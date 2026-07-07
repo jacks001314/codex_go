@@ -1,0 +1,5 @@
+package model
+
+type Model = ModelSummary
+type ModelProviderCapabilitiesReadParams = ProviderCapabilitiesReadParams
+type ModelProviderCapabilitiesReadResponse = ProviderCapabilitiesReadResponse

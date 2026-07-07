@@ -1,0 +1,8 @@
+package features
+
+type ExperimentalFeature = FeatureEntry
+type ExperimentalFeatureListParams = FeatureListParams
+type ExperimentalFeatureListResponse = FeatureListResponse
+type ExperimentalFeatureEnablementSetParams = FeatureEnablementSetParams
+type ExperimentalFeatureEnablementSetResponse = FeatureEnablementSetResponse
+type ExperimentalFeatureStage = FeatureAPIStage

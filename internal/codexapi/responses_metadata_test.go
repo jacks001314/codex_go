@@ -1,0 +1,51 @@
+package codexapi
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestMetadataClientAndTurnMetadata(t *testing.T) {
+	metadata := NewResponsesMetadata("install", "session", "thread", "window")
+	metadata.TurnID = "turn"
+	metadata.ParentThreadID = "parent"
+	metadata.SubagentHeader = "review"
+	metadata.RequestKind = &ResponsesRequestKind{
+		Kind:       RequestKindCompaction,
+		Compaction: NewResponsesCompactionMetadata("manual", "userRequested", "local", "midTurn"),
+	}
+	metadata.Extra = map[string]string{"workspace_kind": "git", ThreadIDKey: "reserved"}
+	client := metadata.ClientMetadata()
+	if client[InstallationIDHeader] != "install" || client[TurnIDKey] != "turn" || client[OpenAISubagentHeader] != "review" {
+		t.Fatalf("client = %#v", client)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(client[TurnMetadataHeader]), &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if payload[RequestKindKey] != RequestKindCompaction || payload["workspace_kind"] != "git" || payload[ThreadIDKey] != "thread" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestMemoryRequestOmitsTurnIdentity(t *testing.T) {
+	metadata := NewResponsesMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = &ResponsesRequestKind{Kind: RequestKindMemory}
+	payload := metadata.TurnMetadataValue()
+	if _, ok := payload[ThreadIDKey]; ok {
+		t.Fatalf("memory payload should omit thread id: %#v", payload)
+	}
+	if payload[RequestKindKey] != RequestKindMemory {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestFilterExtraMetadataAndSubagentHeader(t *testing.T) {
+	filtered := FilterExtraMetadata(map[string]string{ThreadIDKey: "bad", "custom": "ok"})
+	if len(filtered) != 1 || filtered["custom"] != "ok" {
+		t.Fatalf("filtered = %#v", filtered)
+	}
+	if SubagentHeaderValue("thread_spawn") != "collab_spawn" || SubagentHeaderValue("subagent:worker") != "worker" {
+		t.Fatalf("subagent headers wrong")
+	}
+}

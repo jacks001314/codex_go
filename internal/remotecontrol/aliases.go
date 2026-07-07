@@ -1,0 +1,6 @@
+package remotecontrol
+
+type RemoteControlEnableParams = EnableParams
+type RemoteControlDisableParams = DisableParams
+type RemoteControlConnectionStatus = ConnectionStatus
+type RemoteControlStatusChangedNotification = StatusChangedNotification

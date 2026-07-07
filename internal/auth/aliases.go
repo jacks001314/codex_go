@@ -1,0 +1,8 @@
+package auth
+
+type ChatgptAuthTokensRefreshParams = ChatGPTAuthTokensRefreshParams
+type ChatgptAuthTokensRefreshReason = ChatGPTAuthTokensRefreshReason
+type ChatgptAuthTokensRefreshResponse = ChatGPTAuthTokensRefreshResponse
+type ConsumeAccountRateLimitResetCreditParams = ConsumeRateLimitResetCreditParams
+type ConsumeAccountRateLimitResetCreditResponse = ConsumeRateLimitResetCreditResponse
+type ConsumeAccountRateLimitResetCreditOutcome = ConsumeRateLimitResetCreditOutcome

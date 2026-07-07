@@ -1,0 +1,854 @@
+package rollout
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRecorderCreateAppendLoad(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome:        home,
+		SessionID:        "session-1",
+		ThreadID:         "thread-1",
+		ForkedFromID:     "thread-root",
+		Source:           "cli",
+		ThreadSource:     "user",
+		Originator:       "codex_vscode",
+		CWD:              "/repo",
+		ModelProvider:    "openai",
+		HistoryMode:      "legacy",
+		MemoryMode:       "disabled",
+		BaseInstructions: "base",
+		AgentPath:        "/worker",
+		DynamicTools: []json.RawMessage{
+			json.RawMessage(`{"type":"function","name":"demo","description":"demo","inputSchema":{"type":"object"}}`),
+		},
+		SelectedCapabilityRoots: []json.RawMessage{
+			json.RawMessage(`{"id":"cap-root","location":{"type":"environment","environmentId":"env-1","path":"/skills"}}`),
+		},
+		MultiAgentVersion: "v2",
+		ContextWindow:     json.RawMessage(`{"window_number":1,"window_id":"window-1"}`),
+		Now:               now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendItem(Item{Type: "user_message", Data: map[string]any{"text": "hello"}}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	lines, parseErrors, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 || len(lines) != 2 {
+		t.Fatalf("Load() len/errors = %d/%d", len(lines), parseErrors)
+	}
+	if lines[0].Meta.ID != "thread-1" {
+		t.Fatalf("meta = %#v", lines[0].Meta)
+	}
+	if lines[0].Meta.ForkedFromID != "thread-root" || lines[0].Meta.ThreadSource != "user" || lines[0].Meta.Originator != "codex_vscode" || lines[0].Meta.MemoryMode != "disabled" || lines[0].Meta.BaseInstructions != "base" {
+		t.Fatalf("meta extended fields = %#v", lines[0].Meta)
+	}
+	if lines[0].Meta.AgentPath != "/worker" || len(lines[0].Meta.DynamicTools) != 1 || len(lines[0].Meta.SelectedCapabilityRoots) != 1 || lines[0].Meta.MultiAgentVersion != "v2" || len(lines[0].Meta.ContextWindow) == 0 {
+		t.Fatalf("meta high fidelity fields = %#v", lines[0].Meta)
+	}
+	record, err := RecordFromPath(recorder.Path(), false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if record.Metadata.AgentPath != "/worker" || len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 || record.Metadata.MultiAgentVersion != "v2" || len(record.Metadata.ContextWindow) == 0 {
+		t.Fatalf("record metadata high fidelity fields = %#v", record.Metadata)
+	}
+}
+
+func TestNewRecorderRequiresParams(t *testing.T) {
+	if _, err := NewRecorder(nil); err == nil {
+		t.Fatal("NewRecorder(nil) error = nil")
+	}
+}
+
+func TestUnarchiveTouchesRestoredRolloutModTime(t *testing.T) {
+	home := t.TempDir()
+	archivedPath := filepath.Join(home, ArchivedSessionsSubdir, "rollout-2025-01-03T13-00-00-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(archivedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2025-01-03T13:00:00Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2025-01-03T13:00:00Z","cwd":"/repo","source":"cli","model_provider":"openai"}}`,
+		`{"timestamp":"2025-01-03T13:00:05Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(archivedPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	old := time.Unix(1, 0).UTC()
+	if err := os.Chtimes(archivedPath, old, old); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	restoredPath, err := Unarchive(archivedPath, home)
+	if err != nil {
+		t.Fatalf("Unarchive() error = %v", err)
+	}
+	info, err := os.Stat(restoredPath)
+	if err != nil {
+		t.Fatalf("Stat(restored) error = %v", err)
+	}
+	if !info.ModTime().After(old) {
+		t.Fatalf("restored mtime = %v, want after %v", info.ModTime(), old)
+	}
+	record, err := RecordFromPath(restoredPath, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if !record.UpdatedAt.After(old) {
+		t.Fatalf("record.UpdatedAt = %v, want after %v", record.UpdatedAt, old)
+	}
+	wantRecency := time.Date(2025, 1, 3, 13, 0, 5, 0, time.UTC)
+	if !record.RecencyAt.Equal(wantRecency) {
+		t.Fatalf("record.RecencyAt = %v, want %v", record.RecencyAt, wantRecency)
+	}
+}
+
+func TestLoadRustStylePayloadLinesAndRecordFromPath(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","session_id":"session-1","forked_from_id":"thread-root","parent_thread_id":"thread-parent","timestamp":"2026-06-29T01:02:03Z","cwd":"/repo","source":"cli","thread_source":"user","originator":"codex_vscode","model_provider":"openai","history_mode":"legacy","memory_mode":"disabled","base_instructions":"base","cli_version":"0.0.0","extra":{"previous_response_id":"resp-prev","last_response_id":"resp-last"}}}`,
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/repo/context","approval_policy":"never","sandbox_policy":"danger_full_access","model":"gpt-5","multi_agent_version":"v2","network":{"allowed_domains":["api.example.com"],"denied_domains":[]}}}`,
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"world_state","payload":{"full":true,"state":{"workspaces":{"/repo/context":{"has_changes":true}}}}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 || len(lines) != 4 {
+		t.Fatalf("Load() len/errors = %d/%d", len(lines), parseErrors)
+	}
+	if lines[0].Meta == nil || lines[0].Meta.ID != "thread-1" {
+		t.Fatalf("meta line = %#v", lines[0])
+	}
+	if len(lines[1].TurnContext) == 0 || len(lines[2].WorldState) == 0 {
+		t.Fatalf("context/world lines = %#v / %#v", lines[1], lines[2])
+	}
+	if lines[3].Type != "item" || len(lines[3].Item) == 0 {
+		t.Fatalf("response item line = %#v", lines[3])
+	}
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if record.ID != "thread-1" || record.SessionID != "session-1" || record.Preview != "hello" {
+		t.Fatalf("record = %#v", record)
+	}
+	if record.ForkedFromID != "thread-root" || record.ParentThreadID != "thread-parent" {
+		t.Fatalf("lineage = forked:%q parent:%q", record.ForkedFromID, record.ParentThreadID)
+	}
+	if record.Metadata.ThreadSource != "user" || record.Metadata.Originator != "codex_vscode" || record.Metadata.MemoryMode != "disabled" || record.Metadata.BaseInstructions != "base" {
+		t.Fatalf("metadata = %#v", record.Metadata)
+	}
+	if record.Metadata.PreviousResponseID != "resp-prev" || record.Metadata.LastResponseID != "resp-last" {
+		t.Fatalf("response ids = %q/%q", record.Metadata.PreviousResponseID, record.Metadata.LastResponseID)
+	}
+	if record.Metadata.CWD != "/repo/context" || record.Metadata.Model != "gpt-5" || record.Metadata.ApprovalPolicy != "never" || record.Metadata.SandboxPolicy != "danger_full_access" || record.Metadata.MultiAgentVersion != "v2" {
+		t.Fatalf("turn context metadata = %#v", record.Metadata)
+	}
+	if len(record.Metadata.TurnContext) == 0 || len(record.Metadata.WorldState) == 0 {
+		t.Fatalf("turn context/world state raw missing = %#v", record.Metadata)
+	}
+	if len(record.Items) != 1 || record.Items[0].Text != "hello" || record.Items[0].Role != "user" {
+		t.Fatalf("items = %#v", record.Items)
+	}
+}
+
+func TestRecordFromPathUsesLatestSessionMetaMetadata(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome:        home,
+		SessionID:        "session-1",
+		ThreadID:         "thread-1",
+		Source:           "cli",
+		CWD:              "/repo/old",
+		ModelProvider:    "openai",
+		Git:              map[string]string{"branch": "old"},
+		Now:              now,
+		HistoryMode:      "legacy",
+		MemoryMode:       "disabled",
+		BaseInstructions: "base",
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendLine(Line{
+		Type:      "session_meta",
+		Timestamp: now.Add(time.Minute).Format(time.RFC3339Nano),
+		Meta: &SessionMeta{
+			ID:               "thread-1",
+			SessionID:        "session-1",
+			Timestamp:        now.Format(time.RFC3339),
+			CWD:              "/repo/new",
+			Source:           "cli",
+			ModelProvider:    "openai",
+			Git:              map[string]string{"branch": "new"},
+			HistoryMode:      "legacy",
+			MemoryMode:       "disabled",
+			BaseInstructions: "base",
+		},
+	}); err != nil {
+		t.Fatalf("AppendLine(session_meta) error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	record, err := RecordFromPath(recorder.Path(), false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if !record.CreatedAt.Equal(now) {
+		t.Fatalf("CreatedAt = %v, want %v", record.CreatedAt, now)
+	}
+	if record.Metadata.CWD != "/repo/new" || record.Metadata.Git["branch"] != "new" {
+		t.Fatalf("metadata = %#v", record.Metadata)
+	}
+}
+
+func TestRecordFromPathReplaysRustEventMsgTurns(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":1700000000,"model_context_window":128000}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"user_message","client_id":"client-1","message":"hello event","images":["data:image/png;base64,a"],"image_details":["high"]}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"agent_message","message":"answer event"}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted","completed_at":1700000005,"duration_ms":5000}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 2 {
+		t.Fatalf("items len = %d, want 2: %#v", len(record.Items), record.Items)
+	}
+	if record.Preview != "hello event" || record.Items[0].ID != "item-1" || record.Items[0].Text != "hello event" || record.Items[0].Metadata["turnId"] != "turn-1" {
+		t.Fatalf("user item/preview = %#v / %q", record.Items[0], record.Preview)
+	}
+	if len(record.Items[0].Content) != 2 || record.Items[0].Content[1].ImageURL == "" || record.Items[0].Content[1].Detail == nil || *record.Items[0].Content[1].Detail != "high" {
+		t.Fatalf("user content = %#v", record.Items[0].Content)
+	}
+	if record.Items[1].Type != "agent_message" || record.Items[1].Text != "answer event" || record.Items[1].Metadata["turnId"] != "turn-1" {
+		t.Fatalf("agent item = %#v", record.Items[1])
+	}
+	if len(record.Metadata.RolloutTurns) != 1 {
+		t.Fatalf("rollout turns = %#v", record.Metadata.RolloutTurns)
+	}
+	turn := record.Metadata.RolloutTurns[0]
+	if turn.ID != "turn-1" || turn.Status != "interrupted" || turn.StartedAt == nil || *turn.StartedAt != 1700000000 || turn.CompletedAt == nil || *turn.CompletedAt != 1700000005 || turn.DurationMS == nil || *turn.DurationMS != 5000 {
+		t.Fatalf("rollout turn = %#v", turn)
+	}
+}
+
+func TestRecordFromPathReplaysAnonymousTurnAbortedBoundary(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"}]}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 1 || !strings.Contains(record.Items[0].Text, "<turn_aborted>") {
+		t.Fatalf("items = %#v", record.Items)
+	}
+	if len(record.Metadata.RolloutTurns) != 1 {
+		t.Fatalf("rollout turns = %#v", record.Metadata.RolloutTurns)
+	}
+	turn := record.Metadata.RolloutTurns[0]
+	if turn.ID != "turn-1" || turn.Status != "interrupted" || turn.CompletedAt != nil || turn.DurationMS != nil {
+		t.Fatalf("rollout turn = %#v", turn)
+	}
+}
+
+func TestRecordFromPathReplaysRustTokenCountMetadata(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-usage"}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":40,"output_tokens":50,"reasoning_output_tokens":15,"total_tokens":230},"last_token_usage":{"input_tokens":90,"cached_input_tokens":30,"output_tokens":40,"reasoning_output_tokens":12,"total_tokens":130},"model_context_window":200000},"rate_limits":null}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-usage","reason":"interrupted"}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if record.Metadata.Extra["token_usage_turn_id"] != "turn-usage" {
+		t.Fatalf("token usage turn id = %#v", record.Metadata.Extra["token_usage_turn_id"])
+	}
+	info, ok := record.Metadata.Extra["token_usage_info"].(map[string]any)
+	if !ok {
+		t.Fatalf("token usage info = %#v", record.Metadata.Extra["token_usage_info"])
+	}
+	last, ok := info["last_token_usage"].(map[string]any)
+	if !ok || last["total_tokens"] != float64(130) {
+		t.Fatalf("last token usage = %#v", info["last_token_usage"])
+	}
+}
+
+func TestRecordFromPathReplaysRustErrorTurn(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-failed","started_at":1700000000}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"user_message","message":"please fail"}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"error","message":"simulated failure"}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-failed","completed_at":1700000006,"duration_ms":6000}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Metadata.RolloutTurns) != 1 {
+		t.Fatalf("rollout turns = %#v", record.Metadata.RolloutTurns)
+	}
+	turn := record.Metadata.RolloutTurns[0]
+	if turn.ID != "turn-failed" || turn.Status != "failed" || turn.ErrorMessage != "simulated failure" {
+		t.Fatalf("rollout turn = %#v", turn)
+	}
+	if turn.StartedAt == nil || *turn.StartedAt != 1700000000 || turn.CompletedAt == nil || *turn.CompletedAt != 1700000006 || turn.DurationMS == nil || *turn.DurationMS != 6000 {
+		t.Fatalf("rollout turn timing = %#v", turn)
+	}
+}
+
+func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":1700000000}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","completed_at_ms":1000,"item":{"type":"Sleep","id":"sleep-1","duration_ms":1000}}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","completed_at_ms":2000,"item":{"type":"CommandExecution","id":"exec-1","process_id":"pid-1","command":["echo","hello world"],"cwd":"/tmp","parsed_cmd":[{"type":"unknown","cmd":"echo hello world"}],"source":"agent","status":"completed","stdout":"hello world\n","stderr":"","aggregated_output":"hello world\n","exit_code":0,"duration":{"secs":0,"nanos":12000000},"formatted_output":"hello world\n"}}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":1700000006,"duration_ms":6000}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 2 {
+		t.Fatalf("items len = %d, want 2: %#v", len(record.Items), record.Items)
+	}
+	sleep := record.Items[0]
+	if sleep.Type != "sleep" || sleep.ID != "sleep-1" || sleep.Metadata["turnId"] != "turn-1" || sleep.CreatedAt.UnixMilli() != 1000 {
+		t.Fatalf("sleep item = %#v", sleep)
+	}
+	if duration, ok := rolloutInt64FromAny(sleep.Data["duration_ms"]); !ok || duration != 1000 {
+		t.Fatalf("sleep duration = %#v", sleep.Data)
+	}
+	command := record.Items[1]
+	if command.Type != "commandExecution" || command.ID != "exec-1" || command.Metadata["turnId"] != "turn-1" || command.CreatedAt.UnixMilli() != 2000 {
+		t.Fatalf("command item = %#v", command)
+	}
+	if command.Data["command"] != "echo 'hello world'" || command.Data["cwd"] != "/tmp" || command.Text != "hello world\n" {
+		t.Fatalf("command data/text = %#v / %q", command.Data, command.Text)
+	}
+	if duration, ok := rolloutInt64FromAny(command.Data["durationMs"]); !ok || duration != 12 {
+		t.Fatalf("command duration = %#v", command.Data)
+	}
+	actions, ok := command.Data["commandActions"].([]map[string]any)
+	if !ok || len(actions) != 1 || actions[0]["type"] != "unknown" || actions[0]["command"] != "echo hello world" {
+		t.Fatalf("command actions = %#v", command.Data["commandActions"])
+	}
+	if len(record.Metadata.RolloutTurns) != 1 || record.Metadata.RolloutTurns[0].ID != "turn-1" || record.Metadata.RolloutTurns[0].Status != "completed" {
+		t.Fatalf("rollout turns = %#v", record.Metadata.RolloutTurns)
+	}
+}
+
+func TestRecordFromPathNormalizesRustComplexThreadItems(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"response_item","payload":{"type":"mcpToolCall","id":"mcp-1","server":"memory","tool":"create_entities","status":"completed","arguments":{"entity":"Ada"},"result":{"content":[{"type":"text","text":"ok"}]}}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"response_item","payload":{"type":"dynamicToolCall","id":"dyn-1","namespace":"codex_app","tool":"demo_tool","status":"completed","arguments":{"city":"Paris"},"contentItems":[{"type":"inputText","text":"dynamic-ok"}],"success":true}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"response_item","payload":{"type":"fileChange","id":"patch-1","status":"completed","changes":{"src/old.txt":{"type":"update","movePath":"src/new.txt","unifiedDiff":"@@\n-old\n+new\n"}}}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"response_item","payload":{"type":"commandExecution","id":"cmd-1","command":"echo hi","cwd":"/repo","status":"completed","aggregatedOutput":"hi\n","exitCode":0,"durationMs":12}}`,
+		`{"timestamp":"2026-06-29T01:02:08Z","type":"response_item","payload":{"type":"custom_tool_call","id":"patch-call","call_id":"call-patch","name":"apply_patch","input":"*** Begin Patch\n*** End Patch\n"}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 5 {
+		t.Fatalf("items len = %d, want 5: %#v", len(record.Items), record.Items)
+	}
+	mcp := record.Items[0]
+	if mcp.Data["mcpToolCall"] != true || mcp.Data["server"] != "memory" || mcp.Data["tool"] != "create_entities" {
+		t.Fatalf("mcp item = %#v", mcp)
+	}
+	dynamic := record.Items[1]
+	if dynamic.Data["dynamicToolCall"] != true || dynamic.Data["namespace"] != "codex_app" || dynamic.Data["tool"] != "demo_tool" {
+		t.Fatalf("dynamic item = %#v", dynamic)
+	}
+	fileChange := record.Items[2]
+	if fileChange.Data["fileChange"] != true || len(fileChange.Data["changes"].([]map[string]any)) != 1 {
+		t.Fatalf("file change item = %#v", fileChange)
+	}
+	change := fileChange.Data["changes"].([]map[string]any)[0]
+	kind := change["kind"].(map[string]any)
+	if change["path"] != "src/old.txt" || change["diff"] != "@@\n-old\n+new\n" || kind["type"] != "update" || kind["move_path"] != "src/new.txt" {
+		t.Fatalf("normalized file change = %#v", change)
+	}
+	command := record.Items[3]
+	if command.Data["command"] != "echo hi" || command.Data["cwd"] != "/repo" || command.Text != "hi\n" {
+		t.Fatalf("command item = %#v", command)
+	}
+	patchCall := record.Items[4]
+	if patchCall.Data["fileChange"] != true || patchCall.Name != "apply_patch" {
+		t.Fatalf("patch call item = %#v", patchCall)
+	}
+}
+
+func TestRecordFromPathAppliesThreadRolledBackEvent(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: home,
+		SessionID: "session-1",
+		ThreadID:  "thread-1",
+		Now:       now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	for _, item := range []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "one", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "answer one", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "u2", Type: "message", Role: "user", Text: "two", Metadata: map[string]any{"turnId": "turn-2"}},
+		{ID: "a2", Type: "message", Role: "assistant", Text: "answer two", Metadata: map[string]any{"turnId": "turn-2"}},
+	} {
+		if err := recorder.AppendItem(item); err != nil {
+			t.Fatalf("AppendItem() error = %v", err)
+		}
+	}
+	if err := recorder.AppendThreadRolledBack(1, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendThreadRolledBack() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	lines, parseErrors, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 || len(lines) != 6 {
+		t.Fatalf("Load() len/errors = %d/%d", len(lines), parseErrors)
+	}
+	if lines[len(lines)-1].ThreadRolledBack == nil || lines[len(lines)-1].ThreadRolledBack.NumTurns != 1 {
+		t.Fatalf("rollback line = %#v", lines[len(lines)-1])
+	}
+	inputItems := InputItemsFromLines(lines, true)
+	if len(inputItems) != 2 {
+		t.Fatalf("input items len = %d, want 2", len(inputItems))
+	}
+
+	record, err := RecordFromPath(recorder.Path(), false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 2 || record.Items[0].Text != "one" || record.Items[1].Text != "answer one" {
+		t.Fatalf("record items = %#v", record.Items)
+	}
+}
+
+func TestRecordFromPathAppliesCompactedReplacementHistory(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: home,
+		SessionID: "session-1",
+		ThreadID:  "thread-1",
+		Now:       now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendItem(Item{ID: "u1", Type: "message", Role: "user", Text: "old"}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	replacement := []Item{
+		{ID: "u2", Type: "message", Role: "user", Text: "kept", Metadata: map[string]any{"turnId": "turn-2"}},
+		{ID: "summary", Type: "message", Role: "user", Text: "summary", Metadata: map[string]any{"turnId": "turn-summary"}},
+	}
+	if err := recorder.AppendCompacted("summary", replacement, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendCompacted() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	record, err := RecordFromPath(recorder.Path(), false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 2 || record.Items[0].Text != "kept" || record.Items[1].Text != "summary" {
+		t.Fatalf("record items = %#v", record.Items)
+	}
+	inputItems := InputItemsFromLines(mustLoadLines(t, recorder.Path()), true)
+	if len(inputItems) != 2 {
+		t.Fatalf("input items len = %d, want 2", len(inputItems))
+	}
+}
+
+func TestLineFromItemCarriesRustStyleFields(t *testing.T) {
+	line, err := LineFromItem(&Item{
+		ID:         "item-1",
+		Type:       "message",
+		Role:       "user",
+		Text:       "hello",
+		ResponseID: "resp-1",
+		Metadata:   map[string]any{"turnId": "turn-1"},
+	}, fixedTime())
+	if err != nil {
+		t.Fatalf("LineFromItem() error = %v", err)
+	}
+	if line.Type != "item" || line.ItemID != "item-1" || line.Role != "user" || line.TurnID != "turn-1" || line.ResponseID != "resp-1" {
+		t.Fatalf("line = %#v", line)
+	}
+	if line.Timestamp == "" || len(line.Item) == 0 {
+		t.Fatalf("line missing timestamp/raw: %#v", line)
+	}
+}
+
+func TestInputItemsFromLinesReconstructsResponsesInput(t *testing.T) {
+	raw, _ := json.Marshal(Item{ID: "u1", Type: "message", Role: "user", Text: "hello"})
+	lines := []Line{{Type: "item", Item: raw, ItemID: "u1", Role: "user"}}
+
+	items := InputItemsFromLines(lines, true)
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	got := items[0].(map[string]any)
+	if got["type"] != "message" || got["role"] != "user" {
+		t.Fatalf("item = %#v", got)
+	}
+}
+
+func TestResumeAppendsExistingRollout(t *testing.T) {
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-1", Now: fixedTime()})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	resumed, err := Resume(path)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if err := resumed.AppendItem(Item{Type: "user_message", Data: map[string]any{"text": "again"}}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	if err := resumed.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	lines, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("Load() len = %d, want 2", len(lines))
+	}
+}
+
+func TestLoadCountsParseErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.jsonl")
+	if err := os.WriteFile(path, []byte("{bad\n{\"type\":\"item\"}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(lines) != 1 || parseErrors != 1 {
+		t.Fatalf("Load() lines/errors = %d/%d, want 1/1", len(lines), parseErrors)
+	}
+}
+
+func TestBuildThreadItem(t *testing.T) {
+	path := writeRollout(t, t.TempDir(), "thread-1", fixedTime(), "hello")
+	item, ok := BuildThreadItem(path, false)
+	if !ok {
+		t.Fatalf("BuildThreadItem() ok = false")
+	}
+	if item.ThreadID != "thread-1" || item.FirstUserMessage != "hello" || item.Preview != "hello" {
+		t.Fatalf("BuildThreadItem() = %#v", item)
+	}
+}
+
+func TestBuildThreadItemReadsRustEventMsgPreview(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","source":"cli","model_provider":"openai","cwd":"/repo"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"user_message","message":"event preview target"}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	item, ok := BuildThreadItem(path, false)
+	if !ok {
+		t.Fatalf("BuildThreadItem() ok = false")
+	}
+	if item.FirstUserMessage != "event preview target" || item.Preview != "event preview target" {
+		t.Fatalf("BuildThreadItem() = %#v", item)
+	}
+	page, err := ListThreads(home, ListOptions{Search: "preview target"})
+	if err != nil {
+		t.Fatalf("ListThreads() error = %v", err)
+	}
+	if got := threadIDs(page.Items); !reflect.DeepEqual(got, []string{"thread-1"}) {
+		t.Fatalf("ListThreads(search) = %v, want thread-1", got)
+	}
+}
+
+func TestThreadIDFromPath(t *testing.T) {
+	path := writeRollout(t, t.TempDir(), "thread-1", fixedTime(), "hello")
+	threadID, err := ThreadIDFromPath(path)
+	if err != nil {
+		t.Fatalf("ThreadIDFromPath() error = %v", err)
+	}
+	if threadID != "thread-1" {
+		t.Fatalf("ThreadIDFromPath() = %q, want thread-1", threadID)
+	}
+}
+
+func TestListThreadsFiltersSortsAndPages(t *testing.T) {
+	home := t.TempDir()
+	writeRollout(t, home, "thread-1", fixedTime(), "alpha")
+	writeRollout(t, home, "thread-2", fixedTime().Add(time.Minute), "target beta")
+	writeRollout(t, home, "thread-3", fixedTime().Add(2*time.Minute), "target gamma")
+	page, err := ListThreads(home, ListOptions{
+		PageSize:       1,
+		SortKey:        SortCreatedAt,
+		SortDirection:  SortAsc,
+		Search:         "target",
+		ModelProviders: []string{"openai"},
+		CWDFilters:     []string{"/repo"},
+		AllowedSources: []string{"cli"},
+	})
+	if err != nil {
+		t.Fatalf("ListThreads() error = %v", err)
+	}
+	if got := threadIDs(page.Items); !reflect.DeepEqual(got, []string{"thread-2"}) {
+		t.Fatalf("ListThreads(page1) = %v, want thread-2", got)
+	}
+	if page.NextCursor == "" {
+		t.Fatalf("NextCursor empty, want cursor")
+	}
+	next, err := ListThreads(home, ListOptions{
+		Cursor:        page.NextCursor,
+		SortKey:       SortCreatedAt,
+		SortDirection: SortAsc,
+		Search:        "target",
+	})
+	if err != nil {
+		t.Fatalf("ListThreads(page2) error = %v", err)
+	}
+	if got := threadIDs(next.Items); !reflect.DeepEqual(got, []string{"thread-3"}) {
+		t.Fatalf("ListThreads(page2) = %v, want thread-3", got)
+	}
+}
+
+func TestArchiveMovesRollout(t *testing.T) {
+	home := t.TempDir()
+	path := writeRollout(t, home, "thread-1", fixedTime(), "hello")
+	archived, err := Archive(path, home)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if filepath.Dir(archived) != filepath.Join(home, ArchivedSessionsSubdir) {
+		t.Fatalf("Archive() path = %q", archived)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("source stat = %v, want not exist", err)
+	}
+	page, err := ListThreads(home, ListOptions{Archived: true})
+	if err != nil {
+		t.Fatalf("ListThreads(archived) error = %v", err)
+	}
+	if got := threadIDs(page.Items); !reflect.DeepEqual(got, []string{"thread-1"}) {
+		t.Fatalf("archived threads = %v, want thread-1", got)
+	}
+}
+
+func TestUnarchiveDeleteAndFindThreadPath(t *testing.T) {
+	home := t.TempDir()
+	path := writeRollout(t, home, "thread-1", fixedTime(), "hello")
+	archived, err := Archive(path, home)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	found, err := FindThreadPath(home, "thread-1", true)
+	if err != nil {
+		t.Fatalf("FindThreadPath(archived) error = %v", err)
+	}
+	if found != archived {
+		t.Fatalf("FindThreadPath = %q, want %q", found, archived)
+	}
+	active, err := Unarchive(archived, home)
+	if err != nil {
+		t.Fatalf("Unarchive() error = %v", err)
+	}
+	if filepath.Dir(active) != filepath.Join(home, SessionsSubdir) {
+		t.Fatalf("Unarchive() path = %q", active)
+	}
+	if err := Delete(active); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := os.Stat(active); !os.IsNotExist(err) {
+		t.Fatalf("deleted rollout still exists: %v", err)
+	}
+}
+
+func TestParseTimestampFromFilename(t *testing.T) {
+	got, ok := ParseTimestampFromFilename("rollout-2026-06-29T01-02-03-thread.jsonl")
+	if !ok || !got.Equal(time.Date(2026, 6, 29, 1, 2, 3, 0, time.UTC)) {
+		t.Fatalf("ParseTimestampFromFilename() = %s/%v", got, ok)
+	}
+}
+
+func writeRollout(t *testing.T, home string, threadID string, now time.Time, message string) string {
+	t.Helper()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome:     home,
+		ThreadID:      threadID,
+		Source:        "cli",
+		CWD:           "/repo",
+		ModelProvider: "openai",
+		HistoryMode:   "legacy",
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder(%s) error = %v", threadID, err)
+	}
+	item := Item{Type: "user_message", Data: map[string]any{"text": message}}
+	if err := recorder.AppendItem(item); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	return recorder.Path()
+}
+
+func fixedTime() time.Time {
+	return time.Date(2026, 6, 29, 1, 2, 3, 0, time.UTC)
+}
+
+func mustLoadLines(t *testing.T, path string) []Line {
+	t.Helper()
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 {
+		t.Fatalf("Load() parse errors = %d", parseErrors)
+	}
+	return lines
+}
+
+func threadIDs(items []ThreadItem) []string {
+	out := make([]string, len(items))
+	for i := range items {
+		out[i] = items[i].ThreadID
+	}
+	return out
+}
+
+func TestUserTextFromRaw(t *testing.T) {
+	raw, _ := json.Marshal(Item{Type: "user_message", Data: map[string]any{"text": "hello"}})
+	if got := userTextFromRaw(raw); got != "hello" {
+		t.Fatalf("userTextFromRaw() = %q, want hello", got)
+	}
+}

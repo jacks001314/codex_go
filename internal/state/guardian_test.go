@@ -1,0 +1,177 @@
+package state
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestReviewerRoutes(t *testing.T) {
+	for _, value := range []string{"auto_review", "guardian_subagent"} {
+		reviewer := ReviewerFromString(value)
+		if !reviewer.RoutesToGuardian() {
+			t.Fatalf("%s should route to guardian", value)
+		}
+	}
+	reviewer := ReviewerFromString("user")
+	if reviewer.RoutesToGuardian() {
+		t.Fatal("user reviewer should not route to guardian")
+	}
+}
+
+func TestActionValidation(t *testing.T) {
+	valid := []Action{
+		{Type: "command", Command: "ls", CWD: "/tmp", Source: CommandSourceShell},
+		{Type: "execve", Program: "python", Argv: []string{"python", "-V"}, CWD: "/tmp", Source: CommandSourceUnifiedExec},
+		{Type: "apply_patch", CWD: "/tmp", Files: []string{"/tmp/a.txt"}},
+		{Type: "network_access", Host: "example.com", Protocol: "https", Port: 443},
+		{Type: "mcp_tool_call", Server: "server", ToolName: "tool"},
+		{Type: "request_permissions", Permissions: map[string]any{"network": true}},
+	}
+	for _, action := range valid {
+		if err := action.Validate(); err != nil {
+			t.Fatalf("valid action rejected: %+v err=%v", action, err)
+		}
+	}
+	if err := (&Action{Type: "command", Command: "ls"}).Validate(); !errors.Is(err, ErrInvalidGuardianRequest) {
+		t.Fatalf("expected invalid command, got %v", err)
+	}
+}
+
+func TestEventLifecycle(t *testing.T) {
+	now := fixedGuardianTime()
+	action := Action{Type: "command", Command: "rm -rf /tmp/x", CWD: "/repo", Source: CommandSourceShell}
+	event, err := NewInProgressEvent("review-a", "turn-a", "item-a", action, now)
+	if err != nil {
+		t.Fatalf("new event: %v", err)
+	}
+	if event.Status != StatusInProgress || event.StartedAtMS != now.UnixMilli() {
+		t.Fatalf("event = %+v", event)
+	}
+	completed, err := event.Complete(Assessment{
+		RiskLevel:         RiskHigh,
+		UserAuthorization: AuthorizationLow,
+		Outcome:           OutcomeDeny,
+		Rationale:         "too risky",
+	}, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if completed.Status != StatusDenied || !completed.Terminal() {
+		t.Fatalf("completed = %+v", completed)
+	}
+	if DecisionFromEvent(completed) != DecisionDenied {
+		t.Fatalf("decision = %s", DecisionFromEvent(completed))
+	}
+	if GuardianRejectionMessage(completed) != "too risky" {
+		t.Fatalf("message = %q", GuardianRejectionMessage(completed))
+	}
+}
+
+func TestTimeoutAndAbort(t *testing.T) {
+	event, err := NewInProgressEvent("review-a", "turn-a", "", Action{Type: "network_access", Host: "example.com", Protocol: "https", Port: 443}, fixedGuardianTime())
+	if err != nil {
+		t.Fatalf("new event: %v", err)
+	}
+	timedOut := event.Timeout(fixedGuardianTime().Add(time.Second))
+	if timedOut.Status != StatusTimedOut || DecisionFromEvent(timedOut) != DecisionTimedOut {
+		t.Fatalf("timed out = %+v", timedOut)
+	}
+	aborted := event.Aborted(fixedGuardianTime().Add(time.Second), "stopped")
+	if aborted.Status != StatusAborted || DecisionFromEvent(aborted) != DecisionAborted {
+		t.Fatalf("aborted = %+v", aborted)
+	}
+}
+
+func TestCircuitBreaker(t *testing.T) {
+	breaker := NewCircuitBreaker()
+	if action := breaker.RecordDenial("turn-a"); action.InterruptTurn {
+		t.Fatalf("first denial should continue: %+v", action)
+	}
+	if action := breaker.RecordDenial("turn-a"); action.InterruptTurn {
+		t.Fatalf("second denial should continue: %+v", action)
+	}
+	action := breaker.RecordDenial("turn-a")
+	if !action.InterruptTurn || action.ConsecutiveDenials != MaxConsecutiveDenialsPerTurn {
+		t.Fatalf("third denial should interrupt: %+v", action)
+	}
+	breaker.RecordNonDenial("turn-a")
+	if action := breaker.RecordDenial("turn-a"); action.ConsecutiveDenials != 1 || action.InterruptTurn {
+		t.Fatalf("non denial should reset consecutive count: %+v", action)
+	}
+	breaker.ClearTurn("turn-a")
+	if action := breaker.RecordDenial("turn-a"); action.ConsecutiveDenials != 1 {
+		t.Fatalf("clear did not reset: %+v", action)
+	}
+}
+
+func TestReviewStore(t *testing.T) {
+	store := NewReviewStore()
+	now := fixedGuardianTime()
+	store.SetClock(func() time.Time { return now })
+	started, err := store.Start("turn-a", "item-a", Action{Type: "mcp_tool_call", Server: "mcp", ToolName: "search"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if started.ID != "guardian-review-1" || started.Status != StatusInProgress {
+		t.Fatalf("started = %+v", started)
+	}
+	now = now.Add(time.Second)
+	completed, err := store.Complete(started.ID, Assessment{
+		RiskLevel:         RiskLow,
+		UserAuthorization: AuthorizationHigh,
+		Outcome:           OutcomeAllow,
+		Rationale:         "authorized",
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if completed.Status != StatusApproved || completed.CompletedAtMS == nil {
+		t.Fatalf("completed = %+v", completed)
+	}
+	got, ok := store.Get(started.ID)
+	if !ok || got.Status != StatusApproved {
+		t.Fatalf("get = %+v ok=%v", got, ok)
+	}
+}
+
+func TestNotifications(t *testing.T) {
+	event, err := NewInProgressEvent("review-a", "turn-a", "item-a", Action{Type: "apply_patch", CWD: "/repo", Files: []string{"/repo/a.txt"}}, fixedGuardianTime())
+	if err != nil {
+		t.Fatalf("new event: %v", err)
+	}
+	notification := NotificationFromEvent("thread-a", event)
+	if notification.Method != NotificationReviewStarted {
+		t.Fatalf("started notification = %+v", notification)
+	}
+	completed, err := event.Complete(Assessment{RiskLevel: RiskMedium, UserAuthorization: AuthorizationMedium, Outcome: OutcomeAllow, Rationale: "ok"}, fixedGuardianTime())
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	notification = NotificationFromEvent("thread-a", completed)
+	if notification.Method != NotificationReviewCompleted {
+		t.Fatalf("completed notification = %+v", notification)
+	}
+}
+
+func TestParseAssessmentAndPrompt(t *testing.T) {
+	assessment, err := ParseAssessment([]byte(`{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`))
+	if err != nil {
+		t.Fatalf("parse assessment: %v", err)
+	}
+	if assessment.Outcome != OutcomeAllow {
+		t.Fatalf("assessment = %+v", assessment)
+	}
+	prompt, err := BuildPrompt(Action{Type: "command", Command: "ls", CWD: "/repo"}, []string{"user: list files"})
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "Action:") || !strings.Contains(prompt, "user: list files") {
+		t.Fatalf("prompt = %s", prompt)
+	}
+}
+
+func fixedGuardianTime() time.Time {
+	return time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC)
+}

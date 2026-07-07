@@ -1,0 +1,7258 @@
+package appserver
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"codex_go/internal/agent"
+	"codex_go/internal/apps"
+	"codex_go/internal/auth"
+	"codex_go/internal/chatgptapi"
+	"codex_go/internal/compact"
+	"codex_go/internal/config"
+	"codex_go/internal/features"
+	"codex_go/internal/install"
+	"codex_go/internal/mcp"
+	"codex_go/internal/model"
+	"codex_go/internal/plugin"
+	promptctx "codex_go/internal/prompt"
+	"codex_go/internal/realtime"
+	"codex_go/internal/remotecontrol"
+	"codex_go/internal/review"
+	"codex_go/internal/rollout"
+	"codex_go/internal/runtimeutil"
+	"codex_go/internal/sandbox"
+	"codex_go/internal/session"
+	"codex_go/internal/tool"
+	"codex_go/internal/turn"
+)
+
+type RuntimeServices struct {
+	ThreadRouter   *Router
+	ThreadExtras   *ThreadExtraService
+	Realtime       *realtime.Manager
+	FS             *FSService
+	Remote         *remotecontrol.Manager
+	Environment    *EnvironmentManager
+	Windows        *sandbox.WindowsManager
+	Feedback       *FeedbackSnapshot
+	Config         *config.ConfigService
+	Account        *auth.AccountManager
+	Hooks          *HookRegistry
+	HooksDiscovery *HookDiscoveryService
+	HookRunner     *HookRunner
+	Skills         *SkillsService
+	Plugins        *plugin.PluginService
+	Models         *model.ModelService
+	Permissions    *sandbox.PermissionProfileService
+	Collaboration  *CollaborationModeService
+	MCP            *mcp.MCPService
+	Features       *features.FeatureService
+	Apps           *apps.AppService
+	Turns          *turn.TurnService
+	SteerMailbox   *turn.SteerMailbox
+	ThreadStatus   *ThreadStatusManager
+	Agent          model.AgentRunner
+	CompactRunner  compact.RemoteRunner
+	ToolRouter     *tool.Router
+	TurnRuntime    *turn.Runtime
+	Reviews        *review.Service
+	Misc           *MiscService
+	CommandExec    *CommandExecService
+	Processes      *ProcessService
+	ServerRequests *ServerRequestBroker
+	AccountHTTP    chatgptapi.HTTPDoer
+	HTTPClient     model.HTTPDoer
+	SpawnGraph     agent.Store
+	DefaultCWD     string
+
+	RemoteControlDisabledByRequirements bool
+}
+
+type RemoteControlStartupMode string
+
+const (
+	RemoteControlStartupResolvePersisted  RemoteControlStartupMode = "resolvePersisted"
+	RemoteControlStartupDisabledEphemeral RemoteControlStartupMode = "disabledEphemeral"
+	RemoteControlStartupEnabledEphemeral  RemoteControlStartupMode = "enabledEphemeral"
+)
+
+type RuntimeRouterOptions struct {
+	RemoteControlStartupMode            RemoteControlStartupMode
+	Requirements                        *config.ConfigRequirements
+	RemoteControlDisabledByRequirements bool
+	RemoteControlURL                    string
+	RemoteControlInstallationID         string
+	RemoteControlEnrollmentStore        *remotecontrol.EnrollmentStore
+	RemoteControlAuthLoader             remotecontrol.RemoteControlAuthLoader
+	RemoteControlAuthRecovery           remotecontrol.RemoteControlAuthRecovery
+	RemoteControlServerAPIOptions       *remotecontrol.ServerAPIOptions
+	RemoteControlAppServerClientName    *string
+	RemoteControlBackendEnabled         bool
+}
+
+type RuntimeRouter struct {
+	services            RuntimeServices
+	mu                  sync.RWMutex
+	sink                NotificationSink
+	requests            ServerRequestSink
+	turnsMu             sync.Mutex
+	active              map[string]*activeRuntimeTurn
+	diffs               map[string]*runtimeutil.DiffTracker
+	ephemeralMu         sync.RWMutex
+	ephemeralThreads    map[string]*session.Record
+	subscriptionsMu     sync.Mutex
+	threadSubscriptions map[string]map[string]struct{}
+	clientInfoMu        sync.RWMutex
+	clientInfo          map[string]ClientInfo
+	notificationOptOut  map[string]map[NotificationMethod]struct{}
+	experimentalAPI     map[string]bool
+	requestAttestation  map[string]bool
+	mcpOpenAIForm       map[string]bool
+	authRevisionMu      sync.Mutex
+	authRevision        uint64
+}
+
+const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
+const remoteControlExternalAuthRecoveryTimeout = 30 * time.Second
+
+func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
+	router := &RuntimeRouter{
+		services:            services,
+		active:              map[string]*activeRuntimeTurn{},
+		diffs:               map[string]*runtimeutil.DiffTracker{},
+		ephemeralThreads:    map[string]*session.Record{},
+		threadSubscriptions: map[string]map[string]struct{}{},
+		clientInfo:          map[string]ClientInfo{},
+		notificationOptOut:  map[string]map[NotificationMethod]struct{}{},
+		experimentalAPI:     map[string]bool{},
+		requestAttestation:  map[string]bool{},
+		mcpOpenAIForm:       map[string]bool{},
+	}
+	if router.services.ServerRequests == nil {
+		router.services.ServerRequests = NewServerRequestBroker()
+	}
+	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
+	if router.services.ThreadRouter != nil && router.services.SpawnGraph != nil {
+		router.services.ThreadRouter.SetSpawnGraph(router.services.SpawnGraph)
+	}
+	return router
+}
+
+func (r *RuntimeRouter) SetNotificationSink(sink NotificationSink) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sink = sink
+}
+
+func (r *RuntimeRouter) SetServerRequestSink(sink ServerRequestSink) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.requests = sink
+	r.mu.Unlock()
+	r.requireServerRequests().SetSink(sink)
+}
+
+func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
+	if r == nil {
+		return
+	}
+	if r.notificationMethodOptedOut(method) {
+		return
+	}
+	r.mu.RLock()
+	sink := r.sink
+	r.mu.RUnlock()
+	if sink != nil {
+		sink.Notify(NewNotification(method, params))
+	}
+}
+
+func (r *RuntimeRouter) authRevisionSnapshot(context.Context) (uint64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	r.authRevisionMu.Lock()
+	defer r.authRevisionMu.Unlock()
+	return r.authRevision, nil
+}
+
+func (r *RuntimeRouter) noteAuthChanged() {
+	if r == nil {
+		return
+	}
+	r.authRevisionMu.Lock()
+	r.authRevision++
+	r.authRevisionMu.Unlock()
+}
+
+func (r *RuntimeRouter) notifyRemoteControlStatusChanged(notification *remotecontrol.StatusChangedNotification) {
+	if notification == nil {
+		return
+	}
+	r.notify(NotificationRemoteControlStatusChanged, RemoteControlStatusChangedFromManager(notification))
+}
+
+func (r *RuntimeRouter) initializeRemoteControlStatusNotification() *Notification {
+	if r == nil || r.notificationMethodOptedOut(NotificationRemoteControlStatusChanged) {
+		return nil
+	}
+	return NewRemoteControlStatusChangedNotification(r.requireRemote().StatusChanged())
+}
+
+func (r *RuntimeRouter) resolveServerResponse(response *Response) bool {
+	if r == nil || response == nil || response.ID.IsZero() {
+		return false
+	}
+	resolved, _ := r.requireServerRequests().Resolve(response)
+	return resolved
+}
+
+func (r *RuntimeRouter) notifyServerRequestResolved(request *ServerRequest) {
+	if r == nil || request == nil {
+		return
+	}
+	threadID := serverRequestThreadID(request)
+	if threadID == "" {
+		return
+	}
+	r.notify(NotificationServerRequestResolved, &ServerRequestResolvedNotification{
+		ThreadID:  threadID,
+		RequestID: request.ID,
+	})
+}
+
+func (r *RuntimeRouter) authStore(codexHome string) *auth.Store {
+	return auth.NewStoreWithOptions(codexHome, r.authStoreOptions())
+}
+
+func (r *RuntimeRouter) authStoreOptions() *auth.StoreOptions {
+	if r == nil || r.services.Config == nil {
+		return auth.StoreOptionsFromConfig("", false)
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return auth.StoreOptionsFromConfig("", false)
+	}
+	cfg := &config.Config{Values: read.Config}
+	return auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
+}
+
+func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*auth.ResolvedAuth, error) {
+	store := r.authStore(codexHome)
+	resolved, err := store.Resolve()
+	if err != nil || resolved == nil {
+		return resolved, err
+	}
+	violation, err := r.loginRestrictionViolation(&resolved.Auth)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(violation) == "" {
+		return resolved, nil
+	}
+	if authSourceIsEnvironment(resolved.Source) {
+		return nil, errors.New(violation)
+	}
+	_, deleteErr := store.Delete()
+	if deleteErr != nil {
+		return nil, deleteErr
+	}
+	r.requireAccount().Logout()
+	return nil, nil
+}
+
+func (r *RuntimeRouter) loginRestrictionViolation(snapshot *auth.AuthDotJSON) (string, error) {
+	if snapshot == nil || r == nil || r.services.Config == nil {
+		return "", nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return "", err
+	}
+	cfg := &config.Config{Values: read.Config}
+	switch cfg.ForcedLoginMethod() {
+	case config.ForcedLoginMethodAPI:
+		switch snapshot.Mode() {
+		case "chatgpt", "chatgptAuthTokens", "agent-identity", "personal-access-token":
+			return "API key login is required, but ChatGPT is currently being used. Logging out.", nil
+		}
+	case config.ForcedLoginMethodChatGPT:
+		switch snapshot.Mode() {
+		case "api-key", "bedrock-api-key":
+			return "ChatGPT login is required, but an API key is currently being used. Logging out.", nil
+		}
+	}
+	workspaces := cfg.ForcedChatGPTWorkspaceIDs()
+	if len(workspaces) == 0 || snapshot.Mode() == "api-key" || snapshot.Mode() == "bedrock-api-key" {
+		return "", nil
+	}
+	accountID := auth.AccountIDFromAuthForRestrictions(snapshot)
+	if accountID == "" && snapshot.Mode() == "personal-access-token" {
+		metadata, err := auth.LoadPersonalAccessTokenMetadata(context.Background(), snapshot.PersonalAccessToken)
+		if err != nil {
+			return "", err
+		}
+		accountID = strings.TrimSpace(metadata.ChatGPTAccountID)
+	}
+	if err := auth.EnsureWorkspaceAccountAllowed(workspaces, accountID); err == nil {
+		return "", nil
+	}
+	expected := strings.Join(workspaces, ", ")
+	if accountID != "" {
+		return fmt.Sprintf("Login is restricted to workspace(s) %s, but current credentials belong to %s. Logging out.", expected, accountID), nil
+	}
+	return fmt.Sprintf("Login is restricted to workspace(s) %s, but current credentials lack a workspace identifier. Logging out.", expected), nil
+}
+
+func authSourceIsEnvironment(source string) bool {
+	switch strings.TrimSpace(source) {
+	case auth.OpenAIAPIKeyEnv, auth.CodexAPIKeyEnv, auth.CodexAccessTokenEnv:
+		return true
+	default:
+		return false
+	}
+}
+
+func NewDefaultRuntimeRouter(store *session.Store, codexHome string) *RuntimeRouter {
+	return NewDefaultRuntimeRouterWithOptions(store, codexHome, nil)
+}
+
+func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, options *RuntimeRouterOptions) *RuntimeRouter {
+	account := auth.NewAccountManager()
+	configService := config.NewConfigService(codexHome)
+	if options != nil && options.Requirements != nil {
+		configService.SetRequirements(options.Requirements)
+	}
+	pluginService := plugin.NewPluginService()
+	pluginService.SetCodexHome(codexHome)
+	services := RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		ThreadExtras:   NewThreadExtraService(),
+		Realtime:       realtime.NewManager(),
+		FS:             NewFSService(),
+		Remote:         newRemoteControlManagerForStartup(codexHome, options),
+		Environment:    NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, ""),
+		Windows:        sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:         configService,
+		Account:        account,
+		Hooks:          NewHookRegistry(),
+		HooksDiscovery: &HookDiscoveryService{CodexHome: codexHome, Config: configService},
+		HookRunner:     NewHookRunner(),
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Config:              configService,
+			CodexHome:           codexHome,
+			IncludeDefaultRoots: true,
+		}),
+		Plugins:      pluginService,
+		Models:       model.NewModelService(nil),
+		Permissions:  sandbox.NewPermissionProfileService(nil),
+		MCP:          mcp.NewMCPService(nil),
+		Features:     features.NewFeatureService(nil),
+		Apps:         apps.NewAppService(nil),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Reviews:      review.NewService(),
+		Misc:         NewMiscService(),
+		CommandExec:  NewCommandExecService(),
+		Processes:    NewProcessService(),
+		Feedback:     &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)},
+		DefaultCWD:   codexHome,
+
+		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
+	}
+	router := NewRuntimeRouter(services)
+	router.configureRemoteControlBackendForStartup(codexHome, options)
+	router.configureMCPFromConfig()
+	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
+		account.ApplyAuthSnapshot(&resolved.Auth)
+	}
+	return router
+}
+
+func newRemoteControlManagerForStartup(codexHome string, options *RuntimeRouterOptions) *remotecontrol.Manager {
+	installationID := ""
+	if options != nil && strings.TrimSpace(options.RemoteControlInstallationID) != "" {
+		installationID = strings.TrimSpace(options.RemoteControlInstallationID)
+	} else if strings.TrimSpace(codexHome) != "" {
+		if id, err := install.ResolveInstallationID(codexHome); err == nil {
+			installationID = id
+		}
+	}
+	manager := remotecontrol.NewManager("codex", installationID)
+	if options == nil {
+		return manager
+	}
+	switch options.RemoteControlStartupMode {
+	case RemoteControlStartupEnabledEphemeral:
+		manager.Enable(&remotecontrol.EnableParams{Ephemeral: true})
+	case RemoteControlStartupDisabledEphemeral:
+		manager.Disable(&remotecontrol.DisableParams{Ephemeral: true})
+	}
+	return manager
+}
+
+func (r *RuntimeRouter) configureRemoteControlBackendForStartup(codexHome string, options *RuntimeRouterOptions) {
+	if r == nil {
+		return
+	}
+	if backend := r.remoteControlManagerBackend(codexHome, options); backend != nil {
+		r.requireRemote().ConfigureBackend(backend)
+	}
+}
+
+func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *RuntimeRouterOptions) *remotecontrol.ManagerBackendOptions {
+	if options == nil {
+		return nil
+	}
+	explicitBackend := options.RemoteControlBackendEnabled ||
+		options.RemoteControlEnrollmentStore != nil ||
+		options.RemoteControlAuthLoader != nil ||
+		options.RemoteControlAuthRecovery != nil ||
+		strings.TrimSpace(options.RemoteControlURL) != "" ||
+		options.RemoteControlServerAPIOptions != nil ||
+		options.RemoteControlAppServerClientName != nil
+	if !explicitBackend {
+		return nil
+	}
+	store := options.RemoteControlEnrollmentStore
+	closeStoreOnClose := false
+	if store == nil && strings.TrimSpace(codexHome) != "" {
+		if opened, err := remotecontrol.OpenEnrollmentStore(remotecontrol.RemoteControlStateDBPath(codexHome)); err == nil {
+			store = opened
+			closeStoreOnClose = true
+			_ = store.EnsureSchema(context.Background())
+		}
+	}
+	authLoader := options.RemoteControlAuthLoader
+	if authLoader == nil && strings.TrimSpace(codexHome) != "" {
+		authLoader = remotecontrol.NewRemoteControlAuthLoaderForCodexHome(codexHome)
+	}
+	authRecovery, authRecoveryReset, authRecoveryChanged := r.remoteControlAuthRecovery(codexHome, options)
+	remoteControlURL := strings.TrimSpace(options.RemoteControlURL)
+	if remoteControlURL == "" {
+		remoteControlURL = config.DefaultChatGPTBaseURL
+	}
+	return &remotecontrol.ManagerBackendOptions{
+		RemoteControlURL:    remoteControlURL,
+		Store:               store,
+		CloseStoreOnClose:   closeStoreOnClose,
+		AuthLoader:          authLoader,
+		AuthRecovery:        authRecovery,
+		AuthRecoveryReset:   authRecoveryReset,
+		AuthRecoveryChanged: authRecoveryChanged,
+		ServerAPIOptions:    options.RemoteControlServerAPIOptions,
+		AppServerClientName: options.RemoteControlAppServerClientName,
+	}
+}
+
+func (r *RuntimeRouter) remoteControlAuthRecovery(codexHome string, options *RuntimeRouterOptions) (remotecontrol.RemoteControlAuthRecovery, func(), func() bool) {
+	if options != nil && options.RemoteControlAuthRecovery != nil {
+		return options.RemoteControlAuthRecovery, nil, nil
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return nil, nil, nil
+	}
+	controller := remotecontrol.NewUnauthorizedRecoveryControllerForCodexHome(codexHome, &remotecontrol.UnauthorizedRecoveryOptions{
+		ExternalRefresh: r.remoteControlExternalAuthRecovery,
+		Observer:        remoteControlAuthRecoveryLogObserver,
+	})
+	return controller.Recover, controller.Reset, controller.ConsumeAuthStateChanged
+}
+
+func remoteControlAuthRecoveryLogObserver(event remotecontrol.RemoteControlAuthRecoveryEvent) {
+	attrs := []any{
+		"mode", event.Mode,
+		"step", event.Step,
+		"unavailable_reason", event.UnavailableReason,
+	}
+	if event.AuthStateChanged != nil {
+		attrs = append(attrs, "auth_state_changed", *event.AuthStateChanged)
+	}
+	if event.Err != nil {
+		attrs = append(attrs, "error", event.Err)
+		slog.Warn("remote control unauthorized recovery failed", attrs...)
+		return
+	}
+	slog.Info("remote control unauthorized recovery step", attrs...)
+}
+
+func (r *RuntimeRouter) remoteControlExternalAuthRecovery(ctx context.Context, previous *remotecontrol.RemoteControlConnectionAuth) (*remotecontrol.RemoteControlConnectionAuth, bool, error) {
+	if r == nil {
+		return nil, false, fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, remoteControlExternalAuthRecoveryTimeout)
+		defer cancel()
+	}
+	previousAccountID := ""
+	if previous != nil {
+		previousAccountID = previous.AccountID
+	}
+	response, err := r.externalAuthRefresh(ctx, &model.ExternalAuthRefreshRequest{
+		Reason:            model.ExternalAuthRefreshUnauthorized,
+		PreviousAccountID: previousAccountID,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	snapshot := auth.FromChatGPTAuthTokens(response.AccessToken, response.ChatGPTAccountID, response.ChatGPTPlanType)
+	recovered, err := remotecontrol.NewRemoteControlConnectionAuthFromSnapshot(&snapshot)
+	if err != nil {
+		return nil, false, err
+	}
+	return recovered, true, nil
+}
+
+func remoteControlDisabledByRequirements(options *RuntimeRouterOptions) bool {
+	if options == nil {
+		return false
+	}
+	if options.RemoteControlDisabledByRequirements {
+		return true
+	}
+	return options.Requirements != nil &&
+		options.Requirements.AllowRemoteControl != nil &&
+		!*options.Requirements.AllowRemoteControl
+}
+
+func (r *RuntimeRouter) Handle(request *Request) *Response {
+	if err := request.Validate(); err != nil {
+		if request == nil {
+			return ErrorResponse(RequestID{}, -32600, err.Error(), nil)
+		}
+		return ErrorResponse(request.ID, -32600, err.Error(), nil)
+	}
+	result, err := r.dispatch(request)
+	if err != nil {
+		return ErrorResponse(request.ID, runtimeErrorCode(err), err.Error(), jsonRPCErrorData(err))
+	}
+	return OK(request.ID, result)
+}
+
+func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
+	connectionID = normalizeConnectionID(connectionID)
+	if r == nil {
+		return
+	}
+	r.clearConnectionSubscriptions(connectionID)
+	r.clearConnectionClientInfo(connectionID)
+	r.clearConnectionNotificationOptOut(connectionID)
+	r.clearConnectionExperimentalAPI(connectionID)
+	r.clearConnectionRequestAttestation(connectionID)
+	r.clearConnectionMCPOpenAIForm(connectionID)
+	r.syncMCPOpenAIFormElicitationCapability()
+	if r.services.CommandExec != nil {
+		r.services.CommandExec.ConnectionClosed(connectionID)
+	}
+	if r.services.Processes != nil {
+		r.services.Processes.ConnectionClosed(connectionID)
+	}
+	if r.services.FS != nil {
+		r.services.FS.ConnectionClosed(connectionID)
+	}
+}
+
+func (r *RuntimeRouter) Close() error {
+	if r == nil || r.services.Remote == nil {
+		return nil
+	}
+	return r.services.Remote.Close()
+}
+
+func (r *RuntimeRouter) rememberConnectionClientInfo(connectionID string, info ClientInfo) bool {
+	if r == nil {
+		return false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.clientInfo == nil {
+		r.clientInfo = map[string]ClientInfo{}
+	}
+	if _, exists := r.clientInfo[connectionID]; exists {
+		return false
+	}
+	r.clientInfo[connectionID] = info
+	return true
+}
+
+func (r *RuntimeRouter) rememberConnectionNotificationOptOut(connectionID string, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	methods := map[NotificationMethod]struct{}{}
+	if capabilities != nil {
+		for _, method := range capabilities.OptOutNotificationMethods {
+			method = strings.TrimSpace(method)
+			if method == "" {
+				continue
+			}
+			methods[NotificationMethod(method)] = struct{}{}
+		}
+	}
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.notificationOptOut == nil {
+		r.notificationOptOut = map[string]map[NotificationMethod]struct{}{}
+	}
+	r.notificationOptOut[connectionID] = methods
+}
+
+func (r *RuntimeRouter) rememberConnectionExperimentalAPI(connectionID string, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.experimentalAPI == nil {
+		r.experimentalAPI = map[string]bool{}
+	}
+	if capabilities == nil {
+		r.experimentalAPI[connectionID] = false
+		return
+	}
+	r.experimentalAPI[connectionID] = capabilities.ExperimentalAPI
+}
+
+func (r *RuntimeRouter) rememberConnectionMCPOpenAIForm(connectionID string, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	enabled := capabilities != nil && capabilities.MCPServerOpenAIFormElicitation
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.mcpOpenAIForm == nil {
+		r.mcpOpenAIForm = map[string]bool{}
+	}
+	r.mcpOpenAIForm[connectionID] = enabled
+}
+
+func (r *RuntimeRouter) rememberConnectionRequestAttestation(connectionID string, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	enabled := capabilities != nil && capabilities.RequestAttestation
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.requestAttestation == nil {
+		r.requestAttestation = map[string]bool{}
+	}
+	r.requestAttestation[connectionID] = enabled
+}
+
+func (r *RuntimeRouter) clearConnectionClientInfo(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.clientInfo, connectionID)
+}
+
+func (r *RuntimeRouter) clearConnectionNotificationOptOut(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.notificationOptOut, connectionID)
+}
+
+func (r *RuntimeRouter) clearConnectionExperimentalAPI(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.experimentalAPI, connectionID)
+}
+
+func (r *RuntimeRouter) clearConnectionMCPOpenAIForm(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.mcpOpenAIForm, connectionID)
+}
+
+func (r *RuntimeRouter) clearConnectionRequestAttestation(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.requestAttestation, connectionID)
+}
+
+func (r *RuntimeRouter) connectionClientInfo(connectionID string) (ClientInfo, bool) {
+	if r == nil {
+		return ClientInfo{}, false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	info, ok := r.clientInfo[connectionID]
+	return info, ok
+}
+
+func (r *RuntimeRouter) connectionExperimentalAPIDisabled(connectionID string) bool {
+	if r == nil {
+		return false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	enabled, ok := r.experimentalAPI[connectionID]
+	return ok && !enabled
+}
+
+func (r *RuntimeRouter) anyConnectionMCPOpenAIFormElicitation() bool {
+	if r == nil {
+		return false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	for _, enabled := range r.mcpOpenAIForm {
+		if enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RuntimeRouter) syncMCPOpenAIFormElicitationCapability() {
+	if r == nil || r.services.MCP == nil {
+		return
+	}
+	r.services.MCP.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
+}
+
+func (r *RuntimeRouter) notificationMethodOptedOut(method NotificationMethod) bool {
+	if r == nil || strings.TrimSpace(string(method)) == "" {
+		return false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	if len(r.notificationOptOut) == 0 {
+		return false
+	}
+	for _, methods := range r.notificationOptOut {
+		if _, ok := methods[method]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *RuntimeRouter) shouldNotifyThreadRollbackDeprecation(request *Request) bool {
+	if r == nil || request == nil {
+		return true
+	}
+	info, ok := r.connectionClientInfo(request.normalizedConnectionID())
+	if !ok {
+		return true
+	}
+	return info.Name != "codex-tui"
+}
+
+func (r *RuntimeRouter) rejectUninitializedConnection(request *Request) error {
+	if r == nil || request == nil || requestAllowsUninitializedConnection(request.Method) {
+		return nil
+	}
+	if strings.TrimSpace(request.ConnectionID) == "" {
+		return nil
+	}
+	if _, ok := r.connectionClientInfo(request.ConnectionID); !ok {
+		return jsonRPCInvalidRequest("Not initialized")
+	}
+	return nil
+}
+
+func requestAllowsUninitializedConnection(method Method) bool {
+	switch method {
+	case MethodInitialize,
+		MethodFSWatch,
+		MethodFSUnwatch,
+		MethodThreadStart,
+		MethodThreadResume,
+		MethodThreadFork,
+		MethodThreadUnsubscribe:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *RuntimeRouter) rejectExperimentalAPIDisabled(request *Request) error {
+	if r == nil || request == nil || request.Method == MethodInitialize {
+		return nil
+	}
+	if !r.connectionExperimentalAPIDisabled(request.normalizedConnectionID()) {
+		return nil
+	}
+	reason := experimentalAPIReasonForRequest(request)
+	if reason == "" {
+		return nil
+	}
+	return jsonRPCInvalidRequest(fmt.Sprintf("%s requires experimentalApi capability", reason))
+}
+
+func experimentalAPIReasonForRequest(request *Request) string {
+	if request == nil {
+		return ""
+	}
+	if reason := experimentalAPIFieldReasonForRequest(request); reason != "" {
+		return reason
+	}
+	if experimentalAPIMethod(request.Method) {
+		return string(request.Method)
+	}
+	return ""
+}
+
+func experimentalAPIFieldReasonForRequest(request *Request) string {
+	if request == nil {
+		return ""
+	}
+	switch request.Method {
+	case MethodThreadStart:
+		if rawParamPresentNonNull(request, "mockExperimentalField") {
+			return "thread/start.mockExperimentalField"
+		}
+		if rawParamArrayNonEmpty(request, "dynamicTools") {
+			return "thread/start.dynamicTools"
+		}
+	case MethodTurnStart:
+		if rawParamArrayNonEmpty(request, "dynamicTools") {
+			return "turn/start.dynamicTools"
+		}
+	}
+	switch request.Method {
+	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodTurnStart, MethodThreadSettingsUpdate:
+		if rawApprovalPolicyGranular(request) {
+			return "askForApproval.granular"
+		}
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) rejectRemoteControlDisabledByRequirements(request *Request) error {
+	if r == nil || request == nil || !r.services.RemoteControlDisabledByRequirements {
+		return nil
+	}
+	if !isRemoteControlMethod(request.Method) {
+		return nil
+	}
+	return jsonRPCInvalidRequest("remote control is disabled by managed requirements")
+}
+
+func isRemoteControlMethod(method Method) bool {
+	switch method {
+	case MethodRemoteControlClientsList,
+		MethodRemoteControlClientsRevoke,
+		MethodRemoteControlDisable,
+		MethodRemoteControlEnable,
+		MethodRemoteControlPairingStart,
+		MethodRemoteControlPairingStatus,
+		MethodRemoteControlStatusRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func experimentalAPIMethod(method Method) bool {
+	switch method {
+	case MethodCollaborationModeList,
+		MethodEnvironmentAdd,
+		MethodEnvironmentInfo,
+		MethodFuzzyFileSearchStart,
+		MethodFuzzyFileSearchStop,
+		MethodFuzzyFileSearchUpdate,
+		MethodMemoryReset,
+		MethodMockExperimentalMethod,
+		MethodProcessKill,
+		MethodProcessResizePty,
+		MethodProcessSpawn,
+		MethodProcessWriteStdin,
+		MethodRemoteControlClientsList,
+		MethodRemoteControlClientsRevoke,
+		MethodRemoteControlDisable,
+		MethodRemoteControlEnable,
+		MethodRemoteControlPairingStart,
+		MethodRemoteControlPairingStatus,
+		MethodRemoteControlStatusRead,
+		MethodThreadBackgroundTerminalsClean,
+		MethodThreadBackgroundTerminalsList,
+		MethodThreadBackgroundTerminalsTerminate,
+		MethodThreadDecrementElicitation,
+		MethodThreadDecrementElicitationLegacy,
+		MethodThreadIncrementElicitation,
+		MethodThreadIncrementElicitationLegacy,
+		MethodThreadItemsList,
+		MethodThreadMemoryModeSet,
+		MethodThreadRealtimeAppendAudio,
+		MethodThreadRealtimeAppendSpeech,
+		MethodThreadRealtimeAppendText,
+		MethodThreadRealtimeListVoices,
+		MethodThreadRealtimeStart,
+		MethodThreadRealtimeStop,
+		MethodThreadSearch,
+		MethodThreadSettingsUpdate,
+		MethodThreadTurnsList:
+		return true
+	default:
+		return false
+	}
+}
+
+func rawParamPresentNonNull(request *Request, key string) bool {
+	raw, ok := rawParam(request, key)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) != "null"
+}
+
+func rawParamArrayNonEmpty(request *Request, key string) bool {
+	raw, ok := rawParam(request, key)
+	if !ok || strings.TrimSpace(string(raw)) == "null" {
+		return false
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return false
+	}
+	return len(values) > 0
+}
+
+func rawApprovalPolicyGranular(request *Request) bool {
+	raw, ok := rawParam(request, "approvalPolicy")
+	if !ok || strings.TrimSpace(string(raw)) == "null" {
+		return false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.EqualFold(strings.TrimSpace(text), "granular")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return false
+	}
+	if _, ok := object["granular"]; ok {
+		return true
+	}
+	if kindRaw, ok := object["type"]; ok {
+		var kind string
+		if err := json.Unmarshal(kindRaw, &kind); err == nil && strings.EqualFold(strings.TrimSpace(kind), "granular") {
+			return true
+		}
+	}
+	return false
+}
+
+func rawParam(request *Request, key string) (json.RawMessage, bool) {
+	if request == nil || len(request.Params) == 0 || strings.TrimSpace(key) == "" {
+		return nil, false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(request.Params, &raw); err != nil {
+		return nil, false
+	}
+	value, ok := raw[key]
+	return value, ok
+}
+
+func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
+	if r == nil {
+		return nil, fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
+	}
+	if err := r.rejectUninitializedConnection(request); err != nil {
+		return nil, err
+	}
+	if err := r.rejectExperimentalAPIDisabled(request); err != nil {
+		return nil, err
+	}
+	if err := r.rejectRemoteControlDisabledByRequirements(request); err != nil {
+		return nil, err
+	}
+	if isThreadExtraMethod(request.Method) {
+		return r.dispatchThreadExtra(request)
+	}
+	if isRealtimeMethod(request.Method) {
+		return r.dispatchRealtime(request)
+	}
+	if isThreadMethod(request.Method) {
+		if r.services.ThreadRouter == nil {
+			return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+		}
+		if request.Method == MethodThreadCompactStart {
+			return r.handleThreadCompactStartRuntime(request)
+		}
+		if request.Method == MethodThreadRead {
+			return r.handleThreadReadRuntime(request)
+		}
+		if request.Method == MethodThreadItemsList {
+			return r.handleThreadItemsListRuntime(request)
+		}
+		if request.Method == MethodThreadTurnsList {
+			return r.handleThreadTurnsListRuntime(request)
+		}
+		if request.Method == MethodThreadLoadedList {
+			return r.handleThreadLoadedListRuntime(request)
+		}
+		if request.Method == MethodThreadList {
+			return r.handleThreadListRuntime(request)
+		}
+		if request.Method == MethodThreadSearch {
+			return r.handleThreadSearchRuntime(request)
+		}
+		if request.Method == MethodThreadUnsubscribe {
+			return r.handleThreadUnsubscribeRuntime(request)
+		}
+		if request.Method == MethodThreadMetadataUpdate {
+			return r.handleThreadMetadataUpdateRuntime(request)
+		}
+		if request.Method == MethodThreadRollback {
+			if r.shouldNotifyThreadRollbackDeprecation(request) {
+				r.notify(NotificationDeprecationNotice, threadRollbackDeprecationNotice())
+			}
+			return r.handleThreadRollbackRuntime(request)
+		}
+		if threadMethodRequiresLoadedRuntime(request.Method) {
+			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
+				return nil, err
+			}
+		}
+		if request.Method == MethodThreadResume {
+			if err := r.rejectRunningThreadResumeHistory(request); err != nil {
+				return nil, err
+			}
+			if err := r.rejectRunningThreadResumeStalePath(request); err != nil {
+				return nil, err
+			}
+			result, err := r.services.ThreadRouter.dispatch(request)
+			if err != nil {
+				return nil, err
+			}
+			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
+			r.applyRunningThreadResumeSnapshot(result, request)
+			r.markThreadResumeSessionStartSource(result, request)
+			r.markResponseThreadLoaded(result, request.normalizedConnectionID())
+			r.notifyRestoredTokenUsage(result)
+			return result, nil
+		}
+		if isThreadLifecycleNotificationMethod(request.Method) {
+			return r.handleThreadLifecycleRuntime(request)
+		}
+		return r.services.ThreadRouter.dispatch(request)
+	}
+	switch request.Method {
+	case MethodInitialize:
+		return r.handleInitialize(request)
+	case MethodTurnStart:
+		return r.handleTurnStart(request)
+	case MethodTurnSteer:
+		return r.handleTurnSteer(request)
+	case MethodTurnInterrupt:
+		return r.handleTurnInterrupt(request)
+	case MethodReviewStart:
+		return r.handleReviewStart(request)
+	case MethodExperimentalFeatureList:
+		return r.handleExperimentalFeatureList(request)
+	case MethodExperimentalFeatureSet:
+		return r.handleExperimentalFeatureSet(request)
+	case MethodAppList:
+		return r.handleAppList(request)
+	case MethodGetAuthStatus:
+		return r.handleGetAuthStatus(request)
+	case MethodGetConversationSummary:
+		return r.handleGetConversationSummary(request)
+	case MethodGitDiffToRemote:
+		return r.handleGitDiffToRemote(request)
+	case MethodFuzzyFileSearch:
+		return r.handleFuzzyFileSearch(request)
+	case MethodFuzzyFileSearchStart:
+		return r.handleFuzzyFileSearchSessionStart(request)
+	case MethodFuzzyFileSearchUpdate:
+		return r.handleFuzzyFileSearchSessionUpdate(request)
+	case MethodFuzzyFileSearchStop:
+		return r.handleFuzzyFileSearchSessionStop(request)
+	case MethodHooksList:
+		return r.handleHooksList(request)
+	case MethodSkillsList:
+		return r.handleSkillsList(request)
+	case MethodSkillsExtraRootsSet:
+		return r.handleSkillsExtraRootsSet(request)
+	case MethodSkillsConfigWrite:
+		return r.handleSkillsConfigWrite(request)
+	case MethodMarketplaceAdd:
+		return r.handleMarketplaceAdd(request)
+	case MethodMarketplaceRemove:
+		return r.handleMarketplaceRemove(request)
+	case MethodMarketplaceUpgrade:
+		return r.handleMarketplaceUpgrade(request)
+	case MethodPluginList:
+		return r.handlePluginList(request)
+	case MethodPluginInstalled:
+		return r.handlePluginInstalled(request)
+	case MethodPluginRead:
+		return r.handlePluginRead(request)
+	case MethodPluginSkillRead:
+		return r.handlePluginSkillRead(request)
+	case MethodPluginShareSave:
+		return r.handlePluginShareSave(request)
+	case MethodPluginShareUpdateTargets:
+		return r.handlePluginShareUpdateTargets(request)
+	case MethodPluginShareList:
+		return r.handlePluginShareList(request)
+	case MethodPluginShareCheckout:
+		return r.handlePluginShareCheckout(request)
+	case MethodPluginShareDelete:
+		return r.handlePluginShareDelete(request)
+	case MethodPluginInstall:
+		return r.handlePluginInstall(request)
+	case MethodPluginUninstall:
+		return r.handlePluginUninstall(request)
+	case MethodModelList:
+		return r.handleModelList(request)
+	case MethodModelProviderCapabilitiesRead:
+		return r.handleModelProviderCapabilitiesRead(request)
+	case MethodPermissionProfileList:
+		return r.handlePermissionProfileList(request)
+	case MethodCollaborationModeList:
+		return r.handleCollaborationModeList(request)
+	case MethodMockExperimentalMethod:
+		return r.handleMockExperimentalMethod(request)
+	case MethodMCPServerOauthLogin:
+		return r.handleMCPServerOauthLogin(request)
+	case MethodMCPServerOauthCancel:
+		return r.handleMCPServerOauthCancel(request)
+	case MethodMCPServerRefresh, MethodConfigMCPServerReload:
+		return r.handleMCPServerRefresh(request)
+	case MethodMCPServerStatusList:
+		return r.handleMCPServerStatusList(request)
+	case MethodMCPServerResourceRead:
+		return r.handleMCPServerResourceRead(request)
+	case MethodMCPServerToolCall:
+		return r.handleMCPServerToolCall(request)
+	case MethodFSReadFile:
+		return r.handleFSReadFile(request)
+	case MethodFSWriteFile:
+		return r.handleFSWriteFile(request)
+	case MethodFSCreateDirectory:
+		return r.handleFSCreateDirectory(request)
+	case MethodFSGetMetadata:
+		return r.handleFSGetMetadata(request)
+	case MethodFSReadDirectory:
+		return r.handleFSReadDirectory(request)
+	case MethodFSRemove:
+		return r.handleFSRemove(request)
+	case MethodFSCopy:
+		return r.handleFSCopy(request)
+	case MethodFSWatch:
+		return r.handleFSWatch(request)
+	case MethodFSUnwatch:
+		return r.handleFSUnwatch(request)
+	case MethodRemoteControlEnable:
+		return r.handleRemoteControlEnable(request)
+	case MethodRemoteControlDisable:
+		return r.handleRemoteControlDisable(request)
+	case MethodRemoteControlStatusRead:
+		return r.requireRemote().Status(), nil
+	case MethodRemoteControlPairingStart:
+		return r.handleRemoteControlPairingStart(request)
+	case MethodRemoteControlPairingStatus:
+		return r.handleRemoteControlPairingStatus(request)
+	case MethodRemoteControlClientsList:
+		return r.handleRemoteControlClientsList(request)
+	case MethodRemoteControlClientsRevoke:
+		return r.handleRemoteControlClientsRevoke(request)
+	case MethodEnvironmentAdd:
+		return r.handleEnvironmentAdd(request)
+	case MethodEnvironmentInfo:
+		return r.handleEnvironmentInfo(request)
+	case MethodWindowsSandboxSetupStart:
+		return r.handleWindowsSandboxSetupStart(request)
+	case MethodWindowsSandboxReadiness:
+		return r.requireWindows().Readiness(), nil
+	case MethodFeedbackUpload:
+		return r.handleFeedbackUpload(request)
+	case MethodConfigRead:
+		return r.handleConfigRead(request)
+	case MethodConfigValueWrite:
+		return r.handleConfigValueWrite(request)
+	case MethodConfigBatchWrite:
+		return r.handleConfigBatchWrite(request)
+	case MethodConfigRequirementsRead:
+		return r.requireConfig().Requirements(), nil
+	case MethodExternalAgentConfigDetect:
+		return r.handleExternalAgentConfigDetect(request)
+	case MethodExternalAgentConfigImport:
+		return r.handleExternalAgentConfigImport(request)
+	case MethodExternalAgentConfigImportHistoriesRead:
+		return r.requireConfig().ImportHistories(), nil
+	case MethodLoginAccount:
+		return r.handleLoginAccount(request)
+	case MethodCancelLoginAccount:
+		return r.handleCancelLoginAccount(request)
+	case MethodAccountSessionsAdd:
+		return r.handleAccountSessionsAdd(request)
+	case MethodAccountSessionsList:
+		return r.handleAccountSessionsList(request)
+	case MethodAccountSessionsLogout:
+		return r.handleAccountSessionsLogout(request)
+	case MethodAccountSessionsSwitch:
+		return r.handleAccountSessionsSwitch(request)
+	case MethodLogoutAccount:
+		return r.handleLogoutAccount(request)
+	case MethodGetAccount:
+		return r.handleGetAccount(request)
+	case MethodGetAccountRateLimits:
+		return r.handleGetAccountRateLimits(request)
+	case MethodConsumeAccountRateLimitResetCredit:
+		return r.handleConsumeResetCredit(request)
+	case MethodGetAccountTokenUsage:
+		return r.handleGetAccountTokenUsage(request)
+	case MethodGetWorkspaceMessages:
+		return r.handleGetWorkspaceMessages(request)
+	case MethodSendAddCreditsNudgeEmail:
+		return r.handleSendAddCreditsNudgeEmail(request)
+	case MethodProcessSpawn:
+		return r.handleProcessSpawn(request)
+	case MethodProcessWriteStdin:
+		return r.handleProcessWriteStdin(request)
+	case MethodProcessKill:
+		return r.handleProcessKill(request)
+	case MethodProcessResizePty:
+		return r.handleProcessResizePty(request)
+	case MethodCommandExec:
+		return r.handleCommandExec(request)
+	case MethodCommandExecWrite:
+		return r.handleCommandExecWrite(request)
+	case MethodCommandExecTerminate:
+		return r.handleCommandExecTerminate(request)
+	case MethodCommandExecResize:
+		return r.handleCommandExecResize(request)
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
+	}
+}
+
+func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*ThreadCompactStartResponse, error) {
+	var params ThreadCompactStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+		return nil, err
+	}
+	notification, err := r.compactThread(context.Background(), &runtimeCompactRequest{
+		ThreadID: params.ThreadID,
+		Trigger:  compact.TriggerManual,
+		Reason:   compact.ReasonUserRequested,
+		Phase:    compact.PhaseStandaloneTurn,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if notification == nil {
+		notification = &ContextCompactedNotification{ThreadID: params.ThreadID}
+	}
+	r.notify(NotificationContextCompacted, notification)
+	return &ThreadCompactStartResponse{}, nil
+}
+
+func (r *RuntimeRouter) handleThreadTurnsListRuntime(request *Request) (*TurnsPage, error) {
+	var params ThreadTurnsListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest("ephemeral threads do not support thread/turns/list")
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, threadTurnsListReadError(params.ThreadID, err)
+	}
+	if paginatedRolloutHistory(record) {
+		return nil, methodNotFound("paginated_threads is not supported yet")
+	}
+	if unmaterializedThread(record) {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/turns/list is unavailable before first user message", record.ID))
+	}
+	activeTurn := r.activeRuntimeTurnSnapshot(params.ThreadID)
+	return buildTurnsResponse(record, &params, &turnsResponseOptions{
+		ActiveTurn:   activeTurn,
+		LoadedStatus: r.requireThreadStatus().LoadedStatusForThread(params.ThreadID),
+	})
+}
+
+func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadItemsListResponse, error) {
+	var params ThreadItemsListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest("ephemeral threads do not support thread/items/list")
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, threadItemsListReadError(params.ThreadID, err)
+	}
+	if paginatedRolloutHistory(record) {
+		return nil, methodNotFound("paginated_threads is not supported yet")
+	}
+	if unmaterializedThread(record) {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
+	}
+	return BuildItemsResponse(record, &params)
+}
+
+func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRollbackResponse, error) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var params ThreadRollbackParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+		return nil, err
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	response, ok := result.(*ThreadRollbackResponse)
+	if !ok {
+		return nil, fmt.Errorf("%w: unexpected thread/rollback response %T", ErrInvalidRequest, result)
+	}
+	return response, nil
+}
+
+func threadMethodRequiresLoadedRuntime(method Method) bool {
+	switch method {
+	case MethodThreadIncrementElicitation, MethodThreadIncrementElicitationLegacy,
+		MethodThreadDecrementElicitation, MethodThreadDecrementElicitationLegacy,
+		MethodThreadApproveGuardianDeniedAction,
+		MethodThreadInjectItems:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *RuntimeRouter) rejectNotLoadedThreadRuntimeRequest(request *Request) error {
+	var params struct {
+		ThreadID string `json:"threadId"`
+	}
+	if request == nil {
+		return nil
+	}
+	if err := request.DecodeParams(&params); err != nil {
+		return err
+	}
+	if strings.TrimSpace(params.ThreadID) == "" {
+		return nil
+	}
+	return r.requireLoadedThreadForRuntimeOp(params.ThreadID)
+}
+
+func (r *RuntimeRouter) requireLoadedThreadForRuntimeOp(threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	if r.requireThreadStatus().LoadedStatusForThread(threadID).Type == NotLoadedStatus().Type {
+		return jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+	}
+	return nil
+}
+
+func (r *RuntimeRouter) handleThreadLoadedListRuntime(request *Request) (*ThreadLoadedListResponse, error) {
+	var params ThreadLoadedListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	ids := r.requireThreadStatus().LoadedThreadIDs()
+	if len(ids) == 0 {
+		return &ThreadLoadedListResponse{Data: []string{}}, nil
+	}
+	sort.Strings(ids)
+	total := len(ids)
+	start := 0
+	if params.Cursor != nil && strings.TrimSpace(*params.Cursor) != "" {
+		cursor := strings.TrimSpace(*params.Cursor)
+		index := sort.SearchStrings(ids, cursor)
+		if index < total && ids[index] == cursor {
+			start = index + 1
+		} else {
+			start = index
+		}
+	}
+	if start >= total {
+		return &ThreadLoadedListResponse{Data: []string{}}, nil
+	}
+	limit := total - start
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit < 1 {
+			limit = 1
+		}
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := append([]string(nil), ids[start:end]...)
+	var next *string
+	if end < total && len(page) > 0 {
+		value := page[len(page)-1]
+		next = &value
+	}
+	return &ThreadLoadedListResponse{Data: page, NextCursor: next}, nil
+}
+
+func (r *RuntimeRouter) handleThreadReadRuntime(request *Request) (*ThreadReadResponse, error) {
+	var params ThreadReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if record, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		if params.IncludeTurns {
+			return nil, jsonRPCInvalidRequest("ephemeral threads do not support includeTurns")
+		}
+		thread := BuildThread(record, "", false)
+		if thread != nil {
+			thread.Status = r.requireThreadStatus().LoadedStatusForThread(params.ThreadID)
+		}
+		return &ThreadReadResponse{Thread: thread}, nil
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	response, ok := result.(*ThreadReadResponse)
+	if !ok || response == nil || response.Thread == nil {
+		return response, nil
+	}
+	loadedStatus := r.requireThreadStatus().LoadedStatusForThread(params.ThreadID)
+	response.Thread.Status = loadedStatus
+	if params.IncludeTurns {
+		normalizeThreadTurnsStatus(response.Thread.Turns, loadedStatus, r.activeRuntimeTurnSnapshot(params.ThreadID) != nil)
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleThreadUnsubscribeRuntime(request *Request) (*ThreadUnsubscribeResponse, error) {
+	var params ThreadUnsubscribeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.requireThreadStatus().LoadedStatusForThread(params.ThreadID).Type == NotLoadedStatus().Type {
+		r.clearThreadSubscriptions(params.ThreadID)
+		return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusNotLoaded}, nil
+	}
+	if r.unsubscribeThreadConnection(params.ThreadID, request.normalizedConnectionID()) {
+		return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusUnsubscribed}, nil
+	}
+	return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusNotSubscribed}, nil
+}
+
+func (r *RuntimeRouter) handleThreadMetadataUpdateRuntime(request *Request) (*ThreadMetadataUpdateResponse, error) {
+	var params ThreadMetadataUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support metadata updates: %s", params.ThreadID))
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	response, _ := result.(*ThreadMetadataUpdateResponse)
+	return response, nil
+}
+
+func threadRollbackDeprecationNotice() *DeprecationNoticeNotification {
+	return &DeprecationNoticeNotification{
+		Summary: "thread/rollback is deprecated and will be removed soon",
+	}
+}
+
+func isThreadLifecycleNotificationMethod(method Method) bool {
+	switch method {
+	case MethodThreadStart, MethodThreadFork, MethodThreadArchive, MethodThreadUnarchive, MethodThreadDelete, MethodThreadSetName, MethodThreadNameSet:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *RuntimeRouter) rejectRunningThreadResumeHistory(request *Request) error {
+	if r == nil || request == nil {
+		return nil
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return err
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" || len(params.History) == 0 {
+		return nil
+	}
+	if r.activeRuntimeTurnSnapshot(threadID) == nil {
+		return nil
+	}
+	return jsonRPCInvalidRequest(fmt.Sprintf("cannot resume thread %s with history while it is already running", threadID))
+}
+
+func (r *RuntimeRouter) rejectRunningThreadResumeStalePath(request *Request) error {
+	if r == nil || request == nil {
+		return nil
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return err
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" || params.Path == nil || strings.TrimSpace(*params.Path) == "" {
+		return nil
+	}
+	if r.activeRuntimeTurnSnapshot(threadID) == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || r.services.ThreadRouter == nil {
+		return err
+	}
+	activePath := canonicalThreadLifecyclePath(r.services.ThreadRouter.threadRolloutPath(record), codexHomeFromSessionStore(r.services.ThreadRouter.store))
+	requestPath := canonicalThreadLifecyclePath(*params.Path, codexHomeFromSessionStore(r.services.ThreadRouter.store))
+	if activePath == "" || requestPath == "" || sameAppPath(activePath, requestPath) {
+		return nil
+	}
+	return jsonRPCInvalidRequest(fmt.Sprintf("cannot resume running thread %s with stale path: requested `%s`, active `%s`", threadID, strings.TrimSpace(*params.Path), activePath))
+}
+
+func canonicalThreadLifecyclePath(path string, codexHome string) string {
+	path = normalizeWindowsExtendedPathPrefix(strings.TrimSpace(path))
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) && strings.TrimSpace(codexHome) != "" {
+		path = filepath.Join(codexHome, path)
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	if canonical, err := filepath.EvalSymlinks(path); err == nil {
+		path = canonical
+	}
+	return filepath.Clean(path)
+}
+
+func normalizeWindowsExtendedPathPrefix(path string) string {
+	switch {
+	case strings.HasPrefix(path, `\\?\UNC\`):
+		return `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	case strings.HasPrefix(path, `\\?\`):
+		return strings.TrimPrefix(path, `\\?\`)
+	default:
+		return path
+	}
+}
+
+func (r *RuntimeRouter) handleThreadListRuntime(request *Request) (any, error) {
+	if r == nil || request == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var params ThreadListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if runtimeThreadListShouldDefaultModelProvider(request, &params) {
+		if provider := strings.TrimSpace(r.runtimeThreadListDefaultModelProvider()); provider != "" {
+			params.ModelProviders = []string{provider}
+			updated, err := requestWithRuntimeParams(request, params)
+			if err != nil {
+				return nil, err
+			}
+			request = updated
+		}
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	r.applyRuntimeThreadStatuses(result)
+	return result, nil
+}
+
+func (r *RuntimeRouter) handleThreadSearchRuntime(request *Request) (any, error) {
+	if r == nil || request == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	r.applyRuntimeThreadStatuses(result)
+	return result, nil
+}
+
+func (r *RuntimeRouter) applyRuntimeThreadStatuses(result any) {
+	if r == nil {
+		return
+	}
+	switch response := result.(type) {
+	case *ThreadListResponse:
+		if response == nil {
+			return
+		}
+		for i := range response.Data {
+			r.applyRuntimeThreadStatus(&response.Data[i])
+		}
+	case *ThreadSearchResponse:
+		if response == nil {
+			return
+		}
+		for i := range response.Data {
+			r.applyRuntimeThreadStatus(&response.Data[i].Thread)
+		}
+	}
+}
+
+func (r *RuntimeRouter) applyRuntimeThreadStatus(thread *Thread) {
+	if r == nil || thread == nil || thread.ID == "" {
+		return
+	}
+	status := r.requireThreadStatus().LoadedStatusForThread(thread.ID)
+	if status.Type == NotLoadedStatus().Type {
+		return
+	}
+	thread.Status = status
+}
+
+func runtimeThreadListShouldDefaultModelProvider(request *Request, params *ThreadListParams) bool {
+	if request == nil || params == nil {
+		return false
+	}
+	if params.ParentThreadID != nil || params.AncestorThreadID != nil {
+		return false
+	}
+	if len(params.ModelProviders) > 0 {
+		return false
+	}
+	raw, ok := rawParam(request, "modelProviders")
+	if !ok {
+		return true
+	}
+	return strings.TrimSpace(string(raw)) == "null"
+}
+
+func (r *RuntimeRouter) runtimeThreadListDefaultModelProvider() string {
+	if r == nil {
+		return model.OpenAIProviderID
+	}
+	read, err := r.requireConfig().Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return model.OpenAIProviderID
+	}
+	return firstNonEmpty(stringFromMap(read.Config, "model_provider"), stringFromMap(read.Config, "modelProvider"), model.OpenAIProviderID)
+}
+
+func requestWithRuntimeParams(request *Request, params any) (*Request, error) {
+	if request == nil {
+		return nil, fmt.Errorf("%w: request is nil", ErrInvalidRequest)
+	}
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	updated := *request
+	updated.Params = data
+	return &updated, nil
+}
+
+func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, error) {
+	lifecycleIDs := r.lifecycleSubtreeIDs(request)
+	var result any
+	var err error
+	if request.Method == MethodThreadStart {
+		var params ThreadStartParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
+			return nil, err
+		}
+		if err := r.validateThreadStartEnvironments(&params); err != nil {
+			return nil, err
+		}
+		var handled bool
+		result, handled, err = r.handleEphemeralThreadStartRuntime(request)
+		if err != nil {
+			return nil, err
+		}
+		if !handled {
+			result, err = r.services.ThreadRouter.dispatch(request)
+		}
+	} else if request.Method == MethodThreadFork {
+		var handled bool
+		result, handled, err = r.handleActiveThreadForkRuntime(request)
+		if err != nil {
+			return nil, err
+		}
+		if !handled {
+			result, handled, err = r.handleEphemeralThreadForkRuntime(request)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !handled {
+			result, err = r.services.ThreadRouter.dispatch(request)
+		}
+	} else if request.Method == MethodThreadDelete {
+		if err := r.rejectEphemeralThreadDelete(request); err != nil {
+			return nil, err
+		}
+		result, err = r.services.ThreadRouter.dispatch(request)
+	} else {
+		result, err = r.services.ThreadRouter.dispatch(request)
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch request.Method {
+	case MethodThreadStart, MethodThreadFork:
+		if response, ok := result.(*ThreadStartResponse); ok && response.Thread != nil {
+			r.applyThreadStartConfigSnapshot(response, request)
+			r.applyThreadStartInstructionSources(response, request)
+			r.applyThreadStartOriginator(response, request)
+			r.markRuntimeSeedRollout(response, request)
+			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
+			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			r.notifyRestoredTokenUsage(response)
+			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+		}
+	case MethodThreadArchive:
+		archivedIDs := lifecycleIDsWithFallback(request, lifecycleIDs)
+		if response, ok := result.(*ThreadArchiveResponse); ok {
+			archivedIDs = response.archivedThreadIDs
+		}
+		for _, threadID := range session.ArchiveNotificationOrder(archivedIDs) {
+			r.markThreadUnloaded(string(threadID))
+			r.notify(NotificationThreadArchived, &ThreadIDNotification{ThreadID: string(threadID)})
+		}
+	case MethodThreadUnarchive:
+		if response, ok := result.(*ThreadUnarchiveResponse); ok && response.Thread != nil {
+			r.notify(NotificationThreadUnarchived, &ThreadIDNotification{ThreadID: response.Thread.ID})
+		}
+	case MethodThreadDelete:
+		for _, threadID := range session.DeleteOrderForSubtree(lifecycleIDsWithFallback(request, lifecycleIDs)) {
+			r.markThreadUnloaded(string(threadID))
+			r.notify(NotificationThreadDeleted, &ThreadIDNotification{ThreadID: string(threadID)})
+		}
+	case MethodThreadSetName, MethodThreadNameSet:
+		if params, ok := lifecycleSetNameParams(request); ok {
+			r.notify(NotificationThreadNameUpdated, &ThreadNameUpdatedNotification{ThreadID: params.ThreadID, ThreadName: &params.Name})
+		}
+	}
+	return result, nil
+}
+
+func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*ThreadStartResponse, bool, error) {
+	if r == nil || request == nil || request.Method != MethodThreadStart {
+		return nil, false, nil
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, true, err
+	}
+	if !params.Ephemeral {
+		return nil, false, nil
+	}
+	if err := params.Validate(); err != nil {
+		return nil, true, err
+	}
+	if err := threadStartHistoryModeError(&params); err != nil {
+		return nil, true, err
+	}
+	threadID := session.ThreadID("thread-" + safeIdentifier(request.ID.String()))
+	if _, ok := r.ephemeralThreadRecord(threadID, false); ok {
+		return nil, true, fmt.Errorf("%w: thread %s already exists", session.ErrConflict, threadID)
+	}
+	if r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
+		if _, err := r.services.ThreadRouter.store.Load(threadID); err == nil {
+			return nil, true, fmt.Errorf("%w: thread %s already exists", session.ErrConflict, threadID)
+		} else if !errors.Is(err, session.ErrThreadNotFound) {
+			return nil, true, err
+		}
+	}
+	now := runtimeRouterNow(r).UTC()
+	historyMode := string(params.HistoryMode)
+	if historyMode == "" {
+		historyMode = string(ThreadHistoryLegacy)
+	}
+	threadSource := ""
+	if params.ThreadSource != nil {
+		threadSource = string(*params.ThreadSource)
+	}
+	extra := ensureRecordExtra(threadStartExtra(&params))
+	extra["ephemeral"] = true
+	cwd := r.effectiveThreadStartCWD(&params)
+	runtimeWorkspaceRoots := threadRuntimeWorkspaceRoots(cwd, params.RuntimeWorkspaceRoots)
+	if len(runtimeWorkspaceRoots) > 0 {
+		extra["runtime_workspace_roots"] = append([]string(nil), runtimeWorkspaceRoots...)
+	}
+	serviceTier := threadLifecycleServiceTier(params.ServiceTierSet, params.ServiceTier)
+	record := &session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Preview:   params.Prompt,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:                     cwd,
+			Model:                   params.Model,
+			ModelProvider:           params.ModelProvider,
+			ServiceTier:             serviceTier,
+			Source:                  string(SessionSourceAppServer),
+			ThreadSource:            threadSource,
+			HistoryMode:             historyMode,
+			SessionPrefix:           session.PrefixForSessionID(string(threadID)),
+			DynamicTools:            cloneRawMessages(params.DynamicTools),
+			SelectedCapabilityRoots: rawSelectedCapabilityRoots(params.SelectedCapabilityRoots),
+			Extra:                   extra,
+		},
+	}
+	if params.Prompt != "" {
+		record.Items = []session.Item{{
+			ID:        "item-" + safeIdentifier(request.ID.String()),
+			Type:      "message",
+			Role:      "user",
+			Text:      params.Prompt,
+			CreatedAt: now,
+			Metadata:  map[string]any{"turnId": "turn-" + safeIdentifier(request.ID.String())},
+		}}
+	}
+	r.saveEphemeralThreadRecord(record)
+	thread := BuildThread(record, "", true)
+	if thread != nil {
+		thread.Status = IdleStatus()
+	}
+	return &ThreadStartResponse{
+		Thread:                  thread,
+		CWD:                     cwd,
+		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
+		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
+	}, true, nil
+}
+
+func (r *RuntimeRouter) markRuntimeSeedRollout(response *ThreadStartResponse, request *Request) {
+	if r == nil || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	if params.Ephemeral || strings.TrimSpace(params.Prompt) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
+	if err != nil || record == nil || runtimeRecordEphemeral(record) {
+		return
+	}
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	record.Metadata.Extra[runtimeSeedRolloutExtraKey] = true
+	_ = r.runtimeSaveThreadRecord(record)
+}
+
+func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*ThreadForkResponse, bool, error) {
+	if r == nil || request == nil || request.Method != MethodThreadFork || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, false, nil
+	}
+	var params ThreadForkParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, true, err
+	}
+	if !params.Ephemeral {
+		return nil, false, nil
+	}
+	if err := params.Validate(); err != nil {
+		return nil, true, err
+	}
+	if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
+		return nil, true, err
+	}
+	mode := params.HistoryMode
+	if mode == "" {
+		mode = session.ForkAll
+	}
+	var sourceRecord *session.Record
+	var err error
+	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
+		sourceRecord, err = r.services.ThreadRouter.readThreadRecordFromRolloutPath(*params.Path, true, true)
+		if err != nil {
+			return nil, true, err
+		}
+	} else {
+		sourceID, err := threadForkSourceID(&params)
+		if err != nil {
+			return nil, true, err
+		}
+		sourceRecord, err = r.threadRecord(sourceID, true, true)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	if sourceRecord != nil && sourceRecord.Archived {
+		return nil, true, threadResumeArchivedError(sourceRecord.ID)
+	}
+	if unmaterializedThread(sourceRecord) {
+		return nil, true, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
+	}
+	if paginatedRolloutHistory(sourceRecord) {
+		return nil, true, methodNotFound("paginated_threads is not supported yet")
+	}
+	r.attachRolloutTurnSnapshots(sourceRecord)
+	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
+		Mode:       mode,
+		LastN:      params.LastN,
+		LastTurnID: params.LastTurnID,
+		Ephemeral:  true,
+		Now:        runtimeRouterNow(r).UTC(),
+	})
+	if err != nil {
+		return nil, true, threadForkRecordError(err)
+	}
+	applyThreadForkName(record, sourceRecord)
+	if params.ThreadSource != nil {
+		value := string(*params.ThreadSource)
+		record.Metadata.ThreadSource = value
+	}
+	applyThreadForkOverrides(record, &params)
+	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	record.Metadata.Extra["ephemeral"] = true
+	r.saveEphemeralThreadRecord(record)
+	responseRecord := record
+	if params.ExcludeTurns {
+		responseRecord = cloneRuntimeSessionRecord(record)
+		responseRecord.Items = nil
+	}
+	thread := BuildThread(responseRecord, "", !params.ExcludeTurns)
+	if thread != nil {
+		thread.Status = IdleStatus()
+	}
+	return &ThreadForkResponse{
+		Thread:                  thread,
+		ApprovalPolicy:          params.ApprovalPolicy,
+		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		CWD:                     record.Metadata.CWD,
+		Model:                   record.Metadata.Model,
+		ModelProvider:           record.Metadata.ModelProvider,
+		Sandbox:                 params.Sandbox,
+		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
+		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
+		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+	}, true, nil
+}
+
+func (r *RuntimeRouter) rejectEphemeralThreadDelete(request *Request) error {
+	var params ThreadDeleteParams
+	if request == nil || request.DecodeParams(&params) != nil || strings.TrimSpace(params.ThreadID) == "" {
+		return nil
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return jsonRPCInvalidRequest(fmt.Sprintf("thread is not persisted and cannot be deleted: %s", params.ThreadID))
+	}
+	return nil
+}
+
+func runtimeRouterNow(r *RuntimeRouter) time.Time {
+	if r != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.now != nil {
+		if now := r.services.ThreadRouter.now().UTC(); !now.IsZero() {
+			return now
+		}
+	}
+	return time.Now().UTC()
+}
+
+func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStartResponse, request *Request) {
+	if r == nil || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	instructions, sources := r.threadStartInstructions(&params)
+	response.InstructionSources = sources
+	baseInstructions := firstNonEmpty(stringPtrValue(params.BaseInstructions), instructions)
+	if strings.TrimSpace(baseInstructions) == "" && len(sources) == 0 {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
+	if err != nil || record == nil {
+		return
+	}
+	if strings.TrimSpace(baseInstructions) != "" {
+		record.Metadata.BaseInstructions = baseInstructions
+	}
+	setThreadRecordInstructionSources(record, sources)
+	_ = r.runtimeSaveThreadRecord(record)
+}
+
+func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse, request *Request) {
+	if r == nil || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	originator := stringPtrValue(params.ServiceName)
+	if strings.TrimSpace(originator) == "" {
+		if info, ok := r.connectionClientInfo(request.normalizedConnectionID()); ok {
+			originator = strings.TrimSpace(info.Name)
+		}
+	}
+	if strings.TrimSpace(originator) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
+	if err != nil || record == nil {
+		return
+	}
+	record.Metadata.Originator = strings.TrimSpace(originator)
+	_ = r.runtimeSaveThreadRecord(record)
+}
+
+func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResponse, request *Request) {
+	if r == nil || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	cfg, err := r.effectiveConfigForThreadStart(&params)
+	if err != nil || cfg == nil {
+		return
+	}
+	modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
+	providerID := firstNonEmpty(strings.TrimSpace(params.ModelProvider), stringConfigValue(cfg, "model_provider"), stringConfigValue(cfg, "modelProvider"), model.OpenAIProviderID)
+	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
+	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
+	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
+	cwd := r.effectiveThreadStartCWD(&params)
+	runtimeWorkspaceRoots := threadRuntimeWorkspaceRoots(cwd, params.RuntimeWorkspaceRoots)
+	if modelID != "" {
+		response.Model = modelID
+	}
+	if providerID != "" {
+		response.ModelProvider = providerID
+		response.Thread.ModelProvider = providerID
+	}
+	if reasoningEffort != "" {
+		response.ReasoningEffort = stringPtrIfNotEmpty(reasoningEffort)
+	}
+	response.ServiceTier = stringPtrIfNotEmpty(serviceTier)
+	response.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)
+	if cwd != "" {
+		response.CWD = cwd
+		response.Thread.CWD = cwd
+	}
+	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
+	if err != nil || record == nil {
+		return
+	}
+	if modelID != "" {
+		record.Metadata.Model = modelID
+	}
+	if providerID != "" {
+		record.Metadata.ModelProvider = providerID
+	}
+	record.Metadata.ServiceTier = serviceTier
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	if len(runtimeWorkspaceRoots) > 0 {
+		record.Metadata.Extra["runtime_workspace_roots"] = append([]string(nil), runtimeWorkspaceRoots...)
+	} else {
+		delete(record.Metadata.Extra, "runtime_workspace_roots")
+	}
+	if cwd != "" {
+		record.Metadata.CWD = cwd
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return
+	}
+}
+
+func (r *RuntimeRouter) effectiveThreadStartCWD(params *ThreadStartParams) string {
+	if r == nil {
+		return effectiveThreadStartCWD(params, processCWD())
+	}
+	return effectiveThreadStartCWD(params, r.threadStartDefaultCWD())
+}
+
+func (r *RuntimeRouter) threadStartDefaultCWD() string {
+	if r != nil {
+		if cwd := strings.TrimSpace(r.services.DefaultCWD); cwd != "" {
+			return cwd
+		}
+		if r.services.ThreadRouter != nil {
+			if cwd := routerDefaultCWD(r.services.ThreadRouter); cwd != "" {
+				return cwd
+			}
+		}
+	}
+	return processCWD()
+}
+
+func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams) (*config.Config, error) {
+	if r == nil || r.services.Config == nil {
+		return &config.Config{Values: map[string]any{}}, nil
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return &config.Config{Values: map[string]any{}}, nil
+	}
+	cwd := r.effectiveThreadStartCWD(params)
+	r.maybeTrustThreadStartProject(params)
+	return config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: cwd})
+}
+
+func (r *RuntimeRouter) maybeTrustThreadStartProject(params *ThreadStartParams) {
+	if r == nil || r.services.Config == nil || params == nil {
+		return
+	}
+	cwd := strings.TrimSpace(params.CWD)
+	if cwd == "" || !threadStartSandboxTrustsProject(params.Sandbox) {
+		return
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return
+	}
+	trustTarget := threadStartTrustTarget(cwd)
+	if trustTarget == "" || projectTrustLevel(codexHome, trustTarget) != "" {
+		return
+	}
+	_ = appendProjectTrustLevel(codexHome, trustTarget)
+}
+
+func threadStartSandboxTrustsProject(policy any) bool {
+	switch value := policy.(type) {
+	case string:
+		return sandboxModeTrustsProject(value)
+	case map[string]any:
+		return sandboxModeTrustsProject(firstNonEmpty(
+			threadItemStringFromAnyMap(value, "mode"),
+			threadItemStringFromAnyMap(value, "type"),
+			threadItemStringFromAnyMap(value, "kind"),
+			threadItemStringFromAnyMap(value, "sandboxMode"),
+			threadItemStringFromAnyMap(value, "sandbox_mode"),
+		))
+	case *sandbox.SandboxPolicy:
+		return value != nil && sandboxModeTrustsProject(string(value.Kind))
+	case sandbox.SandboxPolicy:
+		return sandboxModeTrustsProject(string(value.Kind))
+	default:
+		return false
+	}
+}
+
+func sandboxModeTrustsProject(value string) bool {
+	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(value)))
+	return normalized == "workspacewrite" || normalized == "dangerfullaccess"
+}
+
+func threadStartTrustTarget(cwd string) string {
+	cwd = cleanRuntimeWorkspaceRoot(cwd)
+	if cwd == "" {
+		return ""
+	}
+	for dir := cwd; dir != ""; dir = parentAppPath(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+	}
+	return cwd
+}
+
+func parentAppPath(path string) string {
+	parent := filepath.Dir(path)
+	if parent == path || parent == "." {
+		return ""
+	}
+	return parent
+}
+
+func projectTrustLevel(codexHome string, trustTarget string) string {
+	cfg, err := config.Load(codexHome)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	projects, _ := cfg.Values["projects"].(map[string]any)
+	for key, value := range projects {
+		if !sameAppPath(key, trustTarget) {
+			continue
+		}
+		if project, ok := value.(map[string]any); ok {
+			return strings.TrimSpace(stringFromMap(project, "trust_level"))
+		}
+	}
+	return ""
+}
+
+func appendProjectTrustLevel(codexHome string, trustTarget string) error {
+	path := config.ConfigPath(codexHome)
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	body := strings.TrimRight(string(data), "\r\n")
+	if body != "" {
+		body += "\n\n"
+	}
+	body += fmt.Sprintf("[projects.%q]\ntrust_level = \"trusted\"\n", filepath.Clean(trustTarget))
+	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+func threadStartProviderFallbackModel(modelID string, providerID string, allowFallback bool) string {
+	modelID = strings.TrimSpace(modelID)
+	if !allowFallback || strings.TrimSpace(providerID) != model.AmazonBedrockProviderID {
+		return modelID
+	}
+	manager := model.NewStaticModelsManager(model.AmazonBedrockModelCatalog())
+	return manager.GetDefaultModel(modelID, true, model.RefreshOffline)
+}
+
+func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *ThreadStartParams, modelID string) string {
+	settings := map[string]bool{}
+	if cfg != nil {
+		settings = cfg.FeatureSettings()
+	}
+	if !features.Enabled(settings, "fast_mode") {
+		return ""
+	}
+	if params != nil && (params.ServiceTierSet || params.ServiceTier != nil) {
+		return threadLifecycleServiceTierForModel(r.requireModels(), params.ServiceTierSet, params.ServiceTier, modelID)
+	}
+	requested := firstNonEmpty(
+		stringConfigValue(cfg, "service_tier"),
+		stringConfigValue(cfg, "serviceTier"),
+	)
+	return threadLifecycleServiceTierForRequest(r.requireModels(), requested, modelID)
+}
+
+func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (string, []string) {
+	if r == nil || params == nil {
+		return "", nil
+	}
+	parts := []string{}
+	sources := []string{}
+	if codexHome := r.codexHomeForInstructions(); codexHome != "" {
+		loaded := config.NewUserInstructionsProvider(codexHome).Load()
+		if loaded != nil && loaded.Instructions != nil && strings.TrimSpace(loaded.Instructions.Text) != "" {
+			parts = append(parts, strings.TrimSpace(loaded.Instructions.Text))
+			sources = appendInstructionSource(sources, loaded.Instructions.Source)
+		}
+	}
+	if params.Environments == nil {
+		loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
+			CWD:      r.effectiveThreadStartCWD(params),
+			MaxBytes: -1,
+		})
+		if err == nil && loaded != nil {
+			projectText := strings.TrimSpace(loaded.Text())
+			if projectText != "" {
+				parts = append(parts, projectText)
+			}
+			for _, entry := range loaded.Entries {
+				if entry.Provenance != promptctx.InstructionsProvenanceProject || strings.TrimSpace(entry.Contents) == "" {
+					continue
+				}
+				sources = appendInstructionSource(sources, entry.SourcePath)
+			}
+		}
+	}
+	return strings.Join(parts, promptctx.InstructionsAgentsMDSeparator), sources
+}
+
+func (r *RuntimeRouter) codexHomeForInstructions() string {
+	if r == nil {
+		return ""
+	}
+	if r.services.Config != nil {
+		if codexHome := strings.TrimSpace(r.services.Config.CodexHome()); codexHome != "" {
+			return codexHome
+		}
+	}
+	if r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
+		return codexHomeFromSessionStore(r.services.ThreadRouter.store)
+	}
+	return ""
+}
+
+func appendInstructionSource(sources []string, path string) []string {
+	path = canonicalInstructionSource(path)
+	if path == "" {
+		return sources
+	}
+	for _, existing := range sources {
+		if sameAppPath(existing, path) {
+			return sources
+		}
+	}
+	return append(sources, path)
+}
+
+func canonicalInstructionSource(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	if canonical, err := filepath.EvalSymlinks(path); err == nil {
+		path = canonical
+	}
+	return filepath.Clean(path)
+}
+
+func sameAppPath(a string, b string) bool {
+	a = filepath.Clean(strings.TrimSpace(a))
+	b = filepath.Clean(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return a == b
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	return a == b
+}
+
+func lifecycleIDsWithFallback(request *Request, ids []session.ThreadID) []session.ThreadID {
+	if len(ids) > 0 {
+		return ids
+	}
+	threadID := strings.TrimSpace(lifecycleThreadID(request))
+	if threadID == "" {
+		return nil
+	}
+	return []session.ThreadID{session.ThreadID(threadID)}
+}
+
+func (r *RuntimeRouter) markResponseThreadLoaded(result any, connectionID string) {
+	if r == nil {
+		return
+	}
+	var thread *Thread
+	switch response := result.(type) {
+	case *ThreadStartResponse:
+		thread = response.Thread
+	case *ThreadResumeResponse:
+		thread = response.Thread
+	case *ThreadForkResponse:
+		thread = response.Thread
+	default:
+		return
+	}
+	if thread == nil || strings.TrimSpace(thread.ID) == "" {
+		return
+	}
+	r.requireThreadStatus().UpsertThread(thread.ID, false)
+	r.subscribeThreadConnection(thread.ID, connectionID)
+	thread.Status = r.requireThreadStatus().LoadedStatusForThread(thread.ID)
+}
+
+func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.requireThreadStatus().RemoveThread(threadID)
+	r.clearThreadSubscriptions(threadID)
+}
+
+func (r *RuntimeRouter) subscribeThreadConnection(threadID string, connectionID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.subscriptionsMu.Lock()
+	defer r.subscriptionsMu.Unlock()
+	if r.threadSubscriptions == nil {
+		r.threadSubscriptions = map[string]map[string]struct{}{}
+	}
+	connections := r.threadSubscriptions[threadID]
+	if connections == nil {
+		connections = map[string]struct{}{}
+		r.threadSubscriptions[threadID] = connections
+	}
+	connections[connectionID] = struct{}{}
+}
+
+func (r *RuntimeRouter) firstAttestationCapableConnectionForThread(threadID string) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	connectionIDs := r.subscribedConnectionIDsForThread(threadID)
+	if len(connectionIDs) == 0 {
+		return "", false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	for _, connectionID := range connectionIDs {
+		if r.requestAttestation[connectionID] {
+			return connectionID, true
+		}
+	}
+	return "", false
+}
+
+func (r *RuntimeRouter) subscribedConnectionIDsForThread(threadID string) []string {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	r.subscriptionsMu.Lock()
+	defer r.subscriptionsMu.Unlock()
+	connections := r.threadSubscriptions[threadID]
+	connectionIDs := make([]string, 0, len(connections))
+	for connectionID := range connections {
+		connectionIDs = append(connectionIDs, connectionID)
+	}
+	sort.Strings(connectionIDs)
+	return connectionIDs
+}
+
+func (r *RuntimeRouter) unsubscribeThreadConnection(threadID string, connectionID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.subscriptionsMu.Lock()
+	defer r.subscriptionsMu.Unlock()
+	connections := r.threadSubscriptions[threadID]
+	if len(connections) == 0 {
+		return false
+	}
+	if _, ok := connections[connectionID]; !ok {
+		return false
+	}
+	delete(connections, connectionID)
+	if len(connections) == 0 {
+		delete(r.threadSubscriptions, threadID)
+	}
+	return true
+}
+
+func (r *RuntimeRouter) clearConnectionSubscriptions(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.subscriptionsMu.Lock()
+	defer r.subscriptionsMu.Unlock()
+	for threadID, connections := range r.threadSubscriptions {
+		delete(connections, connectionID)
+		if len(connections) == 0 {
+			delete(r.threadSubscriptions, threadID)
+		}
+	}
+}
+
+func (r *RuntimeRouter) clearThreadSubscriptions(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.subscriptionsMu.Lock()
+	defer r.subscriptionsMu.Unlock()
+	delete(r.threadSubscriptions, threadID)
+}
+
+func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
+	if r == nil || result == nil {
+		return
+	}
+	var thread *Thread
+	switch typed := result.(type) {
+	case *ThreadResumeResponse:
+		thread = typed.Thread
+	case *ThreadForkResponse:
+		thread = typed.Thread
+	default:
+		return
+	}
+	if thread == nil || len(thread.Turns) == 0 {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(thread.ID), true, true)
+	if err != nil || record == nil {
+		return
+	}
+	usage := restoredTokenUsageFromRecord(record)
+	if usage == nil {
+		return
+	}
+	turnID := strings.TrimSpace(stringFromMap(record.Metadata.Extra, "token_usage_turn_id"))
+	if turnID == "" || !threadHasTurnID(thread, turnID) {
+		turnID = latestRestoredTokenUsageTurnID(thread)
+	}
+	if turnID == "" {
+		return
+	}
+	r.notify(NotificationThreadTokenUsageUpdated, &ThreadTokenUsageUpdatedNotification{
+		ThreadID:   thread.ID,
+		TurnID:     turnID,
+		TokenUsage: *usage,
+	})
+}
+
+func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
+	if record == nil || len(record.Metadata.Extra) == 0 {
+		return nil
+	}
+	extra := record.Metadata.Extra
+	var info map[string]any
+	if rawInfo, ok := extra["token_usage_info"].(map[string]any); ok {
+		info = rawInfo
+	}
+	var totalRaw any
+	var lastRaw any
+	var windowRaw any
+	if info != nil {
+		totalRaw = firstMapValue(info, "total_token_usage", "totalTokenUsage", "total")
+		lastRaw = firstMapValue(info, "last_token_usage", "lastTokenUsage", "last")
+		windowRaw = firstMapValue(info, "model_context_window", "modelContextWindow")
+	}
+	if totalRaw == nil {
+		totalRaw = firstMapValue(extra, "total_token_usage", "totalTokenUsage", "total")
+	}
+	if lastRaw == nil {
+		lastRaw = firstMapValue(extra, "last_token_usage", "lastTokenUsage", "last")
+	}
+	if windowRaw == nil {
+		windowRaw = firstMapValue(extra, "model_context_window", "modelContextWindow")
+	}
+	total := tokenUsageBreakdownFromMetadata(totalRaw)
+	last := tokenUsageBreakdownFromMetadata(lastRaw)
+	if total == nil && last == nil {
+		return nil
+	}
+	if total == nil {
+		total = cloneTokenUsageBreakdownPtr(last)
+	}
+	usage := &TokenUsage{Total: total}
+	if last != nil {
+		usage.Last = last
+		usage.InputTokens = last.InputTokens
+		usage.CachedInputTokens = last.CachedInputTokens
+		usage.OutputTokens = last.OutputTokens
+		usage.ReasoningOutputTokens = last.ReasoningOutputTokens
+		usage.TotalTokens = last.TotalTokens
+	}
+	if window := int64FromAnyValue(windowRaw); window > 0 {
+		usage.ModelContextWindow = &window
+	}
+	return usage
+}
+
+func tokenUsageBreakdownFromMetadata(value any) *TokenUsageBreakdown {
+	values, ok := value.(map[string]any)
+	if !ok || len(values) == 0 {
+		return nil
+	}
+	breakdown := &TokenUsageBreakdown{
+		InputTokens:           int64FromAnyValue(firstMapValue(values, "input_tokens", "inputTokens")),
+		CachedInputTokens:     int64FromAnyValue(firstMapValue(values, "cached_input_tokens", "cachedInputTokens")),
+		OutputTokens:          int64FromAnyValue(firstMapValue(values, "output_tokens", "outputTokens")),
+		ReasoningOutputTokens: int64FromAnyValue(firstMapValue(values, "reasoning_output_tokens", "reasoningOutputTokens")),
+		TotalTokens:           int64FromAnyValue(firstMapValue(values, "total_tokens", "totalTokens")),
+	}
+	if breakdown.TotalTokens == 0 {
+		breakdown.TotalTokens = breakdown.InputTokens + breakdown.OutputTokens
+	}
+	if breakdown.InputTokens == 0 && breakdown.CachedInputTokens == 0 && breakdown.OutputTokens == 0 && breakdown.ReasoningOutputTokens == 0 && breakdown.TotalTokens == 0 {
+		return nil
+	}
+	return breakdown
+}
+
+func firstMapValue(values map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func int64FromAnyValue(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case int32:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func threadHasTurnID(thread *Thread, turnID string) bool {
+	if thread == nil || strings.TrimSpace(turnID) == "" {
+		return false
+	}
+	for i := range thread.Turns {
+		if thread.Turns[i].ID == turnID {
+			return true
+		}
+	}
+	return false
+}
+
+func latestRestoredTokenUsageTurnID(thread *Thread) string {
+	if thread == nil {
+		return ""
+	}
+	for i := len(thread.Turns) - 1; i >= 0; i-- {
+		if thread.Turns[i].Status == TurnStatusCompleted || thread.Turns[i].Status == TurnStatusFailed {
+			return thread.Turns[i].ID
+		}
+	}
+	if len(thread.Turns) == 0 {
+		return ""
+	}
+	return thread.Turns[len(thread.Turns)-1].ID
+}
+
+type activeRuntimeTurnForkSnapshot struct {
+	ThreadID    string
+	TurnID      string
+	StartedAtMS int64
+	Params      *turn.TurnStartParams
+}
+
+func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bool, error) {
+	if r == nil || request == nil || request.Method != MethodThreadFork || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, false, nil
+	}
+	var params ThreadForkParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, true, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, true, err
+	}
+	if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
+		return nil, true, err
+	}
+	if strings.TrimSpace(params.LastTurnID) != "" {
+		return nil, false, nil
+	}
+	sourceID, err := threadForkSourceID(&params)
+	if err != nil {
+		return nil, true, err
+	}
+	active, ok := r.activeRuntimeTurnForkSnapshot(string(sourceID))
+	if !ok {
+		return nil, false, nil
+	}
+	mode := params.HistoryMode
+	if mode == "" {
+		mode = session.ForkAll
+	}
+	now := r.services.ThreadRouter.now().UTC()
+	sourceRecord, err := r.threadRecord(sourceID, true, true)
+	if err != nil {
+		return nil, true, err
+	}
+	if sourceRecord != nil && sourceRecord.Archived {
+		return nil, true, threadResumeArchivedError(sourceRecord.ID)
+	}
+	if paginatedRolloutHistory(sourceRecord) {
+		return nil, true, methodNotFound("paginated_threads is not supported yet")
+	}
+	annotateActiveForkSourceSnapshot(sourceRecord, active, now)
+	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
+		Mode:       mode,
+		LastN:      params.LastN,
+		LastTurnID: params.LastTurnID,
+		Ephemeral:  params.Ephemeral,
+		Now:        now,
+	})
+	if err != nil {
+		return nil, true, threadForkRecordError(err)
+	}
+	applyThreadForkName(record, sourceRecord)
+	record.Metadata.RolloutTurns = activeForkTurnSnapshots(record, active, now)
+	if params.ThreadSource != nil {
+		value := string(*params.ThreadSource)
+		record.Metadata.ThreadSource = value
+	}
+	applyThreadForkOverrides(record, &params)
+	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
+	if !params.Ephemeral {
+		if err := r.services.ThreadRouter.store.Save(record); err != nil {
+			return nil, true, err
+		}
+	}
+	if !params.Ephemeral {
+		if err := r.createActiveForkThreadRollout(record, active, now); err != nil {
+			return nil, true, err
+		}
+	} else {
+		r.saveEphemeralThreadRecord(record)
+	}
+	responseRecord := record
+	if params.ExcludeTurns {
+		responseRecord = cloneRuntimeSessionRecord(record)
+		responseRecord.Items = nil
+		responseRecord.Metadata.RolloutTurns = nil
+	}
+	path := ""
+	if !params.Ephemeral {
+		path = r.services.ThreadRouter.threadRolloutPath(record)
+	}
+	thread := BuildThread(responseRecord, path, !params.ExcludeTurns)
+	if thread != nil {
+		thread.Status = IdleStatus()
+	}
+	return &ThreadForkResponse{
+		Thread:                  thread,
+		ApprovalPolicy:          params.ApprovalPolicy,
+		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		CWD:                     record.Metadata.CWD,
+		Model:                   record.Metadata.Model,
+		ModelProvider:           record.Metadata.ModelProvider,
+		Sandbox:                 params.Sandbox,
+		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
+		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
+		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+	}, true, nil
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnForkSnapshot(threadID string) (activeRuntimeTurnForkSnapshot, bool) {
+	if r == nil {
+		return activeRuntimeTurnForkSnapshot{}, false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return activeRuntimeTurnForkSnapshot{}, false
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || strings.TrimSpace(active.TurnID) == "" {
+		return activeRuntimeTurnForkSnapshot{}, false
+	}
+	return activeRuntimeTurnForkSnapshot{
+		ThreadID:    threadID,
+		TurnID:      strings.TrimSpace(active.TurnID),
+		StartedAtMS: active.StartedAtMS,
+		Params:      cloneTurnStartParams(active.Params),
+	}, true
+}
+
+func annotateActiveForkSourceSnapshot(record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time) {
+	if record == nil || strings.TrimSpace(active.TurnID) == "" {
+		return
+	}
+	startedAt := activeForkStartedAt(active, now)
+	if promptItem, ok := runtimeUserPromptSessionItem(active.TurnID, active.Params, startedAt); ok && !sessionRecordHasItemID(record, promptItem.ID) {
+		record.Items = append(record.Items, promptItem)
+	}
+	marker := interruptedTurnMarkerSessionItem(active.TurnID, now)
+	if !sessionRecordHasItemID(record, marker.ID) && !sessionRecordHasTurnAbortedMarker(record, active.TurnID) {
+		record.Items = append(record.Items, marker)
+	}
+}
+
+func sessionRecordHasItemID(record *session.Record, itemID string) bool {
+	if record == nil || strings.TrimSpace(itemID) == "" {
+		return false
+	}
+	for i := range record.Items {
+		if record.Items[i].ID == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionRecordHasTurnAbortedMarker(record *session.Record, turnID string) bool {
+	if record == nil || strings.TrimSpace(turnID) == "" {
+		return false
+	}
+	for i := range record.Items {
+		item := &record.Items[i]
+		if firstNonEmpty(stringFromMap(item.Metadata, "kind"), stringFromMap(item.Data, "kind")) != "turn_aborted" {
+			continue
+		}
+		if firstNonEmpty(stringFromMap(item.Metadata, "turnId"), stringFromMap(item.Metadata, "turn_id"), stringFromMap(item.Data, "turnId"), stringFromMap(item.Data, "turn_id")) == turnID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RuntimeRouter) createActiveForkThreadRollout(record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time) error {
+	if r == nil || r.services.ThreadRouter == nil || record == nil {
+		return nil
+	}
+	recorder, err := r.services.ThreadRouter.newThreadRolloutRecorder(record, record.CreatedAt)
+	if err != nil || recorder == nil {
+		return err
+	}
+	defer recorder.Close()
+	return appendActiveForkRolloutItems(recorder, record, active, now)
+}
+
+type runtimeForkTurnItemGroup struct {
+	TurnID      string
+	Items       []session.Item
+	StartedAt   time.Time
+	CompletedAt time.Time
+}
+
+func appendActiveForkRolloutItems(recorder *rollout.Recorder, record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time) error {
+	if recorder == nil || record == nil {
+		return nil
+	}
+	for _, group := range runtimeForkTurnItemGroups(record.Items, record.CreatedAt) {
+		startedAt := group.StartedAt
+		completedAt := group.CompletedAt
+		durationMS := runtimeForkDurationMS(startedAt, completedAt)
+		if group.TurnID == active.TurnID {
+			startedAt = activeForkStartedAt(active, group.StartedAt)
+			completedAt = now.UTC()
+			durationMS = runtimeForkDurationMS(startedAt, completedAt)
+		}
+		if err := recorder.AppendTurnStarted(group.TurnID, startedAt); err != nil {
+			return err
+		}
+		if err := rollout.AppendSessionItems(recorder, group.Items, now); err != nil {
+			return err
+		}
+		if group.TurnID == active.TurnID {
+			if err := recorder.AppendTurnAborted(group.TurnID, "interrupted", completedAt, durationMS); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := recorder.AppendTurnComplete(group.TurnID, completedAt, durationMS); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func activeForkTurnSnapshots(record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time) []session.TurnSnapshot {
+	if record == nil {
+		return nil
+	}
+	groups := runtimeForkTurnItemGroups(record.Items, record.CreatedAt)
+	if len(groups) == 0 {
+		return nil
+	}
+	snapshots := make([]session.TurnSnapshot, 0, len(groups))
+	for _, group := range groups {
+		status := string(TurnStatusCompleted)
+		startedAt := group.StartedAt
+		completedAt := group.CompletedAt
+		if group.TurnID == active.TurnID {
+			status = string(TurnStatusInterrupted)
+			startedAt = activeForkStartedAt(active, group.StartedAt)
+			completedAt = now.UTC()
+		}
+		durationMS := runtimeForkDurationMS(startedAt, completedAt)
+		snapshots = append(snapshots, session.TurnSnapshot{
+			ID:          group.TurnID,
+			Status:      status,
+			StartedAt:   runtimeInt64Ptr(startedAt.UTC().Unix()),
+			CompletedAt: runtimeInt64Ptr(completedAt.UTC().Unix()),
+			DurationMS:  runtimeInt64Ptr(durationMS),
+		})
+	}
+	return snapshots
+}
+
+func runtimeForkTurnItemGroups(items []session.Item, fallback time.Time) []runtimeForkTurnItemGroup {
+	if len(items) == 0 {
+		return nil
+	}
+	groups := []runtimeForkTurnItemGroup{}
+	for i := range items {
+		item := items[i]
+		turnID := runtimeSessionItemTurnID(&item, i)
+		createdAt := runtimeItemCreatedAt(item, fallback)
+		if len(groups) == 0 || groups[len(groups)-1].TurnID != turnID {
+			groups = append(groups, runtimeForkTurnItemGroup{
+				TurnID:      turnID,
+				Items:       []session.Item{},
+				StartedAt:   createdAt,
+				CompletedAt: createdAt,
+			})
+		}
+		group := &groups[len(groups)-1]
+		group.Items = append(group.Items, item)
+		if createdAt.Before(group.StartedAt) {
+			group.StartedAt = createdAt
+		}
+		if createdAt.After(group.CompletedAt) {
+			group.CompletedAt = createdAt
+		}
+	}
+	return groups
+}
+
+func runtimeSessionItemTurnID(item *session.Item, index int) string {
+	if item != nil {
+		if turnID := firstNonEmpty(stringFromMap(item.Metadata, "turnId"), stringFromMap(item.Metadata, "turn_id"), stringFromMap(item.Data, "turnId"), stringFromMap(item.Data, "turn_id")); turnID != "" {
+			return turnID
+		}
+	}
+	return fmt.Sprintf("turn-%d", index+1)
+}
+
+func runtimeItemCreatedAt(item session.Item, fallback time.Time) time.Time {
+	if !item.CreatedAt.IsZero() {
+		return item.CreatedAt.UTC()
+	}
+	if !fallback.IsZero() {
+		return fallback.UTC()
+	}
+	return time.Now().UTC()
+}
+
+func activeForkStartedAt(active activeRuntimeTurnForkSnapshot, fallback time.Time) time.Time {
+	if active.StartedAtMS > 0 {
+		return time.UnixMilli(active.StartedAtMS).UTC()
+	}
+	if !fallback.IsZero() {
+		return fallback.UTC()
+	}
+	return time.Now().UTC()
+}
+
+func runtimeForkDurationMS(startedAt time.Time, completedAt time.Time) int64 {
+	if startedAt.IsZero() || completedAt.IsZero() {
+		return 0
+	}
+	durationMS := completedAt.UTC().Sub(startedAt.UTC()).Milliseconds()
+	if durationMS < 0 {
+		return 0
+	}
+	return durationMS
+}
+
+func runtimeInt64Ptr(value int64) *int64 {
+	return &value
+}
+
+func (r *RuntimeRouter) lifecycleSubtreeIDs(request *Request) []session.ThreadID {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || request == nil {
+		return nil
+	}
+	threadID := lifecycleThreadID(request)
+	if threadID == "" {
+		return nil
+	}
+	var (
+		ids []session.ThreadID
+		err error
+	)
+	switch request.Method {
+	case MethodThreadArchive:
+		ids, err = r.services.ThreadRouter.archiveSubtreeThreadIDs(session.ThreadID(threadID))
+	case MethodThreadDelete:
+		ids, err = r.services.ThreadRouter.deleteSubtreeThreadIDs(session.ThreadID(threadID))
+	default:
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	return ids
+}
+
+func threadStartedNotificationThread(thread *Thread) *Thread {
+	if thread == nil {
+		return nil
+	}
+	clone := *thread
+	clone.Turns = nil
+	return &clone
+}
+
+func lifecycleThreadID(request *Request) string {
+	if request == nil {
+		return ""
+	}
+	var payload struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := request.DecodeParams(&payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.ThreadID)
+}
+
+func lifecycleSetNameParams(request *Request) (ThreadSetNameParams, bool) {
+	var params ThreadSetNameParams
+	if request == nil || request.DecodeParams(&params) != nil || strings.TrimSpace(params.ThreadID) == "" {
+		return ThreadSetNameParams{}, false
+	}
+	return params, true
+}
+
+func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse, error) {
+	var params InitializeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	connectionID := request.normalizedConnectionID()
+	if !r.rememberConnectionClientInfo(connectionID, params.ClientInfo) {
+		return nil, jsonRPCInvalidRequest("Already initialized")
+	}
+	r.rememberConnectionNotificationOptOut(connectionID, params.Capabilities)
+	r.rememberConnectionExperimentalAPI(connectionID, params.Capabilities)
+	r.rememberConnectionRequestAttestation(connectionID, params.Capabilities)
+	r.rememberConnectionMCPOpenAIForm(connectionID, params.Capabilities)
+	r.syncMCPOpenAIFormElicitationCapability()
+	codexHome := ""
+	if r.services.Config != nil {
+		codexHome = r.services.Config.CodexHome()
+	}
+	if codexHome == "" {
+		codexHome = r.services.DefaultCWD
+	}
+	userAgent := InitializeUserAgent(params.ClientInfo)
+	response := NewInitializeResponse(codexHome, userAgent)
+	warnings := r.configWarningsForInitialize()
+	for i := range warnings {
+		warning := warnings[i]
+		r.notify(NotificationConfigWarning, &warning)
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNotification {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	return r.services.Config.Warnings()
+}
+
+func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
+	var params turn.TurnStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
+		return nil, err
+	}
+	if err := r.validateTurnStartEnvironments(&params); err != nil {
+		return nil, err
+	}
+	if params.Permissions != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
+		return nil, jsonRPCInvalidRequest("`permissions` cannot be combined with `sandboxPolicy`")
+	}
+	settingsUpdate, hasSettingsUpdate := turnStartSettingsUpdateParams(&params)
+	if err := r.prepareTurnStartParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.runPendingSessionStartHook(context.Background(), &params); err != nil {
+		return nil, err
+	}
+	reservedRuntime := false
+	if r.hasRuntimeThreadStore() {
+		if err := r.reserveRuntimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		reservedRuntime = true
+	}
+	response, err := r.requireTurns().Start(&params)
+	if err != nil {
+		if reservedRuntime {
+			r.clearActiveRuntimeTurn(params.ThreadID, "")
+		}
+		return nil, err
+	}
+	_ = r.persistTurnStartRuntimeWorkspaceRoots(&params)
+	if hasSettingsUpdate {
+		r.applyTurnStartSettingsUpdate(settingsUpdate)
+	}
+	r.startTurnRuntimeAsync(&params, response)
+	return response, nil
+}
+
+func (r *RuntimeRouter) persistTurnStartRuntimeWorkspaceRoots(params *turn.TurnStartParams) error {
+	if params == nil {
+		return nil
+	}
+	return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, threadRuntimeWorkspaceRoots(params.CWD, params.RuntimeWorkspaceRoots))
+}
+
+func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, request *Request) {
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	if params.CWD == nil && len(params.RuntimeWorkspaceRoots) == 0 {
+		return
+	}
+	roots := append([]string(nil), response.RuntimeWorkspaceRoots...)
+	if len(roots) == 0 {
+		roots = threadRuntimeWorkspaceRoots(response.CWD, params.RuntimeWorkspaceRoots)
+	}
+	_ = r.persistThreadRecordRuntimeWorkspaceRoots(response.Thread.ID, roots)
+}
+
+func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Request) {
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" {
+		return
+	}
+	activeTurn := r.activeRuntimeTurnSnapshot(threadID)
+	if activeTurn == nil {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, params.InitialTurnsPage != nil)
+	if err != nil || record == nil {
+		return
+	}
+	activeParams := r.activeTurnParams(threadID)
+	response.CWD = ""
+	response.Model = ""
+	response.ModelProvider = ""
+	if activeParams != nil {
+		response.CWD = strings.TrimSpace(activeParams.CWD)
+		response.Model = strings.TrimSpace(activeParams.Model)
+		response.ModelProvider = strings.TrimSpace(providerFromTurnStart(activeParams))
+	}
+	response.CWD = firstNonEmpty(response.CWD, strings.TrimSpace(record.Metadata.CWD))
+	response.Model = firstNonEmpty(response.Model, strings.TrimSpace(record.Metadata.Model))
+	response.ModelProvider = firstNonEmpty(response.ModelProvider, strings.TrimSpace(record.Metadata.ModelProvider))
+	if params.InitialTurnsPage != nil {
+		page, err := buildTurnsResponse(record, &ThreadTurnsListParams{
+			ThreadID:      threadID,
+			Limit:         params.InitialTurnsPage.Limit,
+			SortDirection: params.InitialTurnsPage.SortDirection,
+			ItemsView:     params.InitialTurnsPage.ItemsView,
+		}, &turnsResponseOptions{
+			ActiveTurn:   activeTurn,
+			LoadedStatus: r.requireThreadStatus().LoadedStatusForThread(threadID),
+		})
+		if err == nil {
+			response.InitialTurnsPage = page
+		}
+	}
+}
+
+func (r *RuntimeRouter) markThreadResumeSessionStartSource(result any, request *Request) {
+	if r == nil || request == nil {
+		return
+	}
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil {
+		return
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	if threadID := strings.TrimSpace(params.ThreadID); threadID != "" && r.activeRuntimeTurnSnapshot(threadID) != nil {
+		return
+	}
+	_ = r.markThreadPendingSessionStartSource(response.Thread.ID, SessionStartSourceResume)
+}
+
+func (r *RuntimeRouter) persistThreadRecordRuntimeWorkspaceRoots(threadID string, roots []string) error {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return err
+	}
+	extra := cloneAnyMap(record.Metadata.Extra)
+	if len(roots) > 0 && extra == nil {
+		extra = map[string]any{}
+	}
+	if len(roots) > 0 {
+		extra["runtime_workspace_roots"] = append([]string(nil), roots...)
+	} else if len(extra) > 0 {
+		delete(extra, "runtime_workspace_roots")
+	} else {
+		return nil
+	}
+	if runtimeRecordEphemeral(record) {
+		record.Metadata.Extra = extra
+		r.saveEphemeralThreadRecord(record)
+		return nil
+	}
+	_, err = r.services.ThreadRouter.store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
+	return err
+}
+
+func (r *RuntimeRouter) validateTurnStartEnvironments(params *turn.TurnStartParams) error {
+	if params == nil {
+		return nil
+	}
+	return r.validateTurnEnvironmentSelections(params.Environments)
+}
+
+func (r *RuntimeRouter) validateThreadStartEnvironments(params *ThreadStartParams) error {
+	if params == nil {
+		return nil
+	}
+	return r.validateTurnEnvironmentSelections(params.Environments)
+}
+
+func (r *RuntimeRouter) validateTurnEnvironmentSelections(environments []map[string]any) error {
+	if len(environments) == 0 {
+		return nil
+	}
+	manager := r.requireEnvironment()
+	for i := range environments {
+		environmentID := firstNonEmpty(
+			threadItemStringFromAnyMap(environments[i], "environmentId"),
+			threadItemStringFromAnyMap(environments[i], "environment_id"),
+		)
+		environmentID = strings.TrimSpace(environmentID)
+		if environmentID == "" {
+			return jsonRPCInvalidRequest("environmentId is required")
+		}
+		cwd := firstNonEmpty(
+			threadItemStringFromAnyMap(environments[i], "cwd"),
+			threadItemStringFromAnyMap(environments[i], "CWD"),
+		)
+		cwd = strings.TrimSpace(cwd)
+		if !isAbsoluteAppPath(cwd) {
+			return jsonRPCInvalidRequest(fmt.Sprintf("invalid cwd for environment `%s`: path `%s` does not use absolute POSIX or Windows path syntax", environmentID, cwd))
+		}
+		if _, ok := manager.Record(environmentID); !ok {
+			return jsonRPCInvalidRequest(fmt.Sprintf("unknown turn environment id `%s`", environmentID))
+		}
+	}
+	return nil
+}
+
+func isAbsoluteAppPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
+		return true
+	}
+	return len(value) >= 3 && asciiLetter(value[0]) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+}
+
+func asciiLetter(value byte) bool {
+	return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
+}
+
+func turnStartSandboxPolicyPresent(policy any) bool {
+	if policy == nil {
+		return false
+	}
+	value := reflect.ValueOf(policy)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func turnStartSettingsUpdateParams(params *turn.TurnStartParams) (*SettingsUpdateParams, bool) {
+	if params == nil {
+		return nil, false
+	}
+	update := &SettingsUpdateParams{ThreadID: strings.TrimSpace(params.ThreadID)}
+	hasUpdate := false
+	if cwd := strings.TrimSpace(params.CWD); cwd != "" {
+		update.CWD = &cwd
+		hasUpdate = true
+	}
+	if modelID := strings.TrimSpace(params.Model); modelID != "" {
+		update.Model = &modelID
+		hasUpdate = true
+	}
+	if params.ServiceTierSet || params.ServiceTier != nil {
+		update.ServiceTier = &ThreadExtraOptionalString{Set: true, Value: cloneString(params.ServiceTier)}
+		hasUpdate = true
+	}
+	if params.Effort != nil {
+		update.Effort = cloneString(params.Effort)
+		hasUpdate = true
+	}
+	if params.Summary != nil {
+		update.Summary = cloneString(params.Summary)
+		hasUpdate = true
+	}
+	if params.Personality != nil {
+		update.Personality = cloneString(params.Personality)
+		hasUpdate = true
+	}
+	return update, hasUpdate
+}
+
+func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParams) {
+	if r == nil || params == nil {
+		return
+	}
+	service := r.requireThreadExtras()
+	if _, err := service.UpdateSettings(params); err != nil {
+		return
+	}
+	if settings := service.Settings(params.ThreadID); settings != nil {
+		r.notify(NotificationThreadSettingsUpdated, &SettingsUpdatedNotification{
+			ThreadID:       strings.TrimSpace(params.ThreadID),
+			ThreadSettings: *settings,
+		})
+	}
+}
+
+func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) error {
+	if r == nil || params == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), false, false)
+	if err != nil {
+		return err
+	}
+	settings := r.threadSettingsForTurn(params.ThreadID)
+	if strings.TrimSpace(params.CWD) == "" {
+		params.CWD = firstNonEmpty(threadSettingsCWD(settings), strings.TrimSpace(record.Metadata.CWD))
+	}
+	if strings.TrimSpace(params.Model) == "" {
+		params.Model = firstNonEmpty(threadSettingsModel(settings), strings.TrimSpace(record.Metadata.Model))
+	}
+	applyThreadSettingsToTurnStartParams(params, settings)
+	if strings.TrimSpace(params.Originator) == "" {
+		params.Originator = strings.TrimSpace(record.Metadata.Originator)
+	}
+	if params.Config == nil {
+		params.Config = map[string]any{}
+	}
+	if len(params.DynamicTools) == 0 {
+		params.DynamicTools = dynamicToolsFromRecordMetadata(record.Metadata)
+	}
+	params.ExperimentalRawEvents = threadRecordExperimentalRawEvents(record)
+	if params.BaseInstructions == nil && strings.TrimSpace(record.Metadata.BaseInstructions) != "" {
+		params.BaseInstructions = cloneString(&record.Metadata.BaseInstructions)
+	} else if params.BaseInstructions == nil && boolFromMap(record.Metadata.Extra, "suppress_model_instructions") {
+		empty := ""
+		params.BaseInstructions = &empty
+	}
+	if strings.TrimSpace(providerFromTurnStart(params)) == "" && strings.TrimSpace(record.Metadata.ModelProvider) != "" {
+		params.Config["model_provider"] = strings.TrimSpace(record.Metadata.ModelProvider)
+	}
+	return nil
+}
+
+func (r *RuntimeRouter) threadSettingsForTurn(threadID string) *Settings {
+	if r == nil || r.services.ThreadExtras == nil {
+		return nil
+	}
+	return r.services.ThreadExtras.Settings(threadID)
+}
+
+func applyThreadSettingsToTurnStartParams(params *turn.TurnStartParams, settings *Settings) {
+	if params == nil || settings == nil {
+		return
+	}
+	if !params.ServiceTierSet && params.ServiceTier == nil && settings.ServiceTier != nil {
+		params.ServiceTier = cloneString(settings.ServiceTier)
+	}
+	if params.Effort == nil && settings.Effort != nil {
+		params.Effort = cloneString(settings.Effort)
+	}
+	if params.Summary == nil && settings.Summary != nil {
+		params.Summary = cloneString(settings.Summary)
+	}
+	if params.Personality == nil && settings.Personality != nil {
+		params.Personality = cloneString(settings.Personality)
+	}
+}
+
+func threadSettingsCWD(settings *Settings) string {
+	if settings == nil {
+		return ""
+	}
+	return strings.TrimSpace(settings.CWD)
+}
+
+func threadSettingsModel(settings *Settings) string {
+	if settings == nil {
+		return ""
+	}
+	return strings.TrimSpace(settings.Model)
+}
+
+func dynamicToolsFromRecordMetadata(metadata session.Metadata) []turn.DynamicToolSpec {
+	if len(metadata.DynamicTools) > 0 {
+		data, err := json.Marshal(metadata.DynamicTools)
+		if err == nil {
+			var tools []turn.DynamicToolSpec
+			if err := json.Unmarshal(data, &tools); err == nil {
+				return tools
+			}
+		}
+	}
+	return dynamicToolsFromMetadata(metadata.Extra)
+}
+
+func dynamicToolsFromMetadata(extra map[string]any) []turn.DynamicToolSpec {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra["dynamic_tools"]
+	if !ok {
+		raw = extra["dynamicTools"]
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var tools []turn.DynamicToolSpec
+	if err := json.Unmarshal(data, &tools); err != nil {
+		return nil
+	}
+	return tools
+}
+
+func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerResponse, error) {
+	var params turn.TurnSteerParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
+		return nil, err
+	}
+	response, err := r.requireTurns().Steer(&params)
+	if err != nil {
+		return nil, turnSteerRuntimeError(err)
+	}
+	if r.hasRuntimeThreadStore() {
+		if item, ok := sessionItemFromTurnSteer(&params); ok {
+			if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
+				return nil, err
+			}
+			_ = r.appendRuntimeRollout(params.ThreadID, []session.Item{item}, item.CreatedAt)
+			threadItem := BuildThreadItem(item)
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item:        threadItemPayload(threadItem),
+				ThreadID:    params.ThreadID,
+				TurnID:      params.ExpectedTurnID,
+				StartedAtMS: item.CreatedAt.UTC().UnixMilli(),
+			})
+			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+				Item:          threadItemPayload(threadItem),
+				ThreadID:      params.ThreadID,
+				TurnID:        params.ExpectedTurnID,
+				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+			})
+		}
+	}
+	if inputItems := inputItemsFromTurnSteer(&params); len(inputItems) > 0 {
+		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
+			ThreadID:   params.ThreadID,
+			TurnID:     params.ExpectedTurnID,
+			InputItems: inputItems,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
+}
+
+func turnSteerRuntimeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, turn.ErrNoActiveTurnToSteer):
+		return jsonRPCInvalidRequest("no active turn to steer")
+	case errors.Is(err, turn.ErrExpectedTurnMismatch):
+		return jsonRPCInvalidRequest(strings.TrimSpace(err.Error()))
+	case errors.Is(err, turn.ErrEmptyTurnSteerInput):
+		return jsonRPCInvalidRequest("input must not be empty")
+	}
+	message := strings.TrimSpace(err.Error())
+	if strings.Contains(message, "expectedTurnId must not be empty") {
+		return jsonRPCInvalidRequest("expectedTurnId must not be empty")
+	}
+	return err
+}
+
+func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterruptResponse, error) {
+	var params turn.TurnInterruptParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireTurns().Interrupt(&params)
+	if err != nil {
+		return nil, err
+	}
+	if r.hasRuntimeThreadStore() {
+		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
+			r.finishTurnInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS)
+		}
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartResponse, error) {
+	var params review.StartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireReviews().Start(&params)
+}
+
+func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
+	switch request.Method {
+	case MethodThreadGoalSet:
+		var params GoalSetParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		return r.setThreadGoal(&params)
+	case MethodThreadGoalGet:
+		var params GoalGetParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		return r.getThreadGoal(&params)
+	case MethodThreadGoalClear:
+		var params GoalClearParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		return r.clearThreadGoal(&params)
+	case MethodThreadSettingsUpdate:
+		var params SettingsUpdateParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(params.ThreadID) == "" {
+			return nil, fmt.Errorf("%w: threadId is required", ErrInvalidThreadExtraRequest)
+		}
+		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if params.Permissions != nil && params.SandboxPolicy != nil {
+			return nil, jsonRPCInvalidRequest("`permissions` cannot be combined with `sandboxPolicy`")
+		}
+		service := r.requireThreadExtras()
+		response, err := service.UpdateSettings(&params)
+		if err != nil {
+			return nil, err
+		}
+		if settings := service.Settings(params.ThreadID); settings != nil {
+			r.notify(NotificationThreadSettingsUpdated, &SettingsUpdatedNotification{
+				ThreadID:       strings.TrimSpace(params.ThreadID),
+				ThreadSettings: *settings,
+			})
+		}
+		return response, nil
+	case MethodThreadShellCommand:
+		var params ShellCommandParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		return r.handleThreadShellCommand(&params)
+	case MethodThreadBackgroundTerminalsClean:
+		var params BackgroundTerminalsCleanParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+			return nil, err
+		}
+		return r.requireThreadExtras().CleanBackgroundTerminals(&params)
+	case MethodThreadBackgroundTerminalsList:
+		var params BackgroundTerminalsListParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+			return nil, err
+		}
+		return r.requireThreadExtras().ListBackgroundTerminals(&params)
+	case MethodThreadBackgroundTerminalsTerminate:
+		var params BackgroundTerminalsTerminateParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+			return nil, err
+		}
+		return r.requireThreadExtras().TerminateBackgroundTerminal(&params)
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
+	}
+}
+
+func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams) (*GoalSetResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		response, err := r.requireThreadExtras().SetGoal(params)
+		if err == nil && response != nil {
+			r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
+		}
+		return response, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support goals: %s", params.ThreadID))
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	existing, found, err := goalFromRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		existing = nil
+	}
+	now := time.Now().UTC().Unix()
+	if r.services.ThreadRouter.now != nil {
+		now = r.services.ThreadRouter.now().UTC().Unix()
+	}
+	goal, err := buildGoalFromSetParams(params, existing, now)
+	if err != nil {
+		return nil, err
+	}
+	if record.Metadata.Extra == nil {
+		record.Metadata.Extra = map[string]any{}
+	}
+	record.Metadata.Extra[threadGoalExtraKey] = cloneGoal(goal)
+	record.UpdatedAt = time.Unix(now, 0).UTC()
+	record.RecencyAt = record.UpdatedAt
+	if strings.TrimSpace(record.Preview) == "" {
+		record.Preview = goal.Objective
+	}
+	if err := r.services.ThreadRouter.store.Save(record); err != nil {
+		return nil, err
+	}
+	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
+	return &GoalSetResponse{Goal: goal}, nil
+}
+
+func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return r.requireThreadExtras().GetGoal(params)
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support goals: %s", params.ThreadID))
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	goal, found, err := goalFromRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	if !found || goal == nil {
+		return &GoalGetResponse{}, nil
+	}
+	cloned := cloneGoal(*goal)
+	return &GoalGetResponse{Goal: &cloned}, nil
+}
+
+func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams) (*GoalClearResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		response, err := r.requireThreadExtras().ClearGoal(params)
+		if err == nil && response != nil && response.Cleared {
+			r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+		}
+		return response, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support goals: %s", params.ThreadID))
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	cleared := false
+	if record.Metadata.Extra != nil {
+		if _, ok := record.Metadata.Extra[threadGoalExtraKey]; ok {
+			delete(record.Metadata.Extra, threadGoalExtraKey)
+			cleared = true
+		}
+	}
+	if cleared {
+		now := time.Now().UTC()
+		if r.services.ThreadRouter.now != nil {
+			now = r.services.ThreadRouter.now().UTC()
+		}
+		record.UpdatedAt = now
+		record.RecencyAt = now
+		if err := r.services.ThreadRouter.store.Save(record); err != nil {
+			return nil, err
+		}
+		r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+	}
+	return &GoalClearResponse{Cleared: cleared}, nil
+}
+
+func (r *RuntimeRouter) dispatchRealtime(request *Request) (any, error) {
+	switch request.Method {
+	case MethodThreadRealtimeStart:
+		var params realtime.StartParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if _, notifications, err := r.requireRealtime().Start(&params); err != nil {
+			return nil, err
+		} else {
+			r.notifyRealtime(notifications)
+		}
+		return &realtime.StartResponse{}, nil
+	case MethodThreadRealtimeAppendAudio:
+		var params realtime.AppendAudioParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if _, err := r.requireRealtime().AppendAudio(&params); err != nil {
+			return nil, err
+		}
+		return &realtime.AppendAudioResponse{}, nil
+	case MethodThreadRealtimeAppendText:
+		var params realtime.AppendTextParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if _, err := r.requireRealtime().AppendText(&params); err != nil {
+			return nil, err
+		}
+		return &realtime.AppendTextResponse{}, nil
+	case MethodThreadRealtimeAppendSpeech:
+		var params realtime.AppendSpeechParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if _, err := r.requireRealtime().AppendSpeech(&params); err != nil {
+			return nil, err
+		}
+		return &realtime.AppendSpeechResponse{}, nil
+	case MethodThreadRealtimeStop:
+		var params realtime.StopParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
+			return nil, err
+		}
+		if _, notification, err := r.requireRealtime().Stop(&params, "client"); err != nil {
+			return nil, err
+		} else {
+			r.notifyRealtime([]realtime.Notification{notification})
+		}
+		return &realtime.StopResponse{}, nil
+	case MethodThreadRealtimeListVoices:
+		var params realtime.ListVoicesParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		return r.requireRealtime().ListVoices(&params), nil
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
+	}
+}
+
+func (r *RuntimeRouter) ensureRealtimeThread(threadID string) error {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	_, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	return err
+}
+
+func (r *RuntimeRouter) notifyRealtime(notifications []realtime.Notification) {
+	for i := range notifications {
+		method, params, ok := realtimeNotificationPayload(&notifications[i])
+		if !ok {
+			continue
+		}
+		r.notify(method, params)
+	}
+}
+
+func realtimeNotificationPayload(notification *realtime.Notification) (NotificationMethod, any, bool) {
+	if notification == nil {
+		return "", nil, false
+	}
+	switch notification.Method {
+	case realtime.NotificationStarted:
+		params, ok := notification.Params.(realtime.StartedNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.StartedNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeStarted, &ThreadRealtimeStartedNotification{
+			ThreadID:          params.ThreadID,
+			RealtimeSessionID: cloneString(params.RealtimeSessionID),
+			Version:           string(params.Version),
+		}, true
+	case realtime.NotificationItemAdded:
+		params, ok := notification.Params.(realtime.ItemAddedNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ItemAddedNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeItemAdded, &ThreadRealtimeItemAddedNotification{ThreadID: params.ThreadID, Item: cloneAnyMap(params.Item)}, true
+	case realtime.NotificationTranscriptDelta:
+		params, ok := notification.Params.(realtime.TranscriptDeltaNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.TranscriptDeltaNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeTranscriptDelta, &ThreadRealtimeTranscriptDeltaNotification{
+			ThreadID: params.ThreadID,
+			Role:     params.Role,
+			Delta:    params.Delta,
+		}, true
+	case realtime.NotificationTranscriptDone:
+		params, ok := notification.Params.(realtime.TranscriptDoneNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.TranscriptDoneNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeTranscriptDone, &ThreadRealtimeTranscriptDoneNotification{
+			ThreadID: params.ThreadID,
+			Role:     params.Role,
+			Text:     params.Text,
+		}, true
+	case realtime.NotificationOutputAudioDelta:
+		params, ok := notification.Params.(realtime.OutputAudioDeltaNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.OutputAudioDeltaNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeOutputAudioDelta, &ThreadRealtimeOutputAudioDeltaNotification{
+			ThreadID: params.ThreadID,
+			Audio:    appserverRealtimeAudioChunk(&params.Audio),
+		}, true
+	case realtime.NotificationSDP:
+		params, ok := notification.Params.(realtime.SDPNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.SDPNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeSDP, &ThreadRealtimeSDPNotification{ThreadID: params.ThreadID, SDP: params.SDP}, true
+	case realtime.NotificationError:
+		params, ok := notification.Params.(realtime.ErrorNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ErrorNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeError, &ThreadRealtimeErrorNotification{ThreadID: params.ThreadID, Message: params.Message}, true
+	case realtime.NotificationClosed:
+		params, ok := notification.Params.(realtime.ClosedNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ClosedNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeClosed, &ThreadRealtimeClosedNotification{ThreadID: params.ThreadID, Reason: cloneString(params.Reason)}, true
+	default:
+		return "", nil, false
+	}
+}
+
+func appserverRealtimeAudioChunk(chunk *realtime.AudioChunk) ThreadRealtimeAudioChunk {
+	if chunk == nil {
+		return ThreadRealtimeAudioChunk{}
+	}
+	return ThreadRealtimeAudioChunk{
+		Data:              chunk.Data,
+		ItemID:            cloneString(chunk.ItemID),
+		NumChannels:       chunk.NumChannels,
+		SampleRate:        chunk.SampleRate,
+		SamplesPerChannel: cloneUint32(chunk.SamplesPerChannel),
+	}
+}
+
+func cloneUint32(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func (r *RuntimeRouter) handleExperimentalFeatureList(request *Request) (*features.FeatureListResponse, error) {
+	var params features.FeatureListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFeatures().List(&params)
+}
+
+func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*features.FeatureEnablementSetResponse, error) {
+	var params features.FeatureEnablementSetParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFeatures().SetEnablement(&params)
+}
+
+func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, error) {
+	var params apps.AppListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	service := r.requireApps()
+	if r.services.Plugins != nil {
+		service.SetPluginConnectors(appPluginConnectorsFromCapabilities(r.services.Plugins.EnabledCapabilities()))
+	}
+	var configValues map[string]any
+	if r.services.Config != nil {
+		read, err := r.services.Config.Read(&config.ConfigReadParams{})
+		if err == nil && read != nil {
+			configValues = read.Config
+			service.SetConfigValues(read.Config)
+		}
+	}
+	r.configureAppDirectoryProvider(service, configValues)
+	r.configureAppAccessibleProvider(service)
+	var lastNotified []apps.AppEntry
+	if params.ForceRefetch {
+		lastNotified = service.CachedListForNotification()
+		if len(lastNotified) > 0 {
+			r.notify(NotificationAppListUpdated, &apps.AppListUpdatedNotification{Data: lastNotified})
+		}
+	}
+	response, err := service.List(&params)
+	if err != nil {
+		return nil, err
+	}
+	if response != nil {
+		data := appListUpdatedNotificationData(response)
+		if !reflect.DeepEqual(lastNotified, data) {
+			r.notify(NotificationAppListUpdated, &apps.AppListUpdatedNotification{Data: data})
+		}
+	}
+	return response, nil
+}
+
+func appListUpdatedNotificationData(response *apps.AppListResponse) []apps.AppEntry {
+	if response == nil {
+		return nil
+	}
+	if response.AllApps != nil {
+		return response.AllApps
+	}
+	if response.Apps != nil {
+		return response.Apps
+	}
+	return response.Data
+}
+
+func appPluginConnectorsFromCapabilities(capabilities []plugin.CapabilitySummary) []apps.PluginConnector {
+	out := make([]apps.PluginConnector, 0)
+	seen := map[string]bool{}
+	appendConnector := func(connector apps.PluginConnector, displayName string) {
+		connector.ID = strings.TrimSpace(connector.ID)
+		if connector.ID == "" {
+			return
+		}
+		connector.PluginDisplayName = displayName
+		key := connector.ID + "\x00" + displayName
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, connector)
+	}
+	for i := range capabilities {
+		displayName := firstNonEmpty(capabilities[i].DisplayName, capabilities[i].Name, capabilities[i].ConfigName, capabilities[i].RemotePluginID)
+		for _, app := range capabilities[i].Apps {
+			appendConnector(appPluginConnectorFromSummary(app), displayName)
+		}
+		for _, template := range capabilities[i].AppTemplates {
+			for _, connector := range appPluginConnectorsFromTemplate(template) {
+				appendConnector(connector, displayName)
+			}
+		}
+		for _, connectorID := range capabilities[i].AppConnectors {
+			appendConnector(apps.PluginConnector{ID: connectorID}, displayName)
+		}
+	}
+	return out
+}
+
+func appPluginConnectorFromSummary(app plugin.AppSummary) apps.PluginConnector {
+	return apps.PluginConnector{
+		ID:          app.ID,
+		Name:        firstNonEmpty(app.DisplayName, app.Name, app.ID),
+		Description: cloneStringPtrAppserver(app.Description),
+		InstallURL:  cloneStringPtrAppserver(app.InstallURL),
+	}
+}
+
+func appPluginConnectorsFromTemplate(template plugin.AppTemplateSummary) []apps.PluginConnector {
+	name := firstNonEmpty(template.DisplayName, template.Name, template.TemplateID, template.ID)
+	base := apps.PluginConnector{
+		Name:        name,
+		Description: cloneStringPtrAppserver(template.Description),
+		LogoURL:     cloneStringPtrAppserver(template.LogoURL),
+		LogoURLDark: cloneStringPtrAppserver(template.LogoURLDark),
+	}
+	out := make([]apps.PluginConnector, 0, 1+len(template.MaterializedAppIDs))
+	if template.CanonicalConnectorID != nil {
+		connector := base
+		connector.ID = *template.CanonicalConnectorID
+		out = append(out, connector)
+	}
+	for _, id := range template.MaterializedAppIDs {
+		connector := base
+		connector.ID = id
+		out = append(out, connector)
+	}
+	return out
+}
+
+func (r *RuntimeRouter) configureAppDirectoryProvider(service *apps.AppService, values map[string]any) {
+	if r == nil || service == nil || r.services.Config == nil {
+		return
+	}
+	cfg := &config.Config{Values: values}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		service.SetDirectoryProviderWithKey(nil, "")
+		return
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil || resolved == nil {
+		service.SetDirectoryProviderWithKey(nil, "")
+		return
+	}
+	token := appDirectoryAuthToken(&resolved.Auth)
+	if token == "" {
+		service.SetDirectoryProviderWithKey(nil, "")
+		return
+	}
+	accountID := auth.AccountIDFromAuthForRestrictions(&resolved.Auth)
+	userID := appDirectoryChatGPTUserID(&resolved.Auth)
+	baseURL := cfg.ChatGPTBaseURL()
+	key := strings.Join([]string{baseURL, accountID, userID, fmt.Sprintf("workspace=%t", accountID != "")}, "|")
+	provider := apps.NewChatGPTDirectoryProvider(&apps.ChatGPTDirectoryProviderOptions{
+		BaseURL: baseURL,
+		Headers: http.Header{
+			"Authorization": []string{"Bearer " + token},
+		},
+		HTTPClient:         r.httpClientForConfig(cfg),
+		IsWorkspaceAccount: accountID != "",
+	})
+	service.SetDirectoryProviderWithKey(provider, key)
+}
+
+func (r *RuntimeRouter) configureAppAccessibleProvider(service *apps.AppService) {
+	if r == nil || service == nil || r.services.MCP == nil {
+		return
+	}
+	service.SetAccessibleProviderWithKey(&mcpAccessibleAppsProvider{service: r.services.MCP}, "mcp:codex_apps")
+}
+
+func appDirectoryAuthToken(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens":
+		return strings.TrimSpace(stringFromMap(snapshot.Tokens, "access_token"))
+	case "personal-access-token":
+		return strings.TrimSpace(snapshot.PersonalAccessToken)
+	case "agent-identity":
+		if token, ok := snapshot.AgentIdentity.(string); ok {
+			return strings.TrimSpace(token)
+		}
+	}
+	return ""
+}
+
+func appDirectoryChatGPTUserID(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	userID := strings.TrimSpace(stringFromMap(snapshot.Tokens, "chatgpt_user_id"))
+	if userID != "" {
+		return userID
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) handleGetAuthStatus(request *Request) (*AuthStatusResponse, error) {
+	var params AuthStatusParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if r.services.Misc != nil && r.services.Misc.HasAuthStatus() {
+		return r.services.Misc.AuthStatus(&params), nil
+	}
+	return r.currentAuthStatus(&params)
+}
+
+func (r *RuntimeRouter) handleGetConversationSummary(request *Request) (*ConversationSummaryResponse, error) {
+	var params ConversationSummaryParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(params.RolloutPath) != "" {
+		return r.conversationSummaryFromRolloutPath(params.RolloutPath)
+	}
+	conversationID := params.LookupConversationID()
+	if r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil && conversationID != "" {
+		record, err := r.threadRecord(session.ThreadID(conversationID), true, true)
+		if err != nil {
+			return nil, err
+		}
+		path := r.services.ThreadRouter.threadRolloutPath(record)
+		if path == "" {
+			path = strings.TrimSpace(params.RolloutPath)
+		}
+		summary := conversationSummaryFromRecord(record, 4000)
+		return &ConversationSummaryResponse{
+			Summary:     summary,
+			SummaryData: conversationSummaryDataFromRecord(record, path, 4000),
+		}, nil
+	}
+	return r.requireMisc().ConversationSummary(&params)
+}
+
+func (r *RuntimeRouter) conversationSummaryFromRolloutPath(rawPath string) (*ConversationSummaryResponse, error) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, fmt.Errorf("%w: rollout path queries are only supported with the local thread store", ErrInvalidMiscRequest)
+	}
+	path, err := r.resolveConversationSummaryRolloutPath(rawPath)
+	if err != nil {
+		return nil, err
+	}
+	record, err := rollout.RecordFromPath(path, false)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid rolloutPath: %w", ErrInvalidMiscRequest, err)
+	}
+	if err := r.services.ThreadRouter.store.Save(record); err != nil {
+		return nil, err
+	}
+	summary := conversationSummaryFromRecord(record, 4000)
+	return &ConversationSummaryResponse{
+		Summary:     summary,
+		SummaryData: conversationSummaryDataFromRecord(record, path, 4000),
+	}, nil
+}
+
+func (r *RuntimeRouter) resolveConversationSummaryRolloutPath(rawPath string) (string, error) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return "", fmt.Errorf("%w: rolloutPath is required", ErrInvalidMiscRequest)
+	}
+	if !filepath.IsAbs(path) {
+		codexHome := ""
+		if r != nil && r.services.ThreadRouter != nil {
+			codexHome = codexHomeFromSessionStore(r.services.ThreadRouter.store)
+		}
+		if strings.TrimSpace(codexHome) == "" {
+			return "", fmt.Errorf("%w: rollout path queries are only supported with the local thread store", ErrInvalidMiscRequest)
+		}
+		path = filepath.Join(codexHome, path)
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	if canonical, err := filepath.EvalSymlinks(path); err == nil {
+		path = canonical
+	}
+	return filepath.Clean(path), nil
+}
+
+func (r *RuntimeRouter) threadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
+	}
+	if record, ok := r.ephemeralThreadRecord(threadID, includeHistory); ok {
+		return record, nil
+	}
+	record, err := r.services.ThreadRouter.store.Read(threadID, includeArchived, includeHistory)
+	if err == nil {
+		if includeHistory {
+			r.attachRolloutTurnSnapshots(record)
+		}
+		return record, nil
+	}
+	if !errors.Is(err, session.ErrThreadNotFound) {
+		return nil, err
+	}
+	record, repairErr := r.services.ThreadRouter.readThreadRecordFromRollout(threadID, includeArchived, true)
+	if repairErr != nil {
+		return nil, repairErr
+	}
+	if includeHistory && paginatedRolloutHistory(record) {
+		return nil, methodNotFound("paginated_threads is not supported yet")
+	}
+	if err := r.services.ThreadRouter.store.Save(record); err != nil {
+		return nil, err
+	}
+	if !includeHistory {
+		record.Items = nil
+	}
+	return record, nil
+}
+
+func (r *RuntimeRouter) ephemeralThreadRecord(threadID session.ThreadID, includeHistory bool) (*session.Record, bool) {
+	if r == nil || strings.TrimSpace(string(threadID)) == "" {
+		return nil, false
+	}
+	r.ephemeralMu.RLock()
+	record, ok := r.ephemeralThreads[string(threadID)]
+	r.ephemeralMu.RUnlock()
+	if !ok || record == nil {
+		return nil, false
+	}
+	clone := cloneRuntimeSessionRecord(record)
+	if !includeHistory {
+		clone.Items = nil
+	}
+	return clone, true
+}
+
+func (r *RuntimeRouter) saveEphemeralThreadRecord(record *session.Record) bool {
+	if r == nil || record == nil || strings.TrimSpace(string(record.ID)) == "" || !runtimeRecordEphemeral(record) {
+		return false
+	}
+	clone := cloneRuntimeSessionRecord(record)
+	clone.Metadata.Extra = ensureRecordExtra(clone.Metadata.Extra)
+	clone.Metadata.Extra["ephemeral"] = true
+	r.ephemeralMu.Lock()
+	if existing := r.ephemeralThreads[string(clone.ID)]; existing != nil && len(clone.Items) == 0 && len(existing.Items) > 0 {
+		clone.Items = cloneRuntimeSessionItems(existing.Items)
+	}
+	r.ephemeralThreads[string(clone.ID)] = clone
+	r.ephemeralMu.Unlock()
+	return true
+}
+
+func (r *RuntimeRouter) runtimeSaveThreadRecord(record *session.Record) error {
+	if record == nil {
+		return fmt.Errorf("%w: record is nil", session.ErrInvalidThreadID)
+	}
+	if r.saveEphemeralThreadRecord(record) {
+		return nil
+	}
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return fmt.Errorf("%w: %s", session.ErrThreadNotFound, record.ID)
+	}
+	return r.services.ThreadRouter.store.Save(record)
+}
+
+func (r *RuntimeRouter) runtimeAppendItem(threadID session.ThreadID, item session.Item) (*session.Record, error) {
+	return r.runtimeAppendItems(threadID, []session.Item{item})
+}
+
+func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
+	if record, ok := r.appendEphemeralThreadItems(threadID, items); ok {
+		return record, nil
+	}
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
+	}
+	return r.services.ThreadRouter.store.AppendItems(threadID, items)
+}
+
+func (r *RuntimeRouter) appendEphemeralThreadItems(threadID session.ThreadID, items []session.Item) (*session.Record, bool) {
+	if r == nil || strings.TrimSpace(string(threadID)) == "" {
+		return nil, false
+	}
+	r.ephemeralMu.Lock()
+	defer r.ephemeralMu.Unlock()
+	record, ok := r.ephemeralThreads[string(threadID)]
+	if !ok || record == nil {
+		return nil, false
+	}
+	now := time.Now().UTC()
+	for i := range items {
+		item := items[i]
+		if item.CreatedAt.IsZero() {
+			item.CreatedAt = now
+		}
+		record.Items = append(record.Items, cloneRuntimeSessionItem(item))
+		record.UpdatedAt = item.CreatedAt
+		record.RecencyAt = item.CreatedAt
+		if strings.TrimSpace(record.Preview) == "" {
+			record.Preview = runtimeSessionItemPreviewText(&item)
+		}
+	}
+	return cloneRuntimeSessionRecord(record), true
+}
+
+func runtimeRecordEphemeral(record *session.Record) bool {
+	return record != nil && boolFromMap(record.Metadata.Extra, "ephemeral")
+}
+
+func cloneRuntimeSessionRecord(record *session.Record) *session.Record {
+	if record == nil {
+		return nil
+	}
+	clone := *record
+	clone.Metadata = cloneRuntimeSessionMetadata(record.Metadata)
+	clone.Items = cloneRuntimeSessionItems(record.Items)
+	return &clone
+}
+
+func cloneRuntimeSessionMetadata(metadata session.Metadata) session.Metadata {
+	clone := metadata
+	clone.Git = cloneStringMap(metadata.Git)
+	clone.DynamicTools = cloneRawMessages(metadata.DynamicTools)
+	clone.SelectedCapabilityRoots = cloneRawMessages(metadata.SelectedCapabilityRoots)
+	clone.ContextWindow = cloneRawMessage(metadata.ContextWindow)
+	clone.TurnContext = cloneRawMessage(metadata.TurnContext)
+	clone.WorldState = cloneRawMessage(metadata.WorldState)
+	clone.Extra = cloneAnyMap(metadata.Extra)
+	if len(metadata.RolloutTurns) > 0 {
+		clone.RolloutTurns = append([]session.TurnSnapshot(nil), metadata.RolloutTurns...)
+	}
+	return clone
+}
+
+func cloneRuntimeSessionItems(items []session.Item) []session.Item {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]session.Item, len(items))
+	for i := range items {
+		out[i] = cloneRuntimeSessionItem(items[i])
+	}
+	return out
+}
+
+func cloneRuntimeSessionItem(item session.Item) session.Item {
+	clone := item
+	if len(item.Content) > 0 {
+		clone.Content = make([]session.ContentPart, len(item.Content))
+		for i := range item.Content {
+			clone.Content[i] = item.Content[i]
+			clone.Content[i].Detail = cloneString(item.Content[i].Detail)
+		}
+	}
+	clone.Data = cloneAnyMap(item.Data)
+	clone.Raw = cloneRawMessage(item.Raw)
+	clone.Metadata = cloneAnyMap(item.Metadata)
+	return clone
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), value...)
+}
+
+func runtimeSessionItemPreviewText(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(item.Text); text != "" {
+		return text
+	}
+	for i := range item.Content {
+		if text := strings.TrimSpace(item.Content[i].Text); text != "" {
+			return text
+		}
+	}
+	return strings.TrimSpace(item.Name)
+}
+
+func (r *RuntimeRouter) attachRolloutTurnSnapshots(record *session.Record) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return
+	}
+	r.services.ThreadRouter.attachRolloutTurnSnapshots(record)
+}
+
+func (r *RuntimeRouter) handleGitDiffToRemote(request *Request) (*GitDiffToRemoteResponse, error) {
+	var params GitDiffToRemoteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireMisc().GitDiffToRemote(&params)
+}
+
+func (r *RuntimeRouter) handleFuzzyFileSearch(request *Request) (*FuzzyFileSearchResponse, error) {
+	var params FuzzyFileSearchParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireMisc().FuzzyFileSearch(nil, &params)
+}
+
+func (r *RuntimeRouter) handleFuzzyFileSearchSessionStart(request *Request) (*FuzzyFileSearchSessionStartResponse, error) {
+	var params FuzzyFileSearchSessionStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireMisc().FuzzyFileSearchSessionStart(&params)
+}
+
+func (r *RuntimeRouter) handleFuzzyFileSearchSessionUpdate(request *Request) (*FuzzyFileSearchSessionUpdateResponse, error) {
+	var params FuzzyFileSearchSessionUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireMisc().FuzzyFileSearchSessionUpdate(nil, &params)
+	if err != nil {
+		return nil, err
+	}
+	if response.Notify {
+		files := make([]any, 0, len(response.Files))
+		for i := range response.Files {
+			files = append(files, response.Files[i])
+		}
+		r.notify(NotificationFuzzyFileSearchSessionUpdated, &FuzzyFileSearchSessionUpdatedNotification{
+			SessionID: response.SessionID,
+			Query:     response.Query,
+			Files:     files,
+		})
+		r.notify(NotificationFuzzyFileSearchSessionCompleted, &FuzzyFileSearchSessionCompletedNotification{
+			SessionID: response.SessionID,
+		})
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleFuzzyFileSearchSessionStop(request *Request) (*FuzzyFileSearchSessionStopResponse, error) {
+	var params FuzzyFileSearchSessionStopParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireMisc().FuzzyFileSearchSessionStop(&params)
+}
+
+func (r *RuntimeRouter) handleHooksList(request *Request) (*HookListResponse, error) {
+	var params HookListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	registry := r.requireHooks().List(&params)
+	discovery := r.configureHookDiscovery()
+	discovered := discovery.Discover(&params, r.services.DefaultCWD)
+	return MergeHookListResponses(registry, discovered), nil
+}
+
+func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse, error) {
+	var params SkillsListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireSkills().List(&params)
+}
+
+func (r *RuntimeRouter) handleSkillsExtraRootsSet(request *Request) (*SkillsExtraRootsSetResponse, error) {
+	var params SkillsExtraRootsSetParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireSkills().SetExtraRoots(&params)
+	if err == nil {
+		r.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
+	}
+	return response, err
+}
+
+func (r *RuntimeRouter) handleSkillsConfigWrite(request *Request) (*SkillsConfigWriteResponse, error) {
+	var params SkillsConfigWriteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireSkills().WriteConfig(&params)
+	if err == nil {
+		r.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
+	}
+	return response, err
+}
+
+func (r *RuntimeRouter) handleMarketplaceAdd(request *Request) (*plugin.MarketplaceAddResponse, error) {
+	var params plugin.MarketplaceAddParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().AddMarketplace(&params)
+}
+
+func (r *RuntimeRouter) handleMarketplaceRemove(request *Request) (*plugin.MarketplaceRemoveResponse, error) {
+	var params plugin.MarketplaceRemoveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().RemoveMarketplace(&params)
+}
+
+func (r *RuntimeRouter) handleMarketplaceUpgrade(request *Request) (*plugin.MarketplaceUpgradeResponse, error) {
+	var params plugin.MarketplaceUpgradeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().UpgradeMarketplace(&params)
+}
+
+func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListResponse, error) {
+	var params plugin.PluginListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().List(&params), nil
+}
+
+func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginInstalledResponse, error) {
+	var params plugin.PluginInstalledParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().Installed(&params), nil
+}
+
+func (r *RuntimeRouter) handlePluginRead(request *Request) (*plugin.PluginReadResponse, error) {
+	var params plugin.PluginReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().Read(&params)
+}
+
+func (r *RuntimeRouter) handlePluginSkillRead(request *Request) (*plugin.PluginSkillReadResponse, error) {
+	var params plugin.PluginSkillReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().ReadSkill(&params)
+}
+
+func (r *RuntimeRouter) handlePluginShareSave(request *Request) (*plugin.PluginShareSaveResponse, error) {
+	var params plugin.PluginShareSaveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().SaveShare(&params)
+}
+
+func (r *RuntimeRouter) handlePluginShareUpdateTargets(request *Request) (*plugin.PluginShareUpdateTargetsResponse, error) {
+	var params plugin.PluginShareUpdateTargetsParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().UpdateShareTargets(&params)
+}
+
+func (r *RuntimeRouter) handlePluginShareList(request *Request) (*plugin.PluginShareListResponse, error) {
+	var params plugin.PluginShareListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().ListShares(&params), nil
+}
+
+func (r *RuntimeRouter) handlePluginShareCheckout(request *Request) (*plugin.PluginShareCheckoutResponse, error) {
+	var params plugin.PluginShareCheckoutParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().CheckoutShare(&params)
+}
+
+func (r *RuntimeRouter) handlePluginShareDelete(request *Request) (*plugin.PluginShareDeleteResponse, error) {
+	var params plugin.PluginShareDeleteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().DeleteShare(&params)
+}
+
+func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginInstallResponse, error) {
+	var params plugin.PluginInstallParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().Install(&params)
+}
+
+func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginUninstallResponse, error) {
+	var params plugin.PluginUninstallParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePlugins().Uninstall(&params)
+}
+
+func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListResponse, error) {
+	var params model.ModelListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireModels().List(&params)
+}
+
+func (r *RuntimeRouter) handleModelProviderCapabilitiesRead(request *Request) (*model.ProviderCapabilitiesReadResponse, error) {
+	var params model.ProviderCapabilitiesReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireModels().ProviderCapabilities(&params), nil
+}
+
+func (r *RuntimeRouter) handlePermissionProfileList(request *Request) (*sandbox.PermissionProfileListResponse, error) {
+	var params sandbox.PermissionProfileListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requirePermissions().List(&params)
+}
+
+func (r *RuntimeRouter) handleCollaborationModeList(request *Request) (*CollaborationModeListResponse, error) {
+	var params CollaborationModeListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireCollaboration().List(&params), nil
+}
+
+func (r *RuntimeRouter) handleMockExperimentalMethod(request *Request) (*MockExperimentalMethodResponse, error) {
+	var params MockExperimentalMethodParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return &MockExperimentalMethodResponse{Echoed: params.Value}, nil
+}
+
+func (r *RuntimeRouter) handleMCPServerOauthLogin(request *Request) (*mcp.MCPServerOauthLoginResponse, error) {
+	var params mcp.MCPServerOauthLoginParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.ThreadID != nil {
+		if err := r.ensureMCPThread(*params.ThreadID); err != nil {
+			return nil, err
+		}
+	}
+	return r.requireMCP().OauthLogin(&params)
+}
+
+func (r *RuntimeRouter) handleMCPServerOauthCancel(request *Request) (*mcp.MCPServerOauthCancelResponse, error) {
+	var params mcp.MCPServerOauthCancelParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.ThreadID != nil {
+		if err := r.ensureMCPThread(*params.ThreadID); err != nil {
+			return nil, err
+		}
+	}
+	return r.requireMCP().OauthCancel(&params)
+}
+
+func (r *RuntimeRouter) handleMCPServerRefresh(request *Request) (*mcp.MCPServerRefreshResponse, error) {
+	if request != nil && request.Method == MethodConfigMCPServerReload {
+		r.configureMCPFromConfig()
+	}
+	return r.requireMCP().Refresh(), nil
+}
+
+func (r *RuntimeRouter) configureMCPFromConfig() {
+	if r == nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	r.requireMCP().ApplyRuntimeConfig(mcp.RuntimeConfigFromValues(read.Config, r.services.Config.CodexHome()))
+}
+
+func (r *RuntimeRouter) handleMCPServerStatusList(request *Request) (*mcp.MCPListServerStatusResponse, error) {
+	var params mcp.MCPListServerStatusParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.ThreadID != nil {
+		if err := r.ensureMCPThread(*params.ThreadID); err != nil {
+			return nil, err
+		}
+	}
+	return r.requireMCP().ListStatusChecked(&params)
+}
+
+func (r *RuntimeRouter) handleMCPServerResourceRead(request *Request) (*mcp.MCPResourceReadResponse, error) {
+	var params mcp.MCPResourceReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.ThreadID != nil {
+		if err := r.ensureMCPThread(*params.ThreadID); err != nil {
+			return nil, err
+		}
+	}
+	return r.requireMCP().ReadResource(&params)
+}
+
+func (r *RuntimeRouter) handleMCPServerToolCall(request *Request) (*mcp.MCPToolCallResponse, error) {
+	var params mcp.MCPToolCallParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := r.ensureMCPThread(params.ThreadID); err != nil {
+		return nil, err
+	}
+	return r.requireMCP().CallTool(&params)
+}
+
+func (r *RuntimeRouter) ensureMCPThread(threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	_, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	return err
+}
+
+func (r *RuntimeRouter) handleFSReadFile(request *Request) (*ReadFileResponse, error) {
+	var params ReadFileParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().ReadFile(&params)
+}
+
+func (r *RuntimeRouter) handleFSWriteFile(request *Request) (*WriteFileResponse, error) {
+	var params WriteFileParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().WriteFile(&params)
+}
+
+func (r *RuntimeRouter) handleFSCreateDirectory(request *Request) (*CreateDirectoryResponse, error) {
+	var params CreateDirectoryParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().CreateDirectory(&params)
+}
+
+func (r *RuntimeRouter) handleFSGetMetadata(request *Request) (*GetMetadataResponse, error) {
+	var params GetMetadataParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().GetMetadata(&params)
+}
+
+func (r *RuntimeRouter) handleFSReadDirectory(request *Request) (*ReadDirectoryResponse, error) {
+	var params ReadDirectoryParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().ReadDirectory(&params)
+}
+
+func (r *RuntimeRouter) handleFSRemove(request *Request) (*RemoveResponse, error) {
+	var params RemoveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().Remove(&params)
+}
+
+func (r *RuntimeRouter) handleFSCopy(request *Request) (*CopyResponse, error) {
+	var params CopyParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().Copy(&params)
+}
+
+func (r *RuntimeRouter) handleFSWatch(request *Request) (*WatchResponse, error) {
+	var params WatchParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().WatchWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleFSUnwatch(request *Request) (*UnwatchResponse, error) {
+	var params UnwatchParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireFS().UnwatchWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleRemoteControlEnable(request *Request) (*remotecontrol.EnableResponse, error) {
+	var params *remotecontrol.EnableParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params == nil {
+		params = &remotecontrol.EnableParams{}
+	}
+	response, notification, err := r.requireRemote().EnableContext(context.Background(), params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyRemoteControlStatusChanged(notification)
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleRemoteControlDisable(request *Request) (*remotecontrol.DisableResponse, error) {
+	var params *remotecontrol.DisableParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params == nil {
+		params = &remotecontrol.DisableParams{}
+	}
+	response, notification, err := r.requireRemote().DisableContext(context.Background(), params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyRemoteControlStatusChanged(notification)
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleRemoteControlPairingStart(request *Request) (*remotecontrol.PairingStartResponse, error) {
+	var params remotecontrol.PairingStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireRemote().StartPairingContext(context.Background(), &params)
+}
+
+func (r *RuntimeRouter) handleRemoteControlPairingStatus(request *Request) (*remotecontrol.PairingStatusResponse, error) {
+	var params remotecontrol.PairingStatusParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireRemote().PairingStatusContext(context.Background(), &params)
+}
+
+func (r *RuntimeRouter) handleRemoteControlClientsList(request *Request) (*remotecontrol.ClientsListResponse, error) {
+	var params remotecontrol.ClientsListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireRemote().ListClientsContext(context.Background(), &params)
+}
+
+func (r *RuntimeRouter) handleRemoteControlClientsRevoke(request *Request) (*remotecontrol.ClientsRevokeResponse, error) {
+	var params remotecontrol.ClientsRevokeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireRemote().RevokeClientContext(context.Background(), &params)
+}
+
+func (r *RuntimeRouter) handleEnvironmentAdd(request *Request) (*EnvironmentAddResponse, error) {
+	var params EnvironmentAddParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireEnvironment().Add(&params)
+}
+
+func (r *RuntimeRouter) handleEnvironmentInfo(request *Request) (*EnvironmentInfoResponse, error) {
+	var params EnvironmentInfoParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireEnvironment().Info(&params)
+}
+
+func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandbox.WindowsSetupStartResponse, error) {
+	var params sandbox.WindowsSetupStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	resolved, err := config.ResolveAllowedWindowsSandboxSetupMode(r.requireConfig().Requirements().Requirements, config.WindowsSandboxSetupMode(params.Mode))
+	if err != nil {
+		return nil, err
+	}
+	params.Mode = sandbox.WindowsSetupMode(resolved)
+	return r.requireWindows().StartSetup(&params)
+}
+
+func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadResponse, error) {
+	var params FeedbackUploadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	threadID := "feedback-" + request.ID.String()
+	if params.ThreadID != nil && *params.ThreadID != "" {
+		threadID = *params.ThreadID
+	}
+	snapshot := r.requireFeedback()
+	snapshot.ThreadID = threadID
+	snapshot.PrepareUpload(&FeedbackUploadOptions{
+		Classification:      params.Classification,
+		Reason:              params.Reason,
+		ClientTags:          params.Tags,
+		IncludeLogs:         params.IncludeLogs,
+		ExtraAttachmentPath: FeedbackAttachmentPaths(nil, nil, threadID, nil, params.ExtraLogFiles),
+	})
+	return &FeedbackUploadResponse{ThreadID: threadID}, nil
+}
+
+func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadResponse, error) {
+	var params config.ConfigReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireConfig().Read(&params)
+}
+
+func (r *RuntimeRouter) handleConfigValueWrite(request *Request) (*config.ConfigWriteResponse, error) {
+	var params config.ConfigValueWriteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireConfig().WriteValue(&params)
+}
+
+func (r *RuntimeRouter) handleConfigBatchWrite(request *Request) (*config.ConfigWriteResponse, error) {
+	var params config.ConfigBatchWriteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireConfig().BatchWrite(&params)
+}
+
+func (r *RuntimeRouter) handleExternalAgentConfigDetect(request *Request) (*config.ExternalAgentConfigDetectResponse, error) {
+	var params config.ExternalAgentConfigDetectParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireConfig().DetectExternalAgentConfig(&params), nil
+}
+
+func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*config.ExternalAgentConfigImportResponse, error) {
+	var params config.ExternalAgentConfigImportParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, _ := r.requireConfig().ImportExternalAgentConfig(&params)
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccountResponse, error) {
+	var params auth.LoginAccountParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := r.validateLoginAccountParams(&params); err != nil {
+		return nil, err
+	}
+	if params.Type == "chatgptAuthTokens" {
+		r.requireAccount().CancelActiveLogins()
+	}
+	response, err := r.requireAccount().Login(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.applyChatGPTLoginConfig(params, response)
+	if snapshot := authSnapshotFromLoginParams(&params); snapshot != nil {
+		if codexHome := r.codexHomeForRollout(); codexHome != "" {
+			if err := r.authStore(codexHome).Save(*snapshot); err != nil {
+				return nil, err
+			}
+		}
+		r.requireAccount().ApplyAuthSnapshot(snapshot)
+		r.noteAuthChanged()
+	}
+	if response != nil && response.LoginID == "" {
+		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{Success: true})
+		r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) applyChatGPTLoginConfig(params auth.LoginAccountParams, response *auth.LoginAccountResponse) {
+	if r == nil || r.services.Config == nil || response == nil || params.Type != auth.AccountChatGPT || response.Type != auth.AccountChatGPT || strings.TrimSpace(response.AuthURL) == "" {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	cfg := config.Config{Values: read.Config}
+	workspaces := normalizedWorkspaceQueryList(cfg.ForcedChatGPTWorkspaceIDs())
+	if len(workspaces) == 0 {
+		return
+	}
+	parsed, err := url.Parse(response.AuthURL)
+	if err != nil {
+		return
+	}
+	query := parsed.Query()
+	query.Set("allowed_workspace_id", strings.Join(workspaces, ","))
+	parsed.RawQuery = query.Encode()
+	response.AuthURL = parsed.String()
+}
+
+func normalizedWorkspaceQueryList(workspaces []string) []string {
+	if len(workspaces) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		trimmed := strings.TrimSpace(workspace)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (r *RuntimeRouter) validateLoginAccountParams(params *auth.LoginAccountParams) error {
+	if params == nil {
+		return nil
+	}
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return err
+	}
+	cfg := config.Config{Values: read.Config}
+	switch params.Type {
+	case auth.AccountAPIKey:
+		if r.externalChatGPTAuthActive() {
+			return fmt.Errorf(externalChatGPTAuthActiveMessage)
+		}
+		if cfg.ForcedLoginMethod() == config.ForcedLoginMethodChatGPT {
+			return fmt.Errorf("API key login is disabled. Use ChatGPT login instead.")
+		}
+	case auth.AccountChatGPT, "chatgptDeviceCode":
+		if r.externalChatGPTAuthActive() {
+			return fmt.Errorf(externalChatGPTAuthActiveMessage)
+		}
+		if cfg.ForcedLoginMethod() == config.ForcedLoginMethodAPI {
+			return fmt.Errorf("ChatGPT login is disabled. Use API key login instead.")
+		}
+	case "chatgptAuthTokens":
+		if cfg.ForcedLoginMethod() == config.ForcedLoginMethodAPI {
+			return fmt.Errorf("External ChatGPT auth is disabled. Use API key login instead.")
+		}
+		workspaces := cfg.ForcedChatGPTWorkspaceIDs()
+		if len(workspaces) == 0 {
+			return nil
+		}
+		if err := auth.EnsureWorkspaceAccountAllowed(workspaces, params.ChatGPTAccountID); err != nil {
+			return fmt.Errorf("External auth must use one of workspace(s) %v, but received %q.", workspaces, strings.TrimSpace(params.ChatGPTAccountID))
+		}
+	}
+	return nil
+}
+
+const externalChatGPTAuthActiveMessage = "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it."
+
+func (r *RuntimeRouter) externalChatGPTAuthActive() bool {
+	if r == nil {
+		return false
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	return err == nil && resolved != nil && (&resolved.Auth).Mode() == "chatgptAuthTokens"
+}
+
+func authSnapshotFromLoginParams(params *auth.LoginAccountParams) *auth.AuthDotJSON {
+	if params == nil {
+		return nil
+	}
+	switch params.Type {
+	case auth.AccountAPIKey:
+		snapshot := auth.FromAPIKey(params.APIKey)
+		return &snapshot
+	case "chatgptAuthTokens":
+		snapshot := auth.FromChatGPTAuthTokens(params.AccessToken, params.ChatGPTAccountID, params.ChatGPTPlanType)
+		return &snapshot
+	default:
+		return nil
+	}
+}
+
+func (r *RuntimeRouter) handleCancelLoginAccount(request *Request) (*auth.CancelLoginAccountResponse, error) {
+	var params auth.CancelLoginAccountParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireAccount().CancelLogin(&params)
+	if err != nil {
+		return nil, err
+	}
+	if response != nil && response.Status == auth.CancelLoginCanceled {
+		message := "login canceled"
+		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &params.LoginID, Success: false, Error: &message})
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleAccountSessionsAdd(request *Request) (*auth.AccountSessionsResponse, error) {
+	var params auth.AccountSessionsAddParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireAccount().AddSession(&params)
+}
+
+func (r *RuntimeRouter) handleAccountSessionsList(request *Request) (*auth.AccountSessionsResponse, error) {
+	var params auth.AccountSessionsListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireAccount().ListSessions(&params), nil
+}
+
+func (r *RuntimeRouter) handleAccountSessionsLogout(request *Request) (*auth.AccountSessionsResponse, error) {
+	var params auth.AccountSessionsLogoutParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireAccount().LogoutSession(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.AccountSessionsResponse, error) {
+	var params auth.AccountSessionsSwitchParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	response, err := r.requireAccount().SwitchSession(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccountResponse, error) {
+	if len(request.Params) > 0 {
+		var params struct{}
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+	}
+	r.requireAccount().CancelActiveLogins()
+	response := r.requireAccount().Logout()
+	if codexHome := r.codexHomeForRollout(); codexHome != "" {
+		if _, err := auth.LogoutWithRevoke(context.Background(), codexHome, r.authStoreOptions()); err != nil {
+			return nil, err
+		}
+	}
+	r.noteAuthChanged()
+	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResponse, error) {
+	var params auth.GetAccountParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	codexHome := r.codexHomeForRollout()
+	var snapshot *auth.AuthDotJSON
+	if resolved, err := r.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
+		snapshot = &resolved.Auth
+	} else if err != nil {
+		return nil, err
+	}
+	if response, ok := r.providerAccountResponse(snapshot); ok {
+		return response, nil
+	}
+	requiresOpenAIAuth := r.requiresOpenAIAuthForStatus()
+	if !requiresOpenAIAuth {
+		return &auth.GetAccountResponse{RequiresOpenAIAuth: false}, nil
+	}
+	if snapshot != nil {
+		if params.RefreshToken {
+			refreshed, _ := r.refreshManagedAuthForStatus(context.Background(), snapshot)
+			if refreshed != nil {
+				snapshot = refreshed
+			}
+		}
+		if auth.RefreshFailureForAuth(codexHome, snapshot) != nil {
+			return &auth.GetAccountResponse{RequiresOpenAIAuth: true}, nil
+		}
+		if err := r.hydratePersonalAccessTokenAccount(context.Background(), snapshot); err != nil {
+			return nil, err
+		}
+		r.requireAccount().ApplyAuthSnapshot(snapshot)
+	}
+	response := r.requireAccount().GetAccount(&params)
+	response.RequiresOpenAIAuth = true
+	return response, nil
+}
+
+func (r *RuntimeRouter) providerAccountResponse(snapshot *auth.AuthDotJSON) (*auth.GetAccountResponse, bool) {
+	if r == nil || r.services.Config == nil {
+		return nil, false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil, false
+	}
+	providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+	providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
+	if err != nil || providerInfo == nil {
+		return nil, false
+	}
+	provider := model.CreateRuntimeProviderForID(providerID, *providerInfo, snapshot)
+	state, err := provider.AccountState()
+	if err != nil || state.RequiresOpenAIAuth {
+		return nil, false
+	}
+	return &auth.GetAccountResponse{
+		Account:            authAccountFromProviderAccount(state.Account),
+		RequiresOpenAIAuth: false,
+	}, true
+}
+
+func authAccountFromProviderAccount(account *model.ProviderAccount) *auth.Account {
+	if account == nil {
+		return nil
+	}
+	switch account.Type {
+	case "api-key":
+		return &auth.Account{Type: auth.AccountAPIKey}
+	case "chatgpt":
+		return &auth.Account{
+			Type:     auth.AccountChatGPT,
+			Email:    stringPtrIfNotEmpty(account.Email),
+			PlanType: auth.PlanType(strings.TrimSpace(account.PlanType)),
+		}
+	case "amazon-bedrock":
+		return &auth.Account{
+			Type:             auth.AccountAmazonBedrock,
+			CredentialSource: bedrockCredentialSourceFromProvider(account.CredentialSource),
+		}
+	default:
+		return nil
+	}
+}
+
+func bedrockCredentialSourceFromProvider(source string) auth.BedrockCredentialSource {
+	switch strings.TrimSpace(source) {
+	case "codex-managed", "codexManaged", "apiKey":
+		return auth.BedrockCredentialSourceCodexManaged
+	default:
+		return auth.BedrockCredentialSourceAWSManaged
+	}
+}
+
+func (r *RuntimeRouter) hydratePersonalAccessTokenAccount(ctx context.Context, snapshot *auth.AuthDotJSON) error {
+	if snapshot == nil || snapshot.Mode() != "personal-access-token" || auth.AccountFromAuth(snapshot) != nil {
+		return nil
+	}
+	metadata, err := auth.LoadPersonalAccessTokenMetadata(ctx, snapshot.PersonalAccessToken)
+	if err != nil {
+		return err
+	}
+	snapshot.Tokens = map[string]any{
+		"email":                      metadata.Email,
+		"chatgpt_user_id":            metadata.ChatGPTUserID,
+		"chatgpt_account_id":         metadata.ChatGPTAccountID,
+		"chatgpt_plan_type":          metadata.ChatGPTPlanType,
+		"chatgpt_account_is_fedramp": metadata.ChatGPTAccountFedRAMP,
+	}
+	return nil
+}
+
+func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetAccountRateLimitsResponse, error) {
+	if len(request.Params) > 0 {
+		var params struct{}
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+	}
+	snapshot, err := r.requireCodexBackendAuthForAccountRead("rate limits")
+	if err != nil {
+		return nil, err
+	}
+	client, err := r.accountBackendClient(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	response, err := client.GetRateLimitsWithResetCredits(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch codex rate limits: %w", err)
+	}
+	if response == nil || len(response.RateLimits) == 0 {
+		return nil, errors.New("failed to fetch codex rate limits: no snapshots returned")
+	}
+	rateLimits, byLimitID := accountRateLimitsFromBackend(response.RateLimits)
+	var resetCredits *auth.RateLimitResetCreditsSummary
+	if response.RateLimitResetCredits != nil {
+		resetCredits = &auth.RateLimitResetCreditsSummary{AvailableCount: response.RateLimitResetCredits.AvailableCount}
+	}
+	r.requireAccount().SetRateLimits(rateLimits, byLimitID, resetCredits)
+	return r.requireAccount().RateLimits(), nil
+}
+
+func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetAccountTokenUsageResponse, error) {
+	if len(request.Params) > 0 {
+		var params struct{}
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+	}
+	snapshot, err := r.requireCodexBackendAuthForAccountRead("token usage")
+	if err != nil {
+		return nil, err
+	}
+	client, err := r.accountBackendClient(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountTokenUsageFetchTimeout())
+	defer cancel()
+	profile, err := client.GetTokenUsageProfile(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, errors.New("token usage profile fetch timed out")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch token usage profile: %w", err)
+	}
+	usage := accountTokenUsageFromBackend(profile)
+	r.requireAccount().SetTokenUsage(usage)
+	return r.requireAccount().TokenUsage(), nil
+}
+
+func (r *RuntimeRouter) handleGetWorkspaceMessages(request *Request) (*auth.GetWorkspaceMessagesResponse, error) {
+	if len(request.Params) > 0 {
+		var params struct{}
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+	}
+	snapshot, err := r.requireCodexBackendAuthForAccountRead("workspace messages")
+	if err != nil {
+		return nil, err
+	}
+	client, err := r.accountBackendClient(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountWorkspaceMessagesFetchTimeout())
+	defer cancel()
+	messages, err := client.ListWorkspaceMessages(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, errors.New("workspace messages fetch timed out")
+	}
+	if err != nil {
+		var statusErr *chatgptapi.HTTPStatusError
+		if errors.As(err, &statusErr) && statusErr.IsStatus(http.StatusNotFound) {
+			response := auth.GetWorkspaceMessagesResponse{FeatureEnabled: false, Messages: []auth.WorkspaceMessage{}}
+			r.requireAccount().SetWorkspaceMessages(response)
+			return r.requireAccount().WorkspaceMessages(), nil
+		}
+		return nil, fmt.Errorf("failed to fetch workspace messages: %w", err)
+	}
+	response, err := accountWorkspaceMessagesFromBackend(messages, true)
+	if err != nil {
+		return nil, err
+	}
+	r.requireAccount().SetWorkspaceMessages(response)
+	return r.requireAccount().WorkspaceMessages(), nil
+}
+
+func (r *RuntimeRouter) accountBackendClient(snapshot *auth.AuthDotJSON) (*chatgptapi.CloudClient, error) {
+	if snapshot == nil {
+		return nil, errors.New("account auth is nil")
+	}
+	if err := r.hydratePersonalAccessTokenAccount(context.Background(), snapshot); err != nil {
+		return nil, err
+	}
+	headers, err := model.AuthHeadersFromAuth(*snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return chatgptapi.NewCloudClient(&chatgptapi.CloudClientOptions{
+		BaseURL:    r.chatGPTBaseURL(),
+		Headers:    headers.Headers,
+		HTTPClient: r.accountHTTPClient(),
+	}), nil
+}
+
+func accountTokenUsageFetchTimeout() time.Duration {
+	return 10 * time.Second
+}
+
+func accountWorkspaceMessagesFetchTimeout() time.Duration {
+	return time.Second
+}
+
+func (r *RuntimeRouter) requireCodexBackendAuthForAccountRead(resource string) (*auth.AuthDotJSON, error) {
+	codexHome := r.codexHomeForRollout()
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
+		return nil, invalidAccountRequest("codex account authentication required to read " + resource)
+	}
+	snapshot := &resolved.Auth
+	if !authUsesCodexBackend(snapshot) {
+		return nil, invalidAccountRequest("chatgpt authentication required to read " + resource)
+	}
+	return snapshot, nil
+}
+
+func authUsesCodexBackend(snapshot *auth.AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+		return true
+	default:
+		return false
+	}
+}
+
+func accountRateLimitsFromBackend(snapshots []chatgptapi.RateLimitSnapshot) (auth.RateLimitSnapshot, map[string]auth.RateLimitSnapshot) {
+	byLimitID := make(map[string]auth.RateLimitSnapshot, len(snapshots))
+	var selected auth.RateLimitSnapshot
+	for index := range snapshots {
+		converted := accountRateLimitFromBackend(&snapshots[index])
+		limitID := "codex"
+		if converted.LimitID != nil && strings.TrimSpace(*converted.LimitID) != "" {
+			limitID = strings.TrimSpace(*converted.LimitID)
+		}
+		byLimitID[limitID] = converted
+		if selected == (auth.RateLimitSnapshot{}) || limitID == "codex" {
+			selected = converted
+		}
+	}
+	return selected, byLimitID
+}
+
+func accountRateLimitFromBackend(snapshot *chatgptapi.RateLimitSnapshot) auth.RateLimitSnapshot {
+	if snapshot == nil {
+		return auth.RateLimitSnapshot{}
+	}
+	return auth.RateLimitSnapshot{
+		LimitID:              cloneStringPtrAppserver(snapshot.LimitID),
+		LimitName:            cloneStringPtrAppserver(snapshot.LimitName),
+		Primary:              accountRateLimitWindowFromBackend(snapshot.Primary),
+		Secondary:            accountRateLimitWindowFromBackend(snapshot.Secondary),
+		Credits:              accountCreditsFromBackend(snapshot.Credits),
+		IndividualLimit:      accountSpendLimitFromBackend(snapshot.IndividualLimit),
+		PlanType:             accountPlanTypeFromBackend(snapshot.PlanType),
+		RateLimitReachedType: accountRateLimitReachedTypeFromBackend(snapshot.RateLimitReachedType),
+	}
+}
+
+func accountRateLimitWindowFromBackend(window *chatgptapi.RateLimitWindow) *auth.RateLimitWindow {
+	if window == nil {
+		return nil
+	}
+	return &auth.RateLimitWindow{
+		UsedPercent:        roundedRateLimitPercent(window.UsedPercent),
+		WindowDurationMins: cloneInt64PtrAppserver(window.WindowDurationMins),
+		ResetsAt:           cloneInt64PtrAppserver(window.ResetsAt),
+	}
+}
+
+func roundedRateLimitPercent(value float64) int32 {
+	if math.IsNaN(value) {
+		return 0
+	}
+	rounded := math.Round(value)
+	if rounded > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if rounded < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(rounded)
+}
+
+func accountCreditsFromBackend(credits *chatgptapi.CreditsSnapshot) *auth.CreditsSnapshot {
+	if credits == nil {
+		return nil
+	}
+	return &auth.CreditsSnapshot{
+		HasCredits: credits.HasCredits,
+		Unlimited:  credits.Unlimited,
+		Balance:    cloneStringPtrAppserver(credits.Balance),
+	}
+}
+
+func accountSpendLimitFromBackend(limit *chatgptapi.SpendControlLimitSnapshot) *auth.SpendControlLimitSnapshot {
+	if limit == nil {
+		return nil
+	}
+	return &auth.SpendControlLimitSnapshot{
+		Limit:            limit.Limit,
+		Used:             limit.Used,
+		RemainingPercent: limit.RemainingPercent,
+		ResetsAt:         limit.ResetsAt,
+	}
+}
+
+func accountPlanTypeFromBackend(plan chatgptapi.PlanType) *auth.PlanType {
+	switch plan {
+	case chatgptapi.PlanFree:
+		value := auth.PlanFree
+		return &value
+	case chatgptapi.PlanGo:
+		value := auth.PlanGo
+		return &value
+	case chatgptapi.PlanPlus:
+		value := auth.PlanPlus
+		return &value
+	case chatgptapi.PlanPro:
+		value := auth.PlanPro
+		return &value
+	case chatgptapi.PlanProLite:
+		value := auth.PlanProlite
+		return &value
+	case chatgptapi.PlanTeam:
+		value := auth.PlanTeam
+		return &value
+	case chatgptapi.PlanSelfServeBusinessUsageBased:
+		value := auth.PlanSelfServeBusinessUsageBased
+		return &value
+	case chatgptapi.PlanBusiness:
+		value := auth.PlanBusiness
+		return &value
+	case chatgptapi.PlanEnterpriseCbpUsageBased:
+		value := auth.PlanEnterpriseCBPUsageBased
+		return &value
+	case chatgptapi.PlanEnterprise:
+		value := auth.PlanEnterprise
+		return &value
+	case chatgptapi.PlanEdu, chatgptapi.PlanEducation:
+		value := auth.PlanEdu
+		return &value
+	default:
+		value := auth.PlanUnknown
+		return &value
+	}
+}
+
+func accountRateLimitReachedTypeFromBackend(kind *chatgptapi.RateLimitReachedKind) *auth.RateLimitReachedType {
+	if kind == nil {
+		return nil
+	}
+	switch *kind {
+	case chatgptapi.RateLimitReached:
+		value := auth.RateLimitReached
+		return &value
+	case chatgptapi.WorkspaceOwnerCreditsDepleted:
+		value := auth.WorkspaceOwnerCreditsDepleted
+		return &value
+	case chatgptapi.WorkspaceMemberCreditsDepleted:
+		value := auth.WorkspaceMemberCreditsDepleted
+		return &value
+	case chatgptapi.WorkspaceOwnerUsageLimitReached:
+		value := auth.WorkspaceOwnerUsageLimitReached
+		return &value
+	case chatgptapi.WorkspaceMemberUsageLimitReached:
+		value := auth.WorkspaceMemberUsageLimitReached
+		return &value
+	default:
+		return nil
+	}
+}
+
+func cloneInt64PtrAppserver(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func accountTokenUsageFromBackend(profile *chatgptapi.TokenUsageProfile) auth.GetAccountTokenUsageResponse {
+	if profile == nil {
+		return auth.GetAccountTokenUsageResponse{}
+	}
+	response := auth.GetAccountTokenUsageResponse{
+		Summary: auth.AccountTokenUsageSummary{
+			LifetimeTokens:        cloneInt64PtrAppserver(profile.Stats.LifetimeTokens),
+			PeakDailyTokens:       cloneInt64PtrAppserver(profile.Stats.PeakDailyTokens),
+			LongestRunningTurnSec: cloneInt64PtrAppserver(profile.Stats.LongestRunningTurnSec),
+			CurrentStreakDays:     cloneInt64PtrAppserver(profile.Stats.CurrentStreakDays),
+			LongestStreakDays:     cloneInt64PtrAppserver(profile.Stats.LongestStreakDays),
+		},
+	}
+	if profile.Stats.DailyUsageBuckets != nil {
+		response.DailyUsageBuckets = make([]auth.AccountTokenUsageDailyBucket, 0, len(*profile.Stats.DailyUsageBuckets))
+		for _, bucket := range *profile.Stats.DailyUsageBuckets {
+			response.DailyUsageBuckets = append(response.DailyUsageBuckets, auth.AccountTokenUsageDailyBucket{
+				StartDate: bucket.StartDate,
+				Tokens:    bucket.Tokens,
+			})
+		}
+	}
+	return response
+}
+
+func accountWorkspaceMessagesFromBackend(response *chatgptapi.WorkspaceMessagesResponse, featureEnabled bool) (auth.GetWorkspaceMessagesResponse, error) {
+	out := auth.GetWorkspaceMessagesResponse{FeatureEnabled: featureEnabled, Messages: []auth.WorkspaceMessage{}}
+	if response == nil {
+		return out, nil
+	}
+	for _, message := range response.Messages {
+		createdAt, err := workspaceMessageTimestamp(message.CreatedAt)
+		if err != nil {
+			return auth.GetWorkspaceMessagesResponse{}, err
+		}
+		archivedAt, err := workspaceMessageTimestamp(message.ArchivedAt)
+		if err != nil {
+			return auth.GetWorkspaceMessagesResponse{}, err
+		}
+		out.Messages = append(out.Messages, auth.WorkspaceMessage{
+			MessageID:   message.MessageID,
+			MessageType: workspaceMessageTypeFromBackend(message.MessageType),
+			MessageBody: message.MessageBody,
+			CreatedAt:   createdAt,
+			ArchivedAt:  archivedAt,
+		})
+	}
+	return out, nil
+}
+
+func workspaceMessageTimestamp(value *string) (*int64, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*value))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse workspace message timestamp `%s`: %w", strings.TrimSpace(*value), err)
+	}
+	unix := parsed.Unix()
+	return &unix, nil
+}
+
+func workspaceMessageTypeFromBackend(value chatgptapi.WorkspaceMessageType) auth.WorkspaceMessageType {
+	switch value {
+	case chatgptapi.WorkspaceMessageHeadline:
+		return auth.WorkspaceMessageHeadline
+	case chatgptapi.WorkspaceMessageAnnouncement:
+		return auth.WorkspaceMessageAnnouncement
+	default:
+		return auth.WorkspaceMessageUnknown
+	}
+}
+
+func cloneStringPtrAppserver(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func (r *RuntimeRouter) handleConsumeResetCredit(request *Request) (*auth.ConsumeRateLimitResetCreditResponse, error) {
+	var params auth.ConsumeRateLimitResetCreditParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(params.IdempotencyKey) == "" {
+		return nil, invalidAccountRequest("idempotencyKey must not be empty")
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
+		return nil, invalidAccountRequest("codex account authentication required for rate limit reset credits")
+	}
+	if !authUsesCodexBackend(&resolved.Auth) {
+		return nil, invalidAccountRequest("chatgpt authentication required for rate limit reset credits")
+	}
+	client, err := r.accountBackendClient(&resolved.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rateLimitResetRequestTimeout())
+	defer cancel()
+	response, err := client.ConsumeRateLimitResetCredit(ctx, params.IdempotencyKey)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, errors.New("rate limit reset consume timed out")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to consume rate limit reset: %w", err)
+	}
+	outcome, ok := backendResetCreditOutcome(response)
+	if !ok {
+		return nil, fmt.Errorf("failed to consume rate limit reset: unsupported outcome %q", responseCodeFromResetCredit(response))
+	}
+	return &auth.ConsumeRateLimitResetCreditResponse{Outcome: outcome}, nil
+}
+
+func backendResetCreditOutcome(response *chatgptapi.ConsumeRateLimitResetCreditResponse) (auth.ConsumeRateLimitResetCreditOutcome, bool) {
+	if response == nil {
+		return "", false
+	}
+	switch response.Code {
+	case chatgptapi.ConsumeReset:
+		return auth.ResetCreditOutcomeReset, true
+	case chatgptapi.ConsumeNothingToReset:
+		return auth.ResetCreditOutcomeNothingToReset, true
+	case chatgptapi.ConsumeNoCredit:
+		return auth.ResetCreditOutcomeNoCredit, true
+	case chatgptapi.ConsumeAlreadyRedeemed:
+		return auth.ResetCreditOutcomeAlreadyRedeemed, true
+	default:
+		return "", false
+	}
+}
+
+func responseCodeFromResetCredit(response *chatgptapi.ConsumeRateLimitResetCreditResponse) chatgptapi.ConsumeRateLimitResetCreditCode {
+	if response == nil {
+		return ""
+	}
+	return response.Code
+}
+
+func (r *RuntimeRouter) handleSendAddCreditsNudgeEmail(request *Request) (*auth.SendAddCreditsNudgeEmailResponse, error) {
+	var params auth.SendAddCreditsNudgeEmailParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
+		return nil, invalidAccountRequest("codex account authentication required to notify workspace owner")
+	}
+	if !authUsesCodexBackend(&resolved.Auth) {
+		return nil, invalidAccountRequest("chatgpt authentication required to notify workspace owner")
+	}
+	client, err := r.accountBackendClient(&resolved.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	err = client.SendAddCreditsNudgeEmail(context.Background(), backendCreditType(params.CreditType))
+	if err == nil {
+		return &auth.SendAddCreditsNudgeEmailResponse{Status: auth.AddCreditsNudgeEmailSent}, nil
+	}
+	var statusErr *chatgptapi.HTTPStatusError
+	if errors.As(err, &statusErr) && statusErr.IsStatus(http.StatusTooManyRequests) {
+		return &auth.SendAddCreditsNudgeEmailResponse{Status: auth.AddCreditsNudgeEmailCooldownActive}, nil
+	}
+	return nil, fmt.Errorf("failed to notify workspace owner: %w", err)
+}
+
+func backendCreditType(creditType auth.AddCreditsNudgeCreditType) chatgptapi.AddCreditsNudgeCreditType {
+	switch creditType {
+	case auth.AddCreditsNudgeUsageLimit:
+		return chatgptapi.AddCreditsNudgeUsageLimit
+	default:
+		return chatgptapi.AddCreditsNudgeCredits
+	}
+}
+
+func rateLimitResetRequestTimeout() time.Duration {
+	const fallback = 10 * time.Second
+	value := strings.TrimSpace(os.Getenv("CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS"))
+	if value == "" {
+		return fallback
+	}
+	millis, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || millis <= 0 {
+		return fallback
+	}
+	return time.Duration(millis) * time.Millisecond
+}
+
+func (r *RuntimeRouter) accountHTTPClient() chatgptapi.HTTPDoer {
+	if r != nil && r.services.AccountHTTP != nil {
+		return r.services.AccountHTTP
+	}
+	return http.DefaultClient
+}
+
+func (r *RuntimeRouter) chatGPTBaseURL() string {
+	if r == nil || r.services.Config == nil {
+		return config.DefaultChatGPTBaseURL
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return config.DefaultChatGPTBaseURL
+	}
+	cfg := &config.Config{Values: read.Config}
+	return cfg.ChatGPTBaseURL()
+}
+
+type accountRequestError struct {
+	message string
+}
+
+func invalidAccountRequest(message string) error {
+	return &accountRequestError{message: message}
+}
+
+func (e *accountRequestError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *accountRequestError) Unwrap() error {
+	return ErrJSONRPCInvalidRequest
+}
+
+func (r *RuntimeRouter) handleProcessSpawn(request *Request) (*ProcessSpawnResponse, error) {
+	var params ProcessSpawnParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireProcesses().SpawnWithOptions(nil, &params, r.notify, &ProcessSpawnOptions{ConnectionID: request.normalizedConnectionID()})
+}
+
+func (r *RuntimeRouter) handleProcessWriteStdin(request *Request) (*ProcessWriteStdinResponse, error) {
+	var params ProcessWriteStdinParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireProcesses().WriteStdinWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleProcessKill(request *Request) (*ProcessKillResponse, error) {
+	var params ProcessKillParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireProcesses().KillWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleProcessResizePty(request *Request) (*ProcessResizePtyResponse, error) {
+	var params ProcessResizePtyParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireProcesses().ResizeWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecResponse, error) {
+	var params CommandExecParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, &CommandExecOptions{ConnectionID: request.normalizedConnectionID()})
+}
+
+func (r *RuntimeRouter) handleCommandExecWrite(request *Request) (*CommandExecWriteResponse, error) {
+	var params CommandExecWriteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireCommandExec().WriteWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleCommandExecTerminate(request *Request) (*CommandExecTerminateResponse, error) {
+	var params CommandExecTerminateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireCommandExec().TerminateWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) handleCommandExecResize(request *Request) (*CommandExecResizeResponse, error) {
+	var params CommandExecResizeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireCommandExec().ResizeWithConnection(request.normalizedConnectionID(), &params)
+}
+
+func (r *RuntimeRouter) requireFS() *FSService {
+	if r.services.FS == nil {
+		r.services.FS = NewFSService()
+	}
+	return r.services.FS
+}
+
+func (r *RuntimeRouter) requireThreadExtras() *ThreadExtraService {
+	if r.services.ThreadExtras == nil {
+		r.services.ThreadExtras = NewThreadExtraService()
+	}
+	return r.services.ThreadExtras
+}
+
+func (r *RuntimeRouter) requireRealtime() *realtime.Manager {
+	if r.services.Realtime == nil {
+		r.services.Realtime = realtime.NewManager()
+	}
+	return r.services.Realtime
+}
+
+func (r *RuntimeRouter) requireRemote() *remotecontrol.Manager {
+	if r.services.Remote == nil {
+		r.services.Remote = remotecontrol.NewManager("codex", "")
+	}
+	return r.services.Remote
+}
+
+func (r *RuntimeRouter) requireEnvironment() *EnvironmentManager {
+	if r.services.Environment == nil {
+		r.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, "")
+	}
+	return r.services.Environment
+}
+
+func (r *RuntimeRouter) requireWindows() *sandbox.WindowsManager {
+	if r.services.Windows == nil {
+		r.services.Windows = sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured)
+	}
+	return r.services.Windows
+}
+
+func (r *RuntimeRouter) requireConfig() *config.ConfigService {
+	if r.services.Config == nil {
+		r.services.Config = config.NewConfigService("")
+	}
+	return r.services.Config
+}
+
+func (r *RuntimeRouter) requireAccount() *auth.AccountManager {
+	if r.services.Account == nil {
+		r.services.Account = auth.NewAccountManager()
+	}
+	return r.services.Account
+}
+
+func (r *RuntimeRouter) requireHooks() *HookRegistry {
+	if r.services.Hooks == nil {
+		r.services.Hooks = NewHookRegistry()
+	}
+	return r.services.Hooks
+}
+
+func (r *RuntimeRouter) requireHooksDiscovery() *HookDiscoveryService {
+	if r.services.HooksDiscovery == nil {
+		codexHome := ""
+		if r.services.Config != nil {
+			codexHome = r.services.Config.CodexHome()
+		}
+		r.services.HooksDiscovery = NewHookDiscoveryService(codexHome)
+	}
+	if r.services.HooksDiscovery.Config == nil {
+		r.services.HooksDiscovery.Config = r.services.Config
+	}
+	return r.services.HooksDiscovery
+}
+
+func (r *RuntimeRouter) hookStatesFromConfig() map[string]*HookState {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil
+	}
+	hooksValue, ok := read.Config["hooks"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	stateValue, ok := hooksValue["state"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	states := make(map[string]*HookState, len(stateValue))
+	for key, value := range stateValue {
+		stateMap, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		state := &HookState{}
+		if enabled, ok := stateMap["enabled"].(bool); ok {
+			state.Enabled = &enabled
+		}
+		if hash, ok := stateMap["trusted_hash"].(string); ok {
+			state.TrustedHash = &hash
+		}
+		if hash, ok := stateMap["trustedHash"].(string); ok {
+			state.TrustedHash = &hash
+		}
+		states[key] = state
+	}
+	return states
+}
+
+func (r *RuntimeRouter) bypassHookTrustFromConfig() bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return false
+	}
+	value, ok := read.Config["bypass_hook_trust"].(bool)
+	return ok && value
+}
+
+func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
+	discovery := r.requireHooksDiscovery()
+	discovery.States = r.hookStatesFromConfig()
+	discovery.BypassTrust = r.bypassHookTrustFromConfig()
+	if r.services.Plugins != nil {
+		discovery.PluginHookSources = r.services.Plugins.EnabledHookSources()
+	} else {
+		discovery.PluginHookSources = nil
+	}
+	return discovery
+}
+
+func (r *RuntimeRouter) requireHookRunner() *HookRunner {
+	if r.services.HookRunner == nil {
+		r.services.HookRunner = NewHookRunner()
+	}
+	r.services.HookRunner.Notify = r.notify
+	return r.services.HookRunner
+}
+
+func (r *RuntimeRouter) requireSkills() *SkillsService {
+	if r.services.Skills == nil {
+		options := &SkillsServiceOptions{}
+		if r.services.Config != nil {
+			options.Config = r.services.Config
+			options.CodexHome = r.services.Config.CodexHome()
+			options.IncludeDefaultRoots = strings.TrimSpace(options.CodexHome) != ""
+		}
+		r.services.Skills = NewSkillsServiceWithOptions(options)
+	}
+	return r.services.Skills
+}
+
+func (r *RuntimeRouter) requirePlugins() *plugin.PluginService {
+	if r.services.Plugins == nil {
+		r.services.Plugins = plugin.NewPluginService()
+	}
+	return r.services.Plugins
+}
+
+func (r *RuntimeRouter) requireModels() *model.ModelService {
+	if r.services.Models == nil {
+		r.services.Models = model.NewModelService(nil)
+	}
+	return r.services.Models
+}
+
+func (r *RuntimeRouter) requirePermissions() *sandbox.PermissionProfileService {
+	if r.services.Permissions == nil {
+		r.services.Permissions = sandbox.NewPermissionProfileService(nil)
+	}
+	return r.services.Permissions
+}
+
+func (r *RuntimeRouter) requireCollaboration() *CollaborationModeService {
+	if r.services.Collaboration == nil {
+		r.services.Collaboration = NewCollaborationModeService(nil)
+	}
+	return r.services.Collaboration
+}
+
+func (r *RuntimeRouter) requireMCP() *mcp.MCPService {
+	if r.services.MCP == nil {
+		r.services.MCP = mcp.NewMCPService(nil)
+	}
+	r.services.MCP.SetElicitationHandler(&appserverMCPElicitationHandler{broker: r.requireServerRequests()})
+	r.services.MCP.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
+	r.services.MCP.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
+		return r.mcpRootsForThread(threadID)
+	}))
+	r.services.MCP.SetOAuthLoginCompletionHandler(&appserverMCPOAuthLoginCompletionHandler{notify: r.notify})
+	r.services.MCP.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
+	return r.services.MCP
+}
+
+func (r *RuntimeRouter) mcpRootsForThread(threadID string) []mcp.MCPRoot {
+	paths := r.mcpRootPathsForThread(threadID)
+	if len(paths) == 0 {
+		return nil
+	}
+	roots := make([]mcp.MCPRoot, 0, len(paths))
+	for _, path := range paths {
+		root := mcp.NewMCPFileRoot(path)
+		if root != nil {
+			roots = append(roots, *root)
+		}
+	}
+	return roots
+}
+
+func (r *RuntimeRouter) mcpRootPathsForThread(threadID string) []string {
+	if params := r.activeTurnParams(threadID); params != nil {
+		paths := normalizedMCPRootPaths(r, params.RuntimeWorkspaceRoots)
+		if len(paths) == 0 {
+			paths = normalizedMCPRootPaths(r, []string{params.CWD})
+		}
+		if len(paths) > 0 {
+			return paths
+		}
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID != "" && r != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
+		if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
+			paths := normalizedMCPRootPaths(r, stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"]))
+			if len(paths) == 0 {
+				paths = normalizedMCPRootPaths(r, []string{record.Metadata.CWD})
+			}
+			if len(paths) > 0 {
+				return paths
+			}
+		}
+	}
+	if r != nil {
+		return normalizedMCPRootPaths(r, []string{r.services.DefaultCWD})
+	}
+	return nil
+}
+
+func (r *RuntimeRouter) activeTurnParams(threadID string) *turn.TurnStartParams {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	return cloneTurnStartParams(active.Params)
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	r.turnsMu.Lock()
+	active := r.active[threadID]
+	if active == nil || strings.TrimSpace(active.TurnID) == "" {
+		r.turnsMu.Unlock()
+		return nil
+	}
+	turnID := strings.TrimSpace(active.TurnID)
+	startedAtMS := active.StartedAtMS
+	params := cloneTurnStartParams(active.Params)
+	r.turnsMu.Unlock()
+
+	startedAt := time.UnixMilli(startedAtMS).UTC().Unix()
+	createdAt := time.UnixMilli(startedAtMS).UTC()
+	if startedAtMS == 0 {
+		now := time.Now().UTC()
+		startedAt = now.Unix()
+		createdAt = now
+	}
+	items := []ThreadItem{}
+	for _, item := range r.sessionItemsForTurn(turnID, params, nil, createdAt) {
+		items = append(items, BuildThreadItem(item))
+	}
+	return &Turn{
+		ID:        turnID,
+		Items:     items,
+		ItemsView: TurnItemsFull,
+		Status:    TurnStatusInProgress,
+		StartedAt: &startedAt,
+	}
+}
+
+func normalizedMCPRootPaths(r *RuntimeRouter, values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	base := ""
+	if r != nil {
+		base = strings.TrimSpace(r.services.DefaultCWD)
+	}
+	for _, value := range values {
+		path := strings.TrimSpace(value)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) && base != "" {
+			path = filepath.Join(base, path)
+		}
+		path = filepath.Clean(path)
+		if path == "." || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
+}
+
+func (r *RuntimeRouter) requireFeatures() *features.FeatureService {
+	if r.services.Features == nil {
+		r.services.Features = features.NewFeatureService(nil)
+	}
+	return r.services.Features
+}
+
+func (r *RuntimeRouter) requireApps() *apps.AppService {
+	if r.services.Apps == nil {
+		r.services.Apps = apps.NewAppService(nil)
+	}
+	return r.services.Apps
+}
+
+func (r *RuntimeRouter) requireTurns() *turn.TurnService {
+	if r.services.Turns == nil {
+		r.services.Turns = turn.NewTurnService()
+	}
+	return r.services.Turns
+}
+
+func (r *RuntimeRouter) requireSteerMailbox() *turn.SteerMailbox {
+	if r.services.SteerMailbox == nil {
+		r.services.SteerMailbox = turn.NewSteerMailbox()
+	}
+	return r.services.SteerMailbox
+}
+
+func (r *RuntimeRouter) requireAgent() model.AgentRunner {
+	if r.services.Agent == nil {
+		r.services.Agent = model.NewLocalAgentRunner()
+	}
+	return r.services.Agent
+}
+
+func (r *RuntimeRouter) requireToolRouter(cwd string) (*tool.Router, error) {
+	if r.services.ToolRouter != nil {
+		return r.services.ToolRouter, nil
+	}
+	options := turn.DefaultToolRegistryOptions(cwd)
+	options.EnableMCP = false
+	options.EnableAgents = false
+	router, err := turn.BuildToolRouter(options)
+	if err != nil {
+		return nil, err
+	}
+	r.services.ToolRouter = router
+	return router, nil
+}
+
+func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID string) (*turn.Runtime, error) {
+	if r.services.TurnRuntime != nil {
+		return r.services.TurnRuntime, nil
+	}
+	cwd := firstNonEmpty(params.CWD, r.services.DefaultCWD)
+	router, err := r.toolRouterForTurn(cwd, params, turnID)
+	if err != nil {
+		return nil, err
+	}
+	hooks := r.turnHookAdapter(params, turnID)
+	agent := r.agentForAppTurn(params, turnID)
+	return turn.NewRuntime(&turn.RuntimeOptions{
+		Agent:        agent,
+		Router:       router,
+		Hooks:        hooks,
+		SteerMailbox: r.requireSteerMailbox(),
+	}), nil
+}
+
+func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartParams, turnID string) (*tool.Router, error) {
+	var candidates []plugin.DiscoverableInfo
+	if r != nil {
+		candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn())
+	}
+	threadID := ""
+	if params != nil {
+		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	enableCurrentTimeTool := false
+	enableSleepTool := false
+	var clockProvider tool.ClockProvider
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return nil, err
+	}
+	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled {
+			enableCurrentTimeTool = true
+			enableSleepTool = reminder.SleepTool
+			if reminder.ClockSource == config.CurrentTimeSourceExternal {
+				clockProvider = &appServerClockProvider{router: r}
+			}
+		}
+	}
+	mcpTools, mcpConnectors := r.mcpRuntimeInputsForTurn(threadID, cfg)
+	if r != nil && r.services.ToolRouter != nil && !enableCurrentTimeTool && !enableSleepTool && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+		return r.services.ToolRouter, nil
+	}
+	options := turn.DefaultToolRegistryOptions(cwd)
+	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
+		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
+		options.Shell.Validation.PermissionProfile = permissionProfile.Profile
+	}
+	options.EnableMCP = len(mcpTools) > 0
+	if r != nil {
+		options.MCPService = r.services.MCP
+	}
+	options.MCPTools = mcpTools
+	options.MCPConnectors = mcpConnectors
+	options.EnableAgents = false
+	if params != nil && len(params.DynamicTools) > 0 {
+		options.DynamicToolCaller = dynamicToolServerRequestCaller{broker: r.requireServerRequests()}
+		options.DynamicTools = params.CloneDynamicTools()
+	}
+	options.ContextStatus = r.contextStatusForThread(threadID)
+	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	options.EnableCurrentTimeTool = enableCurrentTimeTool
+	options.EnableSleepTool = enableSleepTool
+	options.ClockProvider = clockProvider
+	if len(candidates) > 0 {
+		options.PluginInstallCandidates = candidates
+		options.PluginInstallRecommendationContext = true
+		options.PluginInstallRuntime = &pluginInstallRuntime{
+			broker:   r.requireServerRequests(),
+			plugins:  r.services.Plugins,
+			apps:     r.requireApps(),
+			config:   r.requireConfig(),
+			threadID: threadID,
+			turnID:   strings.TrimSpace(turnID),
+		}
+	}
+	options.ThreadID = threadID
+	options.TurnID = strings.TrimSpace(turnID)
+	return turn.BuildToolRouter(options)
+}
+
+func turnSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) (*config.SandboxPermissionProfileResolution, error) {
+	if params != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
+		profileID, profile, err := turnSandboxPolicyPermissionProfile(params.SandboxPolicy)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := sandbox.RuntimePermissionProfileJSON(*profile)
+		if err != nil {
+			return nil, err
+		}
+		return &config.SandboxPermissionProfileResolution{ID: profileID, Profile: profile, ProfileJSON: raw}, nil
+	}
+	profileID := ""
+	if params != nil && params.Permissions != nil {
+		profileID = strings.TrimSpace(*params.Permissions)
+	}
+	if cfg == nil {
+		return nil, nil
+	}
+	return cfg.ResolveSandboxPermissionProfile(profileID, cwd)
+}
+
+func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionProfile, error) {
+	policy, err := parseTurnSandboxPolicy(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	if policy == nil {
+		return "", nil, nil
+	}
+	switch policy.Kind {
+	case sandbox.SandboxDangerFullAccess:
+		profile := sandbox.FullAccessPermissionProfile()
+		return sandbox.BuiltInPermissionProfileDangerFullAccess, &profile, nil
+	case sandbox.SandboxReadOnly:
+		profile := sandbox.PermissionProfile{SandboxPolicy: policy, NetworkEnabled: policy.HasFullNetworkAccess()}
+		return sandbox.BuiltInPermissionProfileReadOnly, &profile, nil
+	case sandbox.SandboxWorkspaceWrite, "":
+		policy.Kind = sandbox.SandboxWorkspaceWrite
+		profile := sandbox.PermissionProfile{SandboxPolicy: policy, NetworkEnabled: policy.HasFullNetworkAccess()}
+		return sandbox.BuiltInPermissionProfileWorkspace, &profile, nil
+	default:
+		profile := sandbox.PermissionProfile{SandboxPolicy: policy, NetworkEnabled: policy.HasFullNetworkAccess()}
+		return string(policy.Kind), &profile, nil
+	}
+}
+
+func parseTurnSandboxPolicy(raw any) (*sandbox.SandboxPolicy, error) {
+	switch value := raw.(type) {
+	case nil:
+		return nil, nil
+	case *sandbox.SandboxPolicy:
+		if value == nil {
+			return nil, nil
+		}
+		clone := *value
+		clone.WritableRoots = append([]string(nil), value.WritableRoots...)
+		return &clone, nil
+	case sandbox.SandboxPolicy:
+		clone := value
+		clone.WritableRoots = append([]string(nil), value.WritableRoots...)
+		return &clone, nil
+	case string:
+		mode, err := sandbox.ParseSandboxMode(value)
+		if err != nil {
+			return nil, err
+		}
+		return sandbox.SandboxPolicyFromMode(mode)
+	case map[string]any:
+		if mode := turnSandboxPolicyMode(value); mode != "" {
+			normalized := make(map[string]any, len(value)+1)
+			for key, entry := range value {
+				normalized[key] = entry
+			}
+			if _, ok := normalized["type"]; !ok {
+				normalized["type"] = mode
+			}
+			raw = normalized
+		}
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var policy sandbox.SandboxPolicy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
+
+func turnSandboxPolicyMode(values map[string]any) string {
+	for _, key := range []string{"mode", "sandboxMode", "sandbox_mode"} {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) mcpRuntimeInputsForTurn(threadID string, cfg *config.Config) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+	if r == nil || r.services.MCP == nil {
+		return nil, nil
+	}
+	response, err := r.services.MCP.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		ThreadID: stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
+		Detail:   &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+	})
+	if err != nil || response == nil {
+		return nil, nil
+	}
+	tools := mcpRuntimeToolsFromStatuses(response.Data)
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	tools = r.annotateRuntimeMCPToolsWithPluginSources(tools)
+	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg)
+}
+
+func (r *RuntimeRouter) mcpRuntimeConnectorsForTurn(threadID string, cfg *config.Config) []mcp.RuntimeConnector {
+	if r == nil {
+		return nil
+	}
+	appsByID := r.appsForExplicitMentions(threadID, cfg)
+	if len(appsByID) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(appsByID))
+	for id := range appsByID {
+		if strings.TrimSpace(id) != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	connectors := make([]mcp.RuntimeConnector, 0, len(ids))
+	for _, id := range ids {
+		app := appsByID[id]
+		connectors = append(connectors, mcp.RuntimeConnector{
+			ID:      id,
+			Name:    firstNonEmpty(strings.TrimSpace(app.Name), id),
+			Enabled: appEnabledForRuntime(&app),
+		})
+	}
+	return connectors
+}
+
+func mcpRuntimeToolsFromStatuses(statuses []mcp.MCPServerStatus) []mcp.RuntimeToolInfo {
+	out := make([]mcp.RuntimeToolInfo, 0)
+	for i := range statuses {
+		status := statuses[i]
+		if status.State != "" && status.State != mcp.MCPServerReady {
+			continue
+		}
+		serverName := mcpRuntimeServerName(&status)
+		if serverName == "" {
+			continue
+		}
+		runtimeServerName := serverName
+		if mcp.IsCodexAppsMCPServerName(serverName) {
+			runtimeServerName = mcp.RuntimeCodexAppsMCPServerName
+		}
+		for j := range status.Tools {
+			toolInfo := status.Tools[j]
+			toolName := strings.TrimSpace(toolInfo.Name)
+			if toolName == "" || mcpToolSyntheticLink(toolInfo.Meta) {
+				continue
+			}
+			runtimeTool := mcp.RuntimeToolInfo{
+				ServerName: runtimeServerName,
+				Tool: mcp.RuntimeTool{
+					Name:         toolName,
+					Title:        strings.TrimSpace(toolInfo.Title),
+					Description:  strings.TrimSpace(toolInfo.Description),
+					InputSchema:  cloneAnyMap(toolInfo.InputSchema),
+					Annotations:  runtimeToolAnnotationsFromMCP(toolInfo.Annotations),
+					ModelVisible: mcpToolModelVisible(&toolInfo),
+				},
+			}
+			if connector := mcp.ConnectorToolInfoFromMCPTool(serverName, &toolInfo); connector != nil {
+				runtimeTool.ConnectorID = strings.TrimSpace(connector.ConnectorID)
+				runtimeTool.PluginDisplayNames = append([]string(nil), connector.PluginDisplayNames...)
+				if runtimeTool.Tool.Description == "" {
+					runtimeTool.Tool.Description = firstNonEmpty(
+						strings.TrimSpace(connector.NamespaceDescription),
+						strings.TrimSpace(connector.ConnectorDescription),
+					)
+				}
+			}
+			out = append(out, runtimeTool)
+		}
+	}
+	return out
+}
+
+func mcpRuntimeServerName(status *mcp.MCPServerStatus) string {
+	if status == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(status.Name); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(status.Server.Name); name != "" {
+		return name
+	}
+	if status.ServerInfo != nil {
+		return strings.TrimSpace(status.ServerInfo.Name)
+	}
+	return ""
+}
+
+func runtimeToolAnnotationsFromMCP(value any) *mcp.RuntimeToolAnnotations {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var annotations mcp.RuntimeToolAnnotations
+	if err := json.Unmarshal(encoded, &annotations); err != nil {
+		return nil
+	}
+	if annotations.ReadOnlyHint == nil && annotations.DestructiveHint == nil && annotations.OpenWorldHint == nil {
+		return nil
+	}
+	return &annotations
+}
+
+func mcpToolModelVisible(toolInfo *mcp.MCPToolInfo) *bool {
+	if toolInfo == nil {
+		return nil
+	}
+	if value, ok := mcpBoolMetadataValue(toolInfo.Meta, "modelVisible", "model_visible"); ok {
+		return value
+	}
+	if value, ok := mcpBoolMetadataValue(toolInfo.Annotations, "modelVisible", "model_visible"); ok {
+		return value
+	}
+	return nil
+}
+
+func mcpToolSyntheticLink(meta any) bool {
+	value, ok := mcpBoolMetadataValue(meta, "synthetic_link", "syntheticLink")
+	return ok && value != nil && *value
+}
+
+func mcpBoolMetadataValue(value any, keys ...string) (*bool, bool) {
+	for _, values := range mcpMetadataMaps(value) {
+		for _, key := range keys {
+			raw, ok := values[key]
+			if !ok {
+				continue
+			}
+			switch typed := raw.(type) {
+			case bool:
+				return &typed, true
+			case string:
+				switch strings.ToLower(strings.TrimSpace(typed)) {
+				case "true":
+					result := true
+					return &result, true
+				case "false":
+					result := false
+					return &result, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+func mcpMetadataMaps(value any) []map[string]any {
+	base := mcpMetadataMap(value)
+	if base == nil {
+		return nil
+	}
+	out := []map[string]any{base}
+	for _, key := range []string{"_codex_apps", "codex_apps", "codexApps"} {
+		if nested := mcpMetadataMap(base[key]); nested != nil {
+			out = append(out, nested)
+		}
+	}
+	return out
+}
+
+func mcpMetadataMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return typed
+	case map[string]string:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = item
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func (r *RuntimeRouter) annotateRuntimeMCPToolsWithPluginSources(tools []mcp.RuntimeToolInfo) []mcp.RuntimeToolInfo {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]mcp.RuntimeToolInfo, len(tools))
+	copy(out, tools)
+	var provenance *mcp.ConnectorPluginProvenance
+	if r != nil && r.services.Plugins != nil {
+		provenance = mcp.NewConnectorPluginProvenance()
+		for _, connector := range appPluginConnectorsFromCapabilities(r.services.Plugins.EnabledCapabilities()) {
+			provenance.Add(connector.ID, connector.PluginDisplayName)
+		}
+	}
+	for i := range out {
+		if out[i].ServerName != mcp.RuntimeCodexAppsMCPServerName || strings.TrimSpace(out[i].ConnectorID) == "" {
+			continue
+		}
+		var provenanceNames []string
+		if provenance != nil {
+			provenanceNames = provenance.Names(out[i].ConnectorID)
+		}
+		names := mergeRuntimePluginDisplayNames(out[i].PluginDisplayNames, provenanceNames)
+		mcp.AnnotateRuntimeToolWithPluginProvenance(&out[i], names)
+	}
+	return out
+}
+
+func mergeRuntimePluginDisplayNames(left []string, right []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(left)+len(right))
+	for _, value := range append(append([]string(nil), left...), right...) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (r *RuntimeRouter) contextStatusForThread(threadID string) func() compact.TokenStatus {
+	return func() compact.TokenStatus {
+		if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
+			return compact.TokenStatus{}
+		}
+		record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil || record == nil {
+			return compact.TokenStatus{}
+		}
+		return compactTokenStatusFromMetadata(record.Metadata.Extra)
+	}
+}
+
+func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string) tool.UserInputResponder {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	return func(ctx context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+		if r == nil {
+			return nil, fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
+		}
+		if threadID == "" {
+			return nil, fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+		}
+		if err := args.Normalize(); err != nil {
+			return nil, err
+		}
+		guard, notification := r.requireThreadStatus().NoteUserInputRequestedWithNotification(threadID)
+		r.notifyThreadStatus(notification)
+		defer func() {
+			r.notifyThreadStatus(guard.Release())
+		}()
+
+		params := toolRequestUserInputParamsFromArgs(threadID, turnID, args)
+		var response ToolRequestUserInputResponse
+		if err := r.requireServerRequests().Request(ctx, ServerRequestToolUserInput, params, &response); err != nil {
+			return nil, err
+		}
+		return toolUserInputResponseToToolResponse(&response), nil
+	}
+}
+
+func toolRequestUserInputParamsFromArgs(threadID string, turnID string, args *tool.RequestUserInputArgs) *ToolRequestUserInputParams {
+	if args == nil {
+		args = &tool.RequestUserInputArgs{}
+	}
+	params := &ToolRequestUserInputParams{
+		ThreadID:  strings.TrimSpace(threadID),
+		TurnID:    strings.TrimSpace(turnID),
+		ItemID:    "request-user-input-" + safeIdentifier(firstNonEmpty(turnID, threadID)),
+		Questions: make([]ToolRequestUserInputQuestion, 0, len(args.Questions)),
+	}
+	if args.AutoResolutionMS != nil {
+		value := uint64(*args.AutoResolutionMS)
+		params.AutoResolutionMS = &value
+	}
+	for i := range args.Questions {
+		params.Questions = append(params.Questions, toolRequestUserInputQuestionFromToolQuestion(&args.Questions[i]))
+	}
+	return params
+}
+
+func toolRequestUserInputQuestionFromToolQuestion(question *tool.UserInputQuestion) ToolRequestUserInputQuestion {
+	if question == nil {
+		return ToolRequestUserInputQuestion{}
+	}
+	out := ToolRequestUserInputQuestion{
+		ID:       strings.TrimSpace(question.ID),
+		Header:   strings.TrimSpace(question.Header),
+		Question: strings.TrimSpace(question.Question),
+		Options:  make([]ToolRequestUserInputOption, 0, len(question.Options)),
+	}
+	for i := range question.Options {
+		out.Options = append(out.Options, ToolRequestUserInputOption{
+			Label:       question.Options[i].Label,
+			Description: question.Options[i].Description,
+		})
+	}
+	return out
+}
+
+func toolUserInputResponseToToolResponse(response *ToolRequestUserInputResponse) *tool.UserInputResponse {
+	out := &tool.UserInputResponse{
+		Answers:           map[string]string{},
+		StructuredAnswers: map[string][]string{},
+	}
+	if response == nil {
+		return out
+	}
+	for key, answer := range response.Answers {
+		out.StructuredAnswers[key] = append([]string(nil), answer.Answers...)
+		for _, value := range answer.Answers {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out.Answers[key] = value
+				break
+			}
+		}
+		if _, ok := out.Answers[key]; !ok {
+			out.Answers[key] = ""
+		}
+	}
+	return out
+}
+
+type dynamicToolServerRequestCaller struct {
+	broker *ServerRequestBroker
+}
+
+func (c dynamicToolServerRequestCaller) Request(ctx context.Context, method string, params any, target any) error {
+	if c.broker == nil {
+		return fmt.Errorf("%w: server request broker is nil", ErrInvalidRequest)
+	}
+	return c.broker.Request(ctx, ServerRequestMethod(method), params, target)
+}
+
+func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.ExternalAuthRefreshRequest) (*model.ExternalAuthRefreshResponse, error) {
+	if request == nil {
+		return nil, fmt.Errorf("%w: external auth refresh request is nil", ErrInvalidRequest)
+	}
+	params := &auth.ChatGPTAuthTokensRefreshParams{
+		Reason: auth.ChatGPTAuthTokensRefreshReason(request.Reason),
+	}
+	if strings.TrimSpace(request.PreviousAccountID) != "" {
+		value := strings.TrimSpace(request.PreviousAccountID)
+		params.PreviousAccountID = &value
+	}
+	var response auth.ChatGPTAuthTokensRefreshResponse
+	if err := r.requireServerRequests().Request(ctx, ServerRequestChatGPTAuthTokensRefresh, params, &response); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(response.AccessToken) == "" || strings.TrimSpace(response.ChatGPTAccountID) == "" {
+		return nil, fmt.Errorf("%w: external auth refresh response omitted accessToken or chatgptAccountId", ErrInvalidRequest)
+	}
+	snapshot := auth.FromChatGPTAuthTokens(response.AccessToken, response.ChatGPTAccountID, response.ChatGPTPlanType)
+	if codexHome := r.codexHomeForRollout(); codexHome != "" {
+		if err := r.authStore(codexHome).Save(snapshot); err != nil {
+			return nil, err
+		}
+	}
+	r.requireAccount().ApplyAuthSnapshot(&snapshot)
+	r.noteAuthChanged()
+	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	return &model.ExternalAuthRefreshResponse{
+		AccessToken:      response.AccessToken,
+		ChatGPTAccountID: response.ChatGPTAccountID,
+		ChatGPTPlanType:  response.ChatGPTPlanType,
+	}, nil
+}
+
+const currentTimeRequestTimeout = 10 * time.Second
+
+func (r *RuntimeRouter) requestCurrentTime(ctx context.Context, threadID string) (time.Time, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return time.Time{}, fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, currentTimeRequestTimeout)
+	defer cancel()
+	connectionIDs, err := r.waitForCurrentTimeSubscriber(requestCtx, threadID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	connectionID, err := requireSingleCurrentTimeConnection(connectionIDs)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var response CurrentTimeReadResponse
+	if err := r.requireServerRequests().RequestToConnection(requestCtx, connectionID, ServerRequestCurrentTimeRead, &CurrentTimeReadParams{ThreadID: threadID}, &response); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return time.Time{}, errors.New("current-time request timed out after 10s")
+		}
+		return time.Time{}, err
+	}
+	current := time.Unix(response.CurrentTimeAt, 0).UTC()
+	if current.IsZero() {
+		return time.Time{}, fmt.Errorf("%w: current-time response is outside the supported range", ErrInvalidRequest)
+	}
+	return current, nil
+}
+
+func (r *RuntimeRouter) waitForCurrentTimeSubscriber(ctx context.Context, threadID string) ([]string, error) {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		connectionIDs := r.subscribedConnectionIDsForThread(threadID)
+		if len(connectionIDs) > 0 {
+			return connectionIDs, nil
+		}
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, errors.New("timed out waiting for a client to subscribe to the thread after 10s")
+			}
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func requireSingleCurrentTimeConnection(connectionIDs []string) (string, error) {
+	if len(connectionIDs) == 1 {
+		return connectionIDs[0], nil
+	}
+	return "", fmt.Errorf("expected exactly one client subscribed to the thread, found %d", len(connectionIDs))
+}
+
+func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID string) tool.HookRunner {
+	if r == nil || params == nil || r.services.HookRunner == nil {
+		return nil
+	}
+	hooks := r.hooksForCWD(params.CWD)
+	return NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
+}
+
+func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse) {
+	if r == nil || params == nil || response == nil {
+		return
+	}
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return
+	}
+	runtime, err := r.buildTurnRuntime(params, response.Turn.ID)
+	if err != nil {
+		r.clearActiveRuntimeTurn(params.ThreadID, "")
+		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
+		return
+	}
+	if runtime == nil {
+		r.clearActiveRuntimeTurn(params.ThreadID, "")
+		return
+	}
+	paramsCopy := cloneTurnStartParams(params)
+	turnCopy := response.Turn
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := r.registerActiveRuntimeTurn(params.ThreadID, response.Turn.ID, cancel, time.Now().UTC().UnixMilli(), paramsCopy); err != nil {
+		cancel()
+		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
+		return
+	}
+	go r.runTurnRuntime(ctx, paramsCopy, &turnCopy, runtime)
+}
+
+func (r *RuntimeRouter) requireThreadStatus() *ThreadStatusManager {
+	if r.services.ThreadStatus == nil {
+		r.services.ThreadStatus = NewThreadStatusManager()
+	}
+	return r.services.ThreadStatus
+}
+
+func (r *RuntimeRouter) requireReviews() *review.Service {
+	if r.services.Reviews == nil {
+		r.services.Reviews = review.NewService()
+	}
+	return r.services.Reviews
+}
+
+func (r *RuntimeRouter) requireMisc() *MiscService {
+	if r.services.Misc == nil {
+		r.services.Misc = NewMiscService()
+	}
+	return r.services.Misc
+}
+
+func (r *RuntimeRouter) requireCommandExec() *CommandExecService {
+	if r.services.CommandExec == nil {
+		r.services.CommandExec = NewCommandExecService()
+	}
+	return r.services.CommandExec
+}
+
+func (r *RuntimeRouter) requireProcesses() *ProcessService {
+	if r.services.Processes == nil {
+		r.services.Processes = NewProcessService()
+	}
+	return r.services.Processes
+}
+
+func (r *RuntimeRouter) requireServerRequests() *ServerRequestBroker {
+	if r.services.ServerRequests == nil {
+		r.services.ServerRequests = NewServerRequestBroker()
+		r.services.ServerRequests.SetSink(r.requests)
+		r.services.ServerRequests.SetResolvedCallback(r.notifyServerRequestResolved)
+	}
+	return r.services.ServerRequests
+}
+
+func (r *RuntimeRouter) requireFeedback() *FeedbackSnapshot {
+	if r.services.Feedback == nil {
+		r.services.Feedback = &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
+	}
+	return r.services.Feedback
+}
+
+func isThreadMethod(method Method) bool {
+	switch method {
+	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodThreadArchive,
+		MethodThreadUnarchive, MethodThreadDelete, MethodThreadSetName, MethodThreadNameSet,
+		MethodThreadIncrementElicitation, MethodThreadDecrementElicitation,
+		MethodThreadIncrementElicitationLegacy, MethodThreadDecrementElicitationLegacy,
+		MethodThreadUnsubscribe, MethodThreadMemoryModeSet, MethodMemoryReset,
+		MethodThreadCompactStart, MethodThreadApproveGuardianDeniedAction,
+		MethodThreadMetadataUpdate, MethodThreadList, MethodThreadRead,
+		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
+		MethodThreadTurnsList, MethodThreadRollback, MethodThreadInjectItems:
+		return true
+	default:
+		return false
+	}
+}
+
+func isThreadExtraMethod(method Method) bool {
+	switch method {
+	case MethodThreadGoalSet, MethodThreadGoalGet, MethodThreadGoalClear,
+		MethodThreadSettingsUpdate, MethodThreadShellCommand,
+		MethodThreadBackgroundTerminalsClean, MethodThreadBackgroundTerminalsList,
+		MethodThreadBackgroundTerminalsTerminate:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRealtimeMethod(method Method) bool {
+	switch method {
+	case MethodThreadRealtimeStart, MethodThreadRealtimeAppendAudio,
+		MethodThreadRealtimeAppendText, MethodThreadRealtimeAppendSpeech,
+		MethodThreadRealtimeStop, MethodThreadRealtimeListVoices:
+		return true
+	default:
+		return false
+	}
+}
+
+func runtimeErrorCode(err error) int {
+	var mcpRemoteErr *mcp.MCPRemoteError
+	switch {
+	case errors.Is(err, ErrUnknownMethod):
+		return JSONRPCMethodNotFoundErrorCode
+	case errors.As(err, &mcpRemoteErr) && mcpRemoteErr != nil && mcpRemoteErr.Code != 0:
+		return int(mcpRemoteErr.Code)
+	case errors.Is(err, model.ErrInvalidModelRequest),
+		errors.Is(err, mcp.ErrInvalidMCPRequest),
+		errors.Is(err, apps.ErrInvalidAppRequest),
+		errors.Is(err, features.ErrInvalidFeatureRequest),
+		errors.Is(err, plugin.ErrInvalidPluginRequest),
+		errors.Is(err, sandbox.ErrInvalidPermissionProfileRequest),
+		errors.Is(err, ErrInvalidEnvironmentRequest),
+		errors.Is(err, ErrInvalidFeedbackRequest),
+		errors.Is(err, ErrJSONRPCInvalidRequest):
+		return JSONRPCInvalidRequestErrorCode
+	case errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrInvalidFSRequest),
+		errors.Is(err, remotecontrol.ErrInvalidRequest),
+		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest),
+		errors.Is(err, config.ErrInvalidConfigRequest),
+		errors.Is(err, auth.ErrInvalidAccountRequest),
+		errors.Is(err, turn.ErrInvalidTurnRequest),
+		errors.Is(err, review.ErrInvalidRequest),
+		errors.Is(err, ErrInvalidMiscRequest),
+		errors.Is(err, ErrInvalidThreadExtraRequest),
+		errors.Is(err, realtime.ErrInvalidRealtimeRequest),
+		errors.Is(err, ErrInvalidHook),
+		errors.Is(err, ErrInvalidSkillsRequest),
+		errors.Is(err, session.ErrInvalidThreadID):
+		return JSONRPCInvalidParamsErrorCode
+	case errors.Is(err, session.ErrThreadNotFound):
+		return -32004
+	case errors.Is(err, session.ErrConflict):
+		return -32009
+	default:
+		return JSONRPCInternalErrorCode
+	}
+}

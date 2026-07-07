@@ -1,0 +1,394 @@
+package codexapi
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
+
+const (
+	ClientOpenAIBetaHeader                       = "OpenAI-Beta"
+	ClientCodexInstallationIDHeader              = "x-codex-installation-id"
+	ClientCodexTurnStateHeader                   = "x-codex-turn-state"
+	ClientCodexTurnMetadataHeader                = "x-codex-turn-metadata"
+	ClientCodexParentThreadIDHeader              = "x-codex-parent-thread-id"
+	ClientCodexWindowIDHeader                    = "x-codex-window-id"
+	ClientCodexBetaFeaturesHeader                = "x-codex-beta-features"
+	ClientOpenAIMemgenRequestHeader              = "x-openai-memgen-request"
+	ClientOpenAISubagentHeader                   = "x-openai-subagent"
+	ClientResponsesAPIIncludeTimingMetricsHeader = "x-responsesapi-include-timing-metrics"
+)
+
+type ClientContentKind string
+
+const (
+	ClientContentText  ClientContentKind = "text"
+	ClientContentImage ClientContentKind = "image"
+)
+
+type ClientContentItem struct {
+	Kind     ClientContentKind
+	Text     string
+	ImageURL string
+	Detail   string
+}
+
+type ClientResponseItem struct {
+	Type    string
+	Role    string
+	Content []ClientContentItem
+}
+
+type ClientPrompt struct {
+	Input              []ClientResponseItem
+	Tools              []string
+	ParallelToolCalls  bool
+	BaseInstructions   string
+	OutputSchema       map[string]any
+	OutputSchemaStrict bool
+}
+
+func NewClientPrompt() *ClientPrompt {
+	return &ClientPrompt{OutputSchemaStrict: true}
+}
+
+func (p *ClientPrompt) FormattedInput(useResponsesLite bool) []ClientResponseItem {
+	if p == nil {
+		return nil
+	}
+	input := cloneClientResponseItems(p.Input)
+	if useResponsesLite {
+		stripClientImageDetails(input)
+	}
+	return input
+}
+
+type ClientRequestKind string
+
+const (
+	ClientRequestTurn       ClientRequestKind = "turn"
+	ClientRequestPrewarm    ClientRequestKind = "prewarm"
+	ClientRequestCompaction ClientRequestKind = "compaction"
+	ClientRequestMemory     ClientRequestKind = "memory"
+)
+
+type ClientCompactionMetadata struct {
+	Trigger        string `json:"trigger"`
+	Reason         string `json:"reason"`
+	Implementation string `json:"implementation"`
+	Phase          string `json:"phase"`
+	Strategy       string `json:"strategy"`
+}
+
+type ClientWorkspaceMetadata struct {
+	AssociatedRemoteURLs map[string]string `json:"associated_remote_urls,omitempty"`
+	LatestGitCommitHash  string            `json:"latest_git_commit_hash,omitempty"`
+	HasChanges           *bool             `json:"has_changes,omitempty"`
+}
+
+type ClientMetadata struct {
+	InstallationID      string
+	SessionID           string
+	ThreadID            string
+	TurnID              string
+	WindowID            string
+	RequestKind         ClientRequestKind
+	Compaction          *ClientCompactionMetadata
+	ForkedFromThreadID  string
+	ParentThreadID      string
+	SubagentHeader      string
+	SubagentKind        string
+	ThreadSource        string
+	Sandbox             string
+	Workspaces          map[string]ClientWorkspaceMetadata
+	TurnStartedAtUnixMS int64
+	Extra               map[string]string
+}
+
+func NewClientMetadata(installationID string, sessionID string, threadID string, windowID string) *ClientMetadata {
+	return &ClientMetadata{
+		InstallationID: installationID,
+		SessionID:      sessionID,
+		ThreadID:       threadID,
+		WindowID:       windowID,
+		Workspaces:     map[string]ClientWorkspaceMetadata{},
+		Extra:          map[string]string{},
+	}
+}
+
+func (m *ClientMetadata) HasTurnMetadata() bool {
+	return m != nil && m.RequestKind != ""
+}
+
+func (m *ClientMetadata) TurnMetadataValue() map[string]any {
+	if m == nil {
+		return nil
+	}
+	value := map[string]any{}
+	hasTurnIdentity := m.RequestKind != ClientRequestMemory
+	hasRequestIdentity := m.RequestKind != "" && m.RequestKind != ClientRequestMemory
+	if hasRequestIdentity {
+		value["installation_id"] = m.InstallationID
+		value["window_id"] = m.WindowID
+	}
+	if hasTurnIdentity {
+		value["session_id"] = m.SessionID
+		value["thread_id"] = m.ThreadID
+		if m.TurnID != "" {
+			value["turn_id"] = m.TurnID
+		}
+	}
+	if m.RequestKind != "" {
+		value["request_kind"] = string(m.RequestKind)
+	}
+	if m.Compaction != nil {
+		value["compaction"] = m.Compaction
+	}
+	if m.ForkedFromThreadID != "" {
+		value["forked_from_thread_id"] = m.ForkedFromThreadID
+	}
+	if m.ParentThreadID != "" {
+		value["parent_thread_id"] = m.ParentThreadID
+	}
+	if m.SubagentKind != "" {
+		value["subagent_kind"] = m.SubagentKind
+	}
+	if m.ThreadSource != "" {
+		value["thread_source"] = m.ThreadSource
+	}
+	if m.Sandbox != "" {
+		value["sandbox"] = m.Sandbox
+	}
+	if len(m.Workspaces) > 0 {
+		value["workspaces"] = m.Workspaces
+	}
+	if m.TurnStartedAtUnixMS != 0 {
+		value["turn_started_at_unix_ms"] = m.TurnStartedAtUnixMS
+	}
+	for key, extra := range m.Extra {
+		if ClientReservedMetadataKeys()[key] {
+			continue
+		}
+		value[key] = extra
+	}
+	return value
+}
+
+func (m *ClientMetadata) TurnMetadataJSON() (string, bool) {
+	value := m.TurnMetadataValue()
+	if value == nil {
+		return "", false
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return "", false
+	}
+	return string(bytes), true
+}
+
+func (m *ClientMetadata) ClientMetadata() map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := map[string]string{
+		ClientCodexInstallationIDHeader: m.InstallationID,
+		"session_id":                    m.SessionID,
+		"thread_id":                     m.ThreadID,
+		ClientCodexWindowIDHeader:       m.WindowID,
+	}
+	if m.TurnID != "" {
+		out["turn_id"] = m.TurnID
+	}
+	if m.SubagentHeader != "" {
+		out[ClientOpenAISubagentHeader] = m.SubagentHeader
+	}
+	if m.ParentThreadID != "" {
+		out[ClientCodexParentThreadIDHeader] = m.ParentThreadID
+	}
+	if m.HasTurnMetadata() {
+		if jsonText, ok := m.TurnMetadataJSON(); ok {
+			out[ClientCodexTurnMetadataHeader] = jsonText
+		}
+	}
+	return out
+}
+
+func (m *ClientMetadata) CompatibilityHeaders() map[string]string {
+	if m == nil {
+		return nil
+	}
+	headers := map[string]string{ClientCodexWindowIDHeader: m.WindowID}
+	if m.HasTurnMetadata() {
+		if jsonText, ok := m.TurnMetadataJSON(); ok {
+			headers[ClientCodexTurnMetadataHeader] = jsonText
+		}
+	}
+	if m.ParentThreadID != "" {
+		headers[ClientCodexParentThreadIDHeader] = m.ParentThreadID
+	}
+	if m.SubagentHeader != "" {
+		headers[ClientOpenAISubagentHeader] = m.SubagentHeader
+	}
+	return headers
+}
+
+func ClientFilterExtraMetadata(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	reserved := ClientReservedMetadataKeys()
+	for key, value := range values {
+		if reserved[strings.ToLower(key)] || key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func ClientReservedMetadataKeys() map[string]bool {
+	keys := []string{
+		"installation_id", strings.ToLower(ClientCodexInstallationIDHeader),
+		"session_id", "thread_id", "turn_id", "window_id", strings.ToLower(ClientCodexWindowIDHeader),
+		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
+		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
+		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id",
+		"subagent_kind", "thread_source", "sandbox", "workspaces",
+	}
+	out := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		out[key] = true
+	}
+	return out
+}
+
+type ClientRetryRequest string
+
+const (
+	ClientRetrySampling           ClientRetryRequest = "sampling"
+	ClientRetryRemoteCompactionV2 ClientRetryRequest = "remote_compaction_v2"
+)
+
+type ClientRetryState struct {
+	Retries      uint64
+	MaxRetries   uint64
+	UsedFallback bool
+}
+
+type ClientRetryDecision struct {
+	Retry      bool
+	Fallback   bool
+	Delay      time.Duration
+	NotifyUser bool
+	Error      error
+}
+
+type ClientRetryableError struct {
+	Message        string
+	RequestedDelay time.Duration
+}
+
+func (e *ClientRetryableError) Error() string {
+	return e.Message
+}
+
+func (s *ClientRetryState) Handle(err error, request ClientRetryRequest, canFallback bool, websocketEnabled bool, debug bool) ClientRetryDecision {
+	if s.MaxRetries == 0 {
+		s.MaxRetries = 3
+	}
+	if s.Retries >= s.MaxRetries && canFallback && !s.UsedFallback {
+		s.Retries = 0
+		s.UsedFallback = true
+		return ClientRetryDecision{Retry: true, Fallback: true, Delay: 0}
+	}
+	if s.Retries < s.MaxRetries {
+		s.Retries++
+		delay := ClientBackoff(s.Retries)
+		var retryable *ClientRetryableError
+		if asClientRetryable(err, &retryable) && retryable.RequestedDelay > 0 {
+			delay = retryable.RequestedDelay
+		}
+		notify := s.Retries > 1 || debug || !websocketEnabled || request == ClientRetryRemoteCompactionV2
+		return ClientRetryDecision{Retry: true, Delay: delay, NotifyUser: notify}
+	}
+	return ClientRetryDecision{Error: err}
+}
+
+func ClientBackoff(retry uint64) time.Duration {
+	if retry == 0 {
+		return 0
+	}
+	delay := time.Duration(1<<minClientUint64(retry-1, 5)) * 100 * time.Millisecond
+	return delay
+}
+
+func cloneClientResponseItems(items []ClientResponseItem) []ClientResponseItem {
+	out := make([]ClientResponseItem, len(items))
+	for i := range items {
+		out[i] = items[i]
+		out[i].Content = append([]ClientContentItem(nil), items[i].Content...)
+	}
+	return out
+}
+
+func stripClientImageDetails(items []ClientResponseItem) {
+	for i := range items {
+		for j := range items[i].Content {
+			if items[i].Content[j].Kind == ClientContentImage {
+				items[i].Content[j].Detail = ""
+			}
+		}
+	}
+}
+
+func asClientRetryable(err error, target **ClientRetryableError) bool {
+	if err == nil {
+		return false
+	}
+	if retryable, ok := err.(*ClientRetryableError); ok {
+		*target = retryable
+		return true
+	}
+	return false
+}
+
+func minClientUint64(a uint64, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func ClientSubagentHeaderValue(sessionSource string) string {
+	switch sessionSource {
+	case "subagent:review":
+		return "review"
+	case "subagent:compact":
+		return "compact"
+	case "subagent:memory_consolidation", "internal:memory_consolidation":
+		return "memory_consolidation"
+	case "subagent:thread_spawn":
+		return "collab_spawn"
+	default:
+		if strings.HasPrefix(sessionSource, "subagent:") {
+			return strings.TrimPrefix(sessionSource, "subagent:")
+		}
+		return ""
+	}
+}
+
+func (c *ClientCompactionMetadata) EnsureDefaults() {
+	if c == nil {
+		return
+	}
+	if c.Strategy == "" {
+		c.Strategy = "memento"
+	}
+}
+
+func (m *ClientMetadata) String() string {
+	text, ok := m.TurnMetadataJSON()
+	if !ok {
+		return "{}"
+	}
+	return fmt.Sprintf("%s", text)
+}
