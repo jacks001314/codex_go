@@ -18,9 +18,12 @@ const (
 )
 
 type Spec struct {
-	Key            string
-	Stage          Stage
-	DefaultEnabled bool
+	Key                         string
+	Stage                       Stage
+	DefaultEnabled              bool
+	ExperimentalName            string
+	ExperimentalMenuDescription string
+	ExperimentalAnnouncement    string
 }
 
 var Registry = []Spec{
@@ -45,7 +48,13 @@ var Registry = []Spec{
 	{Key: "codex_git_commit", Stage: StageRemoved},
 	{Key: "runtime_metrics", Stage: StageUnderDevelopment},
 	{Key: "sqlite", Stage: StageRemoved, DefaultEnabled: true},
-	{Key: "memories", Stage: StageExperimental},
+	{
+		Key:                         "memories",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Memories",
+		ExperimentalMenuDescription: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
+		ExperimentalAnnouncement:    "NEW: Codex can now generate and use memories. Try it now with `/memories`",
+	},
 	{Key: "local_thread_store_compression", Stage: StageUnderDevelopment},
 	{Key: "chronicle", Stage: StageUnderDevelopment},
 	{Key: "apply_patch_freeform", Stage: StageRemoved},
@@ -60,7 +69,13 @@ var Registry = []Spec{
 	{Key: "elevated_windows_sandbox", Stage: StageRemoved},
 	{Key: "remote_models", Stage: StageRemoved},
 	{Key: "enable_request_compression", Stage: StageStable, DefaultEnabled: true},
-	{Key: "network_proxy", Stage: StageExperimental},
+	{
+		Key:                         "network_proxy",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Network proxy",
+		ExperimentalMenuDescription: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
+		ExperimentalAnnouncement:    "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
+	},
 	{Key: "respect_system_proxy", Stage: StageUnderDevelopment},
 	{Key: "multi_agent", Stage: StageStable, DefaultEnabled: true},
 	{Key: "multi_agent_v2", Stage: StageUnderDevelopment},
@@ -109,7 +124,13 @@ var Registry = []Spec{
 	{Key: "remote_control", Stage: StageRemoved},
 	{Key: "image_detail_original", Stage: StageRemoved},
 	{Key: "tui_app_server", Stage: StageRemoved, DefaultEnabled: true},
-	{Key: "prevent_idle_sleep", Stage: preventIdleSleepStage()},
+	{
+		Key:                         "prevent_idle_sleep",
+		Stage:                       preventIdleSleepStage(),
+		ExperimentalName:            "Prevent sleep while running",
+		ExperimentalMenuDescription: "Keep your computer awake while Codex is running a thread.",
+		ExperimentalAnnouncement:    "NEW: Prevent sleep while running is now available in /experimental.",
+	},
 	{Key: "workspace_owner_usage_nudge", Stage: StageRemoved},
 	{Key: "responses_websockets", Stage: StageRemoved},
 	{Key: "responses_websockets_v2", Stage: StageRemoved},
@@ -136,7 +157,7 @@ func Validate(key string) error {
 	if Known(key) {
 		return nil
 	}
-	return fmt.Errorf("unknown feature flag: %s", key)
+	return fmt.Errorf("Unknown feature flag: %s", key)
 }
 
 func Defaults() map[string]bool {

@@ -101,6 +101,74 @@ func TestServerRequestBrokerTargetsConnectionWhenSinkSupportsIt(t *testing.T) {
 	}
 }
 
+func TestConnectionServerRequestSinkHonorsTargetConnection(t *testing.T) {
+	sent := make(chan *ServerRequest, 1)
+	sink := connectionServerRequestSink{
+		connectionID: "conn-a",
+		send: func(request *ServerRequest) {
+			sent <- request
+		},
+	}
+
+	broker := NewServerRequestBroker()
+	broker.SetSink(sink)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	var response authRefreshTestResponse
+	err := broker.RequestToConnection(ctx, "conn-b", ServerRequestChatGPTAuthTokensRefresh, nil, &response)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("mismatched target error = %v, want deadline exceeded", err)
+	}
+	select {
+	case request := <-sent:
+		t.Fatalf("mismatched target sent request = %+v", request)
+	default:
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- broker.RequestToConnection(context.Background(), "conn-a", ServerRequestChatGPTAuthTokensRefresh, nil, &response)
+	}()
+	request := <-sent
+	if request.Method != ServerRequestChatGPTAuthTokensRefresh {
+		t.Fatalf("request method = %s", request.Method)
+	}
+	if resolved, err := broker.Resolve(OK(request.ID, authRefreshTestResponse{AccessToken: "token"})); err != nil || !resolved {
+		t.Fatalf("Resolve() resolved=%v error=%v", resolved, err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("matched target error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for matched target response")
+	}
+	if response.AccessToken != "token" {
+		t.Fatalf("response = %+v", response)
+	}
+
+	go func() {
+		done <- broker.Request(context.Background(), ServerRequestChatGPTAuthTokensRefresh, nil, &response)
+	}()
+	request = <-sent
+	if resolved, err := broker.Resolve(OK(request.ID, authRefreshTestResponse{AccessToken: "broadcast-token"})); err != nil || !resolved {
+		t.Fatalf("broadcast Resolve() resolved=%v error=%v", resolved, err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("broadcast request error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for broadcast response")
+	}
+	if response.AccessToken != "broadcast-token" {
+		t.Fatalf("broadcast response = %+v", response)
+	}
+}
+
 func TestServerRequestBrokerResolvedCallback(t *testing.T) {
 	broker := NewServerRequestBroker()
 	sent := make(chan *ServerRequest, 1)

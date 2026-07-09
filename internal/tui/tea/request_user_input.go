@@ -122,7 +122,7 @@ func (m *Model) refreshRequestUserInputModal() {
 		m.modal.selected = 0
 		return
 	}
-	options := make([]ModalOption, 0, len(question.Options))
+	options := make([]ModalOption, 0, requestUserInputOptionsLen(question))
 	for i, option := range question.Options {
 		options = append(options, ModalOption{
 			ID:          fmt.Sprintf("option_%d", i),
@@ -131,10 +131,26 @@ func (m *Model) refreshRequestUserInputModal() {
 			Shortcut:    requestUserInputShortcut(i),
 		})
 	}
+	if question.IsOther && len(question.Options) > 0 {
+		index := len(question.Options)
+		options = append(options, ModalOption{
+			ID:          fmt.Sprintf("option_%d", index),
+			Label:       codextui.RequestUserInputOtherOptionLabel,
+			Description: codextui.RequestUserInputOtherOptionDescription,
+			Shortcut:    requestUserInputShortcut(index),
+		})
+	}
 	m.modal.options = normalizeModalOptions(options)
 	if m.modal.selected < 0 || m.modal.selected >= len(m.modal.options) {
 		m.modal.selected = 0
 	}
+}
+
+func requestUserInputOptionsLen(question codextui.RequestUserInputQuestion) int {
+	if question.IsOther && len(question.Options) > 0 {
+		return len(question.Options) + 1
+	}
+	return len(question.Options)
 }
 
 func requestUserInputShortcut(index int) string {

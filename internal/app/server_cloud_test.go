@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"codex_go/internal/auth"
 )
 
@@ -746,15 +748,82 @@ func TestExecServerRemoteValidationLikeRust(t *testing.T) {
 		t.Fatalf("exec-server remote suffix-spoof error = %v", err)
 	}
 
+	rpcDone := make(chan error, 1)
+	rendezvous := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, acceptErr := websocket.Accept(w, r, nil)
+		if acceptErr != nil {
+			rpcDone <- acceptErr
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		rpcCtx, rpcCancel := context.WithTimeout(r.Context(), time.Second)
+		defer rpcCancel()
+		if writeErr := conn.Write(rpcCtx, websocket.MessageText, []byte(`{"id":1,"method":"initialize","params":{"clientName":"app-remote-test"}}`)); writeErr != nil {
+			rpcDone <- writeErr
+			return
+		}
+		_, data, readErr := conn.Read(rpcCtx)
+		if readErr != nil {
+			rpcDone <- readErr
+			return
+		}
+		if !bytes.Contains(data, []byte(`"id":1`)) || !bytes.Contains(data, []byte(`"sessionId"`)) {
+			rpcDone <- fmt.Errorf("initialize response = %s", data)
+			return
+		}
+		rpcDone <- nil
+	}))
+	defer rendezvous.Close()
+	registerSeen := make(chan struct{}, 1)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/cloud/environment/env-1/register" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-test" {
+			t.Errorf("Authorization = %q", got)
+		}
+		registerSeen <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"environment_id":"env-1","url":%q,"security_profile":"noise_hybrid_ik_v1","executor_registration_id":"registration-1"}`+"\n", "ws"+strings.TrimPrefix(rendezvous.URL, "http")+"/relay?role=environment")
+	}))
+	defer registry.Close()
+
 	var stdout bytes.Buffer
-	err = Run(context.Background(), []string{
-		"exec-server",
-		"--remote", "https://api.openai.com/",
-		"--environment-id", "env-1",
-		"--name", "worker-a",
-	}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "remote exec-server registration is not implemented in codex_go") {
-		t.Fatalf("exec-server remote unsupported error = %v", err)
+	var stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, []string{
+			"exec-server",
+			"--remote", registry.URL + "/",
+			"--environment-id", "env-1",
+			"--name", "worker-a",
+		}, strings.NewReader(""), &stdout, &stderr)
+	}()
+	select {
+	case err := <-rpcDone:
+		if err != nil {
+			t.Fatalf("exec-server remote RPC error = %v; stderr=%q", err, stderr.String())
+		}
+	case err := <-errCh:
+		t.Fatalf("exec-server remote exited early: %v; stderr=%q", err, stderr.String())
+	case <-time.After(2 * time.Second):
+		t.Fatalf("exec-server remote did not connect; stderr=%q", stderr.String())
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("exec-server remote returned error after cancel: %v; stderr=%q", err, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("exec-server remote did not stop after cancel; stderr=%q", stderr.String())
+	}
+	select {
+	case <-registerSeen:
+	default:
+		t.Fatal("registry did not receive remote registration")
 	}
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q", stdout.String())

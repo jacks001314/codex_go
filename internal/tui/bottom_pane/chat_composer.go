@@ -239,6 +239,8 @@ func (s ComposerFooterState) Render(width int) string {
 	} else {
 		parts = append(parts, "Enter send")
 	}
+	parts = append(parts, "Ctrl+J newline")
+	parts = append(parts, "Ctrl+G editor")
 	if s.QueuedCount > 0 {
 		parts = append(parts, formatQueueCount(s.QueuedCount))
 	}

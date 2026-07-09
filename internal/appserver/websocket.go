@@ -231,12 +231,18 @@ func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router 
 		return conn.Write(writeCtx, websocket.MessageText, data)
 	}
 
-	router.SetNotificationSink(NotificationSinkFunc(func(notification *Notification) {
-		setWriteErr(writeJSON(notification))
-	}))
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		setWriteErr(writeJSON(request))
-	}))
+	router.SetNotificationSink(connectionNotificationSink{
+		connectionID: connectionID,
+		send: func(notification *Notification) {
+			setWriteErr(writeJSON(notification))
+		},
+	})
+	router.SetServerRequestSink(connectionServerRequestSink{
+		connectionID: connectionID,
+		send: func(request *ServerRequest) {
+			setWriteErr(writeJSON(request))
+		},
+	})
 	defer router.SetNotificationSink(nil)
 	defer router.SetServerRequestSink(nil)
 

@@ -814,7 +814,7 @@ func (m *AccountManager) Login(params *LoginAccountParams) (*LoginAccountRespons
 	switch params.Type {
 	case AccountAPIKey:
 		m.account = &Account{Type: AccountAPIKey}
-		mode := "api-key"
+		mode := wireAuthModeFromMode("api-key")
 		m.authMode = &mode
 		m.requiresOpenAIAuth = false
 		return &LoginAccountResponse{Type: AccountAPIKey}, nil
@@ -870,7 +870,7 @@ func (m *AccountManager) ApplyAuthSnapshot(snapshot *AuthDotJSON) {
 	account := AccountFromAuth(snapshot)
 	m.account = cloneAccount(account)
 	if snapshot != nil && snapshot.Mode() != "unknown" {
-		mode := snapshot.Mode()
+		mode := wireAuthModeFromMode(snapshot.Mode())
 		m.authMode = &mode
 	} else {
 		m.authMode = nil
@@ -1306,6 +1306,21 @@ func stringPtrIfNotEmpty(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func wireAuthModeFromMode(mode string) string {
+	switch normalizedAuthMode(mode) {
+	case "api-key":
+		return "apikey"
+	case "agent-identity":
+		return "agentIdentity"
+	case "personal-access-token":
+		return "personalAccessToken"
+	case "bedrock-api-key":
+		return "bedrockApiKey"
+	default:
+		return strings.TrimSpace(mode)
+	}
 }
 
 func stringFromAny(values map[string]any, key string) string {

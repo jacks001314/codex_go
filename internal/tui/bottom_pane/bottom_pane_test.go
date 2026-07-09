@@ -119,6 +119,27 @@ func TestPendingInputPreviewOrdersPendingRejectedAndQueued(t *testing.T) {
 	}
 }
 
+func TestPendingInputPreviewUsesRustLineSplitting(t *testing.T) {
+	preview := NewPendingInputPreview()
+	preview.QueuedMessages = []string{""}
+	lines := preview.RenderLines(40)
+	if len(lines) != 2 || !strings.Contains(lines[0], "Queued follow-up inputs") || !strings.Contains(lines[1], "edit last queued message") {
+		t.Fatalf("empty message should render header and edit hint only, got %#v", lines)
+	}
+
+	preview.QueuedMessages = []string{"first\r\nsecond\n"}
+	lines = preview.RenderLines(40)
+	if len(lines) != 4 {
+		t.Fatalf("CRLF/trailing newline lines = %#v", lines)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "\r") {
+		t.Fatalf("CRLF terminators should be stripped like Rust str::lines: %#v", lines)
+	}
+	if !strings.Contains(lines[1], "first") || !strings.Contains(lines[2], "second") {
+		t.Fatalf("CRLF lines not preserved: %#v", lines)
+	}
+}
+
 func TestPasteBurstASCIIHoldAndFlush(t *testing.T) {
 	var burst PasteBurst
 	t0 := time.Unix(0, 0)

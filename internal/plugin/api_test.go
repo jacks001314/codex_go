@@ -1127,8 +1127,8 @@ func TestPluginLifecycleAndShares(t *testing.T) {
 		MarketplaceKinds: []string{"local"},
 		IncludeInstalled: true,
 	})
-	if _, ok := listParamsPayload["includeInstalled"]; ok {
-		t.Fatalf("legacy includeInstalled should not be emitted: %#v", listParamsPayload)
+	if includeInstalled, ok := listParamsPayload["includeInstalled"].(bool); !ok || !includeInstalled {
+		t.Fatalf("plugin list includeInstalled = %#v", listParamsPayload["includeInstalled"])
 	}
 	if cwds, ok := listParamsPayload["cwds"].([]any); !ok || len(cwds) != 1 || cwds[0] != "/repo" {
 		t.Fatalf("plugin list cwds = %#v", listParamsPayload["cwds"])

@@ -77,8 +77,9 @@ func WrapLine(text string, options WrapOptions) []string {
 	currentLimit := width
 	for _, token := range tokens {
 		pieces := []string{token}
-		if shouldBreakToken(token, currentLimit-lenColumns(current), options) {
-			pieces = splitTokenByWidth(token, maxInt(1, currentLimit-lenColumns(current)))
+		breakWidth := tokenBreakWidth(current, options)
+		if shouldBreakToken(token, breakWidth, options) {
+			pieces = splitTokenByWidth(token, breakWidth)
 		}
 		for _, piece := range pieces {
 			separator := ""
@@ -120,14 +121,22 @@ func WrapLines(lines []string, options WrapOptions) []string {
 	return out
 }
 
-func shouldBreakToken(token string, remaining int, options WrapOptions) bool {
+func tokenBreakWidth(current string, options WrapOptions) int {
+	limit := options.Width - lenColumns(options.SubsequentIndent)
+	if current == options.InitialIndent {
+		limit = options.Width - lenColumns(options.InitialIndent)
+	}
+	return maxInt(1, limit)
+}
+
+func shouldBreakToken(token string, limit int, options WrapOptions) bool {
 	if !options.BreakWords {
 		return false
 	}
 	if options.PreserveURLs && IsURLLikeToken(token) {
 		return false
 	}
-	return remaining > 0 && lenColumns(token) > remaining
+	return limit > 0 && lenColumns(token) > limit
 }
 
 func splitTokenByWidth(token string, width int) []string {

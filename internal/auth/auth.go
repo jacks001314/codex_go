@@ -377,8 +377,11 @@ func authStoreKey(codexHome string) string {
 }
 
 func (a *AuthDotJSON) Mode() string {
-	if a.AuthMode != "" {
-		return a.AuthMode
+	if a == nil {
+		return "unknown"
+	}
+	if mode := normalizedAuthMode(a.AuthMode); mode != "" {
+		return mode
 	}
 	switch {
 	case strings.TrimSpace(a.OpenAIAPIKey) != "":
@@ -396,6 +399,32 @@ func (a *AuthDotJSON) Mode() string {
 	}
 }
 
+func normalizedAuthMode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	compact := strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(value))
+	switch compact {
+	case "apikey":
+		return "api-key"
+	case "chatgpt":
+		return "chatgpt"
+	case "chatgptauthtokens":
+		return "chatgptAuthTokens"
+	case "agentidentity":
+		return "agent-identity"
+	case "personalaccesstoken":
+		return "personal-access-token"
+	case "bedrockapikey":
+		return "bedrock-api-key"
+	case "unknown":
+		return "unknown"
+	default:
+		return value
+	}
+}
+
 func (a *AuthDotJSON) BackendMode() string {
 	switch a.Mode() {
 	case "chatgptAuthTokens":
@@ -407,7 +436,7 @@ func (a *AuthDotJSON) BackendMode() string {
 
 func FromAPIKey(apiKey string) AuthDotJSON {
 	return AuthDotJSON{
-		AuthMode:     "api-key",
+		AuthMode:     "apikey",
 		OpenAIAPIKey: strings.TrimSpace(apiKey),
 	}
 }
@@ -445,14 +474,14 @@ func FromPersonalAccessToken(accessToken string, metadata *PersonalAccessTokenMe
 
 func FromAgentIdentityToken(accessToken string) AuthDotJSON {
 	return AuthDotJSON{
-		AuthMode:      "agent-identity",
+		AuthMode:      "agentIdentity",
 		AgentIdentity: strings.TrimSpace(accessToken),
 	}
 }
 
 func FromBedrockAPIKey(apiKey string, region string) AuthDotJSON {
 	return AuthDotJSON{
-		AuthMode: "bedrock-api-key",
+		AuthMode: "bedrockApiKey",
 		BedrockAPIKey: &BedrockAPIKeyAuth{
 			APIKey: strings.TrimSpace(apiKey),
 			Region: strings.TrimSpace(region),

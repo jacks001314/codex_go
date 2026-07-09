@@ -81,12 +81,18 @@ func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.W
 		_, err = stdout.Write(append(data, '\n'))
 		return err
 	}
-	router.SetNotificationSink(NotificationSinkFunc(func(notification *Notification) {
-		setWriteErr(writeJSONLine(notification))
-	}))
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		setWriteErr(writeJSONLine(request))
-	}))
+	router.SetNotificationSink(connectionNotificationSink{
+		connectionID: connectionID,
+		send: func(notification *Notification) {
+			setWriteErr(writeJSONLine(notification))
+		},
+	})
+	router.SetServerRequestSink(connectionServerRequestSink{
+		connectionID: connectionID,
+		send: func(request *ServerRequest) {
+			setWriteErr(writeJSONLine(request))
+		},
+	})
 	defer router.SetNotificationSink(nil)
 	defer router.SetServerRequestSink(nil)
 

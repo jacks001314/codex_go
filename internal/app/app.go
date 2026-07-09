@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -52,6 +53,7 @@ var (
 	runWindowsSandboxProvisioningSetup = windowssandbox.RunElevatedProvisioningSetup
 	createWindowsSandboxCommandArgs    = windowssandbox.CreateWindowsSandboxCommandArgsForPermissionProfile
 	runWindowsSandboxWrapperExitCode   = windowssandbox.RunWindowsSandboxWrapperExitCode
+	newCodexExecRunner                 = codexexec.NewRunner
 )
 
 type RunOptions struct {
@@ -88,13 +90,13 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandInteractive:
 		return runInteractive(ctx, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandExec:
-		_, err := codexexec.NewRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
+		_, err := newCodexExecRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
 			Root: parsed.Root,
 			Exec: parsed.Exec,
 		}, stdin, stdout, stderr)
 		return err
 	case cli.CommandReview:
-		_, err := codexexec.NewRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
+		_, err := newCodexExecRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
 			Root: parsed.Root,
 			Exec: parsed.Exec,
 		}, stdin, stdout, stderr)
@@ -609,7 +611,6 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 }
 
 func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool) error {
-	_ = ctx
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.Remote), "/")
 	if baseURL == "" {
 		return errors.New("environment registry base URL is required")
@@ -627,10 +628,18 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return err
 	}
 	if opts.UseAgentIdentityAuth {
-		if strings.TrimSpace(os.Getenv(auth.CodexAccessTokenEnv)) == "" {
+		accessToken := strings.TrimSpace(os.Getenv(auth.CodexAccessTokenEnv))
+		if accessToken == "" {
 			return errors.New("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
 		}
-		return errors.New("remote exec-server registration is not implemented in codex_go")
+		headers := http.Header{}
+		headers.Set("Authorization", "Bearer "+accessToken)
+		return execserver.RunRemoteEnvironment(ctx, execserver.RemoteEnvironmentConfig{
+			BaseURL:       baseURL,
+			EnvironmentID: environmentID,
+			Name:          strings.TrimSpace(opts.Name),
+			AuthHeaders:   headers,
+		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
 	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
@@ -649,7 +658,43 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			return err
 		}
 	}
-	return errors.New("remote exec-server registration is not implemented in codex_go")
+	headers, err := execServerRemoteAuthHeaders(&resolved.Auth)
+	if err != nil {
+		return err
+	}
+	return execserver.RunRemoteEnvironment(ctx, execserver.RemoteEnvironmentConfig{
+		BaseURL:       baseURL,
+		EnvironmentID: environmentID,
+		Name:          strings.TrimSpace(opts.Name),
+		AuthHeaders:   headers,
+	})
+}
+
+func execServerRemoteAuthHeaders(snapshot *auth.AuthDotJSON) (http.Header, error) {
+	headers := http.Header{}
+	if snapshot == nil {
+		return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
+	}
+	switch snapshot.BackendMode() {
+	case "api-key":
+		apiKey := strings.TrimSpace(snapshot.OpenAIAPIKey)
+		if apiKey == "" {
+			return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
+		}
+		headers.Set("Authorization", "Bearer "+apiKey)
+	case "chatgpt":
+		accessToken := remoteAuthTokenString(snapshot, "access_token")
+		if accessToken == "" {
+			return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY")
+		}
+		headers.Set("Authorization", "Bearer "+accessToken)
+		if accountID := auth.AccountIDFromAuthForRestrictions(snapshot); accountID != "" {
+			headers.Set("ChatGPT-Account-ID", accountID)
+		}
+	default:
+		return headers, errors.New("remote exec-server registration requires ChatGPT authentication or API key authentication; Agent Identity auth requires --use-agent-identity-auth")
+	}
+	return headers, nil
 }
 
 func validateExecServerAPIKeyRemoteHost(baseURL string) error {
@@ -849,36 +894,18 @@ func appServerRequirements(codexHome string, loadedConfig *config.Config) (*conf
 	if err != nil {
 		return nil, err
 	}
-	if managed != nil && managed.AllowRemoteControl != nil {
-		if requirements == nil {
-			requirements = &config.ConfigRequirements{}
+	if managed != nil {
+		if requirements != nil && managed.AllowRemoteControl == nil && requirements.AllowRemoteControl != nil {
+			allow := *requirements.AllowRemoteControl
+			managed.AllowRemoteControl = &allow
 		}
-		allow := *managed.AllowRemoteControl
-		requirements.AllowRemoteControl = &allow
+		requirements = managed
 	}
 	return requirements, nil
 }
 
 func appServerRequirementsFromFile(path string) (*config.ConfigRequirements, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	values, err := config.ParseCloudConfigSimpleTOML(string(data))
-	if err != nil {
-		return nil, err
-	}
-	allow, ok, err := appServerAllowRemoteControlFromMap(values, true)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
-	return &config.ConfigRequirements{AllowRemoteControl: &allow}, nil
+	return config.LoadRequirementsFile(path)
 }
 
 func appServerAllowRemoteControlFromEffectiveConfig(loadedConfig *config.Config) (bool, bool, error) {

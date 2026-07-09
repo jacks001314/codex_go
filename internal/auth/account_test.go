@@ -175,6 +175,9 @@ func TestLoginCancelCompleteAndLogout(t *testing.T) {
 	if response := manager.GetAccount(&GetAccountParams{}); response.Account == nil || response.Account.Type != AccountAPIKey || response.RequiresOpenAIAuth {
 		t.Fatalf("account after api key = %+v", response)
 	}
+	if updated := manager.AccountUpdated(); updated.AuthMode == nil || *updated.AuthMode != "apikey" {
+		t.Fatalf("api key AccountUpdated() = %+v", updated)
+	}
 
 	manager.Logout()
 	login, err := manager.Login(&LoginAccountParams{Type: AccountChatGPT})
@@ -332,6 +335,31 @@ func TestChatGPTAuthTokensLoginUsesExternalMode(t *testing.T) {
 	updated := manager.AccountUpdated()
 	if updated.AuthMode == nil || *updated.AuthMode != "chatgptAuthTokens" || updated.PlanType == nil || *updated.PlanType != PlanPro {
 		t.Fatalf("updated = %+v", updated)
+	}
+}
+
+func TestApplyAuthSnapshotUsesRustWireAuthMode(t *testing.T) {
+	manager := NewAccountManager()
+	manager.ApplyAuthSnapshot(&AuthDotJSON{AuthMode: "apikey", OpenAIAPIKey: "sk-rust"})
+	updated := manager.AccountUpdated()
+	if updated.AuthMode == nil || *updated.AuthMode != "apikey" {
+		t.Fatalf("api key updated = %+v", updated)
+	}
+	read := manager.GetAccount(&GetAccountParams{})
+	if read.Account == nil || read.Account.Type != AccountAPIKey || read.RequiresOpenAIAuth {
+		t.Fatalf("api key account = %+v", read)
+	}
+
+	manager.ApplyAuthSnapshot(&AuthDotJSON{
+		AuthMode: "agent-identity",
+		AgentIdentity: map[string]any{
+			"account_id":      "account-agent",
+			"chatgpt_user_id": "user-agent",
+		},
+	})
+	updated = manager.AccountUpdated()
+	if updated.AuthMode == nil || *updated.AuthMode != "agentIdentity" {
+		t.Fatalf("agent identity updated = %+v", updated)
 	}
 }
 

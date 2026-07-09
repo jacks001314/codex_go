@@ -366,7 +366,10 @@ func TestAuthCheckReportsStoredAuthIssuesLikeRust(t *testing.T) {
 }
 
 func TestStoredAuthIssuesMatchRustModes(t *testing.T) {
-	apiKey := &auth.AuthDotJSON{AuthMode: "api-key"}
+	apiKey := &auth.AuthDotJSON{AuthMode: "apikey"}
+	if got := storedAuthModeForDoctor(apiKey); got != "api_key" {
+		t.Fatalf("api key mode = %q", got)
+	}
 	if got := storedAuthIssuesForDoctor(apiKey, func(string) bool { return false }); !sameStringSlice(got, []string{"API key auth is missing an API key"}) {
 		t.Fatalf("api key issues = %#v", got)
 	}

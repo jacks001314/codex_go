@@ -206,6 +206,35 @@ func TestLoadEffectiveStrictConfigRejectsUnknownTopLevelField(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveStrictConfigAllowsTUI(t *testing.T) {
+	dir := t.TempDir()
+	body := "[tui.keymap.global]\nopen_external_editor = \"ctrl-e\"\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+		t.Fatalf("LoadEffectiveWithOptions strict tui returned error: %v", err)
+	}
+}
+
+func TestLoadEffectiveStrictConfigAllowsPersonality(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("personality = \"pragmatic\"\n[notices]\nhide_rate_limit_model_nudge = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions strict personality/notices returned error: %v", err)
+	}
+	if cfg.Values["personality"] != "pragmatic" {
+		t.Fatalf("personality = %#v", cfg.Values["personality"])
+	}
+	notices, ok := cfg.Values["notices"].(map[string]any)
+	if !ok || notices["hide_rate_limit_model_nudge"] != true {
+		t.Fatalf("notices = %#v", cfg.Values["notices"])
+	}
+}
+
 func TestLoadEffectiveStrictConfigRejectsUnknownOverride(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(ConfigPath(dir), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {

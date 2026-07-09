@@ -559,6 +559,11 @@ func (p *Parsed) remoteUnsupportedSubcommandName() string {
 	switch p.Command {
 	case CommandInteractive, CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork:
 		return ""
+	case CommandAppServer:
+		if len(p.AppServer.Subcommand) == 0 {
+			return "app-server"
+		}
+		return "app-server " + strings.Join(p.AppServer.Subcommand, " ")
 	default:
 		if p.Command == "" {
 			return ""
@@ -2182,16 +2187,21 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			return fmt.Errorf("unknown app-server option %s", arg)
 		default:
 			appServer.Subcommand = append(appServer.Subcommand, args[i:]...)
+			var err error
 			switch appServer.Subcommand[0] {
 			case "daemon":
-				return parseAppServerDaemon(args[i+1:], &appServer.Daemon)
+				err = parseAppServerDaemon(args[i+1:], &appServer.Daemon)
 			case "proxy":
-				return parseAppServerProxy(args[i+1:], &appServer.Proxy)
+				err = parseAppServerProxy(args[i+1:], &appServer.Proxy)
 			case "generate-ts", "generate-json-schema", "generate-internal-json-schema":
-				return parseAppServerGenerate(appServer.Subcommand[0], args[i+1:], &appServer.Generate)
+				err = parseAppServerGenerate(appServer.Subcommand[0], args[i+1:], &appServer.Generate)
 			default:
 				return fmt.Errorf("unknown app-server subcommand %s", appServer.Subcommand[0])
 			}
+			if err != nil {
+				return err
+			}
+			i = len(args)
 		}
 	}
 	if appServer.Stdio && listenSet {

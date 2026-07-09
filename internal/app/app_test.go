@@ -8,18 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/coder/websocket"
 
+	appsapi "codex_go/internal/apps"
 	"codex_go/internal/appserver"
 	"codex_go/internal/appserverdaemon"
 	"codex_go/internal/auth"
@@ -27,15 +30,31 @@ import (
 	"codex_go/internal/config"
 	codexexec "codex_go/internal/exec"
 	"codex_go/internal/mcp"
+	"codex_go/internal/plugin"
 	"codex_go/internal/protocol"
+	"codex_go/internal/review"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
 	"codex_go/internal/tool"
 	codextui "codex_go/internal/tui"
 	bottompane "codex_go/internal/tui/bottom_pane"
+	chatwidget "codex_go/internal/tui/chatwidget"
 	codextea "codex_go/internal/tui/tea"
 	"codex_go/internal/turn"
 )
+
+func useLocalExecRunner(t *testing.T) {
+	t.Helper()
+	previous := newCodexExecRunner
+	newCodexExecRunner = codexexec.NewLocalRunner
+	t.Cleanup(func() {
+		newCodexExecRunner = previous
+	})
+}
+
+func writeAppResponseSSE(w io.Writer, payload string) {
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+}
 
 func TestLoginStatusLogoutFlow(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -516,8 +535,18 @@ func TestUnknownFeatureToggleFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run returned nil error, want failure")
 	}
-	if !strings.Contains(err.Error(), "unknown feature flag") {
+	if err.Error() != "Unknown feature flag: does_not_exist" {
 		t.Fatalf("error = %v", err)
+	}
+
+	err = Run(context.Background(), []string{"--disable", "does_not_exist"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || err.Error() != "Unknown feature flag: does_not_exist" {
+		t.Fatalf("disable unknown feature error = %v", err)
+	}
+
+	err = Run(context.Background(), []string{"--strict-config", "--enable", "multi_agent_v2.subagent_usage_hint_text"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || err.Error() != "Unknown feature flag: multi_agent_v2.subagent_usage_hint_text" {
+		t.Fatalf("compound unknown feature error = %v", err)
 	}
 }
 
@@ -577,19 +606,46 @@ func TestDebugPromptInput(t *testing.T) {
 }
 
 func TestExecJSONEndToEnd(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
 	t.Setenv("OPENAI_API_KEY", "sk-test")
+	seenPath := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath <- r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAppResponseSSE(w, `{"type":"response.created","response":{"id":"resp-cli"}}`)
+		writeAppResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-cli","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeAppResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-cli","delta":"cli default"}`)
+		writeAppResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-cli","type":"message","role":"assistant","content":[{"type":"output_text","text":"cli default"}]}}`)
+		writeAppResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-cli","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("openai_base_url = \""+server.URL+"/v1\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
 	var stdout, stderr bytes.Buffer
 	if err := Run(context.Background(), []string{"exec", "--json", "hello"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("exec returned error: %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, `"type":"thread.started"`) || !strings.Contains(output, `"type":"turn.completed"`) {
+	if !strings.Contains(output, `"type":"thread.started"`) ||
+		!strings.Contains(output, `"type":"turn.completed"`) ||
+		!strings.Contains(output, "cli default") ||
+		strings.Contains(output, "Go Codex exec stub received") {
 		t.Fatalf("exec json output = %q", output)
+	}
+	select {
+	case path := <-seenPath:
+		if path != "/v1/responses" {
+			t.Fatalf("request path = %q", path)
+		}
+	default:
+		t.Fatal("Responses API server did not receive a request")
 	}
 }
 
 func TestInteractivePromptUsesExecRunner(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
@@ -610,6 +666,7 @@ func TestInteractivePromptNormalizesCRLF(t *testing.T) {
 }
 
 func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
@@ -626,15 +683,20 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 }
 
 func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	var stdout bytes.Buffer
 	input := strings.Join([]string{
 		"/help",
+		"/keymap",
 		"/model gpt-test",
 		"/approval never",
 		"/sandbox :workspace",
+		"/permissions full-access",
+		"/personality pragmatic",
+		"/experimental memories on",
 		"hello tui",
 		"/new",
 		"/status",
@@ -646,9 +708,14 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 	output := stdout.String()
 	for _, want := range []string{
 		"Codex TUI commands:",
+		"Codex TUI keymap:",
+		"Open External Editor | ctrl-g",
 		"Model: gpt-test",
 		"Approval: never",
 		"Sandbox: :workspace",
+		"Permissions: approval=never sandbox=:danger-full-access",
+		"Personality set to Pragmatic",
+		"Feature memories enabled.",
 		"hello tui",
 		"Started a new local thread.",
 		"Thread: new",
@@ -656,6 +723,121 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("interactive output = %q, missing %q", output, want)
 		}
+	}
+	data, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "memories = true") {
+		t.Fatalf("config missing settings writes:\n%s", text)
+	}
+}
+
+func TestInteractiveKeymapCommandPersistsConfig(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var stdout bytes.Buffer
+	input := strings.Join([]string{
+		"/keymap set global.open_external_editor ctrl-e",
+		"/keymap unbind composer.queue",
+		"/keymap unset global.open_external_editor",
+		"/exit",
+	}, "\n") + "\n"
+	if err := Run(context.Background(), []string{}, strings.NewReader(input), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("interactive returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Updated global.open_external_editor", "Unbound composer.queue", "Reset global.open_external_editor"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "open_external_editor") {
+		t.Fatalf("unset should remove open_external_editor:\n%s", text)
+	}
+	if !strings.Contains(text, "[tui.keymap.composer]") || !strings.Contains(text, "queue = []") {
+		t.Fatalf("config missing explicit composer.queue unbind:\n%s", text)
+	}
+}
+
+func TestInteractiveDebugConfigReaderUsesRustStyleRenderer(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .codex error = %v", err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfigApp(project)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile user config error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_web_search_modes = []\nallow_remote_control = false\n[network]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config error = %v", err)
+	}
+	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: project}}
+
+	lines, err := interactiveDebugConfigReader(root)()
+	if err != nil {
+		t.Fatalf("interactiveDebugConfigReader returned error: %v", err)
+	}
+	rendered := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"/debug-config",
+		"Config layer stack (lowest precedence first):",
+		"1. user (",
+		"2. project (",
+		"Requirements:",
+		"allowed_web_search_modes: disabled",
+		"allow_remote_control: false",
+		"experimental_network: enabled=true",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("debug config reader output missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "<unavailable in embedded Tea model>") {
+		t.Fatalf("debug config reader returned embedded fallback:\n%s", rendered)
+	}
+}
+
+func trustedProjectConfigApp(path string) string {
+	key := strings.ReplaceAll(filepath.Clean(path), `\`, `\\`)
+	return "\n[projects.\"" + key + "\"]\ntrust_level = \"trusted\"\n"
+}
+
+func TestAppServerRequirementsFromFileParsesFullRequirements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	if err := os.WriteFile(path, []byte("allowed_sandbox_modes = [\"workspace-write\"]\nallowed_web_search_modes = []\nallow_remote_control = true\n[network]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+
+	requirements, err := appServerRequirementsFromFile(path)
+	if err != nil {
+		t.Fatalf("appServerRequirementsFromFile returned error: %v", err)
+	}
+	if requirements == nil {
+		t.Fatal("requirements = nil")
+	}
+	if len(requirements.AllowedSandboxModes) != 1 || requirements.AllowedSandboxModes[0] != sandbox.SandboxWorkspaceWrite {
+		t.Fatalf("AllowedSandboxModes = %#v", requirements.AllowedSandboxModes)
+	}
+	if requirements.AllowedWebSearchModes == nil || len(requirements.AllowedWebSearchModes) != 0 {
+		t.Fatalf("AllowedWebSearchModes = %#v", requirements.AllowedWebSearchModes)
+	}
+	if requirements.AllowRemoteControl == nil || !*requirements.AllowRemoteControl {
+		t.Fatalf("AllowRemoteControl = %#v", requirements.AllowRemoteControl)
+	}
+	if requirements.Network == nil || requirements.Network.Enabled == nil || !*requirements.Network.Enabled {
+		t.Fatalf("Network = %#v", requirements.Network)
 	}
 }
 
@@ -844,17 +1026,64 @@ func TestInteractiveTurnCommandReportsNilRunner(t *testing.T) {
 	}
 }
 
+func TestInteractiveTurnCommandInterruptCancelsRunningContext(t *testing.T) {
+	interrupts := newInteractiveInterruptController()
+	startedRunning := make(chan struct{})
+	runnerDone := make(chan error, 1)
+	runner := interactiveTurnRunnerFunc(func(ctx context.Context, req *codexexec.Request, stdin io.Reader, stdout, stderr io.Writer) (*codexexec.Result, error) {
+		close(startedRunning)
+		<-ctx.Done()
+		runnerDone <- ctx.Err()
+		return nil, ctx.Err()
+	})
+
+	msg := interactiveTurnCommandWithRequest(context.Background(), &cli.RootOptions{}, runner, codextui.NewState(nil), codextea.SubmitRequest{Prompt: "long task"}, nil, nil, nil, interrupts)()
+	stream, ok := msg.(codextea.StreamStartedMsg)
+	if !ok {
+		t.Fatalf("message = %T, want StreamStartedMsg", msg)
+	}
+	select {
+	case <-startedRunning:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	if interrupted, ok := interrupts.interruptCommand()().(codextea.TurnInterruptedMsg); !ok || interrupted.Err != nil {
+		t.Fatalf("interrupt command = %#v ok=%v", interrupted, ok)
+	}
+	select {
+	case err := <-runnerDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runner context error = %v, want canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runner did not observe cancellation")
+	}
+	sawInterrupted := false
+	for message := range stream.Messages {
+		if interrupted, ok := message.(codextea.TurnInterruptedMsg); ok {
+			sawInterrupted = true
+			if !errors.Is(interrupted.Err, context.Canceled) {
+				t.Fatalf("stream interrupt err = %v, want canceled", interrupted.Err)
+			}
+		}
+	}
+	if !sawInterrupted {
+		t.Fatal("stream did not include TurnInterruptedMsg")
+	}
+}
+
 func TestInteractiveStreamEventWriterParsesJSONLines(t *testing.T) {
 	var messages []any
 	writer := newInteractiveStreamEventWriter(func(message bubbletea.Msg) {
 		messages = append(messages, message)
 	})
 	_, _ = writer.Write([]byte(`{"type":"thread.started","thread_id":"thread-1"}` + "\n"))
-	_, _ = writer.Write([]byte(`{"type":"item.delta","delta":{"item_id":"msg-1","text":"hi"}}`))
+	_, _ = writer.Write([]byte(`{"type":"item.delta","delta":{"item_id":"msg-1","text":"hi"}}` + "\n"))
+	_, _ = writer.Write([]byte(`{"type":"response.rate_limits","rateLimit":{"limitId":"codex","primary":{"usedPercent":90,"windowDurationMins":300}}}`))
 	writer.Flush()
 
-	if len(messages) != 2 {
-		t.Fatalf("message len = %d, want 2 (%#v)", len(messages), messages)
+	if len(messages) != 3 {
+		t.Fatalf("message len = %d, want 3 (%#v)", len(messages), messages)
 	}
 	first, ok := messages[0].(codextea.ThreadEventMsg)
 	if !ok || first.Event.Type != "thread.started" || first.Event.ThreadID != "thread-1" {
@@ -863,6 +1092,10 @@ func TestInteractiveStreamEventWriterParsesJSONLines(t *testing.T) {
 	second, ok := messages[1].(codextea.ThreadEventMsg)
 	if !ok || second.Event.Delta == nil || second.Event.Delta.Text != "hi" {
 		t.Fatalf("second message = %#v", messages[1])
+	}
+	third, ok := messages[2].(codextea.ThreadEventMsg)
+	if !ok || third.Event.RateLimit == nil || third.Event.RateLimit.Primary == nil || third.Event.RateLimit.Primary.UsedPercent != 90 {
+		t.Fatalf("third message = %#v", messages[2])
 	}
 }
 
@@ -932,8 +1165,8 @@ func TestInteractiveElicitationBrokerReturnsMCPResponse(t *testing.T) {
 				"decision": map[string]any{
 					"type": "string",
 					"anyOf": []any{
-						map[string]any{"const": "approve_once", "title": "Allow once"},
-						map[string]any{"const": "approve_session", "title": "Allow session"},
+						map[string]any{"const": "accept", "title": "Allow once"},
+						map[string]any{"const": "accept_session", "title": "Allow session"},
 						map[string]any{"const": "decline", "title": "Decline"},
 						map[string]any{"const": "cancel", "title": "Cancel"},
 					},
@@ -960,7 +1193,7 @@ func TestInteractiveElicitationBrokerReturnsMCPResponse(t *testing.T) {
 	broker.respond(codextea.ModalResponse{
 		ID:       elicitation.ID,
 		Kind:     codextea.ModalKindElicitation,
-		OptionID: "approve_session",
+		OptionID: "accept_session",
 		Elicitation: &codextea.ElicitationDecision{
 			Action:  "accept",
 			Persist: "session",
@@ -976,6 +1209,916 @@ func TestInteractiveElicitationBrokerReturnsMCPResponse(t *testing.T) {
 	}
 }
 
+func TestInteractiveNotificationPosterWritesOSC9(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "WezTerm")
+	t.Setenv("TERM", "")
+	t.Setenv("TMUX", "")
+	var stdout bytes.Buffer
+
+	cmd := interactiveNotificationPoster(&stdout)("done", codextui.NotificationMethodOSC9)
+	if cmd == nil {
+		t.Fatal("notification poster returned nil command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("notification poster message = %#v, want nil", msg)
+	}
+	if got := stdout.String(); got != "\x1b]9;done\x07" {
+		t.Fatalf("notification sequence = %q", got)
+	}
+}
+
+func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
+	hidden := true
+	settings := interactiveSettingsFromConfig(&config.Config{Values: map[string]any{
+		"personality": "pragmatic",
+		"notices":     map[string]any{"hide_rate_limit_model_nudge": hidden},
+		"tui": map[string]any{
+			"notifications":          []any{"approval-requested", "agent-turn-complete", "approval-requested", ""},
+			"notification_method":    "bel",
+			"notification_condition": "always",
+			"theme":                  "dracula",
+			"pet":                    "dewey",
+		},
+		"requirements": map[string]any{
+			"allowed_approval_policies":   []any{"on-request"},
+			"allowed_approvals_reviewers": []any{"user"},
+			"allowed_windows_sandbox_implementations": []any{
+				"elevated",
+			},
+			"allowed_permission_profiles": map[string]any{
+				":workspace":          true,
+				":danger-full-access": false,
+			},
+		},
+	}})
+	if settings.Personality != chatwidget.PersonalityPragmatic {
+		t.Fatalf("personality = %q", settings.Personality)
+	}
+	if settings.Notifications == nil || !settings.Notifications.CustomSet ||
+		len(settings.Notifications.Custom) != 4 ||
+		settings.Notifications.Custom[0] != "approval-requested" ||
+		settings.Notifications.Custom[1] != "agent-turn-complete" ||
+		settings.Notifications.Custom[2] != "approval-requested" ||
+		settings.Notifications.Custom[3] != "" {
+		t.Fatalf("notifications = %#v", settings.Notifications)
+	}
+	if settings.NotificationMethod != codextui.NotificationMethodBEL {
+		t.Fatalf("notification method = %q", settings.NotificationMethod)
+	}
+	if settings.NotificationCondition != codextui.NotificationConditionAlways {
+		t.Fatalf("notification condition = %q", settings.NotificationCondition)
+	}
+	if settings.HideRateLimitModelNudge == nil || *settings.HideRateLimitModelNudge != hidden {
+		t.Fatalf("hide notice = %#v", settings.HideRateLimitModelNudge)
+	}
+	if settings.TUITheme != "dracula" || settings.TUIPet != "dewey" {
+		t.Fatalf("tui theme/pet = %q/%q", settings.TUITheme, settings.TUIPet)
+	}
+	if settings.PermissionRequirements == nil ||
+		len(settings.PermissionRequirements.AllowedApprovalPolicies) != 1 ||
+		settings.PermissionRequirements.AllowedApprovalPolicies[0] != chatwidget.ApprovalOnRequest ||
+		len(settings.PermissionRequirements.AllowedReviewers) != 1 ||
+		settings.PermissionRequirements.AllowedReviewers[0] != chatwidget.ApprovalsReviewerUser ||
+		len(settings.PermissionRequirements.AllowedWindowsSandboxModes) != 1 ||
+		settings.PermissionRequirements.AllowedWindowsSandboxModes[0] != chatwidget.WindowsSandboxModeElevated ||
+		!settings.PermissionRequirements.AllowedProfiles[chatwidget.WorkspaceProfile] ||
+		settings.PermissionRequirements.AllowedProfiles[chatwidget.DangerFullAccessProfile] {
+		t.Fatalf("permission requirements = %#v", settings.PermissionRequirements)
+	}
+}
+
+func TestInteractiveSettingsFromConfigDefaultsTUINotifications(t *testing.T) {
+	settings := interactiveSettingsFromConfig(&config.Config{Values: map[string]any{}})
+	if settings.Notifications == nil || !settings.Notifications.Enabled || len(settings.Notifications.Custom) != 0 {
+		t.Fatalf("default notifications = %#v", settings.Notifications)
+	}
+	if settings.NotificationMethod != codextui.NotificationMethodAuto {
+		t.Fatalf("default notification method = %q", settings.NotificationMethod)
+	}
+	if settings.NotificationCondition != codextui.NotificationConditionUnfocused {
+		t.Fatalf("default notification condition = %q", settings.NotificationCondition)
+	}
+}
+
+func TestInteractiveRemoteLoadSettingsReadsRequirements(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 8)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodConfigRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{
+						"config": map[string]any{
+							"tui": map[string]any{"notification_method": "bel"},
+						},
+					},
+				})
+			case string(appserver.MethodConfigRequirementsRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{
+						"requirements": map[string]any{
+							"allowedApprovalPolicies":              []any{"on-request"},
+							"allowedApprovalsReviewers":            []any{"user"},
+							"allowedWindowsSandboxImplementations": []any{"unelevated"},
+							"allowedPermissionProfiles": map[string]any{
+								":workspace":          true,
+								":danger-full-access": false,
+							},
+						},
+					},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	settings, err := interactiveRemoteLoadSettings(ctx, endpoint)
+	if err != nil {
+		t.Fatalf("interactiveRemoteLoadSettings error = %v", err)
+	}
+	if settings.NotificationMethod != codextui.NotificationMethodBEL {
+		t.Fatalf("remote notification method = %q", settings.NotificationMethod)
+	}
+	if settings.PermissionRequirements == nil ||
+		len(settings.PermissionRequirements.AllowedApprovalPolicies) != 1 ||
+		settings.PermissionRequirements.AllowedApprovalPolicies[0] != chatwidget.ApprovalOnRequest ||
+		len(settings.PermissionRequirements.AllowedWindowsSandboxModes) != 1 ||
+		settings.PermissionRequirements.AllowedWindowsSandboxModes[0] != chatwidget.WindowsSandboxModeUnelevated ||
+		settings.PermissionRequirements.AllowedProfiles[chatwidget.DangerFullAccessProfile] {
+		t.Fatalf("remote permission requirements = %#v", settings.PermissionRequirements)
+	}
+	for _, want := range []appserver.Method{appserver.MethodInitialize, appserver.MethodConfigRead, appserver.MethodConfigRequirementsRead} {
+		got := remoteTUITestReadCapturedRequest(t, requests)
+		if got.Method != string(want) {
+			t.Fatalf("remote request = %q, want %q", got.Method, want)
+		}
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteStartWindowsSandboxSetupCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodWindowsSandboxSetupStart):
+				var params sandbox.WindowsSetupStartParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.Mode != sandbox.WindowsSetupElevated || params.CWD == nil || *params.CWD != `D:\repo` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("setup params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"started": true},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	outcome, err := interactiveRemoteStartWindowsSandboxSetup(ctx, endpoint, chatwidget.WindowsSandboxModeElevated, `D:\repo`)
+	if err != nil {
+		t.Fatalf("interactiveRemoteStartWindowsSandboxSetup error = %v", err)
+	}
+	if !outcome.Started {
+		t.Fatalf("outcome = %#v, want started", outcome)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodWindowsSandboxSetupStart) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodHooksList):
+				var params appserver.HookListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if len(params.CWDs) != 1 || params.CWDs[0] != `D:\repo` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("hooks params = %#v", params))
+					return
+				}
+				command := "echo ok"
+				matcher := "Bash"
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": appserver.HookListResponse{Data: []appserver.HookListEntry{{
+						CWD: `D:\repo`,
+						Hooks: []appserver.HookMetadata{{
+							Key:         "hook-1",
+							EventName:   appserver.HookEventPreToolUse,
+							HandlerType: appserver.HookHandlerCommand,
+							Matcher:     &matcher,
+							Command:     &command,
+							SourcePath:  `D:\repo\.codex\hooks.json`,
+							Source:      appserver.HookSourceProject,
+							Enabled:     true,
+							TrustStatus: appserver.HookTrustTrusted,
+						}},
+						Warnings: []string{"review hook trust"},
+					}}},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	runs, err := interactiveRemoteReadHooks(ctx, endpoint, `D:\repo`)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadHooks error = %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %#v, want hook plus warning", runs)
+	}
+	if runs[0].ID != "hook-1" || runs[0].Name != "preToolUse / Bash" || runs[0].Command != "echo ok" {
+		t.Fatalf("hook run = %#v", runs[0])
+	}
+	for _, want := range []string{`cwd: D:\repo`, "source: project", `path: D:\repo\.codex\hooks.json`, "trust: trusted"} {
+		if !strings.Contains(runs[0].Issue, want) {
+			t.Fatalf("hook issue missing %q: %q", want, runs[0].Issue)
+		}
+	}
+	if runs[1].Name != "Hook warning" || !strings.Contains(runs[1].Issue, "review hook trust") {
+		t.Fatalf("warning run = %#v", runs[1])
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodHooksList) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteReadPluginsCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodPluginList):
+				var params plugin.PluginListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if !params.IncludeInstalled {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("plugin list params = %#v, want include installed", params))
+					return
+				}
+				display := "Docs"
+				short := "Search docs."
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": plugin.PluginListResponse{Marketplaces: []plugin.PluginMarketplaceEntry{{
+						Name: "team",
+						Plugins: []plugin.PluginSummary{{
+							ID:            "docs@team",
+							Name:          "docs",
+							Availability:  plugin.PluginAvailable,
+							InstallPolicy: plugin.InstallAllowed,
+							Installed:     true,
+							Enabled:       true,
+							Interface: &plugin.PluginInterface{
+								DisplayName:      &display,
+								ShortDescription: &short,
+							},
+						}},
+					}}},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteReadPlugins(ctx, endpoint)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadPlugins error = %v", err)
+	}
+	if len(response.Marketplaces) != 1 || len(response.Marketplaces[0].Plugins) != 1 || response.Marketplaces[0].Plugins[0].ID != "docs@team" {
+		t.Fatalf("plugin response = %#v", response)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodPluginList) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteReadAppsCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodAppList):
+				var params appsapi.AppListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID == nil || *params.ThreadID != "thread-apps" || !params.ForceRefetch {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("app list params = %#v, want thread-apps force refetch", params))
+					return
+				}
+				desc := "Search Drive files."
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": appsapi.AppListResponse{Data: []appsapi.AppEntry{{
+						ID:           "drive",
+						Name:         "Google Drive",
+						Description:  &desc,
+						IsAccessible: true,
+						IsEnabled:    true,
+					}}},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteReadApps(ctx, endpoint, "thread-apps", true)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadApps error = %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "drive" {
+		t.Fatalf("apps response = %#v", response)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodAppList) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteStartReviewCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodReviewStart):
+				var params review.StartParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-review" || params.Delivery == nil || *params.Delivery != "inline" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("review start params = %#v, want inline thread-review", params))
+					return
+				}
+				if params.Target.Type != "custom" || params.Target.Instructions != "check security" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("review target = %#v", params.Target))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": review.StartResponse{
+						Turn:           review.Turn{ID: "review-turn", Status: review.TurnStatusInProgress},
+						ReviewThreadID: "thread-review",
+					},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	delivery := "inline"
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteStartReview(ctx, endpoint, review.StartParams{
+		ThreadID: "thread-review",
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "check security",
+		},
+		Delivery: &delivery,
+	})
+	if err != nil {
+		t.Fatalf("interactiveRemoteStartReview error = %v", err)
+	}
+	if response.Turn.ID != "review-turn" || response.ReviewThreadID != "thread-review" {
+		t.Fatalf("review response = %#v", response)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodReviewStart) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteStartSideForksAndInjectsBoundary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 6)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadFork):
+				var params appserver.ThreadForkParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-parent" || !params.Ephemeral || params.Model == nil || *params.Model != "gpt-side" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("side fork params = %#v", params))
+					return
+				}
+				if params.CWD == nil || *params.CWD != `D:\repo` || params.DeveloperInstructions == nil || !strings.Contains(*params.DeveloperInstructions, "You are in a side conversation") {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("side fork config = %#v", params))
+					return
+				}
+				if params.Config["model_provider"] != "openai" || params.Config["model_reasoning_effort"] != "high" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("side fork config map = %#v", params.Config))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{
+						"thread": map[string]any{
+							"id":        "thread-side",
+							"ephemeral": true,
+							"turns":     []any{},
+						},
+					},
+				})
+			case string(appserver.MethodThreadInjectItems):
+				var params appserver.ThreadInjectItemsParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-side" || len(params.Items) != 1 || !strings.Contains(string(params.Items[0]), "Side conversation boundary.") {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("inject params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	state := codextui.NewState(&codextui.Options{
+		Model:           "gpt-side",
+		ReasoningEffort: "high",
+		ApprovalPolicy:  "on-request",
+		Sandbox:         "workspace-write",
+	})
+	response, err := interactiveRemoteStartSide(ctx, &cli.RootOptions{
+		ConfigOverrides: []string{`model_provider="openai"`},
+		Shared: cli.SharedOptions{
+			CWD:   `D:\repo`,
+			Model: "gpt-root",
+		},
+	}, endpoint, state, codextea.SideStartParams{ParentThreadID: "thread-parent"})
+	if err != nil {
+		t.Fatalf("interactiveRemoteStartSide error = %v", err)
+	}
+	if response.ParentThreadID != "thread-parent" || response.SideThreadID != "thread-side" {
+		t.Fatalf("side response = %#v", response)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadFork) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadInjectItems) {
+		t.Fatalf("third request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteCloseSideUnsubscribesThread(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadUnsubscribe):
+				var params appserver.ThreadUnsubscribeParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-side" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("unsubscribe params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"status": string(appserver.ThreadUnsubscribeStatusUnsubscribed)},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if _, err := interactiveRemoteCloseSide(ctx, endpoint, codextea.SideCloseParams{ParentThreadID: "thread-parent", SideThreadID: "thread-side"}); err != nil {
+		t.Fatalf("interactiveRemoteCloseSide error = %v", err)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadUnsubscribe) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestRemoteNotificationForParentThreadUpdatesSideStatusOnly(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-side")
+	messages := make(chan bubbletea.Msg, 4)
+	client := &remoteAppServerTUIClient{
+		state:    state,
+		messages: messages,
+	}
+	payload, err := json.Marshal(appserver.TurnCompletedNotification{
+		ThreadID: "thread-parent",
+		Turn:     appserver.Turn{ID: "turn-parent", Status: appserver.TurnStatusCompleted},
+	})
+	if err != nil {
+		t.Fatalf("marshal notification: %v", err)
+	}
+
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationTurnCompleted),
+		Params: payload,
+	}); err != nil {
+		t.Fatalf("handleNotification: %v", err)
+	}
+	if state.ThreadID != "thread-side" {
+		t.Fatalf("state thread id = %q, want side", state.ThreadID)
+	}
+	if client.turnCompleted {
+		t.Fatal("parent turn completion should not complete the active side stream")
+	}
+	select {
+	case msg := <-messages:
+		status, ok := msg.(codextea.SideParentStatusChangeMsg)
+		if !ok {
+			t.Fatalf("message = %#v, want side status change", msg)
+		}
+		if status.ParentThreadID != "thread-parent" || status.Kind != codextea.SideParentStatusChangeSet || status.Status != codextea.SideParentStatusFinished {
+			t.Fatalf("side status change = %#v", status)
+		}
+	default:
+		t.Fatal("missing side parent status change")
+	}
+	select {
+	case msg := <-messages:
+		scoped, ok := msg.(codextea.ThreadScopedEventMsg)
+		if !ok {
+			t.Fatalf("message = %#v, want scoped parent event", msg)
+		}
+		if scoped.ThreadID != "thread-parent" || scoped.Event.Type != "turn.completed" {
+			t.Fatalf("scoped parent event = %#v", scoped)
+		}
+	default:
+		t.Fatal("missing scoped parent event")
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("unexpected extra message for parent thread: %#v", msg)
+	default:
+	}
+}
+
+func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodSkillsList):
+				var params appserver.SkillsListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if len(params.CWDs) != 1 || params.CWDs[0] != `D:\repo` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("skills list params = %#v, want D:\\repo", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+						CWD: `D:\repo`,
+						Skills: []appserver.SkillsListEntry{{
+							Name:             "Docs:review",
+							Path:             `D:\repo\.codex\skills\review\SKILL.md`,
+							Scope:            "plugin",
+							ShortDescription: "Review code",
+							Enabled:          true,
+							PluginID:         "docs@team",
+						}},
+					}}},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteReadSkills(ctx, endpoint, `D:\repo`)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadSkills error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Skills) != 1 || response.Data[0].Skills[0].Name != "Docs:review" {
+		t.Fatalf("skills response = %#v", response)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodSkillsList) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
 func TestInteractiveUserInputBrokerReturnsToolResponse(t *testing.T) {
 	broker := newInteractiveUserInputBroker()
 	messages := make(chan bubbletea.Msg, 1)
@@ -988,6 +2131,8 @@ func TestInteractiveUserInputBrokerReturnsToolResponse(t *testing.T) {
 				Header:   "Scope",
 				ID:       "scope",
 				Question: "Where should this apply?",
+				IsOther:  true,
+				IsSecret: true,
 				Options:  []tool.UserInputChoice{{Label: "Plan"}, {Label: "All"}},
 			}},
 		})
@@ -1002,6 +2147,9 @@ func TestInteractiveUserInputBrokerReturnsToolResponse(t *testing.T) {
 	request, ok := message.(codextea.RequestUserInputMsg)
 	if !ok {
 		t.Fatalf("message = %T, want RequestUserInputMsg", message)
+	}
+	if len(request.Questions) != 1 || !request.Questions[0].IsOther || !request.Questions[0].IsSecret {
+		t.Fatalf("request question flags = %#v", request.Questions)
 	}
 	broker.respond(codextea.ModalResponse{
 		ID:   request.ID,
@@ -1322,7 +2470,7 @@ func TestInteractiveRemoteTurnStartsThreadThenTurnAndStreamsEvents(t *testing.T)
 			{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/image.png"},
 			{Kind: bottompane.AttachmentFile, Path: `D:\repo\notes.md`},
 		},
-	}, messages)
+	}, messages, remoteTUIBrokers{}, nil)
 
 	if got := remoteTUITestReadString(t, authHeaders); got != "Bearer remote-token" {
 		t.Fatalf("Authorization header = %q", got)
@@ -1439,7 +2587,7 @@ func TestInteractiveRemoteTurnUsesExistingThread(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-existing")
 	messages := make(chan bubbletea.Msg, 16)
-	runInteractiveRemoteTurn(ctx, &cli.RootOptions{}, endpoint, state, codextea.SubmitRequest{Prompt: "continue"}, messages)
+	runInteractiveRemoteTurn(ctx, &cli.RootOptions{}, endpoint, state, codextea.SubmitRequest{Prompt: "continue"}, messages, remoteTUIBrokers{}, nil)
 	for range messages {
 	}
 	initialize := remoteTUITestReadCapturedRequest(t, requests)
@@ -1459,10 +2607,1284 @@ func TestInteractiveRemoteTurnUsesExistingThread(t *testing.T) {
 	}
 }
 
+func TestInteractiveRemoteTurnInterruptSendsTurnInterrupt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	turnStarted := make(chan struct{})
+	completeTurn := make(chan struct{})
+	interruptRequests := make(chan remoteTUITestRequest, 1)
+	serverErrs := make(chan error, 4)
+	var turnStartedOnce sync.Once
+	var completeOnce sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodTurnStart):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"turn": map[string]any{"id": "turn-interrupt", "items": []any{}, "status": "inProgress"}},
+				})
+				turnStartedOnce.Do(func() { close(turnStarted) })
+				<-completeTurn
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"method":  string(appserver.NotificationTurnCompleted),
+					"params":  map[string]any{"threadId": "thread-interrupt", "turn": map[string]any{"id": "turn-interrupt", "items": []any{}, "status": "interrupted"}},
+				})
+			case string(appserver.MethodTurnInterrupt):
+				interruptRequests <- req
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				completeOnce.Do(func() { close(completeTurn) })
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-interrupt")
+	messages := make(chan bubbletea.Msg, 64)
+	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	done := make(chan struct{})
+	go func() {
+		runInteractiveRemoteTurn(ctx, &cli.RootOptions{}, endpoint, state, codextea.SubmitRequest{Prompt: "interrupt me"}, messages, remoteTUIBrokers{}, interrupts)
+		close(done)
+	}()
+
+	select {
+	case <-turnStarted:
+	case <-time.After(time.Second):
+		t.Fatal("remote turn did not start")
+	}
+	waitForRemoteTUIInterruptActive(t, interrupts, "thread-interrupt", "turn-interrupt")
+	if interrupted, ok := interrupts.interruptCommand()().(codextea.TurnInterruptedMsg); !ok || interrupted.Err != nil {
+		t.Fatalf("interrupt command = %#v ok=%v", interrupted, ok)
+	}
+	interrupt := remoteTUITestReadCapturedRequest(t, interruptRequests)
+	if interrupt.Method != string(appserver.MethodTurnInterrupt) {
+		t.Fatalf("interrupt method = %q", interrupt.Method)
+	}
+	var params turn.TurnInterruptParams
+	if err := json.Unmarshal(interrupt.Params, &params); err != nil {
+		t.Fatalf("unmarshal interrupt params: %v", err)
+	}
+	if params.ThreadID != "thread-interrupt" || params.TurnID != "turn-interrupt" {
+		t.Fatalf("interrupt params = %#v", params)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("remote turn did not finish after interrupt")
+	}
+	sawInterrupted := false
+	for message := range messages {
+		if _, ok := message.(codextea.TurnInterruptedMsg); ok {
+			sawInterrupted = true
+		}
+	}
+	if !sawInterrupted {
+		t.Fatal("remote stream did not include TurnInterruptedMsg")
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteTurnHandlesCommandApprovalServerRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	responses := make(chan remoteTUITestResponse, 1)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadStart):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"thread": map[string]any{"id": "thread-approval"}},
+				})
+			case string(appserver.MethodTurnStart):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"turn": map[string]any{"id": "turn-approval", "items": []any{}, "status": "inProgress"}},
+				})
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      "approval-remote",
+					"method":  string(appserver.ServerRequestCommandExecutionApproval),
+					"params": map[string]any{
+						"threadId":    "thread-approval",
+						"turnId":      "turn-approval",
+						"itemId":      "exec-1",
+						"startedAtMs": 123,
+						"command":     "go test ./...",
+						"cwd":         `D:\repo`,
+						"reason":      "needs approval",
+					},
+				})
+				response, err := remoteTUITestReadResponse(ctx, conn)
+				if err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				responses <- response
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"method":  string(appserver.NotificationTurnCompleted),
+					"params":  map[string]any{"threadId": "thread-approval", "turn": map[string]any{"id": "turn-approval", "items": []any{}, "status": "completed"}},
+				})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	state := codextui.NewState(nil)
+	messages := make(chan bubbletea.Msg, 64)
+	brokers := newRemoteTUIBrokers()
+	done := make(chan struct{})
+	go func() {
+		runInteractiveRemoteTurn(ctx, &cli.RootOptions{}, endpoint, state, codextea.SubmitRequest{Prompt: "run tests"}, messages, brokers, nil)
+		close(done)
+	}()
+
+	approval := remoteTUITestReadApprovalMessage(t, messages)
+	if approval.ID == "" || approval.Command != "go test ./..." || !strings.Contains(approval.Body, "needs approval") {
+		t.Fatalf("approval message = %#v", approval)
+	}
+	brokers.respond(codextea.ModalResponse{ID: approval.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_session"})
+
+	response := remoteTUITestReadCapturedResponse(t, responses)
+	if response.Error != nil {
+		t.Fatalf("approval response error = %#v", response.Error)
+	}
+	var result appserver.CommandExecutionRequestApprovalResponse
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("unmarshal approval response: %v", err)
+	}
+	if got := fmt.Sprint(result.Decision); got != string(appserver.CommandExecutionApprovalAcceptForSession) {
+		t.Fatalf("approval decision = %q", got)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for remote approval turn")
+	}
+	for range messages {
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteTurnHandlesUserInputServerRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	responses := make(chan remoteTUITestResponse, 1)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadStart):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"thread": map[string]any{"id": "thread-input"}},
+				})
+			case string(appserver.MethodTurnStart):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"turn": map[string]any{"id": "turn-input", "items": []any{}, "status": "inProgress"}},
+				})
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      "input-remote",
+					"method":  string(appserver.ServerRequestToolUserInput),
+					"params": map[string]any{
+						"threadId": "thread-input",
+						"turnId":   "turn-input",
+						"itemId":   "input-1",
+						"questions": []any{
+							map[string]any{
+								"header":   "Scope",
+								"id":       "scope",
+								"question": "Where should this apply?",
+								"isOther":  true,
+								"isSecret": true,
+								"options": []any{
+									map[string]any{"label": "Plan", "description": "Only update the plan."},
+									map[string]any{"label": "All", "description": "Apply everywhere."},
+								},
+							},
+						},
+						"autoResolutionMs": 60000,
+					},
+				})
+				response, err := remoteTUITestReadResponse(ctx, conn)
+				if err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				responses <- response
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"method":  string(appserver.NotificationTurnCompleted),
+					"params":  map[string]any{"threadId": "thread-input", "turn": map[string]any{"id": "turn-input", "items": []any{}, "status": "completed"}},
+				})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	state := codextui.NewState(nil)
+	messages := make(chan bubbletea.Msg, 64)
+	brokers := newRemoteTUIBrokers()
+	done := make(chan struct{})
+	go func() {
+		runInteractiveRemoteTurn(ctx, &cli.RootOptions{}, endpoint, state, codextea.SubmitRequest{Prompt: "ask"}, messages, brokers, nil)
+		close(done)
+	}()
+
+	request := remoteTUITestReadUserInputMessage(t, messages)
+	if request.ID == "" || len(request.Questions) != 1 || request.Questions[0].ID != "scope" {
+		t.Fatalf("user input message = %#v", request)
+	}
+	if !request.Questions[0].IsOther || !request.Questions[0].IsSecret {
+		t.Fatalf("user input flags = %#v", request.Questions[0])
+	}
+	if request.AutoResolutionMS == nil || *request.AutoResolutionMS != 60000 {
+		t.Fatalf("autoResolutionMS = %#v", request.AutoResolutionMS)
+	}
+	brokers.respond(codextea.ModalResponse{
+		ID:   request.ID,
+		Kind: codextea.ModalKindUserInput,
+		UserInput: &codextea.UserInputDecision{
+			Answers:     map[string]string{"scope": "All"},
+			AnswerLists: map[string][]string{"scope": []string{"All", "user_note: include tests"}},
+		},
+	})
+
+	response := remoteTUITestReadCapturedResponse(t, responses)
+	if response.Error != nil {
+		t.Fatalf("user input response error = %#v", response.Error)
+	}
+	var result appserver.ToolRequestUserInputResponse
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("unmarshal user input response: %v", err)
+	}
+	answers := result.Answers["scope"].Answers
+	if len(answers) != 2 || answers[0] != "All" || answers[1] != "user_note: include tests" {
+		t.Fatalf("answers = %#v", result.Answers)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for remote user input turn")
+	}
+	for range messages {
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestRemoteServerRequestLongTailResponses(t *testing.T) {
+	client := &remoteAppServerTUIClient{}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name     string
+		method   appserver.ServerRequestMethod
+		params   string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name:     "dynamic tool",
+			method:   appserver.ServerRequestDynamicToolCall,
+			params:   `{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"lookup","arguments":{}}`,
+			wantCode: -32000,
+			wantErr:  "Dynamic tool calls are not available in TUI yet.",
+		},
+		{
+			name:     "attestation",
+			method:   appserver.ServerRequestAttestationGenerate,
+			params:   `{}`,
+			wantCode: -32000,
+			wantErr:  "Attestation generation is not available in TUI.",
+		},
+		{
+			name:     "malformed dynamic tool",
+			method:   appserver.ServerRequestDynamicToolCall,
+			params:   `"bad"`,
+			wantCode: -32602,
+			wantErr:  "invalid server request params",
+		},
+		{
+			name:     "unknown",
+			method:   appserver.ServerRequestMethod("thread/unknown"),
+			params:   `{}`,
+			wantCode: -32601,
+			wantErr:  "not implemented",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, code, err := client.remoteServerRequestResult(ctx, tc.method, json.RawMessage(tc.params))
+			if err == nil || code != tc.wantCode || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("result=%#v code=%d err=%v, want code=%d err containing %q", result, code, err, tc.wantCode, tc.wantErr)
+			}
+			if result != nil {
+				t.Fatalf("result = %#v, want nil", result)
+			}
+		})
+	}
+
+	result, code, err := client.remoteServerRequestResult(ctx, appserver.ServerRequestCurrentTimeRead, nil)
+	if err != nil || code != -32603 {
+		t.Fatalf("currentTime/read code=%d err=%v", code, err)
+	}
+	currentTime, ok := result.(*appserver.CurrentTimeReadResponse)
+	if !ok || currentTime.CurrentTimeAt <= 0 {
+		t.Fatalf("currentTime/read result = %#v", result)
+	}
+}
+
+func TestRemoteAppServerTUIClientMapsHookNotifications(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 2)
+	client := &remoteAppServerTUIClient{messages: messages}
+	turnID := "turn-hook"
+	statusMessage := "checking command"
+	startedParams, err := json.Marshal(appserver.HookRunStartedNotification{
+		ThreadID: "thread-hook",
+		TurnID:   &turnID,
+		Run: appserver.HookRunSummary{
+			EventName:     appserver.HookEventPreToolUse,
+			Status:        appserver.HookRunRunning,
+			StatusMessage: &statusMessage,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal hook started: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationHookStarted),
+		Params: startedParams,
+	}); err != nil {
+		t.Fatalf("handle hook started: %v", err)
+	}
+
+	completedParams, err := json.Marshal(appserver.HookRunCompletedNotification{
+		ThreadID: "thread-hook",
+		TurnID:   &turnID,
+		Run: appserver.HookRunSummary{
+			EventName: appserver.HookEventPostToolUse,
+			Status:    appserver.HookRunFailed,
+			Entries: []appserver.HookOutputEntry{
+				{Kind: appserver.HookOutputWarning, Text: "Heads up from the hook"},
+				{Kind: appserver.HookOutputError, Text: "hook exited with code 7"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal hook completed: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationHookCompleted),
+		Params: completedParams,
+	}); err != nil {
+		t.Fatalf("handle hook completed: %v", err)
+	}
+
+	started, ok := (<-messages).(codextea.HookRunMsg)
+	if !ok || !started.Running || started.ThreadID != "thread-hook" || started.TurnID != "turn-hook" || started.EventName != "preToolUse" || started.StatusMessage != "checking command" {
+		t.Fatalf("started hook message = %#v ok=%v", started, ok)
+	}
+	completed, ok := (<-messages).(codextea.HookRunMsg)
+	if !ok || completed.Running || completed.EventName != "postToolUse" || completed.Status != "failed" || len(completed.Entries) != 2 {
+		t.Fatalf("completed hook message = %#v ok=%v", completed, ok)
+	}
+	if completed.Entries[0].Kind != "warning" || completed.Entries[1].Kind != "error" {
+		t.Fatalf("completed hook entries = %#v", completed.Entries)
+	}
+}
+
+func TestRemoteServerRequestChatGPTAuthRefreshUsesLocalAuth(t *testing.T) {
+	clearAuthEnvApp(t)
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	t.Setenv(auth.LoginClientIDEnvOverride, "client-test")
+
+	idToken := fakeJWTApp(map[string]any{
+		"chatgpt_account_id": "workspace-1",
+		"plan_type":          "pro",
+	})
+	if err := auth.PersistChatGPTTokens(home, &auth.ExchangedTokens{
+		IDToken:      idToken,
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+	}); err != nil {
+		t.Fatalf("PersistChatGPTTokens error = %v", err)
+	}
+
+	var requestBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("Decode refresh request error = %v", err)
+		}
+		writeJSON(t, w, map[string]string{
+			"access_token":  "new-access-token",
+			"refresh_token": "new-refresh-token",
+		})
+	}))
+	defer server.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, server.URL)
+
+	client := &remoteAppServerTUIClient{}
+	result, code, err := client.remoteServerRequestResult(context.Background(), appserver.ServerRequestChatGPTAuthTokensRefresh, json.RawMessage(`{"reason":"unauthorized","previousAccountId":"workspace-1"}`))
+	if err != nil || code != -32603 {
+		t.Fatalf("refresh result=%#v code=%d err=%v", result, code, err)
+	}
+	response, ok := result.(*appserver.ChatGPTAuthTokensRefreshResponse)
+	if !ok {
+		t.Fatalf("refresh response = %T", result)
+	}
+	if response.AccessToken != "new-access-token" || response.ChatGPTAccountID != "workspace-1" || response.ChatGPTPlanType == nil || *response.ChatGPTPlanType != "pro" {
+		t.Fatalf("refresh response = %+v", response)
+	}
+	if requestBody["grant_type"] != "refresh_token" || requestBody["refresh_token"] != "old-refresh-token" || requestBody["client_id"] != "client-test" {
+		t.Fatalf("refresh request body = %#v", requestBody)
+	}
+	loaded, err := auth.NewStore(home).Load()
+	if err != nil {
+		t.Fatalf("Load refreshed auth error = %v", err)
+	}
+	if loaded.Tokens["access_token"] != "new-access-token" || loaded.Tokens["refresh_token"] != "new-refresh-token" {
+		t.Fatalf("stored refreshed auth = %#v", loaded.Tokens)
+	}
+}
+
+func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	state := codextui.NewState(nil)
+	messages := make(chan bubbletea.Msg, 16)
+	client := &remoteAppServerTUIClient{
+		endpoint: appserverdaemon.NewUnixSocketEndpoint(`/tmp/codex.sock`),
+		state:    state,
+		messages: messages,
+		unixDial: func(ctx context.Context, socketPath string) (net.Conn, error) {
+			if socketPath != `/tmp/codex.sock` {
+				return nil, fmt.Errorf("socket path = %q", socketPath)
+			}
+			clientConn, serverConn := net.Pipe()
+			go remoteTUITestServeJSONLineAppServer(ctx, serverConn, requests, serverErrs)
+			return clientConn, nil
+		},
+	}
+	if err := client.connect(ctx); err != nil {
+		t.Fatalf("connect unix transport: %v", err)
+	}
+	defer client.close()
+	if err := client.initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	threadID, err := client.startThread(ctx, &cli.RootOptions{}, state)
+	if err != nil {
+		t.Fatalf("startThread: %v", err)
+	}
+	if threadID != "thread-unix" {
+		t.Fatalf("threadID = %q", threadID)
+	}
+	if _, err := client.startTurn(ctx, &cli.RootOptions{}, state, threadID, codextea.SubmitRequest{Prompt: "hello unix"}); err != nil {
+		t.Fatalf("startTurn: %v", err)
+	}
+	if err := client.readUntilTurnCompleted(ctx); err != nil {
+		t.Fatalf("readUntilTurnCompleted: %v", err)
+	}
+	initialize := remoteTUITestReadCapturedRequest(t, requests)
+	threadStart := remoteTUITestReadCapturedRequest(t, requests)
+	turnStart := remoteTUITestReadCapturedRequest(t, requests)
+	if initialize.Method != string(appserver.MethodInitialize) || threadStart.Method != string(appserver.MethodThreadStart) || turnStart.Method != string(appserver.MethodTurnStart) {
+		t.Fatalf("methods = %q, %q, %q", initialize.Method, threadStart.Method, turnStart.Method)
+	}
+	var sawCompleted bool
+	for {
+		select {
+		case message := <-messages:
+			if event, ok := message.(codextea.ThreadEventMsg); ok && event.Event.Type == "turn.completed" {
+				sawCompleted = true
+			}
+		default:
+			if !sawCompleted {
+				t.Fatal("missing remote turn completed event")
+			}
+			return
+		}
+	}
+}
+
+func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadList):
+				var params appserver.ThreadListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				archived := params.Archived != nil && *params.Archived
+				if params.CWD == nil || len(params.CWD.Values) != 1 || params.CWD.Values[0] != `D:\repo` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list cwd params = %#v", params.CWD))
+					return
+				}
+				active := remoteSessionTestThread("thread-active", "Remote Active", false, 0)
+				active["updatedAt"] = fixedAppSessionTime().Add(time.Minute).Unix()
+				active["recencyAt"] = fixedAppSessionTime().Add(time.Minute).Unix()
+				data := []any{active}
+				if archived {
+					data = []any{remoteSessionTestThread("thread-archived", "Remote Archived", true, 0)}
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil}})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	items := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{Shared: cli.SharedOptions{CWD: `D:\repo`}}, endpoint)
+	if len(items) != 2 || items[0].ThreadID != "thread-active" || items[1].ThreadID != "thread-archived" || !items[1].Archived {
+		t.Fatalf("remote session items = %#v", items)
+	}
+	initialize := remoteTUITestReadCapturedRequest(t, requests)
+	activeList := remoteTUITestReadCapturedRequest(t, requests)
+	archivedList := remoteTUITestReadCapturedRequest(t, requests)
+	if initialize.Method != string(appserver.MethodInitialize) || activeList.Method != string(appserver.MethodThreadList) || archivedList.Method != string(appserver.MethodThreadList) {
+		t.Fatalf("methods = %q, %q, %q", initialize.Method, activeList.Method, archivedList.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteSessionActionHandlerCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 16)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadFork):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-forked", "Remote Forked", false, 0)}})
+				return
+			case string(appserver.MethodThreadArchive):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				return
+			case string(appserver.MethodThreadUnarchive):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-source", "Remote Source", false, 0)}})
+				return
+			case string(appserver.MethodThreadDelete):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	handler := interactiveRemoteSessionActionHandler(ctx, endpoint)
+	source := codextui.SessionTarget{ThreadID: "thread-source"}
+	forked, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionFork, Target: source})
+	if err != nil || forked == nil || forked.ThreadID != "thread-forked" {
+		t.Fatalf("forked = %#v err=%v", forked, err)
+	}
+	if _, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionArchive, Target: source}); err != nil {
+		t.Fatalf("archive action error = %v", err)
+	}
+	unarchived, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionUnarchive, Target: source})
+	if err != nil || unarchived == nil || unarchived.ThreadID != "thread-source" {
+		t.Fatalf("unarchived = %#v err=%v", unarchived, err)
+	}
+	if _, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionDelete, Target: source}); err != nil {
+		t.Fatalf("delete action error = %v", err)
+	}
+
+	seen := map[string]int{}
+	for {
+		select {
+		case request := <-requests:
+			seen[request.Method]++
+		default:
+			for _, method := range []appserver.Method{appserver.MethodThreadFork, appserver.MethodThreadArchive, appserver.MethodThreadUnarchive, appserver.MethodThreadDelete} {
+				if seen[string(method)] != 1 {
+					t.Fatalf("seen[%s] = %d, all seen = %#v", method, seen[string(method)], seen)
+				}
+			}
+			select {
+			case err := <-serverErrs:
+				t.Fatalf("server error: %v", err)
+			default:
+			}
+			return
+		}
+	}
+}
+
+func TestInteractiveRemoteUsageCallbacksCallAccountRPC(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 12)
+	serverErrs := make(chan error, 1)
+	lifetime := int64(123456)
+	peak := int64(4500)
+	longestTurn := int64(7200)
+	currentStreak := int64(3)
+	longestStreak := int64(9)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodGetAccountTokenUsage):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{
+						"summary": map[string]any{
+							"lifetimeTokens":        lifetime,
+							"peakDailyTokens":       peak,
+							"longestRunningTurnSec": longestTurn,
+							"currentStreakDays":     currentStreak,
+							"longestStreakDays":     longestStreak,
+						},
+						"dailyUsageBuckets": []map[string]any{
+							{"startDate": "2026-06-29", "tokens": 10},
+						},
+					},
+				})
+				return
+			case string(appserver.MethodGetAccountRateLimits):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{
+						"rateLimits":            map[string]any{},
+						"rateLimitsByLimitId":   map[string]any{},
+						"rateLimitResetCredits": map[string]any{"availableCount": 2},
+					},
+				})
+				return
+			case string(appserver.MethodConsumeAccountRateLimitResetCredit):
+				var params auth.ConsumeRateLimitResetCreditParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.IdempotencyKey != "reset-key" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("idempotency key = %q", params.IdempotencyKey))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"outcome": string(auth.ResetCreditOutcomeAlreadyRedeemed)},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	activity, err := interactiveRemoteReadTokenActivity(ctx, endpoint, chatwidget.TokenActivityWeekly)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadTokenActivity: %v", err)
+	}
+	if activity.Summary.LifetimeTokens == nil || *activity.Summary.LifetimeTokens != lifetime ||
+		activity.Summary.PeakDailyTokens == nil || *activity.Summary.PeakDailyTokens != peak ||
+		activity.Summary.LongestRunningTurnSec == nil || *activity.Summary.LongestRunningTurnSec != longestTurn ||
+		activity.Summary.CurrentStreakDays == nil || *activity.Summary.CurrentStreakDays != currentStreak ||
+		activity.Summary.LongestStreakDays == nil || *activity.Summary.LongestStreakDays != longestStreak {
+		t.Fatalf("activity summary = %#v", activity.Summary)
+	}
+	if activity.DailyUsageBuckets == nil || len(*activity.DailyUsageBuckets) != 1 || (*activity.DailyUsageBuckets)[0].Tokens != 10 {
+		t.Fatalf("activity buckets = %#v", activity.DailyUsageBuckets)
+	}
+	credits, err := interactiveRemoteReadRateLimitResetCredits(ctx, endpoint)
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadRateLimitResetCredits: %v", err)
+	}
+	if credits != 2 {
+		t.Fatalf("credits = %d", credits)
+	}
+	outcome, err := interactiveRemoteConsumeRateLimitResetCredit(ctx, endpoint, "reset-key")
+	if err != nil {
+		t.Fatalf("interactiveRemoteConsumeRateLimitResetCredit: %v", err)
+	}
+	if outcome != chatwidget.RateLimitResetOutcomeAlreadyRedeemed {
+		t.Fatalf("outcome = %q", outcome)
+	}
+	seen := map[string]int{}
+	for {
+		select {
+		case request := <-requests:
+			seen[request.Method]++
+		default:
+			for _, method := range []appserver.Method{appserver.MethodGetAccountTokenUsage, appserver.MethodGetAccountRateLimits, appserver.MethodConsumeAccountRateLimitResetCredit} {
+				if seen[string(method)] != 1 {
+					t.Fatalf("seen[%s] = %d, all seen = %#v", method, seen[string(method)], seen)
+				}
+			}
+			if seen[string(appserver.MethodInitialize)] != 3 {
+				t.Fatalf("initialize count = %d, all seen = %#v", seen[string(appserver.MethodInitialize)], seen)
+			}
+			select {
+			case err := <-serverErrs:
+				t.Fatalf("server error: %v", err)
+			default:
+			}
+			return
+		}
+	}
+}
+
+func TestInteractiveRemoteGoalCallbacksCallAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 12)
+	serverErrs := make(chan error, 1)
+	budget := int64(75000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadGoalGet):
+				var params appserver.GoalGetParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-goal" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal get threadID = %q", params.ThreadID))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{"goal": map[string]any{
+						"threadId":        "thread-goal",
+						"objective":       "ship parity",
+						"tokenBudget":     budget,
+						"tokensUsed":      1200,
+						"timeUsedSeconds": 60,
+						"status":          string(appserver.GoalActive),
+						"createdAt":       1,
+						"updatedAt":       2,
+					}},
+				})
+				return
+			case string(appserver.MethodThreadGoalSet):
+				var params appserver.GoalSetParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-goal" || params.Objective == nil || *params.Objective != "finish goal" || params.TokenBudget == nil || *params.TokenBudget != budget || params.Status == nil || *params.Status != appserver.GoalActive {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal set params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{"goal": map[string]any{
+						"threadId":        "thread-goal",
+						"objective":       *params.Objective,
+						"tokenBudget":     *params.TokenBudget,
+						"tokensUsed":      0,
+						"timeUsedSeconds": 0,
+						"status":          string(*params.Status),
+						"createdAt":       3,
+						"updatedAt":       4,
+					}},
+				})
+				return
+			case string(appserver.MethodThreadGoalClear):
+				var params appserver.GoalClearParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-goal" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal clear threadID = %q", params.ThreadID))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"cleared": true}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	goal, err := interactiveRemoteReadGoal(ctx, endpoint, "thread-goal")
+	if err != nil {
+		t.Fatalf("interactiveRemoteReadGoal: %v", err)
+	}
+	if goal == nil || goal.Objective != "ship parity" || goal.TokenBudget == nil || *goal.TokenBudget != budget {
+		t.Fatalf("read goal = %#v", goal)
+	}
+	objective := " finish goal "
+	status := appserver.GoalActive
+	setGoal, err := interactiveRemoteSetGoal(ctx, endpoint, " thread-goal ", &objective, &budget, &status)
+	if err != nil {
+		t.Fatalf("interactiveRemoteSetGoal: %v", err)
+	}
+	if setGoal.Objective != "finish goal" || setGoal.Status != appserver.GoalActive {
+		t.Fatalf("set goal = %#v", setGoal)
+	}
+	cleared, err := interactiveRemoteClearGoal(ctx, endpoint, "thread-goal")
+	if err != nil {
+		t.Fatalf("interactiveRemoteClearGoal: %v", err)
+	}
+	if !cleared {
+		t.Fatal("cleared = false, want true")
+	}
+	seen := map[string]int{}
+	for {
+		select {
+		case request := <-requests:
+			seen[request.Method]++
+		default:
+			for _, method := range []appserver.Method{appserver.MethodThreadGoalGet, appserver.MethodThreadGoalSet, appserver.MethodThreadGoalClear} {
+				if seen[string(method)] != 1 {
+					t.Fatalf("seen[%s] = %d, all seen = %#v", method, seen[string(method)], seen)
+				}
+			}
+			if seen[string(appserver.MethodInitialize)] != 3 {
+				t.Fatalf("initialize count = %d, all seen = %#v", seen[string(appserver.MethodInitialize)], seen)
+			}
+			select {
+			case err := <-serverErrs:
+				t.Fatalf("server error: %v", err)
+			default:
+			}
+			return
+		}
+	}
+}
+
+func TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 8)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadRead):
+				var params appserver.ThreadReadParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				switch params.ThreadID {
+				case "thread-main":
+					remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteAgentTestThread("thread-main", "", "", "", "idle", nil, nil)}})
+				case "thread-worker":
+					parent := "thread-main"
+					remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteAgentTestThread("thread-worker", "Scout", "review", "subagent", "active", &parent, nil)}})
+				default:
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected thread/read id %q", params.ThreadID))
+					return
+				}
+			case string(appserver.MethodThreadLoadedList):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []string{"thread-main", "thread-worker"}, "nextCursor": nil}})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	entries, err := interactiveRemoteAgentThreadEntries(ctx, endpoint, "thread-main")
+	if err != nil {
+		t.Fatalf("agent entries error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if !entries[0].IsPrimary || entries[0].ThreadID != "thread-main" {
+		t.Fatalf("main entry = %#v", entries[0])
+	}
+	if entries[1].ThreadID != "thread-worker" || entries[1].AgentNickname != "Scout" || entries[1].AgentRole != "review" || !entries[1].IsRunning {
+		t.Fatalf("worker entry = %#v", entries[1])
+	}
+	for _, method := range []appserver.Method{appserver.MethodInitialize, appserver.MethodThreadRead, appserver.MethodThreadLoadedList, appserver.MethodThreadRead} {
+		if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(method) {
+			t.Fatalf("method = %s, want %s", got.Method, method)
+		}
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	parent := "thread-main"
+	turns := []any{map[string]any{
+		"id":     "turn-worker",
+		"status": "completed",
+		"items": []any{
+			map[string]any{"id": "user-1", "type": "userMessage", "text": "worker prompt"},
+			map[string]any{"id": "agent-1", "type": "agentMessage", "text": "worker answer"},
+		},
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadRead):
+				var params appserver.ThreadReadParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-worker" || !params.IncludeTurns {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/read params = %#v", params))
+					return
+				}
+				thread := remoteAgentTestThread("thread-worker", "Scout", "review", "subagent", "active", &parent, turns)
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, "thread-worker")
+	if err != nil {
+		t.Fatalf("switch agent error = %v", err)
+	}
+	if response.Entry.ThreadID != "thread-worker" || response.Entry.AgentNickname != "Scout" || response.Entry.AgentRole != "review" || response.Entry.IsPrimary {
+		t.Fatalf("entry = %#v", response.Entry)
+	}
+	if response.Status != "running" {
+		t.Fatalf("status = %q, want running", response.Status)
+	}
+	if len(response.Messages) != 2 || response.Messages[0].Role != codextui.RoleUser || response.Messages[0].Text != "worker prompt" || response.Messages[1].Role != codextui.RoleAssistant || response.Messages[1].Text != "worker answer" {
+		t.Fatalf("messages = %#v", response.Messages)
+	}
+	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("initialize method = %s", initialize.Method)
+	}
+	if read := remoteTUITestReadCapturedRequest(t, requests); read.Method != string(appserver.MethodThreadRead) {
+		t.Fatalf("read method = %s", read.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestRemoteAppServerTUIClientMapsGoalNotifications(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 2)
+	state := codextui.NewState(nil)
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	updatedParams, err := json.Marshal(appserver.GoalUpdatedNotification{
+		ThreadID: "thread-goal",
+		Goal: appserver.Goal{
+			ThreadID:  "thread-goal",
+			Objective: "ship runtime",
+			Status:    appserver.GoalActive,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal goal updated: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationThreadGoalUpdated),
+		Params: updatedParams,
+	}); err != nil {
+		t.Fatalf("handle goal updated: %v", err)
+	}
+	clearedParams, err := json.Marshal(appserver.GoalClearedNotification{ThreadID: "thread-goal"})
+	if err != nil {
+		t.Fatalf("marshal goal cleared: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationThreadGoalCleared),
+		Params: clearedParams,
+	}); err != nil {
+		t.Fatalf("handle goal cleared: %v", err)
+	}
+
+	updated, ok := (<-messages).(codextea.GoalUpdatedMsg)
+	if !ok || updated.Goal.ThreadID != "thread-goal" || updated.Goal.Objective != "ship runtime" {
+		t.Fatalf("goal updated message = %#v ok=%v", updated, ok)
+	}
+	cleared, ok := (<-messages).(codextea.GoalClearedMsg)
+	if !ok || cleared.ThreadID != "thread-goal" {
+		t.Fatalf("goal cleared message = %#v ok=%v", cleared, ok)
+	}
+	if state.ThreadID != "thread-goal" {
+		t.Fatalf("state threadID = %q, want thread-goal", state.ThreadID)
+	}
+}
+
+func TestRemoteAppServerTUIClientMapsWindowsSandboxSetupCompleted(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 1)
+	client := &remoteAppServerTUIClient{messages: messages}
+	params, err := json.Marshal(sandbox.WindowsSetupCompletedNotification{
+		Mode:    sandbox.WindowsSetupElevated,
+		Success: true,
+	})
+	if err != nil {
+		t.Fatalf("marshal setup completion: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationWindowsSandboxSetupCompleted),
+		Params: params,
+	}); err != nil {
+		t.Fatalf("handle setup completion: %v", err)
+	}
+
+	msg, ok := (<-messages).(codextea.WindowsSandboxSetupCompletedMsg)
+	if !ok || !msg.Completion.Success || msg.Completion.Mode != chatwidget.WindowsSandboxModeElevated {
+		t.Fatalf("setup completion message = %#v ok=%v", msg, ok)
+	}
+}
+
 type remoteTUITestRequest struct {
 	ID     any             `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+}
+
+func remoteAgentTestThread(id string, nickname string, role string, source string, status string, parentID *string, turns []any) map[string]any {
+	thread := remoteSessionTestThread(id, id, false, 0)
+	thread["status"] = map[string]any{"type": status}
+	if strings.TrimSpace(source) != "" {
+		thread["threadSource"] = source
+	}
+	if strings.TrimSpace(nickname) != "" {
+		thread["agentNickname"] = nickname
+	}
+	if strings.TrimSpace(role) != "" {
+		thread["agentRole"] = role
+	}
+	if parentID != nil {
+		thread["parentThreadId"] = *parentID
+	}
+	if turns != nil {
+		thread["turns"] = turns
+	}
+	return thread
+}
+
+type remoteTUITestResponse struct {
+	ID     any                      `json:"id"`
+	Result json.RawMessage          `json:"result"`
+	Error  *appserver.ResponseError `json:"error"`
 }
 
 func remoteTUITestReadRequest(ctx context.Context, conn *websocket.Conn) (remoteTUITestRequest, error) {
@@ -1478,6 +3900,74 @@ func remoteTUITestReadRequest(ctx context.Context, conn *websocket.Conn) (remote
 		return req, err
 	}
 	return req, nil
+}
+
+func remoteTUITestReadResponse(ctx context.Context, conn *websocket.Conn) (remoteTUITestResponse, error) {
+	var response remoteTUITestResponse
+	typ, data, err := conn.Read(ctx)
+	if err != nil {
+		return response, err
+	}
+	if typ != websocket.MessageText {
+		return response, fmt.Errorf("message type = %v", typ)
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return response, err
+	}
+	return response, nil
+}
+
+func remoteTUITestServeJSONLineAppServer(ctx context.Context, conn net.Conn, requests chan<- remoteTUITestRequest, errs chan<- error) {
+	defer conn.Close()
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+	for {
+		var req remoteTUITestRequest
+		if err := decoder.Decode(&req); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(ctx.Err(), context.Canceled) {
+				return
+			}
+			remoteTUITestSendErr(errs, err)
+			return
+		}
+		requests <- req
+		switch req.Method {
+		case string(appserver.MethodInitialize):
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
+		case string(appserver.MethodThreadStart):
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"thread": map[string]any{"id": "thread-unix"}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
+		case string(appserver.MethodTurnStart):
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"turn": map[string]any{"id": "turn-unix", "items": []any{}, "status": "inProgress"}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  string(appserver.NotificationTurnCompleted),
+				"params":  map[string]any{"threadId": "thread-unix", "turn": map[string]any{"id": "turn-unix", "items": []any{}, "status": "completed"}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
+		default:
+			remoteTUITestSendErr(errs, fmt.Errorf("unexpected method %s", req.Method))
+			return
+		}
+	}
 }
 
 func remoteTUITestWrite(ctx context.Context, conn *websocket.Conn, value any) {
@@ -1505,6 +3995,71 @@ func remoteTUITestReadCapturedRequest(t *testing.T, requests <-chan remoteTUITes
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for remote TUI request")
 		return remoteTUITestRequest{}
+	}
+}
+
+func remoteTUITestReadCapturedResponse(t *testing.T, responses <-chan remoteTUITestResponse) remoteTUITestResponse {
+	t.Helper()
+	select {
+	case response := <-responses:
+		return response
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for remote TUI response")
+		return remoteTUITestResponse{}
+	}
+}
+
+func waitForRemoteTUIInterruptActive(t *testing.T, controller *remoteTUIInterruptController, threadID string, turnID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		controller.mu.Lock()
+		gotThreadID := controller.threadID
+		gotTurnID := controller.turnID
+		controller.mu.Unlock()
+		if gotThreadID == threadID && gotTurnID == turnID {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	t.Fatalf("active interrupt target = %q/%q, want %q/%q", controller.threadID, controller.turnID, threadID, turnID)
+}
+
+func remoteTUITestReadApprovalMessage(t *testing.T, messages <-chan bubbletea.Msg) codextea.ApprovalRequestMsg {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case message, ok := <-messages:
+			if !ok {
+				t.Fatal("remote TUI messages closed before approval request")
+			}
+			if approval, ok := message.(codextea.ApprovalRequestMsg); ok {
+				return approval
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for remote approval message")
+		}
+	}
+}
+
+func remoteTUITestReadUserInputMessage(t *testing.T, messages <-chan bubbletea.Msg) codextea.RequestUserInputMsg {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case message, ok := <-messages:
+			if !ok {
+				t.Fatal("remote TUI messages closed before user input request")
+			}
+			if request, ok := message.(codextea.RequestUserInputMsg); ok {
+				return request
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for remote user input message")
+		}
 	}
 }
 
@@ -1544,6 +4099,7 @@ func TestReadRemoteAuthTokenFromEnvVar(t *testing.T) {
 }
 
 func TestExecPromptFromStdinEndToEnd(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	var stdout, stderr bytes.Buffer
@@ -1556,6 +4112,7 @@ func TestExecPromptFromStdinEndToEnd(t *testing.T) {
 }
 
 func TestReviewEndToEnd(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	dir := initGitRepo(t)
@@ -1573,6 +4130,7 @@ func TestReviewEndToEnd(t *testing.T) {
 }
 
 func TestExecReviewEndToEnd(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	dir := initGitRepo(t)
@@ -1587,6 +4145,7 @@ func TestExecReviewEndToEnd(t *testing.T) {
 }
 
 func TestReviewCustomPromptEndToEnd(t *testing.T) {
+	useLocalExecRunner(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	var stdout, stderr bytes.Buffer

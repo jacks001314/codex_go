@@ -778,9 +778,11 @@ func (p *PluginListParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		CWDs             []string `json:"cwds,omitempty"`
 		MarketplaceKinds []string `json:"marketplaceKinds,omitempty"`
+		IncludeInstalled bool     `json:"includeInstalled,omitempty"`
 	}{
 		CWDs:             optionalStringSliceForJSON(p.CWDs),
 		MarketplaceKinds: optionalStringSliceForJSON(p.MarketplaceKinds),
+		IncludeInstalled: p.IncludeInstalled,
 	})
 }
 

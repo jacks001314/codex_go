@@ -100,6 +100,31 @@ func TestFeatureWireShapeMatchesRust(t *testing.T) {
 	}
 }
 
+func TestDefaultFeatureCatalogUsesRustExperimentalMenuMetadata(t *testing.T) {
+	catalog := DefaultFeatureCatalog()
+	var memories FeatureEntry
+	found := false
+	for _, entry := range catalog {
+		if entry.Key == "memories" {
+			memories = entry
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("memories feature missing from catalog: %#v", catalog)
+	}
+	if memories.DisplayName == nil || *memories.DisplayName != "Memories" {
+		t.Fatalf("memories display name = %#v", memories.DisplayName)
+	}
+	if memories.Description == nil || *memories.Description != "Allow Codex to create new memories from conversations and bring relevant memories into new conversations." {
+		t.Fatalf("memories description = %#v", memories.Description)
+	}
+	if memories.Announcement == nil || *memories.Announcement != "NEW: Codex can now generate and use memories. Try it now with `/memories`" {
+		t.Fatalf("memories announcement = %#v", memories.Announcement)
+	}
+}
+
 func marshalObjectForTest(t *testing.T, value any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(value)

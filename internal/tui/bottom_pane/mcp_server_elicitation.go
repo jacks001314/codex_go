@@ -37,9 +37,9 @@ const (
 )
 
 const (
-	ApprovalAcceptOnceValue    = "approve_once"
-	ApprovalAcceptSessionValue = "approve_session"
-	ApprovalAcceptAlwaysValue  = "approve_always"
+	ApprovalAcceptOnceValue    = "accept"
+	ApprovalAcceptSessionValue = "accept_session"
+	ApprovalAcceptAlwaysValue  = "accept_always"
 	ApprovalDeclineValue       = "decline"
 	ApprovalCancelValue        = "cancel"
 )
@@ -323,15 +323,21 @@ func fieldFromProperty(name string, property map[string]any) ElicitationField {
 func optionsFromProperty(property map[string]any) []ElicitationOption {
 	if values, ok := property["enum"].([]any); ok {
 		options := make([]ElicitationOption, 0, len(values))
-		for _, value := range values {
-			text := strings.TrimSpace(fmt.Sprint(value))
-			if text != "" {
-				options = append(options, ElicitationOption{Value: text, Label: text})
+		enumNames := stringSliceFromAnyPreserve(property["enumNames"])
+		for idx, value := range values {
+			text := fmt.Sprint(value)
+			label := text
+			if idx < len(enumNames) {
+				label = enumNames[idx]
 			}
+			options = append(options, ElicitationOption{Value: text, Label: label})
 		}
 		return options
 	}
 	if values, ok := property["anyOf"].([]any); ok {
+		return optionsFromAnyOf(values)
+	}
+	if values, ok := property["oneOf"].([]any); ok {
 		return optionsFromAnyOf(values)
 	}
 	if items, ok := property["items"].(map[string]any); ok {
@@ -344,11 +350,8 @@ func optionsFromAnyOf(values []any) []ElicitationOption {
 	options := make([]ElicitationOption, 0, len(values))
 	for _, value := range values {
 		entry, _ := value.(map[string]any)
-		constValue := strings.TrimSpace(stringFromMap(entry, "const"))
-		if constValue == "" {
-			continue
-		}
-		label := stringFromMap(entry, "title")
+		constValue := stringValueFromMap(entry, "const")
+		label := stringValueFromMap(entry, "title")
 		if label == "" {
 			label = constValue
 		}
@@ -484,6 +487,32 @@ func stringSliceFromAny(value any) []string {
 	default:
 		return nil
 	}
+}
+
+func stringSliceFromAnyPreserve(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, value := range typed {
+			out = append(out, fmt.Sprint(value))
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringValueFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
 }
 
 func cloneMeta(meta map[string]any) map[string]any {

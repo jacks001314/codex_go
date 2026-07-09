@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
+	"codex_go/internal/appserver"
 	"codex_go/internal/config"
 	"codex_go/internal/session"
 )
@@ -244,13 +251,60 @@ func TestSessionRemoteFlagsValidateBeforeLocalStore(t *testing.T) {
 		Metadata:  session.Metadata{Source: "cli"},
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadArchive):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
 	var stdout bytes.Buffer
-	err := Run(context.Background(), []string{"--remote", "unix://", "archive", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "session remote app-server mode is not implemented") {
+	err := Run(ctx, []string{"--remote", "ws" + strings.TrimPrefix(server.URL, "http"), "archive", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err != nil {
 		t.Fatalf("remote archive error = %v", err)
 	}
-	if stdout.String() != "" {
+	if !strings.Contains(stdout.String(), "Archived session "+string(threadID)+".") {
 		t.Fatalf("remote archive stdout = %q", stdout.String())
+	}
+	initialize := remoteTUITestReadCapturedRequest(t, requests)
+	archive := remoteTUITestReadCapturedRequest(t, requests)
+	if initialize.Method != string(appserver.MethodInitialize) || archive.Method != string(appserver.MethodThreadArchive) {
+		t.Fatalf("remote methods = %q, %q", initialize.Method, archive.Method)
+	}
+	var archiveParams appserver.ThreadArchiveParams
+	if err := json.Unmarshal(archive.Params, &archiveParams); err != nil {
+		t.Fatalf("unmarshal archive params: %v", err)
+	}
+	if archiveParams.ThreadID != string(threadID) {
+		t.Fatalf("archive thread id = %q", archiveParams.ThreadID)
 	}
 	record, err := store.Read(threadID, true, false)
 	if err != nil {
@@ -259,15 +313,165 @@ func TestSessionRemoteFlagsValidateBeforeLocalStore(t *testing.T) {
 	if record.Archived {
 		t.Fatal("remote archive unexpectedly mutated the local store")
 	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
 
 	err = Run(context.Background(), []string{"--remote-auth-token-env", "CODEX_REMOTE_AUTH_TOKEN", "resume", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{})
 	if err == nil || err.Error() != "`--remote-auth-token-env` requires `--remote`." {
 		t.Fatalf("remote auth without remote error = %v", err)
 	}
+}
 
-	err = Run(context.Background(), []string{"--remote", "https://not-a-tui-remote", "resume", "--remote", "unix://", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "session remote app-server mode is not implemented") {
-		t.Fatalf("session remote override error = %v", err)
+func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 32)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadList):
+				var params appserver.ThreadListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				archived := params.Archived != nil && *params.Archived
+				name := ""
+				if params.SearchTerm != nil {
+					name = *params.SearchTerm
+				}
+				var data []any
+				switch {
+				case !archived && name == "Remote Active":
+					data = []any{remoteSessionTestThread("thread-active", "Remote Active", false, 2)}
+				case archived && name == "Remote Archived":
+					data = []any{remoteSessionTestThread("thread-archived", "Remote Archived", true, 0)}
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil}})
+			case string(appserver.MethodThreadArchive):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				return
+			case string(appserver.MethodThreadUnarchive):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-archived", "Remote Archived", false, 0)}})
+				return
+			case string(appserver.MethodThreadFork):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-forked", "Remote Forked", false, 2)}})
+				return
+			case string(appserver.MethodThreadRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-active", "Remote Active", false, 2)}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	remoteArg := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	var stdout bytes.Buffer
+	if err := Run(ctx, []string{"--remote", remoteArg, "archive", "Remote Active"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("remote archive by name returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Archived session Remote Active (thread-active).") {
+		t.Fatalf("remote archive stdout = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(ctx, []string{"--remote", remoteArg, "unarchive", "Remote Archived"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("remote unarchive by name returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Unarchived session Remote Archived (thread-archived).") {
+		t.Fatalf("remote unarchive stdout = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(ctx, []string{"--remote", remoteArg, "fork", "Remote Active"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("remote fork by name returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "forked"`) || !strings.Contains(stdout.String(), `"id": "thread-forked"`) || !strings.Contains(stdout.String(), `"itemCount": 2`) {
+		t.Fatalf("remote fork stdout = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(ctx, []string{"--remote", remoteArg, "resume", "Remote Active"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("remote resume by name returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "resumed"`) || !strings.Contains(stdout.String(), `"id": "thread-active"`) || !strings.Contains(stdout.String(), `"itemCount": 2`) {
+		t.Fatalf("remote resume stdout = %q", stdout.String())
+	}
+
+	var sawArchive, sawUnarchive, sawFork, sawRead bool
+	for {
+		select {
+		case request := <-requests:
+			switch request.Method {
+			case string(appserver.MethodThreadArchive):
+				sawArchive = true
+			case string(appserver.MethodThreadUnarchive):
+				sawUnarchive = true
+			case string(appserver.MethodThreadFork):
+				sawFork = true
+			case string(appserver.MethodThreadRead):
+				sawRead = true
+			}
+		default:
+			if !sawArchive || !sawUnarchive || !sawFork || !sawRead {
+				t.Fatalf("remote methods archive=%v unarchive=%v fork=%v read=%v", sawArchive, sawUnarchive, sawFork, sawRead)
+			}
+			select {
+			case err := <-serverErrs:
+				t.Fatalf("server error: %v", err)
+			default:
+			}
+			return
+		}
+	}
+}
+
+func remoteSessionTestThread(id string, name string, archived bool, turns int) map[string]any {
+	now := fixedAppSessionTime().Unix()
+	items := make([]any, 0, turns)
+	for i := 0; i < turns; i++ {
+		items = append(items, map[string]any{"id": fmt.Sprintf("turn-%d", i+1), "status": "completed", "items": []any{}})
+	}
+	return map[string]any{
+		"id":            id,
+		"sessionId":     id,
+		"name":          name,
+		"preview":       strings.ToLower(name),
+		"createdAt":     now,
+		"updatedAt":     now,
+		"recencyAt":     now,
+		"status":        map[string]any{"type": "idle"},
+		"source":        "cli",
+		"threadSource":  "user",
+		"modelProvider": "openai",
+		"turns":         items,
+		"archived":      archived,
 	}
 }
 

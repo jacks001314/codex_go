@@ -128,3 +128,33 @@ func TestTurnTerminalEventJSONShape(t *testing.T) {
 		t.Fatalf("failed json = %s, want %s", data, wantFailed)
 	}
 }
+
+func TestRateLimitSnapshotEventJSONShape(t *testing.T) {
+	minutes := int64(5 * 60)
+	reset := int64(1710000000)
+	balance := "0"
+	event := RateLimitSnapshotEvent(RateLimitSnapshot{
+		LimitID:   "codex",
+		LimitName: "Codex",
+		Primary: &RateLimitWindow{
+			UsedPercent:        90,
+			WindowDurationMins: &minutes,
+			ResetsAt:           &reset,
+		},
+		Credits: &CreditsSnapshot{
+			HasCredits: true,
+			Unlimited:  false,
+			Balance:    &balance,
+		},
+		PlanType:             "plus",
+		RateLimitReachedType: "primary",
+	})
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	want := `{"type":"response.rate_limits","rateLimit":{"limitId":"codex","limitName":"Codex","primary":{"usedPercent":90,"windowDurationMins":300,"resetsAt":1710000000},"credits":{"hasCredits":true,"unlimited":false,"balance":"0"},"planType":"plus","rateLimitReachedType":"primary"}}`
+	if string(data) != want {
+		t.Fatalf("json = %s, want %s", data, want)
+	}
+}

@@ -61,7 +61,7 @@ func (r *codexMCPRunner) runExecRequest(ctx context.Context, request *codexexec.
 	r.applyRootToRequest(request)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	result, err := codexexec.NewRunner(r.codexHome).RunContext(ctx, request, strings.NewReader(""), &stdout, &stderr)
+	result, err := newCodexExecRunner(r.codexHome).RunContext(ctx, request, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		message := strings.TrimSpace(err.Error())
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {

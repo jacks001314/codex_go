@@ -60,9 +60,7 @@ func (s *RemoteControlTransportServer) Serve(ctx context.Context) error {
 	}
 	s.ensure()
 	s.setLastRemoteControlStatus(s.Router.requireRemote().StatusChanged())
-	s.Router.SetNotificationSink(NotificationSinkFunc(func(notification *Notification) {
-		s.broadcastNotification(ctx, notification)
-	}))
+	s.Router.SetNotificationSink(remoteControlNotificationSink{server: s, ctx: ctx})
 	s.Router.SetServerRequestSink(remoteControlServerRequestSink{server: s})
 	defer s.Router.SetNotificationSink(nil)
 	defer s.Router.SetServerRequestSink(nil)
@@ -177,6 +175,22 @@ func (s *RemoteControlTransportServer) broadcastNotification(ctx context.Context
 			continue
 		}
 		s.sendValueToConnection(ctx, conn, notification)
+	}
+}
+
+func (s *RemoteControlTransportServer) sendNotificationToConnection(ctx context.Context, connectionID string, notification *Notification) {
+	if notification == nil {
+		return
+	}
+	for _, conn := range s.connectionSnapshot(false) {
+		if conn.connectionID != normalizeConnectionID(connectionID) {
+			continue
+		}
+		if s.connectionOptedOut(conn.connectionID, notification.Method) {
+			return
+		}
+		s.sendValueToConnection(ctx, conn, notification)
+		return
 	}
 }
 
@@ -360,6 +374,23 @@ func (s remoteControlServerRequestSink) SendServerRequest(request *ServerRequest
 func (s remoteControlServerRequestSink) SendServerRequestToConnection(connectionID string, request *ServerRequest) {
 	if s.server != nil {
 		s.server.sendServerRequestToConnection(context.Background(), connectionID, request)
+	}
+}
+
+type remoteControlNotificationSink struct {
+	server *RemoteControlTransportServer
+	ctx    context.Context
+}
+
+func (s remoteControlNotificationSink) Notify(notification *Notification) {
+	if s.server != nil {
+		s.server.broadcastNotification(s.ctx, notification)
+	}
+}
+
+func (s remoteControlNotificationSink) NotifyToConnection(connectionID string, notification *Notification) {
+	if s.server != nil {
+		s.server.sendNotificationToConnection(s.ctx, connectionID, notification)
 	}
 }
 

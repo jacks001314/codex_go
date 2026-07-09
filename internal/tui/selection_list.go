@@ -61,15 +61,12 @@ func (l *SelectionList) RenderRows(width int) []string {
 	}
 	rows := make([]string, 0, len(l.Items))
 	for i, item := range l.Items {
-		prefix := "  "
-		if i == l.Selected {
-			prefix = "> "
-		}
+		selected := i == l.Selected
 		label := strings.TrimSpace(item.Label)
 		if label == "" {
 			label = item.ID
 		}
-		row := prefix + intLabel(i+1) + ". " + label
+		row := NumberedSelectionPrefix(i, selected) + label
 		if item.Description != "" {
 			row += " - " + item.Description
 		}
@@ -78,6 +75,9 @@ func (l *SelectionList) RenderRows(width int) []string {
 		}
 		if width > 0 {
 			row = TruncateWithEllipsis(row, width)
+		}
+		if selected {
+			row = RenderSelectedRow(row)
 		}
 		rows = append(rows, row)
 	}

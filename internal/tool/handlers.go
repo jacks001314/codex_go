@@ -146,6 +146,8 @@ type UserInputQuestion struct {
 	Header   string            `json:"header"`
 	ID       string            `json:"id"`
 	Question string            `json:"question"`
+	IsOther  bool              `json:"isOther,omitempty"`
+	IsSecret bool              `json:"isSecret,omitempty"`
 	Options  []UserInputChoice `json:"options,omitempty"`
 }
 

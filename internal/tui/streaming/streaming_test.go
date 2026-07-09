@@ -117,6 +117,133 @@ func TestStreamControllerTableHoldback(t *testing.T) {
 	}
 }
 
+func TestStreamControllerSetWidthRebuildsQueuedLines(t *testing.T) {
+	controller := NewStreamController(120)
+	if !controller.Push("This is a long line that should wrap into multiple rows when resized.\n") {
+		t.Fatal("expected initial long line to enqueue")
+	}
+	if controller.QueuedLines() != 1 {
+		t.Fatalf("queued before resize = %d, want 1", controller.QueuedLines())
+	}
+
+	controller.SetWidth(24)
+	cell, idle := controller.OnCommitTickBatch(64)
+	if cell == nil {
+		t.Fatal("expected resized queued cell")
+	}
+	lines := cell.RawLines()
+	if len(lines) <= 1 {
+		t.Fatalf("resized lines = %#v, want wrapped rows", lines)
+	}
+	if !strings.Contains(strings.Join(lines, " "), "resized") {
+		t.Fatalf("resized lines lost content: %#v", lines)
+	}
+	if !idle {
+		t.Fatal("expected queue to drain after batch")
+	}
+}
+
+func TestStreamControllerSetWidthPartialDrainKeepsPendingQueue(t *testing.T) {
+	controller := NewStreamController(40)
+	controller.Push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n")
+	controller.Push("second line\n")
+
+	cell, idle := controller.OnCommitTick()
+	if cell == nil {
+		t.Fatal("expected first emitted line")
+	}
+	if idle {
+		t.Fatal("queue should still have pending lines")
+	}
+	if controller.QueuedLines() == 0 {
+		t.Fatal("expected pending queued lines before resize")
+	}
+
+	controller.SetWidth(20)
+	if controller.QueuedLines() == 0 {
+		t.Fatal("resize must preserve pending queued lines")
+	}
+
+	drained := []string{}
+	for i := 0; i < 64; i++ {
+		cell, isIdle := controller.OnCommitTick()
+		if cell != nil {
+			drained = append(drained, cell.RawLines()...)
+		}
+		if isIdle {
+			break
+		}
+	}
+	if !strings.Contains(strings.Join(drained, " "), "second line") {
+		t.Fatalf("pending lines should continue draining after resize: %#v", drained)
+	}
+}
+
+func TestStreamControllerSetWidthAfterFirstLineEmitDoesNotRequeueFirstLine(t *testing.T) {
+	controller := NewStreamController(120)
+	controller.Push("FIRSTTOKEN contains enough words to wrap once the width is reduced dramatically.\n")
+	controller.Push("second line remains pending\n")
+
+	cell, _ := controller.OnCommitTick()
+	if cell == nil {
+		t.Fatal("expected first line emission")
+	}
+
+	controller.SetWidth(20)
+	final, _ := controller.Finalize()
+	remaining := []string{}
+	if final != nil {
+		remaining = final.RawLines()
+	}
+	if strings.Contains(strings.Join(remaining, " "), "FIRSTTOKEN") {
+		t.Fatalf("first line should not be re-queued after resize: %#v", remaining)
+	}
+	if !strings.Contains(strings.Join(remaining, " "), "second line") {
+		t.Fatalf("expected pending second line after resize: %#v", remaining)
+	}
+}
+
+func TestStreamControllerSetWidthPartialWrappedEmitPreservesRemainder(t *testing.T) {
+	controller := NewStreamController(18)
+	controller.Push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n")
+
+	cell, idle := controller.OnCommitTick()
+	if cell == nil {
+		t.Fatal("expected first wrapped line emission")
+	}
+	if idle {
+		t.Fatal("expected queued wrapped remainder after one tick")
+	}
+	if controller.QueuedLines() == 0 {
+		t.Fatal("expected queued wrapped remainder before resize")
+	}
+
+	controller.SetWidth(80)
+	final, _ := controller.Finalize()
+	remaining := []string{}
+	if final != nil {
+		remaining = final.RawLines()
+	}
+	joined := strings.Join(remaining, " ")
+	if !strings.Contains(joined, "kappa") && !strings.Contains(joined, "lambda") && !strings.Contains(joined, "mu") {
+		t.Fatalf("wrapped remainder was lost after resize: %#v", remaining)
+	}
+}
+
+func TestStreamControllerSetWidthPreservesInFlightTail(t *testing.T) {
+	controller := NewStreamController(80)
+	controller.Push("tail without newline")
+	controller.SetWidth(24)
+
+	final, source := controller.Finalize()
+	if source != "tail without newline" {
+		t.Fatalf("source = %q, want tail without newline", source)
+	}
+	if final == nil || strings.Join(final.RawLines(), "|") != "tail without newline" {
+		t.Fatalf("final cell = %#v", final)
+	}
+}
+
 func TestRunCommitTickCatchUpDrainsBatch(t *testing.T) {
 	controller := NewStreamController(80)
 	now := time.Unix(0, 0)

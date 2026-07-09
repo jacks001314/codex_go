@@ -3,11 +3,12 @@ package protocol
 type ThreadEvent struct {
 	Type string `json:"type"`
 
-	ThreadID string       `json:"thread_id,omitempty"`
-	Usage    *Usage       `json:"usage,omitempty"`
-	Error    *ThreadError `json:"error,omitempty"`
-	Item     *ThreadItem  `json:"item,omitempty"`
-	Delta    *Delta       `json:"delta,omitempty"`
+	ThreadID  string             `json:"thread_id,omitempty"`
+	Usage     *Usage             `json:"usage,omitempty"`
+	Error     *ThreadError       `json:"error,omitempty"`
+	Item      *ThreadItem        `json:"item,omitempty"`
+	Delta     *Delta             `json:"delta,omitempty"`
+	RateLimit *RateLimitSnapshot `json:"rateLimit,omitempty"`
 }
 
 type Usage struct {
@@ -15,6 +16,28 @@ type Usage struct {
 	CachedInputTokens     int64 `json:"cached_input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+}
+
+type RateLimitSnapshot struct {
+	LimitID              string           `json:"limitId,omitempty"`
+	LimitName            string           `json:"limitName,omitempty"`
+	Primary              *RateLimitWindow `json:"primary,omitempty"`
+	Secondary            *RateLimitWindow `json:"secondary,omitempty"`
+	Credits              *CreditsSnapshot `json:"credits,omitempty"`
+	PlanType             string           `json:"planType,omitempty"`
+	RateLimitReachedType string           `json:"rateLimitReachedType,omitempty"`
+}
+
+type RateLimitWindow struct {
+	UsedPercent        float64 `json:"usedPercent"`
+	WindowDurationMins *int64  `json:"windowDurationMins,omitempty"`
+	ResetsAt           *int64  `json:"resetsAt,omitempty"`
+}
+
+type CreditsSnapshot struct {
+	HasCredits bool    `json:"hasCredits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance,omitempty"`
 }
 
 type ThreadError struct {
@@ -27,6 +50,7 @@ type ThreadItem struct {
 
 	Text     string         `json:"text,omitempty"`
 	ToolName string         `json:"tool_name,omitempty"`
+	CallID   string         `json:"call_id,omitempty"`
 	Input    string         `json:"input,omitempty"`
 	Output   string         `json:"output,omitempty"`
 	Success  *bool          `json:"success,omitempty"`
@@ -74,6 +98,12 @@ func ToolCallItem(id string, toolName string, input string) ThreadItem {
 	}
 }
 
+func ToolCallItemWithCallID(id string, callID string, toolName string, input string) ThreadItem {
+	item := ToolCallItem(id, toolName, input)
+	item.CallID = callID
+	return item
+}
+
 func ToolOutputItem(id string, toolName string, output string, success bool) ThreadItem {
 	return ToolOutputItemWithMetadata(id, toolName, output, success, nil)
 }
@@ -87,6 +117,12 @@ func ToolOutputItemWithMetadata(id string, toolName string, output string, succe
 		Success:  &success,
 		Metadata: metadata,
 	}
+}
+
+func ToolOutputItemWithCallID(id string, callID string, toolName string, output string, success bool, metadata map[string]any) ThreadItem {
+	item := ToolOutputItemWithMetadata(id, toolName, output, success, metadata)
+	item.CallID = callID
+	return item
 }
 
 func TodoListItem(id string, items []TodoItem) ThreadItem {
@@ -144,5 +180,12 @@ func ErrorEvent(message string) ThreadEvent {
 	return ThreadEvent{
 		Type:  "error",
 		Error: &ThreadError{Message: message},
+	}
+}
+
+func RateLimitSnapshotEvent(snapshot RateLimitSnapshot) ThreadEvent {
+	return ThreadEvent{
+		Type:      "response.rate_limits",
+		RateLimit: &snapshot,
 	}
 }

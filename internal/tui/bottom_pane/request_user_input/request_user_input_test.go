@@ -1,0 +1,115 @@
+package requestuserinput
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestLayoutSectionsWithOptionsNotesHiddenMatchRustCore(t *testing.T) {
+	sections := LayoutSectionsFor(LayoutInput{
+		Area:                   Rect{Width: 40, Height: 12},
+		HasOptions:             true,
+		NotesVisible:           false,
+		QuestionLines:          []string{"Question line 1", "Question line 2"},
+		OptionsPreferredHeight: 5,
+		OptionsRequiredHeight:  8,
+		NotesPreferredHeight:   3,
+		FooterPreferredHeight:  2,
+	})
+	if sections.ProgressArea != (Rect{Width: 40, Height: 1}) {
+		t.Fatalf("progress area = %#v", sections.ProgressArea)
+	}
+	if sections.QuestionArea != (Rect{Y: 1, Width: 40, Height: 2}) {
+		t.Fatalf("question area = %#v", sections.QuestionArea)
+	}
+	if sections.OptionsArea.Height != 5 || sections.OptionsArea.Y != 4 {
+		t.Fatalf("options area = %#v", sections.OptionsArea)
+	}
+	if sections.NotesArea.Height != 0 || sections.FooterLines != 2 {
+		t.Fatalf("notes/footer = %#v footer=%d", sections.NotesArea, sections.FooterLines)
+	}
+}
+
+func TestLayoutSectionsWithoutOptionsTightAndNormalMatchRustCore(t *testing.T) {
+	tight := LayoutSectionsFor(LayoutInput{
+		Area:          Rect{Width: 20, Height: 2},
+		QuestionLines: []string{"one", "two", "three"},
+	})
+	if !reflect.DeepEqual(tight.QuestionLines, []string{"one", "two"}) || tight.QuestionArea.Height != 2 || tight.FooterLines != 0 {
+		t.Fatalf("tight layout = %#v", tight)
+	}
+
+	normal := LayoutSectionsFor(LayoutInput{
+		Area:                  Rect{Width: 20, Height: 8},
+		QuestionLines:         []string{"question"},
+		NotesPreferredHeight:  2,
+		FooterPreferredHeight: 2,
+	})
+	if normal.ProgressArea.Height != 1 || normal.QuestionArea.Y != 1 || normal.NotesArea.Height != 4 || normal.FooterLines != 2 {
+		t.Fatalf("normal layout = %#v", normal)
+	}
+}
+
+func TestRenderHelpersWrapBottomAlignFooterAndTruncateMatchRustCore(t *testing.T) {
+	if got := RenderQuestionWrapped("Pick the deployment strategy for the next rollout", 18); !reflect.DeepEqual(got, []string{"Pick the", "deployment", "strategy for the", "next rollout"}) {
+		t.Fatalf("wrapped question = %#v", got)
+	}
+	if got := RenderRowsBottomAligned([]string{"one", "two"}, 4, "empty"); !reflect.DeepEqual(got, []string{"", "", "one", "two"}) {
+		t.Fatalf("bottom aligned rows = %#v", got)
+	}
+	if got := RenderRowsBottomAligned(nil, 2, "No options"); !reflect.DeepEqual(got, []string{"", "No options"}) {
+		t.Fatalf("empty bottom aligned rows = %#v", got)
+	}
+	if got := WrapFooterTips(24, []FooterTip{{Text: "enter submit", Highlight: true}, {Text: "esc close"}, {Text: "tab notes"}}); !reflect.DeepEqual(got, []string{"[enter submit]", "esc close | tab notes"}) {
+		t.Fatalf("footer tips = %#v", got)
+	}
+	if got := truncateLineWordBoundaryWithEllipsis("alpha beta gamma", 12); got != "alpha beta\u2026" {
+		t.Fatalf("truncated = %q", got)
+	}
+	if got := truncateLineWordBoundaryWithEllipsis("部署 计划 下一步", 11); got != "部署 计划\u2026" {
+		t.Fatalf("wide truncated = %q", got)
+	}
+	if got := truncateLineWordBoundaryWithEllipsis("  padded", 4); got != "\u2026" {
+		t.Fatalf("blank boundary truncated = %q", got)
+	}
+}
+
+func TestRenderUIPlacesSectionsAndFooter(t *testing.T) {
+	sections := LayoutSectionsFor(LayoutInput{
+		Area:                   Rect{Width: 32, Height: 8},
+		HasOptions:             true,
+		NotesVisible:           true,
+		QuestionLines:          []string{"Question?"},
+		OptionsPreferredHeight: 2,
+		OptionsRequiredHeight:  2,
+		NotesPreferredHeight:   1,
+		FooterPreferredHeight:  1,
+	})
+	lines := RenderUI(RenderInput{
+		Sections:   sections,
+		Progress:   "Question 1/1",
+		OptionRows: []string{"1. Plan", "2. Ship"},
+		Notes:      "Add notes",
+		FooterTips: []FooterTip{{Text: "enter submit", Highlight: true}, {Text: "esc close"}},
+	}, 32)
+	if len(lines) == 0 || lines[0] != "Question 1/1" {
+		t.Fatalf("render lines = %#v", lines)
+	}
+	foundOption := false
+	foundNotes := false
+	foundFooter := false
+	for _, line := range lines {
+		if line == "2. Ship" {
+			foundOption = true
+		}
+		if line == "Add notes" {
+			foundNotes = true
+		}
+		if line == "[enter submit] | esc close" {
+			foundFooter = true
+		}
+	}
+	if !foundOption || !foundNotes || !foundFooter {
+		t.Fatalf("render lines missing sections: %#v", lines)
+	}
+}

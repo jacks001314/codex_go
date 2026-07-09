@@ -8,15 +8,29 @@ import (
 
 	codextui "codex_go/internal/tui"
 	bottompane "codex_go/internal/tui/bottom_pane"
+	chatwidget "codex_go/internal/tui/chatwidget"
 )
 
 type ModalKind string
 
 const (
-	ModalKindApproval    ModalKind = "approval"
-	ModalKindElicitation ModalKind = "elicitation"
-	ModalKindPicker      ModalKind = "picker"
-	ModalKindUserInput   ModalKind = "user_input"
+	ModalKindApproval        ModalKind = "approval"
+	ModalKindElicitation     ModalKind = "elicitation"
+	ModalKindPicker          ModalKind = "picker"
+	ModalKindUserInput       ModalKind = "user_input"
+	ModalKindUsage           ModalKind = "usage"
+	ModalKindStatusLine      ModalKind = "status_line"
+	ModalKindTitle           ModalKind = "terminal_title"
+	ModalKindPermissions     ModalKind = "permissions"
+	ModalKindPersonality     ModalKind = "personality"
+	ModalKindExperimental    ModalKind = "experimental"
+	ModalKindRateLimitSwitch ModalKind = "rate_limit_switch"
+	ModalKindReview          ModalKind = "review"
+	ModalKindSkills          ModalKind = "skills"
+	ModalKindAgent           ModalKind = "agent"
+	ModalKindTheme           ModalKind = "theme"
+	ModalKindPets            ModalKind = "pets"
+	ModalKindGeneric         ModalKind = "generic"
 )
 
 type ModalOption struct {
@@ -24,6 +38,7 @@ type ModalOption struct {
 	Label       string
 	Description string
 	Shortcut    string
+	Disabled    bool
 }
 
 type ModalRequestMsg struct {
@@ -46,6 +61,7 @@ type ModalResponse struct {
 	ID          string
 	Kind        ModalKind
 	OptionID    string
+	OptionLabel string
 	Cancelled   bool
 	Elicitation *ElicitationDecision
 	Picker      *PickerDecision
@@ -88,6 +104,8 @@ type modalState struct {
 	sessionPicker      *codextui.SessionPickerState
 	sessionAction      *codextui.SessionSelection
 	userInput          *codextui.RequestUserInputState
+	statusLineSetup    *statusLineSetupModal
+	terminalTitleSetup *terminalTitleSetupModal
 }
 
 func DefaultApprovalOptions() []ModalOption {
@@ -98,7 +116,7 @@ func DefaultApprovalOptions() []ModalOption {
 	}
 }
 
-func (m *Model) openApprovalModal(message ApprovalRequestMsg) {
+func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 	body := strings.TrimSpace(message.Body)
 	if strings.TrimSpace(message.Command) != "" {
 		if body != "" {
@@ -117,6 +135,7 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) {
 		Body:    body,
 		Options: options,
 	})
+	return m.queueNotification(chatwidget.ExecApprovalRequestedNotification(message.Command))
 }
 
 func (m *Model) openModal(message ModalRequestMsg) {
@@ -150,6 +169,7 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 			Label:       label,
 			Description: strings.TrimSpace(option.Description),
 			Shortcut:    strings.ToLower(strings.TrimSpace(option.Shortcut)),
+			Disabled:    option.Disabled,
 		})
 	}
 	return out
@@ -217,10 +237,35 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 			}
 		}
 	}
+	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
+		switch message.Type {
+		case bubbletea.KeySpace:
+			return m.toggleStatusSetupSelection()
+		case bubbletea.KeyRunes:
+			if string(message.Runes) == " " {
+				return m.toggleStatusSetupSelection()
+			}
+		}
+	}
+	if m.modal.kind == ModalKindExperimental {
+		switch message.Type {
+		case bubbletea.KeySpace:
+			m.toggleExperimentalSelection()
+			return nil
+		case bubbletea.KeyRunes:
+			if string(message.Runes) == " " {
+				m.toggleExperimentalSelection()
+				return nil
+			}
+		}
+	}
 	switch message.Type {
 	case bubbletea.KeyEsc:
 		return m.respondModal(true)
 	case bubbletea.KeyEnter:
+		if m.modal.options[m.modal.selected].Disabled {
+			return nil
+		}
 		return m.respondModal(false)
 	case bubbletea.KeyUp:
 		m.moveModalSelection(-1)
@@ -234,6 +279,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 			return nil
 		}
 		for i, option := range m.modal.options {
+			if option.Disabled {
+				continue
+			}
 			if option.Shortcut == key || fmt.Sprintf("%d", i+1) == key {
 				m.modal.selected = i
 				return m.respondModal(false)
@@ -248,6 +296,9 @@ func (m *Model) requestUserInputShortcutMatches(key string) bool {
 		return false
 	}
 	for i, option := range m.modal.options {
+		if option.Disabled {
+			continue
+		}
 		if option.Shortcut == key || fmt.Sprintf("%d", i+1) == key {
 			return true
 		}
@@ -259,9 +310,16 @@ func (m *Model) moveModalSelection(delta int) {
 	if m == nil || m.modal == nil || len(m.modal.options) == 0 {
 		return
 	}
-	m.modal.selected = (m.modal.selected + delta) % len(m.modal.options)
-	if m.modal.selected < 0 {
-		m.modal.selected += len(m.modal.options)
+	next := m.modal.selected
+	for range m.modal.options {
+		next = (next + delta) % len(m.modal.options)
+		if next < 0 {
+			next += len(m.modal.options)
+		}
+		if !m.modal.options[next].Disabled {
+			m.modal.selected = next
+			break
+		}
 	}
 	if m.modal.modelPicker != nil {
 		m.modal.modelPicker.Select(m.modal.selected)
@@ -288,7 +346,11 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		Cancelled: cancelled,
 	}
 	if !cancelled && len(modal.options) > 0 {
+		if modal.options[modal.selected].Disabled {
+			return nil
+		}
 		response.OptionID = modal.options[modal.selected].ID
+		response.OptionLabel = modal.options[modal.selected].Label
 	} else if cancelled {
 		m.notice = "Cancelled"
 	}
@@ -317,6 +379,101 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		response.UserInput = decision
+	}
+	if modal.kind == ModalKindUsage {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyUsageModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindPermissions {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyPermissionsModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindPersonality {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyPersonalityModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindExperimental {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyExperimentalModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindRateLimitSwitch {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyRateLimitSwitchModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindReview {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyReviewModalOption(response.OptionID, response.OptionLabel)
+	}
+	if modal.kind == ModalKindSkills {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applySkillsModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindAgent {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyAgentModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindTheme {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyThemeModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindPets {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyPetsModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindStatusLine && modal.statusLineSetup != nil {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.commitStatusLineSetup(modal.statusLineSetup)
+	}
+	if modal.kind == ModalKindTitle && modal.terminalTitleSetup != nil {
+		m.modal = nil
+		if cancelled {
+			return m.cancelTerminalTitleSetup()
+		}
+		return m.commitTerminalTitleSetup(modal.terminalTitleSetup)
 	}
 	m.modal = nil
 	if !cancelled && len(modal.options) > 0 {
@@ -366,11 +523,17 @@ func (m *Model) resolveRequestUserInputModal(modal *modalState, optionID string,
 				index = modal.selected
 			}
 		}
-		if index < 0 || index >= len(question.Options) {
+		maxOptions := len(question.Options)
+		otherSelected := question.IsOther && index == maxOptions
+		if index < 0 || index >= maxOptions && !otherSelected {
 			m.notice = "Select an answer."
 			return nil, false, false
 		}
-		complete = modal.userInput.CommitOptionAnswer(question.Options[index].Label, modal.userInput.Draft)
+		label := codextui.RequestUserInputOtherOptionLabel
+		if !otherSelected {
+			label = question.Options[index].Label
+		}
+		complete = modal.userInput.CommitOptionAnswer(label, modal.userInput.Draft)
 	} else {
 		complete = modal.userInput.CommitFreeformAnswer(modal.userInput.Draft)
 	}
@@ -551,24 +714,37 @@ func (m *Model) renderModal() string {
 		builder.WriteString("\n")
 	}
 	for i, option := range m.modal.options {
-		prefix := "  "
-		if i == m.modal.selected {
-			prefix = "> "
+		selected := i == m.modal.selected
+		prefix := codextui.NumberedSelectionPrefix(i, selected)
+		check := ""
+		if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
+			check = "[ ] "
+			if setupOptionSelected(m.modal, option.ID) {
+				check = "[x] "
+			}
 		}
-		builder.WriteString(prefix)
-		builder.WriteString(fmt.Sprintf("%d. %s", i+1, option.Label))
+		line := prefix + check + option.Label
+		if option.Disabled {
+			line += " [disabled]"
+		}
 		if option.Shortcut != "" && option.Shortcut != "enter" {
-			builder.WriteString(" (")
-			builder.WriteString(option.Shortcut)
-			builder.WriteString(")")
+			line += " (" + option.Shortcut + ")"
 		}
 		if option.Description != "" {
-			builder.WriteString(" - ")
-			builder.WriteString(option.Description)
+			line += " - " + option.Description
 		}
+		if selected {
+			line = codextui.RenderSelectedRow(line)
+		}
+		builder.WriteString(line)
 		builder.WriteString("\n")
 	}
 	footer := "Esc cancel | Enter choose"
+	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
+		footer = "Space toggle | Enter save | Esc cancel"
+	} else if m.modal.kind == ModalKindExperimental {
+		footer = "Space toggle | Enter save | Esc cancel"
+	}
 	if m.modal.userInput != nil {
 		switch {
 		case m.modal.userInput.ConfirmUnanswered:

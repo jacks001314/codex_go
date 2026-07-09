@@ -25,6 +25,17 @@ func TestStoreSaveLoadDelete(t *testing.T) {
 	if loaded.Mode() != "api-key" {
 		t.Fatalf("Mode = %q", loaded.Mode())
 	}
+	data, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatalf("ReadFile auth.json returned error: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal auth.json returned error: %v", err)
+	}
+	if raw["auth_mode"] != "apikey" {
+		t.Fatalf("auth_mode = %#v, want Rust storage value apikey", raw["auth_mode"])
+	}
 	removed, err := store.Delete()
 	if err != nil {
 		t.Fatalf("Delete returned error: %v", err)
@@ -165,6 +176,42 @@ func TestResolvePrefersEnv(t *testing.T) {
 	}
 }
 
+func TestResolveReadsRustAPIKeyAuthModeAlias(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-rust"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile auth.json returned error: %v", err)
+	}
+	resolved, err := NewStore(home).Resolve()
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved == nil || resolved.Auth.Mode() != "api-key" || resolved.Auth.OpenAIAPIKey != "sk-rust" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+}
+
+func TestAuthModeAliasesMatchRustStorage(t *testing.T) {
+	tests := map[string]string{
+		"apikey":                "api-key",
+		"api-key":               "api-key",
+		"apiKey":                "api-key",
+		"chatgpt":               "chatgpt",
+		"chatgptAuthTokens":     "chatgptAuthTokens",
+		"chatgpt-auth-tokens":   "chatgptAuthTokens",
+		"agentIdentity":         "agent-identity",
+		"agent-identity":        "agent-identity",
+		"personalAccessToken":   "personal-access-token",
+		"personal-access-token": "personal-access-token",
+		"bedrockApiKey":         "bedrock-api-key",
+		"bedrock-api-key":       "bedrock-api-key",
+	}
+	for raw, want := range tests {
+		if got := (&AuthDotJSON{AuthMode: raw}).Mode(); got != want {
+			t.Fatalf("Mode(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestResolveClassifiesCodexAccessTokenEnv(t *testing.T) {
 	store := NewStore(t.TempDir())
 	t.Setenv(CodexAccessTokenEnv, "at-env-token")
@@ -202,7 +249,7 @@ func TestFromBedrockAPIKeyUsesRustAuthShape(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-	if decoded.AuthMode != "bedrock-api-key" || decoded.BedrockAPIKey.APIKey != "bedrock-key" || decoded.BedrockAPIKey.Region != "us-east-2" {
+	if decoded.AuthMode != "bedrockApiKey" || decoded.BedrockAPIKey.APIKey != "bedrock-key" || decoded.BedrockAPIKey.Region != "us-east-2" {
 		t.Fatalf("decoded = %+v", decoded)
 	}
 }

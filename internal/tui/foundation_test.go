@@ -63,6 +63,14 @@ func TestAdaptiveWrapKeepsLongURLIntact(t *testing.T) {
 	}
 }
 
+func TestAdaptiveWrapMovesWordBeforeBreakingIt(t *testing.T) {
+	got := AdaptiveWrapLine("alpha beta resized", WrapOptions{Width: 12, BreakWords: true})
+	want := []string{"alpha beta", "resized"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AdaptiveWrapLine = %#v, want %#v", got, want)
+	}
+}
+
 func TestSelectionListSkipsDisabledAndRendersRows(t *testing.T) {
 	list := NewSelectionList([]SelectionItem{
 		{ID: "a", Label: "Alpha", Disabled: true},
@@ -77,8 +85,11 @@ func TestSelectionListSkipsDisabledAndRendersRows(t *testing.T) {
 		t.Fatalf("selected after move = %#v", item)
 	}
 	rows := strings.Join(list.RenderRows(80), "\n")
-	if !strings.Contains(rows, "> 3. Gamma - third") || !strings.Contains(rows, "Alpha (disabled)") {
+	if !strings.Contains(rows, NumberedSelectionPrefix(2, true)+"Gamma - third") || !strings.Contains(rows, "Alpha (disabled)") {
 		t.Fatalf("rows:\n%s", rows)
+	}
+	if !strings.Contains(rows, "\x1b[") {
+		t.Fatalf("selected row should include terminal color styling:\n%s", rows)
 	}
 }
 

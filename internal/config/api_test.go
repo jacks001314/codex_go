@@ -251,6 +251,35 @@ func TestServiceWriteValueAndBatchWrite(t *testing.T) {
 	}
 }
 
+func TestServiceWriteValueNilDeletesKeyPath(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "[tui.keymap.global]\nopen_external_editor = \"ctrl-e\"\n")
+	service := NewConfigService(home)
+
+	if _, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath: "tui.keymap.global.open_external_editor",
+		Value:   nil,
+	}); err != nil {
+		t.Fatalf("WriteValue(delete) error = %v", err)
+	}
+	loaded, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read(after delete) error = %v", err)
+	}
+	if tuiConfig, ok := loaded.Config["tui"].(map[string]any); ok {
+		if keymap, ok := tuiConfig["keymap"].(map[string]any); ok && len(keymap) != 0 {
+			t.Fatalf("keymap after delete = %#v, want empty/pruned", keymap)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	if strings.Contains(string(data), "open_external_editor") {
+		t.Fatalf("config still contains deleted key:\n%s", data)
+	}
+}
+
 func TestServiceWriteSkillConfig(t *testing.T) {
 	home := t.TempDir()
 	service := NewConfigService(home)
@@ -526,14 +555,35 @@ func TestServiceWriteValidation(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConfigRequest) {
 		t.Fatalf("WriteValue(relative path) error = %v, want ErrInvalidConfigRequest", err)
 	}
+	otherPath := filepath.Join(t.TempDir(), "other-config.toml")
+	_, err = service.WriteValue(&ConfigValueWriteParams{KeyPath: "model", Value: "gpt-5", FilePath: &otherPath})
+	if !errors.Is(err, ErrInvalidConfigRequest) || configWriteErrorCode(err) != ConfigWriteLayerReadonly {
+		t.Fatalf("WriteValue(other path) error = %v, code = %s, want %s", err, configWriteErrorCode(err), ConfigWriteLayerReadonly)
+	}
+	if _, statErr := os.Stat(otherPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("other config path stat error = %v, want not written", statErr)
+	}
+	staleVersion := "sha256:stale"
+	_, err = service.WriteValue(&ConfigValueWriteParams{KeyPath: "model", Value: "gpt-5", ExpectedVersion: &staleVersion})
+	if !errors.Is(err, ErrInvalidConfigRequest) || configWriteErrorCode(err) != ConfigWriteVersionConflict {
+		t.Fatalf("WriteValue(stale version) error = %v, code = %s, want %s", err, configWriteErrorCode(err), ConfigWriteVersionConflict)
+	}
 	_, err = service.WriteValue(&ConfigValueWriteParams{KeyPath: "profile", Value: "work"})
-	if !errors.Is(err, ErrInvalidConfigRequest) || !strings.Contains(err.Error(), "legacy config selector") {
-		t.Fatalf("WriteValue(profile) error = %v, want legacy profile selector rejection", err)
+	if !errors.Is(err, ErrInvalidConfigRequest) || !strings.Contains(err.Error(), "legacy config selector") || configWriteErrorCode(err) != ConfigWriteValidation {
+		t.Fatalf("WriteValue(profile) error = %v, code = %s, want legacy profile selector rejection", err, configWriteErrorCode(err))
 	}
 	_, err = service.WriteValue(&ConfigValueWriteParams{KeyPath: "profiles.work.model", Value: "gpt-5"})
-	if !errors.Is(err, ErrInvalidConfigRequest) || !strings.Contains(err.Error(), "legacy config profile tables") {
-		t.Fatalf("WriteValue(profiles.*) error = %v, want legacy profile table rejection", err)
+	if !errors.Is(err, ErrInvalidConfigRequest) || !strings.Contains(err.Error(), "legacy config profile tables") || configWriteErrorCode(err) != ConfigWriteValidation {
+		t.Fatalf("WriteValue(profiles.*) error = %v, code = %s, want legacy profile table rejection", err, configWriteErrorCode(err))
 	}
+}
+
+func configWriteErrorCode(err error) ConfigWriteErrorCode {
+	var writeErr *ConfigWriteError
+	if errors.As(err, &writeErr) && writeErr != nil {
+		return writeErr.Code
+	}
+	return ""
 }
 
 func TestRequirementsClone(t *testing.T) {

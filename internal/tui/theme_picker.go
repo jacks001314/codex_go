@@ -13,6 +13,41 @@ const (
 	ThemePreviewListMinWidth = 40
 )
 
+var builtinThemeIDs = []string{
+	"1337",
+	"ansi",
+	"base16",
+	"base16-256",
+	"base16-eighties-dark",
+	"base16-mocha-dark",
+	"base16-ocean-dark",
+	"base16-ocean-light",
+	"catppuccin-frappe",
+	"catppuccin-latte",
+	"catppuccin-macchiato",
+	"catppuccin-mocha",
+	"coldark-cold",
+	"coldark-dark",
+	"dark-neon",
+	"dracula",
+	"github",
+	"gruvbox-dark",
+	"gruvbox-light",
+	"inspired-github",
+	"monokai-extended",
+	"monokai-extended-bright",
+	"monokai-extended-light",
+	"monokai-extended-origin",
+	"nord",
+	"one-half-dark",
+	"one-half-light",
+	"solarized-dark",
+	"solarized-light",
+	"sublime-snazzy",
+	"two-dark",
+	"zenburn",
+}
+
 type ThemeSource string
 
 const (
@@ -26,6 +61,10 @@ type ThemeOption struct {
 	Path        string
 	Source      ThemeSource
 	Description string
+}
+
+func BuiltinThemeIDs() []string {
+	return append([]string(nil), builtinThemeIDs...)
 }
 
 type ThemePicker struct {
@@ -204,11 +243,8 @@ func (p *ThemePicker) RenderRows(width int) []string {
 	}
 	rows := make([]string, 0, len(p.Themes))
 	for i, theme := range p.Themes {
-		prefix := "  "
-		if i == p.Selected {
-			prefix = "> "
-		}
-		row := prefix + theme.Label
+		selected := i == p.Selected
+		row := SelectionPrefix(selected) + theme.Label
 		if theme.ID == p.Current {
 			row += " (current)"
 		}
@@ -217,6 +253,9 @@ func (p *ThemePicker) RenderRows(width int) []string {
 		}
 		if width > 0 {
 			row = TruncateWithEllipsis(row, width)
+		}
+		if selected {
+			row = RenderSelectedRow(row)
 		}
 		rows = append(rows, row)
 	}

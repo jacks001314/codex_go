@@ -320,3 +320,39 @@ func TestServiceWatchIsConnectionScoped(t *testing.T) {
 		t.Fatalf("WatchCount() = %d after ConnectionClosed, want 0", service.WatchCount())
 	}
 }
+
+func TestServiceChangedForPathMatchesFileAndDirectDirectoryWatch(t *testing.T) {
+	service := NewFSService()
+	root := t.TempDir()
+	file := filepath.Join(root, "FETCH_HEAD")
+	nestedDir := filepath.Join(root, "refs")
+	nestedFile := filepath.Join(nestedDir, "main")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	if _, err := service.WatchWithConnection("conn-a", &WatchParams{WatchID: "watch-dir", Path: root}); err != nil {
+		t.Fatalf("WatchWithConnection(dir) error = %v", err)
+	}
+	if _, err := service.WatchWithConnection("conn-b", &WatchParams{WatchID: "watch-file", Path: file}); err != nil {
+		t.Fatalf("WatchWithConnection(file) error = %v", err)
+	}
+
+	notifications := service.ChangedForPath(file)
+	if len(notifications) != 2 {
+		t.Fatalf("ChangedForPath(file) notifications = %d, want 2: %+v", len(notifications), notifications)
+	}
+	if notifications[0].connectionID != "conn-a" || notifications[0].notification.WatchID != "watch-dir" {
+		t.Fatalf("dir watch notification = %+v", notifications[0])
+	}
+	if notifications[1].connectionID != "conn-b" || notifications[1].notification.WatchID != "watch-file" {
+		t.Fatalf("file watch notification = %+v", notifications[1])
+	}
+	if notifications[0].notification.ChangedPaths[0] != file || notifications[1].notification.ChangedPaths[0] != file {
+		t.Fatalf("changed paths = %+v %+v, want %q", notifications[0].notification.ChangedPaths, notifications[1].notification.ChangedPaths, file)
+	}
+
+	if nested := service.ChangedForPath(nestedFile); len(nested) != 0 {
+		t.Fatalf("ChangedForPath(nested file) notifications = %+v, want none for non-recursive directory watch", nested)
+	}
+}

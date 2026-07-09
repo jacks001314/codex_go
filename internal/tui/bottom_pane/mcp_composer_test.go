@@ -111,6 +111,40 @@ func TestElicitationApprovalActionMapsPersistChoices(t *testing.T) {
 	}
 }
 
+func TestElicitationSchemaEnumNamesAndOneOfMatchRust(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"region": map[string]any{
+				"type":      "string",
+				"enum":      []any{"us", "eu"},
+				"enumNames": []any{"United States", "Europe"},
+				"default":   "eu",
+			},
+			"mode": map[string]any{
+				"type": "string",
+				"oneOf": []any{
+					map[string]any{"const": "fast", "title": "Fast path"},
+					map[string]any{"const": "safe", "title": "Safe path"},
+				},
+				"default": "safe",
+			},
+		},
+	}
+	form, err := NewElicitationFormRequest("docs", "request-enum", "Configure docs", schema, nil)
+	if err != nil {
+		t.Fatalf("NewElicitationFormRequest error = %v", err)
+	}
+	region := form.Fields[1]
+	if region.Name != "region" || len(region.Options) != 2 || region.Options[0].Label != "United States" || region.Options[1].Label != "Europe" || region.Value != "eu" {
+		t.Fatalf("region field = %#v", region)
+	}
+	mode := form.Fields[0]
+	if mode.Name != "mode" || len(mode.Options) != 2 || mode.Options[0] != (ElicitationOption{Value: "fast", Label: "Fast path"}) || mode.Options[1] != (ElicitationOption{Value: "safe", Label: "Safe path"}) || mode.Value != "safe" {
+		t.Fatalf("mode field = %#v", mode)
+	}
+}
+
 func TestChatComposerDraftHistoryQueueAndFooter(t *testing.T) {
 	composer := NewChatComposerState()
 	composer.Draft.Insert("hello")
@@ -144,8 +178,8 @@ func TestChatComposerDraftHistoryQueueAndFooter(t *testing.T) {
 	}
 
 	footer := ComposerFooterState{Running: true, QueuedCount: 2, ContextPercent: 55, ActiveAgentLabel: "agent-main", Mode: "plan"}
-	line := footer.Render(80)
-	for _, want := range []string{"plan", "Ctrl+C interrupt", "2 queued", "context 55%", "agent-main"} {
+	line := footer.Render(120)
+	for _, want := range []string{"plan", "Ctrl+C interrupt", "Ctrl+G editor", "2 queued", "context 55%", "agent-main"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("footer %q missing %q", line, want)
 		}

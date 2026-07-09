@@ -410,10 +410,7 @@ func sessionMatchesQuery(item SessionSummary, query string) bool {
 }
 
 func renderDenseSessionRow(item SessionSummary, selected bool, width int, now time.Time) string {
-	prefix := "  "
-	if selected {
-		prefix = "> "
-	}
+	prefix := SelectionPrefix(selected)
 	updated := item.UpdatedAt
 	if updated.IsZero() {
 		updated = item.CreatedAt
@@ -423,22 +420,27 @@ func renderDenseSessionRow(item SessionSummary, selected bool, width int, now ti
 		row += "  " + compactPath(item.CWD)
 	}
 	if width > 0 {
-		return TruncateWithEllipsis(row, width)
+		row = TruncateWithEllipsis(row, width)
+	}
+	if selected {
+		row = RenderSelectedRow(row)
 	}
 	return row
 }
 
 func renderComfortableSessionRow(item SessionSummary, selected bool, width int, now time.Time) []string {
-	prefix := "  "
-	if selected {
-		prefix = "> "
-	}
+	prefix := SelectionPrefix(selected)
 	title := prefix + item.DisplayTitle()
 	lines := AdaptiveWrapLine(title, WrapOptions{
 		Width:            width,
 		SubsequentIndent: "  ",
 		BreakWords:       true,
 	})
+	if selected {
+		for i := range lines {
+			lines[i] = RenderSelectedRow(lines[i])
+		}
+	}
 	meta := []string{}
 	updated := item.UpdatedAt
 	if updated.IsZero() {

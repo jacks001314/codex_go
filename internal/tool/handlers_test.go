@@ -47,13 +47,16 @@ func TestRequestUserInputHandlerNormalizesAndResponds(t *testing.T) {
 		if args.Questions[0].Header != "very-long-he" {
 			t.Fatalf("header not truncated: %#v", args.Questions[0])
 		}
+		if !args.Questions[0].IsOther || !args.Questions[0].IsSecret {
+			t.Fatalf("question flags not preserved: %#v", args.Questions[0])
+		}
 		return &UserInputResponse{
 			Answers:           map[string]string{"q": "yes"},
 			StructuredAnswers: map[string][]string{"q": []string{"yes", "user_note: because"}},
 		}, nil
 	})
 	output, err := handler.Execute(context.Background(), &Invocation{
-		Payload: Payload{Kind: PayloadFunction, Arguments: `{"questions":[{"header":"very-long-header","id":"q","question":"Continue?","options":[{"label":"Yes"},{"label":"No"},{"label":"Later"},{"label":"Extra"}]}],"autoResolutionMs":60000}`},
+		Payload: Payload{Kind: PayloadFunction, Arguments: `{"questions":[{"header":"very-long-header","id":"q","question":"Continue?","isOther":true,"isSecret":true,"options":[{"label":"Yes"},{"label":"No"},{"label":"Later"},{"label":"Extra"}]}],"autoResolutionMs":60000}`},
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

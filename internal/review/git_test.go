@@ -43,6 +43,34 @@ func TestGitDiffProviderCommit(t *testing.T) {
 	}
 }
 
+func TestGitInventoryBranchesAndCommits(t *testing.T) {
+	dir := initGitRepo(t)
+	initialBranch := strings.TrimSpace(git(t, dir, "branch", "--show-current"))
+	git(t, dir, "checkout", "-b", "feature/review")
+	writeFile(t, dir, "tracked.txt", "old\nnew\n")
+	git(t, dir, "add", "tracked.txt")
+	git(t, dir, "commit", "-m", "review change")
+
+	current, branches, err := LocalBranches(dir)
+	if err != nil {
+		t.Fatalf("LocalBranches returned error: %v", err)
+	}
+	if current != "feature/review" {
+		t.Fatalf("current branch = %q", current)
+	}
+	if !containsStringReviewTest(branches, "feature/review") || !containsStringReviewTest(branches, initialBranch) {
+		t.Fatalf("branches = %#v", branches)
+	}
+
+	commits, err := RecentCommits(dir, 1)
+	if err != nil {
+		t.Fatalf("RecentCommits returned error: %v", err)
+	}
+	if len(commits) != 1 || commits[0].Subject != "review change" || strings.TrimSpace(commits[0].SHA) == "" {
+		t.Fatalf("commits = %#v", commits)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -78,4 +106,13 @@ func git(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(output))
 	}
 	return string(output)
+}
+
+func containsStringReviewTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

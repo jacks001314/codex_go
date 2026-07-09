@@ -134,12 +134,14 @@ func DefaultFeatureCatalog() []FeatureEntry {
 	defaults := Defaults()
 	for _, spec := range Sorted() {
 		stage := stageFromFeature(spec.Stage)
-		displayName := toTitle(spec.Key)
-		description := "Enable " + spec.Key
+		displayName := firstNonEmptyFeatureString(spec.ExperimentalName, toTitle(spec.Key))
+		description := firstNonEmptyFeatureString(spec.ExperimentalMenuDescription, "Enable "+spec.Key)
+		announcement := stringPtrIfNonEmpty(spec.ExperimentalAnnouncement)
 		result = append(result, FeatureEntry{
 			Key:            spec.Key,
 			DisplayName:    &displayName,
 			Description:    &description,
+			Announcement:   announcement,
 			Stage:          stage,
 			Enabled:        defaults[spec.Key],
 			DefaultEnabled: defaults[spec.Key],
@@ -249,6 +251,20 @@ func cloneStringPtr(value *string) *string {
 	}
 	clone := *value
 	return &clone
+}
+
+func firstNonEmptyFeatureString(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func stringPtrIfNonEmpty(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
 }
 
 func cloneIntPtr(value *int) *int {

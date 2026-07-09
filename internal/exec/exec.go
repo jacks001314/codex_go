@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -69,9 +71,16 @@ type Runner struct {
 
 func NewRunner(codexHome string) *Runner {
 	return &Runner{
-		CodexHome: codexHome,
-		Now:       time.Now,
+		CodexHome:       codexHome,
+		UseResponsesAPI: true,
+		Now:             time.Now,
 	}
+}
+
+func NewLocalRunner(codexHome string) *Runner {
+	runner := NewRunner(codexHome)
+	runner.UseResponsesAPI = false
+	return runner
 }
 
 func (r *Runner) Run(req Request, stdin io.Reader, stdout, stderr io.Writer) (*Result, error) {
@@ -161,7 +170,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	runPrompt := prompt
-	inputItems := resumeInputItems(resumeContext)
+	inputItems := execStartupInputItems(req, permissionProfile, r.now())
+	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
 	if len(requestInputs) > 0 {
 		if item := userMessageInputItemFromTurnInputs(prompt, requestInputs); item != nil {
 			inputItems = append(inputItems, item)
@@ -215,6 +225,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	})
 	if err != nil {
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 		return nil, err
 	}
 	if err := eventSink.Err(); err != nil {
@@ -294,6 +305,10 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		return
 	}
 	switch event.Kind {
+	case model.ResponsesStreamEventRateLimits:
+		if event.RateLimit != nil {
+			c.emit(protocol.RateLimitSnapshotEvent(protocolRateLimitSnapshotFromModel(event.RateLimit)))
+		}
 	case model.ResponsesStreamEventOutputAdded:
 		if event.Item != nil && event.Item.Type == "reasoning" {
 			return
@@ -313,6 +328,59 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 			c.emit(protocol.ToolCallInputDelta(itemID, event.CallID, event.Delta))
 		}
 	}
+}
+
+func protocolRateLimitSnapshotFromModel(snapshot *model.ResponsesRateLimitSnapshot) protocol.RateLimitSnapshot {
+	if snapshot == nil {
+		return protocol.RateLimitSnapshot{}
+	}
+	return protocol.RateLimitSnapshot{
+		LimitID:              snapshot.LimitID,
+		LimitName:            snapshot.LimitName,
+		Primary:              protocolRateLimitWindowFromModel(snapshot.Primary),
+		Secondary:            protocolRateLimitWindowFromModel(snapshot.Secondary),
+		Credits:              protocolCreditsSnapshotFromModel(snapshot.Credits),
+		PlanType:             snapshot.PlanType,
+		RateLimitReachedType: snapshot.RateLimitReachedType,
+	}
+}
+
+func protocolRateLimitWindowFromModel(window *model.ResponsesRateLimitWindow) *protocol.RateLimitWindow {
+	if window == nil {
+		return nil
+	}
+	return &protocol.RateLimitWindow{
+		UsedPercent:        window.UsedPercent,
+		WindowDurationMins: cloneInt64PtrExec(window.WindowDurationMins),
+		ResetsAt:           cloneInt64PtrExec(window.ResetsAt),
+	}
+}
+
+func protocolCreditsSnapshotFromModel(credits *model.ResponsesCreditsSnapshot) *protocol.CreditsSnapshot {
+	if credits == nil {
+		return nil
+	}
+	return &protocol.CreditsSnapshot{
+		HasCredits: credits.HasCredits,
+		Unlimited:  credits.Unlimited,
+		Balance:    cloneStringPtrExec(credits.Balance),
+	}
+}
+
+func cloneInt64PtrExec(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneStringPtrExec(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func (c *execStreamEventCollector) emit(event protocol.ThreadEvent) {
@@ -511,6 +579,9 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		if err != nil {
 			return nil, err
 		}
+		if snapshot == nil && provider.RequiresOpenAIAuth && !providerHasStandaloneAuth(*provider) {
+			return nil, errors.New("OpenAI authentication is required; run `codex login` or set OPENAI_API_KEY")
+		}
 		runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
 		agent, err := model.NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID, runtimeProvider, r.httpClientForConfig(cfg), r.CodexHome, snapshot)
 		if err != nil {
@@ -522,6 +593,12 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		return agent, nil
 	}
 	return model.NewLocalAgentRunner(), nil
+}
+
+func providerHasStandaloneAuth(provider model.ProviderInfo) bool {
+	return strings.TrimSpace(provider.EnvKey) != "" ||
+		strings.TrimSpace(provider.ExperimentalBearerToken) != "" ||
+		provider.Auth != nil
 }
 
 func agentIdentityOptionsForExec(cfg *config.Config) *model.AgentIdentityOptions {
@@ -708,12 +785,130 @@ func turnUserInputsSummary(inputs []turn.TurnUserInput) string {
 
 func requestCWD(req *Request) string {
 	if req == nil {
-		return ""
+		return "."
 	}
 	if req.Exec.Shared.CWD != "" {
 		return req.Exec.Shared.CWD
 	}
-	return req.Root.Shared.CWD
+	if req.Root.Shared.CWD != "" {
+		return req.Root.Shared.CWD
+	}
+	return "."
+}
+
+func execStartupInputItems(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) []any {
+	items := make([]any, 0, 2)
+	if item := developerMessageInputItem(execPermissionsInstructions(permissions)); item != nil {
+		items = append(items, item)
+	}
+	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now)); item != nil {
+		items = append(items, item)
+	}
+	return items
+}
+
+func developerMessageInputItem(text string) any {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	return map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": text,
+		}},
+	}
+}
+
+func execPermissionsInstructions(permissions *config.SandboxPermissionProfileResolution) string {
+	mode := sandboxPermissionProfileID(permissions)
+	if mode == "" {
+		mode = "default"
+	}
+	network := "restricted"
+	if permissions == nil || permissions.Profile == nil || permissions.Profile.AllowsNetwork() {
+		network = "enabled"
+	}
+	var detail string
+	switch {
+	case permissions != nil && permissions.Profile != nil && permissions.Profile.Disabled:
+		detail = "No filesystem sandboxing - all commands are permitted."
+	case mode == sandbox.BuiltInPermissionProfileReadOnly || mode == ":read-only":
+		detail = "Filesystem access is read-only unless additional permissions are granted."
+	case mode == sandbox.BuiltInPermissionProfileWorkspace || mode == ":workspace" || mode == "workspace-write":
+		detail = "Filesystem writes are restricted to the current workspace unless additional permissions are granted."
+	default:
+		detail = "Filesystem access follows the configured permission profile."
+	}
+	return fmt.Sprintf("<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `%s`: %s Network access is %s.\n</permissions instructions>", mode, detail, network)
+}
+
+func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) string {
+	cwd := absoluteRequestCWD(req)
+	shell := defaultEnvironmentShellName()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	timezone := now.Location().String()
+	if timezone == "" {
+		timezone = time.Local.String()
+	}
+	var b strings.Builder
+	b.WriteString("<environment_context>\n")
+	fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", xmlEscape(cwd))
+	fmt.Fprintf(&b, "  <shell>%s</shell>\n", xmlEscape(shell))
+	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", xmlEscape(now.Format("2006-01-02")))
+	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", xmlEscape(timezone))
+	fmt.Fprintf(&b, "  <filesystem><workspace_roots><root>%s</root></workspace_roots>%s</filesystem>\n", xmlEscape(cwd), execPermissionProfileXML(permissions))
+	b.WriteString("</environment_context>")
+	return b.String()
+}
+
+func absoluteRequestCWD(req *Request) string {
+	cwd := requestCWD(req)
+	if strings.TrimSpace(cwd) == "" {
+		cwd = "."
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return filepath.Clean(cwd)
+	}
+	return filepath.Clean(abs)
+}
+
+func defaultEnvironmentShellName() string {
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		return filepath.Base(shell)
+	}
+	return "bash"
+}
+
+func execPermissionProfileXML(permissions *config.SandboxPermissionProfileResolution) string {
+	if permissions != nil && permissions.Profile != nil && permissions.Profile.Disabled {
+		return `<permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile>`
+	}
+	mode := sandboxPermissionProfileID(permissions)
+	if mode == "" {
+		mode = "default"
+	}
+	network := "restricted"
+	if permissions == nil || permissions.Profile == nil || permissions.Profile.AllowsNetwork() {
+		network = "enabled"
+	}
+	return fmt.Sprintf(`<permission_profile type="%s" network="%s" />`, xmlEscape(mode), xmlEscape(network))
+}
+
+func xmlEscape(value string) string {
+	var b strings.Builder
+	if err := xml.EscapeText(&b, []byte(value)); err != nil {
+		return value
+	}
+	return b.String()
 }
 
 func loadOutputSchema(path string) (any, error) {
@@ -950,8 +1145,9 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 	}
 	switch item.Type {
 	case "function_call", "custom_tool_call", "tool_search_call":
-		return protocol.ToolCallItem(
+		return protocol.ToolCallItemWithCallID(
 			firstNonEmpty(item.ID, "tool-call-"+safeSessionItemID(item.CallID)),
+			item.CallID,
 			firstNonEmpty(item.Name, item.Namespace, item.Type),
 			firstNonEmpty(item.Arguments, item.Input),
 		)
@@ -1045,8 +1241,8 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 	toolName := execution.Invocation.ToolName.Key()
 	input := toolInvocationText(execution.Invocation)
 	return []protocol.ThreadEvent{
-		protocol.ItemStarted(protocol.ToolCallItem("tool-call-"+safeSessionItemID(callID), toolName, input)),
-		protocol.ItemCompleted(protocol.ToolCallItem("tool-call-"+safeSessionItemID(callID), toolName, input)),
+		protocol.ItemStarted(protocol.ToolCallItemWithCallID("tool-call-"+safeSessionItemID(callID), callID, toolName, input)),
+		protocol.ItemCompleted(protocol.ToolCallItemWithCallID("tool-call-"+safeSessionItemID(callID), callID, toolName, input)),
 	}
 }
 
@@ -1060,7 +1256,7 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	}
 	callID := execution.Invocation.CallID
 	toolName := execution.Invocation.ToolName.Key()
-	return protocol.ItemCompleted(protocol.ToolOutputItemWithMetadata("tool-output-"+safeSessionItemID(callID), toolName, execution.Output.Body, execution.Output.Success, cloneEventMetadata(execution.Output.Data))), true
+	return protocol.ItemCompleted(protocol.ToolOutputItemWithCallID("tool-output-"+safeSessionItemID(callID), callID, toolName, execution.Output.Body, execution.Output.Success, cloneEventMetadata(execution.Output.Data))), true
 }
 
 func cloneEventMetadata(metadata map[string]any) map[string]any {

@@ -21,13 +21,16 @@ import (
 	"codex_go/internal/appserverdaemon"
 	"codex_go/internal/auth"
 	"codex_go/internal/cli"
+	"codex_go/internal/config"
 	codexexec "codex_go/internal/exec"
+	"codex_go/internal/features"
 	"codex_go/internal/mcp"
 	"codex_go/internal/protocol"
 	"codex_go/internal/session"
 	"codex_go/internal/tool"
 	codextui "codex_go/internal/tui"
 	bottompane "codex_go/internal/tui/bottom_pane"
+	chatwidget "codex_go/internal/tui/chatwidget"
 	codextea "codex_go/internal/tui/tea"
 	"codex_go/internal/turn"
 )
@@ -67,6 +70,12 @@ type interactiveUserInputBroker struct {
 	pending map[string]chan codextea.ModalResponse
 }
 
+type interactiveInterruptController struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	seq    int64
+}
+
 func newInteractiveApprovalBroker() *interactiveApprovalBroker {
 	return &interactiveApprovalBroker{pending: map[string]chan codextea.ModalResponse{}}
 }
@@ -77,6 +86,57 @@ func newInteractiveElicitationBroker() *interactiveElicitationBroker {
 
 func newInteractiveUserInputBroker() *interactiveUserInputBroker {
 	return &interactiveUserInputBroker{pending: map[string]chan codextea.ModalResponse{}}
+}
+
+func newInteractiveInterruptController() *interactiveInterruptController {
+	return &interactiveInterruptController{}
+}
+
+func (c *interactiveInterruptController) begin(parent context.Context) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if c == nil {
+		return ctx, cancel
+	}
+	c.mu.Lock()
+	c.seq++
+	token := c.seq
+	c.cancel = cancel
+	c.mu.Unlock()
+	done := func() {
+		c.mu.Lock()
+		if c.seq == token {
+			c.cancel = nil
+		}
+		c.mu.Unlock()
+		cancel()
+	}
+	return ctx, done
+}
+
+func (c *interactiveInterruptController) interruptCommand() bubbletea.Cmd {
+	return func() bubbletea.Msg {
+		if c == nil || !c.interrupt() {
+			return codextea.TurnInterruptedMsg{Err: errors.New("no active turn to interrupt")}
+		}
+		return codextea.TurnInterruptedMsg{}
+	}
+}
+
+func (c *interactiveInterruptController) interrupt() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
 }
 
 func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) tool.ShellApprovalFunc {
@@ -330,6 +390,8 @@ func interactiveUserInputQuestions(questions []tool.UserInputQuestion) []codextu
 			Header:   question.Header,
 			ID:       question.ID,
 			Question: question.Question,
+			IsOther:  question.IsOther,
+			IsSecret: question.IsSecret,
 			Options:  options,
 		})
 	}
@@ -467,7 +529,7 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	}
 	session := &interactiveSession{
 		Root:   *root,
-		Runner: codexexec.NewRunner(auth.DefaultCodexHome()),
+		Runner: newCodexExecRunner(auth.DefaultCodexHome()),
 		Reader: bufio.NewScanner(stdin),
 		Stdout: stdout,
 		Stderr: stderr,
@@ -491,17 +553,36 @@ func isRealTerminal(value any) bool {
 
 func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
 	state := interactiveUIState(root)
-	runner := codexexec.NewRunner(auth.DefaultCodexHome())
+	settings := interactiveTUISettings(root)
+	runner := newCodexExecRunner(auth.DefaultCodexHome())
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
 	userInputBroker := newInteractiveUserInputBroker()
+	interrupts := newInteractiveInterruptController()
 	options := codextea.Options{
-		NoAltScreen:        root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems: interactiveSessionPickerItems(root),
-		SessionPickerCWD:   interactiveSessionPickerCWD(root),
-		OnSessionAction:    interactiveSessionActionHandler(root),
+		NoAltScreen:             root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:      interactiveSessionPickerItems(root),
+		SessionPickerCWD:        interactiveSessionPickerCWD(root),
+		OnSessionAction:         interactiveSessionActionHandler(root),
+		KeymapConfig:            interactiveKeymapConfig(root),
+		OnKeymapEdit:            interactiveKeymapEditHandler(root),
+		OnWriteSettings:         interactiveSettingsWriteHandler(root),
+		FeatureSettings:         settings.FeatureSettings,
+		Personality:             settings.Personality,
+		Notifications:           settings.Notifications,
+		NotificationMethod:      settings.NotificationMethod,
+		NotificationCondition:   settings.NotificationCondition,
+		PermissionRequirements:  settings.PermissionRequirements,
+		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
+		TUITheme:                settings.TUITheme,
+		TUIPet:                  settings.TUIPet,
+		OnPostNotification:      interactiveNotificationPoster(stdout),
+		OnReadDebugConfig:       interactiveDebugConfigReader(root),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
-			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker)
+			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+		},
+		OnInterrupt: func() bubbletea.Cmd {
+			return interrupts.interruptCommand()
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			approvalBroker.respond(response)
@@ -512,6 +593,516 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	}
 	_, err := codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+func interactiveNotificationPoster(stdout io.Writer) codextea.NotificationPostFunc {
+	return func(message string, method codextui.NotificationMethod) bubbletea.Cmd {
+		if method == "" {
+			method = codextui.NotificationMethodAuto
+		}
+		sequence := codextui.NotificationSequenceForEnv(method, message, os.Getenv)
+		if sequence == "" || stdout == nil {
+			return nil
+		}
+		return func() bubbletea.Msg {
+			if _, err := io.WriteString(stdout, sequence); err != nil {
+				return codextea.StatusMsg{Status: "warning: failed to post desktop notification: " + err.Error()}
+			}
+			return nil
+		}
+	}
+}
+
+func interactiveKeymapConfig(root *cli.RootOptions) *codextui.KeymapConfig {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil {
+		return codextui.NewKeymapConfig()
+	}
+	keymap, err := codextui.KeymapConfigFromConfigValues(loaded.Values)
+	if err != nil {
+		return codextui.NewKeymapConfig()
+	}
+	return keymap
+}
+
+func interactiveKeymapEditHandler(root *cli.RootOptions) codextea.KeymapEditFunc {
+	return func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
+		if err := edit.Validate(); err != nil {
+			return nil, "", err
+		}
+		codexHome := auth.DefaultCodexHome()
+		service := config.NewConfigService(codexHome)
+		if root != nil && strings.TrimSpace(root.Shared.Profile) != "" {
+			service.SetProfile(root.Shared.Profile)
+		}
+		response, err := service.WriteValue(&config.ConfigValueWriteParams{
+			KeyPath: edit.KeyPath(),
+			Value:   edit.ConfigValue(),
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+		if err != nil {
+			return nil, "", err
+		}
+		keymap, err := codextui.KeymapConfigFromConfigValues(loaded.Values)
+		if err != nil {
+			return nil, "", err
+		}
+		message := interactiveKeymapEditMessage(edit)
+		if response != nil && strings.TrimSpace(response.FilePath) != "" {
+			message += " Saved to " + response.FilePath + "."
+		}
+		return keymap, message, nil
+	}
+}
+
+func interactiveTUISettings(root *cli.RootOptions) codextea.SettingsWriteResult {
+	result, err := interactiveLoadSettings(root)
+	if err != nil {
+		return codextea.SettingsWriteResult{}
+	}
+	return result
+}
+
+func interactiveSettingsWriteHandler(root *cli.RootOptions) codextea.SettingsWriteFunc {
+	return func(edits []codextea.SettingsEdit) (codextea.SettingsWriteResult, error) {
+		if len(edits) == 0 {
+			return interactiveLoadSettings(root)
+		}
+		configEdits := make([]config.ConfigEdit, 0, len(edits))
+		for _, edit := range edits {
+			keyPath := strings.TrimSpace(edit.KeyPath)
+			if keyPath == "" {
+				continue
+			}
+			configEdits = append(configEdits, config.ConfigEdit{
+				KeyPath:       keyPath,
+				Value:         edit.Value,
+				MergeStrategy: config.MergeReplace,
+			})
+		}
+		if len(configEdits) == 0 {
+			return interactiveLoadSettings(root)
+		}
+		service := interactiveConfigService(root)
+		response, err := service.BatchWrite(&config.ConfigBatchWriteParams{Edits: configEdits})
+		if err != nil {
+			return codextea.SettingsWriteResult{}, err
+		}
+		result, err := interactiveLoadSettings(root)
+		if err != nil {
+			return codextea.SettingsWriteResult{}, err
+		}
+		if response != nil {
+			result.FilePath = response.FilePath
+		}
+		return result, nil
+	}
+}
+
+func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResult, error) {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil {
+		return codextea.SettingsWriteResult{}, err
+	}
+	return interactiveSettingsFromConfig(loaded), nil
+}
+
+func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWriteResult {
+	var values map[string]any
+	featureSettings := map[string]bool{}
+	if loaded != nil {
+		values = loaded.Values
+		featureSettings = loaded.FeatureSettings()
+	}
+	return codextea.SettingsWriteResult{
+		FeatureSettings:         featureSettings,
+		Personality:             interactivePersonalityFromConfig(values),
+		Notifications:           interactiveNotificationSettingsFromConfig(values),
+		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
+		NotificationCondition:   interactiveNotificationConditionFromConfig(values),
+		PermissionRequirements:  interactivePermissionRequirementsFromConfig(values),
+		HideRateLimitModelNudge: interactiveHideRateLimitModelNudgeFromConfig(values),
+		TUITheme:                interactiveTUIStringFromConfig(values, "theme"),
+		TUIPet:                  interactiveTUIStringFromConfig(values, "pet"),
+	}
+}
+
+func interactiveConfigService(root *cli.RootOptions) *config.ConfigService {
+	service := config.NewConfigService(auth.DefaultCodexHome())
+	if root != nil && strings.TrimSpace(root.Shared.Profile) != "" {
+		service.SetProfile(root.Shared.Profile)
+	}
+	return service
+}
+
+func interactiveDebugConfigReader(root *cli.RootOptions) codextea.DebugConfigReaderFunc {
+	return func() ([]string, error) {
+		service := interactiveConfigService(root)
+		params := &config.ConfigReadParams{IncludeLayers: true}
+		if cwd := interactiveSessionPickerCWD(root); cwd != "" {
+			params.CWD = &cwd
+		}
+		read, err := service.Read(params)
+		if err != nil {
+			return nil, err
+		}
+		requirements := service.Requirements()
+		var effectiveRequirements *config.ConfigRequirements
+		if requirements != nil {
+			effectiveRequirements = requirements.Requirements
+		}
+		if effectiveRequirements == nil {
+			loadedRequirements, err := config.LoadRequirementsFile(filepath.Join(service.CodexHome(), "requirements.toml"))
+			if err != nil {
+				return nil, err
+			}
+			effectiveRequirements = loadedRequirements
+		}
+		return codextui.NewDebugConfigOutput(read, effectiveRequirements, nil), nil
+	}
+}
+
+func interactivePersonalityFromConfig(values map[string]any) chatwidget.Personality {
+	if values == nil {
+		return ""
+	}
+	value, ok := values["personality"].(string)
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(chatwidget.PersonalityFriendly):
+		return chatwidget.PersonalityFriendly
+	case string(chatwidget.PersonalityPragmatic):
+		return chatwidget.PersonalityPragmatic
+	case string(chatwidget.PersonalityNone):
+		return chatwidget.PersonalityNone
+	default:
+		return ""
+	}
+}
+
+func interactiveHideRateLimitModelNudgeFromConfig(values map[string]any) *bool {
+	if values == nil {
+		return nil
+	}
+	notices, ok := values["notices"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := notices["hide_rate_limit_model_nudge"].(bool)
+	if !ok {
+		return nil
+	}
+	return &value
+}
+
+func interactiveNotificationSettingsFromConfig(values map[string]any) *chatwidget.NotificationsSetting {
+	tui := interactiveTUIConfig(values)
+	raw, ok := tui["notifications"]
+	if !ok {
+		return &chatwidget.NotificationsSetting{Enabled: true}
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return &chatwidget.NotificationsSetting{Enabled: typed}
+	case []string:
+		return &chatwidget.NotificationsSetting{Custom: copyNotificationTypes(typed), CustomSet: true}
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				items = append(items, text)
+			}
+		}
+		return &chatwidget.NotificationsSetting{Custom: copyNotificationTypes(items), CustomSet: true}
+	case string:
+		return &chatwidget.NotificationsSetting{Custom: []string{typed}, CustomSet: true}
+	default:
+		return &chatwidget.NotificationsSetting{Enabled: true}
+	}
+}
+
+func interactiveNotificationMethodFromConfig(values map[string]any) codextui.NotificationMethod {
+	tui := interactiveTUIConfig(values)
+	value, _ := tui["notification_method"].(string)
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(codextui.NotificationMethodOSC9):
+		return codextui.NotificationMethodOSC9
+	case string(codextui.NotificationMethodBEL):
+		return codextui.NotificationMethodBEL
+	default:
+		return codextui.NotificationMethodAuto
+	}
+}
+
+func interactiveNotificationConditionFromConfig(values map[string]any) codextui.NotificationCondition {
+	tui := interactiveTUIConfig(values)
+	value, _ := tui["notification_condition"].(string)
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(codextui.NotificationConditionAlways):
+		return codextui.NotificationConditionAlways
+	default:
+		return codextui.NotificationConditionUnfocused
+	}
+}
+
+func interactiveTUIConfig(values map[string]any) map[string]any {
+	if values == nil {
+		return map[string]any{}
+	}
+	tui, ok := values["tui"].(map[string]any)
+	if !ok || tui == nil {
+		return map[string]any{}
+	}
+	return tui
+}
+
+func interactiveTUIStringFromConfig(values map[string]any, key string) string {
+	tui := interactiveTUIConfig(values)
+	value, _ := tui[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func normalizeNotificationTypes(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func copyNotificationTypes(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+func interactivePermissionRequirementsFromConfig(values map[string]any) *chatwidget.PermissionRequirements {
+	requirements, ok := values["requirements"].(map[string]any)
+	if !ok || requirements == nil {
+		return nil
+	}
+	out := chatwidget.PermissionRequirements{}
+	has := false
+	if policies := interactiveStringListFromEitherKey(requirements, "allowed_approval_policies", "allowedApprovalPolicies"); len(policies) > 0 {
+		has = true
+		out.AllowedApprovalPolicies = interactiveApprovalPoliciesFromStrings(policies)
+	}
+	if reviewers := interactiveStringListFromEitherKey(requirements, "allowed_approvals_reviewers", "allowedApprovalsReviewers"); len(reviewers) > 0 {
+		has = true
+		out.AllowedReviewers = interactiveApprovalReviewersFromStrings(reviewers)
+	}
+	if profiles, ok := interactiveBoolMapFromEitherKey(requirements, "allowed_permission_profiles", "allowedPermissionProfiles"); ok {
+		has = true
+		out.AllowedProfiles = profiles
+	}
+	if modes := interactiveStringListFromEitherKey(requirements, "allowed_windows_sandbox_implementations", "allowedWindowsSandboxImplementations"); len(modes) > 0 {
+		has = true
+		out.AllowedWindowsSandboxModes = interactiveWindowsSandboxModesFromStrings(modes)
+	}
+	if !has {
+		return nil
+	}
+	return &out
+}
+
+func interactivePermissionRequirementsFromConfigRequirements(requirements *config.ConfigRequirements) *chatwidget.PermissionRequirements {
+	if requirements == nil {
+		return nil
+	}
+	out := chatwidget.PermissionRequirements{}
+	has := false
+	if len(requirements.AllowedApprovalPolicies) > 0 {
+		values := make([]string, 0, len(requirements.AllowedApprovalPolicies))
+		for _, policy := range requirements.AllowedApprovalPolicies {
+			values = append(values, string(policy))
+		}
+		has = true
+		out.AllowedApprovalPolicies = interactiveApprovalPoliciesFromStrings(values)
+	}
+	if len(requirements.AllowedApprovalsReviewers) > 0 {
+		values := make([]string, 0, len(requirements.AllowedApprovalsReviewers))
+		for _, reviewer := range requirements.AllowedApprovalsReviewers {
+			values = append(values, string(reviewer))
+		}
+		has = true
+		out.AllowedReviewers = interactiveApprovalReviewersFromStrings(values)
+	}
+	if requirements.AllowedPermissionProfiles != nil {
+		has = true
+		out.AllowedProfiles = make(map[string]bool, len(requirements.AllowedPermissionProfiles))
+		for key, value := range requirements.AllowedPermissionProfiles {
+			if strings.TrimSpace(key) != "" {
+				out.AllowedProfiles[strings.TrimSpace(key)] = value
+			}
+		}
+	}
+	if len(requirements.AllowedWindowsSandboxImplementations) > 0 {
+		values := make([]string, 0, len(requirements.AllowedWindowsSandboxImplementations))
+		for _, mode := range requirements.AllowedWindowsSandboxImplementations {
+			values = append(values, string(mode))
+		}
+		has = true
+		out.AllowedWindowsSandboxModes = interactiveWindowsSandboxModesFromStrings(values)
+	}
+	if !has {
+		return nil
+	}
+	return &out
+}
+
+func interactiveApprovalPoliciesFromStrings(values []string) []chatwidget.ApprovalPolicy {
+	out := []chatwidget.ApprovalPolicy{}
+	seen := map[chatwidget.ApprovalPolicy]bool{}
+	for _, value := range values {
+		var policy chatwidget.ApprovalPolicy
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on-request", "on_request":
+			policy = chatwidget.ApprovalOnRequest
+		case "never":
+			policy = chatwidget.ApprovalNever
+		default:
+			continue
+		}
+		if !seen[policy] {
+			seen[policy] = true
+			out = append(out, policy)
+		}
+	}
+	return out
+}
+
+func interactiveApprovalReviewersFromStrings(values []string) []chatwidget.ApprovalsReviewer {
+	out := []chatwidget.ApprovalsReviewer{}
+	seen := map[chatwidget.ApprovalsReviewer]bool{}
+	for _, value := range values {
+		var reviewer chatwidget.ApprovalsReviewer
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "user":
+			reviewer = chatwidget.ApprovalsReviewerUser
+		case "auto_review", "auto-review":
+			reviewer = chatwidget.ApprovalsReviewerAutoReview
+		default:
+			continue
+		}
+		if !seen[reviewer] {
+			seen[reviewer] = true
+			out = append(out, reviewer)
+		}
+	}
+	return out
+}
+
+func interactiveWindowsSandboxModesFromStrings(values []string) []chatwidget.WindowsSandboxMode {
+	out := []chatwidget.WindowsSandboxMode{}
+	seen := map[chatwidget.WindowsSandboxMode]bool{}
+	for _, value := range values {
+		var mode chatwidget.WindowsSandboxMode
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case string(chatwidget.WindowsSandboxModeDefault):
+			mode = chatwidget.WindowsSandboxModeDefault
+		case string(chatwidget.WindowsSandboxModeElevated):
+			mode = chatwidget.WindowsSandboxModeElevated
+		case string(chatwidget.WindowsSandboxModeUnelevated):
+			mode = chatwidget.WindowsSandboxModeUnelevated
+		case string(chatwidget.WindowsSandboxModeDisabled):
+			mode = chatwidget.WindowsSandboxModeDisabled
+		default:
+			continue
+		}
+		if !seen[mode] {
+			seen[mode] = true
+			out = append(out, mode)
+		}
+	}
+	return out
+}
+
+func interactiveStringListFromEitherKey(values map[string]any, snake string, camel string) []string {
+	if list := interactiveStringListFromConfigValue(values[snake]); len(list) > 0 {
+		return list
+	}
+	return interactiveStringListFromConfigValue(values[camel])
+}
+
+func interactiveStringListFromConfigValue(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		return normalizeNotificationTypes(typed)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, fmt.Sprint(item))
+		}
+		return normalizeNotificationTypes(out)
+	case string:
+		return normalizeNotificationTypes([]string{typed})
+	default:
+		return nil
+	}
+}
+
+func interactiveBoolMapFromEitherKey(values map[string]any, snake string, camel string) (map[string]bool, bool) {
+	if out, ok := interactiveBoolMapFromConfigValue(values[snake]); ok {
+		return out, true
+	}
+	return interactiveBoolMapFromConfigValue(values[camel])
+}
+
+func interactiveBoolMapFromConfigValue(raw any) (map[string]bool, bool) {
+	switch typed := raw.(type) {
+	case map[string]bool:
+		out := make(map[string]bool, len(typed))
+		for key, value := range typed {
+			if strings.TrimSpace(key) != "" {
+				out[strings.TrimSpace(key)] = value
+			}
+		}
+		return out, true
+	case map[string]any:
+		out := make(map[string]bool, len(typed))
+		for key, rawValue := range typed {
+			value, ok := rawValue.(bool)
+			if ok && strings.TrimSpace(key) != "" {
+				out[strings.TrimSpace(key)] = value
+			}
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func interactiveKeymapLoadOptions(root *cli.RootOptions) *config.EffectiveOptions {
+	if root == nil {
+		return nil
+	}
+	return &config.EffectiveOptions{
+		Profile:         root.Shared.Profile,
+		CWD:             root.Shared.CWD,
+		RawOverrides:    append([]string(nil), root.ConfigOverrides...),
+		EnableFeatures:  root.EnableFeatures,
+		DisableFeatures: root.DisableFeatures,
+	}
+}
+
+func interactiveKeymapEditMessage(edit codextui.KeymapEdit) string {
+	switch edit.Operation {
+	case codextui.KeymapEditUnbind:
+		return "Unbound " + edit.Context + "." + edit.Action + "."
+	case codextui.KeymapEditUnset:
+		return "Reset " + edit.Context + "." + edit.Action + " to defaults."
+	default:
+		return "Updated " + edit.Context + "." + edit.Action + " to " + strings.Join(edit.Bindings, ", ") + "."
+	}
 }
 
 func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSummary {
@@ -589,10 +1180,20 @@ func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner i
 	return interactiveTurnCommandWithRequest(ctx, root, runner, state, codextea.SubmitRequest{Prompt: prompt}, approvalBroker, elicitationBroker, userInputBroker)
 }
 
-func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) bubbletea.Cmd {
+func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts ...*interactiveInterruptController) bubbletea.Cmd {
 	return func() bubbletea.Msg {
 		messages := make(chan bubbletea.Msg, 256)
-		go runInteractiveTurn(ctx, root, runner, state, request, messages, approvalBroker, elicitationBroker, userInputBroker)
+		turnCtx := ctx
+		var done func()
+		if len(interrupts) > 0 && interrupts[0] != nil {
+			turnCtx, done = interrupts[0].begin(ctx)
+		}
+		go func() {
+			if done != nil {
+				defer done()
+			}
+			runInteractiveTurn(turnCtx, root, runner, state, request, messages, approvalBroker, elicitationBroker, userInputBroker)
+		}()
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
 }
@@ -603,6 +1204,12 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		select {
 		case messages <- message:
 		case <-ctx.Done():
+		}
+	}
+	sendAfterCancel := func(message bubbletea.Msg) {
+		select {
+		case messages <- message:
+		default:
 		}
 	}
 	if ctx == nil {
@@ -644,6 +1251,9 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}
 	turnRoot := *root
 	turnRoot.Shared = interactiveSharedOptionsFromState(turnRoot.Shared, state)
+	if state != nil && strings.TrimSpace(state.Personality) != "" {
+		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
+	}
 	execOpts := cli.ExecOptions{
 		Prompt: strings.TrimSpace(prompt),
 		Shared: turnRoot.Shared,
@@ -666,6 +1276,10 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}, strings.NewReader(""), streamWriter, io.Discard)
 	streamWriter.Flush()
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			sendAfterCancel(codextea.TurnInterruptedMsg{Err: ctx.Err()})
+			return
+		}
 		send(codextea.TurnCompletedMsg{Err: err})
 		return
 	}
@@ -821,7 +1435,7 @@ func runInteractivePrompt(ctx context.Context, root *cli.RootOptions, stdin io.R
 		Shared: root.Shared,
 		Color:  "auto",
 	}
-	_, err := codexexec.NewRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
+	_, err := newCodexExecRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
 		Root: *root,
 		Exec: execOpts,
 	}, stdin, stdout, stderr)
@@ -959,7 +1573,7 @@ func (s *interactiveSession) Run(ctx context.Context) error {
 		return errors.New("interactive session is nil")
 	}
 	if s.Runner == nil {
-		s.Runner = codexexec.NewRunner(auth.DefaultCodexHome())
+		s.Runner = newCodexExecRunner(auth.DefaultCodexHome())
 	}
 	if s.Reader == nil {
 		return errors.New("interactive reader is nil")
@@ -1022,6 +1636,8 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 		return true, true, nil
 	case codextui.CommandHelp:
 		_, err = fmt.Fprint(s.Stdout, s.UI.RenderHelp())
+	case codextui.CommandKeymap:
+		err = s.handleKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
 		_, err = fmt.Fprintln(s.Stdout, s.UI.RenderStatusLine())
 	case codextui.CommandNew:
@@ -1037,10 +1653,33 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 		err = s.handleApprovalCommand(invocation.Args)
 	case codextui.CommandSandbox:
 		err = s.handleSandboxCommand(invocation.Args)
+	case codextui.CommandPermissions:
+		err = s.handlePermissionsCommand(invocation.Args)
+	case codextui.CommandPersonality:
+		err = s.handlePersonalityCommand(invocation.Args)
+	case codextui.CommandExperimental:
+		err = s.handleExperimentalCommand(invocation.Args)
 	default:
 		_, err = fmt.Fprintf(s.Stdout, "Unknown command %s. Type /help for commands.\n", invocation.Name)
 	}
 	return true, false, err
+}
+
+func (s *interactiveSession) handleKeymapCommand(args string) error {
+	current := interactiveKeymapConfig(&s.Root)
+	handler := interactiveKeymapEditHandler(&s.Root)
+	result, err := codextui.HandleKeymapCommand(args, current, func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
+		return handler(edit)
+	})
+	if err != nil {
+		_, writeErr := fmt.Fprintln(s.Stdout, "Keymap:", err)
+		if writeErr != nil {
+			return writeErr
+		}
+		return nil
+	}
+	_, err = fmt.Fprintln(s.Stdout, result.Text)
+	return err
 }
 
 func (s *interactiveSession) handleModelCommand(args string) error {
@@ -1075,6 +1714,165 @@ func (s *interactiveSession) handleSandboxCommand(args string) error {
 	}
 	_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Sandbox", s.UI.Sandbox))
 	return err
+}
+
+func (s *interactiveSession) handlePermissionsCommand(args string) error {
+	value := strings.ToLower(strings.TrimSpace(args))
+	switch value {
+	case "", "show", "status":
+	case "read-only", ":read-only":
+		s.Root.Shared.ApprovalPolicy = string(chatwidget.ApprovalOnRequest)
+		s.Root.Shared.Sandbox = chatwidget.ReadOnlyProfile
+		s.UI.ApprovalPolicy = string(chatwidget.ApprovalOnRequest)
+		s.UI.Sandbox = chatwidget.ReadOnlyProfile
+	case "default", "auto", "workspace", ":workspace":
+		s.Root.Shared.ApprovalPolicy = string(chatwidget.ApprovalOnRequest)
+		s.Root.Shared.Sandbox = chatwidget.WorkspaceProfile
+		s.UI.ApprovalPolicy = string(chatwidget.ApprovalOnRequest)
+		s.UI.Sandbox = chatwidget.WorkspaceProfile
+	case "full-access", ":danger-full-access":
+		s.Root.Shared.ApprovalPolicy = string(chatwidget.ApprovalNever)
+		s.Root.Shared.Sandbox = chatwidget.DangerFullAccessProfile
+		s.UI.ApprovalPolicy = string(chatwidget.ApprovalNever)
+		s.UI.Sandbox = chatwidget.DangerFullAccessProfile
+	default:
+		_, err := fmt.Fprintln(s.Stdout, "Permissions must be one of read-only, default, full-access.")
+		return err
+	}
+	_, err := fmt.Fprintf(s.Stdout, "Permissions: approval=%s sandbox=%s\n", displayInteractiveValue(s.UI.ApprovalPolicy), displayInteractiveValue(s.UI.Sandbox))
+	return err
+}
+
+func (s *interactiveSession) handlePersonalityCommand(args string) error {
+	value := strings.ToLower(strings.TrimSpace(args))
+	if value == "" || value == "show" || value == "status" {
+		current := s.UI.Personality
+		if strings.TrimSpace(current) == "" {
+			settings := interactiveTUISettings(&s.Root)
+			current = string(settings.Personality)
+		}
+		_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Personality", current))
+		return err
+	}
+	personality, ok := interactiveParsePersonality(value)
+	if !ok {
+		_, err := fmt.Fprintln(s.Stdout, "Personality must be one of friendly, pragmatic, none.")
+		return err
+	}
+	_, err := interactiveSettingsWriteHandler(&s.Root)([]codextea.SettingsEdit{{
+		KeyPath: "personality",
+		Value:   string(personality),
+	}})
+	if err != nil {
+		_, writeErr := fmt.Fprintln(s.Stdout, "Personality:", err)
+		if writeErr != nil {
+			return writeErr
+		}
+		return nil
+	}
+	s.UI.Personality = string(personality)
+	_, err = fmt.Fprintf(s.Stdout, "Personality set to %s\n", chatwidget.PersonalityLabel(personality))
+	return err
+}
+
+func interactiveParsePersonality(value string) (chatwidget.Personality, bool) {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 {
+		return "", false
+	}
+	switch fields[0] {
+	case string(chatwidget.PersonalityFriendly):
+		return chatwidget.PersonalityFriendly, true
+	case string(chatwidget.PersonalityPragmatic):
+		return chatwidget.PersonalityPragmatic, true
+	case string(chatwidget.PersonalityNone):
+		return chatwidget.PersonalityNone, true
+	default:
+		return "", false
+	}
+}
+
+func (s *interactiveSession) handleExperimentalCommand(args string) error {
+	fields := strings.Fields(strings.TrimSpace(args))
+	if len(fields) == 0 {
+		settings := interactiveTUISettings(&s.Root)
+		lines := []string{"Experimental features:"}
+		for _, spec := range features.Registry {
+			if spec.Stage != features.StageExperimental {
+				continue
+			}
+			state := "off"
+			if features.Enabled(settings.FeatureSettings, spec.Key) {
+				state = "on"
+			}
+			lines = append(lines, "  "+spec.Key+": "+state)
+		}
+		_, err := fmt.Fprintln(s.Stdout, strings.Join(lines, "\n"))
+		return err
+	}
+	key := strings.TrimSpace(fields[0])
+	if !interactiveExperimentalFeatureVisible(key) {
+		_, err := fmt.Fprintf(s.Stdout, "Unknown experimental feature: %s\n", key)
+		return err
+	}
+	settings := interactiveTUISettings(&s.Root)
+	enabled := !features.Enabled(settings.FeatureSettings, key)
+	if len(fields) > 1 {
+		parsed, ok := interactiveParseFeatureToggle(fields[1], enabled)
+		if !ok {
+			_, err := fmt.Fprintln(s.Stdout, "Experimental usage: /experimental FEATURE on|off|toggle")
+			return err
+		}
+		enabled = parsed
+	}
+	_, err := interactiveSettingsWriteHandler(&s.Root)([]codextea.SettingsEdit{{
+		KeyPath: "features." + key,
+		Value:   enabled,
+	}})
+	if err != nil {
+		_, writeErr := fmt.Fprintln(s.Stdout, "Experimental:", err)
+		if writeErr != nil {
+			return writeErr
+		}
+		return nil
+	}
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	_, err = fmt.Fprintf(s.Stdout, "Feature %s %s.\n", key, state)
+	return err
+}
+
+func interactiveExperimentalFeatureVisible(key string) bool {
+	key = strings.TrimSpace(key)
+	for _, spec := range features.Registry {
+		if spec.Key == key && spec.Stage == features.StageExperimental {
+			return true
+		}
+	}
+	return false
+}
+
+func interactiveParseFeatureToggle(value string, toggleValue bool) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "true", "enable", "enabled", "yes":
+		return true, true
+	case "off", "false", "disable", "disabled", "no":
+		return false, true
+	case "toggle":
+		return toggleValue, true
+	default:
+		return false, false
+	}
+}
+
+func displayInteractiveValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+	return value
 }
 
 func (s *interactiveSession) RunTurn(ctx context.Context, prompt string) error {

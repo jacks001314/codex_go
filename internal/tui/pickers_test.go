@@ -73,6 +73,29 @@ func TestSessionPickerFiltersSortsAndSelects(t *testing.T) {
 	}
 }
 
+func TestFormatAgentPickerItemNameMatchesRustRules(t *testing.T) {
+	cases := []struct {
+		name      string
+		nickname  string
+		role      string
+		primary   bool
+		wantLabel string
+	}{
+		{name: "primary", primary: true, wantLabel: "Main [default]"},
+		{name: "nickname and role", nickname: "Scout", role: "review", wantLabel: "Scout [review]"},
+		{name: "nickname only", nickname: "Scout", wantLabel: "Scout"},
+		{name: "role only", role: "worker", wantLabel: "[worker]"},
+		{name: "fallback", wantLabel: "Agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FormatAgentPickerItemName(tc.nickname, tc.role, tc.primary); got != tc.wantLabel {
+				t.Fatalf("label = %q, want %q", got, tc.wantLabel)
+			}
+		})
+	}
+}
+
 func TestSessionPickerActionFiltersAndSelectionKinds(t *testing.T) {
 	items := []SessionSummary{
 		{ThreadID: "active", Title: "Active", CWD: `D:\repo\a`},
@@ -475,5 +498,26 @@ func TestRequestUserInputStateCapturesOptionNotesAndUnanswered(t *testing.T) {
 	}
 	if got := answerLists["notes"]; len(got) != 0 {
 		t.Fatalf("notes answer list = %#v", got)
+	}
+}
+
+func TestRequestUserInputStatePreservesOtherAndMasksSecretDraft(t *testing.T) {
+	state, err := NewRequestUserInputState([]RequestUserInputQuestion{{
+		ID:       "secret",
+		Question: "Enter token?",
+		IsOther:  true,
+		IsSecret: true,
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewRequestUserInputState() error = %v", err)
+	}
+	question, _ := state.CurrentQuestion()
+	if !question.IsOther || !question.IsSecret {
+		t.Fatalf("question flags = %#v", question)
+	}
+	state.AppendDraft("s3cr3t")
+	body := state.RenderBody(80)
+	if strings.Contains(body, "s3cr3t") || !strings.Contains(body, "Answer: ******") {
+		t.Fatalf("secret body was not masked:\n%s", body)
 	}
 }

@@ -612,7 +612,7 @@ func TestResponsesAgentRunnerSendsOriginatorHeader(t *testing.T) {
 	}
 }
 
-func TestResponsesAgentRunnerSendsStoreAndContinuationFields(t *testing.T) {
+func TestResponsesAgentRunnerSendsStoreAndMetadataFieldsWithoutHTTPPreviousResponseID(t *testing.T) {
 	var recordedBody map[string]any
 	var recordedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -649,8 +649,11 @@ func TestResponsesAgentRunnerSendsStoreAndContinuationFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run error = %v", err)
 	}
-	if recordedBody["store"] != true || recordedBody["previous_response_id"] != "resp-prev" || recordedBody["service_tier"] != "priority" || recordedBody["prompt_cache_key"] != "cache-key" {
+	if recordedBody["store"] != true || recordedBody["service_tier"] != "priority" || recordedBody["prompt_cache_key"] != "cache-key" {
 		t.Fatalf("body = %#v", recordedBody)
+	}
+	if _, ok := recordedBody["previous_response_id"]; ok {
+		t.Fatalf("HTTP Responses request unexpectedly included previous_response_id: %#v", recordedBody)
 	}
 	metadata, ok := recordedBody["client_metadata"].(map[string]any)
 	if !ok || metadata["thread_id"] != "thread-1" {
@@ -1219,12 +1222,15 @@ func TestResponsesAgentRunnerStreamsResponsesSSE(t *testing.T) {
 			events = append(events, *event)
 		},
 	})
-	response, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	response, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test", PreviousResponseID: "resp-prev"})
 	if err != nil {
 		t.Fatalf("Run error = %v", err)
 	}
 	if recordedAccept != "text/event-stream" || recordedBody["stream"] != true {
 		t.Fatalf("stream request accept=%q body=%#v", recordedAccept, recordedBody)
+	}
+	if _, ok := recordedBody["previous_response_id"]; ok {
+		t.Fatalf("SSE Responses request unexpectedly included previous_response_id: %#v", recordedBody)
 	}
 	if response.Message != "hello world" || len(response.Items) != 2 {
 		t.Fatalf("response = %#v", response)
@@ -1298,6 +1304,44 @@ func TestResponsesAgentRunnerStreamsResponsesSSE(t *testing.T) {
 	}
 	if events[len(events)-1].Kind != ResponsesStreamEventCompleted || events[len(events)-1].ResponseID != "resp-1" {
 		t.Fatalf("completed event = %#v", events[len(events)-1])
+	}
+}
+
+func TestParseResponsesStreamAccumulatesFunctionCallArgumentDeltas(t *testing.T) {
+	var events []ResponsesStreamEvent
+	response, err := parseResponsesStream(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.added","item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"exec_command","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc-1","call_id":"call-1","delta":"{\"cmd\":\""}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc-1","call_id":"call-1","delta":"pwd\"}"}`,
+			`{"type":"response.output_item.done","item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"exec_command","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)),
+		&AgentRequest{Prompt: "inspect", Model: "gpt-test"},
+		"openai",
+		func(event *ResponsesStreamEvent) {
+			events = append(events, *event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStream() error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "function_call" || item.Name != "exec_command" || item.CallID != "call-1" || item.Arguments != `{"cmd":"pwd"}` {
+		t.Fatalf("function call item = %#v", item)
+	}
+	toolDeltas := eventsByKind(events, ResponsesStreamEventToolInputDelta)
+	if len(toolDeltas) != 2 || toolDeltas[0].ItemID != "fc-1" || toolDeltas[0].CallID != "call-1" {
+		t.Fatalf("tool delta events = %#v", toolDeltas)
+	}
+	done := firstEventByKind(events, ResponsesStreamEventOutputDone)
+	if done == nil || done.Item == nil || done.Item.Arguments != `{"cmd":"pwd"}` {
+		t.Fatalf("done event = %#v", done)
 	}
 }
 

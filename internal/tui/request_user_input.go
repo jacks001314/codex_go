@@ -16,8 +16,15 @@ type RequestUserInputQuestion struct {
 	Header   string
 	ID       string
 	Question string
+	IsOther  bool
+	IsSecret bool
 	Options  []RequestUserInputChoice
 }
+
+const (
+	RequestUserInputOtherOptionLabel       = "None of the above"
+	RequestUserInputOtherOptionDescription = "Optionally, add details in notes (tab)."
+)
 
 type RequestUserInputState struct {
 	Questions         []RequestUserInputQuestion
@@ -272,12 +279,16 @@ func (s *RequestUserInputState) RenderBody(width int) string {
 		answer := s.Draft
 		if answer == "" {
 			answer = "Type your answer (optional)"
+		} else if question.IsSecret {
+			answer = maskRequestUserInputText(answer)
 		}
 		lines = append(lines, "Answer: "+answer)
 	} else if s.NotesVisible {
 		notes := s.Draft
 		if notes == "" {
 			notes = "Add notes"
+		} else if question.IsSecret {
+			notes = maskRequestUserInputText(notes)
 		}
 		lines = append(lines, "Notes: "+notes)
 	}
@@ -313,10 +324,19 @@ func normalizeRequestUserInputQuestions(questions []RequestUserInputQuestion) []
 			Header:   header,
 			ID:       strings.TrimSpace(question.ID),
 			Question: strings.TrimSpace(question.Question),
+			IsOther:  question.IsOther,
+			IsSecret: question.IsSecret,
 			Options:  options,
 		})
 	}
 	return out
+}
+
+func maskRequestUserInputText(text string) string {
+	if text == "" {
+		return ""
+	}
+	return strings.Repeat("*", len([]rune(text)))
 }
 
 func normalizeAnswerList(values []string) []string {

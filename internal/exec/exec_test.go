@@ -42,7 +42,7 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	}
 	lastMessage := filepath.Join(t.TempDir(), "last.txt")
 	var stdout, stderr bytes.Buffer
-	result, err := NewRunner(home).Run(Request{
+	result, err := NewLocalRunner(home).Run(Request{
 		Exec: cli.ExecOptions{
 			Prompt:          "hello",
 			JSON:            true,
@@ -82,6 +82,148 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	}
 	if record.Metadata.Source != "cli" || record.Metadata.ThreadSource != string(model.AgentTaskRegular) {
 		t.Fatalf("session metadata = %#v", record.Metadata)
+	}
+}
+
+func TestNewRunnerDefaultsToResponsesAPI(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	type observedRequest struct {
+		path          string
+		authorization string
+		accept        string
+	}
+	seen := make(chan observedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- observedRequest{
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+			accept:        r.Header.Get("Accept"),
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-default"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-default","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-default","delta":"real default"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-default","type":"message","role":"assistant","content":[{"type":"output_text","text":"real default"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-default","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("openai_base_url = \""+server.URL+"/v1\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	result, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "hello",
+			JSON:      true,
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.LastMessage != "real default" || strings.Contains(stdout.String(), "Go Codex exec stub received") {
+		t.Fatalf("result = %#v stdout = %q", result, stdout.String())
+	}
+	select {
+	case request := <-seen:
+		if request.path != "/v1/responses" || request.authorization != "Bearer sk-test" || request.accept != "text/event-stream" {
+			t.Fatalf("request = %#v", request)
+		}
+	default:
+		t.Fatal("Responses API server did not receive a request")
+	}
+}
+
+func TestNewRunnerReadsRustAuthModeAliasAndConfiguredProvider(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-rust"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile auth returned error: %v", err)
+	}
+	type observedRequest struct {
+		path          string
+		authorization string
+	}
+	seen := make(chan observedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- observedRequest{
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-rust-auth"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-rust-auth","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-rust-auth","delta":"configured auth"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-rust-auth","type":"message","role":"assistant","content":[{"type":"output_text","text":"configured auth"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-rust-auth","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+	}))
+	defer server.Close()
+	configBody := `
+model = "gpt-5.5"
+model_provider = "OpenAI"
+
+[model_providers.OpenAI]
+name = "OpenAI"
+base_url = "` + server.URL + `/v1"
+requires_openai_auth = true
+wire_api = "responses"
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	result, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "hello",
+			JSON:      true,
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.LastMessage != "configured auth" {
+		t.Fatalf("LastMessage = %q", result.LastMessage)
+	}
+	select {
+	case request := <-seen:
+		if request.path != "/v1/responses" || request.authorization != "Bearer sk-rust" {
+			t.Fatalf("request = %#v", request)
+		}
+	default:
+		t.Fatal("Responses API server did not receive a request")
+	}
+}
+
+func TestNewRunnerFailsBeforeRequestWhenOpenAIAuthMissing(t *testing.T) {
+	home := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("openai_base_url = \""+server.URL+"/v1\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "hello",
+			JSON:      true,
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "OpenAI authentication is required") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("server requests = %d, want 0", requests)
 	}
 }
 
@@ -153,12 +295,12 @@ func TestRunStructuredInputItemsAndSessionContent(t *testing.T) {
 	if agent.request.Prompt != "" {
 		t.Fatalf("agent prompt = %q, want empty when input items carry user input", agent.request.Prompt)
 	}
-	if len(agent.request.InputItems) != 1 {
+	item := agentRequestInputItemWithText(agent.request, "review these")
+	if item == nil {
 		t.Fatalf("input items = %#v", agent.request.InputItems)
 	}
-	item, ok := agent.request.InputItems[0].(map[string]any)
-	if !ok || item["role"] != "user" {
-		t.Fatalf("user input item = %#v", agent.request.InputItems[0])
+	if item["role"] != "user" {
+		t.Fatalf("user input item = %#v", item)
 	}
 	content, ok := item["content"].([]map[string]any)
 	if !ok || len(content) != 5 {
@@ -186,6 +328,43 @@ func TestRunStructuredInputItemsAndSessionContent(t *testing.T) {
 	}
 	if record.Items[0].Content[2].Type != "input_text" || record.Items[0].Content[2].Text != "review these" {
 		t.Fatalf("session text = %#v", record.Items[0].Content[2])
+	}
+}
+
+func TestRunAddsStartupEnvironmentContextInputItems(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	project := t.TempDir()
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	runner.Now = func() time.Time {
+		return time.Date(2026, 7, 9, 10, 0, 0, 0, time.FixedZone("Asia/Hong_Kong", 8*60*60))
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt: "hello",
+			Shared: cli.SharedOptions{
+				CWD:                                  project,
+				DangerouslyBypassApprovalsAndSandbox: true,
+			},
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !agentRequestInputItemsContainText(agent.request, "<permissions instructions>") ||
+		!agentRequestInputItemsContainText(agent.request, "danger-full-access") ||
+		!agentRequestInputItemsContainText(agent.request, "<environment_context>") ||
+		!agentRequestInputItemsContainText(agent.request, "<cwd>"+filepath.Clean(project)+"</cwd>") ||
+		!agentRequestInputItemsContainText(agent.request, "<current_date>2026-07-09</current_date>") ||
+		!agentRequestInputItemsContainText(agent.request, `<permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile>`) {
+		t.Fatalf("startup input items = %#v", agent.request.InputItems)
 	}
 }
 
@@ -348,7 +527,7 @@ func TestRunWarnsForRemovedFullAuto(t *testing.T) {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	_, err := NewRunner(home).Run(Request{
+	_, err := NewLocalRunner(home).Run(Request{
 		Exec: cli.ExecOptions{
 			Prompt:          "hello",
 			RemovedFullAuto: true,
@@ -368,7 +547,7 @@ func TestRunExecReview(t *testing.T) {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	result, err := NewRunner(home).Run(Request{
+	result, err := NewLocalRunner(home).Run(Request{
 		Exec: cli.ExecOptions{
 			Subcommand: "review",
 			Review: cli.ReviewOptions{
@@ -718,7 +897,7 @@ func TestRunEphemeralSkipsSessionPersistence(t *testing.T) {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	result, err := NewRunner(home).Run(Request{
+	result, err := NewLocalRunner(home).Run(Request{
 		Exec: cli.ExecOptions{
 			Prompt:    "hello",
 			Ephemeral: true,
@@ -765,7 +944,7 @@ func TestRunExecutesToolLoopWithInjectedRouter(t *testing.T) {
 	if result.LastMessage != "done" || strings.TrimSpace(stdout.String()) != "done" {
 		t.Fatalf("result=%#v stdout=%q", result, stdout.String())
 	}
-	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 3 {
+	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 5 {
 		t.Fatalf("agent requests = %#v", agent.requests)
 	}
 	if len(agent.requests[0].Tools) != 1 || len(agent.requests[1].Tools) != 1 {
@@ -1071,6 +1250,53 @@ func TestExecStreamEventCollectorBuildsProtocolEvents(t *testing.T) {
 	}
 }
 
+func TestExecStreamEventCollectorBuildsRateLimitProtocolEvent(t *testing.T) {
+	minutes := int64(5 * 60)
+	reset := int64(1710000000)
+	balance := "0"
+	collector := &execStreamEventCollector{}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventRateLimits,
+		RateLimit: &model.ResponsesRateLimitSnapshot{
+			LimitID:   "codex",
+			LimitName: "Codex",
+			Primary: &model.ResponsesRateLimitWindow{
+				UsedPercent:        90,
+				WindowDurationMins: &minutes,
+				ResetsAt:           &reset,
+			},
+			Credits: &model.ResponsesCreditsSnapshot{
+				HasCredits: true,
+				Unlimited:  false,
+				Balance:    &balance,
+			},
+			PlanType:             "plus",
+			RateLimitReachedType: "primary",
+		},
+	})
+
+	events := collector.Events()
+	if len(events) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	event := events[0]
+	if event.Type != "response.rate_limits" || event.RateLimit == nil {
+		t.Fatalf("rate limit event = %#v", event)
+	}
+	if event.RateLimit.LimitID != "codex" || event.RateLimit.Primary == nil || event.RateLimit.Primary.UsedPercent != 90 {
+		t.Fatalf("rate limit snapshot = %#v", event.RateLimit)
+	}
+	if event.RateLimit.Primary.WindowDurationMins == nil || *event.RateLimit.Primary.WindowDurationMins != minutes {
+		t.Fatalf("rate limit window minutes = %#v", event.RateLimit.Primary)
+	}
+	if event.RateLimit.Primary.ResetsAt == nil || *event.RateLimit.Primary.ResetsAt != reset {
+		t.Fatalf("rate limit reset = %#v", event.RateLimit.Primary)
+	}
+	if event.RateLimit.Credits == nil || event.RateLimit.Credits.Balance == nil || *event.RateLimit.Credits.Balance != balance {
+		t.Fatalf("credits = %#v", event.RateLimit.Credits)
+	}
+}
+
 func TestExecStreamEventCollectorSkipsReasoningStarted(t *testing.T) {
 	collector := &execStreamEventCollector{}
 	collector.Handle(&model.ResponsesStreamEvent{
@@ -1186,12 +1412,17 @@ func TestRunJSONEmitsErrorEventWhenTurnFails(t *testing.T) {
 	}
 	runner := NewRunner(home)
 	runner.Agent = &failingAgent{err: errors.New("model exploded")}
+	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
+	if err := os.WriteFile(lastMessage, []byte("keep existing contents"), 0o600); err != nil {
+		t.Fatalf("seed last message file: %v", err)
+	}
 	var stdout, stderr bytes.Buffer
 	_, err := runner.Run(Request{
 		Exec: cli.ExecOptions{
-			Prompt:    "hello",
-			JSON:      true,
-			Ephemeral: true,
+			Prompt:          "hello",
+			JSON:            true,
+			Ephemeral:       true,
+			LastMessageFile: lastMessage,
 		},
 	}, strings.NewReader(""), &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "model exploded") {
@@ -1204,6 +1435,16 @@ func TestRunJSONEmitsErrorEventWhenTurnFails(t *testing.T) {
 	if !strings.Contains(output, `"type":"error"`) || !strings.Contains(output, `"message":"model exploded"`) {
 		t.Fatalf("stdout missing error event: %q", output)
 	}
+	if !strings.Contains(output, `"type":"turn.failed"`) {
+		t.Fatalf("stdout missing Rust turn.failed event: %q", output)
+	}
+	data, readErr := os.ReadFile(lastMessage)
+	if readErr != nil {
+		t.Fatalf("read last message file: %v", readErr)
+	}
+	if string(data) != "keep existing contents" {
+		t.Fatalf("last message file = %q, want unchanged after failed turn", data)
+	}
 }
 
 type recordingAgent struct {
@@ -1213,6 +1454,10 @@ type recordingAgent struct {
 }
 
 func agentRequestInputItemsHaveText(request *model.AgentRequest, text string) bool {
+	return agentRequestInputItemWithText(request, text) != nil
+}
+
+func agentRequestInputItemsContainText(request *model.AgentRequest, text string) bool {
 	if request == nil {
 		return false
 	}
@@ -1226,12 +1471,34 @@ func agentRequestInputItemsHaveText(request *model.AgentRequest, text string) bo
 			continue
 		}
 		for i := range content {
-			if content[i]["text"] == text {
+			if strings.Contains(fmt.Sprint(content[i]["text"]), text) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func agentRequestInputItemWithText(request *model.AgentRequest, text string) map[string]any {
+	if request == nil {
+		return nil
+	}
+	for _, raw := range request.InputItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := item["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for i := range content {
+			if content[i]["text"] == text {
+				return item
+			}
+		}
+	}
+	return nil
 }
 
 func (a *recordingAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

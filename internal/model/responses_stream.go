@@ -136,13 +136,15 @@ type responsesSSEEvent struct {
 }
 
 type responsesStreamAccumulator struct {
-	responseID    string
-	serverModel   string
-	items         []AgentItem
-	messages      []string
-	usage         AgentUsage
-	hasUsage      bool
-	timingMetrics map[string]any
+	responseID            string
+	serverModel           string
+	items                 []AgentItem
+	messages              []string
+	usage                 AgentUsage
+	hasUsage              bool
+	timingMetrics         map[string]any
+	functionCallArgDeltas map[string]string
+	customToolInputDeltas map[string]string
 }
 
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
@@ -626,6 +628,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		if err != nil {
 			return false, err
 		}
+		a.applyToolInputDeltas(item)
 		if item != nil {
 			a.items = append(a.items, *item)
 			if item.Type == "agent_message" && strings.TrimSpace(item.Text) != "" {
@@ -651,13 +654,13 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			RawType:    rawType,
 		})
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
-		delta := jsonStringField(sse.Data, "delta")
+		delta, itemID, callID := a.appendToolInputDelta(rawType, sse.Data)
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventToolInputDelta,
 			ResponseID: a.responseID,
 			Delta:      delta,
-			ItemID:     jsonStringField(sse.Data, "item_id"),
-			CallID:     jsonStringField(sse.Data, "call_id"),
+			ItemID:     itemID,
+			CallID:     callID,
 			RawType:    rawType,
 		})
 	case "response.plan.delta", "response.plan_text.delta":
@@ -735,6 +738,61 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		return false, responseFailedError(sse.Data)
 	}
 	return false, nil
+}
+
+func (a *responsesStreamAccumulator) appendToolInputDelta(rawType string, data []byte) (string, string, string) {
+	delta := jsonStringField(data, "delta")
+	itemID := firstNonEmptyResponseValue(jsonStringField(data, "item_id"), jsonStringField(data, "itemId"))
+	callID := firstNonEmptyResponseValue(jsonStringField(data, "call_id"), jsonStringField(data, "callId"))
+	if a == nil || delta == "" {
+		return delta, itemID, callID
+	}
+	keys := uniqueNonEmptyResponseValues(itemID, callID)
+	if len(keys) == 0 {
+		return delta, itemID, callID
+	}
+	switch rawType {
+	case "response.function_call_arguments.delta":
+		if a.functionCallArgDeltas == nil {
+			a.functionCallArgDeltas = map[string]string{}
+		}
+		for _, key := range keys {
+			a.functionCallArgDeltas[key] += delta
+		}
+	case "response.custom_tool_call_input.delta":
+		if a.customToolInputDeltas == nil {
+			a.customToolInputDeltas = map[string]string{}
+		}
+		for _, key := range keys {
+			a.customToolInputDeltas[key] += delta
+		}
+	}
+	return delta, itemID, callID
+}
+
+func (a *responsesStreamAccumulator) applyToolInputDeltas(item *AgentItem) {
+	if a == nil || item == nil {
+		return
+	}
+	switch item.Type {
+	case "function_call":
+		if item.Arguments == "" {
+			item.Arguments = accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID)
+		}
+	case "custom_tool_call":
+		if item.Input == "" {
+			item.Input = accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID)
+		}
+	}
+}
+
+func accumulatedToolInputDelta(values map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := values[key]; value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func emitResponsesMetadataEvents(data []byte, handler ResponsesStreamHandler) {

@@ -386,14 +386,13 @@ type ResponseError struct {
 }
 
 func OK(id RequestID, result any) *Response {
-	return &Response{JSONRPC: "2.0", ID: id, Result: result}
+	return &Response{ID: id, Result: result}
 }
 
 func ErrorResponse(id RequestID, code int, message string, data map[string]any) *Response {
 	return &Response{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &ResponseError{Code: code, Message: message, Data: data},
+		ID:    id,
+		Error: &ResponseError{Code: code, Message: message, Data: data},
 	}
 }
 
@@ -416,7 +415,7 @@ type Notification struct {
 }
 
 func NewNotification(method NotificationMethod, params any) *Notification {
-	return &Notification{JSONRPC: "2.0", Method: method, Params: params}
+	return &Notification{Method: method, Params: params}
 }
 
 type SessionSource string

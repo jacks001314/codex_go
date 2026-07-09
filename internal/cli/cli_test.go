@@ -370,6 +370,32 @@ func TestParseExecResume(t *testing.T) {
 	if parsed.Exec.LastMessageFile != "last.txt" || parsed.Exec.OutputSchema != "schema.json" {
 		t.Fatalf("exec output flags = %#v", parsed.Exec)
 	}
+
+	parsed, err = Parse([]string{
+		"exec",
+		"resume",
+		"--last",
+		"--json",
+		"--model", "gpt-5.2-codex",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--skip-git-repo-check",
+		"--ephemeral",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"echo resume-with-global-flags-after-subcommand",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !parsed.Exec.Resume.Last || parsed.Exec.Resume.Prompt != "echo resume-with-global-flags-after-subcommand" {
+		t.Fatalf("resume with flags = %#v", parsed.Exec.Resume)
+	}
+	if !parsed.Exec.JSON || parsed.Exec.Shared.Model != "gpt-5.2-codex" ||
+		!parsed.Exec.Shared.DangerouslyBypassApprovalsAndSandbox ||
+		!parsed.Exec.SkipGitRepoCheck || !parsed.Exec.Ephemeral ||
+		!parsed.Exec.IgnoreUserConfig || !parsed.Exec.IgnoreRules {
+		t.Fatalf("exec resume flags = %#v", parsed.Exec)
+	}
 }
 
 func TestParseReviewRejectsConflicts(t *testing.T) {
@@ -1000,6 +1026,11 @@ func TestParseAppServerListenValidation(t *testing.T) {
 		t.Fatalf("Parse stdio/listen conflict error = %v", err)
 	}
 
+	_, err = Parse([]string{"app-server", "--stdio", "--listen", "stdio://", "proxy"})
+	if err == nil || !strings.Contains(err.Error(), "--stdio conflicts with --listen") {
+		t.Fatalf("Parse stdio/listen conflict with subcommand error = %v", err)
+	}
+
 	relativeUnix, err := Parse([]string{"app-server", "--listen", "unix://codex.sock"})
 	if err != nil {
 		t.Fatalf("Parse relative unix listen returned error: %v", err)
@@ -1040,6 +1071,11 @@ func TestParseAppServerWebSocketAuthFlags(t *testing.T) {
 		t.Fatalf("Parse missing ws-auth error = %v", err)
 	}
 
+	_, err = Parse([]string{"app-server", "--ws-auth", "capability-token", "--ws-token-file", "token.txt", "proxy"})
+	if err == nil || err.Error() != "--ws-token-file must be an absolute path" {
+		t.Fatalf("Parse subcommand relative ws token file error = %v", err)
+	}
+
 	_, err = Parse([]string{"app-server", "--ws-auth", "signed-bearer-token"})
 	if err == nil || !strings.Contains(err.Error(), "--ws-shared-secret-file") {
 		t.Fatalf("Parse signed bearer missing secret error = %v", err)
@@ -1078,6 +1114,45 @@ func TestParseAppServerWebSocketAuthFlags(t *testing.T) {
 	_, err = Parse([]string{"app-server", "--ws-issuer="})
 	if err == nil || !strings.Contains(err.Error(), "websocket auth flags require") {
 		t.Fatalf("Parse empty ws issuer without auth error = %v", err)
+	}
+
+	_, err = Parse([]string{"app-server", "--allow-unauthenticated-non-loopback-ws"})
+	if err == nil || !strings.Contains(err.Error(), "unknown app-server option --allow-unauthenticated-non-loopback-ws") {
+		t.Fatalf("Parse removed insecure non-loopback flag error = %v", err)
+	}
+}
+
+func TestRejectRemoteAuthEnvForAppServerSubcommandsNamesRustSurface(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "generate internal schema",
+			args: []string{"--remote-auth-token-env", "TOKEN", "app-server", "generate-internal-json-schema", "--out", "gen"},
+			want: "app-server generate-internal-json-schema",
+		},
+		{
+			name: "proxy",
+			args: []string{"--remote-auth-token-env=TOKEN", "app-server", "proxy"},
+			want: "app-server proxy",
+		},
+		{
+			name: "daemon version",
+			args: []string{"--remote-auth-token-env", "TOKEN", "app-server", "daemon", "version"},
+			want: "app-server daemon version",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil {
+				t.Fatal("Parse returned nil error, want remote-auth rejection")
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "only supported for interactive TUI commands") {
+				t.Fatalf("error = %q, want subcommand %q", err.Error(), tt.want)
+			}
+		})
 	}
 }
 

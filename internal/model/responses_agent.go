@@ -101,7 +101,6 @@ type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefr
 type responsesAgentRequest struct {
 	Model                string              `json:"model"`
 	Instructions         string              `json:"instructions,omitempty"`
-	PreviousResponseID   string              `json:"previous_response_id,omitempty"`
 	Input                []any               `json:"input"`
 	Tools                []any               `json:"tools,omitempty"`
 	ToolChoice           string              `json:"tool_choice,omitempty"`
@@ -340,10 +339,11 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		instructions = ""
 		tools = nil
 	}
+	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
+	// runner carries conversation context by sending full history in input.
 	apiRequest := &responsesAgentRequest{
 		Model:                modelID,
 		Instructions:         instructions,
-		PreviousResponseID:   strings.TrimSpace(request.PreviousResponseID),
 		Input:                inputItems,
 		Tools:                tools,
 		ToolChoice:           "auto",
@@ -931,6 +931,20 @@ func firstNonEmptyResponseValue(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func uniqueNonEmptyResponseValues(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func responsesInstructions(request *AgentRequest) string {

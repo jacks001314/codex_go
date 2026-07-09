@@ -12,6 +12,9 @@ func TestKnownFeature(t *testing.T) {
 	if Known("does_not_exist") {
 		t.Fatal("does_not_exist should not be known")
 	}
+	if err := Validate("does_not_exist"); err == nil || err.Error() != "Unknown feature flag: does_not_exist" {
+		t.Fatalf("Validate unknown error = %v", err)
+	}
 }
 
 func TestSorted(t *testing.T) {

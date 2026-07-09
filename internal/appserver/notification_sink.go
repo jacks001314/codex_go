@@ -6,6 +6,10 @@ type NotificationSink interface {
 	Notify(notification *Notification)
 }
 
+type TargetedNotificationSink interface {
+	NotifyToConnection(connectionID string, notification *Notification)
+}
+
 type NotificationSinkFunc func(notification *Notification)
 
 func (f NotificationSinkFunc) Notify(notification *Notification) {

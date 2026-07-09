@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,50 @@ import (
 )
 
 var ErrInvalidConfigRequest = errors.New("invalid config request")
+
+type ConfigWriteErrorCode string
+
+const (
+	ConfigWriteLayerReadonly   ConfigWriteErrorCode = "configLayerReadonly"
+	ConfigWriteVersionConflict ConfigWriteErrorCode = "configVersionConflict"
+	ConfigWriteValidation      ConfigWriteErrorCode = "configValidationError"
+	ConfigWritePathNotFound    ConfigWriteErrorCode = "configPathNotFound"
+	ConfigWriteSchemaUnknown   ConfigWriteErrorCode = "configSchemaUnknownKey"
+	ConfigWriteUserLayerAbsent ConfigWriteErrorCode = "userLayerNotFound"
+)
+
+type ConfigWriteError struct {
+	Code ConfigWriteErrorCode
+	Err  error
+}
+
+func (e *ConfigWriteError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *ConfigWriteError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *ConfigWriteError) JSONRPCErrorData() map[string]any {
+	if e == nil || e.Code == "" {
+		return nil
+	}
+	return map[string]any{"config_write_error_code": string(e.Code)}
+}
+
+func configWriteErrorf(code ConfigWriteErrorCode, format string, args ...any) error {
+	return &ConfigWriteError{
+		Code: code,
+		Err:  fmt.Errorf("%w: %s", ErrInvalidConfigRequest, fmt.Sprintf(format, args...)),
+	}
+}
 
 type LayerSourceType string
 
@@ -1355,15 +1400,19 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	path, err := s.currentUserConfigPath()
+	allowedPath, err := s.currentUserConfigPath()
 	if err != nil {
 		return nil, err
 	}
+	path := allowedPath
 	if params.FilePath != nil && strings.TrimSpace(*params.FilePath) != "" {
 		path = *params.FilePath
 	}
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%w: filePath must be absolute", ErrInvalidConfigRequest)
+	}
+	if !pathsMatchAfterNormalization(allowedPath, path) {
+		return nil, configWriteErrorf(ConfigWriteLayerReadonly, "Only writes to the user config are allowed")
 	}
 	values, err := loadConfigFile(path)
 	if err != nil {
@@ -1372,7 +1421,7 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	values = cloneMap(values)
 	currentVersion := configVersion(values)
 	if params.ExpectedVersion != nil && *params.ExpectedVersion != currentVersion {
-		return nil, fmt.Errorf("%w: config version conflict", ErrInvalidConfigRequest)
+		return nil, configWriteErrorf(ConfigWriteVersionConflict, "Configuration was modified since last read. Fetch latest version and retry.")
 	}
 	for i := range params.Edits {
 		if err := validateWritableKeyPath(params.Edits[i].KeyPath, params.Edits[i].Value); err != nil {
@@ -1396,6 +1445,29 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		response.OverriddenMetadata = overridden
 	}
 	return response, nil
+}
+
+func pathsMatchAfterNormalization(expected string, provided string) bool {
+	expected = normalizeConfigWritePath(expected)
+	provided = normalizeConfigWritePath(provided)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(expected, provided)
+	}
+	return expected == provided
+}
+
+func normalizeConfigWritePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(path)
 }
 
 func (s *ConfigService) WriteSkillConfig(params *SkillConfigWriteParams) (*ConfigWriteResponse, error) {
@@ -1692,6 +1764,10 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 		strategy = MergeReplace
 	}
 	parts := splitKeyPath(edit.KeyPath)
+	if edit.Value == nil {
+		deleteAtPath(root, parts)
+		return
+	}
 	if strategy == MergeUpsert {
 		existing, ok := getAtPath(root, parts).(map[string]any)
 		incoming, incomingOK := edit.Value.(map[string]any)
@@ -1705,6 +1781,24 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 		}
 	}
 	setAtPath(root, parts, edit.Value)
+}
+
+func deleteAtPath(root map[string]any, parts []string) bool {
+	if root == nil || len(parts) == 0 {
+		return len(root) == 0
+	}
+	if len(parts) == 1 {
+		delete(root, parts[0])
+		return len(root) == 0
+	}
+	next, ok := root[parts[0]].(map[string]any)
+	if !ok {
+		return len(root) == 0
+	}
+	if deleteAtPath(next, parts[1:]) {
+		delete(root, parts[0])
+	}
+	return len(root) == 0
 }
 
 func applySkillConfigEdit(root map[string]any, params *SkillConfigWriteParams) bool {
@@ -1842,10 +1936,10 @@ func validateWritableKeyPath(keyPath string, value any) error {
 	switch parts[0] {
 	case "profile":
 		if len(parts) == 1 {
-			return fmt.Errorf("%w: `profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead", ErrInvalidConfigRequest)
+			return configWriteErrorf(ConfigWriteValidation, "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead")
 		}
 	case "profiles":
-		return fmt.Errorf("%w: `profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead", ErrInvalidConfigRequest)
+		return configWriteErrorf(ConfigWriteValidation, "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead")
 	}
 	return nil
 }

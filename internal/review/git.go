@@ -6,11 +6,59 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 type GitDiffProvider struct {
 	Dir string
+}
+
+type CommitEntry struct {
+	Subject string
+	SHA     string
+}
+
+func LocalBranches(dir string) (string, []string, error) {
+	provider := &GitDiffProvider{Dir: dir}
+	current, _ := provider.git("branch", "--show-current")
+	output, err := provider.git("for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return "", nil, err
+	}
+	branches := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		branch := strings.TrimSpace(line)
+		if branch == "" {
+			continue
+		}
+		branches = append(branches, branch)
+	}
+	return strings.TrimSpace(current), branches, nil
+}
+
+func RecentCommits(dir string, limit int) ([]CommitEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	provider := &GitDiffProvider{Dir: dir}
+	output, err := provider.git("log", "--max-count="+strconv.Itoa(limit), "--format=%H%x00%s")
+	if err != nil {
+		return nil, err
+	}
+	entries := []CommitEntry{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			continue
+		}
+		entries = append(entries, CommitEntry{SHA: strings.TrimSpace(parts[0]), Subject: strings.TrimSpace(parts[1])})
+	}
+	return entries, nil
 }
 
 func (p *GitDiffProvider) Diff(target Target) (string, error) {

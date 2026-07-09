@@ -1045,17 +1045,8 @@ func storedAuthModeValueForDoctor(snapshot *auth.AuthDotJSON) string {
 	if snapshot == nil {
 		return "chatgpt"
 	}
-	if mode := strings.TrimSpace(snapshot.AuthMode); mode != "" {
+	if mode := snapshot.Mode(); mode != "unknown" {
 		return mode
-	}
-	if strings.TrimSpace(snapshot.PersonalAccessToken) != "" {
-		return "personal-access-token"
-	}
-	if snapshot.BedrockAPIKey != nil {
-		return "bedrock-api-key"
-	}
-	if strings.TrimSpace(snapshot.OpenAIAPIKey) != "" {
-		return "api-key"
 	}
 	return "chatgpt"
 }

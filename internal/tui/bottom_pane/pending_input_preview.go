@@ -1,10 +1,6 @@
 package bottompane
 
-import (
-	"strings"
-
-	"codex_go/internal/tui"
-)
+import "codex_go/internal/tui"
 
 // Rust parity: codex-rs/tui/src/bottom_pane/pending_input_preview.rs.
 
@@ -91,7 +87,7 @@ func pushSectionHeader(lines *[]string, width int, header string) {
 
 func pushPreview(lines *[]string, width int, text string) {
 	wrapped := []string{}
-	for _, rawLine := range strings.Split(text, "\n") {
+	for _, rawLine := range rustLines(text) {
 		wrapped = append(wrapped, tui.AdaptiveWrapLine(rawLine, tui.WrapOptions{
 			Width:            width,
 			InitialIndent:    "  \u21ab ",
@@ -104,4 +100,27 @@ func pushPreview(lines *[]string, width int, text string) {
 	if len(wrapped) > PreviewLineLimit {
 		*lines = append(*lines, "    \u2026")
 	}
+}
+
+func rustLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := []string{}
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\n' {
+			continue
+		}
+		line := text[start:i]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		lines = append(lines, line)
+		start = i + 1
+	}
+	if start < len(text) {
+		lines = append(lines, text[start:])
+	}
+	return lines
 }

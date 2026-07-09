@@ -1052,6 +1052,129 @@ func TestRuntimeRouterFSWatchUsesConnectionScope(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterFSWriteFileEmitsTargetedChangedNotifications(t *testing.T) {
+	fs := NewFSService()
+	router := NewRuntimeRouter(RuntimeServices{FS: fs})
+	sink := &targetedNotificationTestSink{}
+	router.SetNotificationSink(sink)
+	root := t.TempDir()
+	file := filepath.Join(root, "FETCH_HEAD")
+
+	request := requestWithParams(t, IntID(1), MethodFSWatch, WatchParams{WatchID: "watch-dir", Path: root})
+	request.ConnectionID = "conn-a"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch dir error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-a")
+	request = requestWithParams(t, IntID(2), MethodFSWatch, WatchParams{WatchID: "watch-file", Path: file})
+	request.ConnectionID = "conn-b"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch file error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-b")
+
+	write := requestWithParams(t, IntID(3), MethodFSWriteFile, WriteFileParams{
+		Path:       file,
+		DataBase64: base64.StdEncoding.EncodeToString([]byte("updated\n")),
+	})
+	if response := router.Handle(write); response.Error != nil {
+		t.Fatalf("fs/writeFile error: %+v", response.Error)
+	}
+
+	dirPayload := waitForTargetedFSChanged(t, sink, "conn-a", "watch-dir", file)
+	if len(dirPayload.ChangedPaths) != 1 || dirPayload.ChangedPaths[0] != file {
+		t.Fatalf("dir changed paths = %+v, want %q", dirPayload.ChangedPaths, file)
+	}
+	filePayload := waitForTargetedFSChanged(t, sink, "conn-b", "watch-file", file)
+	if len(filePayload.ChangedPaths) != 1 || filePayload.ChangedPaths[0] != file {
+		t.Fatalf("file changed paths = %+v, want %q", filePayload.ChangedPaths, file)
+	}
+}
+
+func TestRuntimeRouterFSWatchReportsExternalFileChanges(t *testing.T) {
+	fs := NewFSService()
+	router := NewRuntimeRouter(RuntimeServices{FS: fs})
+	sink := &targetedNotificationTestSink{}
+	router.SetNotificationSink(sink)
+	root := t.TempDir()
+	file := filepath.Join(root, "external.txt")
+	if err := os.WriteFile(file, []byte("old"), 0o600); err != nil {
+		t.Fatalf("WriteFile fixture error = %v", err)
+	}
+
+	request := requestWithParams(t, IntID(1), MethodFSWatch, WatchParams{WatchID: "watch-file", Path: file})
+	request.ConnectionID = "conn-a"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch file error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-a")
+	time.Sleep(2 * defaultFSWatchPollInterval)
+	if err := os.WriteFile(file, []byte("updated outside appserver"), 0o600); err != nil {
+		t.Fatalf("WriteFile external change error = %v", err)
+	}
+
+	payload := waitForTargetedFSChanged(t, sink, "conn-a", "watch-file", file)
+	if len(payload.ChangedPaths) != 1 || payload.ChangedPaths[0] != file {
+		t.Fatalf("changed paths = %+v, want %q", payload.ChangedPaths, file)
+	}
+}
+
+type targetedNotificationTestSink struct {
+	mu            sync.Mutex
+	notifications []targetedNotificationTestRecord
+}
+
+type targetedNotificationTestRecord struct {
+	connectionID string
+	notification *Notification
+}
+
+func (s *targetedNotificationTestSink) Notify(notification *Notification) {
+	s.append("", notification)
+}
+
+func (s *targetedNotificationTestSink) NotifyToConnection(connectionID string, notification *Notification) {
+	s.append(connectionID, notification)
+}
+
+func (s *targetedNotificationTestSink) append(connectionID string, notification *Notification) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifications = append(s.notifications, targetedNotificationTestRecord{connectionID: connectionID, notification: notification})
+}
+
+func (s *targetedNotificationTestSink) List() []targetedNotificationTestRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]targetedNotificationTestRecord(nil), s.notifications...)
+}
+
+func waitForTargetedFSChanged(t *testing.T, sink *targetedNotificationTestSink, connectionID string, watchID string, changedPath string) *ChangedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []targetedNotificationTestRecord
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, sent := range last {
+			if sent.connectionID != connectionID || sent.notification == nil || sent.notification.Method != NotificationFSChanged {
+				continue
+			}
+			payload, ok := sent.notification.Params.(*ChangedNotification)
+			if !ok || payload == nil || payload.WatchID != watchID {
+				continue
+			}
+			for _, path := range payload.ChangedPaths {
+				if path == changedPath {
+					return payload
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for fs/changed target=%s watch=%s path=%s in %+v", connectionID, watchID, changedPath, last)
+	return nil
+}
+
 func TestRuntimeRouterThreadUnsubscribeTracksConnectionSubscriptions(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{
@@ -3573,6 +3696,50 @@ func TestRuntimeRouterConfigRejectsLegacyProfileWrite(t *testing.T) {
 	}
 	if response.Error == nil || !strings.Contains(response.Error.Message, "legacy config profile tables") {
 		t.Fatalf("unexpected error = %+v", response.Error)
+	}
+	if got := response.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteValidation) {
+		t.Fatalf("error data = %+v, want config_write_error_code=%s", response.Error.Data, config.ConfigWriteValidation)
+	}
+}
+
+func TestRuntimeRouterConfigWriteErrorDataMatchesRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-old\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(home),
+	})
+
+	staleVersion := "sha256:stale"
+	conflict := router.Handle(requestWithParams(t, IntID(1), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:         "model",
+		Value:           "gpt-new",
+		MergeStrategy:   config.MergeReplace,
+		ExpectedVersion: &staleVersion,
+	}))
+	if conflict.Error == nil || conflict.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("version conflict error = %+v", conflict.Error)
+	}
+	if got := conflict.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteVersionConflict) {
+		t.Fatalf("version conflict data = %+v, want %s", conflict.Error.Data, config.ConfigWriteVersionConflict)
+	}
+
+	otherPath := filepath.Join(t.TempDir(), "config.toml")
+	readOnly := router.Handle(requestWithParams(t, IntID(2), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "model",
+		Value:         "gpt-new",
+		MergeStrategy: config.MergeReplace,
+		FilePath:      &otherPath,
+	}))
+	if readOnly.Error == nil || readOnly.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("readonly path error = %+v", readOnly.Error)
+	}
+	if got := readOnly.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteLayerReadonly) {
+		t.Fatalf("readonly path data = %+v, want %s", readOnly.Error.Data, config.ConfigWriteLayerReadonly)
+	}
+	if _, err := os.Stat(otherPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("readonly path stat error = %v, want not written", err)
 	}
 }
 
@@ -7294,6 +7461,10 @@ func TestRuntimeRouterRequestUserInputToolUsesServerRequest(t *testing.T) {
 			t.Errorf("user input params = %#v", params)
 			return
 		}
+		if !params.Questions[0].IsOther || !params.Questions[0].IsSecret {
+			t.Errorf("user input flags = %#v", params.Questions[0])
+			return
+		}
 		response := &ToolRequestUserInputResponse{
 			Answers: map[string]ToolRequestUserInputAnswer{
 				"choice": {Answers: []string{"Blue"}},
@@ -10268,7 +10439,7 @@ func (a *userInputToolAgent) Run(ctx context.Context, request *model.AgentReques
 				Type:      "function_call",
 				Name:      "request_user_input",
 				CallID:    "input-call-1",
-				Arguments: `{"questions":[{"header":"Choice","id":"choice","question":"Pick one?","options":[{"label":"Blue","description":"Use blue"},{"label":"Green","description":"Use green"}]}],"autoResolutionMs":60000}`,
+				Arguments: `{"questions":[{"header":"Choice","id":"choice","question":"Pick one?","isOther":true,"isSecret":true,"options":[{"label":"Blue","description":"Use blue"},{"label":"Green","description":"Use green"}]}],"autoResolutionMs":60000}`,
 			}},
 		}, nil
 	}

@@ -137,7 +137,7 @@ func FromAgentIdentityRecord(record *AgentIdentityAuthRecord) *AuthDotJSON {
 	clone.Email = cloneStringPtr(record.Email)
 	clone.TaskID = cloneStringPtr(record.TaskID)
 	return &AuthDotJSON{
-		AuthMode:      "agent-identity",
+		AuthMode:      "agentIdentity",
 		AgentIdentity: &clone,
 	}
 }

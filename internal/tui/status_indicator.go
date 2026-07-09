@@ -52,6 +52,13 @@ func FormatElapsedCompact(elapsedSeconds int64) string {
 	return fmt.Sprintf("%dh %02dm %02ds", elapsedSeconds/3600, (elapsedSeconds%3600)/60, elapsedSeconds%60)
 }
 
+func (s *StatusIndicator) UpdateHeader(header string) {
+	if s == nil {
+		return
+	}
+	s.Header = header
+}
+
 func (s *StatusIndicator) UpdateDetails(details string, capitalization StatusDetailsCapitalization, maxLines int) {
 	if s == nil {
 		return
@@ -65,6 +72,39 @@ func (s *StatusIndicator) UpdateDetails(details string, capitalization StatusDet
 	}
 	s.Details = details
 	s.DetailsMaxLines = maxLines
+}
+
+func (s *StatusIndicator) UpdateInlineMessage(message string) {
+	if s == nil {
+		return
+	}
+	s.InlineMessage = strings.TrimSpace(message)
+}
+
+func (s *StatusIndicator) SetInterruptHintVisible(visible bool) {
+	if s == nil {
+		return
+	}
+	s.ShowInterruptHint = visible
+}
+
+func (s *StatusIndicator) PauseAt(now time.Time) {
+	if s == nil || s.Paused {
+		return
+	}
+	s.PausedElapsed = s.Elapsed(now)
+	s.Paused = true
+}
+
+func (s *StatusIndicator) ResumeAt(now time.Time) {
+	if s == nil || !s.Paused {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	s.StartedAt = now
+	s.Paused = false
 }
 
 func (s *StatusIndicator) Elapsed(now time.Time) time.Duration {

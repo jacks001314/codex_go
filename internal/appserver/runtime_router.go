@@ -150,7 +150,17 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if router.services.ThreadRouter != nil && router.services.SpawnGraph != nil {
 		router.services.ThreadRouter.SetSpawnGraph(router.services.SpawnGraph)
 	}
+	router.configureFSChangedCallback()
 	return router
+}
+
+func (r *RuntimeRouter) configureFSChangedCallback() {
+	if r == nil || r.services.FS == nil {
+		return
+	}
+	r.services.FS.SetChangedCallback(func(connectionID string, notification *ChangedNotification) {
+		r.notifyToConnection(connectionID, NotificationFSChanged, notification)
+	})
 }
 
 func (r *RuntimeRouter) SetNotificationSink(sink NotificationSink) {
@@ -185,6 +195,32 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if sink != nil {
 		sink.Notify(NewNotification(method, params))
 	}
+}
+
+func (r *RuntimeRouter) notifyToConnection(connectionID string, method NotificationMethod, params any) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	if strings.TrimSpace(connectionID) == "" {
+		r.notify(method, params)
+		return
+	}
+	if r.connectionNotificationMethodOptedOut(connectionID, method) {
+		return
+	}
+	r.mu.RLock()
+	sink := r.sink
+	r.mu.RUnlock()
+	if sink == nil {
+		return
+	}
+	notification := NewNotification(method, params)
+	if targeted, ok := sink.(TargetedNotificationSink); ok {
+		targeted.NotifyToConnection(connectionID, notification)
+		return
+	}
+	sink.Notify(notification)
 }
 
 func (r *RuntimeRouter) authRevisionSnapshot(context.Context) (uint64, error) {
@@ -777,6 +813,21 @@ func (r *RuntimeRouter) notificationMethodOptedOut(method NotificationMethod) bo
 		}
 	}
 	return true
+}
+
+func (r *RuntimeRouter) connectionNotificationMethodOptedOut(connectionID string, method NotificationMethod) bool {
+	if r == nil || strings.TrimSpace(string(method)) == "" {
+		return false
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	methods := r.notificationOptOut[connectionID]
+	if len(methods) == 0 {
+		return false
+	}
+	_, ok := methods[method]
+	return ok
 }
 
 func (r *RuntimeRouter) shouldNotifyThreadRollbackDeprecation(request *Request) bool {
@@ -4916,7 +4967,12 @@ func (r *RuntimeRouter) handleFSWriteFile(request *Request) (*WriteFileResponse,
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().WriteFile(&params)
+	response, err := r.requireFS().WriteFile(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyFSChangedPath(params.Path)
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleFSCreateDirectory(request *Request) (*CreateDirectoryResponse, error) {
@@ -4924,7 +4980,12 @@ func (r *RuntimeRouter) handleFSCreateDirectory(request *Request) (*CreateDirect
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().CreateDirectory(&params)
+	response, err := r.requireFS().CreateDirectory(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyFSChangedPath(params.Path)
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleFSGetMetadata(request *Request) (*GetMetadataResponse, error) {
@@ -4948,7 +5009,12 @@ func (r *RuntimeRouter) handleFSRemove(request *Request) (*RemoveResponse, error
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().Remove(&params)
+	response, err := r.requireFS().Remove(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyFSChangedPath(params.Path)
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleFSCopy(request *Request) (*CopyResponse, error) {
@@ -4956,7 +5022,21 @@ func (r *RuntimeRouter) handleFSCopy(request *Request) (*CopyResponse, error) {
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().Copy(&params)
+	response, err := r.requireFS().Copy(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.notifyFSChangedPath(params.DestinationPath)
+	return response, nil
+}
+
+func (r *RuntimeRouter) notifyFSChangedPath(path string) {
+	for _, changed := range r.requireFS().ChangedForPath(path) {
+		if changed.notification == nil {
+			continue
+		}
+		r.notifyToConnection(changed.connectionID, NotificationFSChanged, changed.notification)
+	}
 }
 
 func (r *RuntimeRouter) handleFSWatch(request *Request) (*WatchResponse, error) {
@@ -6072,6 +6152,7 @@ func (r *RuntimeRouter) requireFS() *FSService {
 	if r.services.FS == nil {
 		r.services.FS = NewFSService()
 	}
+	r.configureFSChangedCallback()
 	return r.services.FS
 }
 
@@ -6949,6 +7030,8 @@ func toolRequestUserInputQuestionFromToolQuestion(question *tool.UserInputQuesti
 		ID:       strings.TrimSpace(question.ID),
 		Header:   strings.TrimSpace(question.Header),
 		Question: strings.TrimSpace(question.Question),
+		IsOther:  question.IsOther,
+		IsSecret: question.IsSecret,
 		Options:  make([]ToolRequestUserInputOption, 0, len(question.Options)),
 	}
 	for i := range question.Options {

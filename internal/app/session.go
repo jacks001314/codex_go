@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/internal/appserver"
+	"codex_go/internal/appserverdaemon"
 	"codex_go/internal/auth"
 	"codex_go/internal/cli"
 	"codex_go/internal/config"
@@ -24,8 +27,12 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdout io
 	if err := loadSessionRuntimeConfig(opts, root); err != nil {
 		return err
 	}
-	if err := ensureSessionRemoteRuntimeSupported(opts, root); err != nil {
+	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
+	if err != nil {
 		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionResume(context.Background(), endpoint, opts, stdout)
 	}
 	store := newSessionStore()
 	if needsSessionPicker(opts) {
@@ -46,8 +53,12 @@ func runSessionArchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout i
 	if err := loadSessionRuntimeConfig(opts, root); err != nil {
 		return err
 	}
-	if err := ensureSessionRemoteRuntimeSupported(opts, root); err != nil {
+	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
+	if err != nil {
 		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionArchive(context.Background(), endpoint, opts, stdout)
 	}
 	store := newSessionStore()
 	target, err := resolveSessionMutationTarget(store, opts, sessionArchivedFilter(false))
@@ -69,8 +80,12 @@ func runSessionUnarchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout
 	if err := loadSessionRuntimeConfig(opts, root); err != nil {
 		return err
 	}
-	if err := ensureSessionRemoteRuntimeSupported(opts, root); err != nil {
+	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
+	if err != nil {
 		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionUnarchive(context.Background(), endpoint, opts, stdout)
 	}
 	store := newSessionStore()
 	target, err := resolveSessionMutationTarget(store, opts, sessionArchivedFilter(true))
@@ -93,8 +108,12 @@ func runSessionDelete(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 	if err := loadSessionRuntimeConfig(opts, root); err != nil {
 		return err
 	}
-	if err := ensureSessionRemoteRuntimeSupported(opts, root); err != nil {
+	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
+	if err != nil {
 		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionDelete(context.Background(), endpoint, opts, stdin, stdout, stderr)
 	}
 	store := newSessionStore()
 	target, err := resolveSessionMutationTarget(store, opts, nil)
@@ -182,8 +201,12 @@ func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.W
 	if err := loadSessionRuntimeConfig(opts, root); err != nil {
 		return err
 	}
-	if err := ensureSessionRemoteRuntimeSupported(opts, root); err != nil {
+	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
+	if err != nil {
 		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionFork(context.Background(), endpoint, opts, stdout)
 	}
 	store := newSessionStore()
 	if needsSessionPicker(opts) {
@@ -218,15 +241,12 @@ func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) e
 	return err
 }
 
-func ensureSessionRemoteRuntimeSupported(opts *cli.SessionOptions, root *cli.RootOptions) error {
+func resolveSessionRemoteEndpoint(opts *cli.SessionOptions, root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {
 	remoteRoot := mergedSessionRemoteOptions(opts, root)
 	if strings.TrimSpace(remoteRoot.Remote) == "" && strings.TrimSpace(remoteRoot.RemoteAuthEnv) == "" {
-		return nil
+		return nil, nil
 	}
-	if _, err := resolveInteractiveRemoteEndpoint(remoteRoot); err != nil {
-		return err
-	}
-	return errors.New("session remote app-server mode is not implemented in the Go port yet")
+	return resolveInteractiveRemoteEndpoint(remoteRoot)
 }
 
 func mergedSessionRemoteOptions(opts *cli.SessionOptions, root *cli.RootOptions) *cli.RootOptions {
@@ -245,6 +265,387 @@ func mergedSessionRemoteOptions(opts *cli.SessionOptions, root *cli.RootOptions)
 		}
 	}
 	return &cli.RootOptions{Remote: remote, RemoteAuthEnv: remoteAuthEnv}
+}
+
+type remoteSessionAction string
+
+const (
+	remoteSessionActionResume    remoteSessionAction = "resume"
+	remoteSessionActionArchive   remoteSessionAction = "archive"
+	remoteSessionActionDelete    remoteSessionAction = "delete"
+	remoteSessionActionUnarchive remoteSessionAction = "unarchive"
+	remoteSessionActionFork      remoteSessionAction = "fork"
+)
+
+type remoteResolvedSessionTarget struct {
+	threadID string
+	name     string
+}
+
+func runRemoteSessionResume(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdout io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	if needsSessionPicker(opts) {
+		return writeRemoteSessionPicker(ctx, client, stdout, "resume", opts)
+	}
+	target, err := resolveRemoteSessionTargetForResume(ctx, client, opts)
+	if err != nil {
+		return err
+	}
+	thread, err := remoteThreadRead(ctx, client, target.threadID, true)
+	if err != nil {
+		return err
+	}
+	return writeSessionSummary(stdout, "resumed", sessionRecordFromAppServerThread(thread, false))
+}
+
+func runRemoteSessionArchive(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdout io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	target, err := resolveRemoteSessionMutationTarget(ctx, client, opts, remoteSessionActionArchive)
+	if err != nil {
+		return err
+	}
+	var response appserver.ThreadArchiveResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadArchive, appserver.ThreadArchiveParams{ThreadID: target.threadID}, &response); err != nil {
+		return err
+	}
+	fmt.Fprint(stdout, sessionMutationSuccessMessage("Archived", session.ThreadID(target.threadID), target.name))
+	return nil
+}
+
+func runRemoteSessionUnarchive(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdout io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	target, err := resolveRemoteSessionMutationTarget(ctx, client, opts, remoteSessionActionUnarchive)
+	if err != nil {
+		return err
+	}
+	var response appserver.ThreadUnarchiveResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadUnarchive, appserver.ThreadUnarchiveParams{ThreadID: target.threadID}, &response); err != nil {
+		return err
+	}
+	name := target.name
+	if response.Thread != nil {
+		name = remoteThreadDisplayName(response.Thread)
+	}
+	fmt.Fprint(stdout, sessionMutationSuccessMessage("Unarchived", session.ThreadID(target.threadID), name))
+	return nil
+}
+
+func runRemoteSessionDelete(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	target, err := resolveRemoteSessionMutationTarget(ctx, client, opts, remoteSessionActionDelete)
+	if err != nil {
+		return err
+	}
+	if opts == nil || !opts.Force {
+		if target.name == "" {
+			thread, err := remoteThreadRead(ctx, client, target.threadID, false)
+			if err != nil {
+				return err
+			}
+			target.name = remoteThreadDisplayName(thread)
+		}
+		confirmed, err := confirmSessionDelete(stdin, stderr, session.ThreadID(target.threadID), target.name)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(stdout, "Delete cancelled.")
+			return nil
+		}
+	}
+	var response appserver.ThreadDeleteResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadDelete, appserver.ThreadDeleteParams{ThreadID: target.threadID}, &response); err != nil {
+		return err
+	}
+	fmt.Fprint(stdout, sessionMutationSuccessMessage("Deleted", session.ThreadID(target.threadID), ""))
+	return nil
+}
+
+func runRemoteSessionFork(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, stdout io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	if needsSessionPicker(opts) {
+		return writeRemoteSessionPicker(ctx, client, stdout, "fork", opts)
+	}
+	target, err := resolveRemoteSessionTargetForResume(ctx, client, opts)
+	if err != nil {
+		return err
+	}
+	var response appserver.ThreadForkResponse
+	params := appserver.ThreadForkParams{
+		ThreadID:    target.threadID,
+		HistoryMode: session.ForkAll,
+	}
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadFork, params, &response); err != nil {
+		return err
+	}
+	return writeSessionSummary(stdout, "forked", sessionRecordFromAppServerThread(response.Thread, false))
+}
+
+func openRemoteSessionClient(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*remoteAppServerTUIClient, error) {
+	client := &remoteAppServerTUIClient{endpoint: endpoint}
+	if err := client.connect(ctx); err != nil {
+		return nil, err
+	}
+	if err := client.initialize(ctx); err != nil {
+		client.close()
+		return nil, err
+	}
+	return client, nil
+}
+
+func remoteSessionRequest(ctx context.Context, client *remoteAppServerTUIClient, method appserver.Method, params any, target any) error {
+	id, err := client.sendRequest(ctx, method, params)
+	if err != nil {
+		return err
+	}
+	return client.waitResponse(ctx, id, target)
+}
+
+func resolveRemoteSessionTargetForResume(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
+	if opts != nil {
+		if target := strings.TrimSpace(opts.Target); target != "" {
+			if isUUIDLike(target) {
+				return remoteResolvedSessionTarget{threadID: target}, nil
+			}
+			return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+		}
+		if opts.Last {
+			thread, err := latestRemoteSession(ctx, client, opts)
+			if err != nil {
+				return remoteResolvedSessionTarget{}, err
+			}
+			return remoteSessionTargetFromThread(thread)
+		}
+	}
+	return remoteResolvedSessionTarget{}, errors.New("SESSION_ID or --last is required")
+}
+
+func resolveRemoteSessionMutationTarget(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions, action remoteSessionAction) (remoteResolvedSessionTarget, error) {
+	if opts == nil || strings.TrimSpace(opts.Target) == "" {
+		return remoteResolvedSessionTarget{}, errors.New("SESSION is required")
+	}
+	target := strings.TrimSpace(opts.Target)
+	if isUUIDLike(target) {
+		return remoteResolvedSessionTarget{threadID: target}, nil
+	}
+	switch action {
+	case remoteSessionActionArchive:
+		return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+	case remoteSessionActionUnarchive:
+		return lookupRemoteSessionByExactName(ctx, client, target, true, opts)
+	case remoteSessionActionDelete:
+		if resolved, err := lookupRemoteSessionByExactName(ctx, client, target, false, opts); err == nil {
+			return resolved, nil
+		}
+		return lookupRemoteSessionByExactName(ctx, client, target, true, opts)
+	default:
+		return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+	}
+}
+
+func lookupRemoteSessionByExactName(ctx context.Context, client *remoteAppServerTUIClient, name string, archived bool, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
+	for _, search := range []bool{true, false} {
+		cursor := (*string)(nil)
+		for {
+			params := remoteThreadListParams(opts, archived, 100)
+			params.Cursor = cursor
+			if search {
+				params.SearchTerm = &name
+			}
+			var response appserver.ThreadListResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+				return remoteResolvedSessionTarget{}, fmt.Errorf("failed to list sessions while resolving session name: %w", err)
+			}
+			for i := range response.Data {
+				if remoteThreadDisplayName(&response.Data[i]) == name {
+					return remoteSessionTargetFromThread(&response.Data[i])
+				}
+			}
+			if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
+				break
+			}
+			cursor = response.NextCursor
+		}
+	}
+	return remoteResolvedSessionTarget{}, fmt.Errorf("No %s session found matching '%s'.", remoteSessionSearchScope(archived), name)
+}
+
+func latestRemoteSession(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions) (*appserver.Thread, error) {
+	params := remoteThreadListParams(opts, false, 1)
+	var response appserver.ThreadListResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+		return nil, err
+	}
+	if len(response.Data) == 0 {
+		return nil, session.ErrThreadNotFound
+	}
+	return &response.Data[0], nil
+}
+
+func remoteThreadRead(ctx context.Context, client *remoteAppServerTUIClient, threadID string, includeTurns bool) (*appserver.Thread, error) {
+	var response appserver.ThreadReadResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, appserver.ThreadReadParams{ThreadID: threadID, IncludeTurns: includeTurns}, &response); err != nil {
+		return nil, err
+	}
+	if response.Thread == nil {
+		return nil, session.ErrThreadNotFound
+	}
+	return response.Thread, nil
+}
+
+func writeRemoteSessionPicker(ctx context.Context, client *remoteAppServerTUIClient, stdout io.Writer, action string, opts *cli.SessionOptions) error {
+	if stdout == nil {
+		return nil
+	}
+	records, err := listRemoteSessionPickerRecords(ctx, client, opts, sessionPickerPageSize)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		fmt.Fprintf(stdout, "No sessions found to %s.\n", action)
+		return nil
+	}
+	response := &sessionPickerResponse{
+		Action:   action,
+		Count:    len(records),
+		Command:  action,
+		Sessions: sessionPickerEntries(records),
+		Hint:     fmt.Sprintf("Run `codex %s SESSION_ID` with one of these IDs.", action),
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(response)
+}
+
+func listRemoteSessionPickerRecords(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions, limit int) ([]session.Record, error) {
+	if limit <= 0 {
+		limit = sessionPickerPageSize
+	}
+	active, err := remoteSessionRecordsByArchived(ctx, client, opts, false, limit)
+	if err != nil {
+		return nil, err
+	}
+	records := active
+	if opts != nil && opts.All {
+		archived, err := remoteSessionRecordsByArchived(ctx, client, opts, true, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, archived...)
+	}
+	sortSessionRecordsByRecency(records)
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
+}
+
+func remoteSessionRecordsByArchived(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions, archived bool, limit int) ([]session.Record, error) {
+	params := remoteThreadListParams(opts, archived, limit)
+	var response appserver.ThreadListResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+		return nil, err
+	}
+	records := make([]session.Record, 0, len(response.Data))
+	for i := range response.Data {
+		records = append(records, *sessionRecordFromAppServerThread(&response.Data[i], archived))
+	}
+	return records, nil
+}
+
+func remoteThreadListParams(opts *cli.SessionOptions, archived bool, limit int) appserver.ThreadListParams {
+	if limit <= 0 {
+		limit = sessionPickerPageSize
+	}
+	params := appserver.ThreadListParams{
+		Limit:         &limit,
+		SortKey:       appserver.SortRecencyAt,
+		SortDirection: appserver.SortDesc,
+		Archived:      &archived,
+	}
+	if opts == nil || !opts.IncludeNonInteractive {
+		params.SourceKinds = []appserver.ThreadSourceKind{
+			appserver.ThreadSourceKindCli,
+			appserver.ThreadSourceKindVsCode,
+		}
+	}
+	return params
+}
+
+func remoteSessionTargetFromThread(thread *appserver.Thread) (remoteResolvedSessionTarget, error) {
+	if thread == nil || strings.TrimSpace(thread.ID) == "" {
+		return remoteResolvedSessionTarget{}, session.ErrThreadNotFound
+	}
+	return remoteResolvedSessionTarget{
+		threadID: strings.TrimSpace(thread.ID),
+		name:     remoteThreadDisplayName(thread),
+	}, nil
+}
+
+func remoteThreadDisplayName(thread *appserver.Thread) string {
+	if thread == nil {
+		return ""
+	}
+	if thread.Name != nil && strings.TrimSpace(*thread.Name) != "" {
+		return strings.TrimSpace(*thread.Name)
+	}
+	return strings.TrimSpace(thread.Preview)
+}
+
+func remoteSessionSearchScope(archived bool) string {
+	if archived {
+		return "archived"
+	}
+	return "active"
+}
+
+func sessionRecordFromAppServerThread(thread *appserver.Thread, archived bool) *session.Record {
+	if thread == nil {
+		return &session.Record{}
+	}
+	record := &session.Record{
+		ID:        session.ThreadID(strings.TrimSpace(thread.ID)),
+		Title:     remoteThreadDisplayName(thread),
+		Preview:   strings.TrimSpace(thread.Preview),
+		Archived:  archived,
+		CreatedAt: time.Unix(thread.CreatedAt, 0).UTC(),
+		UpdatedAt: time.Unix(thread.UpdatedAt, 0).UTC(),
+		Metadata: session.Metadata{
+			CWD:           strings.TrimSpace(thread.CWD),
+			ModelProvider: strings.TrimSpace(thread.ModelProvider),
+			Source:        string(thread.Source),
+		},
+	}
+	if thread.ThreadSource != nil {
+		record.Metadata.ThreadSource = string(*thread.ThreadSource)
+	}
+	if thread.RecencyAt != nil && *thread.RecencyAt > 0 {
+		record.RecencyAt = time.Unix(*thread.RecencyAt, 0).UTC()
+	}
+	if len(thread.Turns) > 0 {
+		record.Items = make([]session.Item, len(thread.Turns))
+	}
+	return record
 }
 
 func sessionMutationSuccessMessage(action string, sessionID session.ThreadID, sessionName string) string {

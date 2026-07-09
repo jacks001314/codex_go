@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	bottompane "codex_go/internal/tui/bottom_pane"
+	chatwidget "codex_go/internal/tui/chatwidget"
 )
 
 type ElicitationRequestMsg struct {
@@ -21,7 +24,7 @@ type ElicitationRequestMsg struct {
 	Meta            map[string]any
 }
 
-func (m *Model) openElicitationModal(message ElicitationRequestMsg) {
+func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cmd {
 	title := strings.TrimSpace(message.Title)
 	if title == "" {
 		title = "MCP request"
@@ -41,7 +44,7 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) {
 				{ID: "cancel", Label: "Cancel", Shortcut: "c"},
 			},
 		})
-		return
+		return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 	}
 	form, err := bottompane.NewElicitationFormRequest(message.ServerName, firstNonEmpty(message.RequestID, message.ID), message.Message, message.RequestedSchema, message.Meta)
 	if err != nil {
@@ -52,7 +55,7 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) {
 			Body:    "Unable to render MCP request: " + err.Error(),
 			Options: []ModalOption{{ID: "cancel", Label: "Cancel", Shortcut: "enter"}},
 		})
-		return
+		return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 	}
 	form.ThreadID = message.ThreadID
 	form.TurnID = message.TurnID
@@ -71,6 +74,7 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) {
 	if m.modal != nil {
 		m.modal.elicitation = form
 	}
+	return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 }
 
 func elicitationURLBody(message ElicitationRequestMsg) string {

@@ -9,12 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 var ErrInvalidFSRequest = errors.New("invalid fs request")
+
+const defaultFSWatchPollInterval = 100 * time.Millisecond
 
 type invalidFSRequestError struct {
 	message string
@@ -169,15 +172,58 @@ type fsWatchKey struct {
 
 type fsWatchEntry struct {
 	path string
+	stop chan struct{}
+}
+
+type fsChangedForConnection struct {
+	connectionID string
+	notification *ChangedNotification
+}
+
+type fsWatchFileState struct {
+	exists  bool
+	isDir   bool
+	size    int64
+	modTime int64
+}
+
+type fsWatchSnapshot struct {
+	state    fsWatchFileState
+	children map[string]fsWatchFileState
 }
 
 type FSService struct {
-	mu      sync.Mutex
-	watches map[fsWatchKey]fsWatchEntry
+	mu        sync.Mutex
+	watches   map[fsWatchKey]fsWatchEntry
+	onChanged func(connectionID string, notification *ChangedNotification)
 }
 
 func NewFSService() *FSService {
 	return &FSService{watches: map[fsWatchKey]fsWatchEntry{}}
+}
+
+func (s *FSService) SetChangedCallback(callback func(connectionID string, notification *ChangedNotification)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChanged = callback
+	for key, entry := range s.watches {
+		if callback == nil {
+			if entry.stop != nil {
+				close(entry.stop)
+				entry.stop = nil
+				s.watches[key] = entry
+			}
+			continue
+		}
+		if entry.stop == nil {
+			entry.stop = make(chan struct{})
+			s.watches[key] = entry
+			go s.watchPathLoop(key, entry.path, entry.stop)
+		}
+	}
 }
 
 func (s *FSService) ReadFile(params *ReadFileParams) (*ReadFileResponse, error) {
@@ -375,7 +421,12 @@ func (s *FSService) WatchWithConnection(connectionID string, params *WatchParams
 	if _, ok := s.watches[key]; ok {
 		return nil, fmt.Errorf("%w: watchId already exists: %s", ErrInvalidFSRequest, params.WatchID)
 	}
-	s.watches[key] = fsWatchEntry{path: canonical}
+	entry := fsWatchEntry{path: canonical}
+	if s.onChanged != nil {
+		entry.stop = make(chan struct{})
+		go s.watchPathLoop(key, canonical, entry.stop)
+	}
+	s.watches[key] = entry
 	return &WatchResponse{Path: canonical}, nil
 }
 
@@ -393,7 +444,7 @@ func (s *FSService) UnwatchWithConnection(connectionID string, params *UnwatchPa
 	key := fsWatchKey{connectionID: normalizeConnectionID(connectionID), watchID: params.WatchID}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.watches, key)
+	s.removeWatchLocked(key)
 	return &UnwatchResponse{}, nil
 }
 
@@ -412,6 +463,56 @@ func (s *FSService) ChangedForConnection(connectionID string, watchID string, pa
 	return &ChangedNotification{WatchID: watchID, ChangedPaths: append([]string(nil), paths...)}, true
 }
 
+func (s *FSService) ChangedForPath(path string) []fsChangedForConnection {
+	if s == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	abs = filepath.Clean(abs)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	notifications := []fsChangedForConnection{}
+	for key, entry := range s.watches {
+		if !fsWatchMatchesChangedPath(entry.path, abs) {
+			continue
+		}
+		notifications = append(notifications, fsChangedForConnection{
+			connectionID: key.connectionID,
+			notification: &ChangedNotification{
+				WatchID:      key.watchID,
+				ChangedPaths: []string{abs},
+			},
+		})
+	}
+	sort.SliceStable(notifications, func(i int, j int) bool {
+		if notifications[i].connectionID != notifications[j].connectionID {
+			return notifications[i].connectionID < notifications[j].connectionID
+		}
+		return notifications[i].notification.WatchID < notifications[j].notification.WatchID
+	})
+	return notifications
+}
+
+func fsWatchMatchesChangedPath(watchPath string, changedPath string) bool {
+	watch := filepath.Clean(watchPath)
+	changed := filepath.Clean(changedPath)
+	if watch == changed {
+		return true
+	}
+	info, err := os.Stat(watch)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	rel, err := filepath.Rel(watch, changed)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !strings.Contains(rel, string(filepath.Separator))
+}
+
 func (s *FSService) ConnectionClosed(connectionID string) {
 	if s == nil {
 		return
@@ -421,9 +522,130 @@ func (s *FSService) ConnectionClosed(connectionID string) {
 	defer s.mu.Unlock()
 	for key := range s.watches {
 		if key.connectionID == connectionID {
-			delete(s.watches, key)
+			s.removeWatchLocked(key)
 		}
 	}
+}
+
+func (s *FSService) removeWatchLocked(key fsWatchKey) {
+	entry, ok := s.watches[key]
+	if !ok {
+		return
+	}
+	if entry.stop != nil {
+		close(entry.stop)
+	}
+	delete(s.watches, key)
+}
+
+func (s *FSService) watchPathLoop(key fsWatchKey, path string, stop <-chan struct{}) {
+	previous := snapshotFSWatchPath(path)
+	ticker := time.NewTicker(defaultFSWatchPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		current := snapshotFSWatchPath(path)
+		changedPaths := fsWatchSnapshotChangedPaths(previous, current, path)
+		previous = current
+		if len(changedPaths) > 0 {
+			s.emitChanged(key, changedPaths)
+		}
+	}
+}
+
+func (s *FSService) emitChanged(key fsWatchKey, changedPaths []string) {
+	if s == nil || len(changedPaths) == 0 {
+		return
+	}
+	s.mu.Lock()
+	_, ok := s.watches[key]
+	callback := s.onChanged
+	s.mu.Unlock()
+	if !ok || callback == nil {
+		return
+	}
+	callback(key.connectionID, &ChangedNotification{
+		WatchID:      key.watchID,
+		ChangedPaths: append([]string(nil), changedPaths...),
+	})
+}
+
+func snapshotFSWatchPath(path string) fsWatchSnapshot {
+	cleaned := filepath.Clean(path)
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return fsWatchSnapshot{}
+	}
+	snapshot := fsWatchSnapshot{state: fsWatchStateFromInfo(info)}
+	if !info.IsDir() {
+		return snapshot
+	}
+	entries, err := os.ReadDir(cleaned)
+	if err != nil {
+		return snapshot
+	}
+	snapshot.children = map[string]fsWatchFileState{}
+	for _, entry := range entries {
+		childInfo, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		snapshot.children[filepath.Join(cleaned, entry.Name())] = fsWatchStateFromInfo(childInfo)
+	}
+	return snapshot
+}
+
+func fsWatchStateFromInfo(info os.FileInfo) fsWatchFileState {
+	if info == nil {
+		return fsWatchFileState{}
+	}
+	return fsWatchFileState{
+		exists:  true,
+		isDir:   info.IsDir(),
+		size:    info.Size(),
+		modTime: info.ModTime().UTC().UnixNano(),
+	}
+}
+
+func fsWatchSnapshotChangedPaths(previous fsWatchSnapshot, current fsWatchSnapshot, path string) []string {
+	cleaned := filepath.Clean(path)
+	changed := map[string]struct{}{}
+	if previous.state != current.state && !(previous.state.exists && current.state.exists && previous.state.isDir && current.state.isDir) {
+		changed[cleaned] = struct{}{}
+	}
+	if previous.state.exists && current.state.exists && previous.state.isDir && current.state.isDir {
+		for childPath, previousState := range previous.children {
+			currentState, ok := current.children[childPath]
+			if !ok {
+				changed[childPath] = struct{}{}
+				continue
+			}
+			if previousState.exists && currentState.exists && previousState.isDir && currentState.isDir {
+				continue
+			}
+			if previousState != currentState {
+				changed[childPath] = struct{}{}
+			}
+		}
+		for childPath := range current.children {
+			if _, ok := previous.children[childPath]; !ok {
+				changed[childPath] = struct{}{}
+			}
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(changed))
+	for changedPath := range changed {
+		paths = append(paths, changedPath)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func (s *FSService) WatchCount() int {

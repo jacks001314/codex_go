@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/internal/tui"
 	historycell "codex_go/internal/tui/history_cell"
 )
 
@@ -45,7 +46,7 @@ func (c *streamCore) pushDelta(delta string) bool {
 	}
 	c.rawSource += committed
 	c.holdbackScanner.PushSourceChunk(committed)
-	c.renderedLines = renderSourceLines(c.rawSource)
+	c.renderedLines = renderSourceLines(c.rawSource, c.width)
 	return c.syncStableQueue()
 }
 
@@ -66,7 +67,7 @@ func (c *streamCore) finalizeRemaining() []string {
 		c.rawSource += remainder
 		c.holdbackScanner.PushSourceChunk(remainder)
 	}
-	rendered := renderSourceLines(c.rawSource)
+	rendered := renderSourceLines(c.rawSource, c.width)
 	if c.emittedStableLen >= len(rendered) {
 		return nil
 	}
@@ -110,15 +111,31 @@ func (c *streamCore) currentTailLines() []string {
 	return append([]string(nil), c.renderedLines[start:]...)
 }
 
+func (c *streamCore) hasTail() bool {
+	return c.enqueuedStableLen < len(c.renderedLines)
+}
+
 func (c *streamCore) setWidth(width int) {
 	if c.width == width {
 		return
 	}
+	hadPendingQueue := len(c.queue) > 0
+	hadLiveTail := c.hasTail()
 	c.width = width
-	c.renderedLines = renderSourceLines(c.rawSource)
+	if c.rawSource == "" {
+		return
+	}
+	c.renderedLines = renderSourceLines(c.rawSource, c.width)
+	c.emittedStableLen = min(c.emittedStableLen, len(c.renderedLines))
+	if hadPendingQueue && c.emittedStableLen == len(c.renderedLines) && c.emittedStableLen > 0 {
+		c.emittedStableLen--
+	}
 	c.queue = nil
-	c.enqueuedStableLen = min(c.emittedStableLen, len(c.renderedLines))
-	c.syncStableQueue()
+	if c.emittedStableLen > 0 && !hadPendingQueue && !hadLiveTail {
+		c.enqueuedStableLen = len(c.renderedLines)
+		return
+	}
+	c.rebuildStableQueueFromRender()
 }
 
 func (c *streamCore) reset() {
@@ -151,8 +168,17 @@ func (c *streamCore) computeTargetStableLen() int {
 	if state.Kind == TableHoldbackNone {
 		return max(len(c.renderedLines), c.emittedStableLen)
 	}
-	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart)
+	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart, c.width)
 	return max(prefixLen, c.emittedStableLen)
+}
+
+func (c *streamCore) rebuildStableQueueFromRender() {
+	target := c.computeTargetStableLen()
+	c.queue = nil
+	if c.emittedStableLen < target {
+		c.enqueue(c.renderedLines[c.emittedStableLen:target])
+	}
+	c.enqueuedStableLen = target
 }
 
 func (c *streamCore) enqueue(lines []string) {
@@ -218,6 +244,14 @@ func (c *StreamController) CurrentTailLines() []string {
 	return c.core.currentTailLines()
 }
 
+func (c *StreamController) HasLiveTail() bool {
+	return c != nil && c.core.hasTail()
+}
+
+func (c *StreamController) TailStartsStream() bool {
+	return c != nil && !c.headerEmitted && c.core.emittedStableLen == 0
+}
+
 type PlanStreamController struct {
 	core streamCore
 }
@@ -264,24 +298,39 @@ func (c *PlanStreamController) OldestQueuedAge(now time.Time) *time.Duration {
 	return c.core.oldestQueuedAge(now)
 }
 
-func renderSourceLines(source string) []string {
+func (c *PlanStreamController) CurrentTailDisplayLines() []string {
+	return c.core.currentTailLines()
+}
+
+func (c *PlanStreamController) HasLiveTail() bool {
+	return c != nil && c.core.hasTail()
+}
+
+func renderSourceLines(source string, width int) []string {
 	source = strings.TrimRight(source, "\n")
 	if source == "" {
 		return nil
 	}
-	return strings.Split(source, "\n")
+	raw := strings.Split(source, "\n")
+	if width <= 0 {
+		return raw
+	}
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		out = append(out, tui.AdaptiveWrapLine(line, tui.WrapOptions{
+			Width:      width,
+			BreakWords: true,
+		})...)
+	}
+	return out
 }
 
-func renderedLineCountBeforeSource(source string, sourceStart int) int {
+func renderedLineCountBeforeSource(source string, sourceStart int, width int) int {
 	if sourceStart <= 0 {
 		return 0
 	}
 	if sourceStart > len(source) {
 		sourceStart = len(source)
 	}
-	prefix := strings.TrimRight(source[:sourceStart], "\n")
-	if prefix == "" {
-		return 0
-	}
-	return strings.Count(prefix, "\n") + 1
+	return len(renderSourceLines(source[:sourceStart], width))
 }

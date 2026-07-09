@@ -16,6 +16,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	state.SetThreadID("thread-1")
 	state.AddMessage(RoleUser, "hello")
 	state.AddMessage(RoleAssistant, "hi there")
+	state.AddHistoryLines([]string{"• MCP Tools", "  • docs"}, []string{"MCP Tools", "docs"})
 
 	welcome := state.RenderWelcome()
 	for _, want := range []string{"Codex interactive session", "Model: gpt-test", "Approval: on-request", "Sandbox: workspace-write"} {
@@ -25,10 +26,13 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	}
 
 	frame := state.RenderFrame()
-	for _, want := range []string{"Thread: thread-1", "User:", "Assistant:", "Commands:"} {
+	for _, want := range []string{"Thread: thread-1", "User:", "Assistant:", "• MCP Tools", "  • docs", "Commands:"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("frame = %q, missing %q", frame, want)
 		}
+	}
+	if strings.Contains(frame, "History:") {
+		t.Fatalf("frame rendered history role header:\n%s", frame)
 	}
 }
 
@@ -41,8 +45,47 @@ func TestParseCommand(t *testing.T) {
 	}{
 		{input: "hello", ok: false},
 		{input: "/help", command: CommandHelp, ok: true},
+		{input: "/keymap", command: CommandKeymap, ok: true},
+		{input: "/usage weekly", command: CommandUsage, args: "weekly", ok: true},
+		{input: "/goal set ship tui parity", command: CommandGoal, args: "set ship tui parity", ok: true},
+		{input: "/statusline model current-dir", command: CommandStatusline, args: "model current-dir", ok: true},
+		{input: "/title app-name project-name", command: CommandTitle, args: "app-name project-name", ok: true},
+		{input: "/debug-config", command: CommandDebugConfig, ok: true},
+		{input: "/copy", command: CommandCopy, ok: true},
+		{input: "/raw on", command: CommandRaw, args: "on", ok: true},
+		{input: "/diff", command: CommandDiff, ok: true},
+		{input: "/ps", command: CommandPs, ok: true},
+		{input: "/stop", command: CommandStop, ok: true},
+		{input: "/clean", command: CommandStop, ok: true},
+		{input: "/permissions", command: CommandPermissions, ok: true},
+		{input: "/personality", command: CommandPersonality, ok: true},
+		{input: "/experimental", command: CommandExperimental, ok: true},
+		{input: "/mcp verbose", command: CommandMcp, args: "verbose", ok: true},
+		{input: "/skills", command: CommandSkills, ok: true},
+		{input: "/plugins", command: CommandPlugins, ok: true},
+		{input: "/apps", command: CommandApps, ok: true},
+		{input: "/review custom", command: CommandReview, args: "custom", ok: true},
+		{input: "/rename work", command: CommandRename, args: "work", ok: true},
+		{input: "/theme", command: CommandTheme, ok: true},
+		{input: "/pet off", command: CommandPets, args: "off", ok: true},
+		{input: "/plan investigate", command: CommandPlan, args: "investigate", ok: true},
+		{input: "/btw quick question", command: CommandSide, args: "quick question", ok: true},
+		{input: "/subagents", command: CommandAgent, ok: true},
+		{input: "/ide", command: CommandIde, ok: true},
+		{input: "/vim", command: CommandVim, ok: true},
+		{input: "/mention", command: CommandMention, ok: true},
+		{input: "/approve", command: CommandAutoReview, ok: true},
+		{input: "/import", command: CommandImport, ok: true},
+		{input: "/setup-default-sandbox", command: CommandElevateSandbox, ok: true},
+		{input: "/sandbox-add-read-dir D:\\tmp", command: CommandSandboxReadRoot, args: "D:\\tmp", ok: true},
+		{input: "/rollout", command: CommandRollout, ok: true},
+		{input: "/test-approval", command: CommandTestApproval, ok: true},
+		{input: "/debug-m-drop", command: CommandMemoryDrop, ok: true},
+		{input: "/debug-m-update", command: CommandMemoryUpdate, ok: true},
 		{input: "/model gpt-5", command: CommandModel, args: "gpt-5", ok: true},
 		{input: "/approval on-request", command: CommandApproval, args: "on-request", ok: true},
+		{input: "/editor", command: CommandEditor, ok: true},
+		{input: "/logout", command: CommandLogout, ok: true},
 		{input: "quit", command: CommandExit, ok: true},
 		{input: "/wat", command: CommandUnknown, ok: true},
 	}
