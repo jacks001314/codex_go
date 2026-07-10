@@ -31,6 +31,7 @@ import (
 	codexexec "codex_go/internal/exec"
 	"codex_go/internal/mcp"
 	"codex_go/internal/plugin"
+	promptctx "codex_go/internal/prompt"
 	"codex_go/internal/protocol"
 	"codex_go/internal/review"
 	"codex_go/internal/sandbox"
@@ -686,7 +687,9 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 		t.Fatalf("interactive returned error: %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "Codex interactive session") ||
+	if !strings.Contains(output, "OpenAI Codex") ||
+		!strings.Contains(output, "Model: gpt-5.5") ||
+		!strings.Contains(output, "Directory:") ||
 		!strings.Contains(output, "first turn") ||
 		!strings.Contains(output, "second turn") {
 		t.Fatalf("stdout = %q", stdout.String())
@@ -742,6 +745,46 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 	text := string(data)
 	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "memories = true") {
 		t.Fatalf("config missing settings writes:\n%s", text)
+	}
+}
+
+func TestInteractiveUIStateUsesEffectiveConfigModelAndDirectory(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("MkdirAll project error = %v", err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(strings.Join([]string{
+		`model = "gpt-config"`,
+		`model_reasoning_effort = "xhigh"`,
+		`approval_policy = "on-request"`,
+		`sandbox_mode = "workspace-write"`,
+	}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+
+	state := interactiveUIState(&cli.RootOptions{Shared: cli.SharedOptions{CWD: project}})
+	if state.Model != "gpt-config" || state.ReasoningEffort != "xhigh" || state.ApprovalPolicy != "on-request" || state.Sandbox != "workspace-write" {
+		t.Fatalf("state config fields = model %q reasoning %q approval %q sandbox %q", state.Model, state.ReasoningEffort, state.ApprovalPolicy, state.Sandbox)
+	}
+	if state.CWD != project {
+		t.Fatalf("state CWD = %q, want %q", state.CWD, project)
+	}
+
+	override := interactiveUIState(&cli.RootOptions{Shared: cli.SharedOptions{CWD: project, Model: "gpt-cli"}})
+	if override.Model != "gpt-cli" || override.ReasoningEffort != "xhigh" {
+		t.Fatalf("override state = model %q reasoning %q", override.Model, override.ReasoningEffort)
+	}
+}
+
+func TestInteractiveUIStateUsesConcreteDefaultModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	state := interactiveUIState(&cli.RootOptions{})
+	if strings.TrimSpace(state.Model) == "" || state.Model == "default" {
+		t.Fatalf("state model = %q, want concrete bundled default", state.Model)
 	}
 }
 
@@ -905,7 +948,7 @@ func TestInteractiveTurnCommandUsesTUIStateAndResume(t *testing.T) {
 		t.Fatalf("message = %T, want StreamStartedMsg", msg)
 	}
 	completed, sawThreadStarted, sawDelta := collectInteractiveStream(t, started)
-	if completed.ThreadID != "thread-1" || completed.AssistantMessage != "assistant reply" || completed.Err != nil {
+	if completed.ThreadID != "thread-1" || completed.AssistantMessage != "" || completed.Err != nil {
 		t.Fatalf("completed = %#v", completed)
 	}
 	if !sawThreadStarted || !sawDelta {
@@ -959,6 +1002,9 @@ func TestInteractiveTurnCommandUsesPlanModeReasoningOverride(t *testing.T) {
 	completed, _, _ := collectInteractiveStream(t, started)
 	if completed.Err != nil {
 		t.Fatalf("completed error = %v", completed.Err)
+	}
+	if completed.AssistantMessage != "ok" {
+		t.Fatalf("completed assistant message = %q, want fallback last message", completed.AssistantMessage)
 	}
 	if captured == nil {
 		t.Fatal("runner was not called")
@@ -1023,6 +1069,79 @@ func TestInteractiveTurnCommandPassesStructuredAttachments(t *testing.T) {
 	if captured.Input[3].Type != "text" || captured.Input[3].Text != "review these" {
 		t.Fatalf("prompt input = %#v", captured.Input[3])
 	}
+}
+
+func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
+	inputs := interactiveSubmitInputs(codextea.SubmitRequest{
+		Prompt:          "$imagegen",
+		MentionBindings: []string{`imagegen|skill://C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`},
+		MentionCatalog: chatwidget.SubmissionMentionCatalog{
+			Skills: []appserver.SkillsListEntry{{
+				Name:    "imagegen",
+				Path:    `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+				Enabled: true,
+			}},
+		},
+	})
+
+	if len(inputs) != 1 {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	if inputs[0].Type != "skill" || inputs[0].Name != "imagegen" || inputs[0].Path != `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md` {
+		t.Fatalf("skill input = %#v", inputs[0])
+	}
+}
+
+func TestInteractiveLocalSkillContextInjectsExplicitRepoSkill(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	cwd := t.TempDir()
+	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, appserver.SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: repo-helper\ndescription: Repo helper\n---\nUse repo context.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	request := codextea.SubmitRequest{Prompt: "$repo-helper"}
+	instructions, inputItems, err := interactiveLocalSkillContextForRequest(&cli.RootOptions{}, request, interactiveSubmitInputs(request), cwd)
+	if err != nil {
+		t.Fatalf("interactiveLocalSkillContextForRequest() error = %v", err)
+	}
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "repo-helper", "Repo helper", "### How to use skills", "must read its `SKILL.md` completely"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, instructions)
+		}
+	}
+	if strings.Contains(instructions, "hidden-skill") {
+		t.Fatalf("instructions missing repo skill:\n%s", instructions)
+	}
+	if len(inputItems) != 1 {
+		t.Fatalf("inputItems = %#v", inputItems)
+	}
+	if !interactiveInputItemContainsText(inputItems[0], "<name>repo-helper</name>") ||
+		!interactiveInputItemContainsText(inputItems[0], "Use repo context.") ||
+		!interactiveInputItemContainsText(inputItems[0], skillPath) {
+		t.Fatalf("skill input item = %#v", inputItems[0])
+	}
+}
+
+func interactiveInputItemContainsText(item any, want string) bool {
+	raw, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	content, ok := raw["content"].([]map[string]any)
+	if !ok {
+		return false
+	}
+	for _, block := range content {
+		if strings.Contains(fmt.Sprint(block["text"]), want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInteractiveTurnCommandReportsNilRunner(t *testing.T) {
@@ -1095,6 +1214,9 @@ func TestInteractiveStreamEventWriterParsesJSONLines(t *testing.T) {
 
 	if len(messages) != 3 {
 		t.Fatalf("message len = %d, want 3 (%#v)", len(messages), messages)
+	}
+	if !writer.SawAssistantOutput() {
+		t.Fatal("writer did not record assistant output")
 	}
 	first, ok := messages[0].(codextea.ThreadEventMsg)
 	if !ok || first.Event.Type != "thread.started" || first.Event.ThreadID != "thread-1" {
@@ -1220,6 +1342,36 @@ func TestInteractiveElicitationBrokerReturnsMCPResponse(t *testing.T) {
 	}
 }
 
+func TestInteractiveMCPRuntimeLoadsConfiguredServersForSlashCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	body := `
+[features]
+apps = false
+
+[mcp_servers.angr]
+command = "codex-go-missing-mcp-test"
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	service, statuses, tools := interactiveMCPRuntime(&cli.RootOptions{})
+	if service == nil {
+		t.Fatal("interactiveMCPRuntime returned nil service for configured MCP server")
+	}
+	defer service.Close()
+	if len(statuses) != 1 || statuses[0].Name != "angr" {
+		t.Fatalf("statuses = %#v, want configured angr server", statuses)
+	}
+	if statuses[0].Auth != "Unsupported" {
+		t.Fatalf("auth = %q, want Unsupported", statuses[0].Auth)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("tools = %#v, want none for missing helper", tools)
+	}
+}
+
 func TestInteractiveNotificationPosterWritesOSC9(t *testing.T) {
 	t.Setenv("TERM_PROGRAM", "WezTerm")
 	t.Setenv("TERM", "")
@@ -1249,6 +1401,7 @@ func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
 			"notification_condition": "always",
 			"theme":                  "dracula",
 			"pet":                    "dewey",
+			"session_picker_view":    "dense",
 		},
 		"requirements": map[string]any{
 			"allowed_approval_policies":   []any{"on-request"},
@@ -1282,8 +1435,8 @@ func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
 	if settings.HideRateLimitModelNudge == nil || *settings.HideRateLimitModelNudge != hidden {
 		t.Fatalf("hide notice = %#v", settings.HideRateLimitModelNudge)
 	}
-	if settings.TUITheme != "dracula" || settings.TUIPet != "dewey" {
-		t.Fatalf("tui theme/pet = %q/%q", settings.TUITheme, settings.TUIPet)
+	if settings.TUITheme != "dracula" || settings.TUIPet != "dewey" || settings.SessionPickerView != "dense" {
+		t.Fatalf("tui theme/pet/session picker = %q/%q/%q", settings.TUITheme, settings.TUIPet, settings.SessionPickerView)
 	}
 	if settings.PermissionRequirements == nil ||
 		len(settings.PermissionRequirements.AllowedApprovalPolicies) != 1 ||
@@ -2307,7 +2460,7 @@ func TestInteractiveDumbTerminalTTYConfirmationLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Codex interactive session") {
+	if !strings.Contains(stdout.String(), "OpenAI Codex") || !strings.Contains(stdout.String(), "Directory:") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -3286,6 +3439,56 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 	case err := <-serverErrs:
 		t.Fatalf("server error: %v", err)
 	default:
+	}
+}
+
+func TestInteractiveResumeSessionHandlerReadsHistoryFromStore(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	store := session.NewStore(filepath.Join(auth.DefaultCodexHome(), "sessions"))
+	record := &session.Record{
+		ID:      "thread-resume",
+		Title:   "Named Session",
+		Preview: "hello prompt",
+		Metadata: session.Metadata{
+			CWD:           `D:\repo`,
+			ModelProvider: "openai",
+			Source:        "cli",
+		},
+		Items: []session.Item{
+			{Type: "user_message", Role: "user", Text: "hello prompt"},
+			{Type: "agent_message", Role: "assistant", Text: "hello answer"},
+			{Type: "reasoning", Data: map[string]any{"summary": "thought summary"}},
+			{Type: "command_execution", Name: "go test", Status: "completed", Data: map[string]any{"output": "ok"}},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	response, err := interactiveResumeSessionHandler(nil)(codextui.SessionSelection{
+		Kind:   codextui.SessionSelectionResume,
+		Target: codextui.SessionTarget{ThreadID: "thread-resume"},
+	})
+	if err != nil {
+		t.Fatalf("resume handler error = %v", err)
+	}
+	if response.Summary == nil || response.Summary.ThreadID != "thread-resume" || response.Summary.Preview != "hello prompt" {
+		t.Fatalf("summary = %#v", response.Summary)
+	}
+	if len(response.Messages) != 4 {
+		t.Fatalf("messages = %#v", response.Messages)
+	}
+	if response.Messages[0].Role != codextui.RoleUser || response.Messages[0].Text != "hello prompt" {
+		t.Fatalf("user message = %#v", response.Messages[0])
+	}
+	if response.Messages[1].Role != codextui.RoleAssistant || response.Messages[1].Text != "hello answer" {
+		t.Fatalf("assistant message = %#v", response.Messages[1])
+	}
+	if response.Messages[2].Role != codextui.RoleHistory || !strings.Contains(response.Messages[2].Text, "thought summary") {
+		t.Fatalf("reasoning message = %#v", response.Messages[2])
+	}
+	if response.Messages[3].Role != codextui.RoleHistory || !strings.Contains(response.Messages[3].Text, "ok") {
+		t.Fatalf("tool message = %#v", response.Messages[3])
 	}
 }
 

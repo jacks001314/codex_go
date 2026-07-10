@@ -345,6 +345,109 @@ func TestAnalyticsEventsClientPostsPluginUnionEventLikeRust(t *testing.T) {
 	}
 }
 
+func TestAnalyticsEventsClientPostsExternalAgentImportUnionEventLikeRust(t *testing.T) {
+	bodies := make(chan TrackEventsRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload TrackEventsRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload error = %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		bodies <- payload
+	}))
+	defer server.Close()
+
+	client := NewAnalyticsEventsClient(AnalyticsEventsClientOptions{
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	defer client.Close()
+
+	event := NewCodexOnboardingExternalAgentImportCompleteEvent(CodexOnboardingExternalAgentImportCompleteMetadata{
+		ImportID:        "import-http",
+		Source:          "test_import",
+		ItemType:        "SESSIONS",
+		SuccessCount:    0,
+		FailedCount:     1,
+		ProductClientID: stringPtrTelemetry("codex_cli_rs"),
+	})
+	client.TrackCodexOnboardingExternalAgentImportCompleteEvent(context.Background(), event)
+
+	var payload TrackEventsRequest
+	select {
+	case payload = <-bodies:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for analytics request")
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("events = %#v", payload.Events)
+	}
+	var got CodexOnboardingExternalAgentImportCompleteEventRequest
+	if err := json.Unmarshal(payload.Events[0], &got); err != nil {
+		t.Fatalf("decode analytics event error = %v", err)
+	}
+	if got.EventType != CodexOnboardingExternalAgentImportCompleteEventType ||
+		got.EventParams.ImportID != "import-http" ||
+		got.EventParams.Source != "test_import" ||
+		got.EventParams.ItemType != "SESSIONS" ||
+		got.EventParams.FailedCount != 1 {
+		t.Fatalf("event = %#v", got)
+	}
+}
+
+func TestAnalyticsEventsClientPostsHookRunUnionEventLikeRust(t *testing.T) {
+	bodies := make(chan TrackEventsRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload TrackEventsRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload error = %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		bodies <- payload
+	}))
+	defer server.Close()
+
+	client := NewAnalyticsEventsClient(AnalyticsEventsClientOptions{
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	defer client.Close()
+
+	event := NewCodexHookRunEvent(CodexHookRunMetadataV1{
+		ThreadID:        stringPtrTelemetry("thread-http"),
+		TurnID:          stringPtrTelemetry("turn-http"),
+		ProductClientID: stringPtrTelemetry("codex_cli_rs"),
+		ModelSlug:       stringPtrTelemetry("gpt-5"),
+		HookName:        stringPtrTelemetry("PreToolUse"),
+		HookSource:      stringPtrTelemetry("user"),
+		Status:          stringPtrTelemetry("completed"),
+	})
+	client.TrackCodexHookRunEvent(context.Background(), event)
+
+	var payload TrackEventsRequest
+	select {
+	case payload = <-bodies:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for analytics request")
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("events = %#v", payload.Events)
+	}
+	var got CodexHookRunEventRequest
+	if err := json.Unmarshal(payload.Events[0], &got); err != nil {
+		t.Fatalf("decode analytics event error = %v", err)
+	}
+	if got.EventType != CodexHookRunEventType ||
+		got.EventParams.ThreadID == nil ||
+		*got.EventParams.ThreadID != "thread-http" ||
+		got.EventParams.HookName == nil ||
+		*got.EventParams.HookName != "PreToolUse" ||
+		got.EventParams.Status == nil ||
+		*got.EventParams.Status != "completed" {
+		t.Fatalf("event = %#v", got)
+	}
+}
+
 func TestAnalyticsEventsClientPostsReviewUnionEventLikeRust(t *testing.T) {
 	bodies := make(chan TrackEventsRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

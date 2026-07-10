@@ -10,6 +10,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 		Model:          "gpt-test",
 		ApprovalPolicy: "on-request",
 		Sandbox:        "workspace-write",
+		CWD:            `D:\repo`,
 		Search:         true,
 		NoAltScreen:    true,
 	})
@@ -19,7 +20,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	state.AddHistoryLines([]string{"• MCP Tools", "  • docs"}, []string{"MCP Tools", "docs"})
 
 	welcome := state.RenderWelcome()
-	for _, want := range []string{"Codex interactive session", "Model: gpt-test", "Approval: on-request", "Sandbox: workspace-write"} {
+	for _, want := range []string{"OpenAI Codex", "Model: gpt-test", "Approval: on-request", "Sandbox: workspace-write", `Directory: D:\repo`} {
 		if !strings.Contains(welcome, want) {
 			t.Fatalf("welcome = %q, missing %q", welcome, want)
 		}

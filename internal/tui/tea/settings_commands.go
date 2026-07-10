@@ -382,6 +382,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if strings.TrimSpace(msg.Result.TUIPet) != "" {
 		m.tuiPet = normalizePetIDTea(msg.Result.TUIPet)
 	}
+	if strings.TrimSpace(msg.Result.SessionPickerView) != "" {
+		m.sessionPickerDensity = normalizeSessionPickerDensityTea(msg.Result.SessionPickerView)
+	}
 	if strings.TrimSpace(msg.Result.FilePath) != "" {
 		switch msg.Kind {
 		case settingsWriteKindPersonality:

@@ -463,29 +463,10 @@ func outputTools(output *tool.Output) []any {
 	if output == nil || output.Data == nil {
 		return nil
 	}
-	switch tools := output.Data["tools"].(type) {
-	case []any:
-		return append([]any(nil), tools...)
-	case []tool.Spec:
-		out := make([]any, 0, len(tools))
-		for i := range tools {
-			out = append(out, tools[i])
-		}
-		return out
-	default:
-		if tools == nil {
-			return nil
-		}
-		data, err := json.Marshal(tools)
-		if err != nil {
-			return nil
-		}
-		var out []any
-		if err := json.Unmarshal(data, &out); err != nil {
-			return nil
-		}
-		return out
+	if tools, ok := model.ResponsesLoadableToolsFromValue(output.Data["tools"]); ok {
+		return tools
 	}
+	return nil
 }
 
 func toolSearchMapFromAgentItem(item *model.AgentItem) map[string]any {

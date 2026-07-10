@@ -36,6 +36,15 @@ func TestStatusIndicatorWidgetStatePauseResumeMatchesRust(t *testing.T) {
 	}
 }
 
+func TestStatusIndicatorWidgetInterruptHintTextMatchesRust(t *testing.T) {
+	start := time.Unix(0, 0)
+	widget := NewStatusIndicatorWidgetState(start)
+	lines := widget.Render(80, start.Add(12*time.Second))
+	if len(lines) == 0 || lines[0] != "Working (12s \u2022 esc to interrupt)" {
+		t.Fatalf("status line = %#v", lines)
+	}
+}
+
 func TestStatusIndicatorWidgetStateDetailsAndInlineMatchRust(t *testing.T) {
 	start := time.Unix(0, 0)
 	widget := NewStatusIndicatorWidgetState(start)
@@ -48,6 +57,9 @@ func TestStatusIndicatorWidgetStateDetailsAndInlineMatchRust(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "thinking (1m 01s") || !strings.Contains(lines[0], "running tests") {
 		t.Fatalf("header line = %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "\u2022 esc to interrupt") || !strings.Contains(lines[0], "\u2022 running tests") {
+		t.Fatalf("Rust separators missing from header line = %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], "  - Cargo") {
 		t.Fatalf("details line = %q", lines[1])

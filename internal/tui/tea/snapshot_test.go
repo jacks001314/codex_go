@@ -101,6 +101,9 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 				},
 			},
 		})
+		model.now = func() time.Time {
+			return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+		}
 		model.openSessionPicker(codextui.SessionPickerResume)
 
 		assertTerminalSnapshot(t, model.View(), `
@@ -118,9 +121,14 @@ No messages yet.
 
 
 Resume a previous session
-  Choose a session to resume.
-› 1. Newer Session (thread-new) (1) - cwd: D:\repo  provider: openai
-Esc cancel | Enter choose
+
+Type to search                         Filter: [Cwd] All    Sort: [Updated] Created
+
+› 3d ago      Newer Session
+
+─────────────────────────────────────────────────────────────────────── 1 / 1 · 100%
+enter resume   esc exit   ctrl+c exit   tab focus   ←/→ option
+ctrl+o comfy   ctrl+t preview   ctrl+e exp   ↑/↓ browse
 Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 	})
 

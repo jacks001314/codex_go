@@ -105,8 +105,11 @@ func (m *Model) applySkillsModalOption(optionID string) bubbletea.Cmd {
 	}
 	switch chatwidget.UsageMenuAction(optionID) {
 	case chatwidget.SkillsMenuActionList:
-		m.composer.InsertString("@")
+		m.composer.InsertString("$")
 		m.notice = "Skills list shortcut inserted."
+		cmd := m.refreshSkillPopup()
+		m.refreshTranscript()
+		return cmd
 	case chatwidget.SkillsMenuActionManage:
 		return m.applySkillsManageCommand()
 	default:
@@ -154,34 +157,18 @@ func (m *Model) openThemePicker() {
 	if m == nil {
 		return
 	}
-	options := codextui.DiscoverThemeOptions(codextui.BuiltinThemeIDs(), nil)
+	themeDir := codextui.DefaultThemeDir()
+	options := codextui.DiscoverThemeOptions(codextui.BuiltinThemeIDs(), codextui.DiscoverCustomThemePaths(themeDir))
 	currentTheme := effectiveThemeIDTea(m.tuiTheme)
 	picker := codextui.NewThemePicker(options, currentTheme)
-	modalOptions := make([]ModalOption, 0, len(options))
-	for _, option := range picker.Themes {
-		description := strings.TrimSpace(option.Description)
-		if option.ID == currentTheme {
-			if description != "" {
-				description += " "
-			}
-			description += "(current)"
-		}
-		modalOptions = append(modalOptions, ModalOption{
-			ID:          option.ID,
-			Label:       option.Label,
-			Description: description,
-		})
+	m.modal = &modalState{
+		id:            "theme",
+		kind:          ModalKindTheme,
+		title:         "Select Syntax Theme",
+		themePicker:   picker,
+		themeSubtitle: codextui.ThemePickerSubtitle(themeDir, m.width),
 	}
-	m.openModal(ModalRequestMsg{
-		ID:      "theme",
-		Kind:    ModalKindTheme,
-		Title:   "Select Syntax Theme",
-		Body:    strings.Join(codextui.ThemePreviewRows(48), "\n"),
-		Options: modalOptions,
-	})
-	if m.modal != nil && picker.Selected >= 0 && picker.Selected < len(m.modal.options) {
-		m.modal.selected = picker.Selected
-	}
+	m.notice = ""
 }
 
 func (m *Model) applyThemeModalOption(optionID string) bubbletea.Cmd {
@@ -287,7 +274,8 @@ func effectiveThemeIDTea(themeID string) string {
 
 func themeOptionByIDTea(themeID string) (codextui.ThemeOption, bool) {
 	themeID = strings.TrimSpace(themeID)
-	for _, option := range codextui.DiscoverThemeOptions(codextui.BuiltinThemeIDs(), nil) {
+	themeDir := codextui.DefaultThemeDir()
+	for _, option := range codextui.DiscoverThemeOptions(codextui.BuiltinThemeIDs(), codextui.DiscoverCustomThemePaths(themeDir)) {
 		if option.ID == themeID {
 			return option, true
 		}

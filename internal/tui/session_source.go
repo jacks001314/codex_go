@@ -142,7 +142,8 @@ func sessionSummaryFromRecord(store *session.Store, record *session.Record) Sess
 	return SessionSummary{
 		ThreadID:  string(record.ID),
 		Path:      path,
-		Title:     firstNonEmpty(record.Title, record.Preview),
+		Title:     strings.TrimSpace(record.Title),
+		Preview:   strings.TrimSpace(record.Preview),
 		CWD:       record.Metadata.CWD,
 		Branch:    record.Metadata.Git["branch"],
 		Provider:  firstNonEmpty(record.Metadata.ModelProvider, record.Metadata.Model),
@@ -164,7 +165,7 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 	if thread.GitInfo != nil && thread.GitInfo.Branch != nil {
 		branch = strings.TrimSpace(*thread.GitInfo.Branch)
 	}
-	title := thread.Preview
+	title := ""
 	if thread.Name != nil && strings.TrimSpace(*thread.Name) != "" {
 		title = strings.TrimSpace(*thread.Name)
 	}
@@ -172,6 +173,7 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 		ThreadID:  strings.TrimSpace(thread.ID),
 		Path:      path,
 		Title:     title,
+		Preview:   strings.TrimSpace(thread.Preview),
 		CWD:       thread.CWD,
 		Branch:    branch,
 		Provider:  thread.ModelProvider,

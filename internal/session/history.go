@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"strings"
+
+	"codex_go/internal/model"
 )
 
 type HistoryBuildOptions struct {
@@ -33,12 +35,14 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 	if len(item.Raw) > 0 {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
-			return raw
+			return sanitizeHistoryInputItem(raw)
 		}
 	}
 	switch item.Type {
 	case "message", "user_message", "agent_message", "assistant_message":
 		return messageInputItem(item)
+	case "imageGeneration", "image_generation", "image_generation_call":
+		return imageGenerationInputItem(item)
 	case "function_call", "custom_tool_call", "tool_search_call":
 		return toolCallInputItem(item)
 	case "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_output":
@@ -52,6 +56,21 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		}
 		return messageInputItem(item)
 	}
+}
+
+func imageGenerationInputItem(item *Item) map[string]any {
+	result := firstNonEmpty(stringValue(item.Data, "result"), item.Text)
+	status := model.NormalizeImageGenerationStatus(firstNonEmpty(item.Status, stringValue(item.Data, "status")), result)
+	out := map[string]any{
+		"id":     item.ID,
+		"type":   "image_generation_call",
+		"status": status,
+		"result": result,
+	}
+	if revised := firstNonEmpty(stringValue(item.Data, "revised_prompt"), stringValue(item.Data, "revisedPrompt")); revised != "" {
+		out["revised_prompt"] = revised
+	}
+	return out
 }
 
 func messageInputItem(item *Item) map[string]any {
@@ -71,13 +90,17 @@ func toolCallInputItem(item *Item) map[string]any {
 	callID := firstNonEmpty(item.CallID, stringValue(item.Data, "call_id"), item.ID)
 	switch item.Type {
 	case "custom_tool_call":
-		return map[string]any{
+		out := map[string]any{
 			"id":      item.ID,
 			"type":    "custom_tool_call",
 			"call_id": callID,
 			"name":    firstNonEmpty(item.Name, stringValue(item.Data, "name"), stringValue(item.Metadata, "toolName")),
 			"input":   firstNonEmpty(item.Text, stringValue(item.Data, "input")),
 		}
+		if namespace := firstNonEmpty(item.Namespace, stringValue(item.Data, "namespace")); namespace != "" {
+			out["namespace"] = namespace
+		}
+		return out
 	case "tool_search_call":
 		out := map[string]any{
 			"id":        item.ID,
@@ -100,14 +123,41 @@ func toolCallInputItem(item *Item) map[string]any {
 		}
 		return out
 	default:
-		return map[string]any{
+		out := map[string]any{
 			"id":        item.ID,
 			"type":      "function_call",
 			"call_id":   callID,
 			"name":      firstNonEmpty(item.Name, stringValue(item.Data, "name"), stringValue(item.Metadata, "toolName")),
-			"namespace": firstNonEmpty(item.Namespace, stringValue(item.Data, "namespace")),
 			"arguments": firstNonEmpty(item.Text, stringValue(item.Data, "arguments")),
 		}
+		if namespace := firstNonEmpty(item.Namespace, stringValue(item.Data, "namespace")); namespace != "" {
+			out["namespace"] = namespace
+		}
+		return out
+	}
+}
+
+func sanitizeHistoryInputItem(input any) any {
+	switch typed := input.(type) {
+	case map[string]any:
+		if itemType, _ := typed["type"].(string); itemType == "image_generation_call" {
+			result, _ := typed["result"].(string)
+			status, _ := typed["status"].(string)
+			typed["status"] = model.NormalizeImageGenerationStatus(status, result)
+		}
+		if namespace, ok := typed["namespace"]; ok {
+			switch value := namespace.(type) {
+			case string:
+				if strings.TrimSpace(value) == "" {
+					delete(typed, "namespace")
+				}
+			case nil:
+				delete(typed, "namespace")
+			}
+		}
+		return typed
+	default:
+		return input
 	}
 }
 
@@ -134,7 +184,9 @@ func toolOutputInputItem(item *Item) map[string]any {
 	if outputType == "tool_search_output" {
 		out["status"] = firstNonEmpty(item.Status, "completed")
 		out["execution"] = firstNonEmpty(stringValue(item.Data, "execution"), "client")
-		if tools, ok := item.Data["tools"]; ok {
+		if tools, ok := model.ResponsesLoadableToolsFromValue(item.Data["tools"]); ok {
+			out["tools"] = tools
+		} else if tools, ok := item.Data["tools"]; ok {
 			out["tools"] = tools
 		} else {
 			out["tools"] = []any{}

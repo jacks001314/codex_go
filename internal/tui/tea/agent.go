@@ -120,7 +120,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		if m.State != nil {
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
-			m.State.SetStatus("idle")
+			m.setStatus("idle")
 		}
 		m.activeSide = nil
 		m.setActiveAgentLabel(entry)
@@ -166,7 +166,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		if status == "" {
 			status = "idle"
 		}
-		m.State.SetStatus(status)
+		m.setStatus(status)
 	}
 	m.activeSide = nil
 	m.upsertAgentEntry(entry)

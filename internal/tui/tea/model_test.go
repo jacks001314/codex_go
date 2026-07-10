@@ -40,6 +40,24 @@ func TestModelViewRendersState(t *testing.T) {
 	}
 }
 
+func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{
+		Model:           "gpt-5.5",
+		ReasoningEffort: "xhigh",
+		CWD:             `D:\repo`,
+	})
+	model := NewModel(state, Options{Width: 90, Height: 18, ShowSessionHeader: true, SessionHeaderVersion: "0.142.5"})
+	view := model.View()
+	for _, want := range []string{"OpenAI Codex", "model:", "gpt-5.5 xhigh", "directory:", `D:\repo`} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "No messages yet.") {
+		t.Fatalf("session header view should replace empty transcript:\n%s", view)
+	}
+}
+
 func TestModelSubmitPrompt(t *testing.T) {
 	state := codextui.NewState(nil)
 	var submitted []string
@@ -125,6 +143,45 @@ func TestModelEscInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 	model.Update(cmd())
 	if state.Status != "idle" {
 		t.Fatalf("Status = %q, want idle after interrupt", state.Status)
+	}
+}
+
+func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
+	start := time.Unix(100, 0)
+	now := start.Add(12 * time.Second)
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	model := NewModel(state, Options{Width: 80, Height: 18})
+	model.taskStartedAt = start
+	model.now = func() time.Time { return now }
+
+	view := model.View()
+	if !strings.Contains(view, "\u2022 Working (12s \u2022 esc to interrupt)") {
+		t.Fatalf("Working indicator missing or not Rust-like:\n%s", view)
+	}
+	if !strings.Contains(view, "Ask Codex") {
+		t.Fatalf("composer should remain visible below Working indicator:\n%s", view)
+	}
+}
+
+func TestModelWorkingIndicatorUsesRemappedInterruptHint(t *testing.T) {
+	start := time.Unix(100, 0)
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	cfg := codextui.NewKeymapConfig()
+	if err := cfg.Set("chat", "interrupt_turn", []string{"ctrl-x"}); err != nil {
+		t.Fatal(err)
+	}
+	model := NewModel(state, Options{Width: 80, Height: 18, KeymapConfig: cfg})
+	model.taskStartedAt = start
+	model.now = func() time.Time { return start }
+
+	view := model.View()
+	if !strings.Contains(view, "\u2022 Working (0s \u2022 ctrl-x to interrupt)") {
+		t.Fatalf("remapped Working indicator missing:\n%s", view)
+	}
+	if strings.Contains(view, "esc to interrupt") {
+		t.Fatalf("Working indicator should not show default Esc after remap:\n%s", view)
 	}
 }
 
@@ -2095,6 +2152,140 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 	}
 }
 
+func TestModelSkillPopupReadsRuntimeInventoryAndInsertsSkill(t *testing.T) {
+	state := codextui.NewState(nil)
+	calls := 0
+	model := NewModel(state, Options{
+		Width:            90,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+			calls++
+			if cwd != `D:\repo` {
+				t.Fatalf("skills cwd = %q, want D:\\repo", cwd)
+			}
+			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+				CWD: `D:\repo`,
+				Skills: []appserver.SkillsListEntry{{
+					Name:             "imagegen",
+					Path:             `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+					Scope:            "system",
+					Description:      "Generate or edit images for websites, games, and more",
+					Enabled:          true,
+					ShortDescription: "Generate or edit images for websites, games, and more",
+					Interface: &appserver.SkillInterface{
+						DisplayName: "Image Gen",
+					},
+				}},
+			}}}, nil
+		},
+	})
+
+	_, cmd := model.Update(runes("$"))
+	if !strings.Contains(model.View(), "Loading skills") {
+		t.Fatalf("skill popup loading view missing:\n%s", model.View())
+	}
+	runTeaCmd(t, model, cmd)
+	if calls != 1 {
+		t.Fatalf("skills reader calls = %d, want 1", calls)
+	}
+	view := model.View()
+	for _, want := range []string{"Image Gen", "Generate or edit images"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("skill popup missing %q:\n%s", want, view)
+		}
+	}
+
+	model.Update(key(bubbletea.KeyEnter))
+	if got := model.ComposerValue(); got != "$imagegen " {
+		t.Fatalf("composer = %q, want $imagegen space", got)
+	}
+}
+
+func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) {
+	var requests []SubmitRequest
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:            90,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+				CWD: `D:\repo`,
+				Skills: []appserver.SkillsListEntry{{
+					Name:             "imagegen",
+					Path:             `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+					Scope:            "system",
+					Description:      "Generate images",
+					Enabled:          true,
+					ShortDescription: "Generate images",
+					Interface:        &appserver.SkillInterface{DisplayName: "Image Gen"},
+				}},
+			}}}, nil
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			requests = append(requests, request)
+			return nil
+		},
+	})
+
+	_, cmd := model.Update(runes("$"))
+	runTeaCmd(t, model, cmd)
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+
+	if len(requests) != 1 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if requests[0].Prompt != "$imagegen" {
+		t.Fatalf("prompt = %q, want $imagegen", requests[0].Prompt)
+	}
+	wantBinding := `imagegen|skill://C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`
+	if len(requests[0].MentionBindings) != 1 || requests[0].MentionBindings[0] != wantBinding {
+		t.Fatalf("mention bindings = %#v, want %q", requests[0].MentionBindings, wantBinding)
+	}
+	if len(requests[0].MentionCatalog.Skills) != 1 || requests[0].MentionCatalog.Skills[0].Name != "imagegen" {
+		t.Fatalf("mention catalog = %#v", requests[0].MentionCatalog)
+	}
+}
+
+func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:            90,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+				CWD: `D:\repo`,
+				Skills: []appserver.SkillsListEntry{{
+					Name:        "openai-docs",
+					Path:        `C:\Users\me\.codex\skills\.system\openai-docs\SKILL.md`,
+					Scope:       "system",
+					Description: "Reference OpenAI docs",
+					Enabled:     true,
+					Interface:   &appserver.SkillInterface{DisplayName: "OpenAI Docs"},
+				}},
+			}}}, nil
+		},
+	})
+
+	typeText(t, model, "/skills")
+	model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/skills list did not request skills inventory")
+	}
+	if got := model.ComposerValue(); got != "$" {
+		t.Fatalf("composer = %q, want $", got)
+	}
+	runTeaCmd(t, model, cmd)
+	view := model.View()
+	for _, want := range []string{"OpenAI Docs", "Reference OpenAI docs"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("/skills list popup missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestModelAppliesHistoryCellMessages(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
@@ -2145,6 +2336,29 @@ func TestModelConsumesStreamChannel(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "streamed") {
 		t.Fatalf("View() missing streamed text:\n%s", model.View())
+	}
+}
+
+func TestModelDeduplicatesNonAdjacentAssistantFinalInCurrentTurn(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{})
+	state.AddMessage(codextui.RoleUser, "$openai-docs")
+
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-skill", "Using the openai-docs skill because you invoked it.")})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.ToolOutputItem("tool-output-1", "exec_command", "skill contents", true))})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-ready", "Ready - I'll use official OpenAI docs/manual sources.")})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItem("msg-skill", "Using the openai-docs skill because you invoked it."))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItem("msg-ready", "Ready - I'll use official OpenAI docs/manual sources."))})
+	model.Update(TurnCompletedMsg{AssistantMessage: "Ready - I'll use official OpenAI docs/manual sources."})
+
+	if got := countRole(state.Messages, codextui.RoleAssistant); got != 2 {
+		t.Fatalf("assistant message count = %d, want 2; messages=%#v", got, state.Messages)
+	}
+	if got := countMessageText(state.Messages, codextui.RoleAssistant, "Using the openai-docs skill because you invoked it."); got != 1 {
+		t.Fatalf("skill assistant message count = %d, want 1; messages=%#v", got, state.Messages)
+	}
+	if got := countMessageText(state.Messages, codextui.RoleAssistant, "Ready - I'll use official OpenAI docs/manual sources."); got != 1 {
+		t.Fatalf("ready assistant message count = %d, want 1; messages=%#v", got, state.Messages)
 	}
 }
 
@@ -2778,7 +2992,18 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 	typeText(t, model, "/theme")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	if !strings.Contains(view, "Select Syntax Theme") || !strings.Contains(view, "Dracula - Built in (current)") || !strings.Contains(view, "summarize") {
+	for _, want := range []string{
+		"Select Syntax Theme",
+		"Type to filter themes...",
+		"dracula (current)",
+		"summarize",
+		"Press enter to confirm or esc to go back",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("theme picker missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "1. 1337") || strings.Contains(view, "Dracula - Built in") {
 		t.Fatalf("theme picker missing Rust-like content:\n%s", view)
 	}
 
@@ -2790,6 +3015,92 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("pets picker missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestModelThemePickerFiltersAndPersistsSelection(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	var writes [][]SettingsEdit
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+			writes = append(writes, append([]SettingsEdit(nil), edits...))
+			return SettingsWriteResult{
+				FilePath: `D:\codex\config.toml`,
+				TUITheme: "dracula",
+			}, nil
+		},
+	})
+
+	typeText(t, model, "/theme")
+	model.Update(key(bubbletea.KeyEnter))
+	typeText(t, model, "dracula")
+	view := model.View()
+	if !strings.Contains(view, "Filter: dracula") || !strings.Contains(view, "dracula") || strings.Contains(view, "base16-ocean-dark") {
+		t.Fatalf("theme filter view mismatch:\n%s", view)
+	}
+
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if model.tuiTheme != "dracula" {
+		t.Fatalf("theme = %q, want dracula", model.tuiTheme)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "tui.theme" || writes[0][0].Value != "dracula" {
+		t.Fatalf("writes = %#v", writes)
+	}
+	if !strings.Contains(model.View(), "Theme set to Dracula. Saved to") {
+		t.Fatalf("theme save notice missing:\n%s", model.View())
+	}
+}
+
+func TestModelThemePickerPreviewPaletteTracksSelection(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	model := NewModel(state, Options{
+		Width:    100,
+		Height:   24,
+		TUITheme: "dracula",
+	})
+
+	typeText(t, model, "/theme")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.themePicker == nil {
+		t.Fatal("theme picker did not open")
+	}
+	beforeID := model.modal.themePicker.PreviewThemeID()
+	beforePreview := strings.Join(renderThemePreviewRows(codextui.ThemePreviewRows(48), 48, beforeID), "\n")
+	model.Update(key(bubbletea.KeyDown))
+	afterID := model.modal.themePicker.PreviewThemeID()
+	afterPreview := strings.Join(renderThemePreviewRows(codextui.ThemePreviewRows(48), 48, afterID), "\n")
+
+	if beforeID == afterID {
+		t.Fatalf("preview theme did not move: %q", beforeID)
+	}
+	if beforePreview == afterPreview {
+		t.Fatalf("preview rendering did not change when selection moved from %q to %q", beforeID, afterID)
+	}
+	if !strings.Contains(beforePreview, "\x1b[") || !strings.Contains(afterPreview, "\x1b[") {
+		t.Fatalf("preview should be ANSI styled before=%q after=%q", beforePreview, afterPreview)
+	}
+}
+
+func TestModelThemeAppliesToAssistantMarkdownCodeBlocks(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	state.AddMessage(codextui.RoleAssistant, "```go\npackage main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n```")
+	model := NewModel(state, Options{
+		Width:    100,
+		Height:   24,
+		TUITheme: "dracula",
+	})
+
+	dracula := model.View()
+	if !strings.Contains(dracula, "\x1b[") || !strings.Contains(dracula, "package") {
+		t.Fatalf("assistant code block was not highlighted:\n%s", dracula)
+	}
+	model.setTUITheme("github")
+	github := model.View()
+	if dracula == github {
+		t.Fatalf("assistant code block did not re-render after theme change")
 	}
 }
 
@@ -2814,8 +3125,8 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 		t.Fatalf("skills modal missing:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyEnter))
-	if model.ComposerValue() != "@" {
-		t.Fatalf("skills list should insert @, got %q", model.ComposerValue())
+	if model.ComposerValue() != "$" {
+		t.Fatalf("skills list should insert $, got %q", model.ComposerValue())
 	}
 	model.composer.Reset()
 
@@ -3315,6 +3626,124 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 			{
 				ThreadID:  "thread-resume",
 				Title:     "Resume Me",
+				Preview:   "Resume Me",
+				CWD:       `D:\repo\a`,
+				Branch:    "main",
+				Provider:  "openai",
+				UpdatedAt: now,
+			},
+			{
+				ThreadID:  "thread-other",
+				Title:     "Other Workspace",
+				CWD:       `D:\repo\b`,
+				UpdatedAt: now,
+			},
+		},
+		OnModalResponse: func(response ModalResponse) bubbletea.Cmd {
+			responses = append(responses, response)
+			return nil
+		},
+		OnResumeSession: func(selection codextui.SessionSelection) (SessionResumeResponse, error) {
+			if selection.Target.ThreadID != "thread-resume" {
+				t.Fatalf("resume target = %#v", selection.Target)
+			}
+			return SessionResumeResponse{
+				Messages: []codextui.Message{
+					{Role: codextui.RoleUser, Text: "restored prompt"},
+					{Role: codextui.RoleAssistant, Text: "restored answer"},
+				},
+				Status: "idle",
+			}, nil
+		},
+	})
+	model.now = func() time.Time { return now.Add(48 * time.Hour) }
+
+	typeText(t, model, "/resume")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	for _, want := range []string{
+		"Resume a previous session",
+		"Type to search",
+		"Filter: [Cwd] All",
+		"Sort: [Updated] Created",
+		"Resume Me",
+		"2d ago",
+		"enter resume",
+		"esc exit",
+		"ctrl+o comfy",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("resume picker missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "branch: main") || strings.Contains(view, "provider:") {
+		t.Fatalf("dense resume picker should not show comfortable metadata:\n%s", view)
+	}
+	if strings.Contains(view, "Other Workspace") {
+		t.Fatalf("resume picker should respect cwd filter:\n%s", view)
+	}
+
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ThreadID != "thread-resume" {
+		t.Fatalf("ThreadID = %q, want thread-resume", state.ThreadID)
+	}
+	if len(state.Messages) != 2 || state.Messages[0].Text != "restored prompt" || state.Messages[1].Text != "restored answer" {
+		t.Fatalf("restored messages = %#v", state.Messages)
+	}
+	if view := model.View(); !strings.Contains(view, "restored prompt") || !strings.Contains(view, "restored answer") {
+		t.Fatalf("restored history not rendered:\n%s", view)
+	}
+	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionResume) || responses[0].Picker.Value != "thread-resume" {
+		t.Fatalf("responses = %#v", responses)
+	}
+}
+
+func TestModelResumePickerUsesConfiguredDensePreviewRows(t *testing.T) {
+	now := fixedTeaTime()
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:             120,
+		Height:            24,
+		SessionPickerView: "dense",
+		SessionPickerItems: []codextui.SessionSummary{{
+			ThreadID:  "thread-preview",
+			Title:     "Renamed Session",
+			Preview:   "请你写一段快速排序的代码使用go",
+			CWD:       `D:\repo\a`,
+			Branch:    "main",
+			Provider:  "openai",
+			UpdatedAt: now.Add(-18 * time.Minute),
+		}},
+	})
+	model.now = func() time.Time { return now }
+
+	typeText(t, model, "/resume")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	for _, want := range []string{"18m ago", "请你写一段快速排序的代码使用go", "ctrl+o comfy"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("dense resume picker missing %q:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Renamed Session", "cwd:", "provider:"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("dense resume picker should not show %q:\n%s", notWant, view)
+		}
+	}
+}
+
+func TestModelResumeCommandSearchFilterAndDirectMatchRust(t *testing.T) {
+	now := fixedTeaTime()
+	state := codextui.NewState(nil)
+	var responses []ModalResponse
+	model := NewModel(state, Options{
+		Width:            120,
+		Height:           24,
+		SessionPickerCWD: `D:\repo\a`,
+		SessionPickerItems: []codextui.SessionSummary{
+			{
+				ThreadID:  "thread-auth",
+				Title:     "Investigate auth flow",
+				Path:      `D:\codex\sessions\auth.jsonl`,
 				CWD:       `D:\repo\a`,
 				Branch:    "main",
 				Provider:  "openai",
@@ -3332,25 +3761,61 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 			return nil
 		},
 	})
+	model.now = func() time.Time { return now.Add(48 * time.Hour) }
 
 	typeText(t, model, "/resume")
 	model.Update(key(bubbletea.KeyEnter))
+	typeText(t, model, "auth")
 	view := model.View()
-	for _, want := range []string{"Resume a previous session", "Resume Me", "branch: main", "thread-resume"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("resume picker missing %q:\n%s", want, view)
-		}
+	if !strings.Contains(view, "Search: auth") || !strings.Contains(view, "Investigate auth flow") {
+		t.Fatalf("resume search did not filter/show query:\n%s", view)
 	}
-	if strings.Contains(view, "Other Workspace") {
-		t.Fatalf("resume picker should respect cwd filter:\n%s", view)
+	model.Update(key(bubbletea.KeyEsc))
+	if view := model.View(); strings.Contains(view, "Search: auth") || !strings.Contains(view, "Type to search") {
+		t.Fatalf("Esc should clear resume search first:\n%s", view)
 	}
+	model.Update(key(bubbletea.KeyRight))
+	if view := model.View(); !strings.Contains(view, "Filter:  Cwd [All]") || !strings.Contains(view, "Other Workspace") {
+		t.Fatalf("Right should toggle focused filter to All:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(bubbletea.KeyRight))
+	if view := model.View(); !strings.Contains(view, "Sort:  Updated [Created]") {
+		t.Fatalf("Tab+Right should toggle sort toolbar:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyCtrlO))
+	if view := model.View(); !strings.Contains(view, "ctrl+o dense") {
+		t.Fatalf("Ctrl+O should toggle comfortable view footer:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyEsc))
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
-	if state.ThreadID != "thread-resume" {
-		t.Fatalf("ThreadID = %q, want thread-resume", state.ThreadID)
+	typeText(t, model, "/resume Investigate auth flow")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ThreadID != "thread-auth" {
+		t.Fatalf("direct resume ThreadID = %q, want thread-auth", state.ThreadID)
 	}
-	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionResume) || responses[0].Picker.Value != "thread-resume" {
-		t.Fatalf("responses = %#v", responses)
+	if len(responses) == 0 || responses[len(responses)-1].Picker == nil || responses[len(responses)-1].Picker.Value != "thread-auth" {
+		t.Fatalf("direct resume response missing: %#v", responses)
+	}
+}
+
+func TestModelResumeCommandMissingMatchShowsRustError(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{
+		SessionPickerItems: []codextui.SessionSummary{{
+			ThreadID: "thread-auth",
+			Title:    "Investigate auth flow",
+		}},
+	})
+
+	typeText(t, model, "/resume missing")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	if !strings.Contains(view, "No saved chat found matching 'missing'.") {
+		t.Fatalf("missing resume error not shown:\n%s", view)
+	}
+	if state.ThreadID != "" {
+		t.Fatalf("ThreadID = %q, want unchanged empty", state.ThreadID)
 	}
 }
 
@@ -4020,6 +4485,16 @@ func countRole(messages []codextui.Message, role codextui.MessageRole) int {
 	count := 0
 	for _, message := range messages {
 		if message.Role == role {
+			count++
+		}
+	}
+	return count
+}
+
+func countMessageText(messages []codextui.Message, role codextui.MessageRole, text string) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == role && strings.TrimSpace(message.Text) == text {
 			count++
 		}
 	}

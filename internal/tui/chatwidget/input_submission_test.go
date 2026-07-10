@@ -73,6 +73,33 @@ func TestInputSubmissionUnavailableModelRestoresComposerMatchRust(t *testing.T) 
 	}
 }
 
+func TestInputSubmissionSkillMentionAllowsPluginPrefixColonLikeRust(t *testing.T) {
+	decision := DecideUserMessageSubmission(NewUserMessage("$Docs:review"), UserMessageTextHistoryRecord(), SubmissionOptions{
+		SessionConfigured:     true,
+		CurrentModelHasImages: true,
+		MentionCatalog: SubmissionMentionCatalog{
+			Skills: []appserver.SkillsListEntry{{
+				Name:    "Docs:review",
+				Path:    "plugins/docs/skills/review/SKILL.md",
+				Enabled: true,
+			}},
+		},
+	})
+
+	var found bool
+	for _, item := range decision.Items {
+		if item.Kind == SubmittedInputSkill && item.Name == "Docs:review" {
+			found = true
+			if item.Path != "plugins/docs/skills/review/SKILL.md" {
+				t.Fatalf("skill path = %q", item.Path)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("decision items = %#v", decision.Items)
+	}
+}
+
 func TestInputSubmissionAgentTurnCreatesPendingSteerCompareKeyMatchRust(t *testing.T) {
 	message := UserMessage{
 		Text:            "please inspect $writer",

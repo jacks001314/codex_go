@@ -182,6 +182,12 @@ func (r *RuntimeRouter) handleNotificationAnalytics(method NotificationMethod, p
 			return
 		}
 		r.emitGuardianReviewCompletedAnalytics(context.Background(), notification)
+	case NotificationHookCompleted:
+		notification, ok := params.(*HookRunCompletedNotification)
+		if !ok || notification == nil {
+			return
+		}
+		r.emitHookRunAnalyticsEvent(context.Background(), notification)
 	}
 }
 

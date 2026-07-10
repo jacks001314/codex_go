@@ -146,6 +146,18 @@ func (c *AnalyticsEventsClient) TrackCodexPluginInstallFailedEvent(ctx context.C
 	c.trackEvent(event)
 }
 
+func (c *AnalyticsEventsClient) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event CodexOnboardingExternalAgentImportCompleteEventRequest) {
+	c.trackEvent(event)
+}
+
+func (c *AnalyticsEventsClient) TrackCodexOnboardingExternalAgentImportFailureEvent(ctx context.Context, event CodexOnboardingExternalAgentImportFailureEventRequest) {
+	c.trackEvent(event)
+}
+
+func (c *AnalyticsEventsClient) TrackCodexHookRunEvent(ctx context.Context, event CodexHookRunEventRequest) {
+	c.trackEvent(event)
+}
+
 func (c *AnalyticsEventsClient) TrackCodexAcceptedLineFingerprintsEvent(ctx context.Context, event CodexAcceptedLineFingerprintsEventRequest) {
 	c.trackEvent(event)
 }
@@ -334,6 +346,33 @@ func (e *HTTPAnalyticsExporter) TrackCodexPluginDisabledEvent(ctx context.Contex
 }
 
 func (e *HTTPAnalyticsExporter) TrackCodexPluginInstallFailedEvent(ctx context.Context, event CodexPluginInstallFailedEventRequest) {
+	if e == nil {
+		return
+	}
+	if err := e.SendTrackEvents(ctx, []any{event}); err != nil {
+		slog.Warn("failed to send analytics events request", "error", err)
+	}
+}
+
+func (e *HTTPAnalyticsExporter) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event CodexOnboardingExternalAgentImportCompleteEventRequest) {
+	if e == nil {
+		return
+	}
+	if err := e.SendTrackEvents(ctx, []any{event}); err != nil {
+		slog.Warn("failed to send analytics events request", "error", err)
+	}
+}
+
+func (e *HTTPAnalyticsExporter) TrackCodexOnboardingExternalAgentImportFailureEvent(ctx context.Context, event CodexOnboardingExternalAgentImportFailureEventRequest) {
+	if e == nil {
+		return
+	}
+	if err := e.SendTrackEvents(ctx, []any{event}); err != nil {
+		slog.Warn("failed to send analytics events request", "error", err)
+	}
+}
+
+func (e *HTTPAnalyticsExporter) TrackCodexHookRunEvent(ctx context.Context, event CodexHookRunEventRequest) {
 	if e == nil {
 		return
 	}

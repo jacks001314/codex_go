@@ -1598,7 +1598,7 @@ func redactThreadItems(items []ThreadItem) []ThreadItem {
 	out := make([]ThreadItem, 0, len(items))
 	for _, item := range items {
 		switch item.Type {
-		case "imageGeneration", "image_generation":
+		case "imageGeneration", "image_generation", "image_generation_call":
 			continue
 		case "mcpToolCall", "mcp_tool_call":
 			item = redactMCPThreadItem(item)
@@ -2693,6 +2693,9 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 	}
 	items := make([]ThreadItem, 0, len(record.Items))
 	for _, item := range record.Items {
+		if sessionItemIsHiddenContextInstruction(&item) {
+			continue
+		}
 		threadItem := BuildThreadItem(item)
 		if params.TurnID != nil && threadItem.TurnID != *params.TurnID {
 			continue
@@ -2954,7 +2957,7 @@ func normalizeThreadItemType(itemType string) string {
 		return "imageView"
 	case "sleep":
 		return "sleep"
-	case "image_generation", "imageGeneration":
+	case "image_generation", "imageGeneration", "image_generation_call":
 		return "imageGeneration"
 	case "entered_review_mode", "enteredReviewMode":
 		return "enteredReviewMode"
@@ -4504,6 +4507,9 @@ func turnsFromItems(items []session.Item) []Turn {
 	turnsByID := map[string]*Turn{}
 	var order []string
 	for index, item := range items {
+		if sessionItemIsHiddenContextInstruction(&item) {
+			continue
+		}
 		threadItem := BuildThreadItem(item)
 		turnID := threadItem.TurnID
 		if turnID == "" {
@@ -4901,7 +4907,7 @@ func sessionItemFromResumeHistory(raw *ThreadResumeHistoryItem, now time.Time, i
 		item.Type = "sleep"
 		item.Text = stringFromMap(payload, "durationMs")
 		item.Data = normalizeHistoryUnionData(payload, "")
-	case "imageGeneration", "image_generation":
+	case "imageGeneration", "image_generation", "image_generation_call":
 		item.Type = "imageGeneration"
 		item.Status = stringFromMap(payload, "status")
 		item.Text = firstNonEmpty(stringFromMap(payload, "result"), stringFromMap(payload, "revisedPrompt"), stringFromMap(payload, "revised_prompt"))
@@ -5050,11 +5056,17 @@ func resumeHistoryTurnID(payload map[string]any, id string, index int) string {
 
 func historyPreview(items []session.Item) string {
 	for i := range items {
+		if sessionItemIsHiddenContextInstruction(&items[i]) {
+			continue
+		}
 		if items[i].Role == "user" && strings.TrimSpace(items[i].Text) != "" {
 			return strings.TrimSpace(items[i].Text)
 		}
 	}
 	for i := range items {
+		if sessionItemIsHiddenContextInstruction(&items[i]) {
+			continue
+		}
 		if strings.TrimSpace(items[i].Text) != "" {
 			return strings.TrimSpace(items[i].Text)
 		}

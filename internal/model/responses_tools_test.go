@@ -163,3 +163,68 @@ func TestResponsesToolsFromSpecsSerializesStandaloneWebSearchNamespace(t *testin
 		t.Fatalf("time schema = %#v", properties["time"])
 	}
 }
+
+func TestResponsesToolsFromSpecsSerializesImageGenerationNamespace(t *testing.T) {
+	got := ResponsesToolsFromSpecs([]tool.Spec{{
+		Name:                 tool.NamespacedName("image_gen", "imagegen"),
+		Description:          "Generate images",
+		NamespaceDescription: "Tools in the image_gen namespace.",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []string{"prompt"},
+			"properties": map[string]any{"prompt": map[string]any{"type": "string"}},
+		},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "image_gen" || namespace["description"] != "Tools in the image_gen namespace." {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+	tools, ok := namespace["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 || tools[0]["name"] != "imagegen" || tools[0]["type"] != "function" {
+		t.Fatalf("namespace tools = %#v", namespace["tools"])
+	}
+	if _, ok := tools[0]["strict"]; ok {
+		t.Fatalf("image_gen namespace tool should not include strict: %#v", tools[0])
+	}
+}
+
+func TestResponsesLoadableToolsFromSpecsSerializesSearchOutputLikeRust(t *testing.T) {
+	got := ResponsesLoadableToolsFromSpecs([]tool.Spec{
+		{
+			Name:                 tool.NamespacedName("angr", "am_list_functions"),
+			Description:          "List functions",
+			NamespaceDescription: "angr MCP tools",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"filter": map[string]any{"type": "string"}},
+			},
+			Exposure: tool.ExposureDiscoverable,
+		},
+		{
+			Name:        tool.PlainName("plain_lookup"),
+			Description: "Plain lookup",
+			Exposure:    tool.ExposureDiscoverable,
+		},
+	})
+	if len(got) != 2 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "angr" || namespace["description"] != "angr MCP tools" {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+	children, ok := namespace["tools"].([]map[string]any)
+	if !ok || len(children) != 1 {
+		t.Fatalf("namespace children = %#v", namespace["tools"])
+	}
+	if children[0]["type"] != "function" || children[0]["name"] != "am_list_functions" || children[0]["defer_loading"] != true || children[0]["strict"] != false {
+		t.Fatalf("child = %#v", children[0])
+	}
+	plain, ok := got[1].(map[string]any)
+	if !ok || plain["type"] != "function" || plain["name"] != "plain_lookup" || plain["defer_loading"] != true || plain["strict"] != false {
+		t.Fatalf("plain tool = %#v", got[1])
+	}
+}

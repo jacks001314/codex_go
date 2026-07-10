@@ -33,6 +33,7 @@ import (
 	"codex_go/internal/mcp"
 	"codex_go/internal/model"
 	"codex_go/internal/plugin"
+	promptctx "codex_go/internal/prompt"
 	"codex_go/internal/remotecontrol"
 	"codex_go/internal/review"
 	"codex_go/internal/rollout"
@@ -5024,6 +5025,241 @@ func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
 	invalidMCPToolCall := router.Handle(requestWithParams(t, IntID(61), MethodMCPServerToolCall, mcp.MCPToolCallParams{ServerName: "custom"}))
 	if invalidMCPToolCall.Error == nil || invalidMCPToolCall.Error.Code != -32600 || invalidMCPToolCall.Error.Message != "server and tool are required" {
 		t.Fatalf("invalid mcp tool call = %+v", invalidMCPToolCall)
+	}
+}
+
+func TestRuntimeRouterPluginManagementEmitsAnalyticsLikeRust(t *testing.T) {
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			Name:            "sample",
+			MarketplaceName: "test",
+			RemotePluginID:  "remote-sample",
+			HasSkills:       true,
+			MCPServers:      []string{"mcp-a", "mcp-b"},
+			AppConnectors:   []string{"calendar"},
+		},
+		Skills: []plugin.PluginSkill{{
+			Name:    "review",
+			Enabled: true,
+		}},
+		MCPServers: []string{"mcp-a", "mcp-b"},
+		Apps: []plugin.AppSummary{{
+			ID:          "calendar",
+			Name:        "calendar",
+			DisplayName: "Calendar",
+		}, {
+			ID:          "drive",
+			Name:        "drive",
+			DisplayName: "Drive",
+		}},
+	})
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Plugins:   plugins,
+		Analytics: analytics,
+	})
+	connectionID := "conn-plugin-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	install := requestWithParams(t, IntID(2), MethodPluginInstall, plugin.PluginInstallParams{PluginID: "sample@test"})
+	install.ConnectionID = connectionID
+	if response := router.Handle(install); response.Error != nil {
+		t.Fatalf("plugin install = %+v", response)
+	}
+	installed := waitForPluginStateAnalyticsEvent(t, analytics, telemetry.CodexPluginInstalledEventType, "sample@test")
+	if installed.EventType != telemetry.CodexPluginInstalledEventType {
+		t.Fatalf("installed event type = %q", installed.EventType)
+	}
+	params := installed.EventParams
+	if params.RemotePluginID == nil || *params.RemotePluginID != "remote-sample" ||
+		params.PluginName == nil || *params.PluginName != "sample" ||
+		params.MarketplaceName == nil || *params.MarketplaceName != "test" ||
+		params.HasSkills == nil || !*params.HasSkills ||
+		params.MCPServerCount == nil || *params.MCPServerCount != 2 ||
+		params.ProductClientID == nil || *params.ProductClientID != expectedProductClientID ||
+		!reflect.DeepEqual(params.ConnectorIDs, []string{"calendar", "drive"}) {
+		t.Fatalf("installed event params = plugin_id=%q remote=%q name=%q marketplace=%q has_skills=%v mcp_count=%v connectors=%#v product=%q",
+			stringValueForTest(params.PluginID),
+			stringValueForTest(params.RemotePluginID),
+			stringValueForTest(params.PluginName),
+			stringValueForTest(params.MarketplaceName),
+			boolValueForTest(params.HasSkills),
+			intValueForTest(params.MCPServerCount),
+			params.ConnectorIDs,
+			stringValueForTest(params.ProductClientID),
+		)
+	}
+
+	failedInstall := requestWithParams(t, IntID(3), MethodPluginInstall, plugin.PluginInstallParams{PluginID: "missing@test"})
+	failedInstall.ConnectionID = connectionID
+	if response := router.Handle(failedInstall); response.Error == nil {
+		t.Fatalf("missing plugin install unexpectedly succeeded: %+v", response)
+	}
+	failed := waitForPluginInstallFailedAnalyticsEvent(t, analytics, "missing@test")
+	if failed.EventType != telemetry.CodexPluginInstallFailedEventType ||
+		failed.EventParams.PluginName == nil || *failed.EventParams.PluginName != "missing" ||
+		failed.EventParams.MarketplaceName == nil || *failed.EventParams.MarketplaceName != "test" ||
+		failed.EventParams.HasSkills != nil ||
+		failed.EventParams.MCPServerCount != nil ||
+		failed.EventParams.ConnectorIDs != nil ||
+		failed.EventParams.ProductClientID == nil || *failed.EventParams.ProductClientID != expectedProductClientID ||
+		failed.EventParams.ErrorType != "store_invalid" {
+		t.Fatalf("failed install event params = %#v", failed.EventParams)
+	}
+
+	uninstall := requestWithParams(t, IntID(4), MethodPluginUninstall, plugin.PluginUninstallParams{PluginID: "sample@test"})
+	uninstall.ConnectionID = connectionID
+	if response := router.Handle(uninstall); response.Error != nil {
+		t.Fatalf("plugin uninstall = %+v", response)
+	}
+	uninstalled := waitForPluginStateAnalyticsEvent(t, analytics, telemetry.CodexPluginUninstalledEventType, "sample@test")
+	if uninstalled.EventType != telemetry.CodexPluginUninstalledEventType {
+		t.Fatalf("uninstalled event type = %q", uninstalled.EventType)
+	}
+	if !reflect.DeepEqual(uninstalled.EventParams.ConnectorIDs, []string{"calendar", "drive"}) ||
+		uninstalled.EventParams.HasSkills == nil || !*uninstalled.EventParams.HasSkills ||
+		uninstalled.EventParams.MCPServerCount == nil || *uninstalled.EventParams.MCPServerCount != 2 {
+		t.Fatalf("uninstalled event params = %#v", uninstalled.EventParams)
+	}
+}
+
+func TestRuntimeRouterExternalAgentConfigImportEmitsAnalyticsLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:    config.NewConfigService(t.TempDir()),
+		Analytics: analytics,
+	})
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	connectionID := "conn-external-import-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	source := "test_import"
+	details := config.NewMigrationDetails()
+	details.Sessions = []config.SessionMigration{{
+		Path: "",
+		CWD:  t.TempDir(),
+	}}
+	request := requestWithParams(t, IntID(2), MethodExternalAgentConfigImport, config.ExternalAgentConfigImportParams{
+		Source: &source,
+		MigrationItems: []config.ExternalAgentConfigMigrationItem{{
+			ItemType:    config.MigrationSessions,
+			Description: "Import sessions",
+			Details:     details,
+		}},
+	})
+	request.ConnectionID = connectionID
+	response := router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("externalAgentConfig/import = %+v", response)
+	}
+	importResponse := response.Result.(*config.ExternalAgentConfigImportResponse)
+	if importResponse.ImportID == "" {
+		t.Fatalf("empty import id in response = %+v", importResponse)
+	}
+	var completed *config.ExternalAgentConfigImportCompletedNotification
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationExternalAgentConfigImportCompleted {
+			continue
+		}
+		completed, _ = notification.Params.(*config.ExternalAgentConfigImportCompletedNotification)
+		break
+	}
+	if completed == nil ||
+		completed.ImportID != importResponse.ImportID ||
+		len(completed.ItemTypeResults) != 1 ||
+		completed.ItemTypeResults[0].ItemType != config.MigrationSessions ||
+		len(completed.ItemTypeResults[0].Successes) != 0 ||
+		len(completed.ItemTypeResults[0].Failures) != 1 {
+		t.Fatalf("completed notification = %#v", completed)
+	}
+
+	complete := waitForExternalAgentImportCompleteEvent(t, analytics, importResponse.ImportID, string(config.MigrationSessions))
+	if complete.EventType != telemetry.CodexOnboardingExternalAgentImportCompleteEventType ||
+		complete.EventParams.Source != source ||
+		complete.EventParams.SuccessCount != 0 ||
+		complete.EventParams.FailedCount != 1 ||
+		complete.EventParams.ProductClientID == nil ||
+		*complete.EventParams.ProductClientID != expectedProductClientID {
+		t.Fatalf("complete event = %#v", complete)
+	}
+	failure := waitForExternalAgentImportFailureEvent(t, analytics, importResponse.ImportID, string(config.MigrationSessions))
+	if failure.EventType != telemetry.CodexOnboardingExternalAgentImportFailureEventType ||
+		failure.EventParams.Source != source ||
+		failure.EventParams.FailureStage != "session_missing" ||
+		failure.EventParams.ErrorType != "session_missing" ||
+		failure.EventParams.ProductClientID == nil ||
+		*failure.EventParams.ProductClientID != expectedProductClientID {
+		t.Fatalf("failure event = %#v", failure)
+	}
+}
+
+func TestRuntimeRouterHookRunCompletedEmitsAnalyticsLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Analytics: analytics,
+	})
+	connectionID := "conn-hook-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	threadID := "thread-hook-analytics"
+	turnID := "turn-hook-analytics"
+	router.turnsMu.Lock()
+	router.active[threadID] = &activeRuntimeTurn{
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ConnectionID: connectionID,
+		RunConfig: &appTurnRunConfig{
+			Model: "gpt-5",
+		},
+	}
+	router.turnsMu.Unlock()
+
+	router.notify(NotificationHookCompleted, &HookRunCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   &turnID,
+		Run: HookRunSummary{
+			EventName: HookEventPreToolUse,
+			Source:    HookSourceCloudRequirements,
+			Status:    HookRunRunning,
+		},
+	})
+
+	event := waitForCodexHookRunEvent(t, analytics, turnID)
+	if event.EventType != telemetry.CodexHookRunEventType ||
+		event.EventParams.ThreadID == nil || *event.EventParams.ThreadID != threadID ||
+		event.EventParams.TurnID == nil || *event.EventParams.TurnID != turnID ||
+		event.EventParams.ProductClientID == nil || *event.EventParams.ProductClientID != expectedProductClientID ||
+		event.EventParams.ModelSlug == nil || *event.EventParams.ModelSlug != "gpt-5" ||
+		event.EventParams.HookName == nil || *event.EventParams.HookName != "PreToolUse" ||
+		event.EventParams.HookSource == nil || *event.EventParams.HookSource != "cloud_requirements" ||
+		event.EventParams.Status == nil || *event.EventParams.Status != "failed" {
+		t.Fatalf("hook run event = %#v", event)
 	}
 }
 
@@ -10413,6 +10649,102 @@ func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "imagegen")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: imagegen\ndescription: Generate images\n---\nUse hosted image generation before shell fallbacks.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("loaded")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService([]string{skillsRoot}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "$imagegen",
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if firstRequest.Prompt != "$imagegen" {
+		t.Fatalf("first prompt = %q, want $imagegen", firstRequest.Prompt)
+	}
+	for _, want := range []string{"<skill>", "<name>imagegen</name>", skillPath, "Use hosted image generation before shell fallbacks."} {
+		if !agentRequestInputItemsContain(firstRequest, want) {
+			t.Fatalf("first request missing skill fragment %q: %#v", want, firstRequest.InputItems)
+		}
+	}
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+		if !strings.Contains(firstRequest.Instructions, want) {
+			t.Fatalf("first request instructions missing %q:\n%s", want, firstRequest.Instructions)
+		}
+	}
+	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var skillItem *session.Item
+	for i := range record.Items {
+		if sessionItemIsSkillInstructions(&record.Items[i]) {
+			skillItem = &record.Items[i]
+			break
+		}
+	}
+	if skillItem == nil || !strings.Contains(skillItem.Text, "<name>imagegen</name>") {
+		t.Fatalf("record missing hidden skill instructions item: %#v", record.Items)
+	}
+	itemsResponse, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: threadID})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	for _, item := range itemsResponse.Data {
+		if item.ID == skillItem.ID || strings.Contains(item.Text, "<name>imagegen</name>") {
+			t.Fatalf("visible thread items leaked skill instructions: %#v", itemsResponse.Data)
+		}
+	}
+
+	agent.message = "done"
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if secondRequest.Prompt != "draw a portrait" {
+		t.Fatalf("second prompt = %q, want draw a portrait", secondRequest.Prompt)
+	}
+	for _, want := range []string{"<skill>", "<name>imagegen</name>", "Use hosted image generation before shell fallbacks."} {
+		if !agentRequestInputItemsContain(secondRequest, want) {
+			t.Fatalf("second request missing persisted skill fragment %q: %#v", want, secondRequest.InputItems)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
 func TestPromptSkillMetadataPreservesPluginID(t *testing.T) {
 	entries := []SkillsListEntry{{
 		Name:             "Docs:review",
@@ -10549,6 +10881,26 @@ func TestRuntimeRouterSkillsContextEmitsBudgetWarning(t *testing.T) {
 		!strings.Contains(warnings[0].Message, "All skill descriptions were removed") ||
 		!strings.Contains(warnings[0].Message, "additional skills were not included in the model-visible skills list") {
 		t.Fatalf("warning message = %q", warnings[0].Message)
+	}
+}
+
+func TestRuntimeRouterSkillsContextIncludesCWDRepoSkills(t *testing.T) {
+	cwd := t.TempDir()
+	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-helper\ndescription: Repo helper\n---\nUse repo context.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService(nil)})
+	instructions, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{CWD: cwd}, "base")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	if !strings.Contains(instructions, "repo-helper") || !strings.Contains(instructions, "Repo helper") {
+		t.Fatalf("instructions missing repo skill:\n%s", instructions)
 	}
 }
 
@@ -16745,6 +17097,321 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterChatGPTTurnIncludesHostedImageGenerationLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "imagegen")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: imagegen\ndescription: Generate images\n---\nUse the built-in image generation path before shell fallbacks.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		Skills:       NewSkillsService([]string{skillsRoot}),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	skillTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "$imagegen",
+	}))
+	if skillTurn.Error != nil {
+		t.Fatalf("skill turn start error: %+v", skillTurn.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, skillTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("tools missing hosted image_generation: %#v", tools)
+	}
+	if modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("hosted image generation should be used by default, got standalone namespace: %#v", tools)
+	}
+	inputText := inputItemText(recordedBody["input"])
+	for _, want := range []string{"<name>imagegen</name>", "Use the built-in image generation path before shell fallbacks."} {
+		if !strings.Contains(inputText, want) {
+			t.Fatalf("input missing imagegen skill context %q:\n%s", want, inputText)
+		}
+	}
+	instructions, _ := recordedBody["instructions"].(string)
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions missing skills protocol %q:\n%s", want, instructions)
+		}
+	}
+}
+
+func TestRuntimeRouterAPIKeyOpenAIProviderIncludesHostedImageGeneration(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("api-key OpenAI provider tools missing hosted image_generation: %#v", tools)
+	}
+	if modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("default non-lite API key request should use hosted image_generation, not standalone namespace: %#v", tools)
+	}
+}
+
+func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenExtEnabled(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\nimagegenext = true\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "$imagegen",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", tools)
+	}
+	if modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", tools)
+	}
+}
+
+func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image"}}`,
+			`{"type":"response.output_item.done","item":{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"Einstein portrait","result":"aW1hZ2U="}}`,
+			`{"type":"response.completed","response":{"id":"resp-image","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "$imagegen",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var imageItem *session.Item
+	var instructionsItem *session.Item
+	for i := range record.Items {
+		switch {
+		case record.Items[i].Type == "imageGeneration":
+			imageItem = &record.Items[i]
+		case sessionItemIsImageGenerationInstructions(&record.Items[i]):
+			instructionsItem = &record.Items[i]
+		}
+	}
+	if imageItem == nil {
+		t.Fatalf("record missing imageGeneration item: %#v", record.Items)
+	}
+	if imageItem.Status != "completed" || stringFromMap(imageItem.Data, "status") != "completed" {
+		t.Fatalf("image item status not normalized: status=%q data=%#v", imageItem.Status, imageItem.Data)
+	}
+	savedPath := firstNonEmpty(stringFromMap(imageItem.Data, "savedPath"), stringFromMap(imageItem.Data, "saved_path"))
+	if savedPath == "" {
+		t.Fatalf("image item missing savedPath: %#v", imageItem.Data)
+	}
+	if _, err := os.Stat(savedPath); err != nil {
+		t.Fatalf("generated image not saved at %q: %v", savedPath, err)
+	}
+	if instructionsItem == nil {
+		t.Fatalf("record missing image generation instructions item: %#v", record.Items)
+	}
+	if instructionsItem.Role != "developer" ||
+		!strings.Contains(instructionsItem.Text, "Generated images are saved to "+filepath.Dir(savedPath)) ||
+		!strings.Contains(instructionsItem.Text, "<image_id>.png") {
+		t.Fatalf("instructions item = %+v", instructionsItem)
+	}
+	itemsResponse, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: threadID})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	for _, item := range itemsResponse.Data {
+		if item.ID == instructionsItem.ID {
+			t.Fatalf("visible thread items leaked image generation instructions: %#v", itemsResponse.Data)
+		}
+	}
+}
+
 func TestRuntimeRouterValidationErrors(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	response := router.Handle(requestWithParams(t, IntID(1), MethodProcessSpawn, ProcessSpawnParams{}))
@@ -17769,6 +18436,9 @@ type recordingTurnEventSink struct {
 	pluginEnabled     chan telemetry.CodexPluginEventRequest
 	pluginDisabled    chan telemetry.CodexPluginEventRequest
 	pluginFailed      chan telemetry.CodexPluginInstallFailedEventRequest
+	importComplete    chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest
+	importFailure     chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest
+	hookRun           chan telemetry.CodexHookRunEventRequest
 	acceptedLines     chan telemetry.CodexAcceptedLineFingerprintsEventRequest
 	commandExecution  chan telemetry.CodexCommandExecutionEventRequest
 	fileChange        chan telemetry.CodexFileChangeEventRequest
@@ -17838,6 +18508,9 @@ func newRecordingTurnEventSink() *recordingTurnEventSink {
 		pluginEnabled:     make(chan telemetry.CodexPluginEventRequest, 8),
 		pluginDisabled:    make(chan telemetry.CodexPluginEventRequest, 8),
 		pluginFailed:      make(chan telemetry.CodexPluginInstallFailedEventRequest, 8),
+		importComplete:    make(chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest, 8),
+		importFailure:     make(chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest, 8),
+		hookRun:           make(chan telemetry.CodexHookRunEventRequest, 8),
 		acceptedLines:     make(chan telemetry.CodexAcceptedLineFingerprintsEventRequest, 8),
 		commandExecution:  make(chan telemetry.CodexCommandExecutionEventRequest, 8),
 		fileChange:        make(chan telemetry.CodexFileChangeEventRequest, 8),
@@ -17918,6 +18591,27 @@ func (s *recordingTurnEventSink) TrackCodexPluginInstallFailedEvent(ctx context.
 		return
 	}
 	s.pluginFailed <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest) {
+	if s == nil {
+		return
+	}
+	s.importComplete <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexOnboardingExternalAgentImportFailureEvent(ctx context.Context, event telemetry.CodexOnboardingExternalAgentImportFailureEventRequest) {
+	if s == nil {
+		return
+	}
+	s.importFailure <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexHookRunEvent(ctx context.Context, event telemetry.CodexHookRunEventRequest) {
+	if s == nil {
+		return
+	}
+	s.hookRun <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexAcceptedLineFingerprintsEvent(ctx context.Context, event telemetry.CodexAcceptedLineFingerprintsEventRequest) {
@@ -18115,6 +18809,16 @@ func modelToolsContainHostedWebSearch(tools []any) bool {
 	for _, item := range tools {
 		toolMap, ok := mapAnyFromValue(item)
 		if ok && toolMap["type"] == "web_search" {
+			return true
+		}
+	}
+	return false
+}
+
+func modelToolsContainHostedImageGeneration(tools []any) bool {
+	for _, item := range tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if ok && toolMap["type"] == "image_generation" {
 			return true
 		}
 	}
@@ -18387,6 +19091,72 @@ func waitForPluginInstallFailedAnalyticsEvent(t *testing.T, sink *recordingTurnE
 			t.Fatalf("timed out waiting for codex_plugin_install_failed for plugin %s", pluginID)
 		}
 	}
+}
+
+func waitForExternalAgentImportCompleteEvent(t *testing.T, sink *recordingTurnEventSink, importID string, itemType string) telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.importComplete:
+			if event.EventParams.ImportID == importID && event.EventParams.ItemType == itemType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for external agent import complete %s/%s", importID, itemType)
+		}
+	}
+}
+
+func waitForExternalAgentImportFailureEvent(t *testing.T, sink *recordingTurnEventSink, importID string, itemType string) telemetry.CodexOnboardingExternalAgentImportFailureEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.importFailure:
+			if event.EventParams.ImportID == importID && event.EventParams.ItemType == itemType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for external agent import failure %s/%s", importID, itemType)
+		}
+	}
+}
+
+func waitForCodexHookRunEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexHookRunEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.hookRun:
+			if event.EventParams.TurnID != nil && *event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_hook_run for turn %s", turnID)
+		}
+	}
+}
+
+func stringValueForTest(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}
+
+func boolValueForTest(value *bool) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return strconv.FormatBool(*value)
+}
+
+func intValueForTest(value *int) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return strconv.Itoa(*value)
 }
 
 func waitForAcceptedLineFingerprintsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexAcceptedLineFingerprintsEventRequest {

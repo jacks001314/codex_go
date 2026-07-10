@@ -21,6 +21,10 @@ func RenderSelectedRow(line string) string {
 	return selectedRowStyle.Render(line)
 }
 
+func ForcedColorStyle() lipgloss.Style {
+	return forcedColorRenderer().NewStyle()
+}
+
 func SelectionPrefix(selected bool) string {
 	if selected {
 		return SelectedRowMarker + " "

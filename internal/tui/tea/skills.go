@@ -30,6 +30,13 @@ func (m *Model) applySkillsListResult(message SkillsListResultMsg) {
 	if m == nil {
 		return
 	}
+	if message.Err == nil {
+		response := message.Response
+		m.skillsInventory = &response
+		m.skillsInventoryCWD = strings.TrimSpace(message.CWD)
+		m.skillsInventoryErr = ""
+		m.skillsInventoryLoading = false
+	}
 	if message.Err != nil {
 		m.openSelectionViewModal(ModalKindGeneric, skillsErrorView("Skills: "+strings.TrimSpace(message.Err.Error())))
 		return

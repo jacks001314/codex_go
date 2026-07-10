@@ -341,6 +341,267 @@ func TestResponsesAgentRunnerDoesNotCompressAPIKeyRequests(t *testing.T) {
 	}
 }
 
+func TestResponsesAgentRunnerAddsHostedImageGenerationForCodexBackend(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-test","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"access_token": "token"},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:            "gpt-test",
+			InputModalities: []string{"text", "image"},
+		}}}),
+	})
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "draw"}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !hasResponseToolType(tools, "image_generation") {
+		t.Fatalf("tools missing image_generation: %#v", tools)
+	}
+}
+
+func TestResponsesAgentRunnerAddsHostedImageGenerationForOpenAIAPIKey(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-test","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:     &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:            "gpt-test",
+			InputModalities: []string{"text", "image"},
+		}}}),
+	})
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "draw"}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	tools, _ := recordedBody["tools"].([]any)
+	if !hasResponseToolType(tools, "image_generation") {
+		t.Fatalf("api key OpenAI tools missing image_generation: %#v", tools)
+	}
+}
+
+func TestResponsesAgentRunnerDoesNotAddHostedImageGenerationForResponsesLite(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-lite","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"access_token": "token"},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:             "gpt-lite",
+			InputModalities:  []string{"text", "image"},
+			UseResponsesLite: true,
+		}}}),
+	})
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{
+		Model:  "gpt-lite",
+		Prompt: "draw",
+		Tools:  []any{map[string]any{"type": "function", "name": "echo"}},
+	}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if _, ok := recordedBody["tools"]; ok {
+		t.Fatalf("responses lite should not include top-level tools: %#v", recordedBody["tools"])
+	}
+	inputs, ok := recordedBody["input"].([]any)
+	if !ok || len(inputs) == 0 {
+		t.Fatalf("input = %#v", recordedBody["input"])
+	}
+	additionalTools, ok := inputs[0].(map[string]any)
+	if !ok || additionalTools["type"] != "additional_tools" {
+		t.Fatalf("additional_tools = %#v", inputs[0])
+	}
+	tools, ok := additionalTools["tools"].([]any)
+	if !ok {
+		t.Fatalf("additional_tools.tools = %#v", additionalTools["tools"])
+	}
+	if hasResponseToolType(tools, "image_generation") {
+		t.Fatalf("responses lite additional_tools should not include hosted image_generation: %#v", tools)
+	}
+}
+
+func TestResponsesAgentRunnerDoesNotAddHostedImageGenerationWhenStandaloneNamespacePresent(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-test","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"access_token": "token"},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:            "gpt-test",
+			InputModalities: []string{"text", "image"},
+		}}}),
+	})
+
+	standalone := map[string]any{
+		"type":        "namespace",
+		"name":        "image_gen",
+		"description": "Tools in the image_gen namespace.",
+		"tools": []any{map[string]any{
+			"type": "function",
+			"name": "imagegen",
+		}},
+	}
+	if _, err := runner.Run(context.Background(), &AgentRequest{
+		Model:  "gpt-test",
+		Prompt: "draw",
+		Tools:  []any{standalone},
+	}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if hasResponseToolType(tools, "image_generation") {
+		t.Fatalf("standalone image_gen should suppress hosted image_generation: %#v", tools)
+	}
+	if !hasResponseNamespaceFunction(tools, "image_gen", "imagegen") {
+		t.Fatalf("standalone namespace missing: %#v", tools)
+	}
+}
+
+func TestResponsesAgentRunnerParsesImageGenerationCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"id":"resp-image",
+			"model":"gpt-test",
+			"output":[{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"A small blue square","result":"Zm9v"}]
+		}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+	})
+	response, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "draw"})
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "image_generation_call" || item.ID != "ig_123" || item.Status != "completed" || item.Text != "Zm9v" {
+		t.Fatalf("image item = %#v", item)
+	}
+	if item.Data["status"] != "completed" || item.Data["revised_prompt"] != "A small blue square" || item.Data["result"] != "Zm9v" {
+		t.Fatalf("image data = %#v", item.Data)
+	}
+}
+
+func TestParseResponsesStreamNormalizesImageGenerationCallWithResult(t *testing.T) {
+	var events []ResponsesStreamEvent
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-image"}}`,
+		`{"type":"response.output_item.added","item":{"id":"ig_123","type":"image_generation_call","status":"generating"}}`,
+		`{"type":"response.output_item.done","item":{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"A small blue square","result":"Zm9v"}}`,
+		`{"type":"response.completed","response":{"id":"resp-image","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, func(event *ResponsesStreamEvent) {
+		events = append(events, *event)
+	})
+	if err != nil {
+		t.Fatalf("parseResponsesStream error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "image_generation_call" || item.Status != "completed" || item.Text != "Zm9v" {
+		t.Fatalf("image item = %#v", item)
+	}
+	var done *ResponsesStreamEvent
+	for i := range events {
+		if events[i].Kind == ResponsesStreamEventOutputDone {
+			done = &events[i]
+			break
+		}
+	}
+	if done == nil || done.Item == nil || done.Item.Status != "completed" || done.Item.Data["status"] != "completed" {
+		t.Fatalf("output done event = %#v", done)
+	}
+}
+
+func TestParseResponsesStreamRecordsImageGenerationFromCompletedOutput(t *testing.T) {
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-image"}}`,
+		`{"type":"response.completed","response":{"id":"resp-image","output":[{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"A small blue square","result":"Zm9v"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil)
+	if err != nil {
+		t.Fatalf("parseResponsesStream error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "image_generation_call" || item.ID != "ig_123" || item.Status != "completed" || item.Text != "Zm9v" {
+		t.Fatalf("image item = %#v", item)
+	}
+	if item.Data["status"] != "completed" || item.Data["revised_prompt"] != "A small blue square" {
+		t.Fatalf("image data = %#v", item.Data)
+	}
+}
+
+func TestParseResponsesStreamDeduplicatesCompletedAssistantMessageWithStableID(t *testing.T) {
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-1"}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+		`{"type":"response.completed","response":{"id":"resp-1","output":[{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil)
+	if err != nil {
+		t.Fatalf("parseResponsesStream error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.ID != "msg_123" || item.Type != "agent_message" || item.Text != "done" {
+		t.Fatalf("deduped item = %#v", item)
+	}
+}
+
 func TestResponsesAgentRunnerReasoningUsesModelDefaultsAndLiteContext(t *testing.T) {
 	var recordedBody map[string]any
 	var recordedLiteHeader string
@@ -1470,6 +1731,44 @@ func TestResponsesAgentRunnerKeepsGenericBedrockUnauthorized(t *testing.T) {
 	if strings.Contains(err.Error(), "Refresh your AWS credentials") {
 		t.Fatalf("error string = %v", err)
 	}
+}
+
+func hasResponseToolType(tools []any, toolType string) bool {
+	for _, tool := range tools {
+		item, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["type"] == toolType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasResponseNamespaceFunction(tools []any, namespace string, name string) bool {
+	for _, tool := range tools {
+		item, ok := tool.(map[string]any)
+		if !ok || item["type"] != "namespace" || item["name"] != namespace {
+			continue
+		}
+		switch children := item["tools"].(type) {
+		case []map[string]any:
+			for _, child := range children {
+				if child["name"] == name {
+					return true
+				}
+			}
+		case []any:
+			for _, childValue := range children {
+				child, ok := childValue.(map[string]any)
+				if ok && child["name"] == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func responsesSSE(payloads ...string) string {

@@ -19,6 +19,8 @@ const (
 	NotificationRawResponseItemCompleted            NotificationMethod = "rawResponseItem/completed"
 	NotificationHookStarted                         NotificationMethod = "hook/started"
 	NotificationHookCompleted                       NotificationMethod = "hook/completed"
+	NotificationExternalAgentConfigImportProgress   NotificationMethod = "externalAgentConfig/import/progress"
+	NotificationExternalAgentConfigImportCompleted  NotificationMethod = "externalAgentConfig/import/completed"
 	NotificationTurnDiffUpdated                     NotificationMethod = "turn/diff/updated"
 	NotificationTurnPlanUpdated                     NotificationMethod = "turn/plan/updated"
 	NotificationTurnModerationMetadata              NotificationMethod = "turn/moderationMetadata"

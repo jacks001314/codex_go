@@ -630,10 +630,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		a.applyToolInputDeltas(item)
 		if item != nil {
-			a.items = append(a.items, *item)
-			if item.Type == "agent_message" && strings.TrimSpace(item.Text) != "" {
-				a.messages = append(a.messages, item.Text)
-			}
+			a.recordAgentItem(item)
 		}
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventOutputDone,
@@ -715,6 +712,14 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			RawType:       rawType,
 		})
 	case "response.completed":
+		items, err := completedAgentItemsFromStreamEventData(sse.Data, len(a.items))
+		if err != nil {
+			return false, err
+		}
+		for i := range items {
+			a.applyToolInputDeltas(&items[i])
+			a.recordAgentItem(&items[i])
+		}
 		usage, hasUsage := usageFromStreamEventData(sse.Data)
 		a.responseID = firstNonEmptyResponseValue(a.responseID, responseIDFromEventData(sse.Data))
 		if hasUsage {
@@ -738,6 +743,75 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		return false, responseFailedError(sse.Data)
 	}
 	return false, nil
+}
+
+func (a *responsesStreamAccumulator) recordAgentItem(item *AgentItem) {
+	if a == nil || item == nil {
+		return
+	}
+	key := agentItemRecordKey(item)
+	if key != "" {
+		for i := range a.items {
+			if agentItemRecordKey(&a.items[i]) == key {
+				a.items[i] = *item
+				a.rebuildMessages()
+				return
+			}
+		}
+	}
+	if item.Type == "agent_message" && strings.TrimSpace(item.Text) != "" {
+		for i := range a.items {
+			if a.items[i].Type != "agent_message" || strings.TrimSpace(a.items[i].Text) != strings.TrimSpace(item.Text) {
+				continue
+			}
+			existingKey := agentItemRecordKey(&a.items[i])
+			if isGeneratedAgentMessageID(existingKey) || key == "" || existingKey == "" {
+				a.items[i] = *item
+				a.rebuildMessages()
+				return
+			}
+		}
+	}
+	a.items = append(a.items, *item)
+	if item.Type == "agent_message" && strings.TrimSpace(item.Text) != "" {
+		a.messages = append(a.messages, item.Text)
+	}
+}
+
+func (a *responsesStreamAccumulator) rebuildMessages() {
+	if a == nil {
+		return
+	}
+	a.messages = a.messages[:0]
+	for i := range a.items {
+		if a.items[i].Type == "agent_message" && strings.TrimSpace(a.items[i].Text) != "" {
+			a.messages = append(a.messages, a.items[i].Text)
+		}
+	}
+}
+
+func agentItemRecordKey(item *AgentItem) string {
+	if item == nil {
+		return ""
+	}
+	return firstNonEmptyResponseValue(item.ID, item.CallID)
+}
+
+func isGeneratedAgentMessageID(value string) bool {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "agent-message-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(value, "agent-message-")
+	if suffix == "" {
+		return false
+	}
+	for _, ch := range suffix {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *responsesStreamAccumulator) appendToolInputDelta(rawType string, data []byte) (string, string, string) {
@@ -946,23 +1020,65 @@ func agentItemFromStreamEventData(data []byte, index int, allowEmptyMessage bool
 		return nil, nil
 	}
 	rawItem := rawResponseItemFromStreamEventData(data)
+	return agentItemFromResponseOutput(payload.Item, rawItem, index, allowEmptyMessage)
+}
+
+func completedAgentItemsFromStreamEventData(data []byte, index int) ([]AgentItem, error) {
+	var payload struct {
+		Response struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("failed to decode responses completed output: %w", err)
+	}
+	if len(payload.Response.Output) == 0 {
+		return nil, nil
+	}
+	items := make([]AgentItem, 0, len(payload.Response.Output))
+	for i, rawItem := range payload.Response.Output {
+		if len(rawItem) == 0 {
+			continue
+		}
+		var output responsesAgentOutputItem
+		if err := json.Unmarshal(rawItem, &output); err != nil {
+			return nil, fmt.Errorf("failed to decode responses completed output item: %w", err)
+		}
+		item, err := agentItemFromResponseOutput(&output, rawItem, index+i, false)
+		if err != nil {
+			return nil, err
+		}
+		if item != nil {
+			items = append(items, *item)
+		}
+	}
+	return items, nil
+}
+
+func agentItemFromResponseOutput(output *responsesAgentOutputItem, rawItem json.RawMessage, index int, allowEmptyMessage bool) (*AgentItem, error) {
+	if output == nil {
+		return nil, nil
+	}
 	if item, ok := reasoningAgentItemFromRaw(rawItem, index); ok {
 		return item, nil
 	}
-	if item, ok := toolCallAgentItem(payload.Item, index); ok {
+	if item, ok := toolCallAgentItem(output, index); ok {
 		return item, nil
 	}
-	if payload.Item.Type != "" && payload.Item.Type != "message" {
+	if item, ok := imageGenerationAgentItem(output, index); ok {
+		return item, nil
+	}
+	if output.Type != "" && output.Type != "message" {
 		return nil, nil
 	}
-	if payload.Item.Role != "" && payload.Item.Role != "assistant" {
+	if output.Role != "" && output.Role != "assistant" {
 		return nil, nil
 	}
-	text := strings.TrimSpace(payload.Item.text())
+	text := strings.TrimSpace(output.text())
 	if text == "" && !allowEmptyMessage {
 		return nil, nil
 	}
-	id := payload.Item.ID
+	id := output.ID
 	if id == "" {
 		id = fmt.Sprintf("agent-message-%d", index+1)
 	}

@@ -23,6 +23,7 @@ import (
 	"codex_go/internal/compact"
 	"codex_go/internal/config"
 	contextfrag "codex_go/internal/context"
+	"codex_go/internal/eventmap"
 	"codex_go/internal/features"
 	"codex_go/internal/install"
 	"codex_go/internal/mcp"
@@ -783,6 +784,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		Prompt:               agentPrompt,
 		Instructions:         runConfig.Instructions,
 		InputItems:           inputItems,
+		HostedTools:          append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:         r.requireSteerMailbox(),
 		Model:                runConfig.Model,
 		ProviderID:           runConfig.ProviderID,
@@ -852,6 +854,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {
+		if sessionItemIsHiddenContextInstruction(&item) {
+			continue
+		}
 		if item.Type == "tool_output" {
 			r.notifyTurnDiffFromSessionItem(threadID, turnID, &item)
 		}
@@ -976,6 +981,19 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 					"type":   "webSearch",
 					"query":  "",
 					"action": map[string]any{"type": "other"},
+				},
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if isImageGenerationInvocation(invocation) {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item: ThreadItemPayload{
+					"id":     firstNonEmpty(invocation.CallID, "image-generation-"+safeIdentifier(turnID)),
+					"type":   "imageGeneration",
+					"status": "in_progress",
 				},
 				ThreadID:    threadID,
 				TurnID:      turnID,
@@ -2041,6 +2059,15 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					toolItemCount++
 					continue
 				}
+				if item.Type == "image_generation_call" {
+					if imageItem, ok := r.sessionItemForImageGeneration(params.ThreadID, &item, createdAt, metadata, response.ResponseID); ok {
+						items = append(items, imageItem)
+						if instructions, ok := imageGenerationInstructionsSessionItem(turnID, &imageItem, metadata); ok {
+							items = append(items, instructions)
+						}
+					}
+					continue
+				}
 				text := firstNonEmpty(item.Text, response.Message)
 				if strings.TrimSpace(text) == "" && item.Type != "reasoning" {
 					continue
@@ -2134,7 +2161,7 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 			}
 			toolExecutions := toolExecutionsForResponse(result.ToolExecutions, executionIndex, toolItemCount)
 			for i := range toolExecutions {
-				if isWebSearchExecution(&toolExecutions[i]) {
+				if isWebSearchExecution(&toolExecutions[i]) || isImageGenerationExecution(&toolExecutions[i]) {
 					continue
 				}
 				if item, ok := sessionItemForClockSleepExecution(turnID, &toolExecutions[i], createdAt); ok {
@@ -2153,6 +2180,13 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					items = append(items, item)
 					continue
 				}
+				if item, ok := sessionItemForStandaloneImageGenerationExecution(turnID, &toolExecutions[i], createdAt, metadata); ok {
+					items = append(items, item)
+					if instructions, ok := imageGenerationInstructionsSessionItem(turnID, &item, metadata); ok {
+						items = append(items, instructions)
+					}
+					continue
+				}
 				if item, ok := sessionItemForAppToolOutput(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
@@ -2165,6 +2199,221 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 		executionIndex++
 	}
 	return items
+}
+
+func (r *RuntimeRouter) sessionItemForImageGeneration(threadID string, item *model.AgentItem, createdAt time.Time, metadata map[string]any, responseID string) (session.Item, bool) {
+	if item == nil || item.Type != "image_generation_call" {
+		return session.Item{}, false
+	}
+	itemID := strings.TrimSpace(item.ID)
+	if itemID == "" {
+		itemID = "image-generation-" + safeIdentifier(threadID)
+	}
+	data := cloneAnyMap(item.Data)
+	if data == nil {
+		data = map[string]any{}
+	}
+	result := firstNonEmpty(stringFromMap(data, "result"), item.Text)
+	status := model.NormalizeImageGenerationStatus(firstNonEmpty(item.Status, stringFromMap(data, "status")), result)
+	revisedPrompt := firstNonEmpty(stringFromMap(data, "revisedPrompt"), stringFromMap(data, "revised_prompt"))
+	data["status"] = status
+	data["result"] = result
+	if revisedPrompt != "" {
+		data["revisedPrompt"] = revisedPrompt
+		data["revised_prompt"] = revisedPrompt
+	}
+	if strings.TrimSpace(result) != "" {
+		if codexHome := r.codexHomeForImageGeneration(); codexHome != "" {
+			if savedPath, err := eventmap.SaveImageGenerationResult(codexHome, threadID, itemID, result); err == nil {
+				data["savedPath"] = savedPath
+				data["saved_path"] = savedPath
+			}
+		}
+	}
+	raw, _ := json.Marshal(item)
+	return session.Item{
+		ID:         itemID,
+		Type:       "imageGeneration",
+		Status:     status,
+		Text:       revisedPrompt,
+		CreatedAt:  createdAt,
+		Data:       data,
+		Metadata:   cloneAnyMap(metadata),
+		Raw:        raw,
+		ResponseID: responseID,
+	}, true
+}
+
+func (r *RuntimeRouter) codexHomeForImageGeneration() string {
+	if r == nil {
+		return ""
+	}
+	if r.services.Config != nil {
+		if codexHome := strings.TrimSpace(r.services.Config.CodexHome()); codexHome != "" {
+			return codexHome
+		}
+	}
+	if r.services.ThreadRouter != nil {
+		return strings.TrimSpace(codexHomeFromSessionStore(r.services.ThreadRouter.store))
+	}
+	return ""
+}
+
+const (
+	imageGenerationInstructionsKind = "image_generation_instructions"
+	skillInstructionsKind           = "skill_instructions"
+)
+
+func skillInstructionSessionItemsForTurn(turnID string, inputItems []any, createdAt time.Time) []session.Item {
+	if len(inputItems) == 0 {
+		return nil
+	}
+	items := make([]session.Item, 0, len(inputItems))
+	for i, item := range inputItems {
+		role, text, ok := skillInstructionInputItemText(item)
+		if !ok {
+			continue
+		}
+		metadata := appTurnMetadata(turnID, map[string]any{"kind": skillInstructionsKind})
+		items = append(items, session.Item{
+			ID:        fmt.Sprintf("skill-instructions-%s-%d", safeIdentifier(turnID), i+1),
+			Type:      "message",
+			Role:      role,
+			Text:      text,
+			Content:   []session.ContentPart{{Type: defaultSessionContentTypeForRole(role), Text: text}},
+			CreatedAt: createdAt,
+			Data:      map[string]any{"kind": skillInstructionsKind},
+			Metadata:  metadata,
+		})
+	}
+	return items
+}
+
+func skillInstructionInputItemText(item any) (string, string, bool) {
+	raw, ok := item.(map[string]any)
+	if !ok {
+		return "", "", false
+	}
+	if strings.TrimSpace(stringFromAny(raw["type"])) != "message" {
+		return "", "", false
+	}
+	role := strings.TrimSpace(stringFromAny(raw["role"]))
+	if role == "" {
+		role = contextfrag.RoleUser
+	}
+	text := strings.TrimSpace(textFromInputItemContent(raw["content"]))
+	if text == "" || !strings.Contains(text, "<skill>") || !strings.Contains(text, "</skill>") {
+		return "", "", false
+	}
+	return role, text, true
+}
+
+func textFromInputItemContent(content any) string {
+	switch typed := content.(type) {
+	case []map[string]any:
+		parts := make([]string, 0, len(typed))
+		for _, block := range typed {
+			if text := strings.TrimSpace(stringFromAny(block["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, raw := range typed {
+			block, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text := strings.TrimSpace(stringFromAny(block["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func defaultSessionContentTypeForRole(role string) string {
+	if strings.TrimSpace(role) == contextfrag.RoleDeveloper {
+		return "input_text"
+	}
+	return "input_text"
+}
+
+func imageGenerationInstructionsSessionItem(turnID string, imageItem *session.Item, responseMetadata map[string]any) (session.Item, bool) {
+	if imageItem == nil || imageItem.Type != "imageGeneration" {
+		return session.Item{}, false
+	}
+	savedPath := firstNonEmpty(stringFromMap(imageItem.Data, "savedPath"), stringFromMap(imageItem.Data, "saved_path"))
+	hint := imageGenerationInstructionsText(savedPath)
+	if hint == "" {
+		return session.Item{}, false
+	}
+	itemID := "image-generation-instructions-" + safeIdentifier(firstNonEmpty(imageItem.ID, turnID))
+	metadata := appTurnMetadata(turnID, cloneAnyMap(responseMetadata))
+	metadata["kind"] = imageGenerationInstructionsKind
+	return session.Item{
+		ID:        itemID,
+		Type:      "message",
+		Role:      "developer",
+		Text:      hint,
+		CreatedAt: imageItem.CreatedAt,
+		Data: map[string]any{
+			"kind":                imageGenerationInstructionsKind,
+			"imageGenerationId":   imageItem.ID,
+			"image_generation_id": imageItem.ID,
+			"savedPath":           savedPath,
+			"saved_path":          savedPath,
+		},
+		Metadata:   metadata,
+		ResponseID: imageItem.ResponseID,
+	}, true
+}
+
+func imageGenerationInstructionsText(savedPath string) string {
+	savedPath = strings.TrimSpace(savedPath)
+	if savedPath == "" {
+		return ""
+	}
+	outputDir := filepath.Dir(savedPath)
+	outputPath := filepath.Join(outputDir, "<image_id>.png")
+	hint := fmt.Sprintf("Generated images are saved to %s as %s by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.", outputDir, outputPath)
+	if len(hint) > 1024 {
+		return ""
+	}
+	return hint
+}
+
+func sessionItemIsImageGenerationInstructions(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if stringValueFromMap(item.Data, "kind") == imageGenerationInstructionsKind {
+		return true
+	}
+	if stringValueFromMap(item.Metadata, "kind") == imageGenerationInstructionsKind {
+		return true
+	}
+	return false
+}
+
+func sessionItemIsSkillInstructions(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if stringValueFromMap(item.Data, "kind") == skillInstructionsKind {
+		return true
+	}
+	if stringValueFromMap(item.Metadata, "kind") == skillInstructionsKind {
+		return true
+	}
+	return false
+}
+
+func sessionItemIsHiddenContextInstruction(item *session.Item) bool {
+	return sessionItemIsImageGenerationInstructions(item) || sessionItemIsSkillInstructions(item)
 }
 
 func runtimeUserPromptSessionItem(turnID string, params *turn.TurnStartParams, createdAt time.Time) (session.Item, bool) {
@@ -2796,6 +3045,9 @@ func sessionItemsForAppToolExecution(turnID string, execution *turn.ToolExecutio
 	if item, ok := sessionItemForWebSearchExecution(turnID, execution, createdAt, nil); ok {
 		return []session.Item{item}
 	}
+	if item, ok := sessionItemForStandaloneImageGenerationExecution(turnID, execution, createdAt, nil); ok {
+		return []session.Item{item}
+	}
 	items := []session.Item{}
 	if item, ok := sessionItemForAppToolCall(turnID, execution, createdAt, nil); ok {
 		items = append(items, item)
@@ -2900,6 +3152,96 @@ func isWebSearchExecution(execution *turn.ToolExecutionResult) bool {
 
 func isWebSearchInvocation(invocation *tool.Invocation) bool {
 	return invocation != nil && invocation.ToolName.Namespace == turn.WebSearchNamespace && invocation.ToolName.Name == turn.WebSearchRunTool
+}
+
+func sessionItemForStandaloneImageGenerationExecution(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time, responseMetadata map[string]any) (session.Item, bool) {
+	if !isImageGenerationExecution(execution) {
+		return session.Item{}, false
+	}
+	callID := appToolExecutionCallID(execution, createdAt)
+	itemCreatedAt := createdAt
+	if execution != nil {
+		if execution.FinishedAt.IsZero() && execution.Output != nil && !execution.Output.CompletedAt.IsZero() {
+			itemCreatedAt = execution.Output.CompletedAt
+		} else if !execution.FinishedAt.IsZero() {
+			itemCreatedAt = execution.FinishedAt
+		}
+	}
+	data := map[string]any{
+		"status": "failed",
+		"result": "",
+	}
+	if execution != nil && execution.Output != nil {
+		if execution.Output.Success {
+			data["status"] = "completed"
+		}
+		for key, value := range execution.Output.Data {
+			data[key] = value
+		}
+	}
+	status := firstNonEmpty(stringFromMap(data, "status"), "completed")
+	result := stringFromMap(data, "result")
+	revisedPrompt := firstNonEmpty(stringFromMap(data, "revisedPrompt"), stringFromMap(data, "revised_prompt"), imageGenerationPromptForExecution(execution))
+	data["status"] = status
+	data["result"] = result
+	if revisedPrompt != "" {
+		data["revisedPrompt"] = revisedPrompt
+		data["revised_prompt"] = revisedPrompt
+	}
+	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
+	metadata["toolName"] = turn.ImageGenerationNamespace + "." + turn.ImageGenerationToolName
+	if execution.Output != nil {
+		metadata["success"] = execution.Output.Success
+		if strings.TrimSpace(execution.Output.Error) != "" {
+			metadata["error"] = execution.Output.Error
+		}
+	}
+	return session.Item{
+		ID:        callID,
+		Type:      "imageGeneration",
+		Status:    status,
+		Text:      revisedPrompt,
+		CreatedAt: itemCreatedAt,
+		Data:      data,
+		Metadata:  metadata,
+	}, true
+}
+
+func isImageGenerationExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	if isImageGenerationInvocation(execution.Invocation) {
+		return true
+	}
+	if execution.Output != nil {
+		if execution.Output.ToolName.Namespace == turn.ImageGenerationNamespace && execution.Output.ToolName.Name == turn.ImageGenerationToolName {
+			return true
+		}
+		if execution.Output.Data != nil {
+			if marker, ok := execution.Output.Data["image_generation"].(bool); ok && marker {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isImageGenerationInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil && invocation.ToolName.Namespace == turn.ImageGenerationNamespace && invocation.ToolName.Name == turn.ImageGenerationToolName
+}
+
+func imageGenerationPromptForExecution(execution *turn.ToolExecutionResult) string {
+	if execution == nil || execution.Invocation == nil {
+		return ""
+	}
+	var payload struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(execution.Invocation.Payload.Arguments), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Prompt)
 }
 
 func webSearchActionForExecution(execution *turn.ToolExecutionResult) any {
@@ -3101,6 +3443,7 @@ type appTurnRunConfig struct {
 	CollaborationMode    string
 	Personality          string
 	InputItems           []any
+	HostedTools          []any
 	SessionItems         []session.Item
 	ExtraSessionItems    func() []session.Item
 	PostToolInputItems   turn.ToolPostExecutionInputItems
@@ -3172,6 +3515,8 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
+	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
+	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
 	var extraSessionItemsMu sync.Mutex
 	extraSessionItems := []session.Item{}
 	appendExtraSessionItems := func(items []session.Item) {
@@ -3191,6 +3536,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
+	hostedTools, err := r.hostedToolsForTurn(params)
+	if err != nil {
+		return nil, err
+	}
 	cwd := firstNonEmpty(turnCWD(params), r.services.DefaultCWD)
 	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
@@ -3227,7 +3576,8 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		CollaborationMode:    analyticsCollaborationMode(params),
 		Personality:          analyticsOptionalModeString(personality),
 		InputItems:           inputItems,
-		SessionItems:         currentTimeSessionItems,
+		HostedTools:          hostedTools,
+		SessionItems:         sessionItems,
 		ExtraSessionItems:    extraSessionItemsSnapshot,
 		PostToolInputItems:   postToolInputItems,
 		PreviousResponseID:   previousResponseID,
@@ -3467,6 +3817,8 @@ func analyticsTurnToolCounts(result *turn.AgentLoopResult) *telemetry.CodexTurnT
 			counts.WebSearch++
 		case strings.HasPrefix(name.Namespace, "mcp__") || strings.HasPrefix(key, "mcp__"):
 			counts.MCPToolCall++
+		case name.Namespace == turn.ImageGenerationNamespace && name.Name == turn.ImageGenerationToolName:
+			counts.ImageGeneration++
 		case strings.Contains(key, "image_generation") || strings.Contains(key, "imageGeneration"):
 			counts.ImageGeneration++
 		case name.Namespace != "":
@@ -4297,7 +4649,11 @@ func (r *RuntimeRouter) instructionsWithSkillsContext(threadID string, cfg *conf
 	if r == nil || r.services.Skills == nil {
 		return strings.TrimSpace(instructions), nil, nil, nil
 	}
-	response, err := r.services.Skills.List(&SkillsListParams{})
+	listParams := &SkillsListParams{}
+	if cwd := turnCWD(params); cwd != "" {
+		listParams.CWDs = []string{cwd}
+	}
+	response, err := r.services.Skills.List(listParams)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -5254,6 +5610,22 @@ func threadItemFromStreamAgentItem(item *model.AgentItem, turnID string, respons
 	}
 	if item.Type == "agent_message" {
 		threadItem.Role = "assistant"
+	}
+	if item.Type == "image_generation_call" {
+		threadItem.Type = "imageGeneration"
+		if threadItem.Data == nil {
+			threadItem.Data = map[string]any{}
+		}
+		result := firstNonEmpty(stringFromMap(threadItem.Data, "result"), item.Text)
+		threadItem.Status = model.NormalizeImageGenerationStatus(firstNonEmpty(item.Status, stringFromMap(threadItem.Data, "status")), result)
+		if item.Text != "" {
+			threadItem.Data["result"] = item.Text
+		}
+		threadItem.Data["status"] = threadItem.Status
+		if revised := firstNonEmpty(stringFromMap(item.Data, "revisedPrompt"), stringFromMap(item.Data, "revised_prompt")); revised != "" {
+			threadItem.Data["revisedPrompt"] = revised
+			threadItem.Data["revised_prompt"] = revised
+		}
 	}
 	if isAppToolItem(item) {
 		if threadItem.Data == nil {

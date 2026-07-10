@@ -30,46 +30,50 @@ type HTTPDoer interface {
 }
 
 type ResponsesAgentOptions struct {
-	Provider                 *APIProvider
-	Auth                     *AuthHeaders
-	HTTPClient               HTTPDoer
-	ProviderID               string
-	Stream                   bool
-	StreamHandler            ResponsesStreamHandler
-	CodexHome                string
-	AuthSnapshot             *auth.AuthDotJSON
-	AuthIssuer               string
-	StoreOptions             *auth.StoreOptions
-	ExternalAuthRefresh      ExternalAuthRefreshFunc
-	AgentIdentity            *AgentIdentityOptions
-	ModelsManager            ModelsManager
-	EnableRequestCompression bool
-	IncludeAttestation       bool
-	AttestationProvider      codexapi.AttestationProvider
+	Provider                   *APIProvider
+	Auth                       *AuthHeaders
+	HTTPClient                 HTTPDoer
+	ProviderID                 string
+	ProviderCapabilities       *ProviderCapabilities
+	ProviderRequiresOpenAIAuth bool
+	Stream                     bool
+	StreamHandler              ResponsesStreamHandler
+	CodexHome                  string
+	AuthSnapshot               *auth.AuthDotJSON
+	AuthIssuer                 string
+	StoreOptions               *auth.StoreOptions
+	ExternalAuthRefresh        ExternalAuthRefreshFunc
+	AgentIdentity              *AgentIdentityOptions
+	ModelsManager              ModelsManager
+	EnableRequestCompression   bool
+	IncludeAttestation         bool
+	AttestationProvider        codexapi.AttestationProvider
 }
 
 type ResponsesAgentRunner struct {
-	Provider                 *APIProvider
-	Auth                     *AuthHeaders
-	HTTPClient               HTTPDoer
-	ProviderID               string
-	Stream                   bool
-	StreamHandler            ResponsesStreamHandler
-	CodexHome                string
-	AuthSnapshot             *auth.AuthDotJSON
-	AuthIssuer               string
-	StoreOptions             *auth.StoreOptions
-	ExternalAuthRefresh      ExternalAuthRefreshFunc
-	AgentIdentity            *AgentIdentityOptions
-	AgentIdentityTelemetry   *codexapi.AgentIdentityTelemetry
-	ModelsManager            ModelsManager
-	EnableRequestCompression bool
-	IncludeAttestation       bool
-	AttestationProvider      codexapi.AttestationProvider
-	providerAuthFetchedAt    time.Time
-	turnState                string
-	agentIdentityTried       bool
-	agentIdentityBypass      bool
+	Provider                   *APIProvider
+	Auth                       *AuthHeaders
+	HTTPClient                 HTTPDoer
+	ProviderID                 string
+	ProviderCapabilities       ProviderCapabilities
+	ProviderRequiresOpenAIAuth bool
+	Stream                     bool
+	StreamHandler              ResponsesStreamHandler
+	CodexHome                  string
+	AuthSnapshot               *auth.AuthDotJSON
+	AuthIssuer                 string
+	StoreOptions               *auth.StoreOptions
+	ExternalAuthRefresh        ExternalAuthRefreshFunc
+	AgentIdentity              *AgentIdentityOptions
+	AgentIdentityTelemetry     *codexapi.AgentIdentityTelemetry
+	ModelsManager              ModelsManager
+	EnableRequestCompression   bool
+	IncludeAttestation         bool
+	AttestationProvider        codexapi.AttestationProvider
+	providerAuthFetchedAt      time.Time
+	turnState                  string
+	agentIdentityTried         bool
+	agentIdentityBypass        bool
 }
 
 type AgentIdentityOptions struct {
@@ -166,6 +170,9 @@ type responsesAgentOutputItem struct {
 	CallID    string                       `json:"call_id"`
 	Arguments any                          `json:"arguments"`
 	Input     string                       `json:"input"`
+	Status    string                       `json:"status"`
+	Revised   string                       `json:"revised_prompt"`
+	Result    string                       `json:"result"`
 	Execution string                       `json:"execution"`
 	Search    map[string]any               `json:"search"`
 }
@@ -241,25 +248,35 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 	if provider.Auth != nil && options.Auth != nil {
 		providerAuthFetchedAt = time.Now()
 	}
+	providerCapabilities := DefaultProviderCapabilities()
+	if options.ProviderCapabilities != nil {
+		providerCapabilities = *options.ProviderCapabilities
+	}
+	providerRequiresOpenAIAuth := options.ProviderRequiresOpenAIAuth
+	if !providerRequiresOpenAIAuth && provider != nil && strings.EqualFold(provider.Name, OpenAIProviderName) {
+		providerRequiresOpenAIAuth = true
+	}
 	return &ResponsesAgentRunner{
-		Provider:                 provider,
-		Auth:                     cloneAuthHeaders(options.Auth),
-		HTTPClient:               client,
-		ProviderID:               strings.TrimSpace(options.ProviderID),
-		Stream:                   options.Stream,
-		StreamHandler:            options.StreamHandler,
-		CodexHome:                strings.TrimSpace(options.CodexHome),
-		AuthSnapshot:             cloneAuthSnapshot(options.AuthSnapshot),
-		AuthIssuer:               strings.TrimSpace(options.AuthIssuer),
-		StoreOptions:             cloneStoreOptions(options.StoreOptions),
-		ExternalAuthRefresh:      options.ExternalAuthRefresh,
-		AgentIdentity:            cloneAgentIdentityOptions(options.AgentIdentity),
-		AgentIdentityTelemetry:   agentIdentityTelemetryFromAuthHeaders(options.Auth),
-		ModelsManager:            options.ModelsManager,
-		EnableRequestCompression: options.EnableRequestCompression,
-		IncludeAttestation:       options.IncludeAttestation,
-		AttestationProvider:      options.AttestationProvider,
-		providerAuthFetchedAt:    providerAuthFetchedAt,
+		Provider:                   provider,
+		Auth:                       cloneAuthHeaders(options.Auth),
+		HTTPClient:                 client,
+		ProviderID:                 strings.TrimSpace(options.ProviderID),
+		ProviderCapabilities:       providerCapabilities,
+		ProviderRequiresOpenAIAuth: providerRequiresOpenAIAuth,
+		Stream:                     options.Stream,
+		StreamHandler:              options.StreamHandler,
+		CodexHome:                  strings.TrimSpace(options.CodexHome),
+		AuthSnapshot:               cloneAuthSnapshot(options.AuthSnapshot),
+		AuthIssuer:                 strings.TrimSpace(options.AuthIssuer),
+		StoreOptions:               cloneStoreOptions(options.StoreOptions),
+		ExternalAuthRefresh:        options.ExternalAuthRefresh,
+		AgentIdentity:              cloneAgentIdentityOptions(options.AgentIdentity),
+		AgentIdentityTelemetry:     agentIdentityTelemetryFromAuthHeaders(options.Auth),
+		ModelsManager:              options.ModelsManager,
+		EnableRequestCompression:   options.EnableRequestCompression,
+		IncludeAttestation:         options.IncludeAttestation,
+		AttestationProvider:        options.AttestationProvider,
+		providerAuthFetchedAt:      providerAuthFetchedAt,
 	}
 }
 
@@ -280,14 +297,16 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		return nil, err
 	}
 	return NewResponsesAgentRunner(&ResponsesAgentOptions{
-		Provider:           &apiProvider,
-		Auth:               &authHeaders,
-		HTTPClient:         httpClient,
-		ProviderID:         providerID,
-		CodexHome:          codexHome,
-		AuthSnapshot:       snapshot,
-		ModelsManager:      runtimeProvider.ModelsManager(nil),
-		IncludeAttestation: runtimeProvider.SupportsAttestation(),
+		Provider:                   &apiProvider,
+		Auth:                       &authHeaders,
+		HTTPClient:                 httpClient,
+		ProviderID:                 providerID,
+		ProviderCapabilities:       cloneProviderCapabilities(runtimeProvider.Capabilities()),
+		ProviderRequiresOpenAIAuth: runtimeProvider.Info().RequiresOpenAIAuth,
+		CodexHome:                  codexHome,
+		AuthSnapshot:               snapshot,
+		ModelsManager:              runtimeProvider.ModelsManager(nil),
+		IncludeAttestation:         runtimeProvider.SupportsAttestation(),
 	}), nil
 }
 
@@ -305,6 +324,8 @@ func (r *ResponsesAgentRunner) WithStreamHandler(handler ResponsesStreamHandler)
 	clone.AgentIdentityTelemetry = cloneAgentIdentityTelemetry(r.AgentIdentityTelemetry)
 	clone.ModelsManager = r.ModelsManager
 	clone.AttestationProvider = r.AttestationProvider
+	clone.ProviderCapabilities = r.ProviderCapabilities
+	clone.ProviderRequiresOpenAIAuth = r.ProviderRequiresOpenAIAuth
 	return &clone
 }
 
@@ -333,6 +354,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	instructions := responsesInstructions(request)
 	inputItems := responsesInputItems(request)
 	tools := cloneAnySlice(request.Tools)
+	tools = r.withHostedToolsForRequest(tools, &modelInfo)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	if modelInfo.UseResponsesLite {
 		inputItems = responsesLiteInputItems(inputItems, tools, instructions)
@@ -452,6 +474,130 @@ func responsesTextParamForOutputSchema(schema any) *responsesTextParam {
 		return nil
 	}
 	return responsesTextParamForRequest(schema, "", nil)
+}
+
+func (r *ResponsesAgentRunner) withHostedToolsForRequest(tools []any, info *ModelInfo) []any {
+	if !r.shouldAddHostedImageGenerationTool(info) ||
+		responsesToolsContainType(tools, "image_generation") ||
+		responsesToolsContainNamespaceFunction(tools, "image_gen", "imagegen") {
+		return tools
+	}
+	return append(tools, map[string]any{
+		"type":          "image_generation",
+		"output_format": "png",
+	})
+}
+
+func (r *ResponsesAgentRunner) shouldAddHostedImageGenerationTool(info *ModelInfo) bool {
+	if r == nil || info == nil {
+		return false
+	}
+	if info.UseResponsesLite {
+		return false
+	}
+	if !r.ProviderCapabilities.ImageGeneration {
+		return false
+	}
+	if !modelInfoSupportsImageInput(info) {
+		return false
+	}
+	return r.imageGenerationAuthEnabled()
+}
+
+func (r *ResponsesAgentRunner) imageGenerationAuthEnabled() bool {
+	if r == nil {
+		return false
+	}
+	if r.providerUsesOpenAIActorAuthorization() {
+		return true
+	}
+	if r.AuthSnapshot == nil {
+		return false
+	}
+	if authSnapshotUsesCodexBackend(r.AuthSnapshot) {
+		return r.ProviderRequiresOpenAIAuth || r.providerName() == OpenAIProviderName
+	}
+	return r.providerName() == OpenAIProviderName && r.AuthSnapshot.Mode() == "api-key"
+}
+
+func (r *ResponsesAgentRunner) providerUsesOpenAIActorAuthorization() bool {
+	if r == nil || r.Provider == nil {
+		return false
+	}
+	for name, values := range r.Provider.Headers {
+		if !strings.EqualFold(name, OpenAIActorAuthorizationHeader) {
+			continue
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func modelInfoSupportsImageInput(info *ModelInfo) bool {
+	if info == nil {
+		return false
+	}
+	for _, modality := range info.InputModalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "image") {
+			return true
+		}
+	}
+	return false
+}
+
+func responsesToolsContainType(tools []any, toolType string) bool {
+	toolType = strings.TrimSpace(toolType)
+	if toolType == "" {
+		return false
+	}
+	for _, tool := range tools {
+		item, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(responseToolString(item["type"])), toolType) {
+			return true
+		}
+	}
+	return false
+}
+
+func responsesToolsContainNamespaceFunction(tools []any, namespace string, name string) bool {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
+		return false
+	}
+	for _, tool := range tools {
+		item, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(responseToolString(item["type"])), "namespace") ||
+			!strings.EqualFold(strings.TrimSpace(responseToolString(item["name"])), namespace) {
+			continue
+		}
+		switch children := item["tools"].(type) {
+		case []map[string]any:
+			for _, child := range children {
+				if strings.EqualFold(strings.TrimSpace(responseToolString(child["name"])), name) {
+					return true
+				}
+			}
+		case []any:
+			for _, childValue := range children {
+				child, ok := childValue.(map[string]any)
+				if ok && strings.EqualFold(strings.TrimSpace(responseToolString(child["name"])), name) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string) (*http.Request, error) {
@@ -779,6 +925,10 @@ func agentResponseFromResponses(apiResponse *responsesAgentAPIResponse, request 
 			items = append(items, *item)
 			continue
 		}
+		if item, ok := imageGenerationAgentItem(&output, index); ok {
+			items = append(items, *item)
+			continue
+		}
 		if output.Type != "" && output.Type != "message" {
 			continue
 		}
@@ -877,6 +1027,53 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		item.Search = responseArgumentsMap(output.Arguments)
 	}
 	return item, true
+}
+
+func imageGenerationAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem, bool) {
+	if output == nil || output.Type != "image_generation_call" {
+		return nil, false
+	}
+	id := output.ID
+	if id == "" {
+		id = fmt.Sprintf("image-generation-%d", index+1)
+	}
+	status := NormalizeImageGenerationStatus(output.Status, output.Result)
+	data := map[string]any{
+		"status": status,
+		"result": output.Result,
+	}
+	if strings.TrimSpace(output.Revised) != "" {
+		data["revisedPrompt"] = output.Revised
+		data["revised_prompt"] = output.Revised
+	}
+	return &AgentItem{
+		ID:     id,
+		Type:   "image_generation_call",
+		Text:   output.Result,
+		Status: status,
+		Data:   data,
+	}, true
+}
+
+func NormalizeImageGenerationStatus(status string, result string) string {
+	status = strings.TrimSpace(status)
+	hasResult := strings.TrimSpace(result) != ""
+	if hasResult && (status == "" ||
+		strings.EqualFold(status, "generating") ||
+		strings.EqualFold(status, "in_progress") ||
+		strings.EqualFold(status, "running")) {
+		return "completed"
+	}
+	if status == "" {
+		if hasResult {
+			return "completed"
+		}
+		return "in_progress"
+	}
+	if strings.EqualFold(status, "generating") {
+		return "in_progress"
+	}
+	return status
 }
 
 func responseArgumentsString(arguments any) string {
@@ -1420,6 +1617,11 @@ func cloneAuthHeaders(headers *AuthHeaders) *AuthHeaders {
 		SignRequest:            headers.SignRequest,
 		AgentIdentityTelemetry: cloneAgentIdentityTelemetry(headers.AgentIdentityTelemetry),
 	}
+}
+
+func cloneProviderCapabilities(capabilities ProviderCapabilities) *ProviderCapabilities {
+	clone := capabilities
+	return &clone
 }
 
 func agentIdentityTelemetryFromAuthHeaders(headers *AuthHeaders) *codexapi.AgentIdentityTelemetry {

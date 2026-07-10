@@ -43,8 +43,90 @@ func TestInputItemsFromRecordBuildsMessagesAndToolItems(t *testing.T) {
 	if call["type"] != "function_call" || call["name"] != "shell" || call["arguments"] != `{"cmd":"date"}` {
 		t.Fatalf("call = %#v", call)
 	}
+	if _, ok := call["namespace"]; ok {
+		t.Fatalf("plain function call should omit empty namespace: %#v", call)
+	}
 	if output["type"] != "function_call_output" || output["call_id"] != "call-1" || output["output"] != "ok" {
 		t.Fatalf("output = %#v", output)
+	}
+}
+
+func TestInputItemsFromRecordOmitsEmptyNamespacesForResponses(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "plain-call", Type: "function_call", Name: "shell", CallID: "call-1", Text: `{}`},
+		{ID: "custom-call", Type: "custom_tool_call", Name: "imagegen", CallID: "call-2", Text: "draw", Namespace: "  "},
+		{ID: "namespaced-call", Type: "function_call", Name: "am_list_functions", Namespace: "angr", CallID: "call-3", Text: `{}`},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 3 {
+		t.Fatalf("items len = %d, want 3", len(items))
+	}
+	plain := items[0].(map[string]any)
+	if _, ok := plain["namespace"]; ok {
+		t.Fatalf("plain call should omit namespace: %#v", plain)
+	}
+	custom := items[1].(map[string]any)
+	if _, ok := custom["namespace"]; ok {
+		t.Fatalf("custom call should omit blank namespace: %#v", custom)
+	}
+	namespaced := items[2].(map[string]any)
+	if namespaced["namespace"] != "angr" {
+		t.Fatalf("namespaced call = %#v", namespaced)
+	}
+}
+
+func TestInputItemsFromRecordSanitizesRawEmptyNamespace(t *testing.T) {
+	raw := json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"shell","namespace":"","arguments":"{}"}`)
+	record := &Record{Items: []Item{{Type: "function_call", Raw: raw}}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	call := items[0].(map[string]any)
+	if _, ok := call["namespace"]; ok {
+		t.Fatalf("raw call should have empty namespace removed: %#v", call)
+	}
+}
+
+func TestInputItemsFromRecordReplaysImageGenerationCall(t *testing.T) {
+	record := &Record{Items: []Item{{
+		ID:     "ig_123",
+		Type:   "imageGeneration",
+		Status: "generating",
+		Text:   "A small blue square",
+		Data: map[string]any{
+			"revisedPrompt": "A small blue square",
+			"result":        "Zm9v",
+		},
+	}}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	image := items[0].(map[string]any)
+	if image["type"] != "image_generation_call" || image["id"] != "ig_123" || image["status"] != "completed" || image["result"] != "Zm9v" || image["revised_prompt"] != "A small blue square" {
+		t.Fatalf("image = %#v", image)
+	}
+}
+
+func TestInputItemsFromRecordNormalizesRawImageGenerationCall(t *testing.T) {
+	raw := json.RawMessage(`{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"A small blue square","result":"Zm9v"}`)
+	record := &Record{Items: []Item{{Type: "imageGeneration", Raw: raw}}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	image := items[0].(map[string]any)
+	if image["status"] != "completed" || image["result"] != "Zm9v" {
+		t.Fatalf("image = %#v", image)
 	}
 }
 
@@ -67,6 +149,42 @@ func TestInputItemsFromRecordToolSearchRustRequiredFields(t *testing.T) {
 	tools, ok := output["tools"].([]any)
 	if !ok || len(tools) != 0 {
 		t.Fatalf("tool search output = %#v", output)
+	}
+}
+
+func TestInputItemsFromRecordToolSearchOutputNormalizesInternalToolSpecs(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "search-1", Type: "tool_search_call"},
+		{
+			ID:     "search-out-1",
+			Type:   "tool_search_output",
+			CallID: "search-1",
+			Data: map[string]any{
+				"tools": []any{map[string]any{
+					"name": map[string]any{
+						"namespace": "angr",
+						"name":      "am_get_function",
+					},
+					"description": "Get function info",
+				}},
+			},
+		},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	output := items[1].(map[string]any)
+	tools := output["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	namespace := tools[0].(map[string]any)
+	if namespace["type"] != "namespace" || namespace["name"] != "angr" {
+		t.Fatalf("namespace = %#v", namespace)
+	}
+	children := namespace["tools"].([]map[string]any)
+	if len(children) != 1 || children[0]["type"] != "function" || children[0]["name"] != "am_get_function" || children[0]["defer_loading"] != true {
+		t.Fatalf("children = %#v", children)
 	}
 }
 

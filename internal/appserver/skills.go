@@ -1197,7 +1197,7 @@ func skillsListResponse(skills []SkillsListEntry, cwds []string) *SkillsListResp
 		}
 		var scoped []SkillsListEntry
 		for _, skill := range skills {
-			if strings.HasPrefix(skill.Path, cwd+string(os.PathSeparator)) || skill.Path == cwd || strings.HasPrefix(skill.Path, filepath.Clean(cwd)+string(os.PathSeparator)) {
+			if skillAppliesToCWD(skill, cwd) {
 				scoped = append(scoped, cloneSkill(skill))
 			}
 		}
@@ -1205,6 +1205,21 @@ func skillsListResponse(skills []SkillsListEntry, cwds []string) *SkillsListResp
 	}
 	response.Data = data
 	return response
+}
+
+func skillAppliesToCWD(skill SkillsListEntry, cwd string) bool {
+	if !strings.EqualFold(strings.TrimSpace(skill.Scope), "repo") {
+		return true
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return true
+	}
+	cleanCWD := filepath.Clean(cwd)
+	return strings.HasPrefix(skill.Path, cwd+string(os.PathSeparator)) ||
+		skill.Path == cwd ||
+		strings.HasPrefix(skill.Path, cleanCWD+string(os.PathSeparator)) ||
+		skill.Path == cleanCWD
 }
 
 func cloneSkill(skill SkillsListEntry) SkillsListEntry {

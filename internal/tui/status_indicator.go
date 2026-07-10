@@ -134,11 +134,11 @@ func (s *StatusIndicator) Render(width int, now time.Time) []string {
 	elapsed := FormatElapsedCompact(int64(s.Elapsed(now).Seconds()))
 	line := header + " (" + elapsed
 	if s.ShowInterruptHint && strings.TrimSpace(s.InterruptHint) != "" {
-		line += " - " + strings.TrimSpace(s.InterruptHint) + " to interrupt"
+		line += " \u2022 " + strings.TrimSpace(s.InterruptHint) + " to interrupt"
 	}
 	line += ")"
 	if strings.TrimSpace(s.InlineMessage) != "" {
-		line += " - " + strings.TrimSpace(s.InlineMessage)
+		line += " \u2022 " + strings.TrimSpace(s.InlineMessage)
 	}
 	if width > 0 {
 		line = TruncateWithEllipsis(line, width)

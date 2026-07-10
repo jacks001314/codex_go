@@ -1,12 +1,128 @@
 package tea
 
 import (
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	codextui "codex_go/internal/tui"
+	historycell "codex_go/internal/tui/history_cell"
 )
+
+func (m *Model) applyResumeCommand(args string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	query := strings.TrimSpace(args)
+	if query == "" {
+		m.openSessionPicker(codextui.SessionPickerResume)
+		return nil
+	}
+	item, ok, ambiguous := m.findSessionByIDOrName(query)
+	if ambiguous {
+		m.notice = "Multiple saved chats match '" + query + "'."
+		m.openSessionPicker(codextui.SessionPickerResume)
+		if m.modal != nil && m.modal.sessionPicker != nil {
+			m.modal.sessionPicker.Query = query
+			m.modal.sessionPicker.SelectFirst()
+		}
+		return nil
+	}
+	if !ok {
+		message := "No saved chat found matching '" + query + "'."
+		m.notice = message
+		m.addHistoryCell(historycell.NewErrorEvent(message))
+		m.refreshTranscript()
+		return nil
+	}
+	selection := codextui.SessionSelection{
+		Kind: codextui.SessionSelectionResume,
+		Target: codextui.SessionTarget{
+			Path:     item.Path,
+			ThreadID: item.ThreadID,
+		},
+	}
+	decision, notice, _ := m.applySessionSelection(selection)
+	if strings.TrimSpace(notice) != "" {
+		m.notice = notice
+	}
+	m.refreshTranscript()
+	if decision == nil {
+		if strings.TrimSpace(notice) != "" {
+			m.addHistoryCell(historycell.NewErrorEvent(strings.TrimSpace(notice)))
+			m.refreshTranscript()
+		}
+		return nil
+	}
+	if m.onModalResponse != nil {
+		return m.onModalResponse(ModalResponse{
+			ID:          "session-picker-resume",
+			Kind:        ModalKindPicker,
+			OptionID:    firstNonEmpty(item.ThreadID, item.Path),
+			OptionLabel: item.DisplayTitle(),
+			Picker:      decision,
+		})
+	}
+	return nil
+}
+
+func (m *Model) findSessionByIDOrName(query string) (codextui.SessionSummary, bool, bool) {
+	if m == nil {
+		return codextui.SessionSummary{}, false, false
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return codextui.SessionSummary{}, false, false
+	}
+	lower := strings.ToLower(query)
+	var exact []codextui.SessionSummary
+	var prefix []codextui.SessionSummary
+	for _, item := range m.sessionItems {
+		fields := sessionLookupFields(item)
+		for _, field := range fields {
+			fieldLower := strings.ToLower(strings.TrimSpace(field))
+			if fieldLower == "" {
+				continue
+			}
+			if fieldLower == lower {
+				exact = append(exact, item)
+				break
+			}
+			if strings.HasPrefix(fieldLower, lower) {
+				prefix = append(prefix, item)
+				break
+			}
+		}
+	}
+	if len(exact) == 1 {
+		return exact[0], true, false
+	}
+	if len(exact) > 1 {
+		return codextui.SessionSummary{}, false, true
+	}
+	if len(prefix) == 1 {
+		return prefix[0], true, false
+	}
+	if len(prefix) > 1 {
+		return codextui.SessionSummary{}, false, true
+	}
+	return codextui.SessionSummary{}, false, false
+}
+
+func sessionLookupFields(item codextui.SessionSummary) []string {
+	fields := []string{
+		item.ThreadID,
+		item.Title,
+		item.Path,
+	}
+	if base := filepath.Base(strings.TrimSpace(item.Path)); base != "." && base != "" {
+		fields = append(fields, base)
+	}
+	return fields
+}
 
 func (m *Model) openSessionPicker(action codextui.SessionPickerAction) {
 	picker := codextui.NewSessionPickerState(action, m.sessionItems, m.sessionCWD)
@@ -14,6 +130,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) {
 		m.notice = "No sessions available."
 		return
 	}
+	picker.Density = m.sessionPickerDensity
 	visible := picker.VisibleItems()
 	if len(visible) == 0 {
 		m.notice = "No sessions available to " + action.Label() + "."
@@ -72,10 +189,33 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 	decision := &PickerDecision{Kind: string(selection.Kind), Value: threadID}
 	switch selection.Kind {
 	case codextui.SessionSelectionResume:
-		if threadID != "" {
-			m.State.SetThreadID(threadID)
+		if threadID == "" {
+			return decision, "Resume failed: missing thread id", true
 		}
-		return decision, strings.TrimSpace(m.State.RenderSetting("Thread", threadID)), true
+		if m.onResumeSession != nil {
+			response, err := m.onResumeSession(selection)
+			if err != nil {
+				message := strings.TrimSpace(err.Error())
+				if message == "" {
+					message = "unknown error"
+				}
+				return nil, "Resume failed: " + message, true
+			}
+			if response.Summary != nil {
+				m.upsertSessionItem(*response.Summary)
+				if strings.TrimSpace(response.Summary.ThreadID) != "" {
+					decision.Value = strings.TrimSpace(response.Summary.ThreadID)
+				}
+			}
+			m.applyResumeResponse(threadID, response)
+		} else if m.State != nil {
+			m.State.SetThreadID(threadID)
+			m.State.Messages = nil
+			m.setStatus("idle")
+			m.refreshTranscript()
+			m.transcript.GotoBottom()
+		}
+		return decision, strings.TrimSpace(m.State.RenderSetting("Thread", firstNonEmpty(decision.Value, threadID))), true
 	case codextui.SessionSelectionFork:
 		summary, err := m.runSessionAction(selection)
 		if err != nil {
@@ -117,6 +257,38 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 		return decision, "Deleted session " + threadID, true
 	default:
 		return decision, "", true
+	}
+}
+
+func (m *Model) applyResumeResponse(threadID string, response SessionResumeResponse) {
+	if m == nil || m.State == nil {
+		return
+	}
+	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
+		threadID = strings.TrimSpace(response.Summary.ThreadID)
+	}
+	m.State.SetThreadID(threadID)
+	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
+	status := strings.TrimSpace(response.Status)
+	if status == "" {
+		status = "idle"
+	}
+	m.setStatus(status)
+	m.activeSide = nil
+	m.activeAgentLabel = ""
+	if m.statusControls != nil {
+		m.statusControls.SetActiveAgentLabel("", false)
+	}
+	m.refreshTranscript()
+	m.transcript.GotoBottom()
+}
+
+func normalizeSessionPickerDensityTea(value string) codextui.SessionListDensity {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "comfortable":
+		return codextui.SessionDensityComfortable
+	default:
+		return codextui.SessionDensityDense
 	}
 }
 

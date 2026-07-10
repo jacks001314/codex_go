@@ -73,6 +73,21 @@ func TestSkillInstructions(t *testing.T) {
 	}
 }
 
+func TestImagegenSkillInstructionsPreserveContentsLikeRust(t *testing.T) {
+	rendered := Render(NewSkillInstructions("imagegen", "/tmp/SKILL.md", "Use the skill."))
+	if rendered == nil {
+		t.Fatal("Render(imagegen skill instructions) = nil")
+	}
+	if !strings.Contains(rendered.Content, "Use the skill.") {
+		t.Fatalf("imagegen instructions missing body:\n%s", rendered.Content)
+	}
+	for _, unexpected := range []string{"hosted Responses image_generation tool", "call image_generation directly", "Do not use tool_search"} {
+		if strings.Contains(rendered.Content, unexpected) {
+			t.Fatalf("imagegen instructions unexpectedly rewrote content with %q:\n%s", unexpected, rendered.Content)
+		}
+	}
+}
+
 func TestRecommendedPluginsInstructions(t *testing.T) {
 	fragment := NewRecommendedPluginsInstructions([]RecommendedPlugin{{ID: "docs@market", Name: "Docs"}})
 	rendered := Render(fragment)

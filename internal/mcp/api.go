@@ -624,6 +624,25 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.clearResourceCache()
 }
 
+func (s *MCPService) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	httpClients := s.httpClientsForCloseLocked()
+	stdioClients := s.stdioClientsForCloseLocked()
+	oauthLogins := s.oauthLoginsForCancelLocked()
+	s.httpClients = map[string]*cachedMCPHTTPClient{}
+	s.stdioClients = map[string]*cachedMCPStdioClient{}
+	s.oauthLogins = map[string]*OAuthLoginServer{}
+	s.mu.Unlock()
+	closeHTTPClients(httpClients)
+	closeStdioClients(stdioClients)
+	cancelOAuthLogins(oauthLogins)
+	s.clearResourceCache()
+	return nil
+}
+
 func (s *MCPService) SetServer(status MCPServerStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

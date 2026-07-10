@@ -214,6 +214,32 @@ func TestSkillsListIncludesCWDCodeXSkillsRootLikeRust(t *testing.T) {
 	}
 }
 
+func TestSkillsListIncludesGlobalSkillsForRequestedCWDLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "imagegen")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: imagegen\ndescription: Generate images\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: root, Scope: "system"}},
+	}).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Skills) != 1 {
+		t.Fatalf("response = %#v, want global skill in cwd data", response)
+	}
+	skill := response.Data[0].Skills[0]
+	if skill.Name != "imagegen" || skill.Scope != "system" || skill.Description != "Generate images" {
+		t.Fatalf("skill = %#v", skill)
+	}
+}
+
 func TestSkillsListPreservesRequestedCWDOrderAndRelativeCWDLikeRust(t *testing.T) {
 	relative := filepath.Join("relative-cwd")
 	absolute := t.TempDir()

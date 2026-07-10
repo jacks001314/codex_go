@@ -102,6 +102,46 @@ func TestRuntimeWithoutRouterRejectsToolCalls(t *testing.T) {
 	}
 }
 
+func TestRuntimeMergesHostedToolsBeforeAgentRequest(t *testing.T) {
+	agent := &singleTurnAgent{response: &model.AgentResponse{
+		Message: "ok",
+		Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "ok"}},
+	}}
+	runtime := NewRuntime(&RuntimeOptions{
+		Agent:       agent,
+		Router:      tool.NewRouter(tool.NewRegistry()),
+		HostedTools: []any{HostedImageGenerationTool("png")},
+	})
+
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "draw"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 1 || !runtimeRequestToolsContainType(agent.requests[0].Tools, HostedImageGenerationToolType) {
+		t.Fatalf("agent request tools = %#v", agent.requests)
+	}
+}
+
+func TestRuntimeMergesPerRequestHostedToolsBeforeAgentRequest(t *testing.T) {
+	agent := &singleTurnAgent{response: &model.AgentResponse{
+		Message: "ok",
+		Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "ok"}},
+	}}
+	runtime := NewRuntime(&RuntimeOptions{
+		Agent:  agent,
+		Router: tool.NewRouter(tool.NewRegistry()),
+	})
+
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
+		Prompt:      "draw",
+		HostedTools: []any{HostedImageGenerationTool("png")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 1 || !runtimeRequestToolsContainType(agent.requests[0].Tools, HostedImageGenerationToolType) {
+		t.Fatalf("agent request tools = %#v", agent.requests)
+	}
+}
+
 type runtimeRecordingAgent struct {
 	requests []model.AgentRequest
 }
@@ -145,6 +185,16 @@ func runtimeResultInputItemsHaveAgentText(items []any, want string) bool {
 	for _, raw := range items {
 		item, ok := raw.(*model.AgentItem)
 		if ok && item.Text == want {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeRequestToolsContainType(tools []any, toolType string) bool {
+	for _, toolValue := range tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if ok && toolMap["type"] == toolType {
 			return true
 		}
 	}

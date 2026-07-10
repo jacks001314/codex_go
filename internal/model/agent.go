@@ -138,6 +138,20 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Content:          agentReasoningContent(i.Data),
 			EncryptedContent: agentReasoningEncryptedContent(i.Data),
 		})
+	case "image_generation_call":
+		return json.Marshal(struct {
+			ID            string `json:"id,omitempty"`
+			Type          string `json:"type"`
+			Status        string `json:"status"`
+			RevisedPrompt string `json:"revised_prompt,omitempty"`
+			Result        string `json:"result"`
+		}{
+			ID:            i.ID,
+			Type:          "image_generation_call",
+			Status:        firstAgentItemValue(i.Status, stringValueFromAgentItemMap(i.Data, "status")),
+			RevisedPrompt: stringValueFromAgentItemMap(i.Data, "revised_prompt", "revisedPrompt"),
+			Result:        firstAgentItemValue(stringValueFromAgentItemMap(i.Data, "result"), i.Text),
+		})
 	case "", "agent_message":
 		return json.Marshal(struct {
 			ID      string                       `json:"id,omitempty"`
@@ -334,6 +348,25 @@ func optionalAgentItemString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func stringValueFromAgentItemMap(values map[string]any, keys ...string) string {
+	if values == nil {
+		return ""
+	}
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return strings.TrimSpace(typed)
+			}
+		}
+	}
+	return ""
 }
 
 func cloneAgentItemMap(values map[string]any) map[string]any {

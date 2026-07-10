@@ -5,8 +5,12 @@ import (
 	"net/url"
 	"strings"
 
+	appsapi "codex_go/internal/apps"
+	"codex_go/internal/appserver"
+	pluginapi "codex_go/internal/plugin"
 	codextui "codex_go/internal/tui"
 	bottompane "codex_go/internal/tui/bottom_pane"
+	chatwidget "codex_go/internal/tui/chatwidget"
 )
 
 func (m *Model) applyAttachmentCommand(args string, kind bottompane.AttachmentKind) {
@@ -155,9 +159,32 @@ func pluralS(count int) string {
 
 func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 	return SubmitRequest{
-		Prompt:      request.Prompt,
-		Attachments: cloneComposerAttachments(request.Attachments),
+		Prompt:          request.Prompt,
+		Attachments:     cloneComposerAttachments(request.Attachments),
+		MentionBindings: append([]string(nil), request.MentionBindings...),
+		MentionCatalog:  cloneSubmissionMentionCatalog(request.MentionCatalog),
 	}
+}
+
+func cloneSubmissionMentionCatalog(catalog chatwidget.SubmissionMentionCatalog) chatwidget.SubmissionMentionCatalog {
+	return chatwidget.SubmissionMentionCatalog{
+		Skills:  cloneSubmitSkillEntries(catalog.Skills),
+		Plugins: append([]pluginapi.PluginSummary(nil), catalog.Plugins...),
+		Apps:    append([]appsapi.AppEntry(nil), catalog.Apps...),
+	}
+}
+
+func cloneSubmitSkillEntries(values []appserver.SkillsListEntry) []appserver.SkillsListEntry {
+	if values == nil {
+		return nil
+	}
+	out := make([]appserver.SkillsListEntry, len(values))
+	for i := range values {
+		out[i] = values[i]
+		out[i].Skills = cloneSubmitSkillEntries(values[i].Skills)
+		out[i].Errors = append([]appserver.SkillErrorInfo(nil), values[i].Errors...)
+	}
+	return out
 }
 
 func cloneComposerAttachments(values []bottompane.ComposerAttachment) []bottompane.ComposerAttachment {

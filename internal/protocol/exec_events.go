@@ -48,14 +48,17 @@ type ThreadItem struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 
-	Text     string         `json:"text,omitempty"`
-	ToolName string         `json:"tool_name,omitempty"`
-	CallID   string         `json:"call_id,omitempty"`
-	Input    string         `json:"input,omitempty"`
-	Output   string         `json:"output,omitempty"`
-	Success  *bool          `json:"success,omitempty"`
-	Items    []TodoItem     `json:"items,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Text          string         `json:"text,omitempty"`
+	ToolName      string         `json:"tool_name,omitempty"`
+	CallID        string         `json:"call_id,omitempty"`
+	Input         string         `json:"input,omitempty"`
+	Output        string         `json:"output,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	RevisedPrompt string         `json:"revised_prompt,omitempty"`
+	SavedPath     string         `json:"saved_path,omitempty"`
+	Success       *bool          `json:"success,omitempty"`
+	Items         []TodoItem     `json:"items,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 type TodoItem struct {
@@ -86,6 +89,23 @@ func AgentMessageItem(id, text string) ThreadItem {
 		ID:   id,
 		Type: "agent_message",
 		Text: text,
+	}
+}
+
+func ImageGenerationItem(id string, status string, revisedPrompt string, savedPath string) ThreadItem {
+	return ThreadItem{
+		ID:            id,
+		Type:          "imageGeneration",
+		Status:        status,
+		RevisedPrompt: revisedPrompt,
+		SavedPath:     savedPath,
+		Metadata: map[string]any{
+			"status":         status,
+			"revisedPrompt":  revisedPrompt,
+			"revised_prompt": revisedPrompt,
+			"savedPath":      savedPath,
+			"saved_path":     savedPath,
+		},
 	}
 }
 

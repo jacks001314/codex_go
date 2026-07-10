@@ -5,24 +5,20 @@ import (
 	"testing"
 )
 
-func TestRenderMarkdown(t *testing.T) {
-	out, err := Render("# Title\n\n- one\n- two", 40)
+func TestRenderWithThemeHighlightsCodeAndChangesTheme(t *testing.T) {
+	source := "```go\npackage main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n```"
+	dracula, err := RenderWithTheme(source, 80, "dracula")
 	if err != nil {
-		t.Fatalf("Render returned error: %v", err)
+		t.Fatal(err)
 	}
-	for _, want := range []string{"Title", "one", "two"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("Render output = %q, missing %q", out, want)
-		}
-	}
-}
-
-func TestRenderEmptyMarkdown(t *testing.T) {
-	out, err := Render("  ", 40)
+	github, err := RenderWithTheme(source, 80, "github")
 	if err != nil {
-		t.Fatalf("Render returned error: %v", err)
+		t.Fatal(err)
 	}
-	if out != "" {
-		t.Fatalf("Render empty = %q, want empty", out)
+	if !strings.Contains(dracula, "\x1b[") || !strings.Contains(github, "\x1b[") {
+		t.Fatalf("expected ANSI highlighted code dracula=%q github=%q", dracula, github)
+	}
+	if dracula == github {
+		t.Fatalf("theme render did not change:\n%s", dracula)
 	}
 }

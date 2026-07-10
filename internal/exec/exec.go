@@ -22,6 +22,7 @@ import (
 	"codex_go/internal/cli"
 	"codex_go/internal/codexapi"
 	"codex_go/internal/config"
+	"codex_go/internal/eventmap"
 	"codex_go/internal/features"
 	"codex_go/internal/install"
 	"codex_go/internal/mcp"
@@ -38,9 +39,11 @@ import (
 )
 
 type Request struct {
-	Root  cli.RootOptions
-	Exec  cli.ExecOptions
-	Input []turn.TurnUserInput
+	Root                   cli.RootOptions
+	Exec                   cli.ExecOptions
+	Input                  []turn.TurnUserInput
+	AdditionalInstructions string
+	AdditionalInputItems   []any
 }
 
 type Result struct {
@@ -127,6 +130,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	if extra := strings.TrimSpace(req.AdditionalInstructions); extra != "" {
+		instructions = strings.Join(nonEmptyStrings([]string{extra, instructions}), "\n\n")
+	}
 
 	prompt, resumeContext, err := r.promptForRequest(req, stdin)
 	if err != nil {
@@ -173,6 +179,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	runPrompt := prompt
 	inputItems := execStartupInputItems(req, permissionProfile, r.now())
 	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
+	inputItems = append(inputItems, req.AdditionalInputItems...)
 	if len(requestInputs) > 0 {
 		if item := userMessageInputItemFromTurnInputs(prompt, requestInputs); item != nil {
 			inputItems = append(inputItems, item)
@@ -194,6 +201,19 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink}
+	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg)
+	imageGenerationOptions, err := r.imageGenerationOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, inputItems)
+	if err != nil {
+		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+		return nil, err
+	}
+	hostedTools, err := r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, imageGenerationOptions)
+	if err != nil {
+		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+		return nil, err
+	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
 		Prompt:               runPrompt,
 		InputItems:           inputItems,
@@ -227,6 +247,11 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		StreamEvents:        streamCollector,
 		PermissionProfileID: sandboxPermissionProfileID(permissionProfile),
 		PermissionProfile:   sandboxPermissionProfile(permissionProfile),
+		MCPService:          mcpService,
+		MCPTools:            mcpTools,
+		MCPConnectors:       mcpConnectors,
+		ImageGeneration:     imageGenerationOptions,
+		HostedTools:         hostedTools,
 	})
 	if err != nil {
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
@@ -299,6 +324,11 @@ type agentRunConfig struct {
 	StreamEvents         *execStreamEventCollector
 	PermissionProfileID  string
 	PermissionProfile    *sandbox.PermissionProfile
+	MCPService           *mcp.MCPService
+	MCPTools             []mcp.RuntimeToolInfo
+	MCPConnectors        []mcp.RuntimeConnector
+	ImageGeneration      *turn.ImageGenerationOptions
+	HostedTools          []any
 }
 
 type execStreamEventCollector struct {
@@ -488,6 +518,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		Prompt:               run.Prompt,
 		Instructions:         run.Instructions,
 		InputItems:           append([]any(nil), run.InputItems...),
+		HostedTools:          append([]any(nil), run.HostedTools...),
 		Model:                run.Model,
 		ProviderID:           run.ProviderID,
 		TaskKind:             run.TaskKind,
@@ -528,17 +559,176 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.Shell.Validation.ApprovalPolicy = run.ApprovalPolicy
 	}
 	options.EnableMCP = false
-	if r.MCPService != nil || len(r.MCPTools) > 0 || len(r.MCPConnectors) > 0 {
+	mcpService := r.MCPService
+	mcpTools := append([]mcp.RuntimeToolInfo(nil), r.MCPTools...)
+	mcpConnectors := append([]mcp.RuntimeConnector(nil), r.MCPConnectors...)
+	if mcpService == nil && len(mcpTools) == 0 && len(mcpConnectors) == 0 && run != nil {
+		mcpService = run.MCPService
+		mcpTools = append([]mcp.RuntimeToolInfo(nil), run.MCPTools...)
+		mcpConnectors = append([]mcp.RuntimeConnector(nil), run.MCPConnectors...)
+	}
+	if mcpService != nil || len(mcpTools) > 0 || len(mcpConnectors) > 0 {
 		options.EnableMCP = true
-		options.MCPService = r.MCPService
+		options.MCPService = mcpService
 		if options.MCPService != nil && r.MCPElicitation != nil {
 			options.MCPService.SetElicitationHandler(r.MCPElicitation)
 		}
-		options.MCPTools = append([]mcp.RuntimeToolInfo(nil), r.MCPTools...)
-		options.MCPConnectors = append([]mcp.RuntimeConnector(nil), r.MCPConnectors...)
+		options.MCPTools = mcpTools
+		options.MCPConnectors = mcpConnectors
+	}
+	if run != nil {
+		options.ImageGeneration = run.ImageGeneration
 	}
 	options.EnableAgents = false
 	return turn.BuildToolRouter(options)
+}
+
+func (r *Runner) configuredMCPRuntimeForConfig(cfg *config.Config) (*mcp.MCPService, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+	if r == nil || cfg == nil {
+		return nil, nil, nil
+	}
+	if r.MCPService != nil || len(r.MCPTools) > 0 || len(r.MCPConnectors) > 0 {
+		return r.MCPService, append([]mcp.RuntimeToolInfo(nil), r.MCPTools...), append([]mcp.RuntimeConnector(nil), r.MCPConnectors...)
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValues(cfg.Values, r.CodexHome)
+	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
+		return nil, nil, nil
+	}
+	service := mcp.NewMCPService(runtimeConfig)
+	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+	})
+	if err != nil || response == nil {
+		return service, nil, nil
+	}
+	return service, mcp.RuntimeToolsFromStatuses(response.Data), nil
+}
+
+func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, threadID string, inputItems []any) (*turn.ImageGenerationOptions, error) {
+	if r == nil || !r.UseResponsesAPI {
+		return nil, nil
+	}
+	var snapshot *auth.AuthDotJSON
+	if resolvedAuth != nil {
+		snapshot = &resolvedAuth.Auth
+	}
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil {
+		return nil, err
+	}
+	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
+	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	if !imageGenerationStandaloneEnabled(*provider, runtimeProvider.Capabilities(), &modelInfo, snapshot, cfg.FeatureSettings()) {
+		return nil, nil
+	}
+	apiProvider, err := runtimeProvider.APIProvider()
+	if err != nil {
+		return nil, err
+	}
+	authHeaders, err := runtimeProvider.APIAuth()
+	if err != nil {
+		return nil, err
+	}
+	return &turn.ImageGenerationOptions{
+		SessionID:  threadID,
+		CodexHome:  r.CodexHome,
+		Provider:   apiProvider,
+		Auth:       authHeaders,
+		HTTPClient: r.httpClientForConfig(cfg),
+		InputItems: append([]any(nil), inputItems...),
+	}, nil
+}
+
+func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
+	if r == nil || !r.UseResponsesAPI || standaloneImageGeneration != nil {
+		return nil, nil
+	}
+	var snapshot *auth.AuthDotJSON
+	if resolvedAuth != nil {
+		snapshot = &resolvedAuth.Auth
+	}
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil {
+		return nil, err
+	}
+	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
+	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	if !imageGenerationHostedEnabledExec(*provider, runtimeProvider.Capabilities(), &modelInfo, snapshot, cfg.FeatureSettings()) {
+		return nil, nil
+	}
+	return []any{turn.HostedImageGenerationTool("png")}, nil
+}
+
+func imageGenerationStandaloneEnabled(provider model.ProviderInfo, capabilities model.ProviderCapabilities, info *model.ModelInfo, snapshot *auth.AuthDotJSON, featureSettings map[string]bool) bool {
+	if info == nil {
+		return false
+	}
+	if !capabilities.NamespaceTools || !capabilities.ImageGeneration {
+		return false
+	}
+	if !modelInfoSupportsImageInputExec(info) {
+		return false
+	}
+	if !features.Enabled(featureSettings, "image_generation") {
+		return false
+	}
+	if !info.UseResponsesLite && !features.Enabled(featureSettings, "imagegenext") {
+		return false
+	}
+	return imageGenerationAuthEnabledExec(provider, snapshot)
+}
+
+func imageGenerationHostedEnabledExec(provider model.ProviderInfo, capabilities model.ProviderCapabilities, info *model.ModelInfo, snapshot *auth.AuthDotJSON, featureSettings map[string]bool) bool {
+	if info == nil || info.UseResponsesLite {
+		return false
+	}
+	if !capabilities.ImageGeneration {
+		return false
+	}
+	if !modelInfoSupportsImageInputExec(info) {
+		return false
+	}
+	if !features.Enabled(featureSettings, "image_generation") {
+		return false
+	}
+	return imageGenerationAuthEnabledExec(provider, snapshot)
+}
+
+func imageGenerationAuthEnabledExec(provider model.ProviderInfo, snapshot *auth.AuthDotJSON) bool {
+	if provider.UsesOpenAIActorAuthorization() {
+		return true
+	}
+	if snapshot == nil {
+		return false
+	}
+	if authSnapshotUsesCodexBackendExec(snapshot) {
+		return provider.RequiresOpenAIAuth || provider.IsOpenAI()
+	}
+	return provider.IsOpenAI() && snapshot.Mode() == "api-key"
+}
+
+func modelInfoSupportsImageInputExec(info *model.ModelInfo) bool {
+	if info == nil {
+		return false
+	}
+	for _, modality := range info.InputModalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "image") {
+			return true
+		}
+	}
+	return false
+}
+
+func authSnapshotUsesCodexBackendExec(snapshot *auth.AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveExecSandboxPermissionProfile(cfg *config.Config, req *Request) (*config.SandboxPermissionProfileResolution, error) {
@@ -993,11 +1183,15 @@ func mergedOverrides(root, exec []string) []string {
 }
 
 func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopResult) error {
+	if sink == nil {
+		return errors.New("event sink is nil")
+	}
 	if result == nil || result.Response == nil {
 		return errors.New("agent response is nil")
 	}
 	usage := agentUsageForResult(result)
 	executionIndex := 0
+	streamedAgentMessages := collectStreamedAgentMessages(sink.Events())
 	for _, response := range result.ModelResponses() {
 		if response == nil {
 			continue
@@ -1011,6 +1205,9 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 			}
 			protocolItem := protocolItemFromStreamAgentItem(&item)
 			if protocolItem.ID == "" {
+				continue
+			}
+			if streamedAgentMessages.seen(protocolItem) {
 				continue
 			}
 			if err := sink.Emit(protocol.ItemCompleted(protocolItem)); err != nil {
@@ -1034,7 +1231,11 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 		}
 		executionIndex += len(toolExecutions)
 		if len(response.Items) == 0 && strings.TrimSpace(response.Message) != "" {
-			if err := sink.Emit(protocol.ItemCompleted(protocol.AgentMessageItem("agent-message", response.Message))); err != nil {
+			item := protocol.AgentMessageItem("agent-message", response.Message)
+			if streamedAgentMessages.seen(item) {
+				continue
+			}
+			if err := sink.Emit(protocol.ItemCompleted(item)); err != nil {
 				return err
 			}
 		}
@@ -1053,6 +1254,63 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 	}))
+}
+
+type streamedAgentMessageSet struct {
+	ids   map[string]struct{}
+	texts map[string]struct{}
+}
+
+func collectStreamedAgentMessages(events []protocol.ThreadEvent) streamedAgentMessageSet {
+	set := streamedAgentMessageSet{}
+	textByID := map[string]*strings.Builder{}
+	for _, event := range events {
+		if event.Type != "item.delta" || event.Delta == nil || event.Delta.Text == "" {
+			continue
+		}
+		itemID := strings.TrimSpace(event.Delta.ItemID)
+		if itemID == "" {
+			itemID = "agent-message"
+		}
+		if set.ids == nil {
+			set.ids = map[string]struct{}{}
+		}
+		set.ids[itemID] = struct{}{}
+		builder := textByID[itemID]
+		if builder == nil {
+			builder = &strings.Builder{}
+			textByID[itemID] = builder
+		}
+		builder.WriteString(event.Delta.Text)
+	}
+	for _, builder := range textByID {
+		text := strings.TrimSpace(builder.String())
+		if text == "" {
+			continue
+		}
+		if set.texts == nil {
+			set.texts = map[string]struct{}{}
+		}
+		set.texts[text] = struct{}{}
+	}
+	return set
+}
+
+func (s streamedAgentMessageSet) seen(item protocol.ThreadItem) bool {
+	if item.Type != "agent_message" {
+		return false
+	}
+	if itemID := strings.TrimSpace(item.ID); itemID != "" {
+		if _, ok := s.ids[itemID]; ok {
+			return true
+		}
+	}
+	if text := strings.TrimSpace(item.Text); text != "" {
+		if _, ok := s.texts[text]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func agentUsageForResult(result *turn.AgentLoopResult) model.AgentUsage {
@@ -1190,6 +1448,8 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 			Type: "reasoning",
 			Text: text,
 		}
+	case "image_generation_call":
+		return protocolImageGenerationItemFromAgentItem(item)
 	default:
 		return protocol.ThreadItem{
 			ID:   firstNonEmpty(item.ID, item.CallID),
@@ -1197,6 +1457,18 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 			Text: firstNonEmpty(item.Text, item.Arguments, item.Input),
 		}
 	}
+}
+
+func protocolImageGenerationItemFromAgentItem(item *model.AgentItem) protocol.ThreadItem {
+	if item == nil {
+		return protocol.ThreadItem{}
+	}
+	data := item.Data
+	result := firstNonEmpty(execStringFromAny(data["result"]), strings.TrimSpace(item.Text))
+	status := model.NormalizeImageGenerationStatus(firstNonEmpty(strings.TrimSpace(item.Status), execStringFromAny(data["status"])), result)
+	revisedPrompt := firstNonEmpty(execStringFromAny(data["revisedPrompt"]), execStringFromAny(data["revised_prompt"]))
+	savedPath := firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"]))
+	return protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath)
 }
 
 func reasoningSummaryText(data map[string]any) string {
@@ -1372,7 +1644,11 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 	if resumeContext != nil && resumeContext.Record != nil {
 		resumeRecord := resumeContext.Record
 		newUserPrompt := firstNonEmpty(resumeContext.UserPrompt, userPrompt)
-		items := sessionItemsForTurn(turnID, newUserPrompt, userInputs, result, now, map[string]any{"resumed": true})
+		items := execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, map[string]any{"resumed": true})
+		items = append(items, sessionItemsForTurn(turnID, newUserPrompt, userInputs, result, now, map[string]any{"resumed": true}, &execImageGenerationContext{
+			CodexHome: r.CodexHome,
+			ThreadID:  string(resumeRecord.ID),
+		})...)
 		updated, err := store.AppendItems(resumeRecord.ID, items)
 		if err != nil {
 			return "", err
@@ -1409,7 +1685,10 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 			LastResponseID: response.ResponseID,
 			SessionPrefix:  session.PrefixForSessionID(threadID),
 		},
-		Items: sessionItemsForTurn(turnID, userPrompt, userInputs, result, now, nil),
+		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
+			CodexHome: r.CodexHome,
+			ThreadID:  threadID,
+		})...),
 	}
 	if err := store.Save(record); err != nil {
 		return "", err
@@ -1525,7 +1804,99 @@ func latestExecResumeRecord(store *session.Store, resume *cli.ExecResumeOptions)
 	return newest, nil
 }
 
-func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, createdAt time.Time, extraMetadata map[string]any) []session.Item {
+const execSkillInstructionsKind = "skill_instructions"
+
+func execAdditionalInputSessionItems(turnID string, inputItems []any, createdAt time.Time, extraMetadata map[string]any) []session.Item {
+	if len(inputItems) == 0 {
+		return nil
+	}
+	items := make([]session.Item, 0, len(inputItems))
+	for i, item := range inputItems {
+		role, text, ok := execSkillInstructionInputItemText(item)
+		if !ok {
+			continue
+		}
+		metadata := sessionMetadata(turnID, extraMetadata)
+		metadata["kind"] = execSkillInstructionsKind
+		items = append(items, session.Item{
+			ID:        fmt.Sprintf("skill-instructions-%s-%d", safeSessionItemID(turnID), i+1),
+			Type:      "message",
+			Role:      role,
+			Text:      text,
+			Content:   []session.ContentPart{{Type: "input_text", Text: text}},
+			CreatedAt: createdAt,
+			Data:      map[string]any{"kind": execSkillInstructionsKind},
+			Metadata:  metadata,
+		})
+	}
+	return items
+}
+
+func execSkillInstructionInputItemText(item any) (string, string, bool) {
+	raw, ok := item.(map[string]any)
+	if !ok {
+		return "", "", false
+	}
+	if strings.TrimSpace(execStringFromAny(raw["type"])) != "message" {
+		return "", "", false
+	}
+	role := strings.TrimSpace(execStringFromAny(raw["role"]))
+	if role == "" {
+		role = "user"
+	}
+	text := strings.TrimSpace(execTextFromInputItemContent(raw["content"]))
+	if text == "" || !strings.Contains(text, "<skill>") || !strings.Contains(text, "</skill>") {
+		return "", "", false
+	}
+	return role, text, true
+}
+
+func execTextFromInputItemContent(content any) string {
+	switch typed := content.(type) {
+	case []map[string]any:
+		parts := make([]string, 0, len(typed))
+		for _, block := range typed {
+			if text := strings.TrimSpace(execStringFromAny(block["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, raw := range typed {
+			block, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text := strings.TrimSpace(execStringFromAny(block["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func execStringFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+type execImageGenerationContext struct {
+	CodexHome string
+	ThreadID  string
+}
+
+func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext) []session.Item {
 	suffix := strings.TrimPrefix(turnID, "turn-")
 	items := []session.Item{{
 		ID:        "user-" + suffix,
@@ -1553,9 +1924,12 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 					toolItemCount++
 					continue
 				}
-				item := sessionItemFromAgentItem(turnID, fallbackAssistantID, response.ResponseID, &response.Items[i], result.TimingProfile, createdAt, responseExtraMetadata)
+				item := sessionItemFromAgentItem(turnID, fallbackAssistantID, response.ResponseID, &response.Items[i], result.TimingProfile, createdAt, responseExtraMetadata, imageContext)
 				if item.ID != "" {
 					items = append(items, item)
+					if instructions, ok := execImageGenerationInstructionsSessionItem(turnID, &item, createdAt, responseExtraMetadata); ok {
+						items = append(items, instructions)
+					}
 				}
 			}
 		}
@@ -1747,9 +2121,12 @@ func addTimingMetadata(metadata map[string]any, started time.Time, completed tim
 	return metadata
 }
 
-func sessionItemFromAgentItem(turnID string, fallbackID string, responseID string, item *model.AgentItem, timingProfile *turn.Profile, createdAt time.Time, extraMetadata map[string]any) session.Item {
+func sessionItemFromAgentItem(turnID string, fallbackID string, responseID string, item *model.AgentItem, timingProfile *turn.Profile, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext) session.Item {
 	if item == nil {
 		return session.Item{}
+	}
+	if item.Type == "image_generation_call" {
+		return sessionItemFromImageGenerationAgentItem(turnID, fallbackID, responseID, item, timingProfile, createdAt, extraMetadata, imageContext)
 	}
 	text := firstNonEmpty(item.Text, item.Arguments, item.Input)
 	metadata := addTimingProfileMetadata(sessionMetadata(turnID, extraMetadata), timingProfile)
@@ -1781,6 +2158,93 @@ func sessionItemFromAgentItem(turnID string, fallbackID string, responseID strin
 		out.Content = []session.ContentPart{{Type: "output_text", Text: text}}
 	}
 	return out
+}
+
+func sessionItemFromImageGenerationAgentItem(turnID string, fallbackID string, responseID string, item *model.AgentItem, timingProfile *turn.Profile, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext) session.Item {
+	itemID := firstNonEmpty(strings.TrimSpace(item.ID), strings.TrimSpace(item.CallID), fallbackID)
+	if itemID == "" {
+		itemID = "image-generation-" + safeSessionItemID(turnID)
+	}
+	data := cloneMap(item.Data)
+	if data == nil {
+		data = map[string]any{}
+	}
+	result := firstNonEmpty(execStringFromAny(data["result"]), strings.TrimSpace(item.Text))
+	status := model.NormalizeImageGenerationStatus(firstNonEmpty(strings.TrimSpace(item.Status), execStringFromAny(data["status"])), result)
+	revisedPrompt := firstNonEmpty(execStringFromAny(data["revisedPrompt"]), execStringFromAny(data["revised_prompt"]))
+	data["status"] = status
+	data["result"] = result
+	if revisedPrompt != "" {
+		data["revisedPrompt"] = revisedPrompt
+		data["revised_prompt"] = revisedPrompt
+	}
+	if result != "" && firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"])) == "" && imageContext != nil {
+		if codexHome := strings.TrimSpace(imageContext.CodexHome); codexHome != "" {
+			threadID := firstNonEmpty(strings.TrimSpace(imageContext.ThreadID), turnID)
+			if savedPath, err := eventmap.SaveImageGenerationResult(codexHome, threadID, itemID, result); err == nil {
+				data["savedPath"] = savedPath
+				data["saved_path"] = savedPath
+			}
+		}
+	}
+	item.Data = cloneMap(data)
+	item.Status = status
+	raw, _ := json.Marshal(item)
+	metadata := addTimingProfileMetadata(sessionMetadata(turnID, extraMetadata), timingProfile)
+	for key, value := range data {
+		if key == "result" {
+			continue
+		}
+		metadata[key] = value
+	}
+	return session.Item{
+		ID:         itemID,
+		Type:       "imageGeneration",
+		Status:     status,
+		Text:       revisedPrompt,
+		CreatedAt:  createdAt,
+		Data:       data,
+		Metadata:   metadata,
+		Raw:        raw,
+		ResponseID: responseID,
+	}
+}
+
+const execImageGenerationInstructionsKind = "image_generation_instructions"
+
+func execImageGenerationInstructionsSessionItem(turnID string, imageItem *session.Item, createdAt time.Time, extraMetadata map[string]any) (session.Item, bool) {
+	if imageItem == nil || imageItem.Type != "imageGeneration" {
+		return session.Item{}, false
+	}
+	savedPath := firstNonEmpty(execStringFromAny(imageItem.Data["savedPath"]), execStringFromAny(imageItem.Data["saved_path"]))
+	if strings.TrimSpace(savedPath) == "" {
+		return session.Item{}, false
+	}
+	outputDir := filepath.Dir(savedPath)
+	outputPath := filepath.Join(outputDir, "<image_id>.png")
+	text := fmt.Sprintf("Generated images are saved to %s as %s by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.", outputDir, outputPath)
+	if len(text) > 1024 {
+		return session.Item{}, false
+	}
+	metadata := sessionMetadata(turnID, extraMetadata)
+	metadata["kind"] = execImageGenerationInstructionsKind
+	return session.Item{
+		ID:        "image-generation-instructions-" + safeSessionItemID(firstNonEmpty(imageItem.ID, turnID)),
+		Type:      "message",
+		Role:      "developer",
+		Text:      text,
+		Content:   []session.ContentPart{{Type: "input_text", Text: text}},
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"kind":                execImageGenerationInstructionsKind,
+			"imageGenerationId":   imageItem.ID,
+			"image_generation_id": imageItem.ID,
+			"savedPath":           savedPath,
+			"saved_path":          savedPath,
+		},
+		Metadata:   metadata,
+		ResponseID: imageItem.ResponseID,
+	}, true
 }
 
 func addTimingProfileMetadata(metadata map[string]any, profile *turn.Profile) map[string]any {
@@ -2122,6 +2586,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func firstLine(value string) string {

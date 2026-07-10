@@ -127,3 +127,26 @@ func TestAgentItemMarshalAgentMessageAsResponsesMessage(t *testing.T) {
 		t.Fatalf("block = %#v", content[0])
 	}
 }
+
+func TestAgentItemMarshalImageGenerationCall(t *testing.T) {
+	item := &AgentItem{
+		ID:     "ig_123",
+		Type:   "image_generation_call",
+		Status: "completed",
+		Text:   "Zm9v",
+		Data: map[string]any{
+			"revisedPrompt": "A small blue square",
+		},
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded["type"] != "image_generation_call" || decoded["id"] != "ig_123" || decoded["status"] != "completed" || decoded["result"] != "Zm9v" || decoded["revised_prompt"] != "A small blue square" {
+		t.Fatalf("image json = %s", data)
+	}
+}

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -320,6 +322,51 @@ func TestThemePickerDiscoversPreviewAndCancelRestore(t *testing.T) {
 	}
 	if rows := ThemePreviewRows(48); len(rows) == 0 || !strings.Contains(strings.Join(rows, "\n"), "summarize") {
 		t.Fatalf("preview rows = %#v", rows)
+	}
+	if rows := NarrowThemePreviewRows(32); len(rows) == 0 || !strings.Contains(strings.Join(rows, "\n"), "greet") {
+		t.Fatalf("narrow preview rows = %#v", rows)
+	}
+	rendered := strings.Join(picker.RenderRows(80), "\n")
+	if strings.Contains(rendered, "Github Dark - Built in") || !strings.Contains(rendered, "github_dark") {
+		t.Fatalf("theme rows should use Rust-style names:\n%s", rendered)
+	}
+}
+
+func TestThemePickerDiscoversCustomThemeDirectoryAndSubtitle(t *testing.T) {
+	dir := t.TempDir()
+	themesDir := filepath.Join(dir, "themes")
+	if err := os.MkdirAll(themesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(themesDir, "team-dark.tmTheme"), []byte("placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(themesDir, "notes.txt"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := DiscoverCustomThemePaths(themesDir)
+	if len(paths) != 1 || filepath.Base(paths[0]) != "team-dark.tmTheme" {
+		t.Fatalf("custom paths = %#v", paths)
+	}
+	options := DiscoverThemeOptions([]string{"dracula"}, paths)
+	if len(options) != 2 {
+		t.Fatalf("custom options = %#v", options)
+	}
+	custom := options[1]
+	if custom.ID != "team-dark" || custom.Source != ThemeSourceCustom || ThemePickerDisplayName(custom) != "team-dark (custom)" {
+		t.Fatalf("custom option = %#v", custom)
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		subtitle := ThemePickerSubtitle(filepath.Join(home, ".codex", "themes"), 240)
+		if !strings.Contains(subtitle, "Custom .tmTheme files") || !strings.Contains(subtitle, filepath.Join("~", ".codex", "themes")) {
+			t.Fatalf("subtitle = %q", subtitle)
+		}
+	}
+	if subtitle := ThemePickerSubtitle(themesDir, 20); subtitle != ThemePreviewFallbackSubtitle {
+		t.Fatalf("narrow subtitle = %q", subtitle)
 	}
 }
 

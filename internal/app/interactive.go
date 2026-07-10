@@ -22,15 +22,20 @@ import (
 	"codex_go/internal/auth"
 	"codex_go/internal/cli"
 	"codex_go/internal/config"
+	contextfrag "codex_go/internal/context"
+	"codex_go/internal/eventmap"
 	codexexec "codex_go/internal/exec"
 	"codex_go/internal/features"
 	"codex_go/internal/mcp"
+	modelpkg "codex_go/internal/model"
+	promptctx "codex_go/internal/prompt"
 	"codex_go/internal/protocol"
 	"codex_go/internal/session"
 	"codex_go/internal/tool"
 	codextui "codex_go/internal/tui"
 	bottompane "codex_go/internal/tui/bottom_pane"
 	chatwidget "codex_go/internal/tui/chatwidget"
+	historycell "codex_go/internal/tui/history_cell"
 	codextea "codex_go/internal/tui/tea"
 	"codex_go/internal/turn"
 )
@@ -555,6 +560,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
 	runner := newCodexExecRunner(auth.DefaultCodexHome())
+	mcpService, mcpStatuses, mcpTools := interactiveMCPRuntime(root)
+	if runner != nil && mcpService != nil {
+		runner.MCPService = mcpService
+		runner.MCPTools = mcpTools
+	}
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
 	userInputBroker := newInteractiveUserInputBroker()
@@ -563,7 +573,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NoAltScreen:             root != nil && root.Shared.NoAltScreen,
 		SessionPickerItems:      interactiveSessionPickerItems(root),
 		SessionPickerCWD:        interactiveSessionPickerCWD(root),
+		SessionPickerView:       settings.SessionPickerView,
+		ShowSessionHeader:       true,
+		SessionHeaderVersion:    "dev",
 		OnSessionAction:         interactiveSessionActionHandler(root),
+		OnResumeSession:         interactiveResumeSessionHandler(root),
 		KeymapConfig:            interactiveKeymapConfig(root),
 		OnKeymapEdit:            interactiveKeymapEditHandler(root),
 		OnWriteSettings:         interactiveSettingsWriteHandler(root),
@@ -573,11 +587,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NotificationMethod:      settings.NotificationMethod,
 		NotificationCondition:   settings.NotificationCondition,
 		PermissionRequirements:  settings.PermissionRequirements,
+		MCPServers:              mcpStatuses,
 		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
 		TUITheme:                settings.TUITheme,
 		TUIPet:                  settings.TUIPet,
 		OnPostNotification:      interactiveNotificationPoster(stdout),
 		OnReadDebugConfig:       interactiveDebugConfigReader(root),
+		OnReadSkills:            interactiveSkillsReader(root),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
@@ -593,6 +609,96 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	}
 	_, err := codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []mcp.RuntimeToolInfo) {
+	codexHome := auth.DefaultCodexHome()
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil, nil, nil
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValues(loaded.Values, codexHome)
+	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
+		return nil, nil, nil
+	}
+	service := mcp.NewMCPService(runtimeConfig)
+	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
+	})
+	if err != nil || response == nil {
+		return service, nil, nil
+	}
+	statuses := interactiveHistoryMCPStatuses(response.Data)
+	return service, statuses, mcp.RuntimeToolsFromStatuses(response.Data)
+}
+
+func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell.McpServerStatus {
+	out := make([]historycell.McpServerStatus, 0, len(statuses))
+	for i := range statuses {
+		status := statuses[i]
+		name := mcp.RuntimeServerNameFromStatus(&status)
+		if name == "" {
+			continue
+		}
+		out = append(out, historycell.McpServerStatus{
+			Name:              name,
+			Auth:              interactiveMCPAuthStatusDisplay(status.AuthStatus),
+			Tools:             interactiveMCPToolNames(status.Tools),
+			Resources:         interactiveMCPResources(status.Resources),
+			ResourceTemplates: interactiveMCPResourceTemplates(status.ResourceTemplates),
+		})
+	}
+	return out
+}
+
+func interactiveMCPAuthStatusDisplay(status mcp.MCPAuthStatus) string {
+	switch status {
+	case mcp.MCPAuthBearerToken:
+		return "Bearer token"
+	case mcp.MCPAuthOAuth:
+		return "OAuth"
+	case mcp.MCPAuthNotLoggedIn:
+		return "Not logged in"
+	case mcp.MCPAuthUnsupported, "":
+		return "Unsupported"
+	default:
+		return string(status)
+	}
+}
+
+func interactiveMCPToolNames(tools []mcp.MCPToolInfo) []string {
+	out := make([]string, 0, len(tools))
+	for i := range tools {
+		name := strings.TrimSpace(tools[i].Name)
+		if name != "" && !mcp.ToolSyntheticLink(tools[i].Meta) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func interactiveMCPResources(resources []mcp.MCPResource) []historycell.McpResource {
+	out := make([]historycell.McpResource, 0, len(resources))
+	for i := range resources {
+		out = append(out, historycell.McpResource{
+			Name:  strings.TrimSpace(resources[i].Name),
+			Title: strings.TrimSpace(resources[i].Title),
+			URI:   strings.TrimSpace(resources[i].URI),
+		})
+	}
+	return out
+}
+
+func interactiveMCPResourceTemplates(templates []mcp.MCPResourceTemplate) []historycell.McpResourceTemplate {
+	out := make([]historycell.McpResourceTemplate, 0, len(templates))
+	for i := range templates {
+		out = append(out, historycell.McpResourceTemplate{
+			Name:        strings.TrimSpace(templates[i].Name),
+			Title:       strings.TrimSpace(templates[i].Title),
+			URITemplate: strings.TrimSpace(templates[i].URITemplate),
+		})
+	}
+	return out
 }
 
 func interactiveNotificationPoster(stdout io.Writer) codextea.NotificationPostFunc {
@@ -727,6 +833,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		HideRateLimitModelNudge: interactiveHideRateLimitModelNudgeFromConfig(values),
 		TUITheme:                interactiveTUIStringFromConfig(values, "theme"),
 		TUIPet:                  interactiveTUIStringFromConfig(values, "pet"),
+		SessionPickerView:       interactiveTUIStringFromConfig(values, "session_picker_view"),
 	}
 }
 
@@ -736,6 +843,30 @@ func interactiveConfigService(root *cli.RootOptions) *config.ConfigService {
 		service.SetProfile(root.Shared.Profile)
 	}
 	return service
+}
+
+func interactiveSkillsReader(root *cli.RootOptions) codextea.SkillsListReaderFunc {
+	codexHome := auth.DefaultCodexHome()
+	service := appserver.NewSkillsServiceWithOptions(&appserver.SkillsServiceOptions{
+		Config:              interactiveConfigService(root),
+		CodexHome:           codexHome,
+		IncludeDefaultRoots: true,
+	})
+	return func(cwd string) (appserver.SkillsListResponse, error) {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			cwd = interactiveSessionPickerCWD(root)
+		}
+		params := &appserver.SkillsListParams{}
+		if cwd != "" {
+			params.CWDs = []string{cwd}
+		}
+		response, err := service.List(params)
+		if err != nil || response == nil {
+			return appserver.SkillsListResponse{}, err
+		}
+		return *response, nil
+	}
 }
 
 func interactiveDebugConfigReader(root *cli.RootOptions) codextea.DebugConfigReaderFunc {
@@ -1158,6 +1289,28 @@ func interactiveSessionActionHandler(root *cli.RootOptions) codextea.SessionActi
 	}
 }
 
+func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {
+	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
+		store := newSessionStore()
+		threadID := session.ThreadID(strings.TrimSpace(selection.Target.ThreadID))
+		if threadID == "" {
+			return codextea.SessionResumeResponse{}, errors.New("resume requires a thread id")
+		}
+		record, err := store.Read(threadID, true, true)
+		if err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
+		if interactiveRepairImageGenerationItems(record, auth.DefaultCodexHome()) {
+			_ = store.Save(record)
+		}
+		return codextea.SessionResumeResponse{
+			Summary:  firstSessionSummary(store, record),
+			Messages: interactiveSessionMessagesFromRecord(record),
+			Status:   "idle",
+		}, nil
+	}
+}
+
 func firstSessionSummary(store *session.Store, record *session.Record) *codextui.SessionSummary {
 	if record == nil {
 		return nil
@@ -1169,11 +1322,260 @@ func firstSessionSummary(store *session.Store, record *session.Record) *codextui
 	return &summaries[0]
 }
 
-func interactiveSessionPickerCWD(root *cli.RootOptions) string {
-	if root == nil {
+func interactiveSessionMessagesFromRecord(record *session.Record) []codextui.Message {
+	if record == nil {
+		return nil
+	}
+	messages := make([]codextui.Message, 0, len(record.Items))
+	for i := range record.Items {
+		if interactiveSessionItemIsHiddenContextInstruction(record.Items[i]) {
+			continue
+		}
+		message, ok := interactiveSessionMessageFromItem(record.Items[i])
+		if ok {
+			messages = append(messages, message)
+		}
+	}
+	return messages
+}
+
+func interactiveSessionItemIsHiddenContextInstruction(item session.Item) bool {
+	kind := firstNonEmptyLocal(
+		interactiveSessionItemDataString(item, "kind"),
+		remoteTUIAnyString(item.Metadata["kind"]),
+	)
+	if kind == "skill_instructions" || kind == "image_generation_instructions" {
+		return true
+	}
+	id := strings.TrimSpace(item.ID)
+	if strings.HasPrefix(id, "skill-instructions-") || strings.HasPrefix(id, "image-generation-instructions-") {
+		return true
+	}
+	return false
+}
+
+func interactiveSessionMessageFromItem(item session.Item) (codextui.Message, bool) {
+	itemType := normalizeInteractiveSessionItemType(item.Type)
+	role := normalizeInteractiveSessionItemRole(item.Role)
+	switch {
+	case itemType == "usermessage" || role == "user":
+		text := interactiveSessionItemUserText(item)
+		return codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text}, strings.TrimSpace(text) != ""
+	case itemType == "imagegeneration" || itemType == "imagegenerationcall":
+		text := interactiveSessionItemImageGenerationText(item)
+		if text == "" {
+			return codextui.Message{}, false
+		}
+		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
+	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
+		text := strings.TrimSpace(item.Text)
+		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, text != ""
+	case itemType == "plan":
+		text := strings.TrimSpace(item.Text)
+		if text == "" {
+			return codextui.Message{}, false
+		}
+		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, true
+	case itemType == "reasoning":
+		text := interactiveSessionItemReasoningText(item)
+		if text == "" {
+			return codextui.Message{}, false
+		}
+		return codextui.Message{Role: codextui.RoleHistory, Text: "Reasoning\n" + text, RawText: text}, true
+	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity" || strings.Contains(itemType, "tool"):
+		text := interactiveSessionItemToolText(item)
+		if text == "" {
+			return codextui.Message{}, false
+		}
+		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
+	case role == "system":
+		text := strings.TrimSpace(item.Text)
+		return codextui.Message{Role: codextui.RoleSystem, Text: text, RawText: text}, text != ""
+	default:
+		text := strings.TrimSpace(firstNonEmptyLocal(item.Text, interactiveSessionItemDataString(item, "text", "output", "input")))
+		if text == "" {
+			return codextui.Message{}, false
+		}
+		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
+	}
+}
+
+func normalizeInteractiveSessionItemType(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "_", "")
+	value = strings.ReplaceAll(value, "-", "")
+	return strings.ToLower(value)
+}
+
+func normalizeInteractiveSessionItemRole(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func interactiveRepairImageGenerationItems(record *session.Record, codexHome string) bool {
+	if record == nil {
+		return false
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	changed := false
+	threadID := string(record.ID)
+	for i := range record.Items {
+		item := &record.Items[i]
+		itemType := normalizeInteractiveSessionItemType(item.Type)
+		if itemType != "imagegeneration" && itemType != "imagegenerationcall" {
+			continue
+		}
+		if item.Data == nil {
+			item.Data = map[string]any{}
+		}
+		result := firstNonEmptyLocal(
+			interactiveSessionItemDataString(*item, "result"),
+			strings.TrimSpace(item.Text),
+		)
+		status := modelpkg.NormalizeImageGenerationStatus(firstNonEmptyLocal(strings.TrimSpace(item.Status), interactiveSessionItemDataString(*item, "status")), result)
+		revisedPrompt := firstNonEmptyLocal(
+			interactiveSessionItemDataString(*item, "revisedPrompt", "revised_prompt"),
+			remoteTUIAnyString(item.Metadata["revisedPrompt"]),
+			remoteTUIAnyString(item.Metadata["revised_prompt"]),
+		)
+		itemID := strings.TrimSpace(item.ID)
+		if itemID == "" {
+			itemID = "image-generation-" + strings.TrimSpace(threadID)
+			item.ID = itemID
+			changed = true
+		}
+		if saved := interactiveSessionItemDataString(*item, "savedPath", "saved_path"); saved == "" && codexHome != "" && result != "" {
+			if path, err := eventmap.SaveImageGenerationResult(codexHome, threadID, itemID, result); err == nil {
+				item.Data["savedPath"] = path
+				item.Data["saved_path"] = path
+				changed = true
+			}
+		}
+		if item.Type != "imageGeneration" {
+			item.Type = "imageGeneration"
+			changed = true
+		}
+		if item.Role != "" {
+			item.Role = ""
+			changed = true
+		}
+		if item.Status != status {
+			item.Status = status
+			changed = true
+		}
+		if result != "" {
+			item.Data["result"] = result
+		}
+		if revisedPrompt != "" {
+			item.Data["revisedPrompt"] = revisedPrompt
+			item.Data["revised_prompt"] = revisedPrompt
+			if item.Text != revisedPrompt {
+				item.Text = revisedPrompt
+				changed = true
+			}
+			if len(item.Content) != 0 {
+				item.Content = nil
+				changed = true
+			}
+		} else if result != "" && item.Text == result {
+			item.Text = ""
+			changed = true
+			if len(item.Content) != 0 {
+				item.Content = nil
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func interactiveSessionItemUserText(item session.Item) string {
+	parts := []string{}
+	if strings.TrimSpace(item.Text) != "" {
+		parts = append(parts, strings.TrimSpace(item.Text))
+	}
+	for _, content := range item.Content {
+		if strings.TrimSpace(content.Text) != "" {
+			parts = append(parts, strings.TrimSpace(content.Text))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func interactiveSessionItemReasoningText(item session.Item) string {
+	parts := []string{}
+	for _, key := range []string{"summary", "reasoningContent", "content"} {
+		parts = append(parts, remoteTUIAnyStrings(item.Data[key])...)
+	}
+	if strings.TrimSpace(item.Text) != "" {
+		parts = append(parts, strings.TrimSpace(item.Text))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func interactiveSessionItemToolText(item session.Item) string {
+	title := firstNonEmptyLocal(
+		interactiveSessionItemDataString(item, "command", "cmd", "tool", "name"),
+		strings.TrimSpace(item.Name),
+		strings.TrimSpace(item.Type),
+		"tool",
+	)
+	lines := []string{title}
+	if status := firstNonEmptyLocal(strings.TrimSpace(item.Status), interactiveSessionItemDataString(item, "status")); status != "" {
+		lines = append(lines, "status: "+status)
+	}
+	for _, key := range []string{"arguments", "input", "output", "aggregatedOutput", "formattedOutput", "result"} {
+		if value := interactiveSessionItemDataString(item, key); value != "" {
+			lines = append(lines, value)
+			break
+		}
+	}
+	if strings.TrimSpace(item.Text) != "" {
+		lines = append(lines, strings.TrimSpace(item.Text))
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func interactiveSessionItemImageGenerationText(item session.Item) string {
+	result := interactiveSessionItemDataString(item, "result")
+	text := strings.TrimSpace(item.Text)
+	if result != "" && text == result {
+		text = ""
+	}
+	detail := firstNonEmptyLocal(
+		interactiveSessionItemDataString(item, "revisedPrompt", "revised_prompt"),
+		text,
+		strings.TrimSpace(item.ID),
+	)
+	if detail == "" {
 		return ""
 	}
-	return strings.TrimSpace(root.Shared.CWD)
+	lines := []string{"Generated Image", detail}
+	if saved := interactiveSessionItemDataString(item, "savedPath", "saved_path"); saved != "" {
+		lines = append(lines, "Saved to: "+saved)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func interactiveSessionItemDataString(item session.Item, keys ...string) string {
+	for _, key := range keys {
+		if value := remoteTUIAnyString(item.Data[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func interactiveSessionPickerCWD(root *cli.RootOptions) string {
+	if root != nil {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			return cwd
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cwd)
 }
 
 func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, prompt string, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) bubbletea.Cmd {
@@ -1245,14 +1647,24 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}
 	inputs := interactiveSubmitInputs(request)
 	prompt := strings.TrimSpace(request.Prompt)
-	if len(inputs) > 0 && prompt != "" {
-		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
-		prompt = ""
-	}
 	turnRoot := *root
 	turnRoot.Shared = interactiveSharedOptionsFromState(turnRoot.Shared, state)
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
+	}
+	additionalInstructions := ""
+	var additionalInputItems []any
+	if _, ok := runner.(*codexexec.Runner); ok {
+		var skillErr error
+		additionalInstructions, additionalInputItems, skillErr = interactiveLocalSkillContextForRequest(root, request, inputs, turnRoot.Shared.CWD)
+		if skillErr != nil {
+			send(codextea.TurnCompletedMsg{Err: skillErr})
+			return
+		}
+	}
+	if len(inputs) > 0 && prompt != "" {
+		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
+		prompt = ""
 	}
 	execOpts := cli.ExecOptions{
 		Prompt: strings.TrimSpace(prompt),
@@ -1270,9 +1682,11 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}
 	streamWriter := newInteractiveStreamEventWriter(send)
 	result, err := runner.RunContext(ctx, &codexexec.Request{
-		Root:  turnRoot,
-		Exec:  execOpts,
-		Input: inputs,
+		Root:                   turnRoot,
+		Exec:                   execOpts,
+		Input:                  inputs,
+		AdditionalInstructions: additionalInstructions,
+		AdditionalInputItems:   additionalInputItems,
 	}, strings.NewReader(""), streamWriter, io.Discard)
 	streamWriter.Flush()
 	if err != nil {
@@ -1286,16 +1700,15 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	msg := codextea.TurnCompletedMsg{}
 	if result != nil {
 		msg.ThreadID = result.ThreadID
-		msg.AssistantMessage = result.LastMessage
+		if !streamWriter.SawAssistantOutput() {
+			msg.AssistantMessage = result.LastMessage
+		}
 	}
 	send(msg)
 }
 
 func interactiveSubmitInputs(request codextea.SubmitRequest) []turn.TurnUserInput {
-	if len(request.Attachments) == 0 {
-		return nil
-	}
-	inputs := make([]turn.TurnUserInput, 0, len(request.Attachments))
+	inputs := make([]turn.TurnUserInput, 0, len(request.Attachments)+len(request.MentionBindings))
 	for _, attachment := range request.Attachments {
 		switch attachment.Kind {
 		case bottompane.AttachmentImage:
@@ -1312,13 +1725,154 @@ func interactiveSubmitInputs(request codextea.SubmitRequest) []turn.TurnUserInpu
 			}
 		}
 	}
+	for _, input := range interactiveSkillInputs(request) {
+		inputs = append(inputs, input)
+	}
 	return inputs
 }
 
+func interactiveSkillInputs(request codextea.SubmitRequest) []turn.TurnUserInput {
+	message := chatwidget.UserMessage{
+		Text:            strings.TrimSpace(request.Prompt),
+		MentionBindings: append([]string(nil), request.MentionBindings...),
+	}
+	decision := chatwidget.DecideUserMessageSubmission(message, chatwidget.UserMessageTextHistoryRecord(), chatwidget.SubmissionOptions{
+		SessionConfigured:     true,
+		CurrentModelHasImages: true,
+		MentionCatalog:        request.MentionCatalog,
+	})
+	inputs := make([]turn.TurnUserInput, 0)
+	for _, item := range decision.Items {
+		if item.Kind != chatwidget.SubmittedInputSkill {
+			continue
+		}
+		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Path) == "" {
+			continue
+		}
+		inputs = append(inputs, turn.TurnUserInput{
+			Type: "skill",
+			Name: strings.TrimSpace(item.Name),
+			Path: strings.TrimSpace(item.Path),
+		})
+	}
+	return inputs
+}
+
+func interactiveLocalSkillContextForRequest(root *cli.RootOptions, request codextea.SubmitRequest, inputs []turn.TurnUserInput, cwd string) (string, []any, error) {
+	codexHome := auth.DefaultCodexHome()
+	service := appserver.NewSkillsServiceWithOptions(&appserver.SkillsServiceOptions{
+		Config:              interactiveConfigService(root),
+		CodexHome:           codexHome,
+		IncludeDefaultRoots: true,
+	})
+	params := &appserver.SkillsListParams{}
+	if strings.TrimSpace(cwd) != "" {
+		params.CWDs = []string{strings.TrimSpace(cwd)}
+	}
+	response, err := service.List(params)
+	if err != nil || response == nil {
+		return "", nil, err
+	}
+	skills := interactivePromptSkillMetadataFromEntries(response.Skills)
+	available := promptctx.RenderAvailableSkills(skills, promptctx.DefaultSkillMetadataBudget(0))
+	instructions := ""
+	if available != nil {
+		instructions = strings.TrimSpace(available.Body)
+	}
+	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
+		Inputs: interactiveSkillMentionInputs(request, inputs),
+		Skills: skills,
+	})
+	inputItems := make([]any, 0, len(selected))
+	for _, skill := range selected {
+		if item := interactiveSkillInstructionsInputItem(skill); item != nil {
+			inputItems = append(inputItems, item)
+		}
+	}
+	return instructions, inputItems, nil
+}
+
+func interactiveSkillMentionInputs(request codextea.SubmitRequest, inputs []turn.TurnUserInput) []promptctx.SkillMentionInput {
+	out := make([]promptctx.SkillMentionInput, 0, len(inputs)+1)
+	if prompt := strings.TrimSpace(request.Prompt); prompt != "" {
+		out = append(out, promptctx.SkillMentionInput{Type: "text", Text: prompt})
+	}
+	for _, input := range inputs {
+		out = append(out, promptctx.SkillMentionInput{
+			Type: input.Type,
+			Text: input.Text,
+			Name: input.Name,
+			Path: input.Path,
+		})
+	}
+	return out
+}
+
+func interactivePromptSkillMetadataFromEntries(entries []appserver.SkillsListEntry) []promptctx.InstructionsSkillMetadata {
+	out := make([]promptctx.InstructionsSkillMetadata, 0, len(entries))
+	var walk func([]appserver.SkillsListEntry)
+	walk = func(values []appserver.SkillsListEntry) {
+		for _, entry := range values {
+			if len(entry.Skills) > 0 {
+				walk(entry.Skills)
+				continue
+			}
+			if !entry.Enabled || strings.TrimSpace(entry.Name) == "" {
+				continue
+			}
+			description := firstNonEmptyLocal(entry.ShortDescription, entry.Description)
+			var allowImplicit *bool
+			if entry.Policy != nil && entry.Policy.AllowImplicitInvocation != nil {
+				value := *entry.Policy.AllowImplicitInvocation
+				allowImplicit = &value
+			}
+			out = append(out, promptctx.InstructionsSkillMetadata{
+				Name:                    strings.TrimSpace(entry.Name),
+				Scope:                   strings.TrimSpace(entry.Scope),
+				Path:                    strings.TrimSpace(entry.Path),
+				Description:             strings.TrimSpace(description),
+				PluginID:                strings.TrimSpace(entry.PluginID),
+				Contents:                entry.Contents,
+				AllowImplicitInvocation: allowImplicit,
+			})
+		}
+	}
+	walk(entries)
+	return out
+}
+
+func interactiveSkillInstructionsInputItem(skill promptctx.InstructionsSkillMetadata) any {
+	contents := skill.Contents
+	if strings.TrimSpace(contents) == "" {
+		data, err := os.ReadFile(skill.Path)
+		if err != nil || strings.TrimSpace(string(data)) == "" {
+			return nil
+		}
+		contents = string(data)
+	}
+	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(skill.Name, skill.Path, contents))
+	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+		return nil
+	}
+	role := strings.TrimSpace(rendered.Role)
+	if role == "" {
+		role = contextfrag.RoleUser
+	}
+	return map[string]any{
+		"type": "message",
+		"role": role,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+	}
+}
+
 type interactiveStreamEventWriter struct {
-	mu     sync.Mutex
-	buffer []byte
-	send   func(bubbletea.Msg)
+	mu                 sync.Mutex
+	buffer             []byte
+	send               func(bubbletea.Msg)
+	sawAssistantOutput bool
 }
 
 func newInteractiveStreamEventWriter(send func(bubbletea.Msg)) *interactiveStreamEventWriter {
@@ -1355,6 +1909,15 @@ func (w *interactiveStreamEventWriter) Flush() {
 	w.emitLine(line)
 }
 
+func (w *interactiveStreamEventWriter) SawAssistantOutput() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.sawAssistantOutput
+}
+
 func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 	if len(line) == 0 || w.send == nil {
 		return
@@ -1364,7 +1927,21 @@ func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 		w.send(codextea.ThreadEventMsg{Event: protocol.ErrorEvent("failed to parse stream event: " + err.Error())})
 		return
 	}
+	if interactiveThreadEventHasAssistantOutput(event) {
+		w.sawAssistantOutput = true
+	}
 	w.send(codextea.ThreadEventMsg{Event: event})
+}
+
+func interactiveThreadEventHasAssistantOutput(event protocol.ThreadEvent) bool {
+	switch event.Type {
+	case "item.delta":
+		return event.Delta != nil && strings.TrimSpace(event.Delta.Text) != ""
+	case "item.completed":
+		return event.Item != nil && event.Item.Type == "agent_message" && strings.TrimSpace(event.Item.Text) != ""
+	default:
+		return false
+	}
 }
 
 func interactiveSharedOptionsFromState(base cli.SharedOptions, state *codextui.State) cli.SharedOptions {
@@ -1375,23 +1952,48 @@ func interactiveSharedOptionsFromState(base cli.SharedOptions, state *codextui.S
 	base.ModelReasoningEffort = state.EffectiveReasoningEffort()
 	base.ApprovalPolicy = state.ApprovalPolicy
 	base.Sandbox = state.Sandbox
+	if cwd := strings.TrimSpace(state.CWD); cwd != "" {
+		base.CWD = cwd
+	}
 	base.Search = state.Search
 	base.NoAltScreen = state.NoAltScreen
 	return base
 }
 
 func interactiveUIState(root *cli.RootOptions) *codextui.State {
-	if root == nil {
-		return codextui.NewState(nil)
+	options := &codextui.Options{}
+	if root != nil {
+		options.Model = strings.TrimSpace(root.Shared.Model)
+		options.ReasoningEffort = strings.TrimSpace(root.Shared.ModelReasoningEffort)
+		options.ApprovalPolicy = strings.TrimSpace(root.Shared.ApprovalPolicy)
+		options.Sandbox = strings.TrimSpace(root.Shared.Sandbox)
+		options.Search = root.Shared.Search
+		options.NoAltScreen = root.Shared.NoAltScreen
 	}
-	return codextui.NewState(&codextui.Options{
-		Model:           root.Shared.Model,
-		ReasoningEffort: root.Shared.ModelReasoningEffort,
-		ApprovalPolicy:  root.Shared.ApprovalPolicy,
-		Sandbox:         root.Shared.Sandbox,
-		Search:          root.Shared.Search,
-		NoAltScreen:     root.Shared.NoAltScreen,
-	})
+	if loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root)); err == nil && loaded != nil {
+		values := loaded.Values
+		options.Model = firstNonEmptyLocal(options.Model, interactiveStringFromConfig(values, "model"))
+		options.ReasoningEffort = firstNonEmptyLocal(options.ReasoningEffort, interactiveStringFromConfig(values, "model_reasoning_effort"))
+		options.Provider = firstNonEmptyLocal(options.Provider, interactiveStringFromConfig(values, "model_provider"))
+		options.ApprovalPolicy = firstNonEmptyLocal(options.ApprovalPolicy, interactiveStringFromConfig(values, "approval_policy"))
+		options.Sandbox = firstNonEmptyLocal(options.Sandbox, interactiveStringFromConfig(values, "sandbox_mode"))
+	}
+	options.Model = firstNonEmptyLocal(options.Model, interactiveDefaultModel())
+	options.CWD = interactiveSessionPickerCWD(root)
+	return codextui.NewState(options)
+}
+
+func interactiveStringFromConfig(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func interactiveDefaultModel() string {
+	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	return strings.TrimSpace(manager.GetDefaultModel("", true, modelpkg.RefreshOffline))
 }
 
 func interactiveFatalExit(stderr io.Writer, message string) error {

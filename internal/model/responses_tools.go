@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -47,6 +48,106 @@ func ResponsesToolsFromSpecs(specs []tool.Spec) []any {
 	return tools
 }
 
+func ResponsesLoadableToolsFromSpecs(specs []tool.Spec) []any {
+	tools := make([]any, 0, len(specs))
+	namespaceIndexes := map[string]int{}
+	for i := range specs {
+		spec := specs[i]
+		if spec.Exposure == tool.ExposureHidden {
+			continue
+		}
+		namespace := strings.TrimSpace(spec.Name.Namespace)
+		if namespace != "" {
+			child := responsesLoadableNamespacedFunctionTool(&spec)
+			if child == nil {
+				continue
+			}
+			if index, ok := namespaceIndexes[namespace]; ok {
+				if existing, ok := tools[index].(map[string]any); ok {
+					children, _ := existing["tools"].([]map[string]any)
+					existing["tools"] = append(children, child)
+				}
+				continue
+			}
+			description := strings.TrimSpace(spec.NamespaceDescription)
+			if description == "" {
+				description = "Tools in the " + namespace + " namespace."
+			}
+			namespaceIndexes[namespace] = len(tools)
+			tools = append(tools, map[string]any{
+				"type":        "namespace",
+				"name":        namespace,
+				"description": description,
+				"tools":       []map[string]any{child},
+			})
+			continue
+		}
+		if item, ok := responsesLoadableToolFromSpec(&spec); ok {
+			tools = append(tools, item)
+		}
+	}
+	return tools
+}
+
+func ResponsesLoadableToolsFromValue(value any) ([]any, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, false
+	case []tool.Spec:
+		return ResponsesLoadableToolsFromSpecs(typed), true
+	case []any:
+		specs := make([]tool.Spec, 0, len(typed))
+		for i := range typed {
+			switch item := typed[i].(type) {
+			case tool.Spec:
+				specs = append(specs, item)
+			case *tool.Spec:
+				if item == nil {
+					return cloneAnySlice(typed), false
+				}
+				specs = append(specs, *item)
+			default:
+				if loadableToolsHaveResponsesType(typed) {
+					return cloneAnySlice(typed), true
+				}
+				if specs, ok := toolSpecsFromJSONValue(typed); ok {
+					return ResponsesLoadableToolsFromSpecs(specs), true
+				}
+				return cloneAnySlice(typed), false
+			}
+		}
+		return ResponsesLoadableToolsFromSpecs(specs), true
+	default:
+		if specs, ok := toolSpecsFromJSONValue(value); ok {
+			return ResponsesLoadableToolsFromSpecs(specs), true
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, false
+		}
+		var tools []any
+		if err := json.Unmarshal(data, &tools); err != nil {
+			return nil, false
+		}
+		if loadableToolsHaveResponsesType(tools) {
+			return tools, true
+		}
+		return tools, false
+	}
+}
+
+func toolSpecsFromJSONValue(value any) ([]tool.Spec, bool) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var specs []tool.Spec
+	if err := json.Unmarshal(data, &specs); err != nil || !toolSpecsHaveNames(specs) {
+		return nil, false
+	}
+	return specs, true
+}
+
 func responsesToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Exposure == tool.ExposureDiscoverable {
 		return nil, false
@@ -84,6 +185,17 @@ func responsesToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 	}, true
 }
 
+func responsesLoadableToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
+	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Freeform != nil {
+		return nil, false
+	}
+	name := tool.ResponsesAPIName(spec.Name)
+	if name == "" || name == tool.ToolSearchName {
+		return nil, false
+	}
+	return responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema), true
+}
+
 func isResponsesNamespaceTool(spec *tool.Spec) bool {
 	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Exposure == tool.ExposureDiscoverable {
 		return false
@@ -92,6 +204,9 @@ func isResponsesNamespaceTool(spec *tool.Spec) bool {
 		return false
 	}
 	if spec.Name.Namespace == "web" && spec.Name.Name == "run" {
+		return true
+	}
+	if spec.Name.Namespace == "image_gen" && spec.Name.Name == "imagegen" {
 		return true
 	}
 	if spec.Name.Namespace == "clock" {
@@ -106,6 +221,28 @@ func responsesNamespacedFunctionTool(spec *tool.Spec) map[string]any {
 		"name":        strings.TrimSpace(spec.Name.Name),
 		"description": spec.Description,
 		"parameters":  responsesInputSchema(spec.InputSchema),
+	}
+}
+
+func responsesLoadableNamespacedFunctionTool(spec *tool.Spec) map[string]any {
+	if spec == nil || spec.Freeform != nil {
+		return nil
+	}
+	name := strings.TrimSpace(spec.Name.Name)
+	if name == "" || name == tool.ToolSearchName {
+		return nil
+	}
+	return responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema)
+}
+
+func responsesLoadableFunctionTool(name string, description string, schema map[string]any) map[string]any {
+	return map[string]any{
+		"type":          "function",
+		"name":          strings.TrimSpace(name),
+		"description":   description,
+		"strict":        false,
+		"defer_loading": true,
+		"parameters":    responsesInputSchema(schema),
 	}
 }
 
@@ -149,4 +286,39 @@ func cloneAny(value any) any {
 	default:
 		return typed
 	}
+}
+
+func loadableToolsHaveResponsesType(values []any) bool {
+	if len(values) == 0 {
+		return true
+	}
+	for _, value := range values {
+		item, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		if strings.TrimSpace(responseToolString(item["type"])) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func toolSpecsHaveNames(specs []tool.Spec) bool {
+	if len(specs) == 0 {
+		return false
+	}
+	for i := range specs {
+		if strings.TrimSpace(specs[i].Name.Name) == "" && strings.TrimSpace(specs[i].Name.Namespace) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func responseToolString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }

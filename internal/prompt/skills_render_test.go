@@ -23,7 +23,20 @@ func TestRenderAvailableSkillsOrdersAndFilters(t *testing.T) {
 	if len(available.SkillLines) != 2 || !strings.Contains(available.SkillLines[0], "repo-skill") || !strings.Contains(available.SkillLines[1], "user-skill") {
 		t.Fatalf("SkillLines = %#v", available.SkillLines)
 	}
-	if strings.Contains(available.Body, "hidden-skill") || !strings.Contains(available.Body, "## Skills") {
+	for _, want := range []string{
+		SkillsInstructionsOpenTag,
+		"## Skills",
+		SkillsIntroWithAbsolutePaths,
+		"### Available skills",
+		"### How to use skills",
+		"After deciding to use a skill, the main agent must read its `SKILL.md` completely",
+		SkillsInstructionsCloseTag,
+	} {
+		if !strings.Contains(available.Body, want) {
+			t.Fatalf("Body missing %q in:\n%s", want, available.Body)
+		}
+	}
+	if strings.Contains(available.Body, "hidden-skill") {
 		t.Fatalf("Body = %q", available.Body)
 	}
 }

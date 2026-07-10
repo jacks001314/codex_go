@@ -370,6 +370,9 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	cwd := ""
 	if m != nil {
 		cwd = strings.TrimSpace(m.sessionCWD)
+		if cwd == "" && m.State != nil {
+			cwd = strings.TrimSpace(m.State.CWD)
+		}
 	}
 	if cwd == "" {
 		cwd, _ = os.Getwd()

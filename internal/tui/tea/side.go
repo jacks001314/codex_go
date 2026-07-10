@@ -259,7 +259,7 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 	}
 	m.State.SetThreadID(sideThreadID)
 	m.State.Messages = nil
-	m.State.SetStatus("idle")
+	m.setStatus("idle")
 	m.composer.Placeholder = "Ask Codex in side conversation"
 	m.notice = m.sideContextLabel()
 	m.refreshTranscript()
@@ -316,9 +316,9 @@ func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, n
 	m.State.SetThreadID(side.ParentThreadID)
 	m.State.Messages = cloneSideMessages(side.ParentMessages)
 	if strings.TrimSpace(side.ParentStatus) != "" {
-		m.State.SetStatus(side.ParentStatus)
+		m.setStatus(side.ParentStatus)
 	} else {
-		m.State.SetStatus("idle")
+		m.setStatus("idle")
 	}
 	if strings.TrimSpace(side.ParentPlaceholder) != "" {
 		m.composer.Placeholder = side.ParentPlaceholder

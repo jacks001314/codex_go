@@ -15,6 +15,7 @@ type RuntimeOptions struct {
 	Router       *tool.Router
 	Hooks        tool.HookRunner
 	SteerMailbox *SteerMailbox
+	HostedTools  []any
 	Now          func() time.Time
 	MaxTurns     int
 }
@@ -24,6 +25,7 @@ type Runtime struct {
 	router       *tool.Router
 	hooks        tool.HookRunner
 	steerMailbox *SteerMailbox
+	hostedTools  []any
 	now          func() time.Time
 	maxTurns     int
 }
@@ -41,6 +43,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		router:       options.Router,
 		hooks:        options.Hooks,
 		steerMailbox: options.SteerMailbox,
+		hostedTools:  append([]any(nil), options.HostedTools...),
 		now:          now,
 		maxTurns:     options.MaxTurns,
 	}
@@ -74,7 +77,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Prompt:               request.Prompt,
 			Instructions:         request.Instructions,
 			InputItems:           inputItems,
-			Tools:                append([]any(nil), request.Tools...),
+			Tools:                MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools),
 			Model:                request.Model,
 			ProviderID:           request.ProviderID,
 			TaskKind:             request.TaskKind,
@@ -127,6 +130,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	if len(loopRequest.Tools) == 0 {
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(r.router.ModelVisibleSpecs())
 	}
+	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:        r.agent,
 		SteerMailbox: r.steerMailbox,

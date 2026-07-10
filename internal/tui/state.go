@@ -29,6 +29,7 @@ type Options struct {
 	Provider                string
 	ApprovalPolicy          string
 	Sandbox                 string
+	CWD                     string
 	Search                  bool
 	NoAltScreen             bool
 }
@@ -43,6 +44,7 @@ type State struct {
 	Provider                string
 	ApprovalPolicy          string
 	Sandbox                 string
+	CWD                     string
 	Search                  bool
 	NoAltScreen             bool
 	Status                  string
@@ -62,6 +64,7 @@ func NewState(options *Options) *State {
 		state.Provider = strings.TrimSpace(options.Provider)
 		state.ApprovalPolicy = strings.TrimSpace(options.ApprovalPolicy)
 		state.Sandbox = strings.TrimSpace(options.Sandbox)
+		state.CWD = strings.TrimSpace(options.CWD)
 		state.Search = options.Search
 		state.NoAltScreen = options.NoAltScreen
 	}
@@ -119,9 +122,14 @@ func (s *State) ResetThread() {
 
 func (s *State) RenderWelcome() string {
 	var builder strings.Builder
-	builder.WriteString("Codex interactive session\n")
+	builder.WriteString("OpenAI Codex\n")
 	builder.WriteString(s.RenderStatusLine())
 	builder.WriteString("\n")
+	if cwd := strings.TrimSpace(s.CWD); cwd != "" {
+		builder.WriteString("Directory: ")
+		builder.WriteString(cwd)
+		builder.WriteString("\n")
+	}
 	builder.WriteString("Type /help for commands or /exit to quit.\n")
 	return builder.String()
 }

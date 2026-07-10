@@ -25,6 +25,7 @@ import (
 	chatwidget "codex_go/internal/tui/chatwidget"
 	execcell "codex_go/internal/tui/exec_cell"
 	historycell "codex_go/internal/tui/history_cell"
+	"codex_go/internal/tui/markdown"
 )
 
 const (
@@ -41,8 +42,10 @@ const (
 type SubmitFunc func(prompt string) bubbletea.Cmd
 
 type SubmitRequest struct {
-	Prompt      string
-	Attachments []bottompane.ComposerAttachment
+	Prompt          string
+	Attachments     []bottompane.ComposerAttachment
+	MentionBindings []string
+	MentionCatalog  chatwidget.SubmissionMentionCatalog
 }
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
@@ -64,6 +67,14 @@ type queuedSubmission struct {
 }
 
 type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.SessionSummary, error)
+
+type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
+
+type SessionResumeResponse struct {
+	Summary  *codextui.SessionSummary
+	Messages []codextui.Message
+	Status   string
+}
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
 
@@ -112,6 +123,7 @@ type SettingsWriteResult struct {
 	HideRateLimitModelNudge *bool
 	TUITheme                string
 	TUIPet                  string
+	SessionPickerView       string
 	FilePath                string
 }
 
@@ -298,6 +310,12 @@ type SkillsListResultMsg struct {
 	Err      error
 }
 
+type SkillsInventoryResultMsg struct {
+	CWD      string
+	Response appserver.SkillsListResponse
+	Err      error
+}
+
 type StreamStartedMsg struct {
 	Messages <-chan bubbletea.Msg
 }
@@ -316,6 +334,9 @@ type Options struct {
 	ModelPickerOptions            []codextui.ModelPickerOption
 	SessionPickerItems            []codextui.SessionSummary
 	SessionPickerCWD              string
+	SessionPickerView             string
+	ShowSessionHeader             bool
+	SessionHeaderVersion          string
 	OnSubmit                      SubmitFunc
 	OnSubmitRequest               SubmitRequestFunc
 	OnInterrupt                   InterruptFunc
@@ -324,6 +345,7 @@ type Options struct {
 	OnKeymapEdit                  KeymapEditFunc
 	OnModalResponse               ModalResponseFunc
 	OnSessionAction               SessionActionFunc
+	OnResumeSession               SessionResumeFunc
 	OnReadAgents                  AgentThreadReaderFunc
 	OnSwitchAgent                 AgentThreadSwitchFunc
 	OnClipboardWrite              func(text string) error
@@ -399,10 +421,17 @@ type Model struct {
 	notice                           string
 	bottom                           []string
 	attachments                      []bottompane.ComposerAttachment
+	composerMentionBindings          []string
 	modal                            *modalState
+	skillPopup                       skillPopupState
 	modelPickerOpts                  []codextui.ModelPickerOption
 	sessionItems                     []codextui.SessionSummary
 	sessionCWD                       string
+	sessionPickerDensity             codextui.SessionListDensity
+	skillsInventory                  *appserver.SkillsListResponse
+	skillsInventoryCWD               string
+	skillsInventoryErr               string
+	skillsInventoryLoading           bool
 	agentItems                       []codextui.AgentThreadEntry
 	activeAgentLabel                 string
 	backgroundProcesses              []historycell.UnifiedExecProcessDetails
@@ -420,6 +449,7 @@ type Model struct {
 	onKeymapEdit                     KeymapEditFunc
 	onModalResponse                  ModalResponseFunc
 	onSessionAction                  SessionActionFunc
+	onResumeSession                  SessionResumeFunc
 	onReadAgents                     AgentThreadReaderFunc
 	onSwitchAgent                    AgentThreadSwitchFunc
 	clipboardWrite                   func(text string) error
@@ -487,6 +517,7 @@ type Model struct {
 	toolCalls                        map[string]*toolCallDisplayState
 	startedThreadIDs                 map[string]bool
 	completedThreadIDs               map[string]bool
+	taskStartedAt                    time.Time
 
 	composerPasteEnterUntil *time.Time
 	now                     func() time.Time
@@ -535,6 +566,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		modelPickerOpts:                append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
 		sessionItems:                   append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                     strings.TrimSpace(options.SessionPickerCWD),
+		sessionPickerDensity:           normalizeSessionPickerDensityTea(options.SessionPickerView),
 		backgroundProcesses:            cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
 		mcpServers:                     cloneMcpServerStatuses(options.MCPServers),
 		featureSettings:                cloneBoolMapTea(options.FeatureSettings),
@@ -549,6 +581,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onKeymapEdit:                   options.OnKeymapEdit,
 		onModalResponse:                options.OnModalResponse,
 		onSessionAction:                options.OnSessionAction,
+		onResumeSession:                options.OnResumeSession,
 		onReadAgents:                   options.OnReadAgents,
 		onSwitchAgent:                  options.OnSwitchAgent,
 		clipboardWrite:                 clipboardWrite,
@@ -597,6 +630,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if strings.TrimSpace(state.Personality) == "" && strings.TrimSpace(string(options.Personality)) != "" {
 		state.Personality = string(model.personality)
 	}
+	model.syncTaskRunningTimer()
 	model.statusControls = chatwidget.NewStatusControlsState(model.statusControlsRuntime())
 	if options.StatusLineItems != nil {
 		model.statusControls.StatusLineConfigured = true
@@ -607,6 +641,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		model.statusControls.TerminalTitleIDs = append([]string(nil), options.TerminalTitleItems...)
 	}
 	model.resize(firstPositive(options.Width, defaultWidth), firstPositive(options.Height, defaultHeight))
+	if options.ShowSessionHeader {
+		model.addStartupSessionHeader(options.SessionHeaderVersion)
+	}
 	model.refreshTranscript()
 	return model
 }
@@ -663,11 +700,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case StatusMsg:
 		if warning, ok := warningMessageFromStatus(msg.Status); ok {
-			m.State.SetStatus("warning")
+			m.setStatus("warning")
 			m.applyWarningMessage(warning)
 			return m, m.refreshStatusControlsCmd()
 		}
-		m.State.SetStatus(msg.Status)
+		m.setStatus(msg.Status)
 		m.refreshTranscript()
 		return m, m.refreshStatusControlsCmd()
 	case TurnCompletedMsg:
@@ -759,6 +796,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case SkillsListResultMsg:
 		m.applySkillsListResult(msg)
 		return m, nil
+	case SkillsInventoryResultMsg:
+		m.applySkillsInventoryResult(msg)
+		return m, nil
 	case StreamStartedMsg:
 		return m, waitForStream(msg.Messages)
 	case ModalRequestMsg:
@@ -784,6 +824,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
+			if m.modal != nil && m.modal.sessionPicker != nil {
+				return m, m.respondModal(true)
+			}
 			if m.isTaskRunning() {
 				return m, m.interruptRunningTask()
 			}
@@ -799,6 +842,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.windowsSandboxSetupActive {
 			return m, nil
+		}
+		if cmd, handled := m.updateSkillPopupKey(msg); handled {
+			return m, cmd
 		}
 		if cmd, handled := m.updateSlashPopupKey(msg); handled {
 			return m, cmd
@@ -874,7 +920,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	var composerCmd bubbletea.Cmd
 	m.composer, composerCmd = m.composer.Update(message)
 	m.refreshSlashPopup()
-	return m, bubbletea.Batch(cmd, composerCmd)
+	skillPopupCmd := m.refreshSkillPopup()
+	return m, bubbletea.Batch(cmd, composerCmd, skillPopupCmd)
 }
 
 func (m *Model) View() string {
@@ -904,7 +951,13 @@ func (m *Model) View() string {
 	} else if m.windowsSandboxSetupActive {
 		sections = append(sections, m.bottomStyle.Render(m.renderWindowsSandboxSetupStatus()))
 	} else {
+		if working := m.renderWorkingIndicator(); working != "" {
+			sections = append(sections, m.bottomStyle.Render(working))
+		}
 		sections = append(sections, m.composer.View())
+		if popup := m.renderSkillPopup(); popup != "" {
+			sections = append(sections, popup)
+		}
 		if popup := m.renderSlashPopup(); popup != "" {
 			sections = append(sections, popup)
 		}
@@ -1049,17 +1102,23 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.slashPopup = slashCommandPopup{}
+	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
+		m.composerMentionBindings = nil
 		return nil
 	}
 	if invocation, ok := codextui.ParseCommand(input); ok {
+		m.composerMentionBindings = nil
 		return m.applyCommand(invocation)
 	}
 	request := SubmitRequest{
-		Prompt:      input,
-		Attachments: cloneComposerAttachments(m.attachments),
+		Prompt:          input,
+		Attachments:     cloneComposerAttachments(m.attachments),
+		MentionBindings: m.activeComposerMentionBindings(input),
+		MentionCatalog:  m.submissionMentionCatalog(),
 	}
 	m.attachments = nil
+	m.composerMentionBindings = nil
 	return m.submitRequest(request, false)
 }
 
@@ -1077,6 +1136,8 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	}
 	m.composer.Reset()
 	m.slashPopup = slashCommandPopup{}
+	m.skillPopup = skillPopupState{}
+	m.composerMentionBindings = nil
 	if !commandAvailableDuringTask(invocation.Command) {
 		message := "'" + strings.TrimSpace(invocation.Name) + "' is disabled while a task is in progress."
 		m.State.AddHistoryLines([]string{message}, []string{message})
@@ -1106,9 +1167,9 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	m.lastTurnError = ""
 	m.State.AddMessage(codextui.RoleUser, displayPrompt)
 	if m.onSubmit == nil && m.onSubmitRequest == nil {
-		m.State.SetStatus("pending")
+		m.setStatus("pending")
 	} else {
-		m.State.SetStatus("running")
+		m.setStatus("running")
 	}
 	m.submitted = append(m.submitted, displayPrompt)
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
@@ -1129,14 +1190,18 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.slashPopup = slashCommandPopup{}
+	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
 		return nil
 	}
 	request := SubmitRequest{
-		Prompt:      input,
-		Attachments: cloneComposerAttachments(m.attachments),
+		Prompt:          input,
+		Attachments:     cloneComposerAttachments(m.attachments),
+		MentionBindings: m.activeComposerMentionBindings(input),
+		MentionCatalog:  m.submissionMentionCatalog(),
 	}
 	m.attachments = nil
+	m.composerMentionBindings = nil
 	m.queued = append(m.queued, queuedSubmission{
 		Request:      cloneSubmitRequest(request),
 		ParseCommand: parseCommand,
@@ -1163,6 +1228,62 @@ func (m *Model) isTaskRunning() bool {
 
 func (m *Model) isIdle() bool {
 	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "idle")
+}
+
+func (m *Model) setStatus(status string) {
+	if m == nil || m.State == nil {
+		return
+	}
+	m.State.SetStatus(status)
+	m.syncTaskRunningTimer()
+}
+
+func (m *Model) syncTaskRunningTimer() {
+	if m == nil {
+		return
+	}
+	if m.isTaskRunning() {
+		if m.taskStartedAt.IsZero() {
+			m.taskStartedAt = m.currentTime()
+		}
+		return
+	}
+	m.taskStartedAt = time.Time{}
+}
+
+func (m *Model) renderWorkingIndicator() string {
+	if m == nil || !m.isTaskRunning() {
+		return ""
+	}
+	now := m.currentTime()
+	if m.taskStartedAt.IsZero() {
+		m.taskStartedAt = now
+	}
+	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
+	indicator.InterruptHint = m.interruptHintBinding()
+	indicator.SetInterruptHintVisible(indicator.InterruptHint != "")
+	width := m.width
+	if width > 2 {
+		width -= 2
+	}
+	lines := indicator.Render(width, now)
+	if len(lines) == 0 {
+		return ""
+	}
+	lines[0] = "\u2022 " + lines[0]
+	lines[0] = fitTerminalLine(lines[0], m.width)
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) interruptHintBinding() string {
+	if m == nil {
+		return ""
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "chat", "interrupt_turn")
+	if len(bindings) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(bindings[0])
 }
 
 func (m *Model) markThreadStarted(threadID string) {
@@ -1273,7 +1394,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if message.Err != nil {
-		m.State.SetStatus("error")
+		m.setStatus("error")
 		errorMessage := message.Err.Error()
 		m.markActiveToolCallsFailed(errorMessage)
 		m.clearCurrentThreadAfterFailure(errorMessage)
@@ -1291,7 +1412,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if strings.TrimSpace(message.AssistantMessage) != "" {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
-	m.State.SetStatus("idle")
+	m.setStatus("idle")
 	m.lastTurnError = ""
 	m.notice = ""
 	m.refreshTranscript()
@@ -1309,7 +1430,7 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	if m == nil || !m.isTaskRunning() {
 		return
 	}
-	m.State.SetStatus("idle")
+	m.setStatus("idle")
 	text := "Interrupted current turn."
 	if message.Err != nil {
 		text = "Interrupted current turn: " + message.Err.Error()
@@ -1343,7 +1464,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.State.SetThreadID(event.ThreadID)
 		m.markThreadStarted(event.ThreadID)
 	case "turn.started":
-		m.State.SetStatus("running")
+		m.setStatus("running")
 		m.lastTurnError = ""
 	case "item.started":
 		m.applyItemStarted(event.Item)
@@ -1352,7 +1473,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "item.delta":
 		m.applyDelta(event.Delta)
 	case "turn.completed":
-		m.State.SetStatus("idle")
+		m.setStatus("idle")
 		m.markThreadCompleted(m.State.ThreadID)
 		m.lastTurnError = ""
 	case "turn.failed", "error":
@@ -1360,7 +1481,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
 			message = strings.TrimSpace(event.Error.Message)
 		}
-		m.State.SetStatus("error")
+		m.setStatus("error")
 		m.markActiveToolCallsFailed(message)
 		m.clearCurrentThreadAfterFailure(message)
 		m.addTurnErrorHistoryMessage(message)
@@ -1383,6 +1504,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		m.startOrUpdateToolCall(item)
 	case "agent_message":
 		// Streaming deltas create the visible assistant message.
+	case "imageGeneration":
+		// The completed event carries the saved path.
 	}
 }
 
@@ -1403,8 +1526,20 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		m.completeToolOutput(item)
 	case "todo_list":
 		m.applyPlanUpdateItem(item)
+	case "imageGeneration":
+		m.applyImageGenerationItem(item)
 	}
 	return nil
+}
+
+func (m *Model) applyImageGenerationItem(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	status := firstNonEmpty(strings.TrimSpace(item.Status), metadataString(item.Metadata, "status"))
+	revisedPrompt := firstNonEmpty(strings.TrimSpace(item.RevisedPrompt), metadataString(item.Metadata, "revisedPrompt"), metadataString(item.Metadata, "revised_prompt"))
+	savedPath := firstNonEmpty(strings.TrimSpace(item.SavedPath), metadataString(item.Metadata, "savedPath"), metadataString(item.Metadata, "saved_path"))
+	m.applyHistoryCell(historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath))
 }
 
 func (m *Model) applyDelta(delta *protocol.Delta) {
@@ -2081,6 +2216,32 @@ func hookStatusFromMessage(status string, running bool) chatwidget.HookStatus {
 	}
 }
 
+func (m *Model) addStartupSessionHeader(version string) {
+	if m == nil || m.State == nil || len(m.State.Messages) > 0 {
+		return
+	}
+	cwd := strings.TrimSpace(m.State.CWD)
+	if cwd == "" {
+		cwd = strings.TrimSpace(m.sessionCWD)
+	}
+	if cwd == "" {
+		cwd = strings.TrimSpace(m.statusControlsRuntime().CWD)
+	}
+	header := historycell.NewSessionHeader(
+		strings.TrimSpace(m.State.Model),
+		m.State.EffectiveReasoningEffort(),
+		false,
+		cwd,
+		firstNonEmpty(strings.TrimSpace(version), "dev"),
+	)
+	cell := historycell.NewSessionInfo(header, false, "")
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+}
+
 func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {
 	if m == nil || cell == nil {
 		return
@@ -2300,7 +2461,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandSide:
 		return m.applySideCommand(invocation.Name, invocation.Args)
 	case codextui.CommandResume:
-		m.openSessionPicker(codextui.SessionPickerResume)
+		return m.applyResumeCommand(invocation.Args)
 	case codextui.CommandFork:
 		m.openSessionPicker(codextui.SessionPickerFork)
 	case codextui.CommandArchive:
@@ -2451,7 +2612,7 @@ func (m *Model) refreshTranscript() {
 	}
 	wasAtBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset
-	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width))
+	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width, m.tuiTheme))
 	if wasAtBottom {
 		m.transcript.GotoBottom()
 		return
@@ -2465,7 +2626,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.ensureSize()
 	if m.overlay == nil {
-		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscript(m.State, m.rawOutput, m.width))
+		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscript(m.State, m.rawOutput, m.width, m.tuiTheme))
 		m.overlayTranscript = true
 	} else {
 		m.overlayTranscript = true
@@ -2499,7 +2660,7 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.overlayTranscript {
 		return
 	}
-	m.overlay.SetContent(renderTranscript(m.State, m.rawOutput, m.width))
+	m.overlay.SetContent(renderTranscript(m.State, m.rawOutput, m.width, m.tuiTheme))
 }
 
 func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
@@ -2756,7 +2917,25 @@ func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []c
 			return messages
 		}
 	}
+	if assistantFinalExistsInCurrentTurn(messages, text) {
+		return messages
+	}
 	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: text})
+}
+
+func assistantFinalExistsInCurrentTurn(messages []codextui.Message, text string) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		switch message.Role {
+		case codextui.RoleUser:
+			return false
+		case codextui.RoleAssistant:
+			if strings.TrimSpace(message.Text) == text {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *Model) addBottomLine(line string) {
@@ -2807,7 +2986,7 @@ func waitForStream(messages <-chan bubbletea.Msg) bubbletea.Cmd {
 	}
 }
 
-func renderTranscript(state *codextui.State, raw bool, width int) string {
+func renderTranscript(state *codextui.State, raw bool, width int, themeID string) string {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet."
 	}
@@ -2820,7 +2999,7 @@ func renderTranscript(state *codextui.State, raw bool, width int) string {
 	var builder strings.Builder
 	first := true
 	for _, message := range state.Messages {
-		lines := richMessageDisplayLines(message, width)
+		lines := richMessageDisplayLines(message, width, themeID)
 		if len(lines) == 0 {
 			continue
 		}
@@ -2836,7 +3015,7 @@ func renderTranscript(state *codextui.State, raw bool, width int) string {
 	return builder.String()
 }
 
-func richMessageDisplayLines(message codextui.Message, width int) []string {
+func richMessageDisplayLines(message codextui.Message, width int, themeID string) []string {
 	text := strings.TrimRight(message.Text, "\r\n")
 	switch message.Role {
 	case codextui.RoleHistory:
@@ -2845,6 +3024,12 @@ func richMessageDisplayLines(message codextui.Message, width int) []string {
 		cell := historycell.NewUserPrompt(text, nil, nil, nil)
 		return trimBlankDisplayEdges(cell.DisplayLines(width))
 	case codextui.RoleAssistant:
+		rendered, err := markdown.RenderWithTheme(text, width, themeID)
+		if err == nil && strings.TrimSpace(rendered) != "" {
+			lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
+			cell := historycell.NewAgentMessageCell(lines, true)
+			return trimBlankDisplayEdges(cell.DisplayLines(width))
+		}
 		lines := rawLinesTrimmed(text)
 		if len(lines) == 0 {
 			return nil

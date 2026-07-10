@@ -145,7 +145,8 @@ type SkillInstructions struct {
 func NewSkillInstructions(name string, path string, contents string) *SkillInstructions {
 	name = strings.TrimSpace(name)
 	path = strings.TrimSpace(path)
-	if name == "" || path == "" || strings.TrimSpace(contents) == "" {
+	contents = strings.TrimSpace(contents)
+	if name == "" || path == "" || contents == "" {
 		return nil
 	}
 	return &SkillInstructions{Name: name, Path: path, Contents: contents}

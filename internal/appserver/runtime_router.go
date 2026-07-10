@@ -5653,7 +5653,11 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, _ := r.requireConfig().ImportExternalAgentConfig(&params)
+	response, notification := r.requireConfig().ImportExternalAgentConfig(&params)
+	if notification != nil && len(notification.ItemTypeResults) > 0 {
+		r.notify(NotificationExternalAgentConfigImportCompleted, notification)
+		r.emitExternalAgentConfigImportAnalytics(context.Background(), request.normalizedConnectionID(), &params, notification)
+	}
 	return response, nil
 }
 
@@ -7086,6 +7090,10 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	if err != nil {
 		return nil, err
 	}
+	imageGenerationOptions, err := r.imageGenerationOptionsForTurn(cfg, params)
+	if err != nil {
+		return nil, err
+	}
 	requestUserInputModes := requestUserInputAvailableModesForTurn(cfg)
 	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
 	var candidates []plugin.DiscoverableInfo
@@ -7106,7 +7114,7 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 		}
 	}
 	mcpTools, mcpConnectors := r.mcpRuntimeInputsForTurn(threadID, cfg)
-	if r != nil && r.services.ToolRouter != nil && !requestUserInputDefaultMode && !enableCurrentTimeTool && !enableSleepTool && webSearchOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if r != nil && r.services.ToolRouter != nil && !requestUserInputDefaultMode && !enableCurrentTimeTool && !enableSleepTool && webSearchOptions == nil && imageGenerationOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
@@ -7159,6 +7167,7 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 		}
 	}
 	options.WebSearch = webSearchOptions
+	options.ImageGeneration = imageGenerationOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
@@ -7598,7 +7607,7 @@ func (r *RuntimeRouter) mcpRuntimeInputsForTurn(threadID string, cfg *config.Con
 	if err != nil || response == nil {
 		return nil, nil
 	}
-	tools := mcpRuntimeToolsFromStatuses(response.Data)
+	tools := mcp.RuntimeToolsFromStatuses(response.Data)
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -7631,162 +7640,6 @@ func (r *RuntimeRouter) mcpRuntimeConnectorsForTurn(threadID string, cfg *config
 		})
 	}
 	return connectors
-}
-
-func mcpRuntimeToolsFromStatuses(statuses []mcp.MCPServerStatus) []mcp.RuntimeToolInfo {
-	out := make([]mcp.RuntimeToolInfo, 0)
-	for i := range statuses {
-		status := statuses[i]
-		if status.State != "" && status.State != mcp.MCPServerReady {
-			continue
-		}
-		serverName := mcpRuntimeServerName(&status)
-		if serverName == "" {
-			continue
-		}
-		runtimeServerName := serverName
-		if mcp.IsCodexAppsMCPServerName(serverName) {
-			runtimeServerName = mcp.RuntimeCodexAppsMCPServerName
-		}
-		for j := range status.Tools {
-			toolInfo := status.Tools[j]
-			toolName := strings.TrimSpace(toolInfo.Name)
-			if toolName == "" || mcpToolSyntheticLink(toolInfo.Meta) {
-				continue
-			}
-			runtimeTool := mcp.RuntimeToolInfo{
-				ServerName: runtimeServerName,
-				Tool: mcp.RuntimeTool{
-					Name:         toolName,
-					Title:        strings.TrimSpace(toolInfo.Title),
-					Description:  strings.TrimSpace(toolInfo.Description),
-					InputSchema:  cloneAnyMap(toolInfo.InputSchema),
-					Annotations:  runtimeToolAnnotationsFromMCP(toolInfo.Annotations),
-					ModelVisible: mcpToolModelVisible(&toolInfo),
-				},
-			}
-			if connector := mcp.ConnectorToolInfoFromMCPTool(serverName, &toolInfo); connector != nil {
-				runtimeTool.ConnectorID = strings.TrimSpace(connector.ConnectorID)
-				runtimeTool.PluginDisplayNames = append([]string(nil), connector.PluginDisplayNames...)
-				if runtimeTool.Tool.Description == "" {
-					runtimeTool.Tool.Description = firstNonEmpty(
-						strings.TrimSpace(connector.NamespaceDescription),
-						strings.TrimSpace(connector.ConnectorDescription),
-					)
-				}
-			}
-			out = append(out, runtimeTool)
-		}
-	}
-	return out
-}
-
-func mcpRuntimeServerName(status *mcp.MCPServerStatus) string {
-	if status == nil {
-		return ""
-	}
-	if name := strings.TrimSpace(status.Name); name != "" {
-		return name
-	}
-	if name := strings.TrimSpace(status.Server.Name); name != "" {
-		return name
-	}
-	if status.ServerInfo != nil {
-		return strings.TrimSpace(status.ServerInfo.Name)
-	}
-	return ""
-}
-
-func runtimeToolAnnotationsFromMCP(value any) *mcp.RuntimeToolAnnotations {
-	if value == nil {
-		return nil
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil
-	}
-	var annotations mcp.RuntimeToolAnnotations
-	if err := json.Unmarshal(encoded, &annotations); err != nil {
-		return nil
-	}
-	if annotations.ReadOnlyHint == nil && annotations.DestructiveHint == nil && annotations.OpenWorldHint == nil {
-		return nil
-	}
-	return &annotations
-}
-
-func mcpToolModelVisible(toolInfo *mcp.MCPToolInfo) *bool {
-	if toolInfo == nil {
-		return nil
-	}
-	if value, ok := mcpBoolMetadataValue(toolInfo.Meta, "modelVisible", "model_visible"); ok {
-		return value
-	}
-	if value, ok := mcpBoolMetadataValue(toolInfo.Annotations, "modelVisible", "model_visible"); ok {
-		return value
-	}
-	return nil
-}
-
-func mcpToolSyntheticLink(meta any) bool {
-	value, ok := mcpBoolMetadataValue(meta, "synthetic_link", "syntheticLink")
-	return ok && value != nil && *value
-}
-
-func mcpBoolMetadataValue(value any, keys ...string) (*bool, bool) {
-	for _, values := range mcpMetadataMaps(value) {
-		for _, key := range keys {
-			raw, ok := values[key]
-			if !ok {
-				continue
-			}
-			switch typed := raw.(type) {
-			case bool:
-				return &typed, true
-			case string:
-				switch strings.ToLower(strings.TrimSpace(typed)) {
-				case "true":
-					result := true
-					return &result, true
-				case "false":
-					result := false
-					return &result, true
-				}
-			}
-		}
-	}
-	return nil, false
-}
-
-func mcpMetadataMaps(value any) []map[string]any {
-	base := mcpMetadataMap(value)
-	if base == nil {
-		return nil
-	}
-	out := []map[string]any{base}
-	for _, key := range []string{"_codex_apps", "codex_apps", "codexApps"} {
-		if nested := mcpMetadataMap(base[key]); nested != nil {
-			out = append(out, nested)
-		}
-	}
-	return out
-}
-
-func mcpMetadataMap(value any) map[string]any {
-	switch typed := value.(type) {
-	case nil:
-		return nil
-	case map[string]any:
-		return typed
-	case map[string]string:
-		out := make(map[string]any, len(typed))
-		for key, item := range typed {
-			out[key] = item
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func (r *RuntimeRouter) annotateRuntimeMCPToolsWithPluginSources(tools []mcp.RuntimeToolInfo) []mcp.RuntimeToolInfo {

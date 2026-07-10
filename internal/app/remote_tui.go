@@ -277,10 +277,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	options := codextea.Options{
-		NoAltScreen:        root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems: interactiveRemoteSessionPickerItems(ctx, root, endpoint),
-		SessionPickerCWD:   interactiveSessionPickerCWD(root),
-		OnSessionAction:    interactiveRemoteSessionActionHandler(ctx, endpoint),
+		NoAltScreen:          root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:   interactiveRemoteSessionPickerItems(ctx, root, endpoint),
+		SessionPickerCWD:     interactiveSessionPickerCWD(root),
+		SessionPickerView:    settings.SessionPickerView,
+		ShowSessionHeader:    true,
+		SessionHeaderVersion: "dev",
+		OnSessionAction:      interactiveRemoteSessionActionHandler(ctx, endpoint),
+		OnResumeSession:      interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID
@@ -998,6 +1002,29 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 	}
 }
 
+func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionResumeFunc {
+	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
+		threadID := strings.TrimSpace(selection.Target.ThreadID)
+		if threadID == "" {
+			return codextea.SessionResumeResponse{}, errors.New("remote resume requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
+		defer client.close()
+		thread, err := remoteTUIReadThread(ctx, client, threadID, true)
+		if err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
+		return codextea.SessionResumeResponse{
+			Summary:  remoteTUISessionSummaryFromThread(thread, false),
+			Messages: remoteTUIThreadMessagesFromThread(thread),
+			Status:   remoteTUIStatusFromThread(thread),
+		}, nil
+	}
+}
+
 func remoteTUIThreadListParams(root *cli.RootOptions, archived bool) appserver.ThreadListParams {
 	limit := codextui.SessionPickerPageSize
 	params := appserver.ThreadListParams{
@@ -1033,6 +1060,7 @@ func remoteTUISessionSummaryFromThread(thread *appserver.Thread, archived bool) 
 		ThreadID:  string(record.ID),
 		Path:      path,
 		Title:     record.Title,
+		Preview:   record.Preview,
 		CWD:       record.Metadata.CWD,
 		Branch:    branch,
 		Provider:  record.Metadata.ModelProvider,

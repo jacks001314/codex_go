@@ -35,6 +35,7 @@ type ToolRegistryOptions struct {
 	PluginInstallRuntime               tool.PluginInstallRuntime
 	PluginInstallAppServerClientName   string
 	WebSearch                          *WebSearchOptions
+	ImageGeneration                    *ImageGenerationOptions
 
 	EnableCore            bool
 	EnableShell           bool
@@ -121,6 +122,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.WebSearch != nil {
 		if err := registry.Register(NewWebSearchHandler(options.WebSearch)); err != nil {
+			return nil, err
+		}
+	}
+	if options.ImageGeneration != nil {
+		if err := registry.Register(NewImageGenerationHandler(options.ImageGeneration)); err != nil {
 			return nil, err
 		}
 	}

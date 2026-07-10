@@ -32,6 +32,94 @@ func TestBuildExposureDirectWhenSearchDisabled(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolsFromStatusesMatchesRustMCPInventory(t *testing.T) {
+	inputSchema := map[string]any{"type": "object"}
+	statuses := []MCPServerStatus{
+		{
+			Name:  "broken",
+			State: MCPServerFailed,
+			Tools: []MCPToolInfo{{
+				Name: "ignored_failed",
+			}},
+		},
+		{
+			Name:  "docs",
+			State: MCPServerReady,
+			Tools: []MCPToolInfo{
+				{
+					Name:        " search ",
+					Title:       " Search ",
+					Description: " Search docs ",
+					InputSchema: inputSchema,
+					Annotations: map[string]any{"readOnlyHint": true},
+					Meta:        map[string]any{"modelVisible": "false"},
+				},
+				{
+					Name: "link",
+					Meta: map[string]any{"synthetic_link": true},
+				},
+			},
+		},
+		{
+			Name:  CodexAppsServerName,
+			State: MCPServerReady,
+			Tools: []MCPToolInfo{
+				{
+					Name: "drive_search",
+					Meta: map[string]any{
+						"_codex_apps": map[string]any{
+							"connectorId":          "drive",
+							"connectorDescription": "Drive files",
+							"pluginDisplayNames":   []any{"Drive Plugin"},
+						},
+					},
+				},
+				{
+					Name: "drive_link",
+					Meta: map[string]any{
+						"_codex_apps": map[string]any{
+							"synthetic_link": true,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	tools := RuntimeToolsFromStatuses(statuses)
+	if len(tools) != 2 {
+		t.Fatalf("tools = %#v, want docs search and drive search only", tools)
+	}
+	docs := tools[0]
+	if docs.ServerName != "docs" || docs.Tool.Name != "search" || docs.Tool.Title != "Search" || docs.Tool.Description != "Search docs" {
+		t.Fatalf("docs tool = %#v", docs)
+	}
+	if docs.Tool.InputSchema["type"] != "object" {
+		t.Fatalf("input schema = %#v", docs.Tool.InputSchema)
+	}
+	inputSchema["type"] = "mutated"
+	if docs.Tool.InputSchema["type"] != "object" {
+		t.Fatalf("input schema was not cloned: %#v", docs.Tool.InputSchema)
+	}
+	if docs.Tool.Annotations == nil || docs.Tool.Annotations.ReadOnlyHint == nil || !*docs.Tool.Annotations.ReadOnlyHint {
+		t.Fatalf("annotations = %#v", docs.Tool.Annotations)
+	}
+	if docs.Tool.ModelVisible == nil || *docs.Tool.ModelVisible {
+		t.Fatalf("model visible = %#v", docs.Tool.ModelVisible)
+	}
+
+	drive := tools[1]
+	if drive.ServerName != RuntimeCodexAppsMCPServerName || drive.ConnectorID != "drive" {
+		t.Fatalf("drive tool identity = %#v", drive)
+	}
+	if drive.Tool.Description != "Drive files" {
+		t.Fatalf("drive description = %q", drive.Tool.Description)
+	}
+	if len(drive.PluginDisplayNames) != 1 || drive.PluginDisplayNames[0] != "Drive Plugin" {
+		t.Fatalf("plugin display names = %#v", drive.PluginDisplayNames)
+	}
+}
+
 func TestAnnotateRuntimeToolsWithConnectorPluginProvenance(t *testing.T) {
 	provenance := NewConnectorPluginProvenance()
 	provenance.Add(" drive ", "Docs")

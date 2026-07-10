@@ -22,7 +22,7 @@ func (r *RuntimeRouter) emitPluginStateAnalyticsEvent(ctx context.Context, conne
 	}
 	event := telemetry.NewCodexPluginEvent(
 		eventType,
-		pluginAnalyticsMetadataFromDetail(detail, r.pluginAnalyticsProductClientID(connectionID)),
+		pluginAnalyticsMetadataFromDetail(detail, r.analyticsProductClientID(connectionID)),
 	)
 	switch event.EventType {
 	case telemetry.CodexPluginInstalledEventType:
@@ -48,13 +48,13 @@ func (r *RuntimeRouter) emitPluginInstallFailedAnalyticsEvent(ctx context.Contex
 		ctx = context.Background()
 	}
 	event := telemetry.NewCodexPluginInstallFailedEvent(
-		pluginAnalyticsMetadataFromInstallParams(params, r.pluginAnalyticsProductClientID(connectionID)),
+		pluginAnalyticsMetadataFromInstallParams(params, r.analyticsProductClientID(connectionID)),
 		pluginAnalyticsInstallErrorType(installErr),
 	)
 	sink.TrackCodexPluginInstallFailedEvent(ctx, event)
 }
 
-func (r *RuntimeRouter) pluginAnalyticsProductClientID(connectionID string) string {
+func (r *RuntimeRouter) analyticsProductClientID(connectionID string) string {
 	if r == nil {
 		return defaultInitializeOriginator
 	}

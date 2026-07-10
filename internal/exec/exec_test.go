@@ -18,6 +18,7 @@ import (
 	"codex_go/internal/auth"
 	"codex_go/internal/cli"
 	"codex_go/internal/config"
+	"codex_go/internal/mcp"
 	"codex_go/internal/model"
 	"codex_go/internal/protocol"
 	"codex_go/internal/rollout"
@@ -402,6 +403,258 @@ func TestRunAddsStartupEnvironmentContextInputItems(t *testing.T) {
 		!agentRequestInputItemsContainText(agent.request, "<current_date>2026-07-09</current_date>") ||
 		!agentRequestInputItemsContainText(agent.request, `<permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile>`) {
 		t.Fatalf("startup input items = %#v", agent.request.InputItems)
+	}
+}
+
+func TestRunIncludesAdditionalInstructionsAndInputItems(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec:                   cli.ExecOptions{Prompt: "use it", Ephemeral: true},
+		AdditionalInstructions: "## Skills\n- imagegen: Generate images",
+		AdditionalInputItems: []any{map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []map[string]any{{
+				"type": "input_text",
+				"text": "<skill>\n<name>imagegen</name>\nUse images.\n</skill>",
+			}},
+		}},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !strings.HasPrefix(agent.request.Instructions, "## Skills\n- imagegen") {
+		t.Fatalf("instructions = %q", agent.request.Instructions)
+	}
+	if !agentRequestInputItemsContainText(agent.request, "<name>imagegen</name>") {
+		t.Fatalf("input items = %#v", agent.request.InputItems)
+	}
+}
+
+func TestRunPersistsAdditionalSkillInputItemsForHistory(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+
+	skillItem := map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": "<skill>\n<name>imagegen</name>\nUse hosted image generation.\n</skill>",
+		}},
+	}
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec:                 cli.ExecOptions{Prompt: "use it"},
+		AdditionalInputItems: []any{skillItem},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	record, err := store.Read(session.ThreadID(result.ThreadID), true, true)
+	if err != nil {
+		t.Fatalf("Read session error = %v", err)
+	}
+	var found bool
+	for i := range record.Items {
+		if record.Items[i].Data["kind"] == execSkillInstructionsKind && strings.Contains(record.Items[i].Text, "<name>imagegen</name>") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("record missing persisted skill instructions: %#v", record.Items)
+	}
+	if !inputItemsContainText(session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true}), "Use hosted image generation.") {
+		t.Fatalf("history input items missing persisted skill: %#v", record.Items)
+	}
+}
+
+func TestRunExposesHostedImageGenerationByDefaultLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("access-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+model = "gpt-5.5"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "ok"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "draw a square",
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if agent.request == nil {
+		t.Fatal("agent request is nil")
+	}
+	if agentRequestToolsContainNamespaceFunction(agent.request, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("default exec runtime should leave image generation hosted, got standalone namespace: %#v", agent.request.Tools)
+	}
+	if !agentRequestToolsContainType(agent.request, "image_generation") {
+		t.Fatalf("default exec runtime should expose hosted image_generation like Rust: %#v", agent.request.Tools)
+	}
+}
+
+func TestRunResponsesRequestIncludesHostedImageGenerationLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("access-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("request path = %q, want /v1/responses", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-image-tools"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-image-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-image-tools","delta":"ready"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-image-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "draw a square",
+			JSON:      true,
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, body = %#v", recordedBody["tools"], recordedBody)
+	}
+	if !responseToolsContainTypeForExecTest(tools, "image_generation") {
+		t.Fatalf("tools missing hosted image_generation: %#v", tools)
+	}
+	if responseToolsContainNamespaceFunctionForExecTest(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("default non-lite request should use hosted image_generation, not standalone namespace: %#v", tools)
+	}
+}
+
+func TestRunResponsesRequestIncludesHostedImageGenerationForOpenAIAPIKeyProvider(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-image-tools"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-image-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-image-tools","delta":"ready"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-image-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "draw a square",
+			JSON:      true,
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, body = %#v", recordedBody["tools"], recordedBody)
+	}
+	if !responseToolsContainTypeForExecTest(tools, "image_generation") {
+		t.Fatalf("api-key OpenAI provider tools missing hosted image_generation: %#v", tools)
+	}
+}
+
+func TestRunExposesStandaloneImageGenerationWhenImagegenExtEnabledLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("access-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+model = "gpt-5.5"
+
+[features]
+imagegenext = true
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "ok"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:    "draw a square",
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if agent.request == nil {
+		t.Fatal("agent request is nil")
+	}
+	if !agentRequestToolsContainNamespaceFunction(agent.request, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", agent.request.Tools)
 	}
 }
 
@@ -833,6 +1086,67 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	}
 }
 
+func TestToolRouterUsesConfiguredMCPRuntimeLikeRust(t *testing.T) {
+	runner := NewRunner(t.TempDir())
+	service := mcp.NewMCPService(nil)
+	router, err := runner.toolRouterForRequest(&Request{Exec: cli.ExecOptions{Prompt: "hello"}}, &agentRunConfig{
+		MCPService: service,
+		MCPTools: []mcp.RuntimeToolInfo{{
+			ServerName: "docs",
+			Tool: mcp.RuntimeTool{
+				Name:        "search",
+				Description: "Search docs",
+				InputSchema: map[string]any{"type": "object"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest returned error: %v", err)
+	}
+	output, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "call-mcp",
+		ToolName: tool.NamespacedName("docs", "search"),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"q":"rust parity"}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch MCP tool returned error: %v", err)
+	}
+	if output == nil || !output.Success || !strings.Contains(output.Body, "rust parity") {
+		t.Fatalf("MCP output = %#v", output)
+	}
+}
+
+func TestConfiguredMCPRuntimeReadsConfigServersLikeRust(t *testing.T) {
+	runner := NewRunner(t.TempDir())
+	service, tools, connectors := runner.configuredMCPRuntimeForConfig(&config.Config{Values: map[string]any{
+		"features": map[string]any{"apps": false},
+		"mcp_servers": map[string]any{
+			"angr": map[string]any{
+				"command": "codex-go-missing-mcp-test",
+			},
+		},
+	}})
+	if service == nil {
+		t.Fatal("configuredMCPRuntimeForConfig returned nil service for configured MCP server")
+	}
+	defer service.Close()
+	if len(tools) != 0 || len(connectors) != 0 {
+		t.Fatalf("tools/connectors = %#v/%#v, want none for missing helper", tools, connectors)
+	}
+	status, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+	})
+	if err != nil {
+		t.Fatalf("ListStatusChecked returned error: %v", err)
+	}
+	if len(status.Data) != 1 || status.Data[0].Name != "angr" {
+		t.Fatalf("status = %#v, want configured angr server", status.Data)
+	}
+}
+
 func TestRunRejectsUnknownExecSubcommandWithoutGoPortMessage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	_, err := NewLocalRunner(t.TempDir()).Run(Request{
@@ -1072,7 +1386,10 @@ func TestRunExecutesToolLoopWithInjectedRouter(t *testing.T) {
 	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 5 {
 		t.Fatalf("agent requests = %#v", agent.requests)
 	}
-	if len(agent.requests[0].Tools) != 1 || len(agent.requests[1].Tools) != 1 {
+	if !agentRequestToolsContainPlainFunction(&agent.requests[0], "echo") ||
+		!agentRequestToolsContainPlainFunction(&agent.requests[1], "echo") ||
+		!agentRequestToolsContainType(&agent.requests[0], "image_generation") ||
+		!agentRequestToolsContainType(&agent.requests[1], "image_generation") {
 		t.Fatalf("agent tools = %#v / %#v", agent.requests[0].Tools, agent.requests[1].Tools)
 	}
 }
@@ -1164,7 +1481,7 @@ func TestSessionItemsForTurnPersistsAllModelResponses(t *testing.T) {
 		}},
 	}
 	result.Response = result.Responses[1]
-	items := sessionItemsForTurn("turn-exec", "hello", nil, result, createdAt, nil)
+	items := sessionItemsForTurn("turn-exec", "hello", nil, result, createdAt, nil, nil)
 
 	reasoning := execSessionItemByID(items, "reasoning-1")
 	if reasoning == nil || reasoning.ResponseID != "resp-first" {
@@ -1192,6 +1509,72 @@ func TestSessionItemsForTurnPersistsAllModelResponses(t *testing.T) {
 	}
 	if items[call1Index].Metadata["request_id"] != "req-first" || items[output1Index].Metadata["requestId"] != "req-first" {
 		t.Fatalf("tool response metadata call=%#v output=%#v", items[call1Index].Metadata, items[output1Index].Metadata)
+	}
+}
+
+func TestExecSessionItemsPersistHostedImageGeneration(t *testing.T) {
+	home := t.TempDir()
+	createdAt := time.Unix(1700000000, 0).UTC()
+	result := &turn.AgentLoopResult{
+		Responses: []*model.AgentResponse{{
+			ResponseID: "resp-image",
+			Items: []model.AgentItem{{
+				ID:     "ig_123",
+				Type:   "image_generation_call",
+				Status: "generating",
+				Text:   "Zm9v",
+				Data: map[string]any{
+					"revised_prompt": "A tiny blue square",
+				},
+			}},
+		}},
+	}
+	result.Response = result.Responses[0]
+
+	items := sessionItemsForTurn("turn-exec", "draw", nil, result, createdAt, nil, &execImageGenerationContext{
+		CodexHome: home,
+		ThreadID:  "thread-1",
+	})
+	imageIndex := execSessionItemIndexByType(items, "imageGeneration")
+	if imageIndex < 0 {
+		t.Fatalf("missing imageGeneration item: %#v", items)
+	}
+	imageItem := items[imageIndex]
+	if imageItem.Status != "completed" || imageItem.Text != "A tiny blue square" {
+		t.Fatalf("image item = %#v", imageItem)
+	}
+	if imageItem.Content != nil || strings.Contains(imageItem.Text, "Zm9v") {
+		t.Fatalf("image base64 leaked into visible text/content: %#v", imageItem)
+	}
+	savedPath := firstNonEmpty(execStringFromAny(imageItem.Data["savedPath"]), execStringFromAny(imageItem.Data["saved_path"]))
+	if savedPath == "" {
+		t.Fatalf("missing saved path in image data: %#v", imageItem.Data)
+	}
+	bytes, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", savedPath, err)
+	}
+	if string(bytes) != "foo" {
+		t.Fatalf("saved bytes = %q", string(bytes))
+	}
+	instructionsIndex := execSessionItemIndexByID(items, "image-generation-instructions-ig_123")
+	if instructionsIndex < 0 || items[instructionsIndex].Role != "developer" || !strings.Contains(items[instructionsIndex].Text, filepath.Dir(savedPath)) {
+		t.Fatalf("missing image generation instructions item: %#v", items)
+	}
+
+	sink := newExecEventSink(nil, false)
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	var eventItem *protocol.ThreadItem
+	for _, event := range sink.Events() {
+		if event.Type == "item.completed" && event.Item != nil && event.Item.Type == "imageGeneration" {
+			eventItem = event.Item
+			break
+		}
+	}
+	if eventItem == nil || eventItem.SavedPath != savedPath || eventItem.RevisedPrompt != "A tiny blue square" {
+		t.Fatalf("image generation event item = %#v", eventItem)
 	}
 }
 
@@ -1259,6 +1642,64 @@ func TestEmitFinalEventsFromAgentResultPreservesLoopOrder(t *testing.T) {
 	}
 	if got := events[reasoningIndex].Item.Text; got != "thinking" {
 		t.Fatalf("reasoning text = %q", got)
+	}
+}
+
+func TestEmitFinalEventsSkipsStreamedAgentMessages(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Responses: []*model.AgentResponse{{
+			ResponseID: "resp-first",
+			Items: []model.AgentItem{{
+				ID:   "msg-skill",
+				Type: "agent_message",
+				Text: "Using the openai-docs skill because you invoked it.",
+			}, {
+				ID:     "call-1",
+				Type:   "function_call",
+				Name:   "exec_command",
+				CallID: "call-1",
+			}},
+		}, {
+			ResponseID: "resp-final",
+			Items: []model.AgentItem{{
+				ID:   "msg-ready",
+				Type: "agent_message",
+				Text: "Ready - I'll use official OpenAI docs/manual sources.",
+			}},
+		}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "call-1",
+				ToolName: tool.PlainName("exec_command"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"Get-Content SKILL.md"}`},
+			},
+			Output: &tool.Output{CallID: "call-1", Success: true, Body: "skill contents"},
+		}},
+	}
+	result.Response = result.Responses[1]
+	sink := newExecEventSink(nil, false)
+	if err := sink.Emit(protocol.AgentMessageDelta("msg-skill", "Using the openai-docs skill because you invoked it.")); err != nil {
+		t.Fatalf("Emit skill delta error = %v", err)
+	}
+	if err := sink.Emit(protocol.AgentMessageDelta("msg-ready", "Ready - I'll use official OpenAI docs/manual sources.")); err != nil {
+		t.Fatalf("Emit ready delta error = %v", err)
+	}
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+
+	events := sink.Events()
+	for _, event := range events {
+		if event.Type == "item.completed" && event.Item != nil && event.Item.Type == "agent_message" {
+			t.Fatalf("streamed agent message was replayed as final item: %#v", event)
+		}
+	}
+	if execEventItemIndex(events, "tool-output-call-1") < 0 {
+		t.Fatalf("tool output event missing: %#v", events)
+	}
+	if execEventTypeIndex(events, "turn.completed") < 0 {
+		t.Fatalf("turn.completed missing: %#v", events)
 	}
 }
 
@@ -1528,6 +1969,9 @@ func TestRunJSONStreamsResponsesEventsImmediately(t *testing.T) {
 		!strings.Contains(stdout.String(), `"output_tokens":2`) {
 		t.Fatalf("stdout after completion = %q", stdout.String())
 	}
+	if strings.Contains(stdout.String(), `"type":"item.completed","item":{"id":"msg-1","type":"agent_message"`) {
+		t.Fatalf("streamed assistant message was replayed as completed item: %q", stdout.String())
+	}
 }
 
 func TestRunJSONEmitsErrorEventWhenTurnFails(t *testing.T) {
@@ -1586,18 +2030,27 @@ func agentRequestInputItemsContainText(request *model.AgentRequest, text string)
 	if request == nil {
 		return false
 	}
-	for _, raw := range request.InputItems {
+	return inputItemsContainText(request.InputItems, text)
+}
+
+func inputItemsContainText(items []any, text string) bool {
+	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		content, ok := item["content"].([]map[string]any)
-		if !ok {
-			continue
-		}
-		for i := range content {
-			if strings.Contains(fmt.Sprint(content[i]["text"]), text) {
-				return true
+		switch content := item["content"].(type) {
+		case []map[string]any:
+			for i := range content {
+				if strings.Contains(fmt.Sprint(content[i]["text"]), text) {
+					return true
+				}
+			}
+		case []any:
+			for _, block := range content {
+				if strings.Contains(fmt.Sprint(block), text) {
+					return true
+				}
 			}
 		}
 	}
@@ -1624,6 +2077,74 @@ func agentRequestInputItemWithText(request *model.AgentRequest, text string) map
 		}
 	}
 	return nil
+}
+
+func agentRequestToolsContainType(request *model.AgentRequest, toolType string) bool {
+	if request == nil {
+		return false
+	}
+	for _, toolValue := range request.Tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if ok && fmt.Sprint(toolMap["type"]) == toolType {
+			return true
+		}
+	}
+	return false
+}
+
+func agentRequestToolsContainPlainFunction(request *model.AgentRequest, name string) bool {
+	if request == nil {
+		return false
+	}
+	for _, toolValue := range request.Tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if ok && fmt.Sprint(toolMap["type"]) == "function" && fmt.Sprint(toolMap["name"]) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func agentRequestToolsContainNamespaceFunction(request *model.AgentRequest, namespace string, name string) bool {
+	if request == nil {
+		return false
+	}
+	return responseToolsContainNamespaceFunctionForExecTest(request.Tools, namespace, name)
+}
+
+func responseToolsContainTypeForExecTest(tools []any, toolType string) bool {
+	for _, toolValue := range tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if ok && fmt.Sprint(toolMap["type"]) == toolType {
+			return true
+		}
+	}
+	return false
+}
+
+func responseToolsContainNamespaceFunctionForExecTest(tools []any, namespace string, name string) bool {
+	for _, toolValue := range tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if !ok || fmt.Sprint(toolMap["type"]) != "namespace" || fmt.Sprint(toolMap["name"]) != namespace {
+			continue
+		}
+		switch children := toolMap["tools"].(type) {
+		case []map[string]any:
+			for _, child := range children {
+				if fmt.Sprint(child["name"]) == name {
+					return true
+				}
+			}
+		case []any:
+			for _, childValue := range children {
+				child, ok := childValue.(map[string]any)
+				if ok && fmt.Sprint(child["name"]) == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (a *recordingAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

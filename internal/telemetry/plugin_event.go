@@ -30,8 +30,8 @@ type CodexPluginMetadata struct {
 }
 
 type CodexPluginEventRequest struct {
-	EventType   string               `json:"event_type"`
-	EventParams CodexPluginMetadata  `json:"event_params"`
+	EventType   string              `json:"event_type"`
+	EventParams CodexPluginMetadata `json:"event_params"`
 }
 
 type CodexPluginInstallFailedMetadata struct {

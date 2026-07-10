@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -63,6 +64,106 @@ func BuildRuntimeExposure(allTools []RuntimeToolInfo, connectors []RuntimeConnec
 	return &RuntimeExposure{DeferredTools: deferred}
 }
 
+func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
+	out := make([]RuntimeToolInfo, 0)
+	for i := range statuses {
+		status := statuses[i]
+		if status.State != "" && status.State != MCPServerReady {
+			continue
+		}
+		serverName := RuntimeServerNameFromStatus(&status)
+		if serverName == "" {
+			continue
+		}
+		runtimeServerName := serverName
+		if IsCodexAppsMCPServerName(serverName) {
+			runtimeServerName = RuntimeCodexAppsMCPServerName
+		}
+		for j := range status.Tools {
+			toolInfo := status.Tools[j]
+			toolName := strings.TrimSpace(toolInfo.Name)
+			if toolName == "" || ToolSyntheticLink(toolInfo.Meta) {
+				continue
+			}
+			runtimeTool := RuntimeToolInfo{
+				ServerName: runtimeServerName,
+				Tool: RuntimeTool{
+					Name:         toolName,
+					Title:        strings.TrimSpace(toolInfo.Title),
+					Description:  strings.TrimSpace(toolInfo.Description),
+					InputSchema:  cloneAnyMap(toolInfo.InputSchema),
+					Annotations:  RuntimeToolAnnotationsFromMCP(toolInfo.Annotations),
+					ModelVisible: ToolModelVisible(&toolInfo),
+				},
+			}
+			if connector := ConnectorToolInfoFromMCPTool(serverName, &toolInfo); connector != nil {
+				runtimeTool.ConnectorID = strings.TrimSpace(connector.ConnectorID)
+				runtimeTool.PluginDisplayNames = append([]string(nil), connector.PluginDisplayNames...)
+				if runtimeTool.Tool.Description == "" {
+					runtimeTool.Tool.Description = firstNonEmpty(
+						strings.TrimSpace(connector.NamespaceDescription),
+						strings.TrimSpace(connector.ConnectorDescription),
+					)
+				}
+			}
+			out = append(out, runtimeTool)
+		}
+	}
+	return out
+}
+
+func RuntimeServerNameFromStatus(status *MCPServerStatus) string {
+	if status == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(status.Name); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(status.Server.Name); name != "" {
+		return name
+	}
+	if status.ServerInfo != nil {
+		return strings.TrimSpace(status.ServerInfo.Name)
+	}
+	return ""
+}
+
+func RuntimeToolAnnotationsFromMCP(value any) *RuntimeToolAnnotations {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var annotations RuntimeToolAnnotations
+	if err := json.Unmarshal(encoded, &annotations); err != nil {
+		return nil
+	}
+	if annotations.ReadOnlyHint == nil && annotations.DestructiveHint == nil && annotations.OpenWorldHint == nil {
+		return nil
+	}
+	return &annotations
+}
+
+func ToolModelVisible(toolInfo *MCPToolInfo) *bool {
+	if toolInfo == nil {
+		return nil
+	}
+	if value, ok := boolMetadataValue(toolInfo.Meta, "modelVisible", "model_visible"); ok {
+		return value
+	}
+	if value, ok := boolMetadataValue(toolInfo.Annotations, "modelVisible", "model_visible"); ok {
+		return value
+	}
+	return nil
+}
+
+func ToolSyntheticLink(meta any) bool {
+	value, ok := boolMetadataValue(meta, "synthetic_link", "syntheticLink")
+	return ok && value != nil && *value
+}
+
 func AnnotateRuntimeToolsWithConnectorPluginProvenance(tools []RuntimeToolInfo, provenance *ConnectorPluginProvenance) []RuntimeToolInfo {
 	out := make([]RuntimeToolInfo, len(tools))
 	for i := range tools {
@@ -73,6 +174,74 @@ func AnnotateRuntimeToolsWithConnectorPluginProvenance(tools []RuntimeToolInfo, 
 		AnnotateRuntimeToolWithPluginProvenance(&out[i], provenance.Names(out[i].ConnectorID))
 	}
 	return out
+}
+
+func boolMetadataValue(value any, keys ...string) (*bool, bool) {
+	for _, values := range metadataMaps(value) {
+		for _, key := range keys {
+			raw, ok := values[key]
+			if !ok {
+				continue
+			}
+			switch typed := raw.(type) {
+			case bool:
+				return &typed, true
+			case string:
+				switch strings.ToLower(strings.TrimSpace(typed)) {
+				case "true":
+					result := true
+					return &result, true
+				case "false":
+					result := false
+					return &result, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+func metadataMaps(value any) []map[string]any {
+	base := metadataMap(value)
+	if base == nil {
+		return nil
+	}
+	out := []map[string]any{base}
+	for _, key := range []string{"_codex_apps", "codex_apps", "codexApps"} {
+		if nested := metadataMap(base[key]); nested != nil {
+			out = append(out, nested)
+		}
+	}
+	return out
+}
+
+func metadataMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case map[string]string:
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			out[key] = value
+		}
+		return out
+	default:
+		if value == nil {
+			return nil
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return nil
+		}
+		if len(decoded) == 0 {
+			return nil
+		}
+		return decoded
+	}
 }
 
 func AnnotateRuntimeToolWithPluginProvenance(tool *RuntimeToolInfo, pluginNames []string) {

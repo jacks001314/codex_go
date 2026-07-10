@@ -58,10 +58,11 @@ func TestToolDispatcherExecutesFunctionAndCustomCalls(t *testing.T) {
 func TestToolDispatcherToolSearchOutput(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := tool.RegisterToolSearchHandler(registry, []tool.Spec{{
-		Name:        tool.PlainName("drive.create_doc"),
-		Description: "Create Google Docs",
-		Exposure:    tool.ExposureDiscoverable,
-		Search:      &tool.SearchInfo{Text: "google docs create"},
+		Name:                 tool.NamespacedName("drive", "create_doc"),
+		Description:          "Create Google Docs",
+		NamespaceDescription: "Drive tools",
+		Exposure:             tool.ExposureDiscoverable,
+		Search:               &tool.SearchInfo{Text: "google docs create"},
 	}}); err != nil {
 		t.Fatalf("RegisterToolSearchHandler() error = %v", err)
 	}
@@ -94,8 +95,21 @@ func TestToolDispatcherToolSearchOutput(t *testing.T) {
 	if payload["type"] != "tool_search_output" || payload["call_id"] != "search-1" || payload["execution"] != "client" {
 		t.Fatalf("response payload = %#v", payload)
 	}
-	if tools := payload["tools"].([]any); len(tools) != 1 {
+	tools := payload["tools"].([]any)
+	if len(tools) != 1 {
 		t.Fatalf("response tools = %#v", payload["tools"])
+	}
+	namespace, ok := tools[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "drive" {
+		t.Fatalf("response namespace = %#v", tools[0])
+	}
+	children, ok := namespace["tools"].([]any)
+	if !ok || len(children) != 1 {
+		t.Fatalf("response namespace tools = %#v", namespace["tools"])
+	}
+	child, ok := children[0].(map[string]any)
+	if !ok || child["type"] != "function" || child["name"] != "create_doc" || child["defer_loading"] != true {
+		t.Fatalf("response namespace child = %#v", children[0])
 	}
 }
 
