@@ -963,6 +963,7 @@ func skillsRootsForCWDs(cwds []string) []SkillsRoot {
 	var roots []SkillsRoot
 	for _, cwd := range cleanStringSlice(cwds) {
 		roots = append(roots, SkillsRoot{Path: cwd, Scope: "repo"})
+		roots = append(roots, SkillsRoot{Path: filepath.Join(cwd, ".codex", "skills"), Scope: "repo"})
 		for _, agentsRoot := range repoAgentsSkillsRoots(cwd) {
 			roots = append(roots, SkillsRoot{Path: agentsRoot, Scope: "repo"})
 		}

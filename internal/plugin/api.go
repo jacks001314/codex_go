@@ -1218,6 +1218,9 @@ type PluginService struct {
 	marketplacePluginMaterializer MarketplacePluginMaterializer
 	marketplaceRevision           MarketplaceRevisionResolver
 	marketplaceConfigPath         string
+	suggestedProvider             SuggestedPluginProvider
+	suggestedProviderKey          string
+	suggestedCache                *SuggestedPluginList
 }
 
 func NewPluginService() *PluginService {
@@ -1823,6 +1826,9 @@ func (s *PluginService) DiscoverableInstallCandidates() []DiscoverableInfo {
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
 	details := mergePluginDetails(storedDetails, loadedDetails)
 	details = s.materializeInstalledDiscoverableDetailsBestEffort(details)
+	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(details); ok {
+		return endpointCandidates
+	}
 	out := make([]DiscoverableInfo, 0, len(details))
 	for _, detail := range details {
 		summary := detail.Summary

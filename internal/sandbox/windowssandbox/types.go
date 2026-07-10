@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrWindowsOnly           = errors.New("windows sandbox is only available on Windows")
-	ErrBackendNotImplemented = errors.New("windows sandbox backend is not implemented in the Go port yet")
+	ErrBackendNotImplemented = errors.New("windows sandbox backend is unavailable")
 	ErrHostUnsupported       = errors.New("windows sandbox host does not support the required feature")
 	ErrInvalidRequest        = errors.New("invalid windows sandbox request")
 )

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -32,6 +34,7 @@ type ServerRequestBroker struct {
 	pending    map[string]*pendingServerRequest
 	sink       ServerRequestSink
 	onResolved func(request *ServerRequest)
+	onResponse func(request *ServerRequest, response *Response)
 }
 
 type serverRequestResult struct {
@@ -64,6 +67,15 @@ func (b *ServerRequestBroker) SetResolvedCallback(callback func(request *ServerR
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onResolved = callback
+}
+
+func (b *ServerRequestBroker) SetResolvedResponseCallback(callback func(request *ServerRequest, response *Response)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onResponse = callback
 }
 
 func (b *ServerRequestBroker) Request(ctx context.Context, method ServerRequestMethod, params any, target any) error {
@@ -125,6 +137,7 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 		return false, nil
 	}
 	b.notifyResolved(entry.request)
+	b.notifyResolvedResponse(entry.request, response)
 	if response.Error != nil {
 		entry.ch <- &serverRequestResult{err: fmt.Errorf("server request failed: code=%d message=%s", response.Error.Code, response.Error.Message)}
 		return true, nil
@@ -136,6 +149,21 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 	}
 	entry.ch <- &serverRequestResult{data: data}
 	return true, nil
+}
+
+func (b *ServerRequestBroker) ReplayThread(threadID string) int {
+	threadID = strings.TrimSpace(threadID)
+	if b == nil || threadID == "" {
+		return 0
+	}
+	requests, sink := b.pendingRequestsForThread(threadID)
+	if sink == nil {
+		return 0
+	}
+	for _, request := range requests {
+		sink.SendServerRequest(request)
+	}
+	return len(requests)
 }
 
 func (b *ServerRequestBroker) nextRequestID() string {
@@ -166,6 +194,32 @@ func (b *ServerRequestBroker) pendingEntry(id string) *pendingServerRequest {
 	return b.pending[id]
 }
 
+func (b *ServerRequestBroker) pendingRequestsForThread(threadID string) ([]*ServerRequest, ServerRequestSink) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pending) == 0 || b.sink == nil {
+		return nil, b.sink
+	}
+	ids := make([]string, 0, len(b.pending))
+	for id, entry := range b.pending {
+		if entry == nil || entry.request == nil {
+			continue
+		}
+		if serverRequestThreadID(entry.request) == threadID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	requests := make([]*ServerRequest, 0, len(ids))
+	for _, id := range ids {
+		if entry := b.pending[id]; entry != nil && entry.request != nil {
+			request := *entry.request
+			requests = append(requests, &request)
+		}
+	}
+	return requests, b.sink
+}
+
 func (b *ServerRequestBroker) notifyResolved(request *ServerRequest) {
 	callback := b.resolvedCallback()
 	if callback != nil {
@@ -177,4 +231,17 @@ func (b *ServerRequestBroker) resolvedCallback() func(request *ServerRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.onResolved
+}
+
+func (b *ServerRequestBroker) notifyResolvedResponse(request *ServerRequest, response *Response) {
+	callback := b.resolvedResponseCallback()
+	if callback != nil {
+		callback(request, response)
+	}
+}
+
+func (b *ServerRequestBroker) resolvedResponseCallback() func(request *ServerRequest, response *Response) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.onResponse
 }

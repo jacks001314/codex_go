@@ -11,7 +11,7 @@ import (
 	"codex_go/internal/model"
 )
 
-const DefaultAgentLoopMaxIterations = 8
+const DefaultAgentLoopMaxIterations = 64
 
 type AgentLoopOptions struct {
 	Agent        model.AgentRunner
@@ -56,6 +56,7 @@ type AgentLoopRequest struct {
 	AttestationProvider  codexapi.AttestationProvider
 	OutputSchema         any
 	PostToolInputItems   ToolPostExecutionInputItems
+	OnToolStarted        ToolStartedCallback
 	Timing               *TimingState
 }
 
@@ -135,9 +136,15 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	prompt := strings.TrimSpace(request.Prompt)
 	promptAppended := false
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
+	clientMetadata := cloneStringMap(request.ClientMetadata)
 	for iteration := 0; iteration < l.maxTurns; iteration++ {
-		if items := drainSteerInputItems(l.steerMailbox, request); len(items) > 0 {
-			result.InputItems = append(result.InputItems, items...)
+		if steer := drainSteer(l.steerMailbox, request); steer != nil {
+			if len(steer.InputItems) > 0 {
+				result.InputItems = append(result.InputItems, steer.InputItems...)
+			}
+			if len(steer.ClientMetadata) > 0 {
+				clientMetadata = cloneStringMap(steer.ClientMetadata)
+			}
 		}
 		inputItems := append([]any(nil), result.InputItems...)
 		if iteration > 0 && len(inputItems) == 0 {
@@ -168,7 +175,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ItemIDsEnabled:       request.ItemIDsEnabled,
 			ServiceTier:          request.ServiceTier,
 			PromptCacheKey:       request.PromptCacheKey,
-			ClientMetadata:       cloneStringMap(request.ClientMetadata),
+			ClientMetadata:       cloneStringMap(clientMetadata),
 			AttestationProvider:  request.AttestationProvider,
 			OutputSchema:         request.OutputSchema,
 			StreamHandler:        timingStreamHandler(timing, l.now),
@@ -296,14 +303,14 @@ func agentItemRecordsTTFT(item *model.AgentItem) bool {
 	}
 }
 
-func drainSteerInputItems(mailbox *SteerMailbox, request *AgentLoopRequest) []any {
+func drainSteer(mailbox *SteerMailbox, request *AgentLoopRequest) *SteerDrainResult {
 	if mailbox == nil && request != nil {
 		mailbox = request.SteerMailbox
 	}
 	if mailbox == nil || request == nil {
 		return nil
 	}
-	return mailbox.Drain(&SteerDrainParams{ThreadID: request.ThreadID, TurnID: request.TurnID})
+	return mailbox.DrainWithMetadata(&SteerDrainParams{ThreadID: request.ThreadID, TurnID: request.TurnID})
 }
 
 func addAgentUsage(left model.AgentUsage, right model.AgentUsage) model.AgentUsage {

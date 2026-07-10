@@ -96,6 +96,91 @@ func TestListModelsPaginationErrorsMatchRust(t *testing.T) {
 	}
 }
 
+func TestListModelsDefaultsToOnlineIfUncachedLikeRust(t *testing.T) {
+	endpoint := &recordingModelsEndpoint{
+		responses: []*ModelsEndpointResponse{{
+			Models: []ModelInfo{{
+				Slug:           "chatgpt-remote-only",
+				DisplayName:    "ChatGPT Remote Only",
+				Description:    "Remote model",
+				Visibility:     VisibilityList,
+				SupportedInAPI: true,
+				Priority:       0,
+			}},
+		}},
+	}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		ModelCatalog: &ModelsResponse{Models: []ModelInfo{{
+			Slug:           "bundled",
+			DisplayName:    "Bundled",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+			Priority:       10,
+		}}},
+		Endpoint:                        endpoint,
+		UseRemoteCatalogAsSourceOfTruth: true,
+	})
+	service := NewModelService(manager)
+
+	first, err := service.List(&ModelListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if endpoint.calls != 1 {
+		t.Fatalf("endpoint calls = %d, want 1", endpoint.calls)
+	}
+	if len(first.Models) != 1 || first.Models[0].ID != "chatgpt-remote-only" || !first.Models[0].IsDefault {
+		t.Fatalf("first models = %#v", first.Models)
+	}
+
+	second, err := service.List(&ModelListParams{})
+	if err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if endpoint.calls != 1 {
+		t.Fatalf("endpoint calls after cached list = %d, want 1", endpoint.calls)
+	}
+	if len(second.Models) != 1 || second.Models[0].ID != "chatgpt-remote-only" {
+		t.Fatalf("second models = %#v", second.Models)
+	}
+}
+
+func TestListModelsExplicitOfflineDoesNotRefresh(t *testing.T) {
+	endpoint := &recordingModelsEndpoint{
+		responses: []*ModelsEndpointResponse{{
+			Models: []ModelInfo{{
+				Slug:           "remote",
+				DisplayName:    "Remote",
+				Visibility:     VisibilityList,
+				SupportedInAPI: true,
+				Priority:       0,
+			}},
+		}},
+	}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		ModelCatalog: &ModelsResponse{Models: []ModelInfo{{
+			Slug:           "bundled",
+			DisplayName:    "Bundled",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+			Priority:       10,
+		}}},
+		Endpoint: endpoint,
+	})
+	service := NewModelService(manager)
+
+	offline, err := service.List(&ModelListParams{RefreshStrategy: string(RefreshOffline)})
+	if err != nil {
+		t.Fatalf("List(offline) error = %v", err)
+	}
+	if endpoint.calls != 0 {
+		t.Fatalf("endpoint calls = %d, want 0", endpoint.calls)
+	}
+	if len(offline.Models) != 1 || offline.Models[0].ID != "bundled" {
+		t.Fatalf("offline models = %#v", offline.Models)
+	}
+}
+
 func marshalObjectForTest(t *testing.T, value any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(value)

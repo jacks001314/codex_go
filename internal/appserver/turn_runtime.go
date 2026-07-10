@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"codex_go/internal/applypatch"
 	"codex_go/internal/apps"
+	"codex_go/internal/auth"
 	"codex_go/internal/codexapi"
 	"codex_go/internal/compact"
 	"codex_go/internal/config"
@@ -29,17 +31,22 @@ import (
 	promptctx "codex_go/internal/prompt"
 	"codex_go/internal/rollout"
 	"codex_go/internal/runtimeutil"
+	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
 )
 
 type activeRuntimeTurn struct {
-	ThreadID    string
-	TurnID      string
-	Cancel      context.CancelFunc
-	StartedAtMS int64
-	Params      *turn.TurnStartParams
+	ThreadID     string
+	TurnID       string
+	Cancel       context.CancelFunc
+	StartedAtMS  int64
+	Params       *turn.TurnStartParams
+	ConnectionID string
+	RunConfig    *appTurnRunConfig
+	SteerCount   int
 }
 
 func activeTurnDiffKey(threadID string, turnID string) string {
@@ -51,24 +58,28 @@ func (r *RuntimeRouter) responsesStreamHandler(threadID string, turnID string, p
 	if params != nil {
 		state.experimentalRawEvents = params.ExperimentalRawEvents
 	}
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil {
+		state.applyPatchStreamingEvents = features.Enabled(cfg.FeatureSettings(), "apply_patch_streaming_events")
+	}
 	return func(event *model.ResponsesStreamEvent) {
 		r.notifyResponsesStreamEvent(threadID, turnID, event, state)
 	}
 }
 
 type responsesStreamNotificationState struct {
-	toolNames             map[string]string
-	patchInputs           map[string]string
-	patchFingerprints     map[string]string
-	activeResponseID      string
-	activeItemID          string
-	activeReasoningItemID string
-	planMode              bool
-	planItemID            string
-	planParser            map[string]*proposedPlanStreamParser
-	planStarted           bool
-	startedAgentItems     map[string]bool
-	experimentalRawEvents bool
+	toolNames                 map[string]string
+	patchInputs               map[string]string
+	patchFingerprints         map[string]string
+	activeResponseID          string
+	activeItemID              string
+	activeReasoningItemID     string
+	planMode                  bool
+	planItemID                string
+	planParser                map[string]*proposedPlanStreamParser
+	planStarted               bool
+	startedAgentItems         map[string]bool
+	experimentalRawEvents     bool
+	applyPatchStreamingEvents bool
 }
 
 func newResponsesStreamNotificationState(planMode bool, turnID string) *responsesStreamNotificationState {
@@ -141,6 +152,44 @@ func turnStartPlanMode(params *turn.TurnStartParams) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])), string(ModeKindPlan))
+}
+
+const collaborationModeDefaultInstructions = `# Collaboration Mode: Default
+
+You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+Your active mode changes only when new developer instructions with a different ` + "`<collaboration_mode>...</collaboration_mode>`" + ` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Plan and Default.
+
+## request_user_input availability
+
+Use the ` + "`request_user_input`" + ` tool only when it is listed in the available tools for this turn.
+
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.`
+
+func collaborationModeInstructionsInputItem(params *turn.TurnStartParams) any {
+	instructions := collaborationModeDeveloperInstructions(params)
+	if strings.TrimSpace(instructions) == "" {
+		return nil
+	}
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<collaboration_mode>", "</collaboration_mode>", instructions))
+	return renderedFragmentInputItem(rendered)
+}
+
+func collaborationModeDeveloperInstructions(params *turn.TurnStartParams) string {
+	if params == nil || params.CollaborationMode == nil {
+		return ""
+	}
+	settings := collaborationModeSettings(params.CollaborationMode)
+	if raw, ok := settings["developer_instructions"]; ok && raw != nil {
+		return strings.TrimSpace(stringFromAny(raw))
+	}
+	if raw, ok := settings["developerInstructions"]; ok && raw != nil {
+		return strings.TrimSpace(stringFromAny(raw))
+	}
+	if strings.EqualFold(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])), string(ModeKindDefault)) {
+		return collaborationModeDefaultInstructions
+	}
+	return ""
 }
 
 func (s *responsesStreamNotificationState) planParserFor(itemID string) *proposedPlanStreamParser {
@@ -457,6 +506,9 @@ func (r *RuntimeRouter) notifyApplyPatchInputDelta(threadID string, turnID strin
 	if state.toolNameFor(event, itemID) != "apply_patch" {
 		return false
 	}
+	if !state.applyPatchStreamingEvents {
+		return true
+	}
 	state.patchInputs[itemID] += delta
 	input := state.patchInputs[itemID]
 	action, err := applypatch.Parse(state.patchInputs[itemID])
@@ -523,6 +575,43 @@ func applyPatchActionFileChangeMaps(action *applypatch.Action) []map[string]any 
 		})
 	}
 	return changes
+}
+
+func applyPatchActionFileChangeMapsForCWD(action *applypatch.Action, cwd string) []map[string]any {
+	changes := applyPatchActionFileChangeMaps(action)
+	if len(changes) == 0 {
+		return changes
+	}
+	for _, change := range changes {
+		if path, ok := change["path"].(string); ok {
+			change["path"] = appserverWorkspacePath(cwd, path)
+		}
+		if kind, ok := change["kind"].(map[string]any); ok {
+			if movePath, ok := kind["move_path"].(string); ok && strings.TrimSpace(movePath) != "" {
+				kind["move_path"] = appserverWorkspacePath(cwd, movePath)
+			}
+		}
+	}
+	return changes
+}
+
+func appserverWorkspacePath(cwd string, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	base := strings.TrimSpace(cwd)
+	if base == "" {
+		base = "."
+	}
+	abs, err := filepath.Abs(filepath.Join(base, path))
+	if err != nil {
+		return path
+	}
+	return filepath.Clean(abs)
 }
 
 func partialApplyPatchFileChangeMaps(input string) []map[string]any {
@@ -652,7 +741,7 @@ func applyPatchActionStreamingDiff(change *applypatch.Change) string {
 	}
 }
 
-func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime) {
+func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime, connectionID string) {
 	if r == nil || params == nil || record == nil || runtime == nil {
 		return
 	}
@@ -680,6 +769,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 		return
 	}
+	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
@@ -715,29 +805,47 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		AttestationProvider:  runConfig.AttestationProvider,
 		OutputSchema:         params.OutputSchema,
 		PostToolInputItems:   runConfig.PostToolInputItems,
+		OnToolStarted:        r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
 	})
 	if err != nil {
+		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 		if ctx.Err() != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			return
 		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
-		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
+		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
+			ConnectionID: connectionID,
+			Params:       params,
+			RunConfig:    runConfig,
+			SteerCount:   steerCount,
+		})
 		return
 	}
+	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
 		return
 	}
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.notifyTurnPlanUpdates(threadID, turnID, result)
 	_ = r.persistLastResponseID(threadID, result)
-	items := r.sessionItemsForTurn(turnID, params, result, startedAt)
+	items := append([]session.Item(nil), runConfig.SessionItems...)
+	if runConfig.ExtraSessionItems != nil {
+		items = append(items, runConfig.ExtraSessionItems()...)
+	}
+	items = append(items, r.sessionItemsForTurn(turnID, params, result, startedAt)...)
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
 	}
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
-			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
+				ConnectionID: connectionID,
+				Params:       params,
+				RunConfig:    runConfig,
+				Result:       result,
+				SteerCount:   steerCount,
+			})
 			return
 		}
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
@@ -750,12 +858,21 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		threadItem := BuildThreadItem(item)
 		threadItems = append(threadItems, threadItem)
 		payload := threadItemPayload(threadItem)
-		r.notify(NotificationItemCompleted, &ItemCompletedNotification{
-			Item:          payload,
-			ThreadID:      threadID,
-			TurnID:        turnID,
-			CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
-		})
+		if shouldNotifyRuntimeItemCompleted(threadItem) {
+			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+				Item:          payload,
+				ThreadID:      threadID,
+				TurnID:        turnID,
+				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+			})
+			r.emitCommandExecutionAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitFileChangeAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitMCPToolCallAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitDynamicToolCallAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitCollabAgentToolCallAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitWebSearchAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+			r.emitImageGenerationAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
+		}
 		if threadItem.Type == "agent_message" && strings.TrimSpace(threadItem.Text) != "" {
 			r.notify(NotificationAgentMessageDelta, &AgentMessageDeltaNotification{
 				ThreadID: threadID,
@@ -774,7 +891,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			TokenUsage: *usage,
 		})
 		if statusErr == nil && status != nil && status.ShouldCompact {
-			if notification, err := r.autoCompactThreadAfterTurn(threadID, turnID, status); err == nil && notification != nil {
+			if notification, err := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); err == nil && notification != nil {
 				r.notify(NotificationContextCompacted, notification)
 			}
 		}
@@ -784,18 +901,36 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	durationMS := completedAt.UnixMilli() - startedAtMS
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
-	completedTurn := Turn{
-		ID:          turnID,
-		Items:       threadItems,
-		ItemsView:   TurnItemsFull,
-		Status:      TurnStatusCompleted,
-		StartedAt:   &record.StartedAt,
-		CompletedAt: &completedAtUnix,
-		DurationMS:  &durationMS,
-	}
+	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
+	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+func shouldNotifyRuntimeItemCompleted(item ThreadItem) bool {
+	switch threadItemWireType(&item) {
+	case "commandExecution":
+		return threadItemCommandStatus(&item) != CommandExecutionInProgress
+	case "fileChange":
+		return threadItemFileChangeStatus(&item) != PatchApplyInProgress
+	default:
+		return true
+	}
+}
+
+func completedTurnNotificationTurn(turnID string, status TurnStatus, appErr *TurnError, startedAt *int64, completedAt *int64, durationMS *int64) Turn {
+	return Turn{
+		ID:          turnID,
+		Items:       []ThreadItem{},
+		ItemsView:   TurnItemsNotLoaded,
+		Status:      status,
+		Error:       appErr,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		DurationMS:  durationMS,
+	}
 }
 
 func (r *RuntimeRouter) notifyTurnPlanUpdates(threadID string, turnID string, result *turn.AgentLoopResult) {
@@ -809,6 +944,122 @@ func (r *RuntimeRouter) notifyTurnPlanUpdates(threadID string, turnID string, re
 		}
 		r.notify(NotificationTurnPlanUpdated, update)
 	}
+}
+
+func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID string, cwd string) turn.ToolStartedCallback {
+	return func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time) {
+		if r == nil || invocation == nil {
+			return
+		}
+		if item, ok := commandExecutionStartedThreadItem(invocation, turnID, cwd, startedAt); ok {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item:        threadItemPayload(item),
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if item, ok := fileChangeStartedThreadItem(invocation, turnID, cwd, startedAt); ok {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item:        threadItemPayload(item),
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if isWebSearchInvocation(invocation) {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item: ThreadItemPayload{
+					"id":     firstNonEmpty(invocation.CallID, "web-search-"+safeIdentifier(turnID)),
+					"type":   "webSearch",
+					"query":  "",
+					"action": map[string]any{"type": "other"},
+				},
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if !isClockSleepInvocation(invocation) {
+			return
+		}
+		durationMS, ok := clockSleepDurationMS(invocation)
+		if !ok {
+			return
+		}
+		r.notify(NotificationItemStarted, &ItemStartedNotification{
+			Item: ThreadItemPayload{
+				"id":         firstNonEmpty(invocation.CallID, "sleep-"+safeIdentifier(turnID)),
+				"type":       "sleep",
+				"durationMs": durationMS,
+			},
+			ThreadID:    threadID,
+			TurnID:      turnID,
+			StartedAtMS: startedAt.UTC().UnixMilli(),
+		})
+	}
+}
+
+func commandExecutionStartedThreadItem(invocation *tool.Invocation, turnID string, cwd string, startedAt time.Time) (ThreadItem, bool) {
+	if invocation == nil || invocation.ToolName.Key() != tool.DefaultExecCommandToolName || invocation.Payload.Kind != tool.PayloadFunction {
+		return ThreadItem{}, false
+	}
+	var args tool.ExecCommandArgs
+	if strings.TrimSpace(invocation.Payload.Arguments) != "" {
+		if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &args); err != nil {
+			return ThreadItem{}, false
+		}
+	}
+	command := strings.TrimSpace(args.Cmd)
+	if command == "" {
+		return ThreadItem{}, false
+	}
+	itemCWD := firstNonEmpty(args.CWD, args.Workdir, cwd)
+	if itemCWD != "" {
+		if abs, err := filepath.Abs(itemCWD); err == nil {
+			itemCWD = abs
+		}
+	}
+	callID := firstNonEmpty(invocation.CallID, "command-"+safeIdentifier(turnID))
+	return ThreadItem{
+		ID:        callID,
+		Type:      "commandExecution",
+		TurnID:    turnID,
+		CreatedAt: startedAt.UTC().UnixMilli(),
+		Data: map[string]any{
+			"command":        command,
+			"cwd":            itemCWD,
+			"source":         string(CommandExecutionSourceAgent),
+			"status":         string(CommandExecutionInProgress),
+			"commandActions": []map[string]any{{"type": "unknown", "command": command}},
+		},
+	}, true
+}
+
+func fileChangeStartedThreadItem(invocation *tool.Invocation, turnID string, cwd string, startedAt time.Time) (ThreadItem, bool) {
+	if invocation == nil || invocation.ToolName.Key() != tool.DefaultApplyPatchToolName || invocation.Payload.Kind != tool.PayloadCustom {
+		return ThreadItem{}, false
+	}
+	action, err := applypatch.Parse(invocation.Payload.Input)
+	if err != nil || action == nil || action.IsEmpty() {
+		return ThreadItem{}, false
+	}
+	callID := firstNonEmpty(invocation.CallID, "patch-"+safeIdentifier(turnID))
+	return ThreadItem{
+		ID:        callID,
+		Type:      "fileChange",
+		Name:      tool.DefaultApplyPatchToolName,
+		TurnID:    turnID,
+		CreatedAt: startedAt.UTC().UnixMilli(),
+		Data: map[string]any{
+			"fileChange": true,
+			"status":     string(PatchApplyInProgress),
+			"changes":    applyPatchActionFileChangeMapsForCWD(action, cwd),
+		},
+	}, true
 }
 
 func turnPlanUpdatedNotification(threadID string, turnID string, execution *turn.ToolExecutionResult) (*TurnPlanUpdatedNotification, bool) {
@@ -982,6 +1233,48 @@ func (r *RuntimeRouter) registerActiveRuntimeTurn(threadID string, turnID string
 	return nil
 }
 
+func (r *RuntimeRouter) updateActiveRuntimeTurnAnalytics(threadID string, turnID string, connectionID string, runConfig *appTurnRunConfig) {
+	if r == nil {
+		return
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || active.TurnID != turnID {
+		return
+	}
+	if strings.TrimSpace(connectionID) != "" {
+		active.ConnectionID = normalizeConnectionID(connectionID)
+	}
+	active.RunConfig = runConfig
+}
+
+func (r *RuntimeRouter) noteAcceptedTurnSteer(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || active.TurnID != turnID {
+		return
+	}
+	active.SteerCount++
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnSteerCount(threadID string, turnID string) int {
+	if r == nil {
+		return 0
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || active.TurnID != turnID {
+		return 0
+	}
+	return active.SteerCount
+}
+
 func (r *RuntimeRouter) consumeCompletedRuntimeTurn(threadID string, turnID string) bool {
 	if r == nil {
 		return false
@@ -1054,13 +1347,31 @@ func (r *RuntimeRouter) activeDiffTracker(threadID string, turnID string) *runti
 	return r.ensureActiveDiffTrackerLocked(threadID, turnID)
 }
 
+func (r *RuntimeRouter) activeUnifiedDiffSnapshot(threadID string, turnID string) string {
+	if r == nil {
+		return ""
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	tracker := r.diffs[activeTurnDiffKey(threadID, turnID)]
+	if tracker == nil {
+		return ""
+	}
+	diff := tracker.UnifiedDiff()
+	if diff == nil {
+		return ""
+	}
+	return *diff
+}
+
 func (r *RuntimeRouter) clearActiveDiffTracker(threadID string, turnID string) {
 	if r == nil {
 		return
 	}
 	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
 	delete(r.diffs, activeTurnDiffKey(threadID, turnID))
+	r.turnsMu.Unlock()
+	r.clearToolItemReviewSummaries(threadID, turnID)
 }
 
 func (r *RuntimeRouter) hasRuntimeThreadStore() bool {
@@ -1279,7 +1590,34 @@ func stringPointerIfNotEmpty(value string) *string {
 	return &value
 }
 
+type turnCompletionAnalyticsContext struct {
+	ConnectionID             string
+	Params                   *turn.TurnStartParams
+	RunConfig                *appTurnRunConfig
+	Result                   *turn.AgentLoopResult
+	SteerCount               int
+	TurnError                CodexErrorInfo
+	CodexErrorKind           *string
+	CodexErrorHTTPStatusCode *uint16
+}
+
+func analyticsContextFromActiveRuntimeTurn(active *activeRuntimeTurn) *turnCompletionAnalyticsContext {
+	if active == nil || active.Params == nil || active.RunConfig == nil {
+		return nil
+	}
+	return &turnCompletionAnalyticsContext{
+		ConnectionID: active.ConnectionID,
+		Params:       cloneTurnStartParams(active.Params),
+		RunConfig:    active.RunConfig,
+		SteerCount:   active.SteerCount,
+	}
+}
+
 func (r *RuntimeRouter) finishTurnWithError(threadID string, turnID string, startedAtMS int64, err error) {
+	r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, nil)
+}
+
+func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID string, startedAtMS int64, err error, analytics *turnCompletionAnalyticsContext) {
 	if r == nil {
 		return
 	}
@@ -1289,7 +1627,13 @@ func (r *RuntimeRouter) finishTurnWithError(threadID string, turnID string, star
 	now := time.Now().UTC()
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
-	appErr := &TurnError{Message: err.Error()}
+	errorFields := turnAnalyticsErrorFieldsFromError(err)
+	appErr := &TurnError{Message: err.Error(), CodexErrorInfo: errorFields.TurnError}
+	if analytics != nil {
+		analytics.TurnError = errorFields.TurnError
+		analytics.CodexErrorKind = errorFields.CodexErrorKind
+		analytics.CodexErrorHTTPStatusCode = errorFields.HTTPStatusCode
+	}
 	_ = r.appendRuntimeTurnError(threadID, err.Error(), now)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
@@ -1302,21 +1646,18 @@ func (r *RuntimeRouter) finishTurnWithError(threadID string, turnID string, star
 	})
 	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn: Turn{
-			ID:          turnID,
-			Items:       []ThreadItem{},
-			ItemsView:   TurnItemsFull,
-			Status:      TurnStatusFailed,
-			Error:       appErr,
-			CompletedAt: &completedAt,
-			DurationMS:  &durationMS,
-		},
+		Turn:     completedTurnNotificationTurn(turnID, TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
+	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusFailed, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
 func (r *RuntimeRouter) finishTurnInterrupted(threadID string, turnID string, startedAtMS int64) {
+	r.finishTurnInterruptedAnalytics(threadID, turnID, startedAtMS, nil)
+}
+
+func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext) {
 	if r == nil {
 		return
 	}
@@ -1329,17 +1670,133 @@ func (r *RuntimeRouter) finishTurnInterrupted(threadID string, turnID string, st
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
 	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn: Turn{
-			ID:          turnID,
-			Items:       []ThreadItem{},
-			ItemsView:   TurnItemsFull,
-			Status:      TurnStatusInterrupted,
-			CompletedAt: &completedAt,
-			DurationMS:  &durationMS,
-		},
+		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
+	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+func (r *RuntimeRouter) emitTurnCompletionAnalytics(ctx context.Context, analytics *turnCompletionAnalyticsContext, turnID string, status TurnStatus, startedAtMS int64, completedAt time.Time, durationMS int64) {
+	if r == nil || analytics == nil || analytics.Params == nil || analytics.RunConfig == nil {
+		return
+	}
+	startedAt := time.UnixMilli(startedAtMS).UTC()
+	record := &turn.TurnRecord{ID: turnID}
+	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode)
+}
+
+type turnAnalyticsErrorFields struct {
+	TurnError      CodexErrorInfo
+	CodexErrorKind *string
+	HTTPStatusCode *uint16
+}
+
+func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
+	if err == nil {
+		return turnAnalyticsErrorFields{}
+	}
+	var apiErr *codexapi.APIError
+	if errors.As(err, &apiErr) {
+		return turnAnalyticsErrorFieldsFromAPIError(apiErr)
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return turnAnalyticsErrorFields{TurnError: "other", CodexErrorKind: stringPtrIfNotEmpty("timeout")}
+	case errors.Is(err, context.Canceled):
+		return turnAnalyticsErrorFields{TurnError: "other", CodexErrorKind: stringPtrIfNotEmpty("interrupted")}
+	case errors.Is(err, turn.ErrInvalidTurnRequest),
+		errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrJSONRPCInvalidRequest),
+		errors.Is(err, model.ErrInvalidAgentRequest),
+		errors.Is(err, session.ErrInvalidThreadID),
+		errors.Is(err, tool.ErrToolInvalidCall),
+		errors.Is(err, tool.ErrToolNotFound):
+		return turnAnalyticsErrorFields{TurnError: "badRequest", CodexErrorKind: stringPtrIfNotEmpty("invalid_request")}
+	case errors.Is(err, sandbox.ErrInvalidSandboxRunRequest),
+		errors.Is(err, sandbox.ErrInvalidPermissionProfileRequest),
+		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest):
+		return turnAnalyticsErrorFields{TurnError: "sandboxError", CodexErrorKind: stringPtrIfNotEmpty("sandbox")}
+	default:
+		return turnAnalyticsErrorFields{}
+	}
+}
+
+func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsErrorFields {
+	if err == nil {
+		return turnAnalyticsErrorFields{}
+	}
+	status := uint16PtrFromHTTPStatus(err.Status)
+	fields := func(info CodexErrorInfo, kind string) turnAnalyticsErrorFields {
+		return turnAnalyticsErrorFields{TurnError: info, CodexErrorKind: stringPtrIfNotEmpty(kind), HTTPStatusCode: status}
+	}
+	switch err.Kind {
+	case codexapi.ErrorContextWindowExceeded:
+		return fields("contextWindowExceeded", "context_window_exceeded")
+	case codexapi.ErrorQuotaExceeded:
+		return fields("usageLimitExceeded", "quota_exceeded")
+	case codexapi.ErrorUsageNotIncluded:
+		return fields("usageLimitExceeded", "usage_not_included")
+	case codexapi.ErrorRateLimit:
+		return fields("usageLimitExceeded", "usage_limit_reached")
+	case codexapi.ErrorServerOverloaded:
+		return fields("serverOverloaded", "server_overloaded")
+	case codexapi.ErrorCyberPolicy:
+		return fields("cyberPolicy", "cyber_policy")
+	case codexapi.ErrorInvalidRequest:
+		return fields("badRequest", "invalid_request")
+	case codexapi.ErrorRetryable:
+		return fields(codexErrorInfoWithHTTPStatus("responseTooManyFailedAttempts", status), "retry_limit")
+	case codexapi.ErrorTransport:
+		return fields(codexErrorInfoWithHTTPStatus("httpConnectionFailed", status), "connection_failed")
+	case codexapi.ErrorStream:
+		return fields(codexErrorInfoWithHTTPStatus("responseStreamConnectionFailed", status), "response_stream_failed")
+	case codexapi.ErrorAPI:
+		return turnAnalyticsErrorFieldsFromAPIStatus(err.Status)
+	default:
+		return turnAnalyticsErrorFields{}
+	}
+}
+
+func turnAnalyticsErrorFieldsFromAPIStatus(status int) turnAnalyticsErrorFields {
+	httpStatus := uint16PtrFromHTTPStatus(status)
+	fields := func(info CodexErrorInfo, kind string) turnAnalyticsErrorFields {
+		return turnAnalyticsErrorFields{TurnError: info, CodexErrorKind: stringPtrIfNotEmpty(kind), HTTPStatusCode: httpStatus}
+	}
+	switch status {
+	case http.StatusBadRequest:
+		return fields("badRequest", "invalid_request")
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fields("unauthorized", "unexpected_status")
+	case http.StatusTooManyRequests:
+		return fields("usageLimitExceeded", "usage_limit_reached")
+	case http.StatusServiceUnavailable:
+		return fields("serverOverloaded", "server_overloaded")
+	default:
+		if status >= 500 {
+			return fields("internalServerError", "internal_server_error")
+		}
+		if status > 0 {
+			return fields("other", "unexpected_status")
+		}
+		return turnAnalyticsErrorFields{}
+	}
+}
+
+func codexErrorInfoWithHTTPStatus(kind string, status *uint16) CodexErrorInfo {
+	value := any(nil)
+	if status != nil {
+		value = *status
+	}
+	return map[string]any{kind: map[string]any{"httpStatusCode": value}}
+}
+
+func uint16PtrFromHTTPStatus(status int) *uint16 {
+	if status <= 0 || status > 65535 {
+		return nil
+	}
+	value := uint16(status)
+	return &value
 }
 
 func (r *RuntimeRouter) persistInterruptedTurnMarker(threadID string, turnID string, now time.Time) {
@@ -1677,11 +2134,25 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 			}
 			toolExecutions := toolExecutionsForResponse(result.ToolExecutions, executionIndex, toolItemCount)
 			for i := range toolExecutions {
+				if isWebSearchExecution(&toolExecutions[i]) {
+					continue
+				}
+				if item, ok := sessionItemForClockSleepExecution(turnID, &toolExecutions[i], createdAt); ok {
+					items = append(items, item)
+					continue
+				}
 				if item, ok := sessionItemForAppToolCall(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
 			}
 			for i := range toolExecutions {
+				if isClockSleepExecution(&toolExecutions[i]) {
+					continue
+				}
+				if item, ok := sessionItemForWebSearchExecution(turnID, &toolExecutions[i], createdAt, metadata); ok {
+					items = append(items, item)
+					continue
+				}
 				if item, ok := sessionItemForAppToolOutput(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
@@ -1909,27 +2380,35 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, usage model.A
 	return &status, nil
 }
 
-func (r *RuntimeRouter) autoCompactThreadAfterTurn(threadID string, turnID string, status *compact.TokenStatus) (*ContextCompactedNotification, error) {
+func (r *RuntimeRouter) autoCompactThreadAfterTurn(threadID string, turnID string, connectionID string, status *compact.TokenStatus) (*ContextCompactedNotification, error) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
 		return nil, nil
 	}
 	reason := compactReasonFromStatus(status)
+	var activeContextTokensBefore int64
+	if status != nil {
+		activeContextTokensBefore = int64(status.ActiveContextTokens)
+	}
 	return r.compactThread(context.Background(), &runtimeCompactRequest{
-		ThreadID: strings.TrimSpace(threadID),
-		TurnID:   strings.TrimSpace(turnID),
-		Trigger:  compact.TriggerAuto,
-		Reason:   reason,
-		Phase:    compact.PhaseMidTurn,
+		ThreadID:                  strings.TrimSpace(threadID),
+		TurnID:                    strings.TrimSpace(turnID),
+		ConnectionID:              connectionID,
+		Trigger:                   compact.TriggerAuto,
+		Reason:                    reason,
+		Phase:                     compact.PhaseMidTurn,
+		ActiveContextTokensBefore: activeContextTokensBefore,
 	})
 }
 
 type runtimeCompactRequest struct {
-	ThreadID string
-	TurnID   string
-	Trigger  compact.Trigger
-	Reason   compact.Reason
-	Phase    compact.Phase
-	Prompt   string
+	ThreadID                  string
+	TurnID                    string
+	ConnectionID              string
+	Trigger                   compact.Trigger
+	Reason                    compact.Reason
+	Phase                     compact.Phase
+	Prompt                    string
+	ActiveContextTokensBefore int64
 }
 
 func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompactRequest) (*ContextCompactedNotification, error) {
@@ -1943,14 +2422,16 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	if err != nil || record == nil {
 		return nil, err
 	}
+	startedAt := time.Now().UTC()
 	request := &compact.Request{
-		ThreadID: strings.TrimSpace(params.ThreadID),
-		TurnID:   strings.TrimSpace(params.TurnID),
-		Trigger:  params.Trigger,
-		Reason:   params.Reason,
-		Phase:    params.Phase,
-		Prompt:   strings.TrimSpace(params.Prompt),
-		History:  compactItemsFromSessionItems(record.Items),
+		ThreadID:  strings.TrimSpace(params.ThreadID),
+		TurnID:    strings.TrimSpace(params.TurnID),
+		Trigger:   params.Trigger,
+		Reason:    params.Reason,
+		Phase:     params.Phase,
+		Prompt:    strings.TrimSpace(params.Prompt),
+		History:   compactItemsFromSessionItems(record.Items),
+		StartedAt: startedAt,
 	}
 	if request.Trigger == "" {
 		request.Trigger = compact.TriggerManual
@@ -1964,6 +2445,7 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, err
 	}
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
@@ -1974,12 +2456,14 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		FallbackToLocal:      true,
 	})
 	if err != nil {
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, err
 	}
 	if compacted == nil {
 		return nil, nil
 	}
 	if err := r.runPostCompactHooks(ctx, hookCtx); err != nil {
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -2022,6 +2506,7 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		return nil, err
 	}
 	_ = r.appendRuntimeCompacted(request.ThreadID, compacted.Summary, record.Items, now)
+	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
 	return &ContextCompactedNotification{
 		ThreadID:    request.ThreadID,
 		TurnID:      request.TurnID,
@@ -2305,6 +2790,12 @@ func appTimingProfileSnakeMap(profile *turn.Profile) map[string]any {
 }
 
 func sessionItemsForAppToolExecution(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time) []session.Item {
+	if item, ok := sessionItemForClockSleepExecution(turnID, execution, createdAt); ok {
+		return []session.Item{item}
+	}
+	if item, ok := sessionItemForWebSearchExecution(turnID, execution, createdAt, nil); ok {
+		return []session.Item{item}
+	}
 	items := []session.Item{}
 	if item, ok := sessionItemForAppToolCall(turnID, execution, createdAt, nil); ok {
 		items = append(items, item)
@@ -2313,6 +2804,159 @@ func sessionItemsForAppToolExecution(turnID string, execution *turn.ToolExecutio
 		items = append(items, item)
 	}
 	return items
+}
+
+func sessionItemForClockSleepExecution(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time) (session.Item, bool) {
+	if !isClockSleepExecution(execution) {
+		return session.Item{}, false
+	}
+	durationMS, ok := clockSleepDurationMS(execution.Invocation)
+	if !ok {
+		return session.Item{}, false
+	}
+	callID := appToolExecutionCallID(execution, createdAt)
+	itemCreatedAt := execution.FinishedAt
+	if itemCreatedAt.IsZero() {
+		itemCreatedAt = createdAt
+	}
+	metadata := appTimingMetadata(appTurnMetadata(turnID, nil), execution.StartedAt, execution.FinishedAt)
+	delete(metadata, "durationMs")
+	delete(metadata, "duration_ms")
+	return session.Item{
+		ID:        callID,
+		Type:      "sleep",
+		Text:      fmt.Sprintf("%d", durationMS),
+		CreatedAt: itemCreatedAt,
+		Data: map[string]any{
+			"durationMs": durationMS,
+		},
+		Metadata: metadata,
+	}, true
+}
+
+func isClockSleepExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && execution.Invocation != nil && isClockSleepInvocation(execution.Invocation)
+}
+
+func isClockSleepInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil && invocation.ToolName.Key() == "clock.sleep"
+}
+
+func sessionItemForWebSearchExecution(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time, responseMetadata map[string]any) (session.Item, bool) {
+	if !isWebSearchExecution(execution) {
+		return session.Item{}, false
+	}
+	callID := appToolExecutionCallID(execution, createdAt)
+	action := webSearchActionForExecution(execution)
+	query := webSearchQueryFromAction(action)
+	itemCreatedAt := createdAt
+	if execution != nil {
+		if execution.FinishedAt.IsZero() && execution.Output != nil && !execution.Output.CompletedAt.IsZero() {
+			itemCreatedAt = execution.Output.CompletedAt
+		} else if !execution.FinishedAt.IsZero() {
+			itemCreatedAt = execution.FinishedAt
+		}
+	}
+	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
+	metadata["toolName"] = "web.run"
+	if execution.Output != nil {
+		metadata["success"] = execution.Output.Success
+		if strings.TrimSpace(execution.Output.Error) != "" {
+			metadata["error"] = execution.Output.Error
+		}
+	}
+	return session.Item{
+		ID:        callID,
+		Type:      "webSearch",
+		Text:      query,
+		CreatedAt: itemCreatedAt,
+		Data: map[string]any{
+			"query":  query,
+			"action": action,
+		},
+		Metadata: metadata,
+	}, true
+}
+
+func isWebSearchExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	if isWebSearchInvocation(execution.Invocation) {
+		return true
+	}
+	if execution.Output != nil {
+		if execution.Output.ToolName.Namespace == turn.WebSearchNamespace && execution.Output.ToolName.Name == turn.WebSearchRunTool {
+			return true
+		}
+		if execution.Output.Data != nil {
+			if marker, ok := execution.Output.Data["web_search"].(bool); ok && marker {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isWebSearchInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil && invocation.ToolName.Namespace == turn.WebSearchNamespace && invocation.ToolName.Name == turn.WebSearchRunTool
+}
+
+func webSearchActionForExecution(execution *turn.ToolExecutionResult) any {
+	if execution != nil && execution.Output != nil && execution.Output.Data != nil {
+		for _, key := range []string{"web_search_action", "webSearchAction", "action"} {
+			if value, ok := execution.Output.Data[key]; ok {
+				if action := threadItemWebSearchActionFromAny(value); action != nil {
+					return action
+				}
+			}
+		}
+	}
+	return map[string]any{"type": "other"}
+}
+
+func webSearchQueryFromAction(action any) string {
+	normalized := threadItemWebSearchActionFromAny(action)
+	data, ok := normalized.(map[string]any)
+	if !ok {
+		return ""
+	}
+	actionType, _ := data["type"].(string)
+	if actionType != "search" {
+		return ""
+	}
+	if query := threadItemStringFromAnyMap(data, "query"); strings.TrimSpace(query) != "" {
+		return strings.TrimSpace(query)
+	}
+	switch queries := data["queries"].(type) {
+	case []string:
+		if len(queries) > 0 {
+			return strings.TrimSpace(queries[0])
+		}
+	case []any:
+		for _, value := range queries {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return ""
+}
+
+func clockSleepDurationMS(invocation *tool.Invocation) (int64, bool) {
+	if invocation == nil {
+		return 0, false
+	}
+	var payload struct {
+		DurationMS int64 `json:"duration_ms"`
+	}
+	if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &payload); err != nil {
+		return 0, false
+	}
+	if payload.DurationMS <= 0 {
+		return 0, false
+	}
+	return payload.DurationMS, true
 }
 
 func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time, responseMetadata map[string]any) (session.Item, bool) {
@@ -2442,7 +3086,23 @@ type appTurnRunConfig struct {
 	Instructions         string
 	Originator           string
 	ClientMetadata       map[string]string
+	SessionID            string
+	ThreadSource         string
+	SubagentSource       string
+	ParentThreadID       string
+	Ephemeral            bool
+	WorkspaceKind        string
+	NumInputImages       int
+	IsFirstTurn          bool
+	ApprovalPolicy       string
+	ApprovalsReviewer    string
+	SandboxPolicy        string
+	SandboxNetworkAccess bool
+	CollaborationMode    string
+	Personality          string
 	InputItems           []any
+	SessionItems         []session.Item
+	ExtraSessionItems    func() []session.Item
 	PostToolInputItems   turn.ToolPostExecutionInputItems
 	PreviousResponseID   string
 	ParallelToolCalls    bool
@@ -2456,6 +3116,15 @@ type appTurnRunConfig struct {
 	ServiceTier          string
 	Store                bool
 	AttestationProvider  codexapi.AttestationProvider
+}
+
+type responsesMetadataLineage struct {
+	SessionID          string
+	ForkedFromThreadID string
+	ParentThreadID     string
+	SubagentHeader     string
+	SubagentKind       string
+	ThreadSource       string
 }
 
 func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, startedAtMS int64) (*appTurnRunConfig, error) {
@@ -2485,12 +3154,17 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
 	inputItems := append([]any(nil), historyItems...)
 	inputItems = append(inputItems, additionalInputItems...)
-	inputItems = append(inputItems, r.recommendedPluginInputItems()...)
+	if item := collaborationModeInstructionsInputItem(params); item != nil {
+		inputItems = append(inputItems, item)
+	}
+	inputItems = append(inputItems, r.recommendedPluginInputItems(cfg)...)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
-	instructions, err = r.instructionsWithCurrentTime(ctx, threadID, cfg, instructions)
+	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
+	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
 	if err != nil {
 		return nil, err
 	}
+	inputItems = append(inputItems, currentTimeInputItems...)
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
 	var postToolInputItems turn.ToolPostExecutionInputItems
@@ -2498,9 +3172,31 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
+	var extraSessionItemsMu sync.Mutex
+	extraSessionItems := []session.Item{}
+	appendExtraSessionItems := func(items []session.Item) {
+		if len(items) == 0 {
+			return
+		}
+		extraSessionItemsMu.Lock()
+		defer extraSessionItemsMu.Unlock()
+		extraSessionItems = append(extraSessionItems, items...)
+	}
+	extraSessionItemsSnapshot := func() []session.Item {
+		extraSessionItemsMu.Lock()
+		defer extraSessionItemsMu.Unlock()
+		return append([]session.Item(nil), extraSessionItems...)
+	}
+	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, currentTimeState, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
+	cwd := firstNonEmpty(turnCWD(params), r.services.DefaultCWD)
+	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil {
+		return nil, err
+	}
+	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	installationID := ""
 	if r != nil && r.services.Config != nil {
 		if codexHome := strings.TrimSpace(r.services.Config.CodexHome()); codexHome != "" {
@@ -2509,12 +3205,30 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			}
 		}
 	}
+	lineage := r.responsesMetadataLineage(threadID)
+	threadSnapshot := r.analyticsThreadSnapshot(threadID)
 	return &appTurnRunConfig{
 		Model:                modelProviderConfig.Model,
 		ProviderID:           modelProviderConfig.ProviderID,
 		Instructions:         instructions,
 		Originator:           strings.TrimSpace(params.Originator),
+		SessionID:            firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
+		ThreadSource:         lineage.ThreadSource,
+		SubagentSource:       lineage.SubagentKind,
+		ParentThreadID:       lineage.ParentThreadID,
+		Ephemeral:            threadSnapshot.Ephemeral,
+		WorkspaceKind:        strings.TrimSpace(extraMetadata["workspace_kind"]),
+		NumInputImages:       countTurnStartInputImages(params),
+		IsFirstTurn:          threadSnapshot.IsFirstTurn,
+		ApprovalPolicy:       string(approvalPolicy),
+		ApprovalsReviewer:    turnApprovalsReviewerForTurn(cfg, params),
+		SandboxPolicy:        analyticsSandboxPolicy(permissionProfile, cwd),
+		SandboxNetworkAccess: analyticsSandboxNetworkAccess(permissionProfile),
+		CollaborationMode:    analyticsCollaborationMode(params),
+		Personality:          analyticsOptionalModeString(personality),
 		InputItems:           inputItems,
+		SessionItems:         currentTimeSessionItems,
+		ExtraSessionItems:    extraSessionItemsSnapshot,
 		PostToolInputItems:   postToolInputItems,
 		PreviousResponseID:   previousResponseID,
 		ParallelToolCalls:    r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
@@ -2529,17 +3243,410 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		Store:                modelProviderConfig.Store,
 		AttestationProvider:  r.appServerAttestationProvider(),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:   installationID,
-			SessionID:        threadID,
-			ThreadID:         threadID,
-			TurnID:           turnID,
-			WindowID:         threadID + ":1",
-			RequestKind:      codexapi.ClientRequestTurn,
-			Extra:            extraMetadata,
-			StartedAtMS:      startedAtMS,
-			UseResponsesLite: r.modelUsesResponsesLite(modelProviderConfig.Model),
+			InstallationID:     installationID,
+			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
+			ThreadID:           threadID,
+			TurnID:             turnID,
+			WindowID:           threadID + ":1",
+			RequestKind:        codexapi.ClientRequestTurn,
+			ForkedFromThreadID: lineage.ForkedFromThreadID,
+			ParentThreadID:     lineage.ParentThreadID,
+			SubagentHeader:     lineage.SubagentHeader,
+			SubagentKind:       lineage.SubagentKind,
+			ThreadSource:       lineage.ThreadSource,
+			Extra:              extraMetadata,
+			StartedAtMS:        startedAtMS,
+			UseResponsesLite:   r.modelUsesResponsesLite(modelProviderConfig.Model),
 		}),
 	}, nil
+}
+
+type appTurnAnalyticsThreadSnapshot struct {
+	SessionID   string
+	Ephemeral   bool
+	IsFirstTurn bool
+}
+
+func (r *RuntimeRouter) analyticsThreadSnapshot(threadID string) appTurnAnalyticsThreadSnapshot {
+	threadID = strings.TrimSpace(threadID)
+	snapshot := appTurnAnalyticsThreadSnapshot{SessionID: threadID, IsFirstTurn: true}
+	if r == nil || threadID == "" {
+		return snapshot
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return snapshot
+	}
+	if sessionID := strings.TrimSpace(record.SessionID); sessionID != "" {
+		snapshot.SessionID = sessionID
+	}
+	snapshot.Ephemeral = runtimeRecordEphemeral(record)
+	snapshot.IsFirstTurn = len(record.Items) == 0 && len(record.Metadata.RolloutTurns) == 0
+	return snapshot
+}
+
+func turnApprovalsReviewerForTurn(cfg *config.Config, params *turn.TurnStartParams) string {
+	if params != nil && params.ApprovalsReviewer != nil {
+		if value := strings.TrimSpace(*params.ApprovalsReviewer); value != "" {
+			return value
+		}
+	}
+	value := firstNonEmpty(
+		stringConfigValue(cfg, "approvals_reviewer"),
+		stringConfigValue(cfg, "approvalsReviewer"),
+	)
+	if value == "" {
+		return "user"
+	}
+	return value
+}
+
+func analyticsSandboxPolicy(resolution *config.SandboxPermissionProfileResolution, cwd string) string {
+	if resolution == nil || resolution.Profile == nil {
+		return ""
+	}
+	profile := resolution.Profile
+	if profile.Disabled {
+		return "full_access"
+	}
+	policy := profile.SandboxPolicy
+	if policy == nil {
+		if profile.AllowsNetwork() {
+			return "full_access"
+		}
+		return "read_only"
+	}
+	if policy.HasFullDiskWriteAccess() {
+		if profile.AllowsNetwork() {
+			return "full_access"
+		}
+		return "external_sandbox"
+	}
+	if len(policy.GetWritableRootsWithCWD(cwd)) == 0 {
+		return "read_only"
+	}
+	return "workspace_write"
+}
+
+func analyticsSandboxNetworkAccess(resolution *config.SandboxPermissionProfileResolution) bool {
+	return resolution != nil && resolution.Profile != nil && resolution.Profile.AllowsNetwork()
+}
+
+func analyticsCollaborationMode(params *turn.TurnStartParams) string {
+	if params != nil && params.CollaborationMode != nil {
+		switch strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"]))) {
+		case strings.ToLower(string(ModeKindPlan)):
+			return "plan"
+		}
+	}
+	return "default"
+}
+
+func analyticsOptionalModeString(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
+}
+
+func countTurnStartInputImages(params *turn.TurnStartParams) int {
+	if params == nil {
+		return 0
+	}
+	return countTurnUserInputImages(params.Input)
+}
+
+func countTurnSteerInputImages(params *turn.TurnSteerParams) int {
+	if params == nil {
+		return 0
+	}
+	return countTurnUserInputImages(params.Input)
+}
+
+func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
+	count := 0
+	for i := range inputs {
+		input := inputs[i]
+		if strings.TrimSpace(input.URL) != "" || strings.TrimSpace(input.Path) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16) {
+	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil {
+		return
+	}
+	client, ok := r.analyticsAppServerClient(connectionID)
+	if !ok {
+		return
+	}
+	event := telemetry.NewCodexTurnEvent(telemetry.CodexTurnEventInput{
+		ThreadID:                 params.ThreadID,
+		SessionID:                firstNonEmpty(runConfig.SessionID, params.ThreadID),
+		TurnID:                   record.ID,
+		AppServerClient:          client,
+		ThreadOriginator:         runConfig.Originator,
+		Runtime:                  telemetry.CurrentRuntimeMetadata(),
+		Ephemeral:                runConfig.Ephemeral,
+		ThreadSource:             stringPtrIfNotEmpty(runConfig.ThreadSource),
+		InitializationMode:       "new",
+		SubagentSource:           stringPtrIfNotEmpty(runConfig.SubagentSource),
+		ParentThreadID:           stringPtrIfNotEmpty(runConfig.ParentThreadID),
+		Model:                    stringPtrIfNotEmpty(runConfig.Model),
+		ModelProvider:            runConfig.ProviderID,
+		SandboxPolicy:            stringPtrIfNotEmpty(runConfig.SandboxPolicy),
+		ReasoningEffort:          stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningEffort)),
+		ReasoningSummary:         stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningSummary)),
+		ServiceTier:              runConfig.ServiceTier,
+		ApprovalPolicy:           firstNonEmpty(runConfig.ApprovalPolicy, string(sandbox.ApprovalOnRequest)),
+		ApprovalsReviewer:        firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
+		SandboxNetworkAccess:     runConfig.SandboxNetworkAccess,
+		CollaborationMode:        stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),
+		Personality:              stringPtrIfNotEmpty(runConfig.Personality),
+		WorkspaceKind:            stringPtrIfNotEmpty(runConfig.WorkspaceKind),
+		NumInputImages:           runConfig.NumInputImages,
+		IsFirstTurn:              runConfig.IsFirstTurn,
+		Status:                   stringPtrIfNotEmpty(string(status)),
+		TurnError:                turnError,
+		CodexErrorKind:           codexErrorKind,
+		CodexErrorHTTPStatusCode: codexErrorHTTPStatusCode,
+		SteerCount:               intPtrAppserver(steerCount),
+		ToolCounts:               analyticsTurnToolCounts(result),
+		TokenUsage:               analyticsTurnTokenUsage(result),
+		TimingProfile:            analyticsTurnTimingProfile(result),
+		DurationMS:               uint64PtrFromNonNegativeInt64(durationMS),
+		StartedAt:                uint64PtrFromUnixSeconds(startedAt),
+		CompletedAt:              uint64PtrFromUnixSeconds(completedAt),
+	})
+	r.services.Analytics.TrackCodexTurnEvent(ctx, event)
+}
+
+func (r *RuntimeRouter) analyticsAppServerClient(connectionID string) (telemetry.CodexAppServerClientMetadata, bool) {
+	if r == nil {
+		return telemetry.CodexAppServerClientMetadata{}, false
+	}
+	info, ok := r.connectionClientInfo(connectionID)
+	if !ok {
+		return telemetry.CodexAppServerClientMetadata{}, false
+	}
+	transport := r.services.AnalyticsRPCTransport
+	if transport == "" {
+		transport = telemetry.AppServerRPCTransportInProcess
+	}
+	return telemetry.CodexAppServerClientMetadata{
+		ProductClientID:       initializeOriginator(info),
+		ClientName:            stringPtrIfNotEmpty(strings.TrimSpace(info.Name)),
+		ClientVersion:         stringPtrIfNotEmpty(strings.TrimSpace(info.Version)),
+		RPCTransport:          transport,
+		ExperimentalAPIEnable: r.connectionExperimentalAPI(connectionID),
+	}, true
+}
+
+func analyticsTurnToolCounts(result *turn.AgentLoopResult) *telemetry.CodexTurnToolCounts {
+	counts := &telemetry.CodexTurnToolCounts{}
+	if result == nil {
+		return counts
+	}
+	for i := range result.ToolExecutions {
+		execution := &result.ToolExecutions[i]
+		if execution.Invocation == nil {
+			continue
+		}
+		counts.Total++
+		name := execution.Invocation.ToolName
+		key := name.Key()
+		switch {
+		case key == tool.DefaultExecCommandToolName:
+			counts.ShellCommand++
+		case key == tool.DefaultApplyPatchToolName:
+			counts.FileChange++
+		case name.Namespace == turn.WebSearchNamespace && name.Name == turn.WebSearchRunTool:
+			counts.WebSearch++
+		case strings.HasPrefix(name.Namespace, "mcp__") || strings.HasPrefix(key, "mcp__"):
+			counts.MCPToolCall++
+		case strings.Contains(key, "image_generation") || strings.Contains(key, "imageGeneration"):
+			counts.ImageGeneration++
+		case name.Namespace != "":
+			counts.DynamicToolCall++
+		}
+	}
+	return counts
+}
+
+func analyticsTurnTokenUsage(result *turn.AgentLoopResult) *telemetry.CodexTurnTokenUsage {
+	usage := tokenUsageFromAgentLoopResult(result)
+	if usage == nil {
+		return nil
+	}
+	return &telemetry.CodexTurnTokenUsage{
+		InputTokens:           usage.InputTokens,
+		CachedInputTokens:     usage.CachedInputTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningOutputTokens: usage.ReasoningOutputTokens,
+		TotalTokens:           usage.TotalTokens,
+	}
+}
+
+func analyticsTurnTimingProfile(result *turn.AgentLoopResult) telemetry.CodexTurnTimingProfile {
+	if result == nil || result.TimingProfile == nil {
+		return telemetry.CodexTurnTimingProfile{}
+	}
+	profile := result.TimingProfile
+	return telemetry.CodexTurnTimingProfile{
+		BeforeFirstSamplingMS:     profile.BeforeFirstSamplingMS,
+		SamplingMS:                profile.SamplingMS,
+		BetweenSamplingOverheadMS: profile.BetweenSamplingOverheadMS,
+		ToolBlockingMS:            profile.ToolBlockingMS,
+		AfterLastSamplingMS:       profile.PendingIdleAfterSamplingMS,
+		SamplingRequestCount:      profile.SamplingRequestCount,
+		SamplingRetryCount:        profile.SamplingRetryCount,
+	}
+}
+
+func intPtrAppserver(value int) *int {
+	return &value
+}
+
+func uint64PtrFromNonNegativeInt64(value int64) *uint64 {
+	if value < 0 {
+		return nil
+	}
+	out := uint64(value)
+	return &out
+}
+
+func uint64PtrFromUnixSeconds(value time.Time) *uint64 {
+	if value.IsZero() {
+		return nil
+	}
+	unix := value.UTC().Unix()
+	if unix < 0 {
+		return nil
+	}
+	out := uint64(unix)
+	return &out
+}
+
+func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[string]string {
+	if r == nil || params == nil || len(params.ResponsesAPIMetadata) == 0 {
+		return nil
+	}
+	active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.ExpectedTurnID)
+	if active == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil {
+		cfg = nil
+	}
+	extraMetadata := turn.MergeClientMetadata(nil, params.ResponsesAPIMetadata)
+	if cfg != nil {
+		extraMetadata = turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
+	}
+	installationID := ""
+	if r.services.Config != nil {
+		if codexHome := strings.TrimSpace(r.services.Config.CodexHome()); codexHome != "" {
+			if id, err := install.ResolveInstallationID(codexHome); err == nil {
+				installationID = id
+			}
+		}
+	}
+	modelID := ""
+	if cfg != nil {
+		modelID = stringConfigValue(cfg, "model")
+	}
+	lineage := r.responsesMetadataLineage(params.ThreadID)
+	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		InstallationID:     installationID,
+		SessionID:          firstNonEmpty(lineage.SessionID, params.ThreadID),
+		ThreadID:           params.ThreadID,
+		TurnID:             params.ExpectedTurnID,
+		WindowID:           params.ThreadID + ":1",
+		RequestKind:        codexapi.ClientRequestTurn,
+		ForkedFromThreadID: lineage.ForkedFromThreadID,
+		ParentThreadID:     lineage.ParentThreadID,
+		SubagentHeader:     lineage.SubagentHeader,
+		SubagentKind:       lineage.SubagentKind,
+		ThreadSource:       lineage.ThreadSource,
+		Extra:              extraMetadata,
+		StartedAtMS:        active.StartedAtMS,
+		UseResponsesLite:   r.modelUsesResponsesLite(modelID),
+	})
+}
+
+func (r *RuntimeRouter) responsesMetadataLineage(threadID string) responsesMetadataLineage {
+	threadID = strings.TrimSpace(threadID)
+	lineage := responsesMetadataLineage{SessionID: threadID}
+	if r == nil || threadID == "" {
+		return lineage
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return lineage
+	}
+	if sessionID := strings.TrimSpace(record.SessionID); sessionID != "" {
+		lineage.SessionID = sessionID
+	}
+	lineage.ThreadSource = strings.TrimSpace(record.Metadata.ThreadSource)
+	source := strings.TrimSpace(record.Metadata.Source)
+	lineage.SubagentHeader, lineage.SubagentKind = codexapi.ClientSubagentMetadataFromSource(source)
+	if runtimeSessionSourceIsSubagent(source) || lineage.SubagentHeader != "" || lineage.SubagentKind != "" {
+		lineage.ParentThreadID = firstNonEmpty(strings.TrimSpace(string(record.ParentThreadID)), runtimeParentThreadIDFromSessionSource(source))
+		lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
+		return lineage
+	}
+	lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
+	return lineage
+}
+
+func runtimeSessionSourceIsSubagent(source string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	return strings.HasPrefix(normalized, "subagent:") ||
+		strings.HasPrefix(normalized, "subagent_") ||
+		strings.HasPrefix(normalized, "subagent-")
+}
+
+func runtimeParentThreadIDFromSessionSource(source string) string {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	for _, prefix := range []string{"subagent_thread_spawn_", "subagent-thread-spawn-"} {
+		if !strings.HasPrefix(normalized, prefix) {
+			continue
+		}
+		rest := strings.TrimSpace(source[len(prefix):])
+		if rest == "" {
+			return ""
+		}
+		if idx := strings.LastIndex(rest, "_d"); idx > 0 {
+			return rest[:idx]
+		}
+		if idx := strings.LastIndex(rest, "-d"); idx > 0 {
+			return rest[:idx]
+		}
+		return rest
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnStateSnapshot(threadID string, turnID string) *activeRuntimeTurn {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	r.turnsMu.Lock()
+	defer r.turnsMu.Unlock()
+	active := r.active[threadID]
+	if active == nil || active.TurnID != turnID {
+		return nil
+	}
+	return &activeRuntimeTurn{
+		ThreadID:     active.ThreadID,
+		TurnID:       active.TurnID,
+		StartedAtMS:  active.StartedAtMS,
+		Params:       cloneTurnStartParams(active.Params),
+		ConnectionID: active.ConnectionID,
+	}
 }
 
 func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string) {
@@ -2553,6 +3660,21 @@ func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string
 	previousResponseID := firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID)
 	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true})
 	return items, previousResponseID
+}
+
+func modelInputTextMessage(role string, text string) map[string]any {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = contextfrag.RoleUser
+	}
+	return map[string]any{
+		"type": "message",
+		"role": role,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": strings.TrimSpace(text),
+		}},
+	}
 }
 
 func instructionsAndInputItemsWithAdditionalContext(instructions string, values map[string]turn.AdditionalContextEntry) (string, []any) {
@@ -2591,8 +3713,8 @@ func instructionsAndInputItemsWithAdditionalContext(instructions string, values 
 	return strings.TrimSpace(instructions), inputItems
 }
 
-func (r *RuntimeRouter) recommendedPluginInputItems() []any {
-	candidates := pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn())
+func (r *RuntimeRouter) recommendedPluginInputItems(cfg *config.Config) []any {
+	candidates := pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(cfg))
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -2707,11 +3829,12 @@ func appEnabledForRuntime(app *apps.AppEntry) bool {
 	return app.Enabled
 }
 
-func (r *RuntimeRouter) pluginInstallCandidatesForTurn() []plugin.DiscoverableInfo {
+func (r *RuntimeRouter) pluginInstallCandidatesForTurn(cfg *config.Config) []plugin.DiscoverableInfo {
 	if r == nil || r.services.Plugins == nil {
 		return nil
 	}
-	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidates(), r.pluginDiscoverableConfigForTurn())
+	r.configureSuggestedPluginProviderForTurn(cfg)
+	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidates(), r.pluginDiscoverableConfigForTurn(cfg))
 }
 
 func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo) []plugin.DiscoverableInfo {
@@ -2725,13 +3848,15 @@ func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo)
 	return out
 }
 
-func (r *RuntimeRouter) pluginDiscoverableConfigForTurn() *plugin.DiscoverableConfig {
+func (r *RuntimeRouter) pluginDiscoverableConfigForTurn(cfg *config.Config) *plugin.DiscoverableConfig {
 	if r == nil {
 		return nil
 	}
 	out := &plugin.DiscoverableConfig{}
 	values := map[string]any{}
-	if r.services.Config != nil {
+	if cfg != nil && cfg.Values != nil {
+		values = cfg.Values
+	} else if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil && read.Config != nil {
 			values = read.Config
 		}
@@ -2762,6 +3887,75 @@ func (r *RuntimeRouter) pluginDiscoverableConfigForTurn() *plugin.DiscoverableCo
 	return out
 }
 
+func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Config) {
+	if r == nil || r.services.Plugins == nil {
+		return
+	}
+	if cfg == nil && r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			cfg = &config.Config{Values: read.Config}
+		}
+	}
+	if !suggestedPluginsEnabledForConfig(cfg) || r.services.Config == nil {
+		r.services.Plugins.SetSuggestedPluginProviderWithKey(nil, "")
+		return
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil || resolved == nil || (&resolved.Auth).BackendMode() != "chatgpt" {
+		r.services.Plugins.SetSuggestedPluginProviderWithKey(nil, "")
+		return
+	}
+	accessToken := suggestedPluginAccessTokenFromAuth(&resolved.Auth)
+	if accessToken == "" {
+		r.services.Plugins.SetSuggestedPluginProviderWithKey(nil, "")
+		return
+	}
+	var client plugin.HTTPDoer
+	if r.services.HTTPClient != nil {
+		client = r.services.HTTPClient
+	}
+	baseURL := cfg.ChatGPTBaseURL()
+	accountID := suggestedPluginAccountIDFromAuth(&resolved.Auth)
+	provider := plugin.NewHTTPSuggestedPluginProvider(baseURL, accessToken, accountID, client)
+	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+}
+
+func suggestedPluginAccessTokenFromAuth(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil || snapshot.Tokens == nil {
+		return ""
+	}
+	return stringFromAnyMap(snapshot.Tokens, "access_token")
+}
+
+func suggestedPluginAccountIDFromAuth(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil || snapshot.Tokens == nil {
+		return ""
+	}
+	return firstNonEmpty(
+		stringFromAnyMap(snapshot.Tokens, "chatgpt_account_id"),
+		stringFromAnyMap(snapshot.Tokens, "account_id"),
+	)
+}
+
+func stringFromAnyMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func suggestedPluginsEnabledForConfig(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	settings := cfg.FeatureSettings()
+	return features.Enabled(settings, "plugins") &&
+		features.Enabled(settings, "remote_plugin") &&
+		features.Enabled(settings, "tool_suggest")
+}
+
 func sortedBoolKeys(values map[string]bool) []string {
 	keys := make([]string, 0, len(values))
 	for key, value := range values {
@@ -2786,36 +3980,228 @@ func sortedAdditionalContextKeys(values map[string]turn.AdditionalContextEntry) 
 }
 
 func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*config.Config, error) {
+	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
-		return &config.Config{Values: map[string]any{}}, nil
+		applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+		return cfg, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
-		return &config.Config{Values: map[string]any{}}, nil
+		applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+		return cfg, nil
 	}
-	return config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: turnCWD(params)})
+	loaded, err := config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: turnCWD(params)})
+	if err != nil {
+		return nil, err
+	}
+	if loaded != nil {
+		cfg = loaded
+	}
+	applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+	return cfg, nil
 }
 
-func (r *RuntimeRouter) instructionsWithCurrentTime(ctx context.Context, threadID string, cfg *config.Config, instructions string) (string, error) {
+func turnConfigOverrides(params *turn.TurnStartParams) map[string]any {
+	if params == nil {
+		return nil
+	}
+	return params.Config
+}
+
+func applyRuntimeConfigOverrides(cfg *config.Config, overrides map[string]any) {
+	if cfg == nil || len(overrides) == 0 {
+		return
+	}
+	if cfg.Values == nil {
+		cfg.Values = map[string]any{}
+	}
+	configOverrides := make([]config.Override, 0, len(overrides))
+	for key, value := range overrides {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		configOverrides = append(configOverrides, config.Override{
+			Path:  config.CanonicalizeKey(key),
+			Value: value,
+		})
+	}
+	config.ApplyOverrides(cfg.Values, configOverrides)
+}
+
+type currentTimeReminderTurnState struct {
+	mu          sync.Mutex
+	hasLast     bool
+	lastTimeUTC time.Time
+}
+
+func (r *RuntimeRouter) newCurrentTimeReminderTurnState(threadID string) *currentTimeReminderTurnState {
+	state := &currentTimeReminderTurnState{}
+	if last, ok := r.lastCurrentTimeReminderTime(threadID); ok {
+		state.hasLast = true
+		state.lastTimeUTC = last.UTC()
+	}
+	return state
+}
+
+func (s *currentTimeReminderTurnState) due(now time.Time, intervalSeconds uint64) bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasLast {
+		return true
+	}
+	if intervalSeconds == 0 {
+		return true
+	}
+	return now.UTC().Sub(s.lastTimeUTC) >= time.Duration(intervalSeconds)*time.Second
+}
+
+func (s *currentTimeReminderTurnState) noteDelivered(now time.Time) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hasLast = true
+	s.lastTimeUTC = now.UTC()
+}
+
+func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threadID string, turnID string, cfg *config.Config, createdAt time.Time, state *currentTimeReminderTurnState) ([]any, []session.Item, error) {
+	if cfg == nil {
+		return nil, nil, nil
+	}
 	reminder := cfg.CurrentTimeReminder()
 	if reminder == nil || !reminder.Enabled {
-		return instructions, nil
+		return nil, nil, nil
 	}
 	now := time.Now().UTC()
 	location := "UTC"
 	if reminder.ClockSource == config.CurrentTimeSourceExternal {
 		current, err := r.requestCurrentTime(ctx, threadID)
 		if err != nil {
-			return "", err
+			return nil, nil, err
 		}
 		now = current
 		location = "external"
 	}
+	if !state.due(now, reminder.ReminderIntervalSeconds) {
+		return nil, nil, nil
+	}
 	rendered := contextfrag.Render(&contextfrag.CurrentTimeReminder{Now: now, Location: location})
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
-		return instructions, nil
+		return nil, nil, nil
 	}
-	return strings.Join(nonEmpty([]string{rendered.Content, strings.TrimSpace(instructions)}), "\n\n"), nil
+	state.noteDelivered(now)
+	sessionItem := currentTimeReminderSessionItem(turnID, rendered, now, location, createdAt)
+	return []any{modelInputTextMessage(rendered.Role, rendered.Content)}, []session.Item{sessionItem}, nil
+}
+
+func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID string, cfg *config.Config, state *currentTimeReminderTurnState, base turn.ToolPostExecutionInputItems, appendSessionItems func([]session.Item)) turn.ToolPostExecutionInputItems {
+	if cfg == nil {
+		return base
+	}
+	reminder := cfg.CurrentTimeReminder()
+	if reminder == nil || !reminder.Enabled {
+		return base
+	}
+	return func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any {
+		items := []any{}
+		if base != nil {
+			items = append(items, base(ctx, invocation, output)...)
+		}
+		createdAt := time.Now().UTC()
+		if output != nil && !output.CompletedAt.IsZero() {
+			createdAt = output.CompletedAt.UTC()
+		}
+		currentInputItems, currentSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, createdAt, state)
+		if err != nil {
+			return items
+		}
+		if len(currentSessionItems) > 0 && appendSessionItems != nil {
+			appendSessionItems(currentSessionItems)
+		}
+		return append(items, currentInputItems...)
+	}
+}
+
+func (r *RuntimeRouter) lastCurrentTimeReminderTime(threadID string) (time.Time, bool) {
+	if r == nil || r.services.ThreadRouter == nil || strings.TrimSpace(threadID) == "" {
+		return time.Time{}, false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return time.Time{}, false
+	}
+	for i := len(record.Items) - 1; i >= 0; i-- {
+		if deliveredAt, ok := currentTimeReminderSessionItemTime(&record.Items[i]); ok {
+			return deliveredAt, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func currentTimeReminderSessionItemTime(item *session.Item) (time.Time, bool) {
+	if item == nil || !sessionItemIsCurrentTimeReminder(item) {
+		return time.Time{}, false
+	}
+	unixSeconds := int64FromAnyValue(firstMapValue(item.Data, "current_time_at", "currentTimeAt"))
+	if unixSeconds <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(unixSeconds, 0).UTC(), true
+}
+
+func sessionItemIsCurrentTimeReminder(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if stringValueFromMap(item.Data, "kind") == "current_time_reminder" {
+		return true
+	}
+	if stringValueFromMap(item.Metadata, "kind") == "current_time_reminder" {
+		return true
+	}
+	return false
+}
+
+func stringValueFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	text, _ := values[key].(string)
+	return strings.TrimSpace(text)
+}
+
+func currentTimeReminderSessionItem(turnID string, rendered *contextfrag.RenderedFragment, now time.Time, source string, createdAt time.Time) session.Item {
+	text := ""
+	role := contextfrag.RoleDeveloper
+	if rendered != nil {
+		text = strings.TrimSpace(rendered.Content)
+		if strings.TrimSpace(rendered.Role) != "" {
+			role = strings.TrimSpace(rendered.Role)
+		}
+	}
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	return session.Item{
+		ID:        "current-time-" + safeIdentifier(turnID) + "-" + strconv.FormatInt(now.Unix(), 10),
+		Type:      "message",
+		Role:      role,
+		Text:      text,
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"kind":            "current_time_reminder",
+			"current_time_at": now.Unix(),
+			"source":          source,
+		},
+		Metadata: appTurnMetadata(turnID, map[string]any{
+			"kind": "current_time_reminder",
+		}),
+	}
 }
 
 func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *config.Config, params *turn.TurnStartParams, instructions string) string {
@@ -3003,6 +4389,9 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 			entries = append(entries, discovered...)
 			continue
 		}
+		if r.selectedCapabilityEnvironmentRequired(&selected.Location) {
+			continue
+		}
 		path := capabilityRootLocalPath(selected.Location.Path)
 		if strings.TrimSpace(path) == "" {
 			continue
@@ -3025,6 +4414,13 @@ func (r *RuntimeRouter) selectedCapabilityEnvironmentRecord(location *Capability
 		return nil, false
 	}
 	return r.services.Environment.Record(location.EnvironmentID)
+}
+
+func (r *RuntimeRouter) selectedCapabilityEnvironmentRequired(location *CapabilityRootLocation) bool {
+	if r == nil || location == nil || r.services.Environment == nil {
+		return false
+	}
+	return strings.TrimSpace(location.EnvironmentID) != "" && strings.TrimSpace(location.EnvironmentID) != "local"
 }
 
 func capabilityRootLocalPath(path string) string {
@@ -4086,11 +5482,11 @@ func markFileChangeToolData(data map[string]any, output *tool.Output, inProgress
 		data["status"] = "inProgress"
 		return
 	}
-	if output != nil && !output.Success {
-		data["status"] = "failed"
+	if status, ok := data["status"].(string); ok && strings.TrimSpace(status) != "" {
 		return
 	}
-	if status, ok := data["status"].(string); ok && strings.TrimSpace(status) != "" {
+	if output != nil && !output.Success {
+		data["status"] = "failed"
 		return
 	}
 	data["status"] = "completed"

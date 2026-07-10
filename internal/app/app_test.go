@@ -605,6 +605,17 @@ func TestDebugPromptInput(t *testing.T) {
 	}
 }
 
+func TestDebugUnknownSubcommandDoesNotExposeGoPortMessage(t *testing.T) {
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"debug", "unknown-tool"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err == nil || err.Error() != "unknown debug subcommand unknown-tool" {
+		t.Fatalf("debug unknown error = %v", err)
+	}
+	if strings.Contains(err.Error(), "not implemented") || strings.Contains(err.Error(), "Go port") {
+		t.Fatalf("debug unknown exposed stale wording: %v", err)
+	}
+}
+
 func TestExecJSONEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
@@ -2989,11 +3000,32 @@ func TestRemoteServerRequestLongTailResponses(t *testing.T) {
 			wantErr:  "invalid server request params",
 		},
 		{
+			name:     "current time",
+			method:   appserver.ServerRequestCurrentTimeRead,
+			params:   `{}`,
+			wantCode: -32000,
+			wantErr:  "External current time is not available in TUI.",
+		},
+		{
+			name:     "legacy patch approval",
+			method:   appserver.ServerRequestApplyPatchApproval,
+			params:   `{}`,
+			wantCode: -32000,
+			wantErr:  "Legacy patch approval requests are not available in TUI yet.",
+		},
+		{
+			name:     "legacy command approval",
+			method:   appserver.ServerRequestExecCommandApproval,
+			params:   `{}`,
+			wantCode: -32000,
+			wantErr:  "Legacy command approval requests are not available in TUI yet.",
+		},
+		{
 			name:     "unknown",
 			method:   appserver.ServerRequestMethod("thread/unknown"),
 			params:   `{}`,
-			wantCode: -32601,
-			wantErr:  "not implemented",
+			wantCode: -32000,
+			wantErr:  "Unsupported app-server request: thread/unknown",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3001,19 +3033,13 @@ func TestRemoteServerRequestLongTailResponses(t *testing.T) {
 			if err == nil || code != tc.wantCode || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("result=%#v code=%d err=%v, want code=%d err containing %q", result, code, err, tc.wantCode, tc.wantErr)
 			}
+			if strings.Contains(err.Error(), "not implemented") || strings.Contains(err.Error(), "Go TUI remote client") {
+				t.Fatalf("err = %q, want Rust-style unsupported request wording", err.Error())
+			}
 			if result != nil {
 				t.Fatalf("result = %#v, want nil", result)
 			}
 		})
-	}
-
-	result, code, err := client.remoteServerRequestResult(ctx, appserver.ServerRequestCurrentTimeRead, nil)
-	if err != nil || code != -32603 {
-		t.Fatalf("currentTime/read code=%d err=%v", code, err)
-	}
-	currentTime, ok := result.(*appserver.CurrentTimeReadResponse)
-	if !ok || currentTime.CurrentTimeAt <= 0 {
-		t.Fatalf("currentTime/read result = %#v", result)
 	}
 }
 

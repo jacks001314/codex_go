@@ -866,7 +866,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			DurationMS       *int64                 `json:"durationMs"`
 		}{
 			Type:             "commandExecution",
-			ID:               i.ID,
+			ID:               threadItemExternalID(i),
 			Command:          threadItemCommand(i),
 			CWD:              threadItemCWD(i),
 			ProcessID:        threadItemStringPtrFromData(i.Data, "processId", "process_id"),
@@ -1049,7 +1049,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Status  PatchApplyStatus   `json:"status"`
 		}{
 			Type:    "fileChange",
-			ID:      i.ID,
+			ID:      threadItemExternalID(i),
 			Changes: threadItemFileChanges(i),
 			Status:  threadItemFileChangeStatus(i),
 		})
@@ -1583,6 +1583,15 @@ func RedactThreadResumePayloads(turns []Turn) []Turn {
 		out[i].Items = redactThreadItems(turns[i].Items)
 	}
 	return out
+}
+
+func RedactTurnsPagePayloads(page *TurnsPage) *TurnsPage {
+	if page == nil {
+		return nil
+	}
+	out := *page
+	out.Data = RedactThreadResumePayloads(page.Data)
+	return &out
 }
 
 func redactThreadItems(items []ThreadItem) []ThreadItem {
@@ -3000,6 +3009,19 @@ func threadItemWireType(item *ThreadItem) string {
 	return item.Type
 }
 
+func threadItemExternalID(item *ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if id := threadItemStringFromData(item.Data, "itemId", "item_id", "callId", "call_id"); strings.TrimSpace(id) != "" {
+		return id
+	}
+	if strings.TrimSpace(item.CallID) != "" {
+		return strings.TrimSpace(item.CallID)
+	}
+	return item.ID
+}
+
 func threadItemUserInputContent(item *ThreadItem) []map[string]any {
 	if item == nil {
 		return []map[string]any{}
@@ -3343,17 +3365,21 @@ func threadItemCommandStatus(item *ThreadItem) CommandExecutionStatus {
 	if item.Type == "function_call" {
 		return CommandExecutionInProgress
 	}
-	if success, ok := item.Data["success"].(bool); ok && !success {
-		return CommandExecutionFailed
-	}
-	if item.Data["error"] != nil {
-		return CommandExecutionFailed
-	}
 	if status := CommandExecutionStatus(threadItemStringFromData(item.Data, "status")); status != "" {
 		switch status {
 		case CommandExecutionInProgress, CommandExecutionCompleted, CommandExecutionFailed, CommandExecutionDeclined:
 			return status
 		}
+	}
+	switch strings.TrimSpace(threadItemStringFromData(item.Data, "approvalDecision", "approval_decision")) {
+	case "deny", string(CommandExecutionApprovalDecline), string(CommandExecutionApprovalCancel):
+		return CommandExecutionDeclined
+	}
+	if success, ok := item.Data["success"].(bool); ok && !success {
+		return CommandExecutionFailed
+	}
+	if item.Data["error"] != nil {
+		return CommandExecutionFailed
 	}
 	return CommandExecutionCompleted
 }
@@ -3453,6 +3479,9 @@ func threadItemAggregatedOutput(item *ThreadItem) *string {
 	if item == nil {
 		return nil
 	}
+	if threadItemCommandStatus(item) == CommandExecutionDeclined {
+		return nil
+	}
 	if output := threadItemStringFromData(item.Data, "aggregatedOutput", "aggregated_output", "hook_response", "output", "formattedOutput", "formatted_output"); output != "" {
 		return &output
 	}
@@ -3497,12 +3526,6 @@ func threadItemFileChangeStatus(item *ThreadItem) PatchApplyStatus {
 	case "custom_tool_call", "function_call":
 		return PatchApplyInProgress
 	}
-	if success, ok := item.Data["success"].(bool); ok && !success {
-		return PatchApplyFailed
-	}
-	if item.Data["error"] != nil {
-		return PatchApplyFailed
-	}
 	switch status := threadItemStringFromData(item.Data, "status"); status {
 	case string(PatchApplyInProgress):
 		return PatchApplyInProgress
@@ -3510,9 +3533,14 @@ func threadItemFileChangeStatus(item *ThreadItem) PatchApplyStatus {
 		return PatchApplyFailed
 	case string(PatchApplyDeclined):
 		return PatchApplyDeclined
-	default:
-		return PatchApplyCompleted
 	}
+	if success, ok := item.Data["success"].(bool); ok && !success {
+		return PatchApplyFailed
+	}
+	if item.Data["error"] != nil {
+		return PatchApplyFailed
+	}
+	return PatchApplyCompleted
 }
 
 func threadItemFileChanges(item *ThreadItem) []fileChangeUpdate {

@@ -95,12 +95,17 @@ func TestMetadataState(t *testing.T) {
 
 func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
-		InstallationID: "install",
-		SessionID:      "session",
-		ThreadID:       "thread",
-		TurnID:         "turn",
-		WindowID:       "thread:1",
-		RequestKind:    codexapi.ClientRequestTurn,
+		InstallationID:     "install",
+		SessionID:          "session",
+		ThreadID:           "thread",
+		TurnID:             "turn",
+		WindowID:           "thread:1",
+		RequestKind:        codexapi.ClientRequestTurn,
+		ForkedFromThreadID: "source-thread",
+		ParentThreadID:     "parent-thread",
+		SubagentHeader:     "guardian",
+		SubagentKind:       "guardian",
+		ThreadSource:       "automation",
 		Extra: map[string]string{
 			"workspace_kind":           "git",
 			"thread_id":                "bad",
@@ -112,6 +117,9 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	})
 	if client[codexapi.ClientCodexInstallationIDHeader] != "install" || client["thread_id"] != "thread" || client["turn_id"] != "turn" {
 		t.Fatalf("client metadata = %#v", client)
+	}
+	if client[codexapi.ClientCodexParentThreadIDHeader] != "parent-thread" || client[codexapi.ClientOpenAISubagentHeader] != "guardian" {
+		t.Fatalf("lineage compatibility metadata = %#v", client)
 	}
 	if client["ws_request_header_x_openai_internal_codex_responses_lite"] != "true" {
 		t.Fatalf("responses lite metadata = %#v", client)
@@ -125,6 +133,9 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 	if turnMetadata["workspace_kind"] != "git" || turnMetadata["thread_id"] != "thread" || turnMetadata["turn_started_at_unix_ms"].(float64) != 42 {
 		t.Fatalf("turn metadata = %#v", turnMetadata)
+	}
+	if turnMetadata["forked_from_thread_id"] != "source-thread" || turnMetadata["parent_thread_id"] != "parent-thread" || turnMetadata["subagent_kind"] != "guardian" || turnMetadata["thread_source"] != "automation" {
+		t.Fatalf("lineage turn metadata = %#v", turnMetadata)
 	}
 	if turnMetadata["x-codex-parent-thread-id"] != nil {
 		t.Fatalf("reserved extra leaked into turn metadata: %#v", turnMetadata)

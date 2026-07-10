@@ -67,8 +67,8 @@ type NetworkApprovalProtocol string
 const (
 	NetworkApprovalHTTP      NetworkApprovalProtocol = "http"
 	NetworkApprovalHTTPS     NetworkApprovalProtocol = "https"
-	NetworkApprovalSocks5TCP NetworkApprovalProtocol = "socks5Tcp"
-	NetworkApprovalSocks5UDP NetworkApprovalProtocol = "socks5Udp"
+	NetworkApprovalSocks5TCP NetworkApprovalProtocol = "socks5_tcp"
+	NetworkApprovalSocks5UDP NetworkApprovalProtocol = "socks5_udp"
 )
 
 type NetworkApprovalContext struct {

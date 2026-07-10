@@ -18,6 +18,7 @@ type ToolDispatcherOptions struct {
 	Hooks              tool.HookRunner
 	Now                func() time.Time
 	PostToolInputItems ToolPostExecutionInputItems
+	OnToolStarted      ToolStartedCallback
 }
 
 type ToolDispatcher struct {
@@ -25,6 +26,7 @@ type ToolDispatcher struct {
 	hooks              tool.HookRunner
 	now                func() time.Time
 	postToolInputItems ToolPostExecutionInputItems
+	onToolStarted      ToolStartedCallback
 	clockMu            sync.Mutex
 }
 
@@ -38,6 +40,8 @@ type ToolExecutionResult struct {
 }
 
 type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
+
+type ToolStartedCallback func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time)
 
 type ToolResponseItem struct {
 	Type      string                     `json:"type"`
@@ -115,6 +119,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		hooks:              options.Hooks,
 		now:                now,
 		postToolInputItems: options.PostToolInputItems,
+		onToolStarted:      options.OnToolStarted,
 	}
 }
 
@@ -224,6 +229,9 @@ func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, inv
 
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
 	startedAt := d.nowUTC()
+	if d.onToolStarted != nil {
+		d.onToolStarted(ctx, invocation, startedAt)
+	}
 	output, dispatchErr := d.router.DispatchWithHooks(ctx, invocation, d.hooks)
 	if dispatchErr != nil {
 		callErr := toolCallErrorForModel(dispatchErr)

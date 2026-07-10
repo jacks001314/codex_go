@@ -12,11 +12,12 @@ import (
 )
 
 type ToolRegistryOptions struct {
-	PlanStore          *tool.PlanStore
-	ContextStatus      func() compact.TokenStatus
-	UserInputResponder tool.UserInputResponder
-	DynamicToolCaller  DynamicToolCaller
-	ClockProvider      tool.ClockProvider
+	PlanStore                      *tool.PlanStore
+	ContextStatus                  func() compact.TokenStatus
+	UserInputResponder             tool.UserInputResponder
+	RequestUserInputAvailableModes []string
+	DynamicToolCaller              DynamicToolCaller
+	ClockProvider                  tool.ClockProvider
 
 	Shell      *tool.ShellExecutorOptions
 	ApplyPatch *tool.ApplyPatchExecutorOptions
@@ -33,6 +34,7 @@ type ToolRegistryOptions struct {
 	PluginInstallRecommendationContext bool
 	PluginInstallRuntime               tool.PluginInstallRuntime
 	PluginInstallAppServerClientName   string
+	WebSearch                          *WebSearchOptions
 
 	EnableCore            bool
 	EnableShell           bool
@@ -75,13 +77,14 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	registry := tool.NewRegistry()
 	if options.EnableCore {
 		if err := tool.RegisterCoreHandlersWithOptions(registry, &tool.CoreHandlerOptions{
-			PlanStore:          options.PlanStore,
-			ContextStatus:      options.ContextStatus,
-			UserInputResponder: options.UserInputResponder,
-			ClockProvider:      options.ClockProvider,
-			ThreadID:           options.ThreadID,
-			EnableCurrentTime:  options.EnableCurrentTimeTool,
-			EnableClockSleep:   options.EnableSleepTool,
+			PlanStore:                      options.PlanStore,
+			ContextStatus:                  options.ContextStatus,
+			UserInputResponder:             options.UserInputResponder,
+			RequestUserInputAvailableModes: options.RequestUserInputAvailableModes,
+			ClockProvider:                  options.ClockProvider,
+			ThreadID:                       options.ThreadID,
+			EnableCurrentTime:              options.EnableCurrentTimeTool,
+			EnableClockSleep:               options.EnableSleepTool,
 		}); err != nil {
 			return nil, err
 		}
@@ -113,6 +116,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			Runtime:               options.PluginInstallRuntime,
 			AppServerClientName:   options.PluginInstallAppServerClientName,
 		}); err != nil {
+			return nil, err
+		}
+	}
+	if options.WebSearch != nil {
+		if err := registry.Register(NewWebSearchHandler(options.WebSearch)); err != nil {
 			return nil, err
 		}
 	}

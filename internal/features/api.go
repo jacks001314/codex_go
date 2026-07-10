@@ -110,15 +110,29 @@ func (p *FeatureEnablementSetParams) MarshalJSON() ([]byte, error) {
 	}{Enablement: enablement})
 }
 
-type FeatureEnablementSetResponse struct{}
+type FeatureEnablementSetResponse struct {
+	Enablement map[string]bool `json:"enablement"`
+}
+
+func (r *FeatureEnablementSetResponse) MarshalJSON() ([]byte, error) {
+	enablement := cloneBoolMap(r.Enablement)
+	if enablement == nil {
+		enablement = map[string]bool{}
+	}
+	return json.Marshal(struct {
+		Enablement map[string]bool `json:"enablement"`
+	}{Enablement: enablement})
+}
 
 type FeatureService struct {
 	mu        sync.Mutex
 	catalog   []FeatureEntry
 	overrides map[string]bool
+	settable  map[string]bool
 }
 
 func NewFeatureService(catalog []FeatureEntry) *FeatureService {
+	defaultCatalog := catalog == nil
 	if catalog == nil {
 		catalog = DefaultFeatureCatalog()
 	}
@@ -126,7 +140,21 @@ func NewFeatureService(catalog []FeatureEntry) *FeatureService {
 	sort.SliceStable(normalized, func(i int, j int) bool {
 		return normalized[i].Key < normalized[j].Key
 	})
-	return &FeatureService{catalog: normalized, overrides: map[string]bool{}}
+	settable := map[string]bool{}
+	if defaultCatalog {
+		for _, key := range SupportedEnablementKeys() {
+			settable[key] = true
+		}
+	} else {
+		for _, entry := range normalized {
+			settable[entry.Key] = true
+		}
+	}
+	return &FeatureService{catalog: normalized, overrides: map[string]bool{}, settable: settable}
+}
+
+func SupportedEnablementKeys() []string {
+	return []string{"auth_elicitation", "memories", "mentions_v2", "remote_control", "remote_plugin", "tool_suggest"}
 }
 
 func DefaultFeatureCatalog() []FeatureEntry {
@@ -167,6 +195,10 @@ func stageFromFeature(stage Stage) FeatureAPIStage {
 }
 
 func (s *FeatureService) List(params *FeatureListParams) (*FeatureListResponse, error) {
+	return s.ListWithSettings(params, nil)
+}
+
+func (s *FeatureService) ListWithSettings(params *FeatureListParams, settings map[string]bool) (*FeatureListResponse, error) {
 	if params == nil {
 		params = &FeatureListParams{}
 	}
@@ -186,6 +218,9 @@ func (s *FeatureService) List(params *FeatureListParams) (*FeatureListResponse, 
 	for _, entry := range s.catalog {
 		cloned := entry
 		if enabled, ok := s.overrides[entry.Key]; ok {
+			cloned.Enabled = enabled
+		}
+		if enabled, ok := settings[entry.Key]; ok {
 			cloned.Enabled = enabled
 		}
 		data = append(data, cloned)
@@ -213,27 +248,31 @@ func (s *FeatureService) SetEnablement(params *FeatureEnablementSetParams) (*Fea
 	defer s.mu.Unlock()
 	known := map[string]bool{}
 	for _, entry := range s.catalog {
-		known[entry.Key] = true
+		known[entry.Key] = s.settable[entry.Key]
 	}
+	applied := map[string]bool{}
 	for key, enabled := range params.Enablement {
 		key = strings.TrimSpace(key)
 		if known[key] {
 			s.overrides[key] = enabled
+			applied[key] = enabled
 		}
 	}
 	for _, key := range params.Enabled {
 		key = strings.TrimSpace(key)
 		if known[key] {
 			s.overrides[key] = true
+			applied[key] = true
 		}
 	}
 	for _, key := range params.Disabled {
 		key = strings.TrimSpace(key)
 		if known[key] {
 			s.overrides[key] = false
+			applied[key] = false
 		}
 	}
-	return &FeatureEnablementSetResponse{}, nil
+	return &FeatureEnablementSetResponse{Enablement: applied}, nil
 }
 
 func toTitle(value string) string {

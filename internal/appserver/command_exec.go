@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	codexexec "codex_go/internal/exec"
+	"codex_go/internal/network"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/tool"
 )
@@ -50,11 +52,20 @@ type managedCommandExec struct {
 }
 
 type CommandExecOptions struct {
-	ConnectionID string
+	ConnectionID              string
+	PermissionProfileResolver CommandExecPermissionProfileResolver
 }
 
 var runCommandExecSandboxed = func(ctx context.Context, req *tool.ShellRequest) (*tool.ShellResult, error) {
 	return tool.NewLocalShellRunner().Run(ctx, req)
+}
+
+type CommandExecPermissionProfileResolver func(profileID string, cwd string) (*CommandExecPermissionProfileResolution, error)
+
+type CommandExecPermissionProfileResolution struct {
+	ID          string
+	Profile     *sandbox.PermissionProfile
+	ProfileJSON string
 }
 
 type CommandExecTerminalInteractionContext struct {
@@ -75,8 +86,9 @@ func cloneCommandExecTerminalInteractionContext(value *CommandExecTerminalIntera
 }
 
 type commandExecSandboxResolution struct {
-	PermissionProfileID *string
-	PermissionProfile   *sandbox.PermissionProfile
+	PermissionProfileID   *string
+	PermissionProfile     *sandbox.PermissionProfile
+	PermissionProfileJSON string
 }
 
 type commandExecSessionKey struct {
@@ -110,7 +122,8 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 	if err := params.Validate(defaultCWD); err != nil {
 		return nil, err
 	}
-	resolution, err := resolveCommandExecSandbox(params)
+	cwd := commandExecCWD(params, defaultCWD)
+	resolution, err := resolveCommandExecSandbox(params, cwd, commandExecPermissionProfileResolver(options))
 	if err != nil {
 		return nil, err
 	}
@@ -129,11 +142,12 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 	}
 
 	cmd := osexec.CommandContext(execCtx, params.Command[0], params.Command[1:]...)
-	if cwd := commandExecCWD(params, defaultCWD); cwd != "" {
+	if cwd != "" {
 		cmd.Dir = cwd
 	}
 	envMap := commandExecEnvMap(os.Environ(), params.Env)
 	codexexec.InjectPermissionProfile(envMap, resolution.PermissionProfileID)
+	commandExecInjectNetworkProxyEnv(envMap, resolution)
 	cmd.Env = commandExecEnvList(envMap)
 
 	outputCap := s.outputBytesCap(params)
@@ -191,6 +205,24 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 		go s.waitCommandExec(execCtx, connectionID, *params.ProcessID, cmd)
 		return s.waitCommandExecResponse(execCtx, active, stdout, stderr, params.StreamStdoutStderr)
 	}
+	if params.ProcessID != nil && strings.TrimSpace(*params.ProcessID) != "" {
+		active, err := s.registerCommandExec(connectionID, *params.ProcessID, cmd, cancel, nil, notify, params.terminalInteractionContext())
+		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			s.removeCommandExec(connectionID, *params.ProcessID)
+			if cancel != nil {
+				cancel()
+			}
+			return nil, fmt.Errorf("failed to start command/exec: %w", err)
+		}
+		go s.waitCommandExec(execCtx, connectionID, *params.ProcessID, cmd)
+		return s.waitCommandExecResponse(execCtx, active, stdout, stderr, false)
+	}
 
 	err = cmd.Run()
 	exitCode, exitErr := commandExecExitCode(execCtx, err)
@@ -212,12 +244,14 @@ func (s *CommandExecService) executeSandboxedBuffered(ctx context.Context, param
 		return nil, jsonRPCInvalidRequest("command/exec sandbox is not supported for tty or streaming commands yet")
 	}
 	envMap := commandExecEnvMap(os.Environ(), params.Env)
+	commandExecInjectNetworkProxyEnv(envMap, resolution)
 	result, err := runCommandExecSandboxed(ctx, &tool.ShellRequest{
-		Command:             append([]string(nil), params.Command...),
-		CWD:                 commandExecCWD(params, defaultCWD),
-		Env:                 envMap,
-		PermissionProfileID: sandboxResolutionProfileID(resolution),
-		PermissionProfile:   sandboxResolutionProfile(resolution),
+		Command:               append([]string(nil), params.Command...),
+		CWD:                   commandExecCWD(params, defaultCWD),
+		Env:                   envMap,
+		PermissionProfileID:   sandboxResolutionProfileID(resolution),
+		PermissionProfile:     sandboxResolutionProfile(resolution),
+		PermissionProfileJSON: sandboxResolutionProfileJSON(resolution),
 	})
 	if err != nil {
 		if errors.Is(err, sandbox.ErrPlatformSandboxUnsupported) {
@@ -365,9 +399,13 @@ func (s *CommandExecService) outputBytesCap(params *CommandExecParams) *int {
 
 func commandExecCWD(params *CommandExecParams, defaultCWD string) string {
 	if params != nil && params.CWD != nil {
-		return *params.CWD
+		cwd := strings.TrimSpace(*params.CWD)
+		if cwd != "" && !filepath.IsAbs(cwd) && strings.TrimSpace(defaultCWD) != "" {
+			return filepath.Join(defaultCWD, cwd)
+		}
+		return cwd
 	}
-	return defaultCWD
+	return strings.TrimSpace(defaultCWD)
 }
 
 func commandExecExitCode(ctx context.Context, err error) (int32, error) {
@@ -387,7 +425,11 @@ func commandExecExitCode(ctx context.Context, err error) (int32, error) {
 }
 
 func noActiveCommandExecError(processID string) error {
-	return jsonRPCInvalidRequest(fmt.Sprintf("no active command/exec for process id %q", processID))
+	return jsonRPCInvalidRequest(fmt.Sprintf("command/exec %q is no longer running", strings.TrimSpace(processID)))
+}
+
+func noActiveCommandExecForProcessIDError(processID string) error {
+	return jsonRPCInvalidRequest(fmt.Sprintf("no active command/exec for process id %q", strings.TrimSpace(processID)))
 }
 
 func (s *CommandExecService) registerCommandExec(connectionID string, processID string, cmd *osexec.Cmd, cancel context.CancelFunc, stdin io.WriteCloser, notify func(NotificationMethod, any), terminalInteraction *CommandExecTerminalInteractionContext) (*managedCommandExec, error) {
@@ -489,6 +531,12 @@ func (s *CommandExecService) activeCommandExecForConnection(connectionID string,
 	defer s.mu.Unlock()
 	active := s.active[commandExecKey(connectionID, processID)]
 	if active == nil {
+		normalizedProcessID := strings.TrimSpace(processID)
+		for key := range s.active {
+			if key.processID == normalizedProcessID {
+				return nil, noActiveCommandExecForProcessIDError(processID)
+			}
+		}
 		return nil, noActiveCommandExecError(processID)
 	}
 	return active, nil
@@ -596,7 +644,7 @@ func commandExecFinalResponse(exitCode int32, stdout *commandExecOutputBuffer, s
 	return response
 }
 
-func resolveCommandExecSandbox(params *CommandExecParams) (*commandExecSandboxResolution, error) {
+func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver CommandExecPermissionProfileResolver) (*commandExecSandboxResolution, error) {
 	if params == nil {
 		return &commandExecSandboxResolution{}, nil
 	}
@@ -605,11 +653,22 @@ func resolveCommandExecSandbox(params *CommandExecParams) (*commandExecSandboxRe
 		if profileID == "" {
 			return nil, jsonRPCInvalidRequest("command/exec permissionProfile must not be empty")
 		}
-		profile, err := commandExecPermissionProfile(profileID)
+		resolved, err := resolver(profileID, cwd)
 		if err != nil {
 			return nil, err
 		}
-		return &commandExecSandboxResolution{PermissionProfileID: &profileID, PermissionProfile: profile}, nil
+		if resolved == nil || resolved.Profile == nil {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("command/exec permissionProfile %q did not resolve to a profile", profileID))
+		}
+		resolvedID := strings.TrimSpace(resolved.ID)
+		if resolvedID == "" {
+			resolvedID = profileID
+		}
+		return &commandExecSandboxResolution{
+			PermissionProfileID:   &resolvedID,
+			PermissionProfile:     resolved.Profile,
+			PermissionProfileJSON: strings.TrimSpace(resolved.ProfileJSON),
+		}, nil
 	}
 	if params.SandboxPolicy == nil {
 		return &commandExecSandboxResolution{}, nil
@@ -661,12 +720,26 @@ func sandboxResolutionProfile(resolution *commandExecSandboxResolution) *sandbox
 	return resolution.PermissionProfile
 }
 
-func commandExecPermissionProfile(profileID string) (*sandbox.PermissionProfile, error) {
+func sandboxResolutionProfileJSON(resolution *commandExecSandboxResolution) string {
+	if resolution == nil {
+		return ""
+	}
+	return strings.TrimSpace(resolution.PermissionProfileJSON)
+}
+
+func commandExecPermissionProfileResolver(options *CommandExecOptions) CommandExecPermissionProfileResolver {
+	if options != nil && options.PermissionProfileResolver != nil {
+		return options.PermissionProfileResolver
+	}
+	return commandExecBuiltinPermissionProfileResolver
+}
+
+func commandExecBuiltinPermissionProfileResolver(profileID string, _ string) (*CommandExecPermissionProfileResolution, error) {
 	profile, _, err := sandbox.ResolvePermissionProfile(profileID)
 	if err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
 	}
-	return profile, nil
+	return &CommandExecPermissionProfileResolution{ID: strings.TrimSpace(profileID), Profile: profile}, nil
 }
 
 type commandExecResult struct {
@@ -734,6 +807,29 @@ func commandExecEnvMap(base []string, overrides map[string]*string) map[string]s
 		out[name] = value
 	}
 	return out
+}
+
+func commandExecInjectNetworkProxyEnv(env map[string]string, resolution *commandExecSandboxResolution) {
+	if env == nil {
+		return
+	}
+	commandExecRemoveEnvKey(env, network.ProxyActiveEnvKey)
+	profile := sandboxResolutionProfile(resolution)
+	if profile != nil && !profile.Disabled && profile.AllowsNetwork() {
+		env[network.ProxyActiveEnvKey] = "1"
+	}
+}
+
+func commandExecRemoveEnvKey(env map[string]string, key string) {
+	if runtime.GOOS == "windows" {
+		for existing := range env {
+			if strings.EqualFold(existing, key) {
+				delete(env, existing)
+			}
+		}
+		return
+	}
+	delete(env, key)
 }
 
 func commandExecEnvList(env map[string]string) []string {

@@ -94,10 +94,10 @@ func (s *CollaborationModeService) List(params *CollaborationModeListParams) *Co
 }
 
 func defaultCollaborationModes() []CollaborationModeMask {
+	medium := "medium"
 	return []CollaborationModeMask{
+		{Name: "Plan", Mode: "plan", ReasoningEffort: &medium},
 		{Name: "Default", Mode: "default"},
-		{Name: "Plan", Mode: "plan"},
-		{Name: "Agentic", Mode: "agentic"},
 	}
 }
 

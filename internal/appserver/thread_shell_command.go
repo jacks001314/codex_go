@@ -172,15 +172,7 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 		duration := completedAtMS - startedAtMS
 		r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
 			ThreadID: run.ThreadID,
-			Turn: Turn{
-				ID:          run.TurnID,
-				Items:       []ThreadItem{},
-				ItemsView:   TurnItemsFull,
-				Status:      TurnStatusCompleted,
-				StartedAt:   &run.StartedAt,
-				CompletedAt: &completedAtMS,
-				DurationMS:  &duration,
-			},
+			Turn:     completedTurnNotificationTurn(run.TurnID, TurnStatusCompleted, nil, &run.StartedAt, &completedAtMS, &duration),
 		})
 	}
 }

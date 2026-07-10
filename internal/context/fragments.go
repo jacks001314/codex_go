@@ -333,7 +333,7 @@ func (c *CurrentTimeReminder) Role() string {
 }
 
 func (c *CurrentTimeReminder) Markers() (string, string) {
-	return "<current_time>", "</current_time>"
+	return "", ""
 }
 
 func (c *CurrentTimeReminder) Body() string {

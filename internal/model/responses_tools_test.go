@@ -77,6 +77,33 @@ func TestResponsesToolNamesUseCodeModeNamespaceSeparatorForPlainNamespacedSpecs(
 	}
 }
 
+func TestResponsesToolsFromSpecsSerializesClockNamespaceLikeRust(t *testing.T) {
+	got := ResponsesToolsFromSpecs([]tool.Spec{{
+		Name:                 tool.NamespacedName("clock", "curr_time"),
+		Description:          "Return the current time in UTC.",
+		NamespaceDescription: "Tools for reading and waiting on time.",
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "clock" || namespace["description"] != "Tools for reading and waiting on time." {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+	tools, ok := namespace["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 || tools[0]["name"] != "curr_time" || tools[0]["type"] != "function" {
+		t.Fatalf("namespace tools = %#v", namespace["tools"])
+	}
+	if _, ok := tools[0]["strict"]; ok {
+		t.Fatalf("clock namespace tool should not include strict: %#v", tools[0])
+	}
+}
+
 func TestResponsesToolsFromSpecsSerializesDynamicNamespace(t *testing.T) {
 	got := ResponsesToolsFromSpecs([]tool.Spec{{
 		Name:                 tool.NamespacedName("codex_app", "demo_tool"),
@@ -101,5 +128,38 @@ func TestResponsesToolsFromSpecsSerializesDynamicNamespace(t *testing.T) {
 	}
 	if _, ok := tools[0]["strict"]; ok {
 		t.Fatalf("dynamic namespace tool should not include strict: %#v", tools[0])
+	}
+}
+
+func TestResponsesToolsFromSpecsSerializesStandaloneWebSearchNamespace(t *testing.T) {
+	got := ResponsesToolsFromSpecs([]tool.Spec{{
+		Name:                 tool.NamespacedName("web", "run"),
+		Description:          "Tool for accessing the internet.",
+		NamespaceDescription: "Tool for accessing the internet.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"time": map[string]any{"type": "array", "description": "Get time for the given UTC offsets."},
+			},
+		},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "web" {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+	tools, ok := namespace["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 || tools[0]["name"] != "run" || tools[0]["type"] != "function" {
+		t.Fatalf("namespace tools = %#v", namespace["tools"])
+	}
+	properties, ok := tools[0]["parameters"].(map[string]any)["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters = %#v", tools[0]["parameters"])
+	}
+	timeSchema, ok := properties["time"].(map[string]any)
+	if !ok || timeSchema["description"] != "Get time for the given UTC offsets." {
+		t.Fatalf("time schema = %#v", properties["time"])
 	}
 }

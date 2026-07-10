@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"codex_go/internal/compact"
 	"codex_go/internal/session"
 )
+
+var ErrCompactHookStopped = errors.New("compact hook stopped")
 
 type compactHookContext struct {
 	ThreadID string
@@ -55,7 +58,7 @@ func (r *RuntimeRouter) runPreCompactHooks(ctx context.Context, hookCtx *compact
 		return nil, err
 	}
 	if result != nil && result.Stopped {
-		return nil, fmt.Errorf("%w: PreCompact hook stopped execution: %s", ErrInvalidHook, strings.TrimSpace(result.StopReason))
+		return nil, fmt.Errorf("%w: %w: PreCompact hook stopped execution: %s", ErrInvalidHook, ErrCompactHookStopped, strings.TrimSpace(result.StopReason))
 	}
 	return compactInitialContextFromHookResult(result, time.Now().UTC()), nil
 }
@@ -76,7 +79,7 @@ func (r *RuntimeRouter) runPostCompactHooks(ctx context.Context, hookCtx *compac
 		return err
 	}
 	if result != nil && result.Stopped {
-		return fmt.Errorf("%w: PostCompact hook stopped execution: %s", ErrInvalidHook, strings.TrimSpace(result.StopReason))
+		return fmt.Errorf("%w: %w: PostCompact hook stopped execution: %s", ErrInvalidHook, ErrCompactHookStopped, strings.TrimSpace(result.StopReason))
 	}
 	return nil
 }

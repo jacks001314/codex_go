@@ -3,6 +3,8 @@ package appserver
 import (
 	"encoding/json"
 	"strings"
+
+	"codex_go/internal/sandbox"
 )
 
 type ServerRequestMethod string
@@ -74,23 +76,24 @@ func serverRequestThreadID(request *ServerRequest) string {
 }
 
 type CommandExecutionRequestApprovalParams struct {
-	ThreadID                        string           `json:"threadId"`
-	TurnID                          string           `json:"turnId"`
-	ItemID                          string           `json:"itemId"`
-	StartedAtMS                     uint64           `json:"startedAtMs"`
-	ApprovalID                      *string          `json:"approvalId,omitempty"`
-	EnvironmentID                   *string          `json:"environmentId"`
-	Reason                          *string          `json:"reason,omitempty"`
-	NetworkApprovalContext          any              `json:"networkApprovalContext,omitempty"`
-	Command                         *string          `json:"command,omitempty"`
-	CWD                             *string          `json:"cwd,omitempty"`
-	CommandActions                  []map[string]any `json:"commandActions,omitempty"`
-	ProposedExecPolicyAmendment     any              `json:"proposedExecpolicyAmendment,omitempty"`
-	ProposedNetworkPolicyAmendments []map[string]any `json:"proposedNetworkPolicyAmendments,omitempty"`
-	Action                          map[string]any   `json:"action,omitempty"`
-	SuggestedProfile                *string          `json:"suggestedProfile,omitempty"`
-	SandboxDenied                   bool             `json:"sandboxDenied,omitempty"`
-	UserApprovalMessage             *string          `json:"userApprovalMessage,omitempty"`
+	ThreadID                        string                               `json:"threadId"`
+	TurnID                          string                               `json:"turnId"`
+	ItemID                          string                               `json:"itemId"`
+	StartedAtMS                     uint64                               `json:"startedAtMs"`
+	ApprovalID                      *string                              `json:"approvalId,omitempty"`
+	EnvironmentID                   *string                              `json:"environmentId"`
+	Reason                          *string                              `json:"reason,omitempty"`
+	NetworkApprovalContext          any                                  `json:"networkApprovalContext,omitempty"`
+	Command                         *string                              `json:"command,omitempty"`
+	CWD                             *string                              `json:"cwd,omitempty"`
+	CommandActions                  []map[string]any                     `json:"commandActions,omitempty"`
+	ProposedExecPolicyAmendment     any                                  `json:"proposedExecpolicyAmendment,omitempty"`
+	ProposedNetworkPolicyAmendments []map[string]any                     `json:"proposedNetworkPolicyAmendments,omitempty"`
+	Action                          map[string]any                       `json:"action,omitempty"`
+	SuggestedProfile                *string                              `json:"suggestedProfile,omitempty"`
+	SandboxDenied                   bool                                 `json:"sandboxDenied,omitempty"`
+	UserApprovalMessage             *string                              `json:"userApprovalMessage,omitempty"`
+	AdditionalPermissions           *sandbox.AdditionalPermissionProfile `json:"-"`
 }
 
 func (p *CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
@@ -433,10 +436,12 @@ type CommandExecutionRequestApprovalResponse struct {
 type CommandExecutionApprovalDecision string
 
 const (
-	CommandExecutionApprovalAccept           CommandExecutionApprovalDecision = "accept"
-	CommandExecutionApprovalAcceptForSession CommandExecutionApprovalDecision = "acceptForSession"
-	CommandExecutionApprovalDecline          CommandExecutionApprovalDecision = "decline"
-	CommandExecutionApprovalCancel           CommandExecutionApprovalDecision = "cancel"
+	CommandExecutionApprovalAccept                        CommandExecutionApprovalDecision = "accept"
+	CommandExecutionApprovalAcceptForSession              CommandExecutionApprovalDecision = "acceptForSession"
+	CommandExecutionApprovalAcceptWithExecpolicyAmendment CommandExecutionApprovalDecision = "acceptWithExecpolicyAmendment"
+	CommandExecutionApprovalApplyNetworkPolicyAmendment   CommandExecutionApprovalDecision = "applyNetworkPolicyAmendment"
+	CommandExecutionApprovalDecline                       CommandExecutionApprovalDecision = "decline"
+	CommandExecutionApprovalCancel                        CommandExecutionApprovalDecision = "cancel"
 )
 
 type FileChangeRequestApprovalResponse struct {

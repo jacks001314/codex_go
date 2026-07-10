@@ -251,8 +251,45 @@ func TestRunHumanPrintsTokenUsageToStderr(t *testing.T) {
 	if result.LastMessage != "done" || stdout.String() != "done\n" {
 		t.Fatalf("stdout = %q, result = %#v", stdout.String(), result)
 	}
-	if got := stderr.String(); got != "tokens used\n1,100\n" {
+	if got := stderr.String(); got != "approval: never\ntokens used\n1,100\n" {
 		t.Fatalf("stderr = %q", got)
+	}
+}
+
+func TestRunHumanApprovalSummaryPreservesAutoReviewPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("approval_policy = \"on-request\"\napprovals_reviewer = \"auto_review\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &recordingAgent{message: "done"}
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "check approval mode"},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "approval: on-request") {
+		t.Fatalf("stderr = %q, want preserved auto-review approval mode", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	_, err = runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt: "check bypass approval mode",
+			Shared: cli.SharedOptions{DangerouslyBypassApprovalsAndSandbox: true},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run bypass returned error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "approval: never") {
+		t.Fatalf("stderr = %q, want bypass approval mode", stderr.String())
 	}
 }
 
@@ -391,7 +428,7 @@ func TestRunHumanPrintsFinalMessageToStderrWhenBothStreamsAreTTY(t *testing.T) {
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if got := stderr.String(); got != "tokens used\n15\ncodex\ndone\n" {
+	if got := stderr.String(); got != "approval: never\ntokens used\n15\ncodex\ndone\n" {
 		t.Fatalf("stderr = %q", got)
 	}
 }
@@ -721,6 +758,94 @@ func TestRequestCWDUsesExecBeforeRoot(t *testing.T) {
 	})
 	if got != "exec-dir" {
 		t.Fatalf("requestCWD = %q", got)
+	}
+}
+
+func TestEffectiveExecApprovalPolicyMatchesRustHeadless(t *testing.T) {
+	autoReviewConfig := &config.Config{Values: map[string]any{
+		"approval_policy":    string(sandbox.ApprovalOnRequest),
+		"approvals_reviewer": string(config.ApprovalsReviewerAutoReview),
+	}}
+	if got := effectiveExecApprovalPolicy(autoReviewConfig, &Request{}); got != sandbox.ApprovalOnRequest {
+		t.Fatalf("auto-review approval policy = %q, want on-request", got)
+	}
+
+	defaultConfig := &config.Config{Values: map[string]any{
+		"approval_policy": string(sandbox.ApprovalOnRequest),
+	}}
+	if got := effectiveExecApprovalPolicy(defaultConfig, &Request{}); got != sandbox.ApprovalNever {
+		t.Fatalf("headless approval policy = %q, want never", got)
+	}
+
+	req := &Request{
+		Exec: cli.ExecOptions{
+			RemovedFullAuto: true,
+		},
+	}
+	if got := effectiveExecApprovalPolicy(autoReviewConfig, req); got != sandbox.ApprovalNever {
+		t.Fatalf("full-auto approval policy = %q, want never", got)
+	}
+
+	req = &Request{
+		Exec: cli.ExecOptions{Shared: cli.SharedOptions{DangerouslyBypassApprovalsAndSandbox: true}},
+	}
+	if got := effectiveExecApprovalPolicy(autoReviewConfig, req); got != sandbox.ApprovalNever {
+		t.Fatalf("bypass approval policy = %q, want never", got)
+	}
+}
+
+func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	req := &Request{Exec: cli.ExecOptions{Prompt: "hello"}}
+	invocation := &tool.Invocation{
+		CallID:   "call-approval",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"cmd":"echo hi","sandbox_permissions":"require_escalated","justification":"need more access"}`,
+		},
+	}
+
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+		ApprovalPolicy: effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req),
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest returned error: %v", err)
+	}
+	_, err = router.Dispatch(context.Background(), invocation)
+	var callErr *tool.FunctionCallError
+	if !tool.AsFunctionCallError(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), "approval policy is never") {
+		t.Fatalf("Dispatch error = %#v, want model-visible never-policy rejection", err)
+	}
+
+	router, err = runner.toolRouterForRequest(req, &agentRunConfig{
+		ApprovalPolicy: sandbox.ApprovalOnRequest,
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest auto-review returned error: %v", err)
+	}
+	output, err := router.Dispatch(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Dispatch auto-review returned error: %v", err)
+	}
+	if output == nil || output.Success || output.Data["approval_required"] != true {
+		t.Fatalf("auto-review output = %#v, want approval request", output)
+	}
+}
+
+func TestRunRejectsUnknownExecSubcommandWithoutGoPortMessage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, err := NewLocalRunner(t.TempDir()).Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "unsupported",
+			Prompt:     "hello",
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || err.Error() != "unknown exec subcommand unsupported" {
+		t.Fatalf("Run error = %v", err)
+	}
+	if strings.Contains(err.Error(), "Go port") || strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("Run exposed stale Go-port wording: %v", err)
 	}
 }
 

@@ -191,6 +191,79 @@ func TestSetExtraRoots(t *testing.T) {
 	}
 }
 
+func TestSkillsListIncludesCWDCodeXSkillsRootLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: from repo root\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Skills) != 1 {
+		t.Fatalf("response = %#v, want one cwd repo skill", response)
+	}
+	skill := response.Data[0].Skills[0]
+	if skill.Name != "repo-skill" || skill.Scope != "repo" || skill.Description != "from repo root" {
+		t.Fatalf("skill = %#v", skill)
+	}
+}
+
+func TestSkillsListPreservesRequestedCWDOrderAndRelativeCWDLikeRust(t *testing.T) {
+	relative := filepath.Join("relative-cwd")
+	absolute := t.TempDir()
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{relative, absolute}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 2 {
+		t.Fatalf("response = %#v, want two cwd entries", response)
+	}
+	if response.Data[0].CWD != relative || response.Data[1].CWD != absolute {
+		t.Fatalf("cwd order = %#v, want %q then %q", []string{response.Data[0].CWD, response.Data[1].CWD}, relative, absolute)
+	}
+}
+
+func TestSkillsListUsesCachedResultUntilForceReloadLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	service := NewSkillsService(nil)
+	first, err := service.List(&SkillsListParams{CWDs: []string{cwd}})
+	if err != nil {
+		t.Fatalf("List(first) error = %v", err)
+	}
+	if len(first.Data) != 1 || len(first.Data[0].Skills) != 0 {
+		t.Fatalf("first response = %#v, want no skills", first)
+	}
+
+	skillDir := filepath.Join(cwd, ".codex", "skills", "late-extra-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: late-extra-skill\ndescription: late skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	cached, err := service.List(&SkillsListParams{CWDs: []string{cwd}})
+	if err != nil {
+		t.Fatalf("List(cached) error = %v", err)
+	}
+	if len(cached.Data) != 1 || len(cached.Data[0].Skills) != 0 {
+		t.Fatalf("cached response = %#v, want cached empty skills", cached)
+	}
+	refreshed, err := service.List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List(force) error = %v", err)
+	}
+	if len(refreshed.Data) != 1 || len(refreshed.Data[0].Skills) != 1 || refreshed.Data[0].Skills[0].Name != "late-extra-skill" {
+		t.Fatalf("refreshed response = %#v, want late-extra-skill", refreshed)
+	}
+}
+
 func TestListSkillsParsesFrontmatterAndMetadata(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "skill-c")

@@ -31,8 +31,12 @@ func TestListPaginatesFeatures(t *testing.T) {
 
 func TestSetEnablementIgnoresUnknownKeys(t *testing.T) {
 	service := NewFeatureService([]FeatureEntry{{Key: "known", Stage: FeatureStageBeta}})
-	if _, err := service.SetEnablement(&FeatureEnablementSetParams{Enabled: []string{"known", "missing"}}); err != nil {
+	setLegacy, err := service.SetEnablement(&FeatureEnablementSetParams{Enabled: []string{"known", "missing"}})
+	if err != nil {
 		t.Fatalf("SetEnablement() error = %v", err)
+	}
+	if len(setLegacy.Enablement) != 1 || !setLegacy.Enablement["known"] {
+		t.Fatalf("SetEnablement() response = %#v, want only known enabled", setLegacy.Enablement)
 	}
 	response, err := service.List(&FeatureListParams{})
 	if err != nil {
@@ -41,8 +45,12 @@ func TestSetEnablementIgnoresUnknownKeys(t *testing.T) {
 	if !response.Data[0].Enabled {
 		t.Fatalf("expected known feature enabled")
 	}
-	if _, err := service.SetEnablement(&FeatureEnablementSetParams{Enablement: map[string]bool{"known": false, "missing": true}}); err != nil {
+	setMap, err := service.SetEnablement(&FeatureEnablementSetParams{Enablement: map[string]bool{"known": false, "missing": true}})
+	if err != nil {
 		t.Fatalf("SetEnablement(map) error = %v", err)
+	}
+	if len(setMap.Enablement) != 1 || setMap.Enablement["known"] {
+		t.Fatalf("SetEnablement(map) response = %#v, want only known disabled", setMap.Enablement)
 	}
 	response, err = service.List(&FeatureListParams{})
 	if err != nil {
@@ -50,6 +58,13 @@ func TestSetEnablementIgnoresUnknownKeys(t *testing.T) {
 	}
 	if response.Data[0].Enabled {
 		t.Fatalf("expected known feature disabled")
+	}
+	empty, err := service.SetEnablement(&FeatureEnablementSetParams{Enablement: map[string]bool{}})
+	if err != nil {
+		t.Fatalf("SetEnablement(empty) error = %v", err)
+	}
+	if len(empty.Enablement) != 0 {
+		t.Fatalf("SetEnablement(empty) response = %#v, want empty enablement", empty.Enablement)
 	}
 }
 
@@ -97,6 +112,12 @@ func TestFeatureWireShapeMatchesRust(t *testing.T) {
 	enablement := enablementPayload["enablement"].(map[string]any)
 	if enablement["known"] != true {
 		t.Fatalf("enablement payload = %#v", enablementPayload)
+	}
+
+	responsePayload := marshalObjectForTest(t, &FeatureEnablementSetResponse{Enablement: map[string]bool{"known": false}})
+	responseEnablement := responsePayload["enablement"].(map[string]any)
+	if responseEnablement["known"] != false {
+		t.Fatalf("enablement response payload = %#v", responsePayload)
 	}
 }
 

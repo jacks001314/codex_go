@@ -1796,25 +1796,25 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 		}
 		return nil, -32000, errors.New("Attestation generation is not available in TUI.")
 	case appserver.ServerRequestCurrentTimeRead:
-		return &appserver.CurrentTimeReadResponse{CurrentTimeAt: time.Now().Unix()}, -32603, nil
+		var payload appserver.CurrentTimeReadParams
+		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
+			return nil, -32602, err
+		}
+		return nil, -32000, errors.New("External current time is not available in TUI.")
 	case appserver.ServerRequestApplyPatchApproval:
 		var payload appserver.ApplyPatchApprovalParams
 		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
 			return nil, -32602, err
 		}
-		c.sendSideParentRequestStatus(payload.ConversationID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.applyPatchApproval(ctx, &payload)
-		return result, -32603, err
+		return nil, -32000, errors.New("Legacy patch approval requests are not available in TUI yet.")
 	case appserver.ServerRequestExecCommandApproval:
 		var payload appserver.ExecCommandApprovalParams
 		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
 			return nil, -32602, err
 		}
-		c.sendSideParentRequestStatus(payload.ConversationID, codextea.SideParentStatusNeedsApproval)
-		result, err := c.execCommandApproval(ctx, &payload)
-		return result, -32603, err
+		return nil, -32000, errors.New("Legacy command approval requests are not available in TUI yet.")
 	default:
-		return nil, -32601, fmt.Errorf("server request %s is not implemented in the Go TUI remote client yet", method)
+		return nil, -32000, fmt.Errorf("Unsupported app-server request: %s", method)
 	}
 }
 

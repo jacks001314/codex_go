@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/internal/mcp"
 	sandboxpkg "codex_go/internal/sandbox"
 )
 
@@ -129,13 +130,32 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 	permissionProfile := "trusted"
 	mcpThreadID := "thread-schema"
 	mcpFailureReason := MCPServerStartupFailureReauthenticationRequired
+	mcpStatusLimit := uint32(25)
+	mcpResourceSize := int64(512)
+	commandOutputCap := 4096
+	commandTimeoutMS := int64(1000)
+	commandDelta := "aGkK"
 	cases := []struct {
 		typeName string
 		value    any
 	}{
 		{"FuzzyFileSearchParams", &FuzzyFileSearchParams{Query: "readme", Roots: []string{"D:/workspace"}, CancellationToken: &searchToken}},
 		{"InitializeResponse", NewInitializeResponse("D:/codex-home", "codex_cli_rs/0.0.0 (windows; amd64) go")},
+		{"JSONRPCResponse", OK(IntID(7), map[string]any{"ok": true})},
+		{"JSONRPCError", ErrorResponse(IntID(7), JSONRPCInternalErrorCode, "boom", map[string]any{"type": "schema_error"})},
+		{"JSONRPCNotification", NewNotification(NotificationConfigWarning, map[string]any{"summary": "queued", "details": nil})},
+		{"JSONRPCMessage", OK(StringID("request-schema"), map[string]any{"ok": true})},
+		{"JSONRPCMessage", ErrorResponse(StringID("request-schema"), JSONRPCInvalidParamsErrorCode, "invalid params", nil)},
+		{"JSONRPCMessage", NewNotification(NotificationWarning, &WarningNotification{Message: "careful"})},
+		{"JSONRPCMessage", &Request{ID: StringID("request-schema"), Method: MethodThreadRead, Params: json.RawMessage(`{"threadId":"thread-schema"}`)}},
 		{"ThreadStartResponse", sampleRustSchemaThreadStartResponse()},
+		{"ThreadReadResponse", &ThreadReadResponse{Thread: sampleRustSchemaThreadWithTurns()}},
+		{"ThreadListResponse", sampleRustSchemaThreadListResponse()},
+		{"ThreadLoadedListResponse", sampleRustSchemaThreadLoadedListResponse()},
+		{"ThreadResumeResponse", sampleRustSchemaThreadResumeResponse()},
+		{"ThreadForkResponse", sampleRustSchemaThreadForkResponse()},
+		{"ThreadRollbackResponse", &ThreadRollbackResponse{Thread: sampleRustSchemaThreadWithTurns()}},
+		{"ThreadMetadataUpdateResponse", &ThreadMetadataUpdateResponse{Thread: sampleRustSchemaThread()}},
 		{"ThreadStartedNotification", &ThreadStartedNotification{Thread: sampleRustSchemaThread()}},
 		{"ThreadNameUpdatedNotification", &ThreadNameUpdatedNotification{ThreadID: "thread-schema"}},
 		{"ThreadGoalUpdatedNotification", &GoalUpdatedNotification{ThreadID: "thread-schema", Goal: sampleRustSchemaGoal()}},
@@ -144,6 +164,9 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadTokenUsageUpdatedNotification", &ThreadTokenUsageUpdatedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", TokenUsage: TokenUsage{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 5, ReasoningOutputTokens: 1, ModelContextWindow: &contextWindow}}},
 		{"TurnStartedNotification", &TurnStartedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusInProgress)}},
 		{"TurnCompletedNotification", &TurnCompletedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusCompleted)}},
+		{"TurnCompletedNotification", &TurnCompletedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurnWithAllThreadItems()}},
+		{"ItemStartedNotification", &ItemStartedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", Item: sampleRustSchemaThreadItemPayload(sampleRustSchemaThreadItems()[5]), StartedAtMS: 1700000000000}},
+		{"ItemCompletedNotification", &ItemCompletedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", Item: sampleRustSchemaThreadItemPayload(sampleRustSchemaThreadItems()[7]), CompletedAtMS: 1700000000000}},
 		{"WarningNotification", &WarningNotification{Message: "careful"}},
 		{"DeprecationNoticeNotification", &DeprecationNoticeNotification{Summary: "legacy summary"}},
 		{"ModelSafetyBufferingUpdatedNotification", &ModelSafetyBufferingUpdatedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", Model: "gpt-5"}},
@@ -151,9 +174,82 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadRealtimeOutputAudioDeltaNotification", &ThreadRealtimeOutputAudioDeltaNotification{ThreadID: "thread-schema", Audio: ThreadRealtimeAudioChunk{Data: "AA==", NumChannels: 1, SampleRate: 24000}}},
 		{"ServerRequestResolvedNotification", &ServerRequestResolvedNotification{ThreadID: "thread-schema", RequestID: StringID("request-schema")}},
 		{"McpServerStatusUpdatedNotification", &MCPServerStatusUpdatedNotification{ThreadID: &mcpThreadID, Name: "server-schema", Status: "stopped", FailureReason: &mcpFailureReason}},
+		{"ListMcpServerStatusParams", &mcp.MCPListServerStatusParams{Cursor: stringPtr("cursor-schema"), Limit: &mcpStatusLimit, Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull}, ThreadID: &mcpThreadID}},
+		{"ListMcpServerStatusResponse", &mcp.MCPListServerStatusResponse{Data: []mcp.MCPServerStatus{{
+			Server: mcp.MCPServerInfo{Name: "server-schema", Version: "1.0.0", Title: stringPtr("Schema Server"), Description: stringPtr("schema fixture"), Icons: []any{map[string]any{"src": "https://example.test/icon.png"}}, WebsiteURL: stringPtr("https://example.test")},
+			Tools: []mcp.MCPToolInfo{{
+				Name:         "echo",
+				Title:        "Echo",
+				Description:  "Echo input",
+				InputSchema:  map[string]any{"type": "object", "properties": map[string]any{"message": map[string]any{"type": "string"}}},
+				OutputSchema: map[string]any{"type": "object"},
+				Annotations:  map[string]any{"readOnlyHint": true},
+				Meta:         map[string]any{"origin": "schema"},
+			}},
+			Resources: []mcp.MCPResource{{
+				URI:         "file://schema/readme.md",
+				Name:        "readme",
+				Title:       "Readme",
+				Description: "schema resource",
+				MimeType:    "text/markdown",
+				Size:        &mcpResourceSize,
+				Annotations: map[string]any{"audience": []any{"assistant"}},
+				Icons:       []any{map[string]any{"src": "https://example.test/resource.png"}},
+				Meta:        map[string]any{"cached": false},
+			}},
+			ResourceTemplates: []mcp.MCPResourceTemplate{{
+				URITemplate: "file://schema/{name}",
+				Name:        "schema-template",
+				Title:       "Schema Template",
+				Description: "templated schema resource",
+				MimeType:    "text/plain",
+				Annotations: map[string]any{"priority": 1},
+			}},
+			AuthStatus: mcp.MCPAuthOAuth,
+			State:      mcp.MCPServerReady,
+		}, {
+			Name:       "empty-schema",
+			AuthStatus: mcp.MCPAuthUnsupported,
+		}}, NextCursor: stringPtr("cursor-next")}},
+		{"McpResourceReadParams", &mcp.MCPResourceReadParams{ThreadID: &mcpThreadID, Server: "server-schema", URI: "file://schema/readme.md"}},
+		{"McpResourceReadResponse", &mcp.MCPResourceReadResponse{Contents: []mcp.MCPResourceContent{
+			{URI: "file://schema/readme.md", MimeType: "text/markdown", Text: "# Schema", Meta: map[string]any{"source": "fixture"}},
+			{URI: "file://schema/blob.bin", MimeType: "application/octet-stream", Blob: "AAEC", Meta: map[string]any{"binary": true}},
+		}}},
+		{"McpServerToolCallParams", &mcp.MCPToolCallParams{ThreadID: "thread-schema", TurnID: "turn-schema", ItemID: "item-schema", Server: "server-schema", Tool: "echo", Arguments: map[string]any{"message": "hello from schema"}, Meta: map[string]any{"calledBy": "schema-test"}}},
+		{"McpServerToolCallResponse", &mcp.MCPToolCallResponse{Content: []mcp.MCPToolCallContent{{Type: "text", Text: "echo: hello from schema"}}, StructuredContent: map[string]any{"echoed": "hello from schema", "threadId": "thread-schema"}, IsError: boolPtr(false), Meta: map[string]any{"calledBy": "schema-test"}}},
+		{"McpServerElicitationRequestParams", &MCPElicitationRequestParams{ThreadID: "thread-schema", TurnID: stringPtr("turn-schema"), ServerName: "server-schema", Mode: "form", Meta: map[string]any{"requestId": "elicitation-schema"}, Message: "Confirm schema action", RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{"confirmed": map[string]any{"type": "boolean", "title": "Confirm"}}, "required": []any{"confirmed"}}}},
+		{"McpServerElicitationRequestParams", &MCPElicitationRequestParams{ThreadID: "thread-schema", TurnID: nil, ServerName: "server-schema", Mode: "url", Meta: nil, Message: "Open authorization", URL: "https://example.test/auth", ElicitationID: "elicitation-schema"}},
+		{"McpServerElicitationRequestResponse", &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept, Content: map[string]any{"confirmed": true}, Meta: map[string]any{"handledBy": "schema-test"}}},
 		{"TerminalInteractionNotification", &TerminalInteractionNotification{ThreadID: "thread-schema", TurnID: "turn-schema", ItemID: "item-schema", ProcessID: "process-schema", Stdin: "echo hi"}},
+		{"CommandExecParams", &CommandExecParams{Command: []string{"sh", "-lc", "printf hi"}, ProcessID: stringPtr("process-schema"), ThreadID: stringPtr("thread-schema"), TurnID: stringPtr("turn-schema"), ItemID: stringPtr("item-schema"), TTY: true, StreamStdin: true, StreamStdoutStderr: true, OutputBytesCap: &commandOutputCap, TimeoutMS: &commandTimeoutMS, CWD: stringPtr("D:/workspace"), Env: map[string]*string{"SCHEMA_ENV": stringPtr("1"), "UNSET_ENV": nil}, Size: &TerminalSize{Rows: 24, Cols: 80}}},
 		{"CommandExecResponse", &CommandExecResponse{ExitCode: 0, Stdout: "ok\n", Stderr: ""}},
+		{"CommandExecWriteParams", &CommandExecWriteParams{ProcessID: "process-schema", DeltaBase64: &commandDelta, CloseStdin: true}},
+		{"CommandExecWriteResponse", &CommandExecWriteResponse{}},
+		{"CommandExecTerminateParams", &CommandExecTerminateParams{ProcessID: "process-schema"}},
+		{"CommandExecTerminateResponse", &CommandExecTerminateResponse{}},
+		{"CommandExecResizeParams", &CommandExecResizeParams{ProcessID: "process-schema", Size: TerminalSize{Rows: 30, Cols: 120}}},
+		{"CommandExecResizeResponse", &CommandExecResizeResponse{}},
 		{"CommandExecOutputDeltaNotification", &CommandExecOutputDeltaNotification{ProcessID: "process-schema", Stream: StreamStdout, DeltaBase64: "b2sK", CapReached: false}},
+		{"FsReadFileParams", &ReadFileParams{Path: "D:/workspace/note.txt"}},
+		{"FsReadFileResponse", &ReadFileResponse{DataBase64: "aGVsbG8="}},
+		{"FsWriteFileParams", &WriteFileParams{Path: "D:/workspace/note.txt", DataBase64: "aGVsbG8="}},
+		{"FsWriteFileResponse", &WriteFileResponse{}},
+		{"FsCreateDirectoryParams", &CreateDirectoryParams{Path: "D:/workspace/nested", Recursive: boolPtr(true)}},
+		{"FsCreateDirectoryResponse", &CreateDirectoryResponse{}},
+		{"FsGetMetadataParams", &GetMetadataParams{Path: "D:/workspace/note.txt"}},
+		{"FsGetMetadataResponse", &GetMetadataResponse{IsDirectory: false, IsFile: true, IsSymlink: false, CreatedAtMS: 1700000000000, ModifiedAtMS: 1700000001000}},
+		{"FsReadDirectoryParams", &ReadDirectoryParams{Path: "D:/workspace"}},
+		{"FsReadDirectoryResponse", &ReadDirectoryResponse{Entries: []ReadDirectoryEntry{{FileName: "note.txt", IsDirectory: false, IsFile: true}, {FileName: "nested", IsDirectory: true, IsFile: false}}}},
+		{"FsRemoveParams", &RemoveParams{Path: "D:/workspace/note.txt", Recursive: boolPtr(false), Force: boolPtr(true)}},
+		{"FsRemoveResponse", &RemoveResponse{}},
+		{"FsCopyParams", &CopyParams{SourcePath: "D:/workspace/note.txt", DestinationPath: "D:/workspace/copy.txt", Recursive: false}},
+		{"FsCopyResponse", &CopyResponse{}},
+		{"FsWatchParams", &WatchParams{WatchID: "watch-schema", Path: "D:/workspace"}},
+		{"FsWatchResponse", &WatchResponse{Path: "D:/workspace"}},
+		{"FsUnwatchParams", &UnwatchParams{WatchID: "watch-schema"}},
+		{"FsUnwatchResponse", &UnwatchResponse{}},
+		{"FsChangedNotification", &ChangedNotification{WatchID: "watch-schema", ChangedPaths: []string{"D:/workspace/note.txt"}}},
 		{"WindowsSandboxReadinessResponse", &sandboxpkg.WindowsReadinessResponse{Status: sandboxpkg.WindowsReadinessNotConfigured}},
 	}
 	for _, tc := range cases {
@@ -161,6 +257,166 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		t.Run(tc.typeName, func(t *testing.T) {
 			requireJSONMatchesRustSchema(t, root, tc.typeName, tc.value)
 		})
+	}
+}
+
+func sampleRustSchemaThreadItemPayload(item ThreadItem) ThreadItemPayload {
+	data, err := json.Marshal(&item)
+	if err != nil {
+		panic(err)
+	}
+	var payload ThreadItemPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		panic(err)
+	}
+	return payload
+}
+
+func sampleRustSchemaTurnWithAllThreadItems() Turn {
+	turn := sampleRustSchemaTurn(TurnStatusCompleted)
+	turn.Items = sampleRustSchemaThreadItems()
+	return turn
+}
+
+func sampleRustSchemaThreadItems() []ThreadItem {
+	processID := "process-schema"
+	exitCode := int64(0)
+	durationMS := int64(42)
+	movePath := "D:/workspace/old.txt"
+	reasoningEffort := "medium"
+	message := "ready"
+	return []ThreadItem{
+		{
+			ID:   "item-user",
+			Type: "userMessage",
+			Data: map[string]any{
+				"clientId": "client-schema",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hello", "text_elements": []any{}},
+					map[string]any{"type": "image", "url": "data:image/png;base64,AA==", "detail": "auto"},
+					map[string]any{"type": "localImage", "path": "D:/workspace/image.png"},
+				},
+			},
+		},
+		{
+			ID:   "item-hook",
+			Type: "hookPrompt",
+			Data: map[string]any{
+				"fragments": []any{
+					map[string]any{"text": "hook says hello", "hookRunId": "hook-run-schema"},
+				},
+			},
+		},
+		{
+			ID:   "item-agent",
+			Type: "agentMessage",
+			Text: "answer",
+			Data: map[string]any{
+				"phase": "final_answer",
+				"memoryCitation": map[string]any{
+					"entries":   []any{map[string]any{"path": "AGENTS.md", "lineStart": float64(1), "lineEnd": float64(2), "note": "memory"}},
+					"threadIds": []any{"thread-schema"},
+				},
+			},
+		},
+		{ID: "item-plan", Type: "plan", Text: "plan text"},
+		{
+			ID:   "item-reasoning",
+			Type: "reasoning",
+			Data: map[string]any{
+				"summary": []any{"summary"},
+				"content": []any{"private reasoning redacted"},
+			},
+		},
+		{
+			ID:   "item-command",
+			Type: "commandExecution",
+			Data: map[string]any{
+				"command":          "rg schema",
+				"cwd":              "D:/workspace",
+				"processId":        processID,
+				"source":           string(CommandExecutionSourceAgent),
+				"status":           string(CommandExecutionCompleted),
+				"commandActions":   []any{map[string]any{"type": "search", "command": "rg schema", "query": "schema", "path": "D:/workspace"}},
+				"aggregatedOutput": "ok\n",
+				"exitCode":         exitCode,
+				"durationMs":       durationMS,
+			},
+		},
+		{
+			ID:   "item-file",
+			Type: "fileChange",
+			Data: map[string]any{
+				"status": string(PatchApplyCompleted),
+				"changes": []any{
+					map[string]any{"path": "D:/workspace/new.txt", "kind": map[string]any{"type": "add"}, "diff": "+hello\n"},
+					map[string]any{"path": "D:/workspace/old.txt", "kind": map[string]any{"type": "delete"}, "diff": "-old\n"},
+					map[string]any{"path": "D:/workspace/move.txt", "kind": map[string]any{"type": "update", "move_path": movePath}, "diff": "@@\n"},
+				},
+			},
+		},
+		{
+			ID:   "item-mcp",
+			Type: "mcpToolCall",
+			Data: map[string]any{
+				"server":    "docs",
+				"tool":      "search",
+				"status":    "completed",
+				"arguments": map[string]any{"query": "schema"},
+				"appContext": map[string]any{
+					"connectorId": "connector-schema",
+					"linkId":      "link-schema",
+					"resourceUri": "mcp://docs/schema",
+					"appName":     "Docs",
+					"templateId":  "template-schema",
+					"actionName":  "search",
+				},
+				"pluginId":   "plugin-schema",
+				"result":     map[string]any{"content": []any{map[string]any{"type": "text", "text": "result"}}, "structuredContent": map[string]any{"ok": true}, "_meta": map[string]any{"trace": "schema"}},
+				"durationMs": durationMS,
+			},
+		},
+		{
+			ID:   "item-dynamic",
+			Type: "dynamicToolCall",
+			Data: map[string]any{
+				"namespace":    "web",
+				"tool":         "open",
+				"arguments":    map[string]any{"url": "https://example.test"},
+				"status":       "completed",
+				"contentItems": []any{map[string]any{"type": "inputText", "text": "opened"}, map[string]any{"type": "inputImage", "imageUrl": "data:image/png;base64,AA=="}},
+				"success":      true,
+				"durationMs":   durationMS,
+			},
+		},
+		{
+			ID:   "item-collab",
+			Type: "collabAgentToolCall",
+			Data: map[string]any{
+				"tool":              string(CollabAgentToolSpawnAgent),
+				"status":            string(CollabAgentToolCallCompleted),
+				"senderThreadId":    "thread-parent",
+				"receiverThreadIds": []any{"thread-child"},
+				"prompt":            "work on schema",
+				"model":             "gpt-5",
+				"reasoningEffort":   reasoningEffort,
+				"agentsStates": map[string]any{
+					"thread-child": map[string]any{"status": string(CollabAgentStatusCompleted), "message": message},
+				},
+			},
+		},
+		{
+			ID:   "item-subagent",
+			Type: "subAgentActivity",
+			Data: map[string]any{"kind": "started", "agentThreadId": "thread-child", "agentPath": "agents/research"},
+		},
+		{ID: "item-web", Type: "webSearch", Text: "schema", Data: map[string]any{"action": map[string]any{"type": "search", "query": "schema", "queries": []any{"schema", "protocol"}}}},
+		{ID: "item-image-view", Type: "imageView", Data: map[string]any{"path": "D:/workspace/image.png"}},
+		{ID: "item-sleep", Type: "sleep", Data: map[string]any{"durationMs": durationMS}},
+		{ID: "item-image-generation", Type: "imageGeneration", Data: map[string]any{"status": "completed", "revisedPrompt": "a sharper prompt", "result": "image-result", "savedPath": "D:/workspace/generated.png"}},
+		{ID: "item-enter-review", Type: "enteredReviewMode", Text: "review started"},
+		{ID: "item-exit-review", Type: "exitedReviewMode", Text: "review ended"},
+		{ID: "item-compact", Type: "contextCompaction"},
 	}
 }
 
@@ -173,6 +429,59 @@ func sampleRustSchemaThreadStartResponse() *ThreadStartResponse {
 		Model:                 "gpt-5",
 		ModelProvider:         "openai",
 	}
+}
+
+func sampleRustSchemaThreadListResponse() *ThreadListResponse {
+	next := "thread-next"
+	backwards := "thread-backwards"
+	return &ThreadListResponse{
+		Data:            []Thread{*sampleRustSchemaThreadWithTurns()},
+		NextCursor:      &next,
+		BackwardsCursor: &backwards,
+	}
+}
+
+func sampleRustSchemaThreadLoadedListResponse() *ThreadLoadedListResponse {
+	next := "thread-next"
+	return &ThreadLoadedListResponse{
+		Data:       []string{"thread-schema"},
+		NextCursor: &next,
+	}
+}
+
+func sampleRustSchemaThreadResumeResponse() *ThreadResumeResponse {
+	next := "turn-next"
+	backwards := "turn-backwards"
+	return &ThreadResumeResponse{
+		Thread: sampleRustSchemaThreadWithTurns(),
+		InitialTurnsPage: &TurnsPage{
+			Data:            []Turn{sampleRustSchemaTurn(TurnStatusCompleted)},
+			NextCursor:      &next,
+			BackwardsCursor: &backwards,
+		},
+		CWD:                   "D:/workspace",
+		RuntimeWorkspaceRoots: []string{},
+		InstructionSources:    []string{},
+		Model:                 "gpt-5",
+		ModelProvider:         "openai",
+	}
+}
+
+func sampleRustSchemaThreadForkResponse() *ThreadForkResponse {
+	return &ThreadForkResponse{
+		Thread:                sampleRustSchemaThreadWithTurns(),
+		CWD:                   "D:/workspace",
+		RuntimeWorkspaceRoots: []string{},
+		InstructionSources:    []string{},
+		Model:                 "gpt-5",
+		ModelProvider:         "openai",
+	}
+}
+
+func sampleRustSchemaThreadWithTurns() *Thread {
+	thread := *sampleRustSchemaThread()
+	thread.Turns = []Turn{sampleRustSchemaTurn(TurnStatusCompleted)}
+	return &thread
 }
 
 func sampleRustSchemaThread() *Thread {
@@ -219,6 +528,10 @@ func sampleRustSchemaGoal() Goal {
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func TestAppServerControlSocketPath(t *testing.T) {
@@ -495,6 +808,12 @@ func rustSchemaRequiredFields(t *testing.T, root string, typeName string) []stri
 func validateRustSchemaValue(doc *rustSchemaDocument, raw json.RawMessage, value any, path string) []string {
 	if len(raw) == 0 {
 		return nil
+	}
+	switch strings.TrimSpace(string(raw)) {
+	case "true":
+		return nil
+	case "false":
+		return []string{fmt.Sprintf("%s: boolean schema false rejects all values", path)}
 	}
 	var node rustJSONSchemaNode
 	if err := json.Unmarshal(raw, &node); err != nil {

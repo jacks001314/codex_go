@@ -243,6 +243,57 @@ func TestLoginAccountResponseMarshalRustUnionShape(t *testing.T) {
 	}
 }
 
+func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
+	email := "user@example.com"
+	cases := []struct {
+		name string
+		in   *GetAccountResponse
+		want string
+	}{
+		{
+			name: "none requiring openai auth",
+			in:   &GetAccountResponse{RequiresOpenAIAuth: true},
+			want: `{"account":null,"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "api key",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountAPIKey}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "chatgpt with email",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, Email: &email, PlanType: PlanPro}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"pro"},"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "chatgpt without email",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, PlanType: PlanEnterprise}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"chatgpt","email":null,"planType":"enterprise"},"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "chatgpt missing plan",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, Email: &email}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"unknown"},"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "amazon bedrock",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountAmazonBedrock, CredentialSource: BedrockCredentialSourceCodexManaged}},
+			want: `{"account":{"type":"amazonBedrock","credentialSource":"codexManaged"},"requiresOpenaiAuth":false}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			if string(data) != tc.want {
+				t.Fatalf("JSON = %s, want %s", data, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoginAccountParamsMarshalRustUnionShape(t *testing.T) {
 	plan := "pro"
 	cases := []struct {

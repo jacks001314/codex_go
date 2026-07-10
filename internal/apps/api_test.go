@@ -285,6 +285,98 @@ func TestListMergesProvidersPluginConnectorsAndCache(t *testing.T) {
 	}
 }
 
+func TestListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust(t *testing.T) {
+	directory := &fakeDirectoryProvider{apps: []AppEntry{{ID: "alpha", Name: "Alpha"}, {ID: "beta", Name: "Beta Directory"}}}
+	accessible := &readyAccessibleProvider{
+		apps: []AppEntry{{
+			ID:           "beta",
+			Name:         "Beta",
+			IsAccessible: true,
+		}},
+		ready: false,
+	}
+	service := NewAppService(nil)
+	service.SetDirectoryProvider(directory)
+	service.SetAccessibleProvider(accessible)
+	service.SetPluginConnectors([]PluginConnector{{ID: "gamma", Name: "Gamma Plugin"}})
+
+	response, err := service.List(&AppListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Apps) != 2 || response.Apps[0].ID != "beta" || !response.Apps[0].IsAccessible || response.Apps[1].ID != "gamma" {
+		t.Fatalf("unready apps = %#v, want accessible beta and plugin gamma", response.Apps)
+	}
+
+	accessible.ready = true
+	if _, err := service.List(&AppListParams{ForceRefetch: true}); err != nil {
+		t.Fatalf("List(force ready) error = %v", err)
+	}
+	ready, err := service.List(&AppListParams{})
+	if err != nil {
+		t.Fatalf("List(cached ready) error = %v", err)
+	}
+	if len(ready.Apps) != 3 || ready.Apps[0].ID != "beta" || ready.Apps[1].ID != "alpha" || ready.Apps[2].ID != "gamma" {
+		t.Fatalf("ready apps = %#v, want merged beta, alpha, gamma", ready.Apps)
+	}
+}
+
+func TestCachedListForNotificationSkipsDirectoryWhenAccessibleNotReadyLikeRust(t *testing.T) {
+	directory := &fakeDirectoryProvider{apps: []AppEntry{{ID: "alpha", Name: "Alpha"}, {ID: "beta", Name: "Beta Directory"}}}
+	accessible := &readyAccessibleProvider{
+		apps: []AppEntry{{
+			ID:           "beta",
+			Name:         "Beta",
+			IsAccessible: true,
+		}},
+		ready: false,
+	}
+	service := NewAppService(nil)
+	service.SetDirectoryProvider(directory)
+	service.SetAccessibleProvider(accessible)
+	service.SetPluginConnectors([]PluginConnector{{ID: "gamma", Name: "Gamma Plugin"}})
+	if _, err := service.List(&AppListParams{}); err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+
+	cached := service.CachedListForNotification()
+	if len(cached) != 2 || cached[0].ID != "beta" || !cached[0].IsAccessible || cached[1].ID != "gamma" {
+		t.Fatalf("cached notification list = %#v, want accessible beta and plugin gamma", cached)
+	}
+}
+
+func TestForceRefetchPreservesPreviousCacheOnDirectoryFailureLikeRust(t *testing.T) {
+	directory := &fakeDirectoryProvider{apps: []AppEntry{{ID: "beta", Name: "Beta"}}}
+	accessible := &fakeAccessibleProvider{apps: []AppEntry{{
+		ID:           "beta",
+		Name:         "Beta App",
+		IsAccessible: true,
+	}}}
+	service := NewAppService(nil)
+	service.SetDirectoryProvider(directory)
+	service.SetAccessibleProvider(accessible)
+
+	initial, err := service.List(&AppListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(initial.Apps) != 1 || initial.Apps[0].ID != "beta" || !initial.Apps[0].IsAccessible {
+		t.Fatalf("initial apps = %#v", initial.Apps)
+	}
+
+	directory.err = errors.New("directory unavailable")
+	if _, err := service.List(&AppListParams{ForceRefetch: true}); !errors.Is(err, directory.err) {
+		t.Fatalf("List(force failure) error = %v, want %v", err, directory.err)
+	}
+	cached, err := service.List(&AppListParams{})
+	if err != nil {
+		t.Fatalf("List(cached after failure) error = %v", err)
+	}
+	if len(cached.Apps) != 1 || cached.Apps[0].ID != "beta" || !cached.Apps[0].IsAccessible {
+		t.Fatalf("cached apps = %#v, want preserved beta", cached.Apps)
+	}
+}
+
 func TestListAccessibleCacheIsThreadScoped(t *testing.T) {
 	accessible := &threadAccessibleProvider{appsByThread: map[string][]AppEntry{
 		"thread-a": {{ID: "drive-a", Name: "Drive A", IsAccessible: true}},
@@ -322,11 +414,15 @@ func TestListAccessibleCacheIsThreadScoped(t *testing.T) {
 
 type fakeDirectoryProvider struct {
 	apps  []AppEntry
+	err   error
 	calls int
 }
 
 func (p *fakeDirectoryProvider) ListDirectoryApps(params *AppDirectoryListParams) (*AppDirectoryListResponse, error) {
 	p.calls++
+	if p.err != nil {
+		return nil, p.err
+	}
 	allLoaded := true
 	return &AppDirectoryListResponse{Apps: cloneApps(p.apps), AllConnectorsLoaded: &allLoaded}, nil
 }
@@ -339,6 +435,17 @@ type fakeAccessibleProvider struct {
 func (p *fakeAccessibleProvider) ListAccessibleApps(params *AppAccessibleListParams) (*AppAccessibleListResponse, error) {
 	p.calls++
 	return &AppAccessibleListResponse{Apps: cloneApps(p.apps), CodexAppsReady: true}, nil
+}
+
+type readyAccessibleProvider struct {
+	apps  []AppEntry
+	ready bool
+	calls int
+}
+
+func (p *readyAccessibleProvider) ListAccessibleApps(params *AppAccessibleListParams) (*AppAccessibleListResponse, error) {
+	p.calls++
+	return &AppAccessibleListResponse{Apps: cloneApps(p.apps), CodexAppsReady: p.ready}, nil
 }
 
 type threadAccessibleProvider struct {

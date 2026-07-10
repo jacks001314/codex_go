@@ -403,7 +403,7 @@ func (s *AppService) CachedListForNotification() []AppEntry {
 	directoryCacheValid := s.directoryCacheValid
 	directoryCache := cloneApps(s.directoryCache)
 	directoryAllLoaded := s.directoryAllLoaded
-	accessibleCache, accessibleCacheValid := s.accessibleCacheSnapshotLocked()
+	accessibleCache, accessibleCacheValid, accessibleReady := s.accessibleCacheSnapshotLocked()
 	s.mu.Unlock()
 	if !directoryCacheValid && !accessibleCacheValid {
 		return nil
@@ -424,6 +424,15 @@ func (s *AppService) CachedListForNotification() []AppEntry {
 	accessible := accessibleStaticApps(snapshot.staticApps)
 	if accessibleCacheValid {
 		accessible = mergeAccessibleSnapshots(accessibleCache, accessible)
+	}
+	if accessibleCacheValid && !accessibleReady {
+		directory = MergePluginConnectors(cloneApps(snapshot.staticApps), snapshot.pluginConnectors)
+		list := MergeConnectors(directory, accessible)
+		list = WithAppEnabledState(list, AppsConfigFromValues(snapshot.configValues), nil)
+		if len(list) == 0 {
+			return nil
+		}
+		return cloneApps(list)
 	}
 	if allLoaded {
 		accessible = filterAccessibleAppsForDirectory(accessible, directory)
@@ -474,12 +483,16 @@ func (s *AppService) listMerged(params *AppListParams, snapshot *appServiceSnaps
 		directory = mergeDirectorySnapshots(directory, snapshot.staticApps)
 	}
 	directory = MergePluginConnectors(directory, snapshot.pluginConnectors)
-	accessible, err := s.accessibleAppsForList(snapshot.accessibleProvider, &AppAccessibleListParams{
+	accessible, accessibleReady, err := s.accessibleAppsForList(snapshot.accessibleProvider, &AppAccessibleListParams{
 		ThreadID:     threadID,
 		ForceRefetch: params.ForceRefetch,
 	}, snapshot.staticApps)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot.accessibleProvider != nil && !accessibleReady {
+		directory = MergePluginConnectors(cloneApps(snapshot.staticApps), snapshot.pluginConnectors)
+		allLoaded = false
 	}
 	if allLoaded {
 		accessible = filterAccessibleAppsForDirectory(accessible, directory)
@@ -530,31 +543,34 @@ func (s *AppService) directoryAppsForList(provider AppDirectoryProvider, params 
 	return apps, allLoaded, nil
 }
 
-func (s *AppService) accessibleAppsForList(provider AppAccessibleProvider, params *AppAccessibleListParams, staticApps []AppEntry) ([]AppEntry, error) {
+func (s *AppService) accessibleAppsForList(provider AppAccessibleProvider, params *AppAccessibleListParams, staticApps []AppEntry) ([]AppEntry, bool, error) {
 	accessible := accessibleStaticApps(staticApps)
 	if provider == nil {
-		return accessible, nil
+		return accessible, true, nil
 	}
 	if params == nil {
 		params = &AppAccessibleListParams{}
 	}
 	var providerApps []AppEntry
+	ready := false
 	cacheKey := strings.TrimSpace(params.ThreadID)
 	if !params.ForceRefetch {
 		s.mu.Lock()
 		if entry, ok := s.accessibleCaches[cacheKey]; ok {
 			providerApps = cloneApps(entry.apps)
+			ready = entry.ready
 			s.mu.Unlock()
-			return mergeAccessibleSnapshots(providerApps, accessible), nil
+			return mergeAccessibleSnapshots(providerApps, accessible), ready, nil
 		}
 		s.mu.Unlock()
 	}
 	response, err := provider.ListAccessibleApps(params)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if response != nil {
 		providerApps = cloneApps(response.Apps)
+		ready = response.CodexAppsReady
 	}
 	s.mu.Lock()
 	if s.accessibleCaches == nil {
@@ -567,12 +583,12 @@ func (s *AppService) accessibleAppsForList(provider AppAccessibleProvider, param
 	s.accessibleCaches[cacheKey] = entry
 	s.lastAccessibleCacheKey = cacheKey
 	s.mu.Unlock()
-	return mergeAccessibleSnapshots(providerApps, accessible), nil
+	return mergeAccessibleSnapshots(providerApps, accessible), ready, nil
 }
 
-func (s *AppService) accessibleCacheSnapshotLocked() ([]AppEntry, bool) {
+func (s *AppService) accessibleCacheSnapshotLocked() ([]AppEntry, bool, bool) {
 	if s == nil || len(s.accessibleCaches) == 0 {
-		return nil, false
+		return nil, false, false
 	}
 	key := s.lastAccessibleCacheKey
 	entry, ok := s.accessibleCaches[key]
@@ -584,9 +600,9 @@ func (s *AppService) accessibleCacheSnapshotLocked() ([]AppEntry, bool) {
 		}
 	}
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
-	return cloneApps(entry.apps), true
+	return cloneApps(entry.apps), true, entry.ready
 }
 
 func cloneApp(app AppEntry) AppEntry {

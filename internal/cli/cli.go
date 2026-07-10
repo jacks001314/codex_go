@@ -2789,7 +2789,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			return errors.New("debug config does not accept arguments")
 		}
 	default:
-		debug.Args = append(debug.Args, args[1:]...)
+		return fmt.Errorf("unknown debug subcommand %s", debug.Subcommand)
 	}
 	return nil
 }

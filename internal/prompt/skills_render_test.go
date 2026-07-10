@@ -51,6 +51,21 @@ func TestRenderAvailableSkillsTruncatesDescriptionsBeforeOmitting(t *testing.T) 
 	}
 }
 
+func TestRenderAvailableSkillsTokenBudgetWarningMentionsPercentLikeRust(t *testing.T) {
+	skills := []InstructionsSkillMetadata{
+		{Name: "alpha", Scope: "repo", Description: "abcdef", Path: "/tmp/alpha/SKILL.md"},
+		{Name: "beta", Scope: "repo", Description: "uvwxyz", Path: "/tmp/beta/SKILL.md"},
+	}
+	available := RenderAvailableSkills(skills, SkillMetadataBudget{Kind: SkillMetadataBudgetTokens, Limit: 1})
+	if available == nil || available.WarningMessage == nil {
+		t.Fatalf("RenderAvailableSkills() = %#v, want warning", available)
+	}
+	want := "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
+	if *available.WarningMessage != want {
+		t.Fatalf("warning = %q, want %q", *available.WarningMessage, want)
+	}
+}
+
 func TestDefaultSkillMetadataBudget(t *testing.T) {
 	if got := DefaultSkillMetadataBudget(200000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 4000 {
 		t.Fatalf("DefaultSkillMetadataBudget(200000) = %#v", got)

@@ -954,7 +954,10 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions) *appserver.Runtim
 	case disabledByEnv:
 		mode = appserver.RemoteControlStartupDisabledEphemeral
 	}
-	return &appserver.RuntimeRouterOptions{RemoteControlStartupMode: mode}
+	return &appserver.RuntimeRouterOptions{
+		RemoteControlStartupMode: mode,
+		AnalyticsDefaultEnabled:  opts.AnalyticsDefaultEnabled,
+	}
 }
 
 func webSocketAuthSettingsFromCLI(opts cli.AppServerOptions) *appserver.WebSocketAuthSettings {
@@ -1097,7 +1100,7 @@ func runDebug(opts cli.DebugOptions, stdout io.Writer) error {
 	case "config":
 		return runDebugConfig(stdout)
 	default:
-		return notImplemented("debug " + opts.Subcommand)
+		return fmt.Errorf("unknown debug subcommand %s", opts.Subcommand)
 	}
 }
 
@@ -1440,7 +1443,7 @@ func isTerminalReader(reader io.Reader) bool {
 }
 
 func notImplemented(name string) error {
-	return fmt.Errorf("%s is not implemented in the Go port yet", name)
+	return fmt.Errorf("unknown command %s", name)
 }
 
 func title(value string) string {

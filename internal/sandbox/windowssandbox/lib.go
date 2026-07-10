@@ -8,6 +8,7 @@ import (
 
 type LegacyPreflightRequest struct {
 	PermissionProfileID string
+	PermissionProfile   *coresandbox.PermissionProfile
 	WorkspaceRoots      []string
 	CodexHome           string
 	CWD                 string
@@ -125,9 +126,13 @@ func RunWindowsSandboxLegacyPreflight(req *LegacyPreflightRequest) error {
 	if req == nil {
 		return ErrInvalidRequest
 	}
-	profile, _, err := coresandbox.ResolvePermissionProfile(req.PermissionProfileID)
-	if err != nil {
-		return err
+	profile := req.PermissionProfile
+	if profile == nil {
+		var err error
+		profile, _, err = coresandbox.ResolvePermissionProfile(req.PermissionProfileID)
+		if err != nil {
+			return err
+		}
 	}
 	permissions, err := ResolvePermissions(profile, req.WorkspaceRoots)
 	if err != nil {

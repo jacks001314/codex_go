@@ -37,48 +37,53 @@ import (
 	"codex_go/internal/runtimeutil"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
 )
 
 type RuntimeServices struct {
-	ThreadRouter   *Router
-	ThreadExtras   *ThreadExtraService
-	Realtime       *realtime.Manager
-	FS             *FSService
-	Remote         *remotecontrol.Manager
-	Environment    *EnvironmentManager
-	Windows        *sandbox.WindowsManager
-	Feedback       *FeedbackSnapshot
-	Config         *config.ConfigService
-	Account        *auth.AccountManager
-	Hooks          *HookRegistry
-	HooksDiscovery *HookDiscoveryService
-	HookRunner     *HookRunner
-	Skills         *SkillsService
-	Plugins        *plugin.PluginService
-	Models         *model.ModelService
-	Permissions    *sandbox.PermissionProfileService
-	Collaboration  *CollaborationModeService
-	MCP            *mcp.MCPService
-	Features       *features.FeatureService
-	Apps           *apps.AppService
-	Turns          *turn.TurnService
-	SteerMailbox   *turn.SteerMailbox
-	ThreadStatus   *ThreadStatusManager
-	Agent          model.AgentRunner
-	CompactRunner  compact.RemoteRunner
-	ToolRouter     *tool.Router
-	TurnRuntime    *turn.Runtime
-	Reviews        *review.Service
-	Misc           *MiscService
-	CommandExec    *CommandExecService
-	Processes      *ProcessService
-	ServerRequests *ServerRequestBroker
-	AccountHTTP    chatgptapi.HTTPDoer
-	HTTPClient     model.HTTPDoer
-	SpawnGraph     agent.Store
-	DefaultCWD     string
+	ThreadRouter            *Router
+	ThreadExtras            *ThreadExtraService
+	Realtime                *realtime.Manager
+	FS                      *FSService
+	Remote                  *remotecontrol.Manager
+	Environment             *EnvironmentManager
+	Windows                 *sandbox.WindowsManager
+	WindowsSetupRunner      WindowsSandboxSetupRunner
+	Feedback                *FeedbackSnapshot
+	Config                  *config.ConfigService
+	Account                 *auth.AccountManager
+	Hooks                   *HookRegistry
+	HooksDiscovery          *HookDiscoveryService
+	HookRunner              *HookRunner
+	Skills                  *SkillsService
+	Plugins                 *plugin.PluginService
+	Models                  *model.ModelService
+	Permissions             *sandbox.PermissionProfileService
+	Collaboration           *CollaborationModeService
+	MCP                     *mcp.MCPService
+	Features                *features.FeatureService
+	Apps                    *apps.AppService
+	Turns                   *turn.TurnService
+	SteerMailbox            *turn.SteerMailbox
+	ThreadStatus            *ThreadStatusManager
+	Agent                   model.AgentRunner
+	CompactRunner           compact.RemoteRunner
+	ToolRouter              *tool.Router
+	TurnRuntime             *turn.Runtime
+	Reviews                 *review.Service
+	Misc                    *MiscService
+	CommandExec             *CommandExecService
+	Processes               *ProcessService
+	ServerRequests          *ServerRequestBroker
+	AccountHTTP             chatgptapi.HTTPDoer
+	HTTPClient              model.HTTPDoer
+	SpawnGraph              agent.Store
+	Analytics               telemetry.TurnEventSink
+	AnalyticsRPCTransport   telemetry.AppServerRPCTransport
+	DefaultCWD              string
+	LocalEnvironmentEnabled *bool
 
 	RemoteControlDisabledByRequirements bool
 }
@@ -95,6 +100,7 @@ type RuntimeRouterOptions struct {
 	RemoteControlStartupMode            RemoteControlStartupMode
 	Requirements                        *config.ConfigRequirements
 	RemoteControlDisabledByRequirements bool
+	AnalyticsDefaultEnabled             bool
 	RemoteControlURL                    string
 	RemoteControlInstallationID         string
 	RemoteControlEnrollmentStore        *remotecontrol.EnrollmentStore
@@ -125,6 +131,10 @@ type RuntimeRouter struct {
 	mcpOpenAIForm       map[string]bool
 	authRevisionMu      sync.Mutex
 	authRevision        uint64
+	approvalSessionsMu  sync.RWMutex
+	commandApprovals    map[string]struct{}
+	fileApprovals       map[string]struct{}
+	toolItemReviews     map[string]toolItemReviewSummary
 }
 
 const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
@@ -142,11 +152,18 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		experimentalAPI:     map[string]bool{},
 		requestAttestation:  map[string]bool{},
 		mcpOpenAIForm:       map[string]bool{},
+		commandApprovals:    map[string]struct{}{},
+		fileApprovals:       map[string]struct{}{},
+		toolItemReviews:     map[string]toolItemReviewSummary{},
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
 	}
+	if router.services.Config != nil {
+		_, _ = router.services.Config.MaybeMigratePersonality()
+	}
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
+	router.services.ServerRequests.SetResolvedResponseCallback(router.handleServerRequestResolvedResponse)
 	if router.services.ThreadRouter != nil && router.services.SpawnGraph != nil {
 		router.services.ThreadRouter.SetSpawnGraph(router.services.SpawnGraph)
 	}
@@ -186,6 +203,7 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if r == nil {
 		return
 	}
+	r.handleNotificationAnalytics(method, params)
 	if r.notificationMethodOptedOut(method) {
 		return
 	}
@@ -206,6 +224,7 @@ func (r *RuntimeRouter) notifyToConnection(connectionID string, method Notificat
 		r.notify(method, params)
 		return
 	}
+	r.handleNotificationAnalytics(method, params)
 	if r.connectionNotificationMethodOptedOut(connectionID, method) {
 		return
 	}
@@ -417,12 +436,59 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
 	}
 	router := NewRuntimeRouter(services)
+	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
 	router.configureMCPFromConfig()
 	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
 	return router
+}
+
+func (r *RuntimeRouter) configureAnalyticsFromConfig(codexHome string, options *RuntimeRouterOptions) {
+	if r == nil || r.services.Analytics != nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	cfg := &config.Config{Values: read.Config}
+	defaultEnabled := false
+	if options != nil {
+		defaultEnabled = options.AnalyticsDefaultEnabled
+	}
+	if !cfg.AnalyticsEnabled(defaultEnabled) {
+		return
+	}
+	r.services.Analytics = telemetry.NewAnalyticsEventsClient(telemetry.AnalyticsEventsClientOptions{
+		BaseURL:          cfg.ChatGPTBaseURL(),
+		HTTPClient:       r.httpClientForConfig(cfg),
+		AuthorizeRequest: r.analyticsAuthorizeRequest(codexHome),
+	})
+}
+
+func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
+	return func(ctx context.Context, request *http.Request, body []byte) (bool, error) {
+		if r == nil {
+			return false, nil
+		}
+		resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+		if err != nil || resolved == nil {
+			return false, err
+		}
+		if !authUsesCodexBackend(&resolved.Auth) {
+			return false, nil
+		}
+		headers, err := model.AuthHeadersFromAuth(resolved.Auth)
+		if err != nil {
+			return false, err
+		}
+		if err := headers.Apply(ctx, request, body); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 }
 
 func newRemoteControlManagerForStartup(codexHome string, options *RuntimeRouterOptions) *remotecontrol.Manager {
@@ -614,10 +680,19 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 }
 
 func (r *RuntimeRouter) Close() error {
-	if r == nil || r.services.Remote == nil {
+	if r == nil {
 		return nil
 	}
-	return r.services.Remote.Close()
+	var closeErr error
+	if closer, ok := r.services.Analytics.(interface{ Close() error }); ok && closer != nil {
+		closeErr = closer.Close()
+	}
+	if r.services.Remote != nil {
+		if err := r.services.Remote.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (r *RuntimeRouter) rememberConnectionClientInfo(connectionID string, info ClientInfo) bool {
@@ -775,6 +850,20 @@ func (r *RuntimeRouter) connectionExperimentalAPIDisabled(connectionID string) b
 	defer r.clientInfoMu.RUnlock()
 	enabled, ok := r.experimentalAPI[connectionID]
 	return ok && !enabled
+}
+
+func (r *RuntimeRouter) connectionExperimentalAPI(connectionID string) *bool {
+	if r == nil {
+		return nil
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	enabled, ok := r.experimentalAPI[connectionID]
+	if !ok {
+		return nil
+	}
+	return &enabled
 }
 
 func (r *RuntimeRouter) anyConnectionMCPOpenAIFormElicitation() bool {
@@ -1122,9 +1211,14 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 				return nil, err
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
+			r.applyThreadResumeSettingsUpdate(result, request)
 			r.applyRunningThreadResumeSnapshot(result, request)
 			r.markThreadResumeSessionStartSource(result, request)
 			r.markResponseThreadLoaded(result, request.normalizedConnectionID())
+			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
+			}
+			r.replayPendingServerRequestsForThread(result)
 			r.notifyRestoredTokenUsage(result)
 			return result, nil
 		}
@@ -1261,7 +1355,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	case MethodWindowsSandboxSetupStart:
 		return r.handleWindowsSandboxSetupStart(request)
 	case MethodWindowsSandboxReadiness:
-		return r.requireWindows().Readiness(), nil
+		return r.windowsSandboxReadiness()
 	case MethodFeedbackUpload:
 		return r.handleFeedbackUpload(request)
 	case MethodConfigRead:
@@ -1337,10 +1431,11 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 		return nil, err
 	}
 	notification, err := r.compactThread(context.Background(), &runtimeCompactRequest{
-		ThreadID: params.ThreadID,
-		Trigger:  compact.TriggerManual,
-		Reason:   compact.ReasonUserRequested,
-		Phase:    compact.PhaseStandaloneTurn,
+		ThreadID:     params.ThreadID,
+		ConnectionID: request.normalizedConnectionID(),
+		Trigger:      compact.TriggerManual,
+		Reason:       compact.ReasonUserRequested,
+		Phase:        compact.PhaseStandaloneTurn,
 	})
 	if err != nil {
 		return nil, err
@@ -1840,9 +1935,11 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			r.emitThreadStartAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notifyRestoredTokenUsage(response)
 			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 		}
@@ -2225,16 +2322,34 @@ func (r *RuntimeRouter) threadStartDefaultCWD() string {
 }
 
 func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams) (*config.Config, error) {
+	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
-		return &config.Config{Values: map[string]any{}}, nil
+		applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+		return cfg, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
-		return &config.Config{Values: map[string]any{}}, nil
+		applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+		return cfg, nil
 	}
 	cwd := r.effectiveThreadStartCWD(params)
 	r.maybeTrustThreadStartProject(params)
-	return config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: cwd})
+	loaded, err := config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: cwd})
+	if err != nil {
+		return nil, err
+	}
+	if loaded != nil {
+		cfg = loaded
+	}
+	applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+	return cfg, nil
+}
+
+func threadStartConfigOverrides(params *ThreadStartParams) map[string]any {
+	if params == nil {
+		return nil
+	}
+	return params.Config
 }
 
 func (r *RuntimeRouter) maybeTrustThreadStartProject(params *ThreadStartParams) {
@@ -2643,6 +2758,21 @@ func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
 		TurnID:     turnID,
 		TokenUsage: *usage,
 	})
+}
+
+func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any) {
+	if r == nil {
+		return
+	}
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil {
+		return
+	}
+	threadID := strings.TrimSpace(response.Thread.ID)
+	if threadID == "" {
+		return
+	}
+	r.requireServerRequests().ReplayThread(threadID)
 }
 
 func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
@@ -3234,7 +3364,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if hasSettingsUpdate {
 		r.applyTurnStartSettingsUpdate(settingsUpdate)
 	}
-	r.startTurnRuntimeAsync(&params, response)
+	r.startTurnRuntimeAsync(&params, response, request.normalizedConnectionID())
 	return response, nil
 }
 
@@ -3262,6 +3392,25 @@ func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, reque
 		roots = threadRuntimeWorkspaceRoots(response.CWD, params.RuntimeWorkspaceRoots)
 	}
 	_ = r.persistThreadRecordRuntimeWorkspaceRoots(response.Thread.ID, roots)
+}
+
+func (r *RuntimeRouter) applyThreadResumeSettingsUpdate(result any, request *Request) {
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil || request == nil {
+		return
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return
+	}
+	if threadID := strings.TrimSpace(params.ThreadID); threadID != "" && r.activeRuntimeTurnSnapshot(threadID) != nil {
+		return
+	}
+	settingsUpdate, hasSettingsUpdate := threadResumeSettingsUpdateParams(&params, response.Thread.ID)
+	if !hasSettingsUpdate {
+		return
+	}
+	r.applyTurnStartSettingsUpdate(settingsUpdate)
 }
 
 func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Request) {
@@ -3457,8 +3606,41 @@ func turnStartSettingsUpdateParams(params *turn.TurnStartParams) (*SettingsUpdat
 		update.Summary = cloneString(params.Summary)
 		hasUpdate = true
 	}
+	if params.CollaborationMode != nil {
+		update.CollaborationMode = cloneAnyMap(params.CollaborationMode)
+		hasUpdate = true
+	}
 	if params.Personality != nil {
 		update.Personality = cloneString(params.Personality)
+		hasUpdate = true
+	}
+	return update, hasUpdate
+}
+
+func threadResumeSettingsUpdateParams(params *ThreadResumeParams, threadID string) (*SettingsUpdateParams, bool) {
+	if params == nil {
+		return nil, false
+	}
+	update := &SettingsUpdateParams{ThreadID: strings.TrimSpace(threadID)}
+	if update.ThreadID == "" {
+		return nil, false
+	}
+	hasUpdate := false
+	if cwd := stringPtrValue(params.CWD); cwd != "" {
+		update.CWD = &cwd
+		hasUpdate = true
+	}
+	if modelID := stringPtrValue(params.Model); modelID != "" {
+		update.Model = &modelID
+		hasUpdate = true
+	}
+	if params.ServiceTierSet || params.ServiceTier != nil {
+		update.ServiceTier = &ThreadExtraOptionalString{Set: true, Value: cloneString(params.ServiceTier)}
+		hasUpdate = true
+	}
+	if params.Personality != nil {
+		update.Personality = cloneString(params.Personality)
+		update.PersonalitySet = true
 		hasUpdate = true
 	}
 	return update, hasUpdate
@@ -3496,12 +3678,14 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Model = firstNonEmpty(threadSettingsModel(settings), strings.TrimSpace(record.Metadata.Model))
 	}
 	applyThreadSettingsToTurnStartParams(params, settings)
+	applyCollaborationModeToTurnStartParams(params)
 	if strings.TrimSpace(params.Originator) == "" {
 		params.Originator = strings.TrimSpace(record.Metadata.Originator)
 	}
 	if params.Config == nil {
 		params.Config = map[string]any{}
 	}
+	params.Config = mergeTurnConfigOverrides(threadRecordConfigOverrides(record), params.Config)
 	if len(params.DynamicTools) == 0 {
 		params.DynamicTools = dynamicToolsFromRecordMetadata(record.Metadata)
 	}
@@ -3538,9 +3722,84 @@ func applyThreadSettingsToTurnStartParams(params *turn.TurnStartParams, settings
 	if params.Summary == nil && settings.Summary != nil {
 		params.Summary = cloneString(settings.Summary)
 	}
+	if params.CollaborationMode == nil && settings.CollaborationMode != nil {
+		params.CollaborationMode = cloneAnyMap(settings.CollaborationMode)
+	}
 	if params.Personality == nil && settings.Personality != nil {
 		params.Personality = cloneString(settings.Personality)
+		params.PersonalitySet = settings.PersonalitySet
 	}
+}
+
+func applyCollaborationModeToTurnStartParams(params *turn.TurnStartParams) {
+	if params == nil || params.CollaborationMode == nil {
+		return
+	}
+	settings := collaborationModeSettings(params.CollaborationMode)
+	if len(settings) == 0 {
+		return
+	}
+	if modelID := strings.TrimSpace(stringFromAny(firstMapValue(settings, "model"))); modelID != "" {
+		params.Model = modelID
+	}
+	if effort := strings.TrimSpace(stringFromAny(firstMapValue(settings, "reasoning_effort", "reasoningEffort"))); effort != "" {
+		params.Effort = &effort
+	}
+}
+
+func collaborationModeSettings(mode map[string]any) map[string]any {
+	if mode == nil {
+		return nil
+	}
+	raw := firstMapValue(mode, "settings")
+	if settings, ok := raw.(map[string]any); ok {
+		return settings
+	}
+	data, err := json.Marshal(raw)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil
+	}
+	return settings
+}
+
+func threadRecordConfigOverrides(record *session.Record) map[string]any {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	raw, ok := record.Metadata.Extra["config"]
+	if !ok || raw == nil {
+		return nil
+	}
+	if values, ok := raw.(map[string]any); ok {
+		return cloneAnyMap(values)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil
+	}
+	return cloneAnyMap(values)
+}
+
+func mergeTurnConfigOverrides(threadConfig map[string]any, turnConfig map[string]any) map[string]any {
+	if len(threadConfig) == 0 && len(turnConfig) == 0 {
+		return map[string]any{}
+	}
+	merged := map[string]any{}
+	for key, value := range threadConfig {
+		merged[key] = value
+	}
+	for key, value := range turnConfig {
+		merged[key] = value
+	}
+	return merged
 }
 
 func threadSettingsCWD(settings *Settings) string {
@@ -3594,11 +3853,14 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	connectionID := request.normalizedConnectionID()
+	createdAt := runtimeRouterNow(r).UTC()
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
 	response, err := r.requireTurns().Steer(&params)
 	if err != nil {
+		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
 	if r.hasRuntimeThreadStore() {
@@ -3624,13 +3886,16 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	}
 	if inputItems := inputItemsFromTurnSteer(&params); len(inputItems) > 0 {
 		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
-			ThreadID:   params.ThreadID,
-			TurnID:     params.ExpectedTurnID,
-			InputItems: inputItems,
+			ThreadID:       params.ThreadID,
+			TurnID:         params.ExpectedTurnID,
+			InputItems:     inputItems,
+			ClientMetadata: r.steerClientMetadata(&params),
 		}); err != nil {
 			return nil, err
 		}
 	}
+	r.noteAcceptedTurnSteer(params.ThreadID, params.ExpectedTurnID)
+	r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, stringPtrIfNotEmpty(response.TurnID), telemetry.TurnSteerResultAccepted, nil, createdAt)
 	return response, nil
 }
 
@@ -3660,14 +3925,25 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 	}
 	response, err := r.requireTurns().Interrupt(&params)
 	if err != nil {
-		return nil, err
+		return nil, turnInterruptRuntimeError(err)
 	}
 	if r.hasRuntimeThreadStore() {
 		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
-			r.finishTurnInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS)
+			r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
 		}
 	}
 	return response, nil
+}
+
+func turnInterruptRuntimeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(err.Error())
+	if strings.Contains(message, " is not active") {
+		return jsonRPCInvalidRequest(message)
+	}
+	return err
 }
 
 func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartResponse, error) {
@@ -3685,7 +3961,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return r.setThreadGoal(&params)
+		return r.setThreadGoal(&params, request.normalizedConnectionID())
 	case MethodThreadGoalGet:
 		var params GoalGetParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -3697,7 +3973,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return r.clearThreadGoal(&params)
+		return r.clearThreadGoal(&params, request.normalizedConnectionID())
 	case MethodThreadSettingsUpdate:
 		var params SettingsUpdateParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -3771,7 +4047,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 	}
 }
 
-func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams) (*GoalSetResponse, error) {
+func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string) (*GoalSetResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -3807,7 +4083,7 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams) (*GoalSetResponse, 
 	if record.Metadata.Extra == nil {
 		record.Metadata.Extra = map[string]any{}
 	}
-	record.Metadata.Extra[threadGoalExtraKey] = cloneGoal(goal)
+	record.Metadata.Extra[threadGoalExtraKey] = goalRecordExtra(goal)
 	record.UpdatedAt = time.Unix(now, 0).UTC()
 	record.RecencyAt = record.UpdatedAt
 	if strings.TrimSpace(record.Preview) == "" {
@@ -3817,6 +4093,7 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams) (*GoalSetResponse, 
 		return nil, err
 	}
 	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
+	r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &goal, goalAnalyticsEventKindForSet(existing, &goal), nil)
 	return &GoalSetResponse{Goal: goal}, nil
 }
 
@@ -3845,7 +4122,7 @@ func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, 
 	return &GoalGetResponse{Goal: &cloned}, nil
 }
 
-func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams) (*GoalClearResponse, error) {
+func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID string) (*GoalClearResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -3860,6 +4137,10 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams) (*GoalClearResp
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support goals: %s", params.ThreadID))
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	goal, found, err := goalFromRecord(record)
 	if err != nil {
 		return nil, err
 	}
@@ -3881,6 +4162,9 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams) (*GoalClearResp
 			return nil, err
 		}
 		r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+		if found && goal != nil {
+			r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, goal, telemetry.GoalEventKindCleared, nil)
+		}
 	}
 	return &GoalClearResponse{Cleared: cleared}, nil
 }
@@ -4127,7 +4411,11 @@ func (r *RuntimeRouter) handleExperimentalFeatureList(request *Request) (*featur
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFeatures().List(&params)
+	settings, err := r.experimentalFeatureSettingsForList(&params)
+	if err != nil {
+		return nil, err
+	}
+	return r.requireFeatures().ListWithSettings(&params, settings)
 }
 
 func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*features.FeatureEnablementSetResponse, error) {
@@ -4135,7 +4423,38 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFeatures().SetEnablement(&params)
+	response, err := r.requireFeatures().SetEnablement(&params)
+	if err != nil {
+		return nil, err
+	}
+	if r.services.Config != nil && response != nil {
+		r.services.Config.SetFeatureEnablementDefaults(response.Enablement)
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) experimentalFeatureSettingsForList(params *features.FeatureListParams) (map[string]bool, error) {
+	if r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	readParams := &config.ConfigReadParams{}
+	if params != nil && params.ThreadID != nil && strings.TrimSpace(*params.ThreadID) != "" {
+		record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(*params.ThreadID)), true, false)
+		if err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+		if cwd := strings.TrimSpace(record.Metadata.CWD); cwd != "" {
+			readParams.CWD = &cwd
+		}
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil {
+		return nil, err
+	}
+	if read == nil {
+		return nil, nil
+	}
+	return (&config.Config{Values: read.Config}).FeatureSettings(), nil
 }
 
 func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, error) {
@@ -4144,16 +4463,21 @@ func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, 
 		return nil, err
 	}
 	service := r.requireApps()
+	configValues, err := r.appListConfigValues(&params)
+	if err != nil {
+		return nil, err
+	}
+	service.SetConfigValues(configValues)
+	if !features.Enabled((&config.Config{Values: configValues}).FeatureSettings(), "apps") {
+		service.SetPluginConnectors(nil)
+		service.SetDirectoryProviderWithKey(nil, "")
+		service.SetAccessibleProviderWithKey(nil, "")
+		return &apps.AppListResponse{Data: []apps.AppEntry{}, Apps: []apps.AppEntry{}, AllApps: []apps.AppEntry{}}, nil
+	}
 	if r.services.Plugins != nil {
 		service.SetPluginConnectors(appPluginConnectorsFromCapabilities(r.services.Plugins.EnabledCapabilities()))
-	}
-	var configValues map[string]any
-	if r.services.Config != nil {
-		read, err := r.services.Config.Read(&config.ConfigReadParams{})
-		if err == nil && read != nil {
-			configValues = read.Config
-			service.SetConfigValues(read.Config)
-		}
+	} else {
+		service.SetPluginConnectors(nil)
 	}
 	r.configureAppDirectoryProvider(service, configValues)
 	r.configureAppAccessibleProvider(service)
@@ -4175,6 +4499,30 @@ func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, 
 		}
 	}
 	return response, nil
+}
+
+func (r *RuntimeRouter) appListConfigValues(params *apps.AppListParams) (map[string]any, error) {
+	if r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	readParams := &config.ConfigReadParams{}
+	if params != nil && params.ThreadID != nil && strings.TrimSpace(*params.ThreadID) != "" {
+		record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(*params.ThreadID)), true, false)
+		if err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+		if cwd := strings.TrimSpace(record.Metadata.CWD); cwd != "" {
+			readParams.CWD = &cwd
+		}
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil {
+		return nil, err
+	}
+	if read == nil {
+		return nil, nil
+	}
+	return read.Config, nil
 }
 
 func appListUpdatedNotificationData(response *apps.AppListResponse) []apps.AppEntry {
@@ -4813,7 +5161,18 @@ func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginIns
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().Install(&params)
+	service := r.requirePlugins()
+	response, err := service.Install(&params)
+	if err != nil {
+		r.emitPluginInstallFailedAnalyticsEvent(context.Background(), request.normalizedConnectionID(), &params, err)
+		return nil, err
+	}
+	if response != nil {
+		if detail := pluginAnalyticsDetailByID(service, response.PluginID); detail != nil {
+			r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginInstalledEventType, detail)
+		}
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginUninstallResponse, error) {
@@ -4821,7 +5180,16 @@ func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginU
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().Uninstall(&params)
+	service := r.requirePlugins()
+	detail := pluginAnalyticsDetailByID(service, params.PluginID)
+	response, err := service.Uninstall(&params)
+	if err != nil {
+		return nil, err
+	}
+	if detail != nil {
+		r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginUninstalledEventType, detail)
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListResponse, error) {
@@ -4845,7 +5213,31 @@ func (r *RuntimeRouter) handlePermissionProfileList(request *Request) (*sandbox.
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if service, err := r.permissionProfileServiceForRequest(&params); err != nil {
+		return nil, err
+	} else if service != nil {
+		return service.List(&params)
+	}
 	return r.requirePermissions().List(&params)
+}
+
+func (r *RuntimeRouter) permissionProfileServiceForRequest(params *sandbox.PermissionProfileListParams) (*sandbox.PermissionProfileService, error) {
+	if r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	readParams := &config.ConfigReadParams{}
+	if params != nil && params.CWD != nil {
+		readParams.CWD = cloneString(params.CWD)
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil {
+		return nil, err
+	}
+	summaries, err := config.PermissionProfileSummariesFromValues(read.Config)
+	if err != nil {
+		return nil, err
+	}
+	return sandbox.NewPermissionProfileService(summaries), nil
 }
 
 func (r *RuntimeRouter) handleCollaborationModeList(request *Request) (*CollaborationModeListResponse, error) {
@@ -4959,7 +5351,11 @@ func (r *RuntimeRouter) handleFSReadFile(request *Request) (*ReadFileResponse, e
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().ReadFile(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(&params)
 }
 
 func (r *RuntimeRouter) handleFSWriteFile(request *Request) (*WriteFileResponse, error) {
@@ -4967,7 +5363,11 @@ func (r *RuntimeRouter) handleFSWriteFile(request *Request) (*WriteFileResponse,
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requireFS().WriteFile(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	response, err := fs.WriteFile(&params)
 	if err != nil {
 		return nil, err
 	}
@@ -4980,7 +5380,11 @@ func (r *RuntimeRouter) handleFSCreateDirectory(request *Request) (*CreateDirect
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requireFS().CreateDirectory(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	response, err := fs.CreateDirectory(&params)
 	if err != nil {
 		return nil, err
 	}
@@ -4993,7 +5397,11 @@ func (r *RuntimeRouter) handleFSGetMetadata(request *Request) (*GetMetadataRespo
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().GetMetadata(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	return fs.GetMetadata(&params)
 }
 
 func (r *RuntimeRouter) handleFSReadDirectory(request *Request) (*ReadDirectoryResponse, error) {
@@ -5001,7 +5409,11 @@ func (r *RuntimeRouter) handleFSReadDirectory(request *Request) (*ReadDirectoryR
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().ReadDirectory(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadDirectory(&params)
 }
 
 func (r *RuntimeRouter) handleFSRemove(request *Request) (*RemoveResponse, error) {
@@ -5009,7 +5421,11 @@ func (r *RuntimeRouter) handleFSRemove(request *Request) (*RemoveResponse, error
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requireFS().Remove(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	response, err := fs.Remove(&params)
 	if err != nil {
 		return nil, err
 	}
@@ -5022,7 +5438,11 @@ func (r *RuntimeRouter) handleFSCopy(request *Request) (*CopyResponse, error) {
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requireFS().Copy(&params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	response, err := fs.Copy(&params)
 	if err != nil {
 		return nil, err
 	}
@@ -5044,7 +5464,11 @@ func (r *RuntimeRouter) handleFSWatch(request *Request) (*WatchResponse, error) 
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().WatchWithConnection(request.normalizedConnectionID(), &params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	return fs.WatchWithConnection(request.normalizedConnectionID(), &params)
 }
 
 func (r *RuntimeRouter) handleFSUnwatch(request *Request) (*UnwatchResponse, error) {
@@ -5052,7 +5476,11 @@ func (r *RuntimeRouter) handleFSUnwatch(request *Request) (*UnwatchResponse, err
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireFS().UnwatchWithConnection(request.normalizedConnectionID(), &params)
+	fs, err := r.localFS()
+	if err != nil {
+		return nil, err
+	}
+	return fs.UnwatchWithConnection(request.normalizedConnectionID(), &params)
 }
 
 func (r *RuntimeRouter) handleRemoteControlEnable(request *Request) (*remotecontrol.EnableResponse, error) {
@@ -5140,12 +5568,28 @@ func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandb
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	cwd, err := r.windowsSandboxSetupCWD(params.CWD)
+	if err != nil {
+		return nil, err
+	}
 	resolved, err := config.ResolveAllowedWindowsSandboxSetupMode(r.requireConfig().Requirements().Requirements, config.WindowsSandboxSetupMode(params.Mode))
 	if err != nil {
 		return nil, err
 	}
 	params.Mode = sandbox.WindowsSetupMode(resolved)
-	return r.requireWindows().StartSetup(&params)
+	params.CWD = &cwd
+	setupRequest, err := r.windowsSandboxSetupRuntimeRequest(params.Mode, cwd)
+	if err != nil {
+		return nil, err
+	}
+	response, err := r.requireWindows().StartSetup(&params)
+	if err != nil {
+		return nil, err
+	}
+	if response.Started {
+		go r.runWindowsSandboxSetupForConnection(request.normalizedConnectionID(), setupRequest)
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadResponse, error) {
@@ -5236,6 +5680,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 			}
 		}
 		r.requireAccount().ApplyAuthSnapshot(snapshot)
+		r.clearRecommendedPluginsCache()
 		r.noteAuthChanged()
 	}
 	if response != nil && response.LoginID == "" {
@@ -5391,6 +5836,7 @@ func (r *RuntimeRouter) handleAccountSessionsLogout(request *Request) (*auth.Acc
 	if err != nil {
 		return nil, err
 	}
+	r.clearRecommendedPluginsCache()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -5404,6 +5850,7 @@ func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.Acc
 	if err != nil {
 		return nil, err
 	}
+	r.clearRecommendedPluginsCache()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -5422,9 +5869,17 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 			return nil, err
 		}
 	}
+	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
+}
+
+func (r *RuntimeRouter) clearRecommendedPluginsCache() {
+	if r == nil || r.services.Plugins == nil {
+		return
+	}
+	r.services.Plugins.ClearRecommendedPluginsCache()
 }
 
 func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResponse, error) {
@@ -6089,6 +6544,9 @@ func (r *RuntimeRouter) handleProcessSpawn(request *Request) (*ProcessSpawnRespo
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if err := r.ensureLocalEnvironment(); err != nil {
+		return nil, err
+	}
 	return r.requireProcesses().SpawnWithOptions(nil, &params, r.notify, &ProcessSpawnOptions{ConnectionID: request.normalizedConnectionID()})
 }
 
@@ -6121,7 +6579,42 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, &CommandExecOptions{ConnectionID: request.normalizedConnectionID()})
+	if err := r.ensureLocalEnvironment(); err != nil {
+		return nil, err
+	}
+	options := &CommandExecOptions{ConnectionID: request.normalizedConnectionID()}
+	if r != nil && r.services.Config != nil {
+		options.PermissionProfileResolver = r.commandExecPermissionProfileResolver()
+	}
+	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, options)
+}
+
+func (r *RuntimeRouter) commandExecPermissionProfileResolver() CommandExecPermissionProfileResolver {
+	return func(profileID string, cwd string) (*CommandExecPermissionProfileResolution, error) {
+		if r == nil || r.services.Config == nil {
+			return commandExecBuiltinPermissionProfileResolver(profileID, cwd)
+		}
+		readParams := &config.ConfigReadParams{}
+		if strings.TrimSpace(cwd) != "" {
+			readParams.CWD = &cwd
+		}
+		read, err := r.services.Config.Read(readParams)
+		if err != nil {
+			return nil, err
+		}
+		values := map[string]any{}
+		if read != nil && read.Config != nil {
+			values = read.Config
+		}
+		resolved, err := (&config.Config{Values: values}).ResolveSandboxPermissionProfile(profileID, cwd)
+		if err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+		if resolved == nil || resolved.Profile == nil {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("permission profile %q not found", strings.TrimSpace(profileID)))
+		}
+		return &CommandExecPermissionProfileResolution{ID: resolved.ID, Profile: resolved.Profile, ProfileJSON: resolved.ProfileJSON}, nil
+	}
 }
 
 func (r *RuntimeRouter) handleCommandExecWrite(request *Request) (*CommandExecWriteResponse, error) {
@@ -6154,6 +6647,37 @@ func (r *RuntimeRouter) requireFS() *FSService {
 	}
 	r.configureFSChangedCallback()
 	return r.services.FS
+}
+
+func (r *RuntimeRouter) localFS() (*FSService, error) {
+	if r == nil {
+		return nil, ErrLocalFilesystemNotConfigured
+	}
+	if !r.localEnvironmentEnabled() {
+		return nil, ErrLocalFilesystemNotConfigured
+	}
+	return r.requireFS(), nil
+}
+
+func (r *RuntimeRouter) ensureLocalEnvironment() error {
+	if r == nil || !r.localEnvironmentEnabled() {
+		return ErrLocalEnvironmentNotConfigured
+	}
+	return nil
+}
+
+func (r *RuntimeRouter) localEnvironmentEnabled() bool {
+	if r == nil {
+		return false
+	}
+	if r.services.LocalEnvironmentEnabled != nil {
+		return *r.services.LocalEnvironmentEnabled
+	}
+	return !execServerURLDisablesLocalFS(os.Getenv(CodexExecServerURLEnvVar))
+}
+
+func execServerURLDisablesLocalFS(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "none")
 }
 
 func (r *RuntimeRouter) requireThreadExtras() *ThreadExtraService {
@@ -6547,10 +7071,6 @@ func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID st
 }
 
 func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartParams, turnID string) (*tool.Router, error) {
-	var candidates []plugin.DiscoverableInfo
-	if r != nil {
-		candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn())
-	}
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
@@ -6561,6 +7081,16 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, err
+	}
+	webSearchOptions, err := r.webSearchOptionsForTurn(cfg, params)
+	if err != nil {
+		return nil, err
+	}
+	requestUserInputModes := requestUserInputAvailableModesForTurn(cfg)
+	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
+	var candidates []plugin.DiscoverableInfo
+	if r != nil {
+		candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(cfg))
 	}
 	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
@@ -6576,13 +7106,28 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 		}
 	}
 	mcpTools, mcpConnectors := r.mcpRuntimeInputsForTurn(threadID, cfg)
-	if r != nil && r.services.ToolRouter != nil && !enableCurrentTimeTool && !enableSleepTool && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if r != nil && r.services.ToolRouter != nil && !requestUserInputDefaultMode && !enableCurrentTimeTool && !enableSleepTool && webSearchOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
 	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
 		options.Shell.Validation.PermissionProfile = permissionProfile.Profile
+	}
+	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
+	if options.Shell != nil {
+		options.Shell.Validation.ApprovalPolicy = approvalPolicy
+		if r.commandApprovalForSession(threadID) {
+			options.Shell.Validation.PermissionsPreapproved = true
+		}
+		if r.serverRequestSinkConfigured() {
+			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID))
+		}
+	}
+	if options.ApplyPatch != nil && r.serverRequestSinkConfigured() && applyPatchApprovalRequiredForTurn(approvalPolicy) {
+		if !r.fileChangeApprovalForSession(threadID) {
+			options.ApplyPatch.Approval = r.applyPatchApprovalForTurn(threadID, strings.TrimSpace(turnID))
+		}
 	}
 	options.EnableMCP = len(mcpTools) > 0
 	if r != nil {
@@ -6597,6 +7142,7 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	}
 	options.ContextStatus = r.contextStatusForThread(threadID)
 	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool
 	options.ClockProvider = clockProvider
@@ -6612,9 +7158,333 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 			turnID:   strings.TrimSpace(turnID),
 		}
 	}
+	options.WebSearch = webSearchOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+func (r *RuntimeRouter) serverRequestSinkConfigured() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.requests != nil
+}
+
+func (r *RuntimeRouter) commandApprovalForSession(threadID string) bool {
+	return r.approvalForSession(r.commandApprovals, threadID)
+}
+
+func (r *RuntimeRouter) fileChangeApprovalForSession(threadID string) bool {
+	return r.approvalForSession(r.fileApprovals, threadID)
+}
+
+func (r *RuntimeRouter) approvalForSession(cache map[string]struct{}, threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	r.approvalSessionsMu.RLock()
+	defer r.approvalSessionsMu.RUnlock()
+	_, ok := cache[threadID]
+	return ok
+}
+
+func (r *RuntimeRouter) rememberCommandApprovalForSession(threadID string) {
+	r.rememberApprovalForSession(r.commandApprovals, threadID)
+}
+
+func (r *RuntimeRouter) rememberFileChangeApprovalForSession(threadID string) {
+	r.rememberApprovalForSession(r.fileApprovals, threadID)
+}
+
+func (r *RuntimeRouter) rememberApprovalForSession(cache map[string]struct{}, threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.approvalSessionsMu.Lock()
+	defer r.approvalSessionsMu.Unlock()
+	cache[threadID] = struct{}{}
+}
+
+func turnApprovalPolicyForTurn(cfg *config.Config, params *turn.TurnStartParams) sandbox.AskForApproval {
+	if params != nil && params.ApprovalPolicy != nil {
+		if policy, ok := parseTurnApprovalPolicy(params.ApprovalPolicy); ok {
+			return policy
+		}
+	}
+	if cfg != nil && cfg.Values != nil {
+		if policy, ok := parseTurnApprovalPolicy(cfg.Values["approval_policy"]); ok {
+			return policy
+		}
+	}
+	return sandbox.ApprovalOnRequest
+}
+
+func parseTurnApprovalPolicy(raw any) (sandbox.AskForApproval, bool) {
+	switch value := raw.(type) {
+	case nil:
+		return "", false
+	case sandbox.AskForApproval:
+		return value, value != ""
+	case string:
+		return normalizeTurnApprovalPolicy(value)
+	case map[string]any:
+		if text, ok := value["type"].(string); ok {
+			return normalizeTurnApprovalPolicy(text)
+		}
+		if _, ok := value["granular"]; ok {
+			return sandbox.ApprovalGranular, true
+		}
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return "", false
+		}
+		var text string
+		if err := json.Unmarshal(data, &text); err == nil {
+			return normalizeTurnApprovalPolicy(text)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(data, &object); err == nil {
+			return parseTurnApprovalPolicy(object)
+		}
+	}
+	return "", false
+}
+
+func normalizeTurnApprovalPolicy(value string) (sandbox.AskForApproval, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	switch normalized {
+	case string(sandbox.ApprovalNever):
+		return sandbox.ApprovalNever, true
+	case string(sandbox.ApprovalOnRequest), "onrequest":
+		return sandbox.ApprovalOnRequest, true
+	case string(sandbox.ApprovalUnlessTrusted), "unless-trusted", "unlesstrusted":
+		return sandbox.ApprovalUnlessTrusted, true
+	case string(sandbox.ApprovalGranular):
+		return sandbox.ApprovalGranular, true
+	default:
+		return "", false
+	}
+}
+
+func applyPatchApprovalRequiredForTurn(policy sandbox.AskForApproval) bool {
+	return policy != sandbox.ApprovalNever
+}
+
+func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string) tool.ShellApprovalFunc {
+	return func(ctx context.Context, request *tool.ShellApprovalRequest) (tool.ShellApprovalDecision, error) {
+		if request == nil || request.Request == nil {
+			return tool.ShellApprovalDecision{}, nil
+		}
+		if r.commandApprovalForSession(threadID) {
+			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
+		}
+		invocation := request.Invocation
+		itemID := ""
+		if invocation != nil {
+			itemID = strings.TrimSpace(invocation.CallID)
+		}
+		if itemID == "" {
+			itemID = "command-" + safeIdentifier(turnID)
+		}
+		environmentID := "local"
+		command := strings.TrimSpace(request.Request.HookCommand)
+		cwd := strings.TrimSpace(request.Request.CWD)
+		reason := strings.TrimSpace(request.Request.ApprovalReason)
+		params := &CommandExecutionRequestApprovalParams{
+			ThreadID:              strings.TrimSpace(threadID),
+			TurnID:                strings.TrimSpace(turnID),
+			ItemID:                itemID,
+			StartedAtMS:           uint64(time.Now().UTC().UnixMilli()),
+			EnvironmentID:         &environmentID,
+			AdditionalPermissions: cloneAdditionalPermissionProfile(request.Request.AdditionalPermissions),
+		}
+		if command != "" {
+			params.Command = &command
+			params.CommandActions = []map[string]any{{"type": "unknown", "command": command}}
+		}
+		if cwd != "" {
+			params.CWD = &cwd
+		}
+		if reason != "" {
+			params.Reason = &reason
+		}
+		if amendment := commandExecutionProposedExecPolicyAmendment(request.Request.PrefixRule); len(amendment) > 0 {
+			params.ProposedExecPolicyAmendment = amendment
+		}
+		var response CommandExecutionRequestApprovalResponse
+		if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
+			return tool.ShellApprovalDecision{}, err
+		}
+		switch approvalDecisionString(response.Decision) {
+		case string(CommandExecutionApprovalAccept):
+			return tool.ShellApprovalDecision{Approved: true}, nil
+		case string(CommandExecutionApprovalAcceptForSession):
+			r.rememberCommandApprovalForSession(threadID)
+			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
+		case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+			return tool.ShellApprovalDecision{Approved: true}, nil
+		case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
+			if commandExecutionApprovalDecisionNetworkAction(response.Decision) == string(NetworkPolicyRuleAllow) {
+				return tool.ShellApprovalDecision{Approved: true}, nil
+			}
+			return tool.ShellApprovalDecision{}, nil
+		default:
+			return tool.ShellApprovalDecision{}, nil
+		}
+	}
+}
+
+func commandExecutionProposedExecPolicyAmendment(prefixRule []string) []string {
+	out := make([]string, 0, len(prefixRule))
+	for _, value := range prefixRule {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string) tool.ApplyPatchApprovalFunc {
+	return func(ctx context.Context, request *tool.ApplyPatchApprovalRequest) (tool.ApplyPatchApprovalDecision, error) {
+		if request == nil {
+			return tool.ApplyPatchApprovalDecision{}, nil
+		}
+		if r.fileChangeApprovalForSession(threadID) {
+			return tool.ApplyPatchApprovalDecision{Approved: true, AllowSession: true}, nil
+		}
+		itemID := ""
+		if request.Invocation != nil {
+			itemID = strings.TrimSpace(request.Invocation.CallID)
+		}
+		if itemID == "" {
+			itemID = "patch-" + safeIdentifier(turnID)
+		}
+		params := &FileChangeRequestApprovalParams{
+			ThreadID:    strings.TrimSpace(threadID),
+			TurnID:      strings.TrimSpace(turnID),
+			ItemID:      itemID,
+			StartedAtMS: uint64(time.Now().UTC().UnixMilli()),
+		}
+		var response FileChangeRequestApprovalResponse
+		if err := r.requireServerRequests().Request(ctx, ServerRequestFileChangeApproval, params, &response); err != nil {
+			return tool.ApplyPatchApprovalDecision{}, err
+		}
+		switch approvalDecisionString(response.Decision) {
+		case string(FileChangeApprovalAccept):
+			return tool.ApplyPatchApprovalDecision{Approved: true}, nil
+		case string(FileChangeApprovalAcceptForSession):
+			r.rememberFileChangeApprovalForSession(threadID)
+			return tool.ApplyPatchApprovalDecision{Approved: true, AllowSession: true}, nil
+		default:
+			return tool.ApplyPatchApprovalDecision{}, nil
+		}
+	}
+}
+
+func approvalDecisionString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case CommandExecutionApprovalDecision:
+		return string(typed)
+	case FileChangeApprovalDecision:
+		return string(typed)
+	default:
+		if kind := commandExecutionApprovalDecisionObjectKind(typed); kind != "" {
+			return kind
+		}
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		var text string
+		if err := json.Unmarshal(data, &text); err == nil {
+			return strings.TrimSpace(text)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(data, &object); err == nil {
+			return commandExecutionApprovalDecisionMapKind(object)
+		}
+		return ""
+	}
+}
+
+func commandExecutionApprovalDecisionObjectKind(value any) string {
+	object, ok := commandExecutionApprovalDecisionObject(value)
+	if !ok {
+		return ""
+	}
+	return commandExecutionApprovalDecisionMapKind(object)
+}
+
+func commandExecutionApprovalDecisionMapKind(object map[string]any) string {
+	if object == nil {
+		return ""
+	}
+	if _, ok := object[string(CommandExecutionApprovalAcceptWithExecpolicyAmendment)]; ok {
+		return string(CommandExecutionApprovalAcceptWithExecpolicyAmendment)
+	}
+	if _, ok := object[string(CommandExecutionApprovalApplyNetworkPolicyAmendment)]; ok {
+		return string(CommandExecutionApprovalApplyNetworkPolicyAmendment)
+	}
+	return ""
+}
+
+func commandExecutionApprovalDecisionNetworkAction(value any) string {
+	object, ok := commandExecutionApprovalDecisionObject(value)
+	if !ok {
+		return ""
+	}
+	payload, ok := object[string(CommandExecutionApprovalApplyNetworkPolicyAmendment)]
+	if !ok || payload == nil {
+		return ""
+	}
+	payloadMap, ok := commandExecutionApprovalDecisionObject(payload)
+	if !ok {
+		return ""
+	}
+	amendment := firstNonNil(payloadMap["network_policy_amendment"], payloadMap["networkPolicyAmendment"])
+	amendmentMap, ok := commandExecutionApprovalDecisionObject(amendment)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringFromAny(amendmentMap["action"]))
+}
+
+func commandExecutionApprovalDecisionObject(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	default:
+		return nil, false
+	}
+}
+
+func requestUserInputAvailableModesForTurn(cfg *config.Config) []string {
+	if requestUserInputDefaultModeEnabled(cfg) {
+		return []string{"Default", "Plan"}
+	}
+	return []string{"Plan"}
+}
+
+func requestUserInputDefaultModeEnabled(cfg *config.Config) bool {
+	return cfg != nil && features.Enabled(cfg.FeatureSettings(), "default_mode_request_user_input")
 }
 
 func turnSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) (*config.SandboxPermissionProfileResolution, error) {
@@ -7180,7 +8050,7 @@ func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID str
 	return NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
 }
 
-func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse) {
+func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse, connectionID string) {
 	if r == nil || params == nil || response == nil {
 		return
 	}
@@ -7205,7 +8075,8 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
 	}
-	go r.runTurnRuntime(ctx, paramsCopy, &turnCopy, runtime)
+	r.updateActiveRuntimeTurnAnalytics(params.ThreadID, response.Turn.ID, connectionID, nil)
+	go r.runTurnRuntime(ctx, paramsCopy, &turnCopy, runtime, connectionID)
 }
 
 func (r *RuntimeRouter) requireThreadStatus() *ThreadStatusManager {
@@ -7248,6 +8119,7 @@ func (r *RuntimeRouter) requireServerRequests() *ServerRequestBroker {
 		r.services.ServerRequests = NewServerRequestBroker()
 		r.services.ServerRequests.SetSink(r.requests)
 		r.services.ServerRequests.SetResolvedCallback(r.notifyServerRequestResolved)
+		r.services.ServerRequests.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
 	}
 	return r.services.ServerRequests
 }

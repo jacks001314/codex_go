@@ -18,7 +18,7 @@ func unsupported(feature string) error {
 		return fmt.Errorf("%w: %s", ErrWindowsOnly, feature)
 	}
 	if feature == "" {
-		return errors.New("windows sandbox elevated backend is not implemented")
+		return errors.New("windows sandbox elevated backend is unavailable")
 	}
-	return fmt.Errorf("windows sandbox elevated backend is not implemented: %s", feature)
+	return fmt.Errorf("windows sandbox elevated backend is unavailable: %s", feature)
 }

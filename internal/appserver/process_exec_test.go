@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -27,6 +29,64 @@ func TestProcessServiceSpawnEmitsExitNotification(t *testing.T) {
 	notification := waitForProcessExited(t, sink, "proc-1")
 	exited := notification.Params.(*ProcessExitedNotification)
 	if exited.ExitCode != 0 || strings.TrimSpace(exited.Stdout) != "hello" {
+		t.Fatalf("exited = %+v", exited)
+	}
+}
+
+func TestProcessServiceSpawnReturnsBeforeExitAndEmitsExitNotificationLikeRust(t *testing.T) {
+	service := NewProcessService()
+	service.DefaultTimeoutMS = 10_000
+	sink := NewNotificationBuffer()
+	dir := t.TempDir()
+	probeFile := filepath.Join(dir, "process-created")
+	releaseFile := filepath.Join(dir, "process-release")
+	probeEnv := probeFile
+	releaseEnv := releaseFile
+	params := &ProcessSpawnParams{
+		Command:       processTestProbeReleaseCommand(),
+		ProcessHandle: "one-shot-1",
+		CWD:           dir,
+		Env: map[string]*string{
+			"CODEX_PROCESS_EXEC_PROBE_FILE":   &probeEnv,
+			"CODEX_PROCESS_EXEC_RELEASE_FILE": &releaseEnv,
+		},
+	}
+	defer func() {
+		_ = os.WriteFile(releaseFile, []byte("release"), 0o600)
+	}()
+
+	responseCh := make(chan *ProcessSpawnResponse, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		response, err := service.Spawn(context.Background(), params, sinkNotifyFunc(sink))
+		if err != nil {
+			errorCh <- err
+			return
+		}
+		responseCh <- response
+	}()
+
+	select {
+	case err := <-errorCh:
+		t.Fatalf("Spawn() error = %v", err)
+	case <-responseCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Spawn() did not return before process exit")
+	}
+	waitForProcessFile(t, probeFile)
+	if data, err := os.ReadFile(probeFile); err != nil || string(data) != "process" {
+		t.Fatalf("probe file = %q, %v; want process", data, err)
+	}
+	if processExitedObserved(sink, "one-shot-1") {
+		t.Fatalf("process/exited was emitted before release file existed")
+	}
+	if err := os.WriteFile(releaseFile, []byte("release"), 0o600); err != nil {
+		t.Fatalf("WriteFile(release) error = %v", err)
+	}
+	exited := waitForProcessExited(t, sink, "one-shot-1").Params.(*ProcessExitedNotification)
+	if exited.ExitCode != 0 ||
+		exited.Stdout != "process-out" || exited.StdoutCapReached ||
+		exited.Stderr != "process-err" || exited.StderrCapReached {
 		t.Fatalf("exited = %+v", exited)
 	}
 }
@@ -82,6 +142,29 @@ func TestProcessServiceSpawnStreamsOutputDelta(t *testing.T) {
 	exited := waitForProcessExited(t, sink, "stream-1").Params.(*ProcessExitedNotification)
 	if exited.Stdout != "" || exited.Stderr != "" {
 		t.Fatalf("streamed exit output should be empty, got stdout=%q stderr=%q", exited.Stdout, exited.Stderr)
+	}
+}
+
+func TestProcessServiceSpawnReportsBufferedOutputCapReachedLikeRust(t *testing.T) {
+	service := NewProcessService()
+	service.DefaultTimeoutMS = 1000
+	sink := NewNotificationBuffer()
+	capValue := 3
+	params := &ProcessSpawnParams{
+		Command:        commandExecTestOutputCommand("abcde", "12345"),
+		ProcessHandle:  "capped-one-shot-1",
+		CWD:            t.TempDir(),
+		OutputBytesCap: &OptionalInt{Set: true, Value: &capValue},
+	}
+
+	if _, err := service.Spawn(context.Background(), params, sinkNotifyFunc(sink)); err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	exited := waitForProcessExited(t, sink, "capped-one-shot-1").Params.(*ProcessExitedNotification)
+	if exited.ExitCode != 0 ||
+		exited.Stdout != "abc" || !exited.StdoutCapReached ||
+		exited.Stderr != "123" || !exited.StderrCapReached {
+		t.Fatalf("exited = %+v, want capped stdout/stderr", exited)
 	}
 }
 
@@ -236,6 +319,23 @@ func TestRuntimeRouterProcessSpawnNotifications(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterProcessSpawnReturnsErrorWhenLocalEnvironmentDisabledLikeRust(t *testing.T) {
+	t.Setenv(CodexExecServerURLEnvVar, "none")
+	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: t.TempDir()})
+
+	spawn := router.Handle(requestWithParams(t, IntID(1), MethodProcessSpawn, ProcessSpawnParams{
+		Command:       processTestEchoCommand("disabled"),
+		ProcessHandle: "disabled-process",
+		CWD:           t.TempDir(),
+	}))
+	if spawn.Error == nil {
+		t.Fatalf("process/spawn response = %+v, want local environment error", spawn)
+	}
+	if spawn.Error.Code != JSONRPCInternalErrorCode || spawn.Error.Message != "local environment is not configured" {
+		t.Fatalf("process/spawn disabled error = %+v", spawn.Error)
+	}
+}
+
 func TestRuntimeRouterProcessControlInvalidRequestAndParamsCodes(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: t.TempDir()})
 	missing := router.Handle(requestWithParams(t, IntID(1), MethodProcessWriteStdin, ProcessWriteStdinParams{
@@ -273,6 +373,31 @@ func waitForProcessExited(t *testing.T, sink *NotificationBuffer, handle string)
 	}
 	t.Fatalf("process/exited notification for %q not observed", handle)
 	return nil
+}
+
+func processExitedObserved(sink *NotificationBuffer, handle string) bool {
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationProcessExited {
+			continue
+		}
+		exited, ok := notification.Params.(*ProcessExitedNotification)
+		if ok && exited.ProcessHandle == handle {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForProcessFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("file %q was not created", path)
 }
 
 func waitForProcessOutputDelta(t *testing.T, sink *NotificationBuffer, handle string, stream OutputStream) *ProcessOutputDeltaNotification {
@@ -329,6 +454,14 @@ func processTestEchoCommand(value string) []string {
 		return []string{"cmd", "/c", "echo " + value}
 	}
 	return []string{"sh", "-c", "printf " + shellQuote(value)}
+}
+
+func processTestProbeReleaseCommand() []string {
+	if runtime.GOOS == "windows" {
+		script := `$ProgressPreference = 'SilentlyContinue'; [IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { Start-Sleep -Milliseconds 20 }; [Console]::Out.Write('process-out'); [Console]::Error.Write('process-err')`
+		return []string{"powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", powershellEncodedScript(script)}
+	}
+	return []string{"sh", "-c", "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; printf process-out; printf process-err >&2"}
 }
 
 func processTestStdinEchoCommand() []string {

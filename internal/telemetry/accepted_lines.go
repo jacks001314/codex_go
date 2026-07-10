@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"crypto/sha1"
 	"fmt"
 	"strings"
@@ -9,6 +10,10 @@ import (
 type AcceptedLineFingerprint struct {
 	PathHash string `json:"path_hash"`
 	LineHash string `json:"line_hash"`
+}
+
+type AcceptedLineFingerprintsEventSink interface {
+	TrackCodexAcceptedLineFingerprintsEvent(context.Context, CodexAcceptedLineFingerprintsEventRequest)
 }
 
 type AcceptedLineFingerprintSummary struct {
@@ -30,19 +35,19 @@ type AcceptedLineFingerprintEventInput struct {
 	LineFingerprints     []AcceptedLineFingerprint
 }
 
-type TrackEventRequest struct {
-	Type   string                              `json:"type"`
-	Params AcceptedLineFingerprintsEventParams `json:"event_params"`
+type CodexAcceptedLineFingerprintsEventRequest struct {
+	EventType string                              `json:"event_type"`
+	Params    AcceptedLineFingerprintsEventParams `json:"event_params"`
 }
 
 type AcceptedLineFingerprintsEventParams struct {
 	EventType            string                    `json:"event_type"`
 	TurnID               string                    `json:"turn_id"`
 	ThreadID             string                    `json:"thread_id"`
-	ProductSurface       *string                   `json:"product_surface,omitempty"`
-	ModelSlug            *string                   `json:"model_slug,omitempty"`
+	ProductSurface       *string                   `json:"product_surface"`
+	ModelSlug            *string                   `json:"model_slug"`
 	CompletedAt          uint64                    `json:"completed_at"`
-	RepoHash             *string                   `json:"repo_hash,omitempty"`
+	RepoHash             *string                   `json:"repo_hash"`
 	AcceptedAddedLines   uint64                    `json:"accepted_added_lines"`
 	AcceptedDeletedLines uint64                    `json:"accepted_deleted_lines"`
 	LineFingerprints     []AcceptedLineFingerprint `json:"line_fingerprints"`
@@ -88,14 +93,18 @@ func AcceptedLineFingerprintsFromUnifiedDiff(diff string) AcceptedLineFingerprin
 	return summary
 }
 
-func AcceptedLineFingerprintEventRequests(input *AcceptedLineFingerprintEventInput) []TrackEventRequest {
+func AcceptedLineFingerprintEventRequests(input *AcceptedLineFingerprintEventInput) []CodexAcceptedLineFingerprintsEventRequest {
 	if input == nil {
 		return nil
 	}
-	return []TrackEventRequest{{
-		Type: "codex_accepted_line_fingerprints",
+	eventType := strings.TrimSpace(input.EventType)
+	if eventType == "" {
+		eventType = "codex.accepted_line_fingerprints"
+	}
+	return []CodexAcceptedLineFingerprintsEventRequest{{
+		EventType: "codex_accepted_line_fingerprints",
 		Params: AcceptedLineFingerprintsEventParams{
-			EventType:            input.EventType,
+			EventType:            eventType,
 			TurnID:               input.TurnID,
 			ThreadID:             input.ThreadID,
 			ProductSurface:       input.ProductSurface,

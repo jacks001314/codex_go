@@ -193,6 +193,49 @@ func TestHookDiscoveryUsesTrustedProjectConfigLayers(t *testing.T) {
 	}
 }
 
+func TestHookDiscoveryUsesEachCWDEffectiveFeatureEnablementLikeRust(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nhooks = false\n\n[projects.\""+strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	hooksDir := filepath.Join(workspace, ".codex")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll hooks dir error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "config.toml"), []byte(`[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo project hook"
+timeout = 5
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile project config error = %v", err)
+	}
+	service := &HookDiscoveryService{CodexHome: home, Config: config.NewConfigService(home)}
+
+	response := service.Discover(&HookListParams{CWDs: []string{home, workspace}}, "")
+	if len(response.Data) != 2 {
+		t.Fatalf("Discover() = %+v", response)
+	}
+	if response.Data[0].CWD != home || len(response.Data[0].Hooks) != 0 {
+		t.Fatalf("home entry = %+v, want hooks disabled", response.Data[0])
+	}
+	if response.Data[1].CWD != workspace || len(response.Data[1].Hooks) != 1 {
+		t.Fatalf("workspace entry = %+v, want project hook", response.Data[1])
+	}
+	hook := response.Data[1].Hooks[0]
+	if hook.Source != HookSourceProject || hook.Matcher == nil || *hook.Matcher != "Bash" || hook.Command == nil || *hook.Command != "echo project hook" {
+		t.Fatalf("workspace hook = %+v", hook)
+	}
+}
+
 func TestHookDiscoveryUsesTrustedProjectDotCodexWithoutConfigToml(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

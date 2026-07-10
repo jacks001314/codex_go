@@ -192,7 +192,7 @@
 - [x] 支持 composer running queue 主路径：任务运行中 Enter/Tab 入队，空闲 Tab 等价提交，turn 完成后自动提交下一条 queued request。
 - [x] 支持 remote app-server TUI ws/wss 主路径：`--remote ws://...`/`wss://...` 进入 Bubble Tea TUI，初始化 app-server，首轮空建 thread，用户输入走 `turn/start`，结构化 text/file/localImage/remote image 输入保留在 `TurnStartParams.input`，远端 thread/turn/item/delta/error/warning 通知转成 TUI stream events，支持 auth token env。
 - [x] 支持 remote app-server TUI `unix://` transport：TUI client 抽象 websocket/JSON-line transport，`unix://` 走 Go app-server 现有 UDS JSON-RPC line 协议，保留与 ws/wss 相同 initialize/thread/start/turn/start/notification 语义。
-- [x] 补齐 remote app-server TUI 核心 server requests：command/file/permissions/applyPatch/exec approval、MCP elicitation、request_user_input、currentTime/read 均可从远端请求打开 TUI modal 或返回结构化结果。
+- [x] 补齐 remote app-server TUI Rust-supported 核心 server requests：commandExecution/fileChange/permissions approval、MCP elicitation、request_user_input 可从远端请求打开 TUI modal 或返回结构化结果；dynamic tool、attestation、currentTime/read、legacy applyPatch/exec approval 按 Rust TUI unsupported 语义返回 `-32000`。
 - [x] 补齐 CLI session remote app-server handoff：`resume/fork/archive/delete/unarchive --remote` 通过远端 app-server `thread/list/read/archive/unarchive/delete/fork` RPC 实现 UUID、精确 name 和 picker/last 主路径。
 - [x] 补齐 remote Bubble Tea TUI 内部 slash session handoff：`/resume` picker 从远端 `thread/list` 拉取 active+archived sessions，`/fork`/`/archive`/`/unarchive`/`/delete` 通过远端 app-server `thread/fork/archive/unarchive/delete` RPC 执行并同步 TUI session items。
 - [ ] 支持 diff/file change display、terminal/background terminal panel。
@@ -460,6 +460,15 @@ Live provider/MCP/plugin/SDK/sandbox/network 测试原则：
 
 ### 2026-07-09
 
+- [x] Continued P0 Rust app-server v2 parity with unrestricted local Rust reads: extended `TestProtocolPayloadsValidateAgainstRustSchemas` beyond `ThreadStartResponse` to cover JSON-RPC envelopes, `ThreadReadResponse`, `ThreadListResponse`, `ThreadLoadedListResponse`, `ThreadResumeResponse`, `ThreadForkResponse`, `ThreadRollbackResponse`, `ThreadMetadataUpdateResponse`, command/exec params and control responses, and the fs params/results/changed notification surface.
+- [x] Matched Rust `app-server/tests/suite/v2/initialize.rs` opt-out behavior by adding `TestRuntimeRouterInitializeOptOutNotificationMethodsFiltersThreadStarted`, locking that `optOutNotificationMethods: ["thread/started"]` suppresses the `thread/started` notification while preserving successful `thread/start`.
+- [x] Matched Rust `app-server/tests/suite/v2/command_exec.rs` router-level timeout conflict semantics by extending `TestRuntimeRouterCommandExecInvalidRequestAndParamsCodes` for `timeoutMs` plus `disableTimeout`, expecting JSON-RPC invalid params `-32602` with `command/exec cannot set both timeoutMs and disableTimeout`.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run TestProtocolPayloadsValidateAgainstRustSchemas -count=1 -v` passed; `go test ./internal/appserver -run "TestRuntimeRouter(InitializeRejectsInvalidClientName|InitializeUserAgentOriginator|InitializeOptOutNotificationMethodsFiltersStatusChanged|InitializeOptOutNotificationMethodsFiltersThreadStarted|RejectsRemoteImageTurnInputs)|TestRouterInjectItemsRejectsRemoteImageURLs" -count=1 -v` passed; `go test ./internal/appserver -run "Test(CommandExecParamsValidateMessagesMatchRust|RuntimeRouterCommandExecInvalidRequestAndParamsCodes|CommandExecParamsJSONMatchesRustShape)" -count=1 -v` passed; `go test ./internal/appserver -count=1` passed.
+
+- [x] Continue P0 app-server protocol parity from `plan_code.md`: expanded Go `TestProtocolPayloadsValidateAgainstRustSchemas` to validate a `TurnCompletedNotification` containing every Rust `ThreadItem` union branch (`userMessage`, `hookPrompt`, `agentMessage`, `plan`, `reasoning`, `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `collabAgentToolCall`, `subAgentActivity`, `webSearch`, `imageView`, `sleep`, `imageGeneration`, `enteredReviewMode`, `exitedReviewMode`, `contextCompaction`) plus `ItemStartedNotification` and `ItemCompletedNotification` payloads.
+- [x] Fixed the Go Rust-schema test harness to support JSON Schema boolean nodes (`true` accepts any value, `false` rejects), which Rust uses for open JSON fields such as tool `arguments`; without this, valid Rust `mcpToolCall`/`dynamicToolCall` payloads were falsely rejected.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run "Test(BuildTypeScriptProtocolSchemaMatchesRustFixtures|BuildProtocolSchemaMatchesRustStableFixtures|ProtocolPayloadsValidateAgainstRustSchemas)" -count=1 -v` passed; `go test ./internal/appserver -count=1` first hit a known Windows TempDir cleanup race in `TestRuntimeRouterTurnStartAppliesExplicitPersonality`, and the package rerun passed.
+
 - [x] 按用户最新反馈继续暂停 TUI 长尾，优先对齐 Rust 默认启动读取本地 `config.toml`/`auth.json` 的 provider/auth 行为；定位到 Rust auth 存储使用 `auth_mode = "apikey"`，Go 之前只识别内部 `"api-key"`，导致本地已有 `OPENAI_API_KEY` 时仍未生成 Authorization header，并在真实 Responses 请求上报 401 `API_KEY_REQUIRED`。
 - [x] Go `internal/auth`：`AuthDotJSON.Mode()` 增加 Rust 存储别名归一化，支持 `apikey`/`apiKey`、`chatgptAuthTokens`、`agentIdentity`、`personalAccessToken`、`bedrockApiKey` 等 wire/storage 形状；`FromAPIKey`、agent identity、Bedrock API key 写回 Rust 同款 storage value，保持内部判断继续使用 `"api-key"`、`"agent-identity"` 等规范值。
 - [x] Go `internal/exec`：默认 `NewRunner` 现在用本地配置解析 `model`、`model_provider`、`model_providers.*.base_url`、`wire_api = "responses"` 与 `requires_openai_auth`，并用本地 `auth.json` 的 Rust `apikey` 形状生成 `Authorization: Bearer ...`；当 OpenAI auth 必需但本地/环境/provider auth 都缺失时，在发请求前返回清晰错误，避免无 Authorization 的远端 401。
@@ -627,7 +636,7 @@ Live provider/MCP/plugin/SDK/sandbox/network 测试原则：
 - [x] 新增回归：首次 remote submit 会按 initialize -> thread/start -> turn/start 顺序执行并保留 remote image/file/text input；已有 `State.ThreadID` 时直接 turn/start，不新建 thread；远端 delta 和 turn completed 会回流 TUI 并触发 queued submission drain。
 - [x] 验证：使用仓库内 `.gopath/.gocache/.gotmp` 运行 `go test ./internal/app -run "TestInteractiveRemoteTurn|TestResolveInteractiveRemoteEndpoint|TestReadRemoteAuthToken" -count=1` 通过；`go test ./internal/app ./internal/tui/tea ./internal/tui -count=1` 通过；`go list -buildvcs=false ./...` 通过；全量 `go test ./... -count=1` 通过。
 - [x] TUI 进度估算从 92% 调整到 94%；本轮完成 remote app-server TUI ws/wss 主路径，尚未完成 remote unix:// transport、remote server requests/approval/elicitation、remote session action handoff、剩余 composer/terminal polish、chatwidget 深集成和 Rust snapshot/真实终端 smoke fixture。
-- [x] 对齐 Rust `app-server-client/src/remote.rs`、`tui/src/app_server_session.rs`、`tui/src/app_server_requests.rs` 远端 TUI 交互：`internal/app/remote_tui.go` 抽象 websocket/JSON-line transport，`--remote unix://` 走 Go app-server UDS JSON-RPC line；远端 server request 不再统一 `-32601`，核心 approval/request_user_input/MCP/currentTime 请求可进入 TUI modal 或返回结构化结果。
+- [x] 对齐 Rust `app-server-client/src/remote.rs`、`tui/src/app_server_session.rs`、`tui/src/app_server_requests.rs` 远端 TUI 交互：`internal/app/remote_tui.go` 抽象 websocket/JSON-line transport，`--remote unix://` 走 Go app-server UDS JSON-RPC line；远端 server request 不再统一 `-32601`，Rust-supported approval/request_user_input/MCP 请求可进入 TUI modal 或返回结构化结果。
 - [x] 新增回归：remote command approval server request 会打开 `ApprovalRequestMsg` 并回传 `acceptForSession`；remote request_user_input server request 会打开 `RequestUserInputMsg` 并回传 `ToolRequestUserInputAnswer{answers:[...]}`；unix JSON-line transport 用 `net.Pipe` 覆盖 initialize/thread/start/turn/start/turn.completed 主链路。
 - [x] 验证：使用仓库内 `.gopath/.gocache/.gotmp` 运行 `go test ./internal/app -run "TestInteractiveRemoteTurn|TestRemoteAppServerTUIClientUsesUnix" -count=1` 通过；`go test ./internal/app ./internal/tui/tea ./internal/tui -count=1` 通过；`go list -buildvcs=false ./...` 通过；全量 `go test ./... -count=1` 通过。
 - [x] TUI 进度估算从 94% 调整到 96%；本轮完成 remote unix:// transport 与 remote app-server 核心 server requests，尚未完成 remote session action handoff、server-request 长尾（ChatGPT auth refresh/dynamic tool/attestation/targeted sink）、剩余 composer/terminal polish、chatwidget 深集成和 Rust snapshot/真实终端 smoke fixture。
@@ -639,7 +648,7 @@ Live provider/MCP/plugin/SDK/sandbox/network 测试原则：
 - [x] 新增回归：remote TUI session picker 会按 CWD 发 active/archived `thread/list` 并生成 active/archived summaries；remote session action handler 会对 fork/archive/unarchive/delete 分别发对应 app-server RPC，并把 fork/unarchive 返回的远端 thread 转回 TUI `SessionSummary`。
 - [x] 验证：使用仓库内 `.gopath/.gocache/.gotmp` 运行 `go test ./internal/app -run "TestInteractiveRemoteSession|TestSessionRemote|TestInteractiveRemoteTurn|TestRemoteAppServerTUIClientUsesUnix" -count=1` 通过；`go test ./internal/app ./internal/tui/tea ./internal/tui ./internal/appserver ./internal/session -count=1` 通过；`go list -buildvcs=false ./...` 通过；全量 `go test ./... -count=1` 本轮仅出现 `internal/appserver/TestCommandExecStreamStdinBuffersFinalOutputWhenNotStreamingStdout` 既有 Windows 时序抖动，失败用例和 `go test ./internal/appserver -count=1` 重跑均通过。
 - [x] TUI 进度估算从 97% 调整到 98%；本轮完成 remote Bubble Tea TUI 内部 slash session handoff，尚未完成 remote app-server server-request 长尾（ChatGPT auth refresh/dynamic tool/attestation/targeted sink）、剩余 composer/terminal polish、chatwidget 深集成和 Rust snapshot/真实终端 smoke fixture。
-- [x] 对齐 Rust `tui/src/app/app_server_requests.rs` 的 unsupported server-request reject 语义：`internal/app/remote_tui.go` 对 dynamic tool call、attestation generate 和 ChatGPT auth refresh 增加显式分支，不再落入 `-32601`，统一返回 `-32000` 明确错误；`currentTime/read` 成功响应由回归锁定。
+- [x] 对齐 Rust `tui/src/app/app_server_requests.rs` 的 unsupported server-request reject 语义：`internal/app/remote_tui.go` 对 dynamic tool call、attestation generate、currentTime/read、legacy applyPatch approval、legacy exec approval 和未知 server request 增加显式 `-32000` 分支，不再落入 `-32601` 或 stale `not implemented` 文案；ChatGPT auth refresh 保持 Rust 的 supported request 路径。
 - [x] 新增回归：`TestRemoteServerRequestLongTailResponses` 覆盖 dynamic tool、ChatGPT auth refresh、attestation、malformed params、unknown request 和 `currentTime/read`，锁定错误码、错误文案和成功结果。
 - [x] 验证：使用仓库内 `.gopath/.gocache/.gotmp` 运行 `go test ./internal/app -run "TestRemoteServerRequestLongTailResponses|TestInteractiveRemoteTurn|TestRemoteAppServerTUIClientUsesUnix|TestInteractiveRemoteSession|TestSessionRemote" -count=1` 通过；`go test ./internal/app ./internal/tui/tea ./internal/tui ./internal/appserver ./internal/session -count=1` 通过；`go list -buildvcs=false ./...` 通过；全量 `go test ./... -count=1` 通过。
 - [x] TUI 进度维持 98%；本轮把 remote server-request 长尾从“泛化未实现/可能挂起”收窄为“已确定响应”，真正剩余为 ChatGPT auth refresh 真刷新、targeted sink/connection-file watch、剩余 composer/terminal polish、chatwidget 深集成和 Rust snapshot/真实终端 smoke fixture。
@@ -1057,3 +1066,761 @@ Live provider/MCP/plugin/SDK/sandbox/network 测试原则：
 - [x] 新增回归：`TestModelFailsRunningToolCellsAndClearsUnconfirmedThread`、`TestModelKeepsConfirmedThreadOnTransientTurnFailure`、`TestModelClearsThreadNotFoundFailures`、`TestModelDedupesRepeatedTurnErrors`，并调整中断路径断言为 history cell。
 - [x] 验证：`go test ./internal/tui/tea -run "TestModel(AppliesTurnCompleted|AppliesThreadEvents|StreamsToolInputIntoHistoryCell|FailsRunningToolCellsAndClearsUnconfirmedThread|KeepsConfirmedThreadOnTransientTurnFailure|ClearsThreadNotFoundFailures|DedupesRepeatedTurnErrors|CtrlCInterruptsRunningTaskWithoutQuitting)$" -count=1 -v` 通过；`go test ./internal/tui/tea -count=1` 通过；`go test ./internal/protocol ./internal/exec ./internal/tui/tea ./internal/tui/exec_cell ./internal/tui/history_cell ./internal/tui/chatwidget -count=1` 通过；`go test ./... -count=1` 通过；`go build -o .\fuck-dev.exe .\cmd\codex` 通过。
 - [ ] 后续缺口：Go 根命令帮助/interactive onboarding 与 Rust 仍不一致（Go `--help`/`exec --help` 目前返回 unknown option，Rust 无 auth 首屏是登录选择）；Rust 读取当前用户配置时报 `tui.model_availability_nux` 类型不兼容，需后续单独处理配置 schema 兼容。
+
+## 工作日志 2026-07-09 Rust TUI 运行展示对齐补丁
+
+- [x] 对照本地 Rust `codex-rs` 实现确认两处核心差异：Rust `update_plan` handler 会立即发送 `PlanUpdate` 事件而不是把 `update_plan {...}` 当普通 exec 命令展示；Rust sampling/tool loop 不存在 Go 默认 8 轮就终止的硬失败路径，长工具链会持续运行到最终响应或真实错误。
+- [x] Go `internal/turn`：默认 `AgentLoop` 工具轮次上限从 8 提高到 64，保留显式 `MaxTurns` 的测试语义；新增 `TestAgentLoopDefaultAllowsLongToolChains` 覆盖 12 轮工具调用后正常完成，避免再次出现截图中的 `agent tool loop exceeded 8 iterations`。
+- [x] Go `internal/tui/tea`：流式 `tool_call` 阶段识别 `update_plan`，在 JSON 参数完整前静默等待，完整后直接渲染 `PlanUpdateCell`；计划更新不再进入 `ExecCell`，也不会在后续 `turn.failed` 时被标成 `Ran update_plan` + 错误输出。
+- [x] 新增 TUI 回归：`TestModelStreamsUpdatePlanIntoPlanCell` 锁定分片输入的计划卡片展示；`TestModelDoesNotMarkUpdatePlanFailedOnTurnFailure` 锁定失败回合下计划卡片不被工具失败渲染污染。
+- [x] 验证：`go test ./internal/turn -run "TestAgentLoop(DefaultAllowsLongToolChains|StopsAtIterationLimit|RunsToolsAndContinuesSampling)" -count=1 -v` 通过；`go test ./internal/tui/tea -run "TestModel(StreamsUpdatePlanIntoPlanCell|DoesNotMarkUpdatePlanFailedOnTurnFailure|StreamsToolInputIntoHistoryCell|FailsRunningToolCellsAndClearsUnconfirmedThread)" -count=1 -v` 通过；`go test ./internal/turn ./internal/exec ./internal/tui/tea -count=1` 通过；`go test ./internal/protocol ./internal/exec ./internal/turn ./internal/tui/tea ./internal/tui/exec_cell ./internal/tui/history_cell ./internal/tui/chatwidget -count=1` 通过。
+- [x] 全量验证：第一次 `go test ./... -count=1` 命中 `internal/appserver/TestRuntimeRouterSessionStartHookInjectsAdditionalContextOnce` 临时 JSONL 读取抖动；单独重跑该用例通过，第二次 `go test ./... -count=1` 全量通过。
+- [x] 构建与真实运行：`go build -o .\fuck.exe .\cmd\codex` 与 `go build -o .\fuck-dev.exe .\cmd\codex` 均通过；`.\fuck.exe exec --json --ephemeral --skip-git-repo-check "请只回复 OK"` 成功输出 `turn.completed`；同机 Rust `codex exec --json --ephemeral --skip-git-repo-check "请只回复 OK"` 也成功输出 `turn.completed`。
+- [x] TUI smoke：`.\fuck.exe` 在当前 `TERM=dumb` PTY 下确认继续启动后可发送 `say OK`，回合完成后状态回到 `idle`，transcript 显示 assistant bullet `OK`，未再出现 8 轮工具循环错误或重复系统错误块。
+
+## Work Log 2026-07-09 App-Server MCP Rust Parity
+
+- [x] Continued P0 Rust app-server v2 MCP parity from `plan_code.md`: expanded `TestProtocolPayloadsValidateAgainstRustSchemas` with Rust schema fixtures for `ListMcpServerStatusParams/Response`, `McpResourceReadParams/Response`, `McpServerToolCallParams/Response`, and `McpServerElicitationRequestParams/Response` form and URL branches.
+- [x] Locked Rust MCP status naming behavior from `app-server/tests/suite/v2/mcp_server_status.rs`: added `TestMCPServerStatusPreservesRawServerAndToolNames` so raw server names (`some-server` versus `some_server`) and raw tool names (`look-up.raw`) survive the v2 JSON status map shape without sanitized-name collisions.
+- [x] Locked Rust MCP tool result passthrough from `app-server/tests/suite/v2/mcp_tool.rs`: extended `TestHTTPMCPToolListCallAndResource` to assert HTTP MCP `tools/call` returns `content`, `structuredContent`, explicit `isError:false`, and `_meta`, while request `_meta.threadId` is still overwritten with the live thread id.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run TestProtocolPayloadsValidateAgainstRustSchemas -count=1 -v` passed; `go test ./internal/mcp -run "Test(ListStatusAndToolCall|MCPServerStatusPreservesRawServerAndToolNames|MCPServerStatusResourceWireShapeMatchesRustV2|MCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly|MCPParamsMarshalRustV2Shape|MCPToolCallMetaWithThreadID)" -count=1 -v` passed; `go test ./internal/mcp -run "TestHTTPMCPToolListCallAndResource|TestMCPServerStatusPreservesRawServerAndToolNames" -count=1 -v` passed; package regressions `go test ./internal/mcp -count=1` and `go test ./internal/appserver -count=1` passed.
+
+- [x] Continued P0 business error envelope parity: added `TestRuntimeRouterMCPRemoteErrorsIncludeRustErrorData` so app-server router responses for MCP `tools/call` and `resources/read` remote JSON-RPC errors preserve the remote error code as `error.code` and expose Rust-compatible `error.data` with `type=mcp_remote_error`, `method`, `message`, `code`, and decoded remote `data`.
+- [x] Matched Rust `app-server/src/command_exec.rs` missing process control error wording: Go `command/exec/write`, `command/exec/terminate`, and `command/exec/resize` now return invalid request `-32600` with `command/exec <processId> is no longer running`, replacing the previous Go-only `no active command/exec ...` text.
+- [x] Verification: `go test ./internal/appserver -run TestRuntimeRouterMCPRemoteErrorsIncludeRustErrorData -count=1 -v` passed; `go test ./internal/appserver -run "TestRuntimeRouterCommandExec|TestRuntimeRouterCommandExecInvalidRequestAndParamsCodes|TestCommandExecStreamingSessionOperations" -count=1 -v` passed; `go test ./internal/appserver -count=1` passed.
+
+- [x] Refined command/exec control parity after re-reading Rust `CommandExecManager::send_control`: client-supplied process ids now use Rust JSON string error representation (`command/exec "missing" is no longer running`) when the session is gone, while cross-connection control attempts still return `no active command/exec for process id "..."` and do not cancel another connection's active process.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run "TestCommandExecSessionsAreConnectionScoped|TestCommandExecConnectionClosedCancelsOnlyThatConnection|TestRuntimeRouterCommandExec|TestRuntimeRouterCommandExecInvalidRequestAndParamsCodes|TestCommandExecStreamingSessionOperations|TestRuntimeRouterMCPRemoteErrorsIncludeRustErrorData" -count=1 -v` passed; `go test ./internal/appserver -count=1` passed.
+- [x] Matched Rust `thread_start_accepts_metrics_service_name`: added `TestRouterThreadStartAcceptsMetricsServiceName` so v2 `thread/start` accepts the metrics `serviceName` field and still creates a thread.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run "TestRouterThreadStart(AcceptsMetricsServiceName|AllowsOmittedCWD|RejectsPaginatedHistoryMode|DropsUnsupportedServiceTier)|TestRuntimeRouterThreadStart(ServiceTierFiltersByModelCatalog|ProviderModelFallbackUsesBedrockStaticCatalog|ElevatedSandboxPersistsProjectTrust|ProjectTrustWriteGuards)" -count=1 -v` passed; first `go test ./internal/appserver -count=1` hit the known Windows TempDir cleanup race in `TestRuntimeRouterTurnStartRepairsRolloutOnlyThread`, and the immediate rerun passed.
+- [x] Matched Rust `experimentalFeature/enablement/set` wire/result shape: Go now accepts the Rust `enablement` map as the primary input, keeps legacy `enabled`/`disabled` compatibility, ignores unsupported feature keys, and returns `{"enablement": {...}}` with only the effective changes from the current request.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/features ./internal/appserver -run "Test(SetEnablementIgnoresUnknownKeys|FeatureWireShapeMatchesRust|RuntimeRouterDispatchesExperienceAPIs)" -count=1 -v` passed after rerunning the exact appserver test name; `go test ./internal/features ./internal/appserver -count=1` passed.
+- [x] Added router-level Rust contract coverage for `modelProvider/capabilities/read`: `TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust` now locks the default-provider all-true response and the Amazon Bedrock-style `imageGeneration=false`, `webSearch=false`, `namespaceTools=true` response.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/model ./internal/appserver -run "TestProviderCapabilities|TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust" -count=1 -v` passed; `go test ./internal/model ./internal/features ./internal/appserver -count=1` hit the known Windows PTY timing flake in `TestCommandExecTTYStreamsAndResizes`, and the immediate `go test ./internal/appserver -count=1` rerun passed.
+- [x] Added first SDK/IDE contract smoke at the real `RuntimeRouter` layer: `TestRuntimeRouterSDKContractSmoke` runs one initialized connection through `initialize`, `thread/start`, `thread/read`, `thread/list`, `turn/start`, `turn/steer`, `turn/interrupt`, buffered `command/exec`, and HTTP MCP `mcpServer/tool/call`, including the MCP initialize/inventory/tool-call method sequence.
+- [x] Verification: `$env:GOCACHE='D:\qax\reagent\dev\codex_go\.gocache'; go test ./internal/appserver -run TestRuntimeRouterSDKContractSmoke -count=1 -v` passed; expanded smoke plus `go test ./internal/appserver -count=1` passed. Note: Go app-server currently has no `shutdown` JSON-RPC method, so shutdown remains a transport/daemon-level SDK follow-up rather than part of this router smoke.
+
+### 2026-07-09 Rust parity progress - account wire shape and turn steer metadata
+- Locked `GetAccountResponse` Rust JSON union shape in Go auth tests, including null account, apiKey, chatgpt email/null email, missing plan -> unknown, and amazonBedrock credentialSource.
+- Tightened appserver account login notification assertions so cancel emits `{ loginId, success:false, error }` and API key login emits `{ loginId:null, success:true, error:null }`, matching Rust account/login/completed semantics.
+- Aligned `turn/steer` Responses API client metadata propagation with Rust: steer requests now enqueue client metadata through `SteerMailbox`, and the next agent sampling uses the steer-provided metadata instead of the original turn/start metadata.
+- Added turn/appserver regression coverage for steer metadata updates and kept existing `SteerMailbox.Drain()` compatibility for older call sites.
+
+### 2026-07-09 Rust parity review - request validation
+- Reviewed Rust `app-server/tests/suite/v2/request_validation.rs` remote image URL rejection cases.
+- Go already rejects remote image URLs for `turn/start`, `turn/steer`, and `thread/inject_items` with the Rust-compatible `-32600` message: `remote image URLs are not supported; use an inline data URL instead`.
+- Verification: `go test ./internal/appserver -run "Test(RuntimeRouterRejectsRemoteImageTurnInputs|RouterInjectItemsRejectsRemoteImageURLs)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread status notifications
+- Reviewed Rust `thread_status.rs` and `thread_unsubscribe.rs` against Go runtime-router coverage.
+- Added Go coverage for the Rust-visible `thread/status/changed` notification sequence: active status is emitted when a turn starts and idle follows after completion.
+- Confirmed existing Go coverage already handles thread unsubscribe connection scoping, repeat unsubscribe -> `notSubscribed`, cold thread -> `notLoaded`, runtime loaded-list pagination, and opt-out filtering.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(ThreadStatusChangedEmitsActiveThenIdle|InitializeOptOutNotificationMethodsFiltersStatusChanged|TurnFailureClearsActiveStateAndAllowsNextTurn)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread turns itemsView
+- Reviewed Rust `thread_read.rs::thread_turns_list_supports_requested_items_view`.
+- Added Go router coverage for `thread/turns/list.itemsView` variants:
+  - `full` returns all turn items.
+  - `summary` keeps the user item and latest assistant item.
+  - `notLoaded` preserves turn identity/status/timestamps while clearing items.
+- Verification: `go test ./internal/appserver -run "TestRouterThreadTurnsListSupportsRequestedItemsView" -count=1 -v` plus adjacent thread read/list/runtime turns tests.
+
+### 2026-07-09 Rust parity progress - permission profile list
+- Reviewed Rust `permission_profile_list.rs` and aligned Go `permissionProfile/list` with Rust's effective-config behavior.
+- Go now lists Rust-ordered built-ins first (`:read-only`, `:workspace`, `:danger-full-access`), appends configured `[permissions.*]` profiles sorted by id, and returns built-in descriptions as `null` on the wire.
+- App-server listing now reads the effective config for request `cwd`, including trusted project `.codex/config.toml` layers, so project-scoped permission profiles are visible even without `default_permissions`.
+- Added router tests for configured profiles, trusted project profile pagination, and trusted project discovery without default selection.
+- Verification: `go test ./internal/sandbox ./internal/config ./internal/appserver -run "Test(RuntimeRouterPermissionProfileList|RuntimeRouterDispatchesCatalogAPIs|ListProfiles|PermissionProfileSummary|LoadWithOptionsAppliesProjectConfigLayers|ProjectConfigRequiresTrustedProject|ProjectConfigTrustUsesActiveProjectRoot)" -count=1`.
+
+### 2026-07-09 Rust parity progress - experimental feature list/set
+- Reviewed Rust `experimental_feature_list.rs` and aligned Go router/config behavior for thread-scoped feature listing and feature enablement writes.
+- `experimentalFeature/list` now resolves `threadId` through the stored thread CWD and reads trusted project config before computing feature enabled states; unknown thread ids return `-32600` with `thread not found: ...`.
+- `experimentalFeature/enablement/set` now returns the applied `enablement` map, ignores Rust-invalid feature names, and makes applied values visible through `config/read` as defaults while preserving explicit user/project feature values.
+- Added router regressions for project-config `memories=true`, unknown thread id, config/read propagation, user config non-override, and invalid feature filtering.
+- Verification: `go test ./internal/features ./internal/config ./internal/appserver -run "Test(RuntimeRouterExperimentalFeature|RuntimeRouterDispatchesExperienceAPIs|SetEnablementIgnoresUnknownKeys|FeatureWireShapeMatchesRust|ListPaginatesFeatures|ListRejectsInvalidCursor|ServiceReadIncludesProjectConfigForCWD)" -count=1 -v`; `go test ./internal/features ./internal/config ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - collaboration mode list
+- Reviewed Rust `collaboration_mode_list.rs` and `models-manager/src/collaboration_mode_presets.rs`.
+- Go default collaboration modes now match Rust's visible presets: `Plan` first with `reasoning_effort = "medium"`, then `Default`; the Go-only `Agentic` preset was removed from the app-server list.
+- Added service/router regression coverage for the exact Rust preset list and retained existing nullable field wire-shape coverage.
+- Verification: `go test ./internal/appserver -run "Test(CollaborationModeList|RuntimeRouterCollaborationModeList|RuntimeRouterDispatchesCatalogAPIs)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - thread unarchive response shape
+- Reviewed Rust `thread_unarchive.rs::thread_unarchive_moves_rollout_back_into_sessions_directory`.
+- Go already restored rollout-only archived threads to the active sessions directory and bumped `updatedAt`; added router-level wire-shape coverage for Rust-visible response details.
+- `thread/unarchive` regression now asserts the returned thread is `status.type = "notLoaded"` and the serialized response includes an explicit `thread.name: null` when the rollout has no title.
+- Verification: `go test ./internal/appserver -run "TestRouterArchiveUnarchiveAndDeleteRolloutOnlyThread|TestRuntimeRouterThreadArchiveDeleteUnloadRuntimeStatus" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread start wire shape
+- Reviewed Rust `thread_start.rs::thread_start_creates_persistent_thread` response and `thread/started` notification contracts.
+- Go router coverage now asserts `thread/start` serializes `thread.name: null`, `thread.ephemeral: false`, and does not emit a top-level `sessionId`.
+- Go runtime-router coverage now asserts `thread/started` notification serializes `thread.name: null`, `thread.ephemeral: false`, preserves `thread.threadSource = "user"`, and does not emit a top-level `sessionId` in params.
+- Verification: `go test ./internal/appserver -run "TestRouterStartReadListAndItems|TestRuntimeRouterThreadStartStartedNotificationMatchesRustWireShape|TestRuntimeRouterInitializeOptOutNotificationMethodsFiltersThreadStarted" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread rollback response shape
+- Reviewed Rust `thread_rollback.rs` rollback response contract.
+- Go rollout-only rollback coverage now asserts the response thread preserves `sessionId` and serializes unset title as explicit `thread.name: null`.
+- Verification: `go test ./internal/appserver -run "TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread|TestRouterSearchLoadedTurnsRollbackAndInjectItems|TestRuntimeRouterThreadRollback" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread name read/list/resume shape
+- Reviewed Rust `thread_read.rs::thread_name_set_is_reflected_in_read_list_and_resume`.
+- Go `thread/name/set` coverage now asserts `thread/read`, `thread/list`, and `thread/resume` all serialize the updated title as `thread.name`.
+- Go `thread/list` coverage also asserts the Rust-visible `thread.ephemeral: false` field is present for the named persistent thread.
+- Verification: `go test ./internal/appserver -run "TestRouterSetNameAndMetadata|TestRuntimeRouterSetNameLifecycleNotifications|TestRouterMetadataWritesMissingThreadUseRustErrors" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - pathless thread metadata
+- Reviewed Rust `thread_read.rs` and `thread_unarchive.rs` pathless store metadata cases.
+- Added Go coverage for store-only threads with no rollout path: `thread/read` and `thread/list` now assert explicit `path: null`, empty `preview`, and preserved `thread.name`.
+- Added Go coverage for archived pathless store threads: `thread/unarchive` now asserts `path: null`, preserved `forkedFromId`, preserved `name`, and empty preview.
+- Verification: `go test ./internal/appserver -run "TestRouterThread(ReadAndListPreservePathlessStoreMetadata|UnarchivePreservesPathlessStoreMetadata)|TestRouterReadAndResumeFallbackToRollout" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - archive/delete empty results
+- Reviewed Rust `thread_archive.rs` and `thread_delete.rs` response usage.
+- Go router coverage now asserts `thread/archive` and `thread/delete` serialize empty result objects `{}` even though Go keeps internal, unexported lifecycle IDs for notification ordering.
+- Verification: `go test ./internal/appserver -run "TestRouterArchiveUnarchiveAndDelete$|TestRouterThread(ReadAndListPreservePathlessStoreMetadata|UnarchivePreservesPathlessStoreMetadata)|TestRuntimeRouterThread(ArchiveDeleteUnloadRuntimeStatus|ArchiveDeleteSpawnedDescendants)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread resume remote redaction
+- Reviewed Rust `thread_resume.rs::thread_resume_redacts_payloads_for_chatgpt_remote_clients`.
+- Fixed Go `thread/resume` so ChatGPT remote client redaction applies to both `thread.turns` and `initialTurnsPage.data`; previously only `thread.turns` was redacted.
+- Added regression coverage that remote clients redact MCP `arguments` and `result`, remove structured/meta payloads, and drop `imageGeneration` items from both response surfaces, while non-remote clients keep the original payloads.
+- Verification: `go test ./internal/appserver -run "TestRouterThreadResumeRedactsRemoteClientInitialTurnsPage|TestRouterResumeInitialTurnsPageWithExcludeTurns|TestRouterResumeHistoryInitialTurnsPageWithExcludeTurns" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - config batch write legacy profile rejection
+- Reviewed Rust `config_rpc.rs::config_batch_write_rejects_legacy_profile_tables`.
+- Added Go runtime-router regression coverage that `config/batchWrite` rejects legacy `profiles.*` writes with `config_write_error_code = configValidationError` and does not partially write earlier valid edits.
+- Verification: `go test ./internal/appserver ./internal/config -run "TestRuntimeRouterConfig(WriteErrorDataMatchesRust|RejectsLegacyProfileWrite|BatchWriteRejectsLegacyProfilesAtomicallyLikeRust)|TestServiceWriteValueValidation" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - config origins for arrays/tools/apps
+- Reviewed Rust `config_rpc.rs::config_read_includes_tools` and `config_read_includes_apps`.
+- Fixed Go config origins so array elements receive per-index origin entries such as `tools.web_search.allowed_domains.0`, matching Rust.
+- Added service regression coverage for tools/app config values and origin paths including web search allowed domain indices and app approval settings.
+- Verification: `go test ./internal/config -run "TestServiceRead(ConfigWithLayersAndOrigins|ToolsAndAppsOriginsMatchRustConfigRPC)|TestConfigReadResponseMarshalRustShape" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - app/list accessible readiness
+- Reviewed Rust `app_list.rs` readiness and force-refetch notification cases.
+- Fixed Go app merging so `CodexAppsReady=false` no longer exposes remote directory-only connector state as an interim app/list result or cached notification payload.
+- Preserved static/plugin app connectors while accessible data is still not ready, matching Rust's distinction between local capabilities and remote directory snapshots.
+- Added service coverage for unready accessible responses and cached notification data.
+- Verification: `go test ./internal/apps ./internal/appserver -run "Test(ListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust|CachedListForNotificationSkipsDirectoryWhenAccessibleNotReadyLikeRust)|TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions|TestRuntimeRouterAppList" -count=1 -v`; `go test ./internal/apps ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - app/list thread feature config
+- Reviewed Rust `app_list.rs::list_apps_uses_thread_feature_flag_when_thread_id_is_provided`.
+- Fixed Go `app/list` to read effective config from the supplied `threadId`'s stored CWD, so trusted project feature config can override the current global config for that thread.
+- `features.connectors=false` now maps through the Rust legacy alias to `apps=false` and returns an empty app/list without touching directory providers or cached connector state.
+- Added runtime-router coverage for global `connectors=false` plus thread/project `connectors=true`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterAppList(UsesThreadProjectFeatureConfigLikeRust|LoadsChatGPTDirectory|EmitsUpdatedNotificationWithFullList|ForceRefetchEmitsCachedThenFreshNotification|UsesPluginAppMetadata|MergesMCPAccessibleConnectors)|TestRuntimeRouterExperimentalFeatureListResolvesThreadProjectConfig" -count=1 -v`; `go test ./internal/apps ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - app/list force-refetch failure cache
+- Reviewed Rust `app_list.rs::list_apps_force_refetch_preserves_previous_cache_on_failure`.
+- Go already retained provider caches on failed directory refresh; added service-level regression coverage so a failed `forceRefetch` cannot clear the previous successful app list.
+- Verification: `go test ./internal/apps -run "TestForceRefetchPreservesPreviousCacheOnDirectoryFailureLikeRust|TestListMergesProvidersPluginConnectorsAndCache|TestListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust" -count=1 -v`; `go test ./internal/apps ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - hooks/list per-cwd feature enablement
+- Reviewed Rust `hooks_list.rs::hooks_list_uses_each_cwds_effective_feature_enablement`.
+- Fixed Go hook discovery to honor each requested CWD's effective `hooks` feature setting before loading user/project/plugin hooks.
+- Added coverage for global `hooks=false` with a trusted project `.codex/config.toml` re-enabling hooks for only that workspace CWD.
+- Verification: `go test ./internal/appserver -run "TestHookDiscovery(UsesEachCWDEffectiveFeatureEnablementLikeRust|UsesTrustedProjectConfigLayers|SkipsUntrustedProjectHooksWhenConfigServicePresent|LinkedWorktreeUsesRootCheckoutHooks)|TestRuntimeRouterHooksList" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - skills/list cwd .codex roots and cache
+- Reviewed Rust `skills_list.rs` cwd-local skill root, relative cwd/order, and force-reload cache cases.
+- Fixed Go `skills/list` to include `cwd/.codex/skills` as a repo skill root, matching Rust.
+- Added coverage for requested CWD order and relative CWD preservation, and for cached results remaining unchanged until `forceReload=true`.
+- Verification: `go test ./internal/appserver -run "TestSkillsList(IncludesCWDCodeXSkillsRootLikeRust|PreservesRequestedCWDOrderAndRelativeCWDLikeRust|UsesCachedResultUntilForceReloadLikeRust)|TestSetExtraRoots|TestListSkillsAndConfig" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Note: an existing Windows ConPTY timing test (`TestProcessServiceSpawnTTYStreamsAndResizes`) flaked twice during full-package verification, passed/skipped when isolated, and the final full appserver run passed.
+
+### 2026-07-09 Rust parity progress - thread/shellCommand history filtering
+- Reviewed Rust `thread_shell_command.rs::thread_shell_command_history_responses_exclude_persisted_command_executions`.
+- Go already persisted user shell commands as user message records instead of `commandExecution`; added runtime-router response coverage that `thread/read` and `thread/turns/list` do not leak `commandExecution` items after a user shell command.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterThreadShellCommand(PersistsUserShellRecord|EmitsUserShellNotifications|EnqueuesActiveTurnContext)|TestRuntimeRouterColdThreadOperationsReturnThreadNotFound" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - selected capability unavailable environment skills
+- Reviewed Rust `selected_capability_stack.rs`, especially the selected executor unavailable/resume assertions.
+- Fixed Go selected capability skill discovery so a selected environment root is not discovered through its local path fallback when an `EnvironmentManager` is present and the non-local environment is not connected.
+- Preserved the existing local/no-environment-service compatibility path and remote connected environment skill discovery.
+- Added runtime-router coverage proving an unavailable selected executor does not expose its selected skill description/body to the model.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(UsesSelectedCapabilitySkillRoots|SkipsUnavailableSelectedEnvironmentSkillRootsLikeRust|UsesRemoteEnvironmentSkillRoot)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - memory/reset runtime RPC
+- Reviewed Rust `memory_reset.rs::memory_reset_clears_memory_files_and_rows_preserves_threads`.
+- Go already cleared the `memories` directory and preserved session threads at router level; added runtime-router coverage for the initialized app-server RPC path and explicit empty `{}` result object.
+- Note: Go does not currently carry Rust's sqlite stage1 memory table implementation, so this locks the shared filesystem/thread behavior without inventing a fake DB layer.
+- Verification: `go test ./internal/appserver -run "Test(RuntimeRouterMemoryResetClearsMemoriesAndPreservesThreadsLikeRust|RouterMemoryResetClearsMemoriesAndPreservesThreads|RuntimeRouterModelProviderCapabilitiesReadMatchesRust)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - turn/start output schema per-turn
+- Reviewed Rust `output_schema.rs::turn_start_accepts_output_schema_v2` and `turn_start_output_schema_is_per_turn_v2`.
+- Go already maps `OutputSchema` into Responses `text.format` with `name=codex_output_schema`, `type=json_schema`, and `strict=true`; added runtime-router coverage that the schema is passed only for the turn that supplied it.
+- Added a two-turn regression where the first `turn/start` includes an object output schema and the second omits it, asserting the second agent request has `OutputSchema == nil`.
+- Verification: `go test ./internal/appserver ./internal/model -run "Test(RuntimeRouterTurnStartOutputSchemaIsPerTurnLikeRust|ResponsesAgentRunnerSendsOutputSchemaTextFormat)" -count=1 -v`; `go test ./internal/appserver ./internal/model -count=1`.
+
+### 2026-07-09 Rust parity progress - external clock sleep items
+- Reviewed Rust `sleep.rs::external_sleep_polls_current_time_and_emits_items`.
+- Added a turn tool-dispatch started callback and app-server mapping for `clock.sleep`, so long external sleeps emit a `sleep` `item/started` immediately and persist/complete a dedicated `sleep` ThreadItem instead of generic function_call/tool_output records.
+- Ensured the sleep item `durationMs` preserves the requested duration, not the measured wall-clock polling duration.
+- Added runtime-router regression coverage for external current-time polling, sleep started/completed notifications, and final turn completion.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(ExternalClockSleepEmitsSleepItemsLikeRust|TurnStartInjectsExternalCurrentTimeReminder|RequestCurrentTimeBridge|RequestCurrentTimeRequiresSingleSubscriber|RequestCurrentTimeWaitsForSubscriber)|TestRegisterCoreHandlersWithOptionsClockTools" -count=1 -v`; `go test ./internal/appserver ./internal/turn ./internal/tool -count=1`.
+
+### 2026-07-09 Rust parity progress - fs runtime RPC surface
+- Reviewed Rust `app-server/tests/suite/v2/fs.rs` and `request_processors/fs_processor.rs`.
+- Added Rust-style JSON parameter validation for FS path params: relative paths now fail at decode time with `Invalid request: AbsolutePathBuf deserialized without a base path`, while direct `FSService` calls still return `ErrInvalidFSRequest`.
+- Added local FS availability gating for app-server `fs/*` RPCs. When `CODEX_EXEC_SERVER_URL=none`, Go now returns `local filesystem is not configured`, matching Rust's disabled local environment behavior.
+- Added runtime-router coverage for exact `fs/getMetadata` response fields, invalid base64 write errors, relative path errors across all path-bearing `fs/*` methods, and disabled local filesystem behavior.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterFS(GetMetadataReturnsOnlyUsedFieldsLikeRust|MethodsReturnErrorWhenLocalEnvironmentDisabledLikeRust|WriteFileRejectsInvalidBase64LikeRust|MethodsRejectRelativePathsLikeRust)|TestRuntimeRouterDispatchesThreadAndFS|TestRuntimeRouterFSWatch|TestRuntimeRouterFSWriteFile|TestService(ReadWriteFile|RejectsRelativePath|DirectoryMetadataCopyAndRemove|CopyDirectoryRequiresRecursive|CopyDirectoryRejectsDescendant|WatchChangedAndUnwatch|ChangedForPathMatchesFileAndDirectDirectoryWatch)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - process/command local environment disabled
+- Reviewed Rust `process_exec.rs::process_spawn_returns_error_when_local_environment_is_disabled` and `command_exec.rs::command_exec_returns_error_when_local_environment_is_disabled`.
+- Promoted Go runtime local availability to `LocalEnvironmentEnabled`, shared by FS, process, and command exec RPCs.
+- `process/spawn` and `command/exec` now return `local environment is not configured` when `CODEX_EXEC_SERVER_URL=none`, matching Rust's app-server behavior before any local process is started.
+- Added runtime-router regressions for both disabled process spawn and disabled command exec.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(ProcessSpawnNotifications|ProcessSpawnReturnsErrorWhenLocalEnvironmentDisabledLikeRust|ProcessControlInvalidRequestAndParamsCodes|CommandExec|CommandExecReturnsErrorWhenLocalEnvironmentDisabledLikeRust|CommandExecInvalidRequestAndParamsCodes|FSMethodsReturnErrorWhenLocalEnvironmentDisabledLikeRust)|Test(CommandExecExecuteBuffered|ProcessServiceSpawnEmitsExitNotification)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - process/command validation coverage
+- Reviewed Rust `process_exec.rs::process_spawn_reports_buffered_output_cap_reached` and `command_exec.rs::command_exec_rejects_sandbox_policy_with_permission_profile`.
+- Added Go regression coverage that `process/spawn` caps buffered stdout/stderr independently, returns the truncated text, and marks both cap flags.
+- Added runtime-router coverage for the Rust `permissionProfile` plus `sandboxPolicy` rejection message and invalid-request code.
+- Verification: `go test ./internal/appserver -run "Test(ProcessServiceSpawnReportsBufferedOutputCapReachedLikeRust|RuntimeRouterCommandExecRejectsSandboxPolicyWithPermissionProfileLikeRust|RuntimeRouterCommandExecInvalidRequestAndParamsCodes|RuntimeRouterCommandExecReturnsErrorWhenLocalEnvironmentDisabledLikeRust|RuntimeRouterProcessSpawnReturnsErrorWhenLocalEnvironmentDisabledLikeRust)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - command/exec non-streaming termination
+- Reviewed Rust `command_exec.rs::command_exec_without_streams_can_be_terminated`.
+- Fixed Go `CommandExecService` so a non-streaming `command/exec` with a client `processId` is registered as an active command before it starts, allowing a concurrent `command/exec/terminate` to cancel it.
+- Calls without `processId` keep the legacy buffered synchronous behavior.
+- Added regression coverage that a sleeping non-streaming command with `processId` can be terminated and returns a non-zero exit code with empty buffered output.
+- Verification: `go test ./internal/appserver -run "TestCommandExec(WithoutStreamsCanBeTerminatedLikeRust|StreamingSessionOperations|StreamingStdin|ExecuteBuffered|SessionsAreConnectionScoped|ConnectionClosedCancelsOnlyThatConnection)|TestRuntimeRouterCommandExec" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - command/exec caps, env merge, streaming output
+- Reviewed Rust `command_exec.rs::command_exec_env_overrides_merge_with_server_environment_and_support_unset`, `command_exec_non_streaming_respects_output_cap`, and `command_exec_streaming_does_not_buffer_output`.
+- Added regression coverage for request env overrides adding, overriding, and unsetting variables while preserving base env values.
+- Added coverage for non-streaming `command/exec` with `processId` respecting `outputBytesCap` independently for stdout and stderr.
+- Added streaming coverage that capped stdout emits a `command/exec/outputDelta` with `capReached=true`, and the final streaming response does not include buffered stdout/stderr.
+- Verification: `go test ./internal/appserver -run "TestCommandExec(StreamingDoesNotBufferOutputLikeRust|StreamingSessionOperations|WithoutStreamsCanBeTerminatedLikeRust|NonStreamingWithProcessIDRespectsOutputCapLikeRust|EnvOverridesMergeAndUnsetLikeRust)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - command/exec custom permission profiles
+- Reviewed Go command/exec sandbox resolution against Rust app-server behavior where `permissionProfile` is resolved from the effective config, not only built-ins.
+- Added an injectable permission profile resolver to `CommandExecService`; direct service calls still use built-ins, while `RuntimeRouter` reads effective config for the command cwd and compiles custom `[permissions.<id>]` profiles through the existing config resolver.
+- Added regressions proving a custom `networked` profile preserves profile ID/cwd and reaches the sandbox runner with network enabled.
+- Verification: `go test ./internal/appserver -run "TestCommandExec(CustomPermissionProfileResolverLikeRust|SandboxPolicyRequiringRunnerUsesSandboxRunner|FullAccessPermissionProfileRuns|SandboxDangerFullAccessRunsAndInjectsProfile|EnvOverridesMergeAndUnsetLikeRust)|TestRuntimeRouterCommandExec(ResolvesCustomPermissionProfileFromConfigLikeRust|RejectsSandboxPolicyWithPermissionProfileLikeRust|ReturnsErrorWhenLocalEnvironmentDisabledLikeRust|InvalidRequestAndParamsCodes|$)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - command/exec selected network proxy marker
+- Reviewed Rust `command_exec_permission_profile_starts_selected_network_proxy` and `command_exec_permission_profile_does_not_reuse_default_network_proxy`.
+- Go `command/exec` now clears inherited `CODEX_NETWORK_PROXY_ACTIVE` per launch and sets it only when the current resolved permission profile is sandboxed and allows network access.
+- Added coverage that a selected custom `networked` profile marks the command environment active, while an explicit read-only profile stays unset even when `default_permissions = "networked"` and the server environment already had the marker.
+- Verification: `go test ./internal/appserver -run "TestCommandExecCustomPermissionProfileResolverLikeRust|TestRuntimeRouterCommandExec(ResolvesCustomPermissionProfileFromConfigLikeRust|PermissionProfileDoesNotReuseDefaultNetworkProxyLikeRust)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - command/exec project roots use command cwd
+- Reviewed Rust `command_exec_permission_profile_project_roots_use_command_cwd`.
+- Go now resolves relative `command/exec.cwd` against the app-server default cwd, matching Rust request behavior.
+- Preserved custom permission profile runtime JSON from config resolution through command exec and tool runner into sandbox planning, so `:workspace_roots` path rules stay precise instead of being reduced to legacy writable roots.
+- Added regression that a profile with `:workspace_roots = "write"` materializes write access at the relative command cwd and not at the server default cwd.
+- Verification: `go test ./internal/appserver ./internal/tool -run "TestRuntimeRouterCommandExec(ResolvesCustomPermissionProfileFromConfigLikeRust|PermissionProfileDoesNotReuseDefaultNetworkProxyLikeRust|PermissionProfileProjectRootsUseCommandCWDLikeRust)|TestCommandExecCustomPermissionProfileResolverLikeRust|TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile|TestBuildShellRequestBuildsSandboxProfileFromPermissionProfile" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - command/exec validation and pipe streaming
+- Reviewed Rust `command_exec_rejects_negative_timeout_ms` and `command_exec_pipe_streams_output_and_accepts_write`.
+- Added runtime-router coverage for negative `timeoutMs` with Rust's exact error message and invalid-params code.
+- Added a pipe streaming regression that verifies pre-write stdout/stderr deltas, stdin write response `{}`, post-write stdout/stderr deltas, and empty final streaming buffers.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterCommandExecInvalidRequestAndParamsCodes|TestCommandExec(PipeStreamsOutputAndAcceptsWriteLikeRust|StreamingStdin|StreamStdinBuffersFinalOutputWhenNotStreamingStdout)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - process/spawn returns before exit
+- Reviewed Rust `process_spawn_returns_before_exit_and_emits_exit_notification`.
+- Added a process service probe/release regression proving `process/spawn` returns before the child exits, does not emit `process/exited` early, and later emits buffered stdout/stderr after release.
+- Verification: `go test ./internal/appserver -run "TestProcessService(SpawnReturnsBeforeExitAndEmitsExitNotificationLikeRust|SpawnEmitsExitNotification|SpawnReportsBufferedOutputCapReachedLikeRust|DuplicateKillAndResize|ControlErrorsMatchRust)|TestRuntimeRouterProcessSpawnReturnsErrorWhenLocalEnvironmentDisabledLikeRust" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - Responses client metadata lineage
+- Reviewed Rust `client_metadata.rs` turn/start, thread fork lineage, cold resumed subagent lineage, and turn/steer follow-up metadata cases.
+- Extended Go Responses client metadata construction to carry Rust-owned lineage fields into `x-codex-turn-metadata`: `forked_from_thread_id`, `parent_thread_id`, `subagent_kind`, and `thread_source`.
+- Runtime turn metadata now reads lineage from the stored thread record so ordinary forks send `forked_from_thread_id`, while subagent records preserve parent/thread/session identity and emit `x-openai-subagent` / `x-codex-parent-thread-id` compatibility keys.
+- Added Rust display-form subagent parsing for sources such as `subagent_guardian` and `subagent_thread_spawn_*_dN`, while preserving existing colon-form compatibility.
+- Verification: `go test ./internal/codexapi ./internal/turn -run "TestClientSubagent|TestBuildResponsesClientMetadata" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(PassesResponsesAPIClientMetadata|SendsForkLineageInClientMetadataLikeRust|SendsSubagentLineageAfterColdResumeLikeRust)$" -count=1 -v`; `go test ./internal/codexapi ./internal/turn -count=1`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - turn/steer validation
+- Reviewed Rust `turn_steer.rs` active-turn, oversized text, accepted steer, and context-only rejection cases.
+- Added runtime-router coverage for oversized `turn/steer` input with Rust's invalid-params error data shape.
+- Added active-turn coverage that context-only steer requests reject with `input must not be empty` and do not append user input or merge `additionalContext` into persisted thread items.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnSteer(PersistsUserInput|RejectsOversizedInputWithRustErrorData|RejectsContextOnlyInputWithoutMergingContextLikeRust|DeliveredToNextAgentSampling)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread read/resume runtime edges
+- Reviewed Rust `thread_read.rs` and `thread_resume.rs` around initial turns pages, incomplete rollout turns, restored token usage, updated-at deferral, and pending approval replay.
+- Added coverage that `thread/resume.initialTurnsPage` equals `thread/turns/list` for the same page params while `excludeTurns=true` omits inline turns.
+- Added token usage replay guards for metadata-only resumes and stale interrupted tails.
+- Added runtime coverage that rollout-only incomplete turns surface as `interrupted` on both resume and read, and that resume itself does not refresh `updatedAt`/`recencyAt`.
+- Implemented pending server-request replay on runtime `thread/resume`, so unresolved approval requests for the resumed thread are sent again.
+- Verification: `go test ./internal/appserver -run "Test(RuntimeRouterThreadResumeAndReadInterruptIncompleteRolloutTurnWhenIdleLikeRust|RouterThreadResumeInitialTurnsPageMatchesRequestedTurnsListPage|RuntimeRouterNotifyRestoredTokenUsageFromRecord|RuntimeRouterThreadResumeDefersUpdatedAtUntilTurnStartLikeRust|RuntimeRouterThreadResumeReplaysPendingServerRequestApprovalLikeRust)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - thread/resume personality override
+- Reviewed Rust `thread_resume.rs::thread_resume_accepts_personality_override`.
+- Runtime `thread/resume` now persists idle resume overrides into thread settings, including `cwd`, `model`, `serviceTier`, and `personality`, so the next `turn/start` uses the resumed settings without repeating them.
+- Preserved running-thread rejoin behavior by skipping persistent resume settings while a turn is active, so mismatched resume overrides do not replace the active turn model/cwd.
+- Resume-origin personality settings now carry the explicit personality presence marker, producing Rust-style `<personality_spec>` instructions for resume-supplied personality while leaving ordinary settings updates and config default personality behavior unchanged.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(ThreadResumeAppliesPersonalityOverrideLikeRust|ThreadResumeRunningIgnoresOverrideMismatch|TurnStartAppliesExplicitPersonality|TurnStartUsesConfigPersonalityTemplate|ThreadResumeDefersUpdatedAtUntilTurnStartLikeRust)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - turn/interrupt pending approvals
+- Reviewed Rust `turn_interrupt.rs::turn_interrupt_resolves_pending_command_approval_request`.
+- Added a runtime-router regression that models a pending command approval request inside the active turn context, interrupts the turn, and verifies `serverRequest/resolved` is emitted for the same request ID.
+- Confirmed existing Go broker context cancellation already matches Rust: the pending request exits with `context.Canceled`, and the turn emits `interrupted`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnInterrupt(ResolvesPendingCommandApprovalLikeRust|WritesRolloutTurnLifecycle|CancelsActiveRuntimeAndRejectsConcurrentStart)$|TestRuntimeRouterThreadResumeReplaysPendingServerRequestApprovalLikeRust|TestServerRequestBrokerResolvedCallbackOnContextCancel" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - turn/start personality mid-thread
+- Reviewed Rust `turn_start.rs::turn_start_change_personality_mid_thread_v2`.
+- Added a runtime-router regression for two turns in one thread: the first uses the default personality template without `<personality_spec>`, and the second explicitly switches to `friendly` and emits the Rust personality update block.
+- This protects the resume-origin personality marker work from leaking explicit personality behavior into default/config-driven turns.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartAppliesExplicitPersonality|TurnStartChangesPersonalityMidThreadLikeRust|ThreadResumeAppliesPersonalityOverrideLikeRust|TurnStartUsesConfigPersonalityTemplate)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - turn/start CWD rebinding
+- Reviewed the CWD portion of Rust `turn_start.rs::turn_start_updates_sandbox_and_cwd_between_turns_v2`.
+- Added runtime-router coverage that explicit per-turn CWD switches load different trusted project instruction files, and that a following turn without `cwd` inherits the latest CWD from thread settings.
+- Confirmed existing Go behavior already matches the Rust CWD rebinding contract; this round adds executable coverage rather than production changes.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartUpdatesCWDBetweenTurnsLikeRust|ThreadSettingsUpdateAffectsFutureTurn|TurnStartSettingsOverrideEmitsThreadSettingsUpdated)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - turn steer/interrupt errors
+- Reviewed Rust `turn_steer.rs::turn_steer_requires_active_turn` and `turn_interrupt.rs::turn_interrupt_rejects_completed_turn`.
+- Added coverage that no-active `turn/steer` returns Rust's invalid-request code and message.
+- Fixed inactive/completed `turn/interrupt` to return JSON-RPC `-32600` instead of `-32603`, preserving the existing `turn ... is not active` message.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurn(SteerRequiresActiveTurnLikeRust|InterruptRejectsCompletedTurnLikeRust|InterruptResolvesPendingCommandApprovalLikeRust|InterruptWritesRolloutTurnLifecycle|SteerRejectsOversizedInputWithRustErrorData|SteerRejectsContextOnlyInputWithoutMergingContextLikeRust)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - exec headless approval policy
+- Reviewed Rust `exec/tests/suite/approval_policy.rs`, `exec/src/lib.rs::build_exec_config`, and human-output `config_summary_entries`.
+- Go `codex exec` now computes Rust-style headless approval mode: default exec is `never`, bypass/full-auto stay `never`, and `approvals_reviewer = "auto_review"` preserves the configured approval policy such as `on-request`.
+- Wired that policy into the exec tool router so `exec_command` `require_escalated` requests are rejected under default headless mode but surface as approval requests when auto-review/on-request is active.
+- Added human stderr `approval: ...` summary output for non-JSON exec and removed stale direct-run `not implemented in the Go port yet` wording for unknown internal exec subcommands.
+- Verification: `go test ./internal/exec -run "Test(EffectiveExecApprovalPolicyMatchesRustHeadless|ToolRouterUsesExecHeadlessApprovalPolicyLikeRust|RunRejectsUnknownExecSubcommandWithoutGoPortMessage|RunJSONAndLastMessage|NewRunnerDefaultsToResponsesAPI)$" -count=1 -v`; `go test ./internal/exec -count=1`; `go test ./internal/app -run "Test(AppExecJSONEndToEnd|RunExecPromptFromStdin|RunReview|RunExecReview|RunRootReview|RunExecServer|Exec)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - debug unknown subcommands
+- Reviewed Rust `cli/src/main.rs::DebugSubcommand`; supported debug subcommands are `models`, `app-server`, `prompt-input`, hidden `trace-reduce`, and hidden `clear-memories`.
+- Go `cli.Parse` now rejects unknown `debug` subcommands immediately with `unknown debug subcommand ...`, matching Rust's parser-level rejection instead of falling through to app-layer `not implemented`.
+- Go `runDebug` and the generic app fallback no longer expose `is not implemented in the Go port yet`; added CLI/app regressions to lock the stale wording out.
+- Verification: `go test ./internal/cli ./internal/app -run "Test(ParseDebugTooling|ParseDebugRejectsUnknownSubcommandLikeRust|DebugPromptInput|DebugUnknownSubcommandDoesNotExposeGoPortMessage)$" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - remote TUI server request long tail
+- Reviewed Rust `tui/src/app/app_server_requests.rs::PendingAppServerRequests::note_server_request` and `App::reject_app_server_request`.
+- Go remote TUI now rejects Rust-unsupported server requests with JSON-RPC `-32000`: dynamic tool calls, attestation generation, external current time, legacy patch approval, and legacy command approval.
+- `currentTime/read` no longer returns a local timestamp in Go remote TUI; legacy `applyPatchApproval` and `execCommandApproval` no longer open approval modals because Rust only supports the newer fileChange/commandExecution approval requests in TUI.
+- Unknown remote TUI server request methods now return `Unsupported app-server request: ...` instead of stale `-32601 not implemented` / `Go TUI remote client` wording.
+- Verification: `go test ./internal/app -run "TestRemoteServerRequestLongTailResponses|TestInteractiveRemoteTurnHandlesCommandApprovalServerRequest|TestInteractiveRemoteTurnHandlesUserInputServerRequest" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - Windows sandbox setup backend
+- Reviewed Rust `app-server/src/request_processors/windows_sandbox_processor.rs`, `app-server/tests/suite/v2/windows_sandbox_setup.rs`, and `core/src/windows_sandbox.rs::run_windows_sandbox_setup`.
+- Go `windowsSandbox/setupStart` now follows Rust's two-phase contract: validate mode/cwd, respond `{started:true}`, run setup asynchronously, and emit `windowsSandbox/setupCompleted` to the originating connection.
+- Added an injectable app-server `WindowsSandboxSetupRunner` plus a default runner for elevated setup and unelevated legacy preflight using resolved permission profile, workspace roots, codex home, cwd, and environment.
+- Successful setup persists Rust's `windows.sandbox` config value and clears legacy Windows sandbox feature keys; failures, including persist failures, are reported via `success:false` completion notifications.
+- Relative setup cwd now returns Rust-style `-32600 Invalid request: AbsolutePathBuf deserialized without a base path`; stale Windows sandbox backend `Go port yet` wording is removed.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterWindowsSandboxSetupStart|TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows" -count=1 -v`; `go test ./internal/sandbox ./internal/sandbox/windowssandbox -count=1`; `go test ./internal/config -run "TestResolveSandboxPermissionProfile|TestConfig|Test.*Write" -count=1`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - Windows sandbox readiness config
+- Reviewed Rust `windows_sandbox_processor.rs::determine_windows_sandbox_readiness` and `core/src/windows_sandbox.rs::WindowsSandboxLevelExt`.
+- Go `windowsSandbox/readiness` now computes readiness from effective config instead of only the in-memory manager, with Rust precedence for `[windows].sandbox`, legacy `windows_sandbox`, and legacy feature flags.
+- Non-Windows returns `notConfigured`; Windows unelevated returns `ready`; Windows elevated checks the setup marker and returns `ready` or `updateRequired`.
+- Verification: `go test ./internal/appserver -run "Test(RuntimeRouterWindowsSandbox|WindowsSandboxLevelFromConfigValues)" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/config ./internal/sandbox ./internal/sandbox/windowssandbox -count=1`.
+
+### 2026-07-09 Rust parity progress - Windows sandbox setup workspace roots
+- Reviewed Rust `windows_sandbox_processor.rs` setup request construction, especially `config.effective_workspace_roots()`.
+- Go `SandboxPermissionProfileResolution` now exposes materialized profile workspace roots, and `windowsSandbox/setupStart` passes cwd plus profile roots into the setup runner.
+- Added a regression for a custom `default_permissions` profile with `[permissions.dev.workspace_roots]`, proving setup receives both cwd and the configured profile root.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterWindowsSandboxSetupStart|TestWindowsSandboxLevelFromConfigValues" -count=1 -v`; `go test ./internal/config -run "TestResolveSandboxPermissionProfile|Test.*Permission|TestConfig" -count=1`; `go test ./internal/appserver -count=1`; `go test ./internal/config ./internal/sandbox ./internal/sandbox/windowssandbox -count=1`.
+
+### 2026-07-09 Rust parity progress - memory sqlite reset and thread memory mode
+- Reviewed Rust `app-server/tests/suite/v2/memory_reset.rs`, `thread_memory_mode_set.rs`, `app-server/src/request_processors/thread_processor.rs`, and `state/src/runtime/memories.rs`.
+- Added a narrow Rust-state SQLite compatibility layer in Go app-server: if `CODEX_SQLITE_HOME/state_5.sqlite` exists, `thread/memoryMode/set` updates `threads.memory_mode`; if `memories_1.sqlite` exists, `memory/reset` clears `stage1_outputs` and only memory pipeline `jobs` rows.
+- Preserved existing file-session behavior for Go-only runs without sqlite files, while matching Rust's important data invariant: memory reset deletes memory outputs/jobs and keeps thread memory modes intact.
+- Added regressions for sqlite-backed memory reset and sqlite-backed thread memory mode updates.
+- Verification: `go test ./internal/appserver -run "TestRouter(MemoryResetClearsRustMemoriesSQLiteRowsLikeRust|ThreadMemoryModeSetUpdatesRustStateSQLiteLikeRust|MemoryResetClearsMemoriesAndPreservesThreads)|TestRuntimeRouterMemoryResetClearsMemoriesAndPreservesThreadsLikeRust" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - thread metadata sqlite git fields
+- Reviewed Rust `thread_metadata_update.rs`, `thread_processor.rs::thread_metadata_update_response_inner`, and `state/src/runtime/threads.rs` thread metadata update paths.
+- Extended the Go sqlite compatibility layer so `thread/metadata/update` writes final git metadata into existing `state_5.sqlite.threads` columns `git_sha`, `git_branch`, and `git_origin_url`.
+- Null git patches now clear the Rust sqlite columns to NULL while preserving Go session-store and rollout metadata behavior.
+- Added regression coverage for setting and clearing sqlite git metadata.
+- Verification: `go test ./internal/appserver -run "TestRouter(ThreadMetadataUpdateUpdatesRustStateSQLiteLikeRust|SetNameAndMetadata|ThreadMetadataUpdateRejectsEmptyGitInfoPatch|MetadataWritesMissingThreadUseRustErrors|MemoryResetClearsRustMemoriesSQLiteRowsLikeRust|ThreadMemoryModeSetUpdatesRustStateSQLiteLikeRust)" -count=1 -v`; `go test ./internal/appserver -count=1` after one transient Windows TempDir cleanup retry.
+
+### 2026-07-09 Rust parity progress - model/list default remote refresh
+- Reviewed Rust `app-server/tests/suite/v2/model_list.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, and `models-manager/src/manager.rs`.
+- Go `model/list` now treats an omitted internal refresh strategy as Rust `OnlineIfUncached`, so ChatGPT-backed model catalogs can fetch `/models` on first list request and use the remote catalog as source of truth.
+- Explicit internal `RefreshOffline` remains available for service-tier and local picker paths that intentionally avoid network refresh.
+- Added regressions proving default model list refreshes remote once and reuses the cached catalog, while explicit offline list does not hit the endpoint.
+- Verification: `go test ./internal/model -run "TestListModels(Default|Explicit|Filters|Pagination)|TestRemoteModelsManager(CanUseRemoteCatalogAsSourceOfTruth|KeepsMerging)|TestConfiguredProviderModelsManagerUsesChatGPTRemoteCatalogAsSourceOfTruth" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterDispatchesCatalogAPIs|TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust" -count=1 -v`; `go test ./internal/model -count=1`.
+
+### 2026-07-09 Rust parity progress - recommended plugins after external login
+- Reviewed Rust `app-server/tests/suite/v2/recommended_plugins.rs`, `core-plugins/src/manager.rs::recommended_plugin_candidates_for_config`, and `core-plugins/src/remote.rs::fetch_recommended_plugins`.
+- Added Go support for the ChatGPT `/ps/plugins/suggested?scope=GLOBAL` recommended-plugin endpoint, mapping remote suggestions into `plugin@openai-curated-remote` install candidates.
+- `turn/start` now configures the suggested-plugin provider from effective config and ChatGPT auth; the first turn after external `chatgptAuthTokens` login waits for the endpoint before sending the model request, so `<recommended_plugins>` and `request_plugin_install` are available immediately.
+- Account login/session switch/logout clear the recommended-plugin cache to avoid carrying suggestions across auth changes.
+- Endpoint failures or `enabled != true` fall back to the existing local discovery path, matching Rust's legacy-mode fallback.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(FirstTurnAfterExternalLoginWaitsForRecommendedPluginsLikeRust|TurnStartInjectsEnabledPluginInstructions|TurnStartDoesNotRecommendConnectorOnlyCandidates)" -count=1 -v`; `go test ./internal/plugin -count=1`; `go test ./internal/appserver -run "Test(RuntimeRouterTurnStart.*Plugin|PluginInstallRuntime|PluginInstallCandidatesForTurnApplyDisabledAndLoadedConnectorConfig|RuntimeRouterDispatchesCatalogAPIs)" -count=1 -v`; `go test ./internal/appserver -count=1` after one unrelated Windows TempDir cleanup retry.
+
+### 2026-07-09 Rust parity progress - account rate limits fixture coverage
+- Reviewed Rust `app-server/tests/suite/v2/rate_limits.rs`, `rate_limit_reset_credits.rs`, account processor handlers, and backend-client rate-limit helpers.
+- Confirmed Go already matched the Rust request routing/auth/error surface for `getAccountRateLimits`, `consumeRateLimitResetCredit`, and `sendAddCreditsNudgeEmail`, including reset-credit auth failures and idempotency-key validation.
+- Added a Rust-fixture-shaped app-server regression for `/api/codex/usage`, covering the primary `codex` snapshot, secondary windows, spend-control individual limit, plan type, reached type, reset credits, and `rateLimitsByLimitId`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(GetAccountRateLimitsReturnsSnapshotLikeRust|SendAddCreditsNudgeEmail|ConsumeRateLimitResetCredit|AccountBackendReadsRequireChatGPTAuth|AccountBackendTimeoutsMatchRust|PersonalAccessTokenBackendReadsHydrateAccountRouting|AccountBackendClientConstructionErrorIsWrapped)" -count=1 -v`.
+
+### 2026-07-09 Rust parity progress - standalone web search
+- Reviewed Rust `app-server/tests/suite/v2/web_search.rs`, `ext/web-search/src/tool.rs`, `extension.rs`, `history.rs`, and `output.rs`.
+- Added Go `web.run` as a model-visible namespace tool gated by `features.standalone_web_search`, using the current provider/auth to POST `/alpha/search` with Rust-style `SearchRequest` commands, `allowed_callers: ["direct"]`, and recent input including the current user message.
+- Responses tool serialization now treats `web.run` as a namespace tool instead of a flattened `web__run` function, and the schema includes Rust's `time` description.
+- Runtime tool lifecycle now emits `item/started` / `item/completed` as `webSearch` ThreadItems and persists one completed `webSearch` history item, avoiding ordinary function-call/tool-output history items for the search call.
+- The model follow-up receives `function_call_output` content items shaped as `[{"type":"input_text","text":...}]`, matching Rust's standalone web search output path.
+- Follow-up parity in the same pass: `web.run` now prunes search input like Rust's `recent_input` tail (previous visible user turn plus current user text, user images removed, contextual environment user messages ignored) and locks Rust command-action cases for multi-query image search, URL open, URL/non-URL find, and non-literal open.
+- Verification: `go test ./internal/model ./internal/turn -count=1`; `go test ./internal/appserver -run "TestRuntimeRouter(StandaloneWebSearchMatchesRustFixture|TurnStartRunsRuntimeAndPersistsItems|TurnStartInjectsExternalCurrentTimeReminder|TurnStartNullServiceTierClearsConfigDefault)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - output schema HTTP fixture
+- Reviewed Rust `app-server/tests/suite/v2/output_schema.rs`.
+- Existing Go runtime already kept `outputSchema` per turn and the model runner already serialized it as Responses `text.format`.
+- Added app-server HTTP/SSE integration coverage using the real `ResponsesAgentRunner`, proving `turn/start` sends Rust's exact `text.format` object with `name: "codex_output_schema"`, `type: "json_schema"`, `strict: true`, and the requested schema.
+- The same regression verifies the following turn omits `text.format` when `outputSchema` is absent, preventing schema leakage across turns.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(OutputSchemaIsPerTurnLikeRust|SendsOutputSchemaTextFormatLikeRust)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+
+### 2026-07-09 Rust parity progress - current time reminder and clock namespace
+- Reviewed Rust `app-server/tests/suite/v2/current_time.rs`, `core/tests/suite/current_time_reminder.rs`, `core/src/context/current_time_reminder.rs`, `core/src/session/time_reminder.rs`, and `core/src/tools/handlers/current_time.rs`.
+- Go current-time reminders now enter the model as bare developer `input_text` messages (`It is ... UTC.`) instead of tagged instruction text, matching Rust's contextual developer fragment.
+- Delivered reminders are persisted into session history and participate in later `InputItemsFromRecord` history, so interval-suppressed requests still carry the last reminder and interval-expired requests append a fresh one.
+- Added Rust-shaped coverage for the app-server external `currentTime/read` round trip, interval persistence (`[first]`, `[first]`, `[first, third]`), zero-interval time moving backward, single-tool `after_user_or_tool_output` post-tool injection, and the `clock.curr_time` tool returning the latest external time.
+- Responses tool serialization now exposes the `clock` namespace as a namespace tool (`clock.curr_time`) like Rust instead of flattening it to `clock__curr_time`.
+- Verification: `go test ./internal/model ./internal/appserver -run "TestResponses(ToolsFromSpecs|ToolNames)|TestRuntimeRouter(CurrentTime(ReadAddsDeveloperInputLikeRust|RemindersFollowIntervalAndPersistInHistoryLikeRust|ToolReturnsLatestTimeLikeRust|ReminderFollowsToolOutputDeliveryModeLikeRust)|ZeroCurrentTimeReminderIntervalDeliversWhenTimeMovesBackwardLikeRust|TurnStartInjectsExternalCurrentTimeReminder|ExternalClockSleepEmitsSleepItemsLikeRust)$" -count=1 -v`; `go test ./internal/... -count=1`.
+- Remaining current-time follow-ups: multi-tool batch semantics for `after_user_or_tool_output`, assistant-only `end_turn=false` continuations, and compaction/window refresh semantics.
+
+### 2026-07-09 Rust parity progress - config requirements new-thread defaults
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_requirements_read_includes_new_thread_model_defaults` and the app-server README contract for `configRequirements/read`.
+- Go `config.NewConfigService` now loads `${CODEX_HOME}/requirements.toml` during construction, so managed requirements from disk are visible to app-server RPCs without test-only injection.
+- Added service and router regressions for `[models.new_thread]` covering `model`, `model_reasoning_effort`, and `service_tier` through the Rust-shaped `models.newThread` response.
+- Verification: `go test ./internal/config ./internal/appserver -run "Test(NewConfigServiceLoadsRequirementsFileLikeRust|RuntimeRouterConfigRequirementsReadIncludesNewThreadModelDefaultsLikeRust)" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1`.
+- Next config follow-ups: continue `config_rpc.rs` translation for `config/read` effective/layers, nested web-search config, apps, desktop settings, project/system layer precedence, and remaining write conflict/error-data fixtures.
+
+### 2026-07-09 Rust parity progress - config/read web search tool config
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_includes_nested_web_search_tool_config` and `config_read_ignores_bool_web_search_tool_config`.
+- Added router-level JSON regression coverage for nested `[tools.web_search]` values, including `context_size`, `allowed_domains`, and `location.region: null`.
+- Fixed Go config response normalization so legacy `[tools] web_search = true` serializes as `tools.web_search: null`, matching Rust's typed `ToolsV2.web_search = None` behavior instead of leaking a boolean.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfigReadWebSearchToolConfigMatchesRust" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1` hit the known Windows ConPTY flake once, then `go test ./internal/appserver -count=1` passed on rerun.
+- Next config follow-ups: apps, desktop settings, project layers, managed/system layer overrides, and write conflict/error-data fixtures from the same Rust file.
+
+### 2026-07-09 Rust parity progress - config/read apps and desktop settings
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_includes_apps` and `config_read_includes_desktop_settings`.
+- Added app-server router JSON coverage for Rust app config defaults and nullable fields, plus origin/layer assertions for app keys.
+- Added router coverage for opaque desktop config preservation, including `appearanceTheme`, hyphenated `selected-avatar-id`, and nested `desktop.workspace` values.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfigReadAppsAndDesktopSettingsMatchRust" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterConfig(Read(WebSearchToolConfig|AppsAndDesktopSettings)|RequirementsReadIncludesNewThreadModelDefaults)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next config follow-ups: project layer origin metadata and managed/system layer override precedence from `config_rpc.rs`.
+
+### 2026-07-09 Rust parity progress - config/read managed layer overrides
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_includes_system_layer_and_overrides` and protocol layer precedence comments.
+- `config.NewConfigService` now loads explicit `CODEX_APP_SERVER_MANAGED_CONFIG_PATH` as a `legacyManagedConfigTomlFromFile` layer, matching the app-server fixture path.
+- Config layer merge ordering now follows Rust precedence semantics, so higher numeric precedence layers apply later and override lower ones; existing managed override tests were adjusted to use Rust's legacy managed-file source instead of lower-precedence `enterpriseManaged`.
+- Added service and router regressions covering managed overrides for `model`, `approval_policy`, and nested `sandbox_workspace_write.writable_roots`, while preserving user-origin `sandbox_mode` and `network_access`.
+- Verification: `go test ./internal/config -run "Test(NewConfigServiceLoadsManagedConfigFromAppServerEnvLikeRust|ServiceManagedLayersOverride|ServiceWriteReportsOverriddenByManagedLayer|ServiceReadIncludesProjectConfigForCWD|LayerSourcePrecedence)" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterConfigReadIncludesManagedLayerOverridesLikeRust" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1`.
+- Next config follow-ups: router-level project layer fixture, then remaining config write/desktop batch/reload cases.
+
+### 2026-07-09 Rust parity progress - config/read project layer
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_includes_project_layers_for_cwd`.
+- Added router-level coverage for trusted project `.codex/config.toml` loading through `config/read` with `cwd`, including project-origin metadata and user/project layer ordering.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfigReadIncludesProjectLayerForCWDLikeRust" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterConfig(Read(WebSearchToolConfig|AppsAndDesktopSettings|IncludesManagedLayerOverrides|IncludesProjectLayerForCWD)|RequirementsReadIncludesNewThreadModelDefaults)" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1` hit a known Windows TempDir cleanup race once, then `go test ./internal/appserver -count=1` passed on rerun.
+- Next config follow-ups: value write replacement, desktop write, batch write, version conflicts, and hot reload fixtures from `config_rpc.rs`.
+
+### 2026-07-09 Rust parity progress - config write success paths
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs` value write, desktop write, batch write, and desktop batch write fixtures.
+- Added router-level coverage for `config/value/write` with `expectedVersion`, desktop key writes, sandbox batch writes, and desktop batch writes.
+- Fixed nested value comparison for config writes so JSON numeric request values and TOML reload values compare structurally; this prevents false `okOverridden` when writing desktop maps like `{ width: 320 }`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfigWriteSuccessPathsMatchRust" -count=1 -v`; `go test ./internal/config ./internal/appserver -run "Test(ConfigReadResponseMarshalRustShape|ServiceWriteValueAndBatchWrite|ServiceWriteReportsOverriddenByManagedLayer|RuntimeRouterConfig(WriteSuccessPathsMatchRust|WriteErrorDataMatchesRust|BatchWriteRejectsLegacyProfilesAtomicallyLikeRust))" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1` hit a known ConPTY flake once, then `go test ./internal/appserver -count=1` passed on rerun.
+- Next config follow-ups: pipelined write/read ordering and `reloadUserConfig=true` hot reload behavior.
+
+### 2026-07-09 Rust parity progress - config/read forced workspace ids
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_accepts_legacy_forced_chatgpt_workspace_id` and `config_read_accepts_forced_chatgpt_workspace_id_list`.
+- Added router-level JSON coverage proving `forced_chatgpt_workspace_id` preserves Rust's untagged shape: single string for the legacy scalar and array for multiple workspace ids.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfigReadForcedWorkspaceIDsMatchRust" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterConfig(Read(WebSearchToolConfig|ForcedWorkspaceIDs|AppsAndDesktopSettings|IncludesManagedLayerOverrides|IncludesProjectLayerForCWD)|RequirementsReadIncludesNewThreadModelDefaults|WriteSuccessPathsMatchRust|WriteErrorDataMatchesRust|BatchWriteRejectsLegacyProfilesAtomicallyLikeRust)" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1`.
+- Next config follow-ups: finish any remaining `config_rpc.rs` edge cases, then resume thread/turn/app-server error-data fixtures.
+
+### 2026-07-09 Rust parity progress - config/read effective layers
+- Reviewed Rust `app-server/tests/suite/v2/config_rpc.rs::config_read_returns_effective_and_layers`.
+- Added router-level coverage for effective user config, `origins.model` user-file metadata, and returned `layers` when `includeLayers=true`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterConfig(Read(WebSearchToolConfig|ForcedWorkspaceIDs|ReturnsEffectiveAndLayers|AppsAndDesktopSettings|IncludesManagedLayerOverrides|IncludesProjectLayerForCWD)|RequirementsReadIncludesNewThreadModelDefaults|WriteSuccessPathsMatchRust|WriteErrorDataMatchesRust|BatchWriteRejectsLegacyProfilesAtomicallyLikeRust)" -count=1 -v`.
+- Next app-server follow-ups: move back to Rust `thread.rs`, `turn.rs`, and remaining business error-data fixtures.
+
+### 2026-07-09 Rust parity progress - requirements clone empty slices
+- Full `go test ./internal/... -count=1` exposed that `ConfigService.Requirements()` collapsed explicit empty requirement slices to nil during cloning.
+- Fixed `cloneRequirements` to preserve nil-vs-empty slice semantics, so `allowed_web_search_modes = []` remains an explicit disabled web-search requirement and debug-config renders `allowed_web_search_modes: disabled`.
+- Verification: `go test ./internal/app ./internal/config -run "TestInteractiveDebugConfigReaderUsesRustStyleRenderer|TestNewConfigServiceLoadsRequirementsFileLikeRust|TestRequirementsClone|TestLoadRequirementsFileParsesRustStyleTOML" -count=1 -v`; `go test ./internal/... -count=1`.
+- Next app-server follow-ups: Rust `thread.rs`, `turn.rs`, and remaining business error-data fixtures.
+
+### 2026-07-09 Rust parity progress - request validation remote image urls
+- Reviewed Rust `app-server/tests/suite/v2/request_validation.rs::request_handlers_reject_remote_image_urls`.
+- Upgraded the Go runtime-router regression to mirror the Rust fixture across `turn/start`, `turn/steer`, and `thread/inject_items` using raw JSON-shaped params and a real loaded thread.
+- Locked the remote image URL JSON-RPC error shape to Rust parity: `-32600`, exact remote-image message, nil `error.data`, and no serialized `data` field.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterRequestHandlersRejectRemoteImageURLsLikeRust" -count=1 -v`; `go test ./internal/appserver -run "RequestHandlersRejectRemoteImageURLsLikeRust|InjectItemsRejectsRemoteImageURLs" -count=1 -v`.
+- Next app-server follow-ups: continue Rust `turn.rs` request/error semantics and remaining thread lifecycle boundary fixtures.
+
+### 2026-07-09 Rust parity progress - turn/start skills budget warning
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills` and `core-skills/src/render.rs`.
+- Fixed Go skill rendering warnings so token-budget truncation says `Exceeded skills context budget of 2%.`, matching Rust's app-server warning text; character-budget warnings keep the non-percent prefix.
+- Strengthened app-server warning coverage to require a thread-scoped `warning` notification with `threadId` and the Rust token-budget prefix.
+- Verification: `go test ./internal/prompt ./internal/appserver -run "TestRenderAvailableSkillsTokenBudgetWarningMentionsPercentLikeRust|TestRuntimeRouterSkillsContextEmitsBudgetWarning" -count=1 -v`; `go test ./internal/prompt ./internal/appserver -run "Test(RenderAvailableSkills|DefaultSkillMetadataBudget|RuntimeRouterSkillsContext|RuntimeRouterTurnStartInjectsAvailableSkills|RuntimeRouterImplicitSkillInvocationFromShellCommand)" -count=1 -v`.
+- Next app-server follow-ups: continue `turn_start.rs` service-tier/originator/approval notification parity and remaining thread lifecycle fixtures.
+
+### 2026-07-09 Rust parity progress - turn/start service tier forwarding
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_sends_service_tier_id_to_model_request`.
+- Added app-runtime coverage proving explicit `turn/start.serviceTier` survives model/catalog validation and reaches `model.AgentRequest.ServiceTier` for a model that supports non-default tiers.
+- This locks the runtime side of the Rust fixture and complements the existing Responses-agent HTTP serialization test for the `service_tier` request field.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartSendsServiceTierIDToModelRequestLikeRust|TestRuntimeRouterTurnStartNullServiceTierClearsConfigDefault|TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn" -count=1 -v`.
+- Next app-server follow-ups: continue `turn_start.rs` originator header, analytics, and command/file-change approval notification parity.
+
+### 2026-07-09 Rust parity progress - turn/start notifications and model override
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_emits_notifications_and_accepts_model_override`, plus Rust completed-turn notification construction in `bespoke_event_handling.rs` and `turn_processor.rs`.
+- Go runtime `turn/completed` notifications now match Rust's lightweight turn payload: `itemsView:"notLoaded"` and `items:[]` for normal completion, failed turns, interrupted turns, and standalone `thread/shellCommand` completion.
+- Added a Rust-fixture-shaped runtime-router test with two turns on one thread: first turn uses the thread model, second turn supplies `model:"mock-model-override"`, both started/completed notifications are `notLoaded` empty items, and the second agent request carries the override model.
+- Added `waitForTurnStartedStatus` to make notification tests key off the specific turn id.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust|TestRuntimeRouterTurnStartRunsRuntimeAndPersistsItems" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust|TurnStartRunsRuntimeAndPersistsItems|TurnFailureClearsActiveStateAndAllowsNextTurn|TurnInterruptCancelsActiveRuntime|ThreadShellCommandStandaloneCompletes|ThreadShellCommand)" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: continue `turn_start.rs` collaboration-mode override, analytics/client metadata, and command/file-change approval notification parity.
+
+### 2026-07-09 Rust parity progress - turn/start collaboration mode override
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_accepts_collaboration_mode_override_v2`, `turn_processor.rs::normalize_collaboration_mode`, `protocol/src/config_types.rs::CollaborationMode`, and `collaboration-mode-templates/templates/default.md`.
+- `turn/start.collaborationMode` now updates thread settings and can be inherited by later turns.
+- Runtime turn preparation now applies `collaborationMode.settings.model` and `collaborationMode.settings.reasoning_effort` as the effective model and reasoning effort, so a collaboration-mode model overrides a same-request `turn/start.model` like Rust.
+- Default collaboration mode with `developer_instructions: null` injects Rust's built-in Default mode developer block as a `<collaboration_mode>` developer input item, including the `request_user_input` availability warning.
+- Added `TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartAcceptsCollaborationModeOverrideLikeRust|TurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust|TurnStartSendsServiceTierIDToModelRequestLikeRust|ThreadSettingsUpdateAffectsFutureTurn|TurnStartChangesPersonalityMidThreadLikeRust)" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterPlanModeStreamsProposedPlanItem" -count=1 -v`; `go test ./internal/appserver -count=1` passed on rerun after one Windows TempDir cleanup race.
+- Next app-server follow-ups: continue `turn_start.rs` feature-overridden `request_user_input` descriptions, analytics/client metadata, and command/file-change approval notification parity.
+
+### 2026-07-09 Rust parity progress - turn/start request_user_input feature override
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_uses_thread_feature_overrides_for_request_user_input_tool_description_v2` and `core/src/tools/handlers/request_user_input_spec.rs`.
+- `thread/start.config` is now persisted and inherited by later turns; runtime config overlays expand dotted keys such as `features.default_mode_request_user_input`, so thread-level feature overrides affect turn tool schemas.
+- `request_user_input` now exposes the Rust tool description with `autoResolutionMs` guidance and mode availability text; app-server switches the description from `Plan mode` to `Default or Plan mode` when the feature is enabled.
+- Added `RequestUserInputAvailableModes` through appserver -> turn -> tool registry and guarded cached default tool-router reuse when the feature-specific schema is needed.
+- Added `TestRequestUserInputHandlerSpecDescriptionMatchesRustModes` and `TestRuntimeRouterTurnStartUsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust`.
+- Verification: `go test ./internal/tool -run "TestRequestUserInput" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(UsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust|AcceptsCollaborationModeOverrideLikeRust)" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartUsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust|TurnStartAcceptsCollaborationModeOverrideLikeRust|TurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust|TurnStartSendsServiceTierIDToModelRequestLikeRust|ThreadSettingsUpdateAffectsFutureTurn|TurnStartChangesPersonalityMidThreadLikeRust)" -count=1 -v`; `go test ./internal/tool ./internal/turn -count=1`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: continue `turn_start.rs` analytics/client metadata fields and command/file-change approval notification parity.
+
+### 2026-07-09 Rust parity progress - turn/start analytics event shape
+- Reviewed Rust `analytics/src/events.rs::CodexTurnEventParams`, `analytics/src/reducer.rs::codex_turn_event_params`, and `turn_start.rs::turn_start_tracks_thread_originator_in_analytics`.
+- Added `internal/telemetry` turn event payload types and `NewCodexTurnEvent` to lock the local `codex_turn_event` contract before app-server transport wiring.
+- The builder matches Rust's nested `app_server_client` shape, serializes optional fields as explicit `null`, defaults missing `service_tier` to `default`, and lets thread originator override `app_server_client.product_client_id`.
+- Added exact JSON-shape coverage and a thread-originator override regression matching the Rust fixture's `codex_work_desktop` assertion. This is payload-shape parity; actual app-server analytics delivery remains to be wired.
+- Verification: `go test ./internal/telemetry -run "TestCodexTurnEvent" -count=1 -v`; `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartUsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust|TurnStartPassesResponsesAPIClientMetadata|TurnStartPreservesThreadOriginator|ThreadStartUsesConnectionClientInfoOriginator)" -count=1 -v`.
+- Next app-server follow-ups: wire app-server runtime facts into telemetry turn-event delivery, then continue command/file-change approval notification parity.
+
+### 2026-07-09 Rust parity progress - turn/start command and file-change approvals
+- Reviewed Rust `app-server/tests/suite/v2/turn_start.rs::turn_start_exec_approval_toggle_v2`, `turn_start_exec_approval_decline_v2`, and `turn_start_file_change_approval_v2`.
+- Go shell execution now treats `approvalPolicy:"untrusted"` like Rust: ordinary shell calls request `item/commandExecution/requestApproval`; `approvalPolicy:"never"` with danger-full-access does not prompt.
+- App-server tool routers now inject broker-backed approval callbacks for command execution and apply_patch file changes, producing Rust request params with `threadId`, `turnId`, `itemId`, and `environmentId:"local"` for commands.
+- Runtime now emits `item/started` for commandExecution/fileChange before requesting approval, uses call ids as the external item ids, and suppresses duplicate completed notifications for the in-progress tool-call item.
+- Declined command approvals complete as `status:"declined"` with no exit code or aggregated output; accepted file-change approvals emit `serverRequest/resolved` before `item/completed` and write the patch afterward.
+- `apply_patch` now requests approval before applying changes and exposes absolute file paths in file-change `changes`, matching the Rust app-server fixture.
+- Added regressions: `TestRuntimeRouterTurnStartExecApprovalToggleLikeRust`, `TestRuntimeRouterTurnStartExecApprovalDeclineLikeRust`, and `TestRuntimeRouterTurnStartFileChangeApprovalLikeRust`.
+- Verification: `go test ./internal/tool -run "Test(ShellExecutor|BuildShellRequest|ApplyPatchExecutor)" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(ExecApprovalToggleLikeRust|ExecApprovalDeclineLikeRust|FileChangeApprovalLikeRust)$" -count=1 -v`; `go test ./internal/tool -count=1`; `go test ./internal/appserver -run "Test(RuntimeRouterTurnStart|RuntimeRouterApplyPatch|RuntimeRouterResponsesStreaming|ThreadItem|ServerRequest|Notification|Schema)" -count=1`; `go test ./internal/appserver -count=1`; `go test ./internal/turn ./internal/tool -count=1`.
+- Next app-server follow-ups: wire the analytics payload into real delivery, then continue approval-for-session cache/granular policy/network approval/amendment parity.
+
+### 2026-07-09 Rust parity progress - turn/start analytics delivery
+- Reviewed Rust `analytics/src/reducer.rs::codex_turn_event_params`, `analytics/src/events.rs::CodexTurnEventParams`, `analytics/src/client.rs`, and `app-server/tests/suite/v2/turn_start.rs::turn_start_tracks_thread_originator_in_analytics`.
+- App-server runtime now emits a typed `codex_turn_event` to an injectable analytics sink when a turn completes, using the existing Rust-shaped payload builder instead of leaving analytics at payload-only parity.
+- The event includes Rust fixture fields from connection client metadata, experimental API enablement, thread originator override, session/thread lineage, effective model/provider, service tier, approval policy/reviewer, sandbox policy/network access, collaboration mode, personality, workspace kind, input-image count, token usage, timing profile, and tool counts.
+- Added `TestRuntimeRouterTurnStartEmitsCodexTurnAnalyticsLikeRust` and the local sink/helper coverage for the completed-turn event.
+- Verification: `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStartEmitsCodexTurnAnalyticsLikeRust|TestRuntimeRouterTurnStartPreservesThreadOriginator|TestRuntimeRouterThreadStartUsesConnectionClientInfoOriginator" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStart" -count=1`; `go test ./internal/appserver ./internal/telemetry -count=1`.
+- Next app-server follow-ups: implement the full Rust analytics HTTP queue/export path, add failed/interrupted turn analytics and turn/thread initialized events, then continue approval-for-session cache/granular policy/network approval/amendment parity.
+
+### 2026-07-09 Rust parity progress - file-change approval acceptForSession and decline
+- Reviewed Rust `turn_start.rs::turn_start_file_change_approval_accept_for_session_persists_v2` and `turn_start_file_change_approval_decline_v2`.
+- App-server now records session-scoped approval grants by thread id; `acceptForSession` for file changes skips later `item/fileChange/requestApproval` prompts on the same thread, including later turns.
+- Added a command approval session cache path at the same layer so future command `acceptForSession` parity can reuse the same mechanism.
+- Fixed completed file-change status mapping so declined patch approvals emit Rust's `status:"declined"` instead of being collapsed to `failed`, and verified the declined patch is not applied.
+- Added `TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRust` and `TestRuntimeRouterTurnStartFileChangeApprovalDeclineLikeRust`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartFileChangeApproval(LikeRust|AcceptForSessionPersistsLikeRust|DeclineLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStart(ExecApprovalToggleLikeRust|ExecApprovalDeclineLikeRust|FileChangeApprovalLikeRust|FileChangeApprovalAcceptForSessionPersistsLikeRust|FileChangeApprovalDeclineLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: continue `turn_start.rs` command execution process id/output-shape fixtures and the network/amendment approval paths.
+
+### 2026-07-09 Rust parity progress - turn sandbox/cwd and personality migration
+- Reviewed Rust `turn_start_updates_sandbox_and_cwd_between_turns_v2`, `turn_start_with_elevated_override_does_not_persist_project_trust`, `turn_start_uses_migrated_pragmatic_personality_without_override_v2`, and `core/src/personality_migration.rs`.
+- Added `TestRuntimeRouterTurnStartUpdatesSandboxAndCWDBetweenTurnsLikeRust`; the first turn applies workspace-write/cwd settings without invoking the Windows workspace sandbox runner, and the second turn verifies a real commandExecution item uses the second turn cwd under danger-full-access.
+- Added `TestRuntimeRouterTurnStartElevatedSandboxDoesNotPersistProjectTrustLikeRust`, locking that turn-level elevated sandbox overrides do not persist project trust to `config.toml`.
+- Implemented `config.MaybeMigratePersonality` with Rust-like `.personality_migration` marker behavior, explicit global personality skip, no-session skip, active/archived rollout user-session detection, and global `personality = "pragmatic"` persistence.
+- `NewRuntimeRouter` now runs the personality migration on startup; `TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust` verifies the migrated pragmatic template is baked into model instructions without emitting `<personality_spec>`.
+- Verification: `go test ./internal/config -run "TestMaybeMigratePersonality" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(StartupMigratesPragmaticPersonalityLikeRust|TurnStartUsesConfigPersonalityTemplate|TurnStartAppliesExplicitPersonality|TurnStartChangesPersonalityMidThreadLikeRust)" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(TurnStartIgnoresDeprecatedMultiAgentMode|ThreadStartIgnoresDeprecatedMultiAgentMode)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStartUpdates(CWDBetweenTurnsLikeRust|SandboxAndCWDBetweenTurnsLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterTurnStartElevatedSandboxDoesNotPersistProjectTrustLikeRust|TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust|TestRuntimeRouterThreadStartProjectTrustWriteGuards" -count=1 -v`; `go test ./internal/config ./internal/appserver -count=1`.
+- Next app-server follow-ups: platform-gated command process-id notification parity, network/amendment approval paths, and analytics HTTP queue/export.
+
+### 2026-07-09 Rust parity progress - apply_patch streaming feature gate
+- Reviewed Rust `turn_start_does_not_stream_apply_patch_change_updates_without_feature_v2` and `turn_start_streams_apply_patch_change_updates_v2` expectations around `item/fileChange/patchUpdated`.
+- Go Responses streaming now gates apply-patch `item/fileChange/patchUpdated` notifications on `features.apply_patch_streaming_events`, using the effective per-turn config including JSON `Config` overrides.
+- Apply-patch custom tool input deltas remain consumed by the stream handler when the feature is off, so they do not leak as assistant text or MCP progress, but no file-change patch update notification is emitted.
+- Updated the existing positive streaming notification test to enable the feature explicitly and added `TestRuntimeRouterResponsesStreamingSkipsApplyPatchPatchUpdatedWithoutFeatureLikeRust` for the default/off Rust fixture.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterResponsesStreaming(EmitsDeltaNotifications|SkipsApplyPatchPatchUpdatedWithoutFeatureLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterResponsesStreaming" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: continue command execution process-id/output-shape fixtures with Windows gating, then network/amendment approval and analytics export transport.
+
+### 2026-07-09 Rust parity progress - command approval amendment/session cache
+- Reviewed Rust `protocol/src/approvals.rs::ExecPolicyAmendment` and approval suite expectations for prefix-rule amendments.
+- Go app-server command approval requests now include `proposedExecpolicyAmendment` in Rust's transparent array shape when `exec_command` carries a valid `prefix_rule`.
+- Added `TestRuntimeRouterTurnStartExecApprovalIncludesPrefixRuleAmendmentLikeRust` to lock the real runtime-router -> server request broker payload.
+- Added `TestRuntimeRouterTurnStartExecApprovalAcceptForSessionPersistsLikeRust` so command approval session caching has the same regression protection as the file-change approval session path.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartExecApproval(ToggleLikeRust|DeclineLikeRust|IncludesPrefixRuleAmendmentLikeRust|AcceptForSessionPersistsLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: network approval / network policy amendment parity, then analytics export transport; unified exec process-id notification remains platform-gated until Go has an equivalent process manager.
+
+### 2026-07-09 Rust parity progress - network approval protocol wire shape
+- Reviewed Rust `protocol/src/approvals.rs::NetworkApprovalProtocol`, which serializes protocol names with snake_case.
+- Fixed Go app-server `NetworkApprovalSocks5TCP` and `NetworkApprovalSocks5UDP` constants to serialize as `socks5_tcp` and `socks5_udp` instead of Go-only camelCase.
+- Extended `TestServerRequestMarshalShape` to lock `networkApprovalContext.protocol` inside command approval server requests to the Rust wire shape.
+- Verification: `go test ./internal/appserver -run "TestServerRequestMarshalShape|TestRuntimeRouterTurnStartExecApproval" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: implement actual managed-network approval request/policy amendment persistence after the Go network proxy runtime is ready, and continue analytics HTTP queue/export transport.
+
+### 2026-07-10 Rust parity progress - analytics HTTP queue/export
+- Reviewed Rust `analytics/src/client.rs`, `analytics/src/events.rs::TrackEventsRequest`, and `app-server/src/analytics_utils.rs`.
+- Added Go `telemetry.AnalyticsEventsClient` with a Rust-style buffered non-blocking queue, disabled behavior for `analytics.enabled=false`, 10s HTTP timeout, graceful close, and `TrackEventsRequest { events }` envelope.
+- Added HTTP export to `{chatgpt_base_url}/codex/analytics-events/events` with `Content-Type: application/json`, static/dynamic auth support, and no delivery attempt when app-server auth is missing or not a Codex backend auth mode.
+- Added `config.AnalyticsEnabled(default)` / `AnalyticsEnabledValue()` so Go preserves Rust's `Option<bool>` default semantics for `analytics.enabled`.
+- App-server default router now wires the analytics client when enabled, resolves auth for each send, and CLI `--analytics-default-enabled` now reaches `RuntimeRouterOptions`.
+- Added unit coverage for the HTTP envelope and disabled behavior, plus `TestRuntimeRouterConfiguredAnalyticsPostsRustTrackEventsRequest` proving a completed turn posts the Rust-shaped payload with ChatGPT auth headers.
+- Verification: `go test ./internal/telemetry -count=1`; `go test ./internal/config -count=1`; `go test ./internal/appserver -count=1`; `go test ./internal/app -count=1`; `go test ./internal/cli -run "TestParseAppServer|TestParse" -count=1`; `git diff --check` only reported existing CRLF normalization warnings.
+- Next app-server follow-ups: failed/interrupted turn analytics, thread/turn initialized analytics, accepted-line fingerprints/tool-item analytics, then the actual managed-network approval request and policy amendment path.
+
+### 2026-07-10 Rust parity progress - failed/interrupted turn analytics
+- Reviewed Rust `analytics/src/reducer.rs::analytics_turn_status` and `analytics_client_tests.rs` failed/interrupted turn lifecycle cases.
+- Active Go runtime turns now retain connection id and resolved run config so non-success completions can emit the same `codex_turn_event` payload shape as successful turns.
+- Runtime failures after config resolution now emit `status:"failed"` analytics with timing fields; generic Go failures keep `turn_error` and `codex_error_*` null until structured CodexErrorInfo/CodexErrKind mapping is added.
+- `turn/interrupt` now emits `status:"interrupted"` analytics from the active turn context, with null error fields like Rust.
+- Added `TestRuntimeRouterTurnStartFailedEmitsCodexTurnAnalyticsLikeRust` and `TestRuntimeRouterTurnInterruptedEmitsCodexTurnAnalyticsLikeRust`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurn(StartEmitsCodexTurnAnalyticsLikeRust|StartFailedEmitsCodexTurnAnalyticsLikeRust|InterruptedEmitsCodexTurnAnalyticsLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: structured CodexErrorInfo/CodexErrKind analytics mapping, thread/turn initialized analytics, accepted-line fingerprints, and tool-item analytics.
+
+### 2026-07-10 Rust parity progress - thread initialized analytics
+- Reviewed Rust `analytics/src/events.rs::ThreadInitializedEventParams`, `analytics/src/reducer.rs::emit_thread_initialized`, and app-server suite fixtures for thread start/resume/fork initialized analytics.
+- Added Go `codex_thread_initialized` telemetry types with Rust's nested `app_server_client`, runtime, model, source, initialization mode, lineage, and `created_at` shape.
+- Changed the analytics HTTP `TrackEventsRequest` body to a raw event union so the same queue/export path can send both `codex_turn_event` and `codex_thread_initialized`.
+- Runtime router now emits thread initialized analytics for `thread/start`, `thread/resume`, and `thread/fork`, preserving connection client metadata and record/request originator overrides; fork events carry `forked_from_thread_id` and keep `parent_thread_id` null like Rust.
+- Added serialization, HTTP union, and app-server regressions: `TestRuntimeRouterThreadStartEmitsThreadInitializedAnalyticsLikeRust`, `TestRuntimeRouterThreadResumeEmitsThreadInitializedAnalyticsLikeRust`, and `TestRuntimeRouterThreadForkEmitsThreadInitializedAnalyticsLikeRust`.
+- Verification: `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -run "TestRuntimeRouterThread(Start|Resume|Fork)EmitsThreadInitializedAnalyticsLikeRust|TestRuntimeRouterConfiguredAnalyticsPostsRustTrackEventsRequest" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: structured CodexErrorInfo/CodexErrKind analytics mapping, accepted-line fingerprints, tool-item analytics, steer-count/subagent edge cases, and managed-network approval parity.
+
+### 2026-07-10 Rust parity progress - turn analytics steer count
+- Reviewed Rust `analytics/src/reducer.rs` steer-count state and `analytics_client_tests.rs::accepted_steers_increment_turn_steer_count`.
+- Active Go runtime turns now track accepted `turn/steer` calls by thread/turn id after app-server steer handling succeeds.
+- Completed, failed, and interrupted `codex_turn_event` emission now carries the real accepted steer count instead of always sending `0`.
+- Added `TestRuntimeRouterTurnAnalyticsCountsAcceptedSteersLikeRust`, which steers an active turn twice and verifies the final analytics payload has `steer_count: 2`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurn(StartEmitsCodexTurnAnalyticsLikeRust|StartFailedEmitsCodexTurnAnalyticsLikeRust|InterruptedEmitsCodexTurnAnalyticsLikeRust|AnalyticsCountsAcceptedSteersLikeRust)$" -count=1 -v`; `go test ./internal/turn -run "TestAgentLoopDrainsSteerMailboxBeforeNextSampling|TestSteer" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: separate `codex_turn_steer_event` accepted/rejected analytics, accepted-line fingerprints, tool-item analytics, and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - turn steer analytics event
+- Reviewed Rust `analytics/src/events.rs::CodexTurnSteerEventParams`, `analytics/src/facts.rs::TurnSteerResult` / `TurnSteerRejectionReason`, and reducer fixtures for accepted/rejected steer analytics.
+- Added Go `codex_turn_steer_event` telemetry types with Rust's nested `app_server_client`, runtime metadata, expected/accepted turn ids, thread lineage, `num_input_images`, `result`, `rejection_reason`, and `created_at` shape.
+- The analytics queue/export path now sends steer events through the same raw event union and Rust `{"events":[...]}` envelope used by turn and thread-initialized analytics.
+- Runtime router now emits accepted steer analytics after `turn/steer` is accepted and queued, and rejected analytics for `TurnService.Steer` failures with Rust reason names for `no_active_turn`, `expected_turn_mismatch`, `empty_input`, and `input_too_large`.
+- Added `TestRuntimeRouterTurnSteerEmitsAcceptedAnalyticsLikeRust`, `TestRuntimeRouterTurnSteerRejectedEmitsAnalyticsLikeRust`, and `TestTurnSteerAnalyticsRejectionReasonMatchesRust`, plus telemetry serialization/HTTP union coverage.
+- Verification: `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -run "TestRuntimeRouterTurnSteer(EmitsAcceptedAnalyticsLikeRust|RejectedEmitsAnalyticsLikeRust|RejectsOversizedInputWithRustErrorData)|TestRuntimeRouterTurnAnalyticsCountsAcceptedSteersLikeRust|TestTurnSteerAnalyticsRejectionReasonMatchesRust" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: non-steerable review/compact rejection parity when Go has matching active-turn states, accepted-line fingerprints, tool-item analytics, and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - accepted-line analytics transport
+- Reviewed Rust `analytics/src/accepted_lines.rs`, `analytics/src/events.rs::CodexAcceptedLineFingerprintsEventRequest`, and `analytics/src/client.rs::track_event_request_batches`.
+- Corrected Go accepted-line analytics payloads to Rust's outer `event_type:"codex_accepted_line_fingerprints"` shape with inner `event_params.event_type:"codex.accepted_line_fingerprints"`.
+- Optional accepted-line fields now serialize as explicit `null` like Rust, and uploaded `line_fingerprints` remains an empty array even though local parsing still computes hashes for counts/tests.
+- `HTTPAnalyticsExporter.SendTrackEvents` now isolates accepted-line fingerprint events into their own one-event HTTP requests while batching adjacent regular events together, matching Rust's `should_send_in_isolated_request` path.
+- Added `TestAcceptedLineFingerprintEventSerializesExpectedRustShape`, `TestAcceptedLineFingerprintEventSerializesNullOptionFieldsLikeRust`, and `TestHTTPAnalyticsExporterIsolatesAcceptedLineFingerprintEventsLikeRust`.
+- Verification: `go test ./internal/telemetry -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterConfiguredAnalyticsPostsRustTrackEventsRequest|TestRuntimeRouterTurnSteer(EmitsAcceptedAnalyticsLikeRust|RejectedEmitsAnalyticsLikeRust)|TestRuntimeRouterTurnAnalyticsCountsAcceptedSteersLikeRust" -count=1 -v`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: emit accepted-line events from completed turns once Go has latest-diff/repo-hash completion context, then continue tool-item analytics and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - accepted-line runtime emission
+- Reviewed Rust `analytics/src/reducer.rs::accepted_line_event_input` and the completed-turn accepted-line emission path.
+- Go runtime turn completion now snapshots the active diff tracker before clearing it and emits `codex_accepted_line_fingerprints` when the completed turn produced accepted added/deleted lines.
+- The emitted event carries `product_surface:"codex"`, effective model slug, completion time, aggregate added/deleted counts, and an intentionally empty `line_fingerprints` array.
+- Added `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`, which applies a patch through the real runtime, observes the diff notification, waits for completion, and verifies the analytics aggregate.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust|TestRuntimeRouterApplyPatchEmitsTurnDiffUpdated" -count=1 -v`; `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: repo hash lookup for accepted-line events, command/file-change tool-item analytics, and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - command execution analytics event
+- Reviewed Rust `analytics/src/events.rs::CodexCommandExecutionEventRequest`, `CodexToolItemEventBase`, and `analytics/src/reducer.rs::tool_item_event`.
+- Added Go `codex_command_execution_event` telemetry types with Rust's flattened tool-item base fields, terminal status, failure kind, approval outcome, command source, exit code, and command action counts.
+- The analytics client/exporter now accepts command execution events through the same Rust `{"events":[...]}` envelope.
+- Runtime completion now emits command execution analytics for ordinary completed agent shell commands using initialized connection client metadata, thread lineage, item timing, execution duration, exit code, and action counts.
+- Added `TestCodexCommandExecutionEventSerializesExpectedRustShape` and `TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust`.
+- Verification: `go test ./internal/telemetry -run "TestCodexCommandExecutionEventSerializesExpectedRustShape|TestAnalyticsEventsClientPosts" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(CommandExecutionEmitsAnalyticsLikeRust|TurnCompletedEmitsAcceptedLineFingerprintsLikeRust)" -count=1 -v`; `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -count=1`; `go test ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: declined/failed/reviewed command analytics with review summaries, file-change tool-item analytics, MCP/dynamic tool-call analytics, and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - file-change analytics event
+- Reviewed Rust `analytics/src/events.rs::CodexFileChangeEventRequest`, `CodexToolItemEventBase`, and the reducer's `patch_apply_outcome` mapping for file-change tool items.
+- Added Go `codex_file_change_event` telemetry types with Rust's flattened tool-item base fields and aggregate file add/update/delete/move counters.
+- The analytics client/exporter now accepts file-change events through the same Rust `{"events":[...]}` envelope.
+- Runtime completion now emits file-change analytics for completed `apply_patch` items using initialized connection client metadata, thread lineage, item timing, terminal status/failure kind, and parsed file-change counts.
+- Added `TestCodexFileChangeEventSerializesExpectedRustShape` and `TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust`.
+- Verification: `go test ./internal/telemetry -run "TestCodex(CommandExecution|FileChange)EventSerializesExpectedRustShape|TestAnalyticsEventsClientPosts" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(FileChangeEmitsAnalyticsLikeRust|CommandExecutionEmitsAnalyticsLikeRust|TurnCompletedEmitsAcceptedLineFingerprintsLikeRust)" -count=1 -v`.
+- Next app-server follow-ups: user/guardian review summary denormalization, MCP/dynamic tool-call analytics, and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - tool-item review summaries
+- Reviewed Rust `analytics/src/reducer.rs::record_item_review_summary`, `tool_item_base`, `command_execution_review_result`, `file_change_review_result`, and `final_approval_outcome`.
+- Go runtime now records per-tool-item review summaries when command execution and file-change approval responses resolve, then denormalizes those summaries onto the completed `codex_command_execution_event` / `codex_file_change_event`.
+- No-review tool-item analytics now uses Rust reducer default `final_approval_outcome:"unknown"` instead of the earlier placeholder `not_needed`.
+- User approval decisions now map to Rust outcomes: `user_approved`, `user_approved_for_session`, `user_denied`, and `user_aborted`.
+- Added `TestRuntimeRouterCommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust` and `TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust`.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(CommandExecutionEmitsAnalyticsLikeRust|FileChangeEmitsAnalyticsLikeRust|CommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust|FileChangeAnalyticsIncludesUserReviewSummaryLikeRust)" -count=1 -v`; `go test ./internal/telemetry -run "TestCodex(CommandExecution|FileChange)EventSerializesExpectedRustShape" -count=1 -v`.
+- Next app-server follow-ups: guardian/permissions/network review paths and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - MCP/dynamic tool-call analytics
+- Reviewed Rust `CodexMcpToolCallEventRequest`, `CodexDynamicToolCallEventRequest`, and reducer mappings for MCP/dynamic outcomes and dynamic content counts.
+- Added Go telemetry types for `codex_mcp_tool_call_event` and `codex_dynamic_tool_call_event`, both flattening Rust's shared tool-item base fields.
+- The analytics client/exporter now accepts MCP and dynamic tool-call events through the same Rust `{"events":[...]}` envelope.
+- Runtime completion now emits MCP and dynamic analytics for completed `mcpToolCall` / `dynamicToolCall` items, including timing, review summary fields, terminal status/failure kind, and event-specific metadata.
+- Dynamic tool analytics now counts output content items by total/text/image and carries the optional `success` field; app-server coverage uses the real `item/tool/call` server request path.
+- Added `TestCodexMCPToolCallEventSerializesExpectedRustShape`, `TestCodexDynamicToolCallEventSerializesExpectedRustShape`, and `TestRuntimeRouterDynamicToolCallEmitsAnalyticsLikeRust`.
+- Verification: `go test ./internal/telemetry -run "TestCodex(MCPToolCall|DynamicToolCall|Review|CommandExecution|FileChange)EventSerializesExpectedRustShape|TestAnalyticsEventsClientPostsReviewUnionEventLikeRust" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(DynamicToolCallEmitsAnalyticsLikeRust|CommandExecutionEmitsAnalyticsLikeRust|FileChangeEmitsAnalyticsLikeRust|CommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust|FileChangeAnalyticsIncludesUserReviewSummaryLikeRust)" -count=1 -v`.
+- Next app-server follow-ups: guardian/permissions/network review paths and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - review analytics event
+- Reviewed Rust `analytics/src/events.rs::CodexReviewEventRequest` / `CodexReviewEventParams` and `analytics/src/reducer.rs::emit_review_event`.
+- Added Go `codex_review_event` telemetry types with Rust's app-server client/runtime metadata, thread lineage, subject kind/name, reviewer, trigger, status, resolution, and timing fields.
+- The analytics client/exporter now accepts review events through the same Rust `{"events":[...]}` envelope.
+- `ServerRequestBroker` now has a response-aware resolved callback so app-server can derive Rust review ids as `user:<request_id>` while preserving the existing `serverRequest/resolved` notification.
+- Runtime router now emits review analytics when command execution and file-change approval responses resolve, and keeps those review results denormalized onto the later tool-item analytics event.
+- Added `TestCodexReviewEventSerializesExpectedRustShape`, `TestAnalyticsEventsClientPostsReviewUnionEventLikeRust`, and app-server assertions in the command/file-change review summary tests.
+- Verification: `go test ./internal/telemetry -run "TestCodexReviewEventSerializesExpectedRustShape|TestAnalyticsEventsClientPostsReviewUnionEventLikeRust|TestCodex(CommandExecution|FileChange)EventSerializesExpectedRustShape" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(CommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust|FileChangeAnalyticsIncludesUserReviewSummaryLikeRust|CommandExecutionEmitsAnalyticsLikeRust|FileChangeEmitsAnalyticsLikeRust)" -count=1 -v`.
+- Next app-server follow-ups: guardian/permissions/network review paths and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - collab/web/image tool-item analytics
+- Reviewed Rust `CodexCollabAgentToolCallEventRequest`, `CodexWebSearchEventRequest`, `CodexImageGenerationEventRequest`, and reducer mappings for collab tool names/outcomes, web-search action/query counts, and image-generation failed/error handling.
+- Added Go telemetry types for `codex_collab_agent_tool_call_event`, `codex_web_search_event`, and `codex_image_generation_event`, all flattening Rust's shared tool-item base fields.
+- The analytics client/exporter now accepts collab-agent, web-search, and image-generation events through the same Rust `{"events":[...]}` envelope.
+- Runtime completion now emits collab/web/image analytics alongside command/file/MCP/dynamic tool-item analytics.
+- Web-search analytics is covered through the real standalone `web.run` runtime fixture; collab/image generation are covered at router emission level with Rust-shaped ThreadItems until Go exposes full equivalent runtime product paths.
+- Added `TestCodexCollabAgentToolCallEventSerializesExpectedRustShape`, `TestCodexWebSearchEventSerializesExpectedRustShape`, `TestCodexImageGenerationEventSerializesExpectedRustShape`, and `TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust`; extended `TestRuntimeRouterStandaloneWebSearchMatchesRustFixture` to assert `codex_web_search_event`.
+- Verification: `go test ./internal/telemetry -run "TestCodex(CollabAgentToolCall|WebSearch|ImageGeneration|MCPToolCall|DynamicToolCall)EventSerializesExpectedRustShape" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(StandaloneWebSearchMatchesRustFixture|CollabAndImageToolAnalyticsLikeRust|DynamicToolCallEmitsAnalyticsLikeRust)$" -count=1 -v`.
+- Next app-server follow-ups: guardian/permissions/network review paths and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - MCP runtime analytics fixture
+- Added full app-server runtime coverage for `codex_mcp_tool_call_event`: a model-visible MCP HTTP tool is discovered via `tools/list`, invoked by a real agent `function_call`, executed through `tools/call`, persisted as a completed `mcpToolCall` ThreadItem, and emitted as Rust-shaped analytics.
+- The regression asserts Rust parity for ids, `tool_name`, `mcp_server_name`, `mcp_tool_name`, `mcp_error_present`, `plugin_id`, terminal outcome, no-review default approval outcome, observed duration, and execution duration.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust" -count=1 -v`.
+- Next app-server follow-ups: guardian/permissions/network review paths and structured CodexErrorInfo/CodexErrKind mapping.
+
+### 2026-07-10 Rust parity progress - failed turn structured error analytics
+- Reviewed Rust `CodexTurnEventParams` failed-turn fields, reducer extraction from `TurnCompletedNotification.turn.error.codex_error_info`, and `CodexErrKind` / HTTP status fact propagation.
+- Go runtime failures now classify equivalent errors and populate both `turn/completed` notification `codexErrorInfo` and `codex_turn_event` fields: `turn_error`, `codex_error_kind`, and `codex_error_http_status_code`.
+- Added mappings for `codexapi.APIError` variants, HTTP status fallbacks, deadline/cancel errors, invalid request errors, and sandbox request errors. Generic unknown Go failures intentionally keep structured error fields null.
+- Added failed-turn regressions for deadline timeout and API invalid request parity, including checks for notification error payload and analytics payload.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouterTurnStartFailed(EmitsCodexTurnAnalyticsLikeRust|AnalyticsClassifiesCodexAPIErrorLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: guardian/permissions/network review paths and remaining Rust-specific `CodexErrorInfo` variants that need matching Go runtime states.
+
+### 2026-07-10 Rust parity progress - permissions/network/guardian review analytics
+- Reviewed Rust reducer paths for `PermissionsRequestApproval`, command approval amendment decisions, guardian completed-review notifications, and `item_review_summary_key`.
+- Go now emits `codex_review_event` for `item/permissions/requestApproval` responses with Rust subject `permissions`, trigger classification, and turn/session resolution.
+- Command approval responses now parse object-shaped Rust decisions: `acceptWithExecpolicyAmendment` approves and runs the command with `exec_policy_amendment` review resolution; `applyNetworkPolicyAmendment` maps allow/deny actions to approved/denied `network_policy_amendment`.
+- `network_access` and `permissions` reviews no longer denormalize into command tool-item review summaries, matching Rust's summary key filtering.
+- Guardian completed-review notifications now emit guardian reviewer `codex_review_event` records and denormalize only command/file/MCP guardian reviews into tool-item summaries.
+- Added regressions for exec-policy amendment execution, network-policy amendment review classification, permissions approval review events, and guardian completed-review analytics.
+- Verification: `go test ./internal/appserver -run "TestRuntimeRouter(CommandApprovalExecPolicyAmendmentRunsAndEmitsReviewAnalyticsLikeRust|CommandNetworkPolicyAmendmentReviewAnalyticsLikeRust|PermissionsApprovalEmitsReviewAnalyticsLikeRust|GuardianReviewCompletedEmitsReviewAnalyticsLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(CommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust|FileChangeAnalyticsIncludesUserReviewSummaryLikeRust|CommandExecutionEmitsAnalyticsLikeRust|FileChangeEmitsAnalyticsLikeRust|TurnStartExecApprovalIncludesPrefixRuleAmendmentLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: detailed `codex_guardian_review` telemetry when Go has guardian subagent payloads, remaining Rust-specific `CodexErrorInfo` variants, and managed-network policy persistence once Go exposes matching runtime state.
+
+### 2026-07-10 Rust parity progress - accepted-line repo hash
+- Reviewed Rust `accepted_line_repo_hash_for_cwd` and git remote canonicalization.
+- Go accepted-line runtime emission now probes `git remote -v` from the thread CWD and fills `repo_hash` when a remote is available.
+- Canonicalization now matches Rust's common cases: prefer `origin`, support scp-style remotes, strip `.git`, remove default ports, lowercase GitHub owner/repo paths, and hash with the existing `FingerprintHash("repo", canonicalRemote)`.
+- Uploaded `line_fingerprints` remains empty, matching Rust's current privacy-preserving event payload.
+- Added helper tests for canonicalization/hash/remote parsing and upgraded the runtime accepted-line regression to assert repo hash when `git` is available.
+- Verification: `go test ./internal/appserver -run "Test(CanonicalizeAcceptedLineGitRemoteURLMatchesRust|AcceptedLineRepoHashFromRemoteURLUsesCanonicalRemote|AcceptedLineParseGitRemoteURLs|RuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust)$" -count=1 -v`; `go test ./internal/appserver -count=1` passed on rerun after one Windows TempDir cleanup race; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: detailed `codex_guardian_review` telemetry only when Go surfaces guardian subagent payloads, and remaining Rust-specific `CodexErrorInfo` variants when matching runtime states exist.
+
+### 2026-07-10 Rust parity progress - compaction analytics event
+- Reviewed Rust `CodexCompactionEventRequest`, reducer `ingest_compaction`, and `core/src/compact.rs::CompactionAnalyticsAttempt`.
+- Added Go telemetry types for Rust-shaped `codex_compaction_event`, including app-server client/runtime metadata, thread lineage, trigger/reason/implementation/phase/strategy/status, error kind/status fields, context-token before/after counts, optional retained image/summary/cache token fields, and timing.
+- The analytics client/exporter now accepts compaction events through the same Rust `{"events":[...]}` envelope.
+- Runtime manual `thread/compact/start` now passes the initialized JSON-RPC connection id into compaction analytics; auto compaction passes the originating turn connection id and active-context-token snapshot.
+- Compaction success emits a completed event after persistence; compact failures emit failed events with Go's existing Rust-style error-kind/status mapping where available.
+- Go internal compact enums now map to Rust snake_case values such as `context_limit`, `standalone_turn`, `mid_turn`, `responses`, and `responses_compact`.
+- Added manual and auto compaction runtime regressions so trigger/reason/turn id/client metadata are locked.
+- PreCompact hook stop now preserves the existing `ErrInvalidHook` caller behavior while adding an internal sentinel so analytics emits Rust-style `status:"interrupted"` and `codex_error_kind:"turn_aborted"`.
+- Verification: `go test ./internal/telemetry -run "Test(CodexCompactionEventSerializesExpectedRustShape|AnalyticsEventsClientPostsCompactionUnionEventLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouter(ThreadCompactStartEmitsCompactionAnalyticsLikeRust|AutoCompactionEmitsCompactionAnalyticsLikeRust|PreCompactStoppedEmitsInterruptedCompactionAnalyticsLikeRust|ThreadCompactStartRunsHooks)$" -count=1 -v`; `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -run "TestRuntimeRouterThreadCompactStart|TestRuntimeRouterThreadCompactStartEmitsCompactionAnalyticsLikeRust|TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust|TestRuntimeRouterConfiguredAnalyticsPostsRustTrackEventsRequest" -count=1 -v`; `go test ./internal/appserver -count=1`; `go test ./internal/telemetry ./internal/turn ./internal/config ./internal/app ./internal/cli -count=1`.
+- Next app-server follow-ups: exact post-compaction cumulative token accounting, PostCompact stopped timing audit, detailed `codex_guardian_review` once Go has guardian subagent payloads, and managed-network policy persistence when runtime support exists.
+
+### 2026-07-10 Rust parity progress - goal analytics event
+- Reviewed Rust `CodexGoalEventRequest`, `GoalEventKind`, reducer `ingest_goal`, and `ext/goal/src/analytics.rs`.
+- Added Go telemetry types for Rust-shaped `codex_goal_event`, including app-server client/runtime metadata, thread lineage, stable `goal_id`, event kind, snake_case goal status, token-budget presence, and nullable cumulative accounting fields.
+- The analytics client/exporter now accepts goal events through the same Rust `{"events":[...]}` envelope.
+- Go goals now persist an internal UUID `goalId` in thread metadata extra while keeping `thread/goal/set/get` response JSON aligned with Rust v2 schema, where `goal_id` is not exposed.
+- Runtime `thread/goal/set` now emits `created` for new goals and `status_changed` only when status changes; `thread/goal/clear` emits `cleared` using the removed goal snapshot.
+- Status mapping is telemetry-only, so public API values like `budgetLimited` remain unchanged while analytics emits Rust state values like `budget_limited`.
+- Added telemetry serialization/null-optionals/HTTP union coverage and app-server coverage for created/status_changed/cleared events plus hidden internal goal id.
+- Verification: `go test ./internal/telemetry -run "Test(CodexGoalEventSerializesExpectedRustShape|CodexGoalEventSerializesNullOptionalsLikeRust|AnalyticsEventsClientPostsGoalUnionEventLikeRust)$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterThreadGoalSetAndClearEmitGoalAnalyticsLikeRust$" -count=1 -v`; `go test ./internal/appserver -run "TestRuntimeRouterThreadGoal(PersistsInThreadStoreAndNotifies|RepairsRolloutOnlyThread|SetAndClearEmitGoalAnalyticsLikeRust)$" -count=1 -v`; `go test ./internal/telemetry -count=1`; `go test ./internal/appserver -count=1`.
+- Next app-server follow-ups: implement turn-linked goal accounting and `usage_accounted` telemetry when Go has equivalent runtime accounting state, then continue exact compaction token accounting and remaining Rust-specific error/guardian/policy gaps.

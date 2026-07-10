@@ -27,3 +27,35 @@ func TestCollaborationModeListResponseMarshalRustShape(t *testing.T) {
 		t.Fatalf("payload = %#v", item)
 	}
 }
+
+func TestCollaborationModeListDefaultPresetsMatchRust(t *testing.T) {
+	response := NewCollaborationModeService(nil).List(&CollaborationModeListParams{})
+	medium := "medium"
+	want := []CollaborationModeMask{
+		{Name: "Plan", Mode: "plan", ReasoningEffort: &medium},
+		{Name: "Default", Mode: "default"},
+	}
+	if len(response.Data) != len(want) {
+		t.Fatalf("modes = %#v, want %#v", response.Data, want)
+	}
+	for i := range want {
+		if response.Data[i].Name != want[i].Name ||
+			response.Data[i].Mode != want[i].Mode ||
+			ptrStringValue(response.Data[i].Model) != ptrStringValue(want[i].Model) ||
+			ptrStringValue(response.Data[i].ReasoningEffort) != ptrStringValue(want[i].ReasoningEffort) {
+			t.Fatalf("mode[%d] = %#v, want %#v", i, response.Data[i], want[i])
+		}
+	}
+}
+
+func TestRuntimeRouterCollaborationModeListReturnsRustPresets(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodCollaborationModeList, CollaborationModeListParams{}))
+	if response.Error != nil {
+		t.Fatalf("collaborationMode/list = %+v", response)
+	}
+	list := response.Result.(*CollaborationModeListResponse)
+	if len(list.Data) != 2 || list.Data[0].Mode != "plan" || ptrStringValue(list.Data[0].ReasoningEffort) != "medium" || list.Data[1].Mode != "default" {
+		t.Fatalf("collaboration modes = %#v", list.Data)
+	}
+}

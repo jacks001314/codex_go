@@ -63,6 +63,7 @@ type ShellRequest struct {
 	SandboxProfile        *ShellSandboxProfile
 	PermissionProfileID   string
 	PermissionProfile     *sandbox.PermissionProfile
+	PermissionProfileJSON string
 	ApprovalRequired      bool
 	ApprovalReason        string
 	Justification         string
@@ -219,9 +220,15 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		opts.PermissionsPreapproved,
 	)
 	sandboxProfile := buildShellSandboxProfile(permissionProfile, additionalPermissions, cwd)
-	approvalRequired := RequestsSandboxOverride(sandboxPermissions) && !opts.PermissionsPreapproved
-	if approvalRequired && opts.ApprovalPolicy != sandbox.ApprovalOnRequest {
+	escalationApprovalRequired := RequestsSandboxOverride(sandboxPermissions) && !opts.PermissionsPreapproved
+	if escalationApprovalRequired && opts.ApprovalPolicy != sandbox.ApprovalOnRequest {
 		return nil, fmt.Errorf("approval policy is %s; reject command - you cannot ask for escalated permissions if the approval policy is %s", opts.ApprovalPolicy, opts.ApprovalPolicy)
+	}
+	policyApprovalRequired := opts.ApprovalPolicy == sandbox.ApprovalUnlessTrusted && !opts.PermissionsPreapproved
+	approvalRequired := escalationApprovalRequired || policyApprovalRequired
+	approvalReason := shellApprovalReason(args)
+	if policyApprovalRequired && strings.TrimSpace(approvalReason) == "" {
+		approvalReason = "approval required by policy"
 	}
 	yieldTimeMS := args.YieldTimeMS
 	if yieldTimeMS == 0 {
@@ -246,7 +253,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		PermissionProfileID:   permissionProfileID,
 		PermissionProfile:     permissionProfile,
 		ApprovalRequired:      approvalRequired,
-		ApprovalReason:        shellApprovalReason(args),
+		ApprovalReason:        approvalReason,
 		Justification:         args.Justification,
 		PrefixRule:            cloneStrings(args.PrefixRule),
 	}, nil

@@ -9,14 +9,14 @@ import (
 
 func ResponsesToolsFromSpecs(specs []tool.Spec) []any {
 	tools := make([]any, 0, len(specs))
-	dynamicNamespaces := map[string][]map[string]any{}
-	dynamicDescriptions := map[string]string{}
+	namespacedTools := map[string][]map[string]any{}
+	namespaceDescriptions := map[string]string{}
 	for i := range specs {
-		if isDynamicNamespaceTool(&specs[i]) {
+		if isResponsesNamespaceTool(&specs[i]) {
 			namespace := strings.TrimSpace(specs[i].Name.Namespace)
-			dynamicNamespaces[namespace] = append(dynamicNamespaces[namespace], responsesNamespacedFunctionTool(&specs[i]))
-			if dynamicDescriptions[namespace] == "" && strings.TrimSpace(specs[i].NamespaceDescription) != "" {
-				dynamicDescriptions[namespace] = strings.TrimSpace(specs[i].NamespaceDescription)
+			namespacedTools[namespace] = append(namespacedTools[namespace], responsesNamespacedFunctionTool(&specs[i]))
+			if namespaceDescriptions[namespace] == "" && strings.TrimSpace(specs[i].NamespaceDescription) != "" {
+				namespaceDescriptions[namespace] = strings.TrimSpace(specs[i].NamespaceDescription)
 			}
 			continue
 		}
@@ -24,16 +24,16 @@ func ResponsesToolsFromSpecs(specs []tool.Spec) []any {
 			tools = append(tools, item)
 		}
 	}
-	namespaces := make([]string, 0, len(dynamicNamespaces))
-	for namespace := range dynamicNamespaces {
+	namespaces := make([]string, 0, len(namespacedTools))
+	for namespace := range namespacedTools {
 		namespaces = append(namespaces, namespace)
 	}
 	sort.Strings(namespaces)
 	for _, namespace := range namespaces {
-		sort.SliceStable(dynamicNamespaces[namespace], func(i int, j int) bool {
-			return dynamicNamespaces[namespace][i]["name"].(string) < dynamicNamespaces[namespace][j]["name"].(string)
+		sort.SliceStable(namespacedTools[namespace], func(i int, j int) bool {
+			return namespacedTools[namespace][i]["name"].(string) < namespacedTools[namespace][j]["name"].(string)
 		})
-		description := dynamicDescriptions[namespace]
+		description := namespaceDescriptions[namespace]
 		if description == "" {
 			description = "Tools provided by the current Codex thread."
 		}
@@ -41,7 +41,7 @@ func ResponsesToolsFromSpecs(specs []tool.Spec) []any {
 			"type":        "namespace",
 			"name":        namespace,
 			"description": description,
-			"tools":       dynamicNamespaces[namespace],
+			"tools":       namespacedTools[namespace],
 		})
 	}
 	return tools
@@ -84,12 +84,18 @@ func responsesToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 	}, true
 }
 
-func isDynamicNamespaceTool(spec *tool.Spec) bool {
+func isResponsesNamespaceTool(spec *tool.Spec) bool {
 	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Exposure == tool.ExposureDiscoverable {
 		return false
 	}
 	if strings.TrimSpace(spec.Name.Namespace) == "" {
 		return false
+	}
+	if spec.Name.Namespace == "web" && spec.Name.Name == "run" {
+		return true
+	}
+	if spec.Name.Namespace == "clock" {
+		return true
 	}
 	return spec.Search != nil && spec.Search.Source != nil && spec.Search.Source.Name == "Dynamic tools"
 }

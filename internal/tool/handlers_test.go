@@ -73,6 +73,21 @@ func TestRequestUserInputHandlerNormalizesAndResponds(t *testing.T) {
 	}
 }
 
+func TestRequestUserInputHandlerSpecDescriptionMatchesRustModes(t *testing.T) {
+	defaultSpec := NewRequestUserInputHandler(nil).Spec()
+	if !strings.Contains(defaultSpec.Description, "This tool is only available in Plan mode.") {
+		t.Fatalf("default description = %q", defaultSpec.Description)
+	}
+	if !strings.Contains(defaultSpec.Description, "Set autoResolutionMs, from 60000 to 240000 milliseconds") {
+		t.Fatalf("default description missing Rust auto resolution guidance: %q", defaultSpec.Description)
+	}
+
+	featureSpec := NewRequestUserInputHandlerWithModes(nil, []string{"Default", "Plan"}).Spec()
+	if !strings.Contains(featureSpec.Description, "This tool is only available in Default or Plan mode.") {
+		t.Fatalf("feature description = %q", featureSpec.Description)
+	}
+}
+
 func TestGetContextRemainingHandler(t *testing.T) {
 	left := 42
 	handler := NewGetContextRemainingHandler(func() compact.TokenStatus {

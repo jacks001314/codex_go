@@ -245,7 +245,7 @@ func TestPluginInstallCandidatesForTurnApplyDisabledAndLoadedConnectorConfig(t *
 	})
 
 	ids := map[string]bool{}
-	for _, candidate := range router.pluginInstallCandidatesForTurn() {
+	for _, candidate := range router.pluginInstallCandidatesForTurn(nil) {
 		ids[candidate.ID] = true
 	}
 	if ids["docs@market"] || ids["connector_docs"] || !ids["keep@market"] {

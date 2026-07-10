@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -138,6 +139,28 @@ func TestAgentLoopStopsAtIterationLimit(t *testing.T) {
 	}
 }
 
+func TestAgentLoopDefaultAllowsLongToolChains(t *testing.T) {
+	agent := &countingToolLoopAgent{toolRounds: 12}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "again"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+	})
+
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "loop a while"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Iterations != 13 || len(result.ToolExecutions) != 12 || result.Response.Message != "done" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestAgentLoopDrainsSteerMailboxBeforeNextSampling(t *testing.T) {
 	mailbox := NewSteerMailbox()
 	agent := &fakeLoopAgent{enqueueSteerAfterFirstCall: true, steerMailbox: mailbox}
@@ -159,6 +182,9 @@ func TestAgentLoopDrainsSteerMailboxBeforeNextSampling(t *testing.T) {
 		ThreadID:     "thread-1",
 		TurnID:       "turn-1",
 		SteerMailbox: mailbox,
+		ClientMetadata: map[string]string{
+			"fiber_run_id": "fiber-start-123",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -182,6 +208,12 @@ func TestAgentLoopDrainsSteerMailboxBeforeNextSampling(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("second request input items = %#v", agent.requests[1].InputItems)
+	}
+	if agent.requests[0].ClientMetadata["fiber_run_id"] != "fiber-start-123" {
+		t.Fatalf("first request client metadata = %#v", agent.requests[0].ClientMetadata)
+	}
+	if agent.requests[1].ClientMetadata["fiber_run_id"] != "fiber-steer-456" || agent.requests[1].ClientMetadata["origin"] != "gaas" {
+		t.Fatalf("second request client metadata = %#v", agent.requests[1].ClientMetadata)
 	}
 }
 
@@ -234,6 +266,11 @@ type fakeLoopAgent struct {
 	alwaysTool                 bool
 	enqueueSteerAfterFirstCall bool
 	steerMailbox               *SteerMailbox
+}
+
+type countingToolLoopAgent struct {
+	requests   []model.AgentRequest
+	toolRounds int
 }
 
 type streamTimingLoopAgent struct {
@@ -296,6 +333,10 @@ func (a *fakeLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*
 					"text": "steered while tools run",
 				}},
 			}},
+			ClientMetadata: map[string]string{
+				"fiber_run_id": "fiber-steer-456",
+				"origin":       "gaas",
+			},
 		})
 	}
 	if a.alwaysTool || len(a.requests) == 1 {
@@ -315,6 +356,33 @@ func (a *fakeLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*
 		ResponseID: "resp-final",
 		Message:    "done",
 		Usage:      model.AgentUsage{InputTokens: 6, OutputTokens: 4, ReasoningOutputTokens: 1},
+		Items: []model.AgentItem{{
+			ID:   "msg-1",
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+func (a *countingToolLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	round := len(a.requests)
+	if round <= a.toolRounds {
+		callID := "call-" + strconv.Itoa(round)
+		return &model.AgentResponse{
+			ResponseID: "resp-tool-" + strconv.Itoa(round),
+			Items: []model.AgentItem{{
+				ID:        callID,
+				Type:      "function_call",
+				Name:      "echo",
+				CallID:    callID,
+				Arguments: `{"text":"hello"}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
 		Items: []model.AgentItem{{
 			ID:   "msg-1",
 			Type: "agent_message",

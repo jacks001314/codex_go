@@ -655,6 +655,32 @@ func TestRespectSystemProxyFeatureConfig(t *testing.T) {
 	}
 }
 
+func TestAnalyticsEnabledUsesRustOptionalDefault(t *testing.T) {
+	cfg := &Config{Values: map[string]any{}}
+	if !cfg.AnalyticsEnabled(true) {
+		t.Fatal("AnalyticsEnabled default true = false")
+	}
+	if cfg.AnalyticsEnabled(false) {
+		t.Fatal("AnalyticsEnabled default false = true")
+	}
+	if cfg.AnalyticsEnabledValue() != nil {
+		t.Fatalf("AnalyticsEnabledValue unset = %#v", cfg.AnalyticsEnabledValue())
+	}
+
+	cfg = &Config{Values: map[string]any{"analytics": map[string]any{"enabled": false}}}
+	if cfg.AnalyticsEnabled(true) {
+		t.Fatal("AnalyticsEnabled explicit false = true")
+	}
+	if value := cfg.AnalyticsEnabledValue(); value == nil || *value {
+		t.Fatalf("AnalyticsEnabledValue false = %#v", value)
+	}
+
+	cfg = &Config{Values: map[string]any{"analytics": map[string]any{"enabled": true}}}
+	if !cfg.AnalyticsEnabled(false) {
+		t.Fatal("AnalyticsEnabled explicit true = false")
+	}
+}
+
 func TestCurrentTimeReminderConfig(t *testing.T) {
 	dir := t.TempDir()
 	body := `[features.current_time_reminder]

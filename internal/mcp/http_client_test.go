@@ -45,7 +45,12 @@ func TestHTTPMCPToolListCallAndResource(t *testing.T) {
 			if err := json.Unmarshal(request.Params, &toolCallParams); err != nil {
 				t.Fatalf("Unmarshal tool call params returned error: %v", err)
 			}
-			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"content": []map[string]string{{"type": "text", "text": string(request.Params)}}})
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"content":           []map[string]string{{"type": "text", "text": string(request.Params)}},
+				"structuredContent": map[string]any{"echoed": "hi", "threadId": "thread-live"},
+				"isError":           false,
+				"_meta":             map[string]any{"calledBy": "mcp-app"},
+			})
 		case "resources/list":
 			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"resources": []any{}})
 		case "resources/templates/list":
@@ -84,6 +89,17 @@ func TestHTTPMCPToolListCallAndResource(t *testing.T) {
 	}
 	if len(call.Content) != 1 || !strings.Contains(call.Content[0].Text, `"text":"hi"`) {
 		t.Fatalf("call = %#v", call)
+	}
+	structured, ok := call.StructuredContent.(map[string]any)
+	if !ok || structured["echoed"] != "hi" || structured["threadId"] != "thread-live" {
+		t.Fatalf("structuredContent = %#v", call.StructuredContent)
+	}
+	if call.IsError == nil || *call.IsError {
+		t.Fatalf("isError = %#v", call.IsError)
+	}
+	responseMeta, ok := call.Meta.(map[string]any)
+	if !ok || responseMeta["calledBy"] != "mcp-app" {
+		t.Fatalf("response _meta = %#v", call.Meta)
 	}
 	meta, ok := toolCallParams["_meta"].(map[string]any)
 	if !ok || meta["source"] != "test-client" || meta["threadId"] != "thread-live" {

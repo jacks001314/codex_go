@@ -25,6 +25,22 @@ func TestListProfilesPaginates(t *testing.T) {
 	}
 }
 
+func TestListProfilesRustBuiltinOrderAndShape(t *testing.T) {
+	service := NewPermissionProfileService(nil)
+	got, err := service.List(&PermissionProfileListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got.Data) != 3 {
+		t.Fatalf("profiles = %#v", got.Data)
+	}
+	for i, want := range []string{":read-only", ":workspace", ":danger-full-access"} {
+		if got.Data[i].ID != want || got.Data[i].Description != "" || !got.Data[i].Allowed {
+			t.Fatalf("profile[%d] = %#v, want id %q with nil description and allowed", i, got.Data[i], want)
+		}
+	}
+}
+
 func TestListProfilesRejectsBadCursor(t *testing.T) {
 	service := NewPermissionProfileService(nil)
 	cursor := "bad"

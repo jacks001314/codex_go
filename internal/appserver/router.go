@@ -512,6 +512,10 @@ func threadStartExtra(params *ThreadStartParams) map[string]any {
 			extra["dynamic_tools"] = tools
 		}
 	}
+	if len(params.Config) > 0 {
+		extra = ensureRecordExtra(extra)
+		extra["config"] = cloneAnyMapForRouter(params.Config)
+	}
 	if len(extra) == 0 {
 		return nil
 	}
@@ -890,6 +894,9 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		})
 		if err != nil {
 			return nil, err
+		}
+		if ShouldRedactThreadResumePayloads(params.ClientName) {
+			page = RedactTurnsPagePayloads(page)
 		}
 		response.InitialTurnsPage = page
 	}
@@ -1829,6 +1836,9 @@ func (r *Router) handleThreadMemoryModeSet(request *Request) (*ThreadMemoryModeS
 	if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
 		return nil, err
 	}
+	if err := updateRustStateThreadMemoryMode(codexHomeFromSessionStore(r.store), params.ThreadID, params.Mode); err != nil {
+		return nil, fmt.Errorf("failed to update sqlite thread memory mode: %w", err)
+	}
 	return &ThreadMemoryModeSetResponse{}, nil
 }
 
@@ -1837,6 +1847,9 @@ func (r *Router) handleMemoryReset(request *Request) (*MemoryResetResponse, erro
 		return nil, fmt.Errorf("%w: router is not configured", ErrInvalidRequest)
 	}
 	codexHome := codexHomeFromSessionStore(r.store)
+	if err := clearRustMemoriesSQLiteData(codexHome); err != nil {
+		return nil, fmt.Errorf("failed to clear memory rows in memories db: %w", err)
+	}
 	if err := clearMemoryRootContents(codexHome); err != nil {
 		return nil, fmt.Errorf("failed to clear memory directories under %s: %w", codexHome, err)
 	}
@@ -1950,6 +1963,9 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	}
 	if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
 		return nil, err
+	}
+	if err := updateRustStateThreadGitInfo(codexHomeFromSessionStore(r.store), params.ThreadID, record.Metadata.Git); err != nil {
+		return nil, fmt.Errorf("failed to update sqlite thread git metadata: %w", err)
 	}
 	path := r.threadRolloutPath(record)
 	return &ThreadMetadataUpdateResponse{Thread: BuildThread(record, path, false)}, nil

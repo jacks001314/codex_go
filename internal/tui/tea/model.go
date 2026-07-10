@@ -500,6 +500,7 @@ type toolCallDisplayState struct {
 	MessageIndex int
 	StartedAt    time.Time
 	Completed    bool
+	PlanUpdate   bool
 }
 
 func NewModel(state *codextui.State, options Options) *Model {
@@ -1437,6 +1438,13 @@ func (m *Model) startOrUpdateToolCall(item *protocol.ThreadItem) {
 		state.StartedAt = m.currentTime()
 	}
 	m.registerToolCallState(state, toolCallAliasesFromItem(item)...)
+	if state.PlanUpdate || isPlanUpdateToolName(state.ToolName) {
+		state.PlanUpdate = true
+		if m.renderPlanUpdateToolCall(state) {
+			return
+		}
+		return
+	}
 	m.renderToolCallState(state, nil)
 }
 
@@ -1456,6 +1464,13 @@ func (m *Model) appendToolCallInputDelta(delta *protocol.Delta) {
 		state.StartedAt = m.currentTime()
 	}
 	m.registerToolCallState(state, toolCallAliasesFromDelta(delta)...)
+	if state.PlanUpdate || isPlanUpdateToolName(state.ToolName) {
+		state.PlanUpdate = true
+		if m.renderPlanUpdateToolCall(state) {
+			return
+		}
+		return
+	}
 	m.renderToolCallState(state, nil)
 }
 
@@ -1485,6 +1500,13 @@ func (m *Model) completeToolOutput(item *protocol.ThreadItem) {
 		state.CallID = callID
 	}
 	m.registerToolCallState(state, toolCallAliasesFromItem(item)...)
+	if state.PlanUpdate || isPlanUpdateToolName(state.ToolName) || metadataBool(item.Metadata, "planUpdate") {
+		state.PlanUpdate = true
+		if !m.renderPlanUpdateToolCall(state) {
+			state.Completed = true
+		}
+		return
+	}
 	m.renderToolCallState(state, item)
 }
 
@@ -1505,6 +1527,71 @@ func (m *Model) applyPlanUpdateItem(item *protocol.ThreadItem) {
 		plan = append(plan, historycell.PlanItemArg{Step: step, Status: status})
 	}
 	m.applyHistoryCell(historycell.NewPlanUpdate("", plan))
+}
+
+type planUpdateToolInput struct {
+	Explanation string                    `json:"explanation,omitempty"`
+	Plan        []planUpdateToolInputItem `json:"plan"`
+}
+
+type planUpdateToolInputItem struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+func (m *Model) renderPlanUpdateToolCall(state *toolCallDisplayState) bool {
+	if m == nil || state == nil {
+		return false
+	}
+	explanation, plan, ok := planUpdateFromToolInput(state.Input)
+	if !ok {
+		return false
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	cell := historycell.NewPlanUpdate(explanation, plan)
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
+	state.Completed = true
+	return true
+}
+
+func planUpdateFromToolInput(input string) (string, []historycell.PlanItemArg, bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", nil, false
+	}
+	var args planUpdateToolInput
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return "", nil, false
+	}
+	if args.Plan == nil && strings.TrimSpace(args.Explanation) == "" {
+		return "", nil, false
+	}
+	plan := make([]historycell.PlanItemArg, 0, len(args.Plan))
+	for _, item := range args.Plan {
+		step := strings.TrimSpace(item.Step)
+		if step == "" {
+			continue
+		}
+		plan = append(plan, historycell.PlanItemArg{
+			Step:   step,
+			Status: planStepStatusFromString(item.Status),
+		})
+	}
+	return strings.TrimSpace(args.Explanation), plan, true
+}
+
+func planStepStatusFromString(status string) historycell.StepStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "complete", "done":
+		return historycell.StepCompleted
+	case "in_progress", "in-progress", "active", "running":
+		return historycell.StepInProgress
+	default:
+		return historycell.StepPending
+	}
 }
 
 func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *protocol.ThreadItem) {
@@ -1542,7 +1629,7 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 	}
 	seen := map[*toolCallDisplayState]bool{}
 	for _, state := range m.toolCalls {
-		if state == nil || seen[state] || state.Completed {
+		if state == nil || seen[state] || state.Completed || state.PlanUpdate {
 			continue
 		}
 		seen[state] = true
@@ -1789,6 +1876,10 @@ func isShellToolName(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func isPlanUpdateToolName(toolName string) bool {
+	return strings.EqualFold(strings.TrimSpace(toolName), "update_plan")
 }
 
 func commandOutputForToolOutput(item *protocol.ThreadItem) (*execcell.CommandOutput, *time.Duration) {

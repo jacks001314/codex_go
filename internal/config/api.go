@@ -19,6 +19,8 @@ import (
 
 var ErrInvalidConfigRequest = errors.New("invalid config request")
 
+const appServerManagedConfigPathEnv = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH"
+
 type ConfigWriteErrorCode string
 
 const (
@@ -276,7 +278,7 @@ func normalizeToolsConfig(values map[string]any) {
 		}
 		normalized["web_search"] = webSearch
 	} else {
-		setDefaultJSONField(normalized, "web_search", nil)
+		normalized["web_search"] = nil
 	}
 	values["tools"] = normalized
 }
@@ -1246,19 +1248,23 @@ func migrationDetailsHasEntries(item *ExternalAgentConfigMigrationItem) bool {
 }
 
 type ConfigService struct {
-	mu            sync.Mutex
-	codexHome     string
-	profile       string
-	userConfig    string
-	requirements  *ConfigRequirements
-	warnings      []ConfigWarningNotification
-	managedLayers []Layer
-	importHistory []ExternalAgentConfigImportHistory
-	now           func() time.Time
+	mu              sync.Mutex
+	codexHome       string
+	profile         string
+	userConfig      string
+	requirements    *ConfigRequirements
+	warnings        []ConfigWarningNotification
+	managedLayers   []Layer
+	featureDefaults map[string]bool
+	importHistory   []ExternalAgentConfigImportHistory
+	now             func() time.Time
 }
 
 func NewConfigService(codexHome string) *ConfigService {
-	return &ConfigService{codexHome: codexHome, now: time.Now}
+	service := &ConfigService{codexHome: codexHome, now: time.Now}
+	service.loadRequirementsFromHome()
+	service.loadManagedConfigLayerFromEnv()
+	return service
 }
 
 func NewProfileConfigService(codexHome string, profile string) *ConfigService {
@@ -1305,6 +1311,53 @@ func (s *ConfigService) SetRequirements(requirements *ConfigRequirements) {
 	s.requirements = cloneRequirements(requirements)
 }
 
+func (s *ConfigService) loadRequirementsFromHome() {
+	if s == nil || strings.TrimSpace(s.codexHome) == "" {
+		return
+	}
+	path := filepath.Join(s.codexHome, "requirements.toml")
+	requirements, err := LoadRequirementsFile(path)
+	if err != nil {
+		details := err.Error()
+		s.warnings = append(s.warnings, ConfigWarningNotification{
+			Summary: "Invalid managed requirements; ignoring.",
+			Details: &details,
+			Path:    &path,
+		})
+		return
+	}
+	s.requirements = requirements
+}
+
+func (s *ConfigService) loadManagedConfigLayerFromEnv() {
+	if s == nil || strings.TrimSpace(s.codexHome) == "" {
+		return
+	}
+	override, ok := os.LookupEnv(appServerManagedConfigPathEnv)
+	if !ok || strings.TrimSpace(override) == "" {
+		return
+	}
+	path := managedConfigPath(s.codexHome, override)
+	values, exists, err := loadConfigFileIfExists(path)
+	if err != nil {
+		details := err.Error()
+		s.warnings = append(s.warnings, ConfigWarningNotification{
+			Summary: "Invalid managed configuration; ignoring.",
+			Details: &details,
+			Path:    &path,
+		})
+		return
+	}
+	if !exists {
+		return
+	}
+	s.managedLayers = append(s.managedLayers, Layer{
+		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: path},
+		Version: configVersion(values),
+		Config:  cloneMap(values),
+	})
+}
+
 func (s *ConfigService) SetWarnings(warnings []ConfigWarningNotification) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1326,6 +1379,23 @@ func (s *ConfigService) SetManagedLayers(layers []Layer) {
 	s.managedLayers = cloneLayers(layers)
 }
 
+func (s *ConfigService) SetFeatureEnablementDefaults(enablement map[string]bool) {
+	if s == nil || len(enablement) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.featureDefaults == nil {
+		s.featureDefaults = map[string]bool{}
+	}
+	for key, enabled := range enablement {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			s.featureDefaults[key] = enabled
+		}
+	}
+}
+
 func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, error) {
 	if params == nil {
 		params = &ConfigReadParams{}
@@ -1341,6 +1411,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 			return nil, err
 		}
 		values, origins := mergeConfigLayers(layers)
+		s.applyFeatureEnablementDefaults(values, origins)
 		applySupportedFeatureEnablement(values)
 		response := &ConfigReadResponse{Config: values, Origins: origins}
 		if params.IncludeLayers {
@@ -1363,12 +1434,40 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	}
 	layers := s.readLayers(userLayer)
 	values, origins := mergeConfigLayers(layers)
+	s.applyFeatureEnablementDefaults(values, origins)
 	applySupportedFeatureEnablement(values)
 	response := &ConfigReadResponse{Config: values, Origins: origins}
 	if params.IncludeLayers {
 		response.Layers = cloneLayers(layers)
 	}
 	return response, nil
+}
+
+func (s *ConfigService) applyFeatureEnablementDefaults(values map[string]any, origins map[string]LayerMetadata) {
+	if s == nil || values == nil {
+		return
+	}
+	s.mu.Lock()
+	defaults := cloneBoolMap(s.featureDefaults)
+	s.mu.Unlock()
+	if len(defaults) == 0 {
+		return
+	}
+	featuresValue, ok := values["features"].(map[string]any)
+	if !ok {
+		featuresValue = map[string]any{}
+		values["features"] = featuresValue
+	}
+	origin := LayerMetadata{Name: LayerSource{Type: LayerSourceSessionFlags}}
+	for key, enabled := range defaults {
+		if _, exists := featuresValue[key]; exists {
+			continue
+		}
+		featuresValue[key] = enabled
+		if origins != nil {
+			origins["features."+key] = origin
+		}
+	}
 }
 
 func configReadCWD(params *ConfigReadParams) string {
@@ -1535,7 +1634,7 @@ func (s *ConfigService) readLayers(userLayer Layer) []Layer {
 	layers = append(layers, userLayer)
 	layers = append(layers, managed...)
 	sort.SliceStable(layers, func(i int, j int) bool {
-		return layers[i].Name.Precedence() > layers[j].Name.Precedence()
+		return layers[i].Name.Precedence() < layers[j].Name.Precedence()
 	})
 	return layers
 }
@@ -1622,7 +1721,7 @@ func (s *ConfigService) managedLayersForRead() []Layer {
 	managed := cloneLayers(s.managedLayers)
 	s.mu.Unlock()
 	sort.SliceStable(managed, func(i int, j int) bool {
-		return managed[i].Name.Precedence() > managed[j].Name.Precedence()
+		return managed[i].Name.Precedence() < managed[j].Name.Precedence()
 	})
 	return managed
 }
@@ -2006,8 +2105,43 @@ func normalizeJSONValue(value any) any {
 		if f, err := v.Float64(); err == nil {
 			return f
 		}
+	case int:
+		return int64(v)
+	case int8:
+		return int64(v)
+	case int16:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case int64:
+		return v
+	case uint:
+		return uint64(v)
+	case uint8:
+		return uint64(v)
+	case uint16:
+		return uint64(v)
+	case uint32:
+		return uint64(v)
+	case uint64:
+		return v
+	case float32:
+		floatValue := float64(v)
+		if floatValue == float64(int64(floatValue)) {
+			return int64(floatValue)
+		}
+		return floatValue
+	case float64:
+		if v == float64(int64(v)) {
+			return int64(v)
+		}
+		return v
 	case map[string]any:
-		return cloneMap(v)
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			out[key] = normalizeJSONValue(value)
+		}
+		return out
 	case []any:
 		out := make([]any, len(v))
 		for i := range v {
@@ -2054,8 +2188,19 @@ func fillOrigins(prefix string, values map[string]any, origin LayerMetadata, out
 			path = prefix + "." + key
 		}
 		out[path] = origin
-		if nested, ok := value.(map[string]any); ok {
-			fillOrigins(path, nested, origin, out)
+		fillOriginChildren(path, value, origin, out)
+	}
+}
+
+func fillOriginChildren(prefix string, value any, origin LayerMetadata, out map[string]LayerMetadata) {
+	switch typed := value.(type) {
+	case map[string]any:
+		fillOrigins(prefix, typed, origin, out)
+	case []any:
+		for index, item := range typed {
+			path := fmt.Sprintf("%s.%d", prefix, index)
+			out[path] = origin
+			fillOriginChildren(path, item, origin, out)
 		}
 	}
 }
@@ -2275,12 +2420,12 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 		return nil
 	}
 	clone := *requirements
-	clone.AllowedApprovalPolicies = append([]sandbox.AskForApproval(nil), requirements.AllowedApprovalPolicies...)
-	clone.AllowedApprovalsReviewers = append([]ApprovalsReviewer(nil), requirements.AllowedApprovalsReviewers...)
-	clone.AllowedSandboxModes = append([]sandbox.SandboxMode(nil), requirements.AllowedSandboxModes...)
-	clone.AllowedWindowsSandboxImplementations = append([]WindowsSandboxSetupMode(nil), requirements.AllowedWindowsSandboxImplementations...)
+	clone.AllowedApprovalPolicies = cloneSlice(requirements.AllowedApprovalPolicies)
+	clone.AllowedApprovalsReviewers = cloneSlice(requirements.AllowedApprovalsReviewers)
+	clone.AllowedSandboxModes = cloneSlice(requirements.AllowedSandboxModes)
+	clone.AllowedWindowsSandboxImplementations = cloneSlice(requirements.AllowedWindowsSandboxImplementations)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
-	clone.AllowedWebSearchModes = append([]WebSearchMode(nil), requirements.AllowedWebSearchModes...)
+	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)
 	clone.FeatureRequirements = cloneBoolMap(requirements.FeatureRequirements)
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
@@ -2292,6 +2437,13 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Network = cloneNetwork(requirements.Network)
 	clone.Models = cloneModels(requirements.Models)
 	return &clone
+}
+
+func cloneSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	return append([]T{}, values...)
 }
 
 func cloneConfigWarnings(warnings []ConfigWarningNotification) []ConfigWarningNotification {

@@ -1081,6 +1081,52 @@ func TestModelStreamsToolInputIntoHistoryCell(t *testing.T) {
 	}
 }
 
+func TestModelStreamsUpdatePlanIntoPlanCell(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID("plan-item", "plan-call", "update_plan", ""))})
+	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"plan":[{"step":"read Rust TUI","status":"in_progress"},`)})
+	if strings.Contains(model.View(), "Running update_plan") || strings.Contains(model.View(), "Ran update_plan") {
+		t.Fatalf("partial update_plan JSON should not render as exec cell:\n%s", model.View())
+	}
+	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"step":"port behavior","status":"pending"}],"explanation":"align with Rust"}`)})
+
+	view := model.View()
+	for _, want := range []string{"Updated Plan", "align with Rust", "read Rust TUI", "port behavior"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Running update_plan", "Ran update_plan"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("update_plan rendered as exec cell %q:\n%s", unwanted, view)
+		}
+	}
+}
+
+func TestModelDoesNotMarkUpdatePlanFailedOnTurnFailure(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID("plan-item", "plan-call", "update_plan", ""))})
+	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"plan":[{"step":"read Rust TUI","status":"completed"},{"step":"port behavior","status":"in_progress"}]}`)})
+	model.Update(ThreadEventMsg{Event: protocol.TurnFailed("network boom")})
+
+	view := model.View()
+	for _, want := range []string{"Updated Plan", "read Rust TUI", "port behavior", "Error: network boom"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Running update_plan", "Ran update_plan", "update_plan {", "Error: network boom\n  └"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("update_plan should not be rendered or failed as exec cell %q:\n%s", unwanted, view)
+		}
+	}
+}
+
 func TestModelFailsRunningToolCellsAndClearsUnconfirmedThread(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})

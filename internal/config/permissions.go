@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"codex_go/internal/sandbox"
@@ -15,9 +16,10 @@ import (
 const projectRootsPatternPrefix = "codex-project-roots://"
 
 type SandboxPermissionProfileResolution struct {
-	ID          string
-	Profile     *sandbox.PermissionProfile
-	ProfileJSON string
+	ID             string
+	Profile        *sandbox.PermissionProfile
+	ProfileJSON    string
+	WorkspaceRoots []string
 }
 
 type runtimePermissionProfileWire struct {
@@ -86,6 +88,41 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 		return nil, fmt.Errorf("default_permissions requires a `[permissions]` table")
 	}
 	return nil, fmt.Errorf("permission profile %q not found", profileID)
+}
+
+func (c *Config) PermissionProfileSummaries() ([]sandbox.PermissionProfileSummary, error) {
+	if c == nil {
+		return PermissionProfileSummariesFromValues(nil)
+	}
+	return PermissionProfileSummariesFromValues(c.Values)
+}
+
+func PermissionProfileSummariesFromValues(values map[string]any) ([]sandbox.PermissionProfileSummary, error) {
+	if values == nil {
+		values = map[string]any{}
+	}
+	profiles := permissionProfilesFromConfig(values["permissions"])
+	if err := validateConfigPermissionProfileNames(profiles); err != nil {
+		return nil, err
+	}
+	summaries := sandbox.BuiltinPermissionProfileSummaries()
+	names := make([]string, 0, len(profiles))
+	for name := range profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		description := ""
+		if profile, ok := profiles[name].(map[string]any); ok {
+			description = stringFromConfigValue(profile["description"])
+		}
+		summaries = append(summaries, sandbox.PermissionProfileSummary{
+			ID:          name,
+			Description: description,
+			Allowed:     true,
+		})
+	}
+	return summaries, nil
 }
 
 func (c *Config) resolveLegacySandboxPermissionProfile(cwd string) (*SandboxPermissionProfileResolution, error) {
@@ -329,12 +366,16 @@ func (b *permissionProfileBuilder) addEntry(entry sandbox.FileSystemSandboxEntry
 
 func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBuilder, cwd string) (*SandboxPermissionProfileResolution, error) {
 	wire := runtimePermissionProfileWire{Type: "managed", Network: builder.network}
+	workspaceRoots, err := builder.effectiveWorkspaceRoots(cwd)
+	if err != nil {
+		return nil, err
+	}
 	if builder.disabled {
 		wire = runtimePermissionProfileWire{Type: "disabled"}
 	} else if builder.unrestrictedFilesystem {
 		wire.FileSystem = &runtimeFilesystemWire{Type: "unrestricted"}
 	} else {
-		entries, err := builder.materializedEntries(cwd)
+		entries, err := builder.materializedEntriesForWorkspaceRoots(workspaceRoots)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +394,7 @@ func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBu
 	if err != nil {
 		return nil, err
 	}
-	return &SandboxPermissionProfileResolution{ID: profileID, Profile: profile, ProfileJSON: raw}, nil
+	return &SandboxPermissionProfileResolution{ID: profileID, Profile: profile, ProfileJSON: raw, WorkspaceRoots: workspaceRoots}, nil
 }
 
 func (b *permissionProfileBuilder) materializedEntries(cwd string) ([]sandbox.FileSystemSandboxEntry, error) {
@@ -361,6 +402,10 @@ func (b *permissionProfileBuilder) materializedEntries(cwd string) ([]sandbox.Fi
 	if err != nil {
 		return nil, err
 	}
+	return b.materializedEntriesForWorkspaceRoots(roots)
+}
+
+func (b *permissionProfileBuilder) materializedEntriesForWorkspaceRoots(roots []string) ([]sandbox.FileSystemSandboxEntry, error) {
 	var out []sandbox.FileSystemSandboxEntry
 	for _, entry := range b.entries {
 		if entry.Path.Type == "special" && entry.Path.Value != nil && entry.Path.Value.Kind == "project_roots" {

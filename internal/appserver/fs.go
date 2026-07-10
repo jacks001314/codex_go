@@ -18,6 +18,10 @@ import (
 var ErrInvalidFSRequest = errors.New("invalid fs request")
 
 const defaultFSWatchPollInterval = 100 * time.Millisecond
+const CodexExecServerURLEnvVar = "CODEX_EXEC_SERVER_URL"
+
+var ErrLocalFilesystemNotConfigured = errors.New("local filesystem is not configured")
+var ErrLocalEnvironmentNotConfigured = errors.New("local environment is not configured")
 
 type invalidFSRequestError struct {
 	message string
@@ -39,6 +43,19 @@ type ReadFileParams struct {
 	Path string `json:"path"`
 }
 
+func (p *ReadFileParams) UnmarshalJSON(data []byte) error {
+	type alias ReadFileParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = ReadFileParams(decoded)
+	return nil
+}
+
 type ReadFileResponse struct {
 	DataBase64 string `json:"dataBase64"`
 }
@@ -48,11 +65,37 @@ type WriteFileParams struct {
 	DataBase64 string `json:"dataBase64"`
 }
 
+func (p *WriteFileParams) UnmarshalJSON(data []byte) error {
+	type alias WriteFileParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = WriteFileParams(decoded)
+	return nil
+}
+
 type WriteFileResponse struct{}
 
 type CreateDirectoryParams struct {
 	Path      string `json:"path"`
 	Recursive *bool  `json:"recursive,omitempty"`
+}
+
+func (p *CreateDirectoryParams) UnmarshalJSON(data []byte) error {
+	type alias CreateDirectoryParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = CreateDirectoryParams(decoded)
+	return nil
 }
 
 func (p CreateDirectoryParams) MarshalJSON() ([]byte, error) {
@@ -71,6 +114,19 @@ type GetMetadataParams struct {
 	Path string `json:"path"`
 }
 
+func (p *GetMetadataParams) UnmarshalJSON(data []byte) error {
+	type alias GetMetadataParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = GetMetadataParams(decoded)
+	return nil
+}
+
 type GetMetadataResponse struct {
 	IsDirectory  bool  `json:"isDirectory"`
 	IsFile       bool  `json:"isFile"`
@@ -81,6 +137,19 @@ type GetMetadataResponse struct {
 
 type ReadDirectoryParams struct {
 	Path string `json:"path"`
+}
+
+func (p *ReadDirectoryParams) UnmarshalJSON(data []byte) error {
+	type alias ReadDirectoryParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = ReadDirectoryParams(decoded)
+	return nil
 }
 
 type ReadDirectoryEntry struct {
@@ -109,6 +178,19 @@ type RemoveParams struct {
 	Force     *bool  `json:"force,omitempty"`
 }
 
+func (p *RemoveParams) UnmarshalJSON(data []byte) error {
+	type alias RemoveParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = RemoveParams(decoded)
+	return nil
+}
+
 func (p RemoveParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Path      string `json:"path"`
@@ -129,11 +211,40 @@ type CopyParams struct {
 	Recursive       bool   `json:"recursive,omitempty"`
 }
 
+func (p *CopyParams) UnmarshalJSON(data []byte) error {
+	type alias CopyParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.SourcePath); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.DestinationPath); err != nil {
+		return err
+	}
+	*p = CopyParams(decoded)
+	return nil
+}
+
 type CopyResponse struct{}
 
 type WatchParams struct {
 	WatchID string `json:"watchId"`
 	Path    string `json:"path"`
+}
+
+func (p *WatchParams) UnmarshalJSON(data []byte) error {
+	type alias WatchParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := validateAbsolutePathForJSON(decoded.Path); err != nil {
+		return err
+	}
+	*p = WatchParams(decoded)
+	return nil
 }
 
 type WatchResponse struct {
@@ -665,6 +776,13 @@ func validateAbsolute(path string) (string, error) {
 		return "", fmt.Errorf("%w: path must be absolute", ErrInvalidFSRequest)
 	}
 	return filepath.Clean(path), nil
+}
+
+func validateAbsolutePathForJSON(path string) error {
+	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
+		return errors.New("AbsolutePathBuf deserialized without a base path")
+	}
+	return nil
 }
 
 func copyFile(src string, dst string, mode os.FileMode) error {

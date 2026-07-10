@@ -98,7 +98,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, errors.New("exec request is nil")
 	}
 	if req.Exec.Subcommand != "" && req.Exec.Subcommand != "review" && req.Exec.Subcommand != "resume" {
-		return nil, fmt.Errorf("exec subcommand %s is not implemented in the Go port yet", req.Exec.Subcommand)
+		return nil, fmt.Errorf("unknown exec subcommand %s", req.Exec.Subcommand)
 	}
 	if warning := removedFullAutoWarning(req.Exec); warning != "" {
 		fmt.Fprintln(stderr, warning)
@@ -164,6 +164,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	approvalPolicy := effectiveExecApprovalPolicy(cfg, req)
 	taskKind := taskKind(req)
 	agent, err := r.agentForRun(cfg, resolvedAuth, providerID, authStoreOptions)
 	if err != nil {
@@ -181,6 +182,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		} else {
 			runPrompt = ""
 		}
+	}
+	if !req.Exec.JSON && stderr != nil {
+		fmt.Fprintf(stderr, "approval: %s\n", approvalPolicy)
 	}
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
@@ -219,6 +223,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			UseResponsesLite: useResponsesLite,
 		}),
 		OutputSchema:        outputSchema,
+		ApprovalPolicy:      approvalPolicy,
 		StreamEvents:        streamCollector,
 		PermissionProfileID: sandboxPermissionProfileID(permissionProfile),
 		PermissionProfile:   sandboxPermissionProfile(permissionProfile),
@@ -290,6 +295,7 @@ type agentRunConfig struct {
 	ServiceTier          string
 	ClientMetadata       map[string]string
 	OutputSchema         any
+	ApprovalPolicy       sandbox.AskForApproval
 	StreamEvents         *execStreamEventCollector
 	PermissionProfileID  string
 	PermissionProfile    *sandbox.PermissionProfile
@@ -518,6 +524,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.Shell.Validation.PermissionProfileID = run.PermissionProfileID
 		options.Shell.Validation.PermissionProfile = run.PermissionProfile
 	}
+	if options.Shell != nil && run != nil && run.ApprovalPolicy != "" {
+		options.Shell.Validation.ApprovalPolicy = run.ApprovalPolicy
+	}
 	options.EnableMCP = false
 	if r.MCPService != nil || len(r.MCPTools) > 0 || len(r.MCPConnectors) > 0 {
 		options.EnableMCP = true
@@ -564,6 +573,24 @@ func sandboxPermissionProfile(resolution *config.SandboxPermissionProfileResolut
 		return nil
 	}
 	return resolution.Profile
+}
+
+func effectiveExecApprovalPolicy(cfg *config.Config, req *Request) sandbox.AskForApproval {
+	if req != nil && (req.Exec.Shared.DangerouslyBypassApprovalsAndSandbox ||
+		req.Root.Shared.DangerouslyBypassApprovalsAndSandbox ||
+		req.Exec.RemovedFullAuto) {
+		return sandbox.ApprovalNever
+	}
+	if strings.EqualFold(stringConfigValue(cfg, "approvals_reviewer"), string(config.ApprovalsReviewerAutoReview)) {
+		if value := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); value != "" {
+			switch sandbox.AskForApproval(value) {
+			case sandbox.ApprovalUnlessTrusted, sandbox.ApprovalOnRequest, sandbox.ApprovalGranular, sandbox.ApprovalNever:
+				return sandbox.AskForApproval(value)
+			}
+		}
+		return sandbox.ApprovalOnRequest
+	}
+	return sandbox.ApprovalNever
 }
 
 func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, storeOptions *auth.StoreOptions) (model.AgentRunner, error) {

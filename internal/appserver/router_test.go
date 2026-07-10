@@ -1,10 +1,12 @@
 package appserver
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,6 +45,27 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 	}
 	if start.Thread.Path == nil || !strings.HasSuffix(*start.Thread.Path, ".jsonl") {
 		t.Fatalf("start thread Path = %+v, want rollout jsonl path", start.Thread.Path)
+	}
+	startData, err := json.Marshal(startResponse.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/start result) error = %v", err)
+	}
+	var startPayload map[string]any
+	if err := json.Unmarshal(startData, &startPayload); err != nil {
+		t.Fatalf("Unmarshal(thread/start result) error = %v", err)
+	}
+	if _, ok := startPayload["sessionId"]; ok {
+		t.Fatalf("thread/start result has top-level sessionId: %v", startPayload["sessionId"])
+	}
+	startThreadPayload, ok := startPayload["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start payload thread = %T, want object", startPayload["thread"])
+	}
+	if value, ok := startThreadPayload["name"]; !ok || value != nil {
+		t.Fatalf("thread/start payload thread.name = %v, present=%v; want explicit null", value, ok)
+	}
+	if value, ok := startThreadPayload["ephemeral"].(bool); !ok || value {
+		t.Fatalf("thread/start payload thread.ephemeral = %v, present=%v; want false", startThreadPayload["ephemeral"], ok)
 	}
 
 	readRequest := requestWithParams(t, StringID("read"), MethodThreadRead, ThreadReadParams{
@@ -127,6 +150,24 @@ func TestRouterThreadStartAllowsOmittedCWD(t *testing.T) {
 	recordRoots := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
 	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], start.CWD) {
 		t.Fatalf("record runtime roots = %#v, want cwd %q", recordRoots, start.CWD)
+	}
+}
+
+func TestRouterThreadStartAcceptsMetricsServiceName(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	router.SetClock(func() time.Time { return fixedTime() })
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         "D:/repo",
+		ServiceName: stringPtr("my_app_server_client"),
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/start serviceName error: %+v", response.Error)
+	}
+	start := response.Result.(*ThreadStartResponse)
+	if start.Thread == nil || start.Thread.ID == "" {
+		t.Fatalf("thread/start serviceName result = %+v", start)
 	}
 }
 
@@ -805,6 +846,7 @@ func TestRouterArchiveUnarchiveAndDelete(t *testing.T) {
 	if archive.Error != nil {
 		t.Fatalf("archive error: %+v", archive.Error)
 	}
+	assertJSONPayload(t, archive.Result, "thread/archive result", map[string]any{})
 	record, err = store.Read("thread-a", true, false)
 	if err != nil {
 		t.Fatalf("read archived: %v", err)
@@ -835,6 +877,7 @@ func TestRouterArchiveUnarchiveAndDelete(t *testing.T) {
 	if deleted.Error != nil {
 		t.Fatalf("delete error: %+v", deleted.Error)
 	}
+	assertJSONPayload(t, deleted.Result, "thread/delete result", map[string]any{})
 	missing := router.Handle(requestWithParams(t, IntID(4), MethodThreadRead, ThreadReadParams{ThreadID: "thread-a"}))
 	if missing.Error == nil || missing.Error.Code != -32600 || missing.Error.Message != "thread not loaded: thread-a" {
 		t.Fatalf("expected thread not loaded after delete, got %+v", missing.Error)
@@ -892,6 +935,24 @@ func TestRouterArchiveUnarchiveAndDeleteRolloutOnlyThread(t *testing.T) {
 	if unarchived.UpdatedAt <= old.Unix() {
 		t.Fatalf("unarchived.UpdatedAt = %d, want after %d", unarchived.UpdatedAt, old.Unix())
 	}
+	if unarchived.Status.Type != NotLoadedStatus().Type {
+		t.Fatalf("unarchived.Status = %+v, want notLoaded", unarchived.Status)
+	}
+	data, err := json.Marshal(unarchive.Result)
+	if err != nil {
+		t.Fatalf("Marshal(unarchive.Result) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal(unarchive.Result) error = %v", err)
+	}
+	threadPayload, ok := payload["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("unarchive payload thread = %T, want object", payload["thread"])
+	}
+	if value, ok := threadPayload["name"]; !ok || value != nil {
+		t.Fatalf("unarchive payload thread.name = %v, present=%v; want explicit null", value, ok)
+	}
 	if _, err := rollout.FindThreadPath(store.Root(), "thread-rollout", false); err != nil {
 		t.Fatalf("active rollout path error: %v", err)
 	}
@@ -902,6 +963,76 @@ func TestRouterArchiveUnarchiveAndDeleteRolloutOnlyThread(t *testing.T) {
 	}
 	if _, err := rollout.FindThreadPath(store.Root(), "thread-rollout", false); err == nil {
 		t.Fatal("rollout still exists after delete")
+	}
+}
+
+func TestRouterThreadUnarchivePreservesPathlessStoreMetadata(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:             "pathless-child",
+		SessionID:      "pathless-child",
+		ForkedFromID:   "pathless-parent",
+		Title:          "named pathless thread",
+		Preview:        "",
+		Archived:       true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		RecencyAt:      now,
+		ParentThreadID: "",
+		Metadata: session.Metadata{
+			CWD:           "",
+			ModelProvider: "test-provider",
+			Source:        "cli",
+			MemoryMode:    "disabled",
+		},
+	}); err != nil {
+		t.Fatalf("Create(pathless archived record) error = %v", err)
+	}
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadUnarchive, ThreadUnarchiveParams{
+		ThreadID: "pathless-child",
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/unarchive pathless error: %+v", response.Error)
+	}
+	thread := response.Result.(*ThreadUnarchiveResponse).Thread
+	if thread.ID != "pathless-child" {
+		t.Fatalf("thread id = %q, want pathless-child", thread.ID)
+	}
+	if thread.Path != nil {
+		t.Fatalf("thread path = %+v, want nil for pathless store thread", thread.Path)
+	}
+	if thread.ForkedFromID == nil || *thread.ForkedFromID != "pathless-parent" {
+		t.Fatalf("thread forkedFromId = %+v, want pathless-parent", thread.ForkedFromID)
+	}
+	if thread.Name == nil || *thread.Name != "named pathless thread" {
+		t.Fatalf("thread name = %+v, want named pathless thread", thread.Name)
+	}
+	if thread.Preview != "" {
+		t.Fatalf("thread preview = %q, want empty", thread.Preview)
+	}
+	data, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/unarchive pathless result) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal(thread/unarchive pathless result) error = %v", err)
+	}
+	threadPayload, ok := payload["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/unarchive pathless payload thread = %T, want object", payload["thread"])
+	}
+	if value, ok := threadPayload["path"]; !ok || value != nil {
+		t.Fatalf("thread/unarchive pathless thread.path = %v, present=%v; want explicit null", value, ok)
+	}
+	if value, ok := threadPayload["name"].(string); !ok || value != "named pathless thread" {
+		t.Fatalf("thread/unarchive pathless thread.name = %v, present=%v; want named pathless thread", threadPayload["name"], ok)
+	}
+	if value, ok := threadPayload["forkedFromId"].(string); !ok || value != "pathless-parent" {
+		t.Fatalf("thread/unarchive pathless thread.forkedFromId = %v, present=%v; want pathless-parent", threadPayload["forkedFromId"], ok)
 	}
 }
 
@@ -1087,6 +1218,81 @@ func TestRouterMemoryResetClearsMemoriesAndPreservesThreads(t *testing.T) {
 	}
 }
 
+func TestRouterMemoryResetClearsRustMemoriesSQLiteRowsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(root)
+	threadID := session.ThreadID("thread-memory-reset-sqlite")
+	createRecord(t, store, threadID, fixedTime())
+	memoryRoot := filepath.Join(root, "memories")
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll memories error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "MEMORY.md"), []byte("stale memory\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile MEMORY.md error = %v", err)
+	}
+
+	memoriesDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustMemoriesSQLiteFilename))
+	routerTestExecSQL(t, memoriesDB, `CREATE TABLE stage1_outputs (thread_id TEXT PRIMARY KEY, source_updated_at INTEGER NOT NULL, raw_memory TEXT NOT NULL, rollout_summary TEXT NOT NULL, generated_at INTEGER NOT NULL)`)
+	routerTestExecSQL(t, memoriesDB, `CREATE TABLE jobs (kind TEXT NOT NULL, job_key TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY (kind, job_key))`)
+	routerTestExecSQL(t, memoriesDB, `INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at) VALUES (?, 1, 'raw', 'summary', 2)`, string(threadID))
+	routerTestExecSQL(t, memoriesDB, `INSERT INTO jobs (kind, job_key, status) VALUES ('memory_stage1', ?, 'queued')`, string(threadID))
+	routerTestExecSQL(t, memoriesDB, `INSERT INTO jobs (kind, job_key, status) VALUES ('memory_consolidate_global', 'global', 'queued')`)
+	routerTestExecSQL(t, memoriesDB, `INSERT INTO jobs (kind, job_key, status) VALUES ('other_pipeline', 'keep', 'queued')`)
+
+	stateDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustStateSQLiteFilename))
+	routerTestExecSQL(t, stateDB, `CREATE TABLE threads (id TEXT PRIMARY KEY, memory_mode TEXT NOT NULL DEFAULT 'enabled')`)
+	routerTestExecSQL(t, stateDB, `INSERT INTO threads (id, memory_mode) VALUES (?, 'enabled')`, string(threadID))
+
+	response := NewRouter(store).Handle(&Request{JSONRPC: "2.0", ID: IntID(1), Method: MethodMemoryReset})
+	if response.Error != nil {
+		t.Fatalf("memory/reset error = %+v", response.Error)
+	}
+	if got := routerTestScalarInt(t, memoriesDB, `SELECT COUNT(*) FROM stage1_outputs`); got != 0 {
+		t.Fatalf("stage1_outputs count = %d, want 0", got)
+	}
+	if got := routerTestScalarInt(t, memoriesDB, `SELECT COUNT(*) FROM jobs WHERE kind IN ('memory_stage1', 'memory_consolidate_global')`); got != 0 {
+		t.Fatalf("memory jobs count = %d, want 0", got)
+	}
+	if got := routerTestScalarInt(t, memoriesDB, `SELECT COUNT(*) FROM jobs WHERE kind = 'other_pipeline'`); got != 1 {
+		t.Fatalf("other jobs count = %d, want 1", got)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT memory_mode FROM threads WHERE id = ?`, string(threadID)); got != "enabled" {
+		t.Fatalf("thread memory_mode after reset = %q, want enabled", got)
+	}
+}
+
+func TestRouterThreadMemoryModeSetUpdatesRustStateSQLiteLikeRust(t *testing.T) {
+	root := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(root)
+	threadID := session.ThreadID("thread-memory-mode-sqlite")
+	createRecord(t, store, threadID, fixedTime())
+	stateDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustStateSQLiteFilename))
+	routerTestExecSQL(t, stateDB, `CREATE TABLE threads (id TEXT PRIMARY KEY, memory_mode TEXT NOT NULL DEFAULT 'enabled')`)
+	routerTestExecSQL(t, stateDB, `INSERT INTO threads (id, memory_mode) VALUES (?, 'enabled')`, string(threadID))
+
+	response := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadMemoryModeSet, ThreadMemoryModeSetParams{
+		ThreadID: string(threadID),
+		Mode:     ThreadMemoryModeDisabled,
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/memoryMode/set error = %+v", response.Error)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT memory_mode FROM threads WHERE id = ?`, string(threadID)); got != "disabled" {
+		t.Fatalf("sqlite memory_mode = %q, want disabled", got)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.MemoryMode != string(ThreadMemoryModeDisabled) {
+		t.Fatalf("store memory mode = %q, want disabled", record.Metadata.MemoryMode)
+	}
+}
+
 func TestRouterSetNameAndMetadata(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
@@ -1130,6 +1336,48 @@ func TestRouterSetNameAndMetadata(t *testing.T) {
 		t.Fatalf("git = %#v", record.Metadata.Git)
 	}
 
+	readNamed := router.Handle(requestWithParams(t, IntID(12), MethodThreadRead, ThreadReadParams{ThreadID: "thread-a"}))
+	if readNamed.Error != nil {
+		t.Fatalf("read named thread error: %+v", readNamed.Error)
+	}
+	if got := readNamed.Result.(*ThreadReadResponse).Thread.Name; got == nil || *got != "Named" {
+		t.Fatalf("read named thread name = %+v, want Named", got)
+	}
+	assertThreadPayloadField(t, readNamed.Result, "thread/read", "name", "Named")
+
+	listNamed := router.Handle(requestWithParams(t, IntID(13), MethodThreadList, ThreadListParams{}))
+	if listNamed.Error != nil {
+		t.Fatalf("list named thread error: %+v", listNamed.Error)
+	}
+	listData, err := json.Marshal(listNamed.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/list result) error = %v", err)
+	}
+	var listPayload struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(listData, &listPayload); err != nil {
+		t.Fatalf("Unmarshal(thread/list result) error = %v", err)
+	}
+	if len(listPayload.Data) != 1 {
+		t.Fatalf("thread/list data length = %d, want 1", len(listPayload.Data))
+	}
+	if value, ok := listPayload.Data[0]["name"].(string); !ok || value != "Named" {
+		t.Fatalf("thread/list thread.name = %v, present=%v; want Named", listPayload.Data[0]["name"], ok)
+	}
+	if value, ok := listPayload.Data[0]["ephemeral"].(bool); !ok || value {
+		t.Fatalf("thread/list thread.ephemeral = %v, present=%v; want false", listPayload.Data[0]["ephemeral"], ok)
+	}
+
+	resumeNamed := router.Handle(requestWithParams(t, IntID(14), MethodThreadResume, ThreadResumeParams{ThreadID: "thread-a"}))
+	if resumeNamed.Error != nil {
+		t.Fatalf("resume named thread error: %+v", resumeNamed.Error)
+	}
+	if got := resumeNamed.Result.(*ThreadResumeResponse).Thread.Name; got == nil || *got != "Named" {
+		t.Fatalf("resume named thread name = %+v, want Named", got)
+	}
+	assertThreadPayloadField(t, resumeNamed.Result, "thread/resume", "name", "Named")
+
 	clearJSON := []byte(`{
 		"threadId":"thread-a",
 		"gitInfo":{"sha":null,"branch":null,"originUrl":null}
@@ -1147,6 +1395,63 @@ func TestRouterSetNameAndMetadata(t *testing.T) {
 	}
 	if got := read.Result.(*ThreadReadResponse).Thread.GitInfo; got != nil {
 		t.Fatalf("cleared read gitInfo = %+v, want nil", got)
+	}
+}
+
+func TestRouterThreadMetadataUpdateUpdatesRustStateSQLiteLikeRust(t *testing.T) {
+	root := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(root)
+	threadID := session.ThreadID("thread-git-sqlite")
+	createRecord(t, store, threadID, fixedTime())
+	stateDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustStateSQLiteFilename))
+	routerTestExecSQL(t, stateDB, `CREATE TABLE threads (id TEXT PRIMARY KEY, git_sha TEXT, git_branch TEXT, git_origin_url TEXT)`)
+	routerTestExecSQL(t, stateDB, `INSERT INTO threads (id) VALUES (?)`, string(threadID))
+
+	sha := "abc123"
+	branch := "feature/sqlite"
+	origin := "git@example.com:openai/codex.git"
+	update := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID),
+		GitInfo: &ThreadMetadataGitInfoPatch{
+			SHA:       OptionalString{Set: true, Value: &sha},
+			Branch:    OptionalString{Set: true, Value: &branch},
+			OriginURL: OptionalString{Set: true, Value: &origin},
+		},
+	}))
+	if update.Error != nil {
+		t.Fatalf("thread/metadata/update error = %+v", update.Error)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT git_sha FROM threads WHERE id = ?`, string(threadID)); got != sha {
+		t.Fatalf("sqlite git_sha = %q, want %q", got, sha)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT git_branch FROM threads WHERE id = ?`, string(threadID)); got != branch {
+		t.Fatalf("sqlite git_branch = %q, want %q", got, branch)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT git_origin_url FROM threads WHERE id = ?`, string(threadID)); got != origin {
+		t.Fatalf("sqlite git_origin_url = %q, want %q", got, origin)
+	}
+
+	clear := NewRouter(store).Handle(requestWithParams(t, IntID(2), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID),
+		GitInfo: &ThreadMetadataGitInfoPatch{
+			SHA:       OptionalString{Set: true},
+			Branch:    OptionalString{Set: true},
+			OriginURL: OptionalString{Set: true},
+		},
+	}))
+	if clear.Error != nil {
+		t.Fatalf("thread/metadata/update clear error = %+v", clear.Error)
+	}
+	if got := routerTestScalarNullString(t, stateDB, `SELECT git_sha FROM threads WHERE id = ?`, string(threadID)); got.Valid {
+		t.Fatalf("sqlite git_sha after clear = %+v, want NULL", got)
+	}
+	if got := routerTestScalarNullString(t, stateDB, `SELECT git_branch FROM threads WHERE id = ?`, string(threadID)); got.Valid {
+		t.Fatalf("sqlite git_branch after clear = %+v, want NULL", got)
+	}
+	if got := routerTestScalarNullString(t, stateDB, `SELECT git_origin_url FROM threads WHERE id = ?`, string(threadID)); got.Valid {
+		t.Fatalf("sqlite git_origin_url after clear = %+v, want NULL", got)
 	}
 }
 
@@ -1465,6 +1770,101 @@ func TestRouterResumeInitialTurnsPageWithExcludeTurns(t *testing.T) {
 	if resume.InitialTurnsPage.Data[0].ItemsView != TurnItemsSummary {
 		t.Fatalf("items view = %+v", resume.InitialTurnsPage.Data[0])
 	}
+}
+
+func TestRouterThreadResumeRedactsRemoteClientInitialTurnsPage(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-redact",
+		SessionID: "thread-redact",
+		Title:     "redact",
+		Preview:   "redact",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           "D:/repo",
+			ModelProvider: "openai",
+			Source:        "cli",
+		},
+		Items: []session.Item{
+			{
+				ID:        "user-redact",
+				Type:      "message",
+				Role:      "user",
+				Text:      "Saved user message",
+				CreatedAt: now,
+				Metadata:  map[string]any{"turnId": "turn-redact"},
+			},
+			{
+				ID:        "mcp-redact",
+				Type:      "mcpToolCall",
+				CreatedAt: now.Add(time.Second),
+				Metadata:  map[string]any{"turnId": "turn-redact"},
+				Data: map[string]any{
+					"turnId":    "turn-redact",
+					"server":    "docs",
+					"tool":      "lookup",
+					"status":    "completed",
+					"arguments": map[string]any{"secret": "argument"},
+					"result": map[string]any{
+						"content":           []any{map[string]any{"type": "text", "text": "secret result"}},
+						"structuredContent": map[string]any{"secret": "structured"},
+						"_meta":             map[string]any{"secret": "meta"},
+					},
+				},
+			},
+			{
+				ID:        "image-redact",
+				Type:      "imageGeneration",
+				Status:    "completed",
+				CreatedAt: now.Add(2 * time.Second),
+				Metadata:  map[string]any{"turnId": "turn-redact"},
+				Data: map[string]any{
+					"turnId":        "turn-redact",
+					"revisedPrompt": "secret revised prompt",
+					"result":        "base64-image-result",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Create(redaction record) error = %v", err)
+	}
+
+	limit := 10
+	remoteClient := "codex_chatgpt_android_remote"
+	remote := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{
+		ThreadID:         "thread-redact",
+		ClientName:       &remoteClient,
+		InitialTurnsPage: &ThreadInitialPageParams{Limit: &limit, ItemsView: TurnItemsFull},
+	}))
+	if remote.Error != nil {
+		t.Fatalf("remote thread/resume error: %+v", remote.Error)
+	}
+	remoteResume := remote.Result.(*ThreadResumeResponse)
+	assertRedactedResumeTurn(t, resumeTurnWithItemTypeForTest(t, remoteResume.Thread.Turns, "mcpToolCall"))
+	if remoteResume.InitialTurnsPage == nil || len(remoteResume.InitialTurnsPage.Data) == 0 {
+		t.Fatalf("remote initialTurnsPage = %+v", remoteResume.InitialTurnsPage)
+	}
+	assertRedactedResumeTurn(t, resumeTurnWithItemTypeForTest(t, remoteResume.InitialTurnsPage.Data, "mcpToolCall"))
+
+	normalClient := "some_other_client"
+	normal := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID:         "thread-redact",
+		ClientName:       &normalClient,
+		InitialTurnsPage: &ThreadInitialPageParams{Limit: &limit, ItemsView: TurnItemsFull},
+	}))
+	if normal.Error != nil {
+		t.Fatalf("normal thread/resume error: %+v", normal.Error)
+	}
+	normalResume := normal.Result.(*ThreadResumeResponse)
+	assertUnredactedResumeTurn(t, resumeTurnWithItemTypeForTest(t, normalResume.Thread.Turns, "mcpToolCall"))
+	if normalResume.InitialTurnsPage == nil || len(normalResume.InitialTurnsPage.Data) == 0 {
+		t.Fatalf("normal initialTurnsPage = %+v", normalResume.InitialTurnsPage)
+	}
+	assertUnredactedResumeTurn(t, resumeTurnWithItemTypeForTest(t, normalResume.InitialTurnsPage.Data, "mcpToolCall"))
 }
 
 func TestRouterResumeResponseIncludesRuntimeSettings(t *testing.T) {
@@ -1962,6 +2362,73 @@ func TestRouterReadAndResumeFallbackToRollout(t *testing.T) {
 	}
 }
 
+func TestRouterThreadReadAndListPreservePathlessStoreMetadata(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "pathless-thread",
+		SessionID: "pathless-thread",
+		Title:     "named pathless thread",
+		Preview:   "",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           "",
+			ModelProvider: "test-provider",
+			Source:        "cli",
+			MemoryMode:    "disabled",
+		},
+	}); err != nil {
+		t.Fatalf("Create(pathless record) error = %v", err)
+	}
+
+	read := router.Handle(requestWithParams(t, IntID(1), MethodThreadRead, ThreadReadParams{ThreadID: "pathless-thread"}))
+	if read.Error != nil {
+		t.Fatalf("thread/read pathless error: %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	if readThread.Path != nil || readThread.Preview != "" || readThread.Name == nil || *readThread.Name != "named pathless thread" {
+		t.Fatalf("thread/read pathless thread = %+v", readThread)
+	}
+	assertThreadPayloadField(t, read.Result, "thread/read pathless", "path", nil)
+	assertThreadPayloadField(t, read.Result, "thread/read pathless", "preview", "")
+	assertThreadPayloadField(t, read.Result, "thread/read pathless", "name", "named pathless thread")
+
+	limit := 10
+	list := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, ThreadListParams{
+		Limit:          &limit,
+		ModelProviders: []string{},
+	}))
+	if list.Error != nil {
+		t.Fatalf("thread/list pathless error: %+v", list.Error)
+	}
+	listData, err := json.Marshal(list.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/list pathless result) error = %v", err)
+	}
+	var listPayload struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(listData, &listPayload); err != nil {
+		t.Fatalf("Unmarshal(thread/list pathless result) error = %v", err)
+	}
+	if len(listPayload.Data) != 1 {
+		t.Fatalf("thread/list pathless data length = %d, want 1", len(listPayload.Data))
+	}
+	threadPayload := listPayload.Data[0]
+	if value, ok := threadPayload["path"]; !ok || value != nil {
+		t.Fatalf("thread/list pathless thread.path = %v, present=%v; want explicit null", value, ok)
+	}
+	if value, ok := threadPayload["preview"].(string); !ok || value != "" {
+		t.Fatalf("thread/list pathless thread.preview = %v, present=%v; want empty", threadPayload["preview"], ok)
+	}
+	if value, ok := threadPayload["name"].(string); !ok || value != "named pathless thread" {
+		t.Fatalf("thread/list pathless thread.name = %v, present=%v; want named pathless thread", threadPayload["name"], ok)
+	}
+}
+
 func TestRouterPaginatedRolloutRejectsLegacyHistoryPaths(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
@@ -2126,6 +2593,195 @@ func TestRouterResumeHistoryInitialTurnsPageWithExcludeTurns(t *testing.T) {
 	if turn.ID != "turn-second" || turn.ItemsView != TurnItemsFull || len(turn.Items) != 1 || turn.Items[0].Text != "Second from history" {
 		t.Fatalf("initial turn = %+v", turn)
 	}
+}
+
+func TestRouterThreadResumeInitialTurnsPageMatchesRequestedTurnsListPage(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	threadID := "thread-initial-page"
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Preview:   "first",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           "D:/repo",
+			ModelProvider: "openai",
+			Source:        string(SessionSourceAppServer),
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+		Items: []session.Item{
+			{ID: "user-1", Type: "message", Role: "user", Text: "first", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "user-2", Type: "message", Role: "user", Text: "second", CreatedAt: now.Add(time.Minute), Metadata: map[string]any{"turnId": "turn-2"}},
+			{ID: "user-3", Type: "message", Role: "user", Text: "third", CreatedAt: now.Add(2 * time.Minute), Metadata: map[string]any{"turnId": "turn-3"}},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error: %v", err)
+	}
+	limit := 2
+	expectedResponse := router.Handle(requestWithParams(t, IntID(1), MethodThreadTurnsList, ThreadTurnsListParams{
+		ThreadID:      threadID,
+		Limit:         &limit,
+		SortDirection: SortAsc,
+		ItemsView:     TurnItemsNotLoaded,
+	}))
+	if expectedResponse.Error != nil {
+		t.Fatalf("thread/turns/list error: %+v", expectedResponse.Error)
+	}
+	expected := expectedResponse.Result.(*TurnsPage)
+
+	resumeResponse := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     threadID,
+		ExcludeTurns: true,
+		InitialTurnsPage: &ThreadInitialPageParams{
+			Limit:         &limit,
+			SortDirection: SortAsc,
+			ItemsView:     TurnItemsNotLoaded,
+		},
+	}))
+	if resumeResponse.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resumeResponse.Error)
+	}
+	resume := resumeResponse.Result.(*ThreadResumeResponse)
+	if len(resume.Thread.Turns) != 0 {
+		t.Fatalf("resume turns = %+v, want excluded", resume.Thread.Turns)
+	}
+	if !reflect.DeepEqual(resume.InitialTurnsPage, expected) {
+		t.Fatalf("initialTurnsPage = %+v, want %+v", resume.InitialTurnsPage, expected)
+	}
+}
+
+func TestRouterThreadTurnsListSupportsRequestedItemsView(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	router.SetClock(func() time.Time { return fixedTime() })
+	threadID := "thread-items-view"
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Title:     "items view",
+		Preview:   "items view",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           "D:/repo",
+			ModelProvider: "openai",
+			Source:        "cli",
+		},
+		Items: []session.Item{
+			{ID: "first", Type: "message", Role: "user", Text: "First from history", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-items"}},
+			{ID: "draft", Type: "message", Role: "assistant", Text: "Draft answer", CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-items"}},
+			{ID: "final", Type: "message", Role: "assistant", Text: "Final answer", CreatedAt: now.Add(2 * time.Second), Metadata: map[string]any{"turnId": "turn-items"}},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error: %v", err)
+	}
+	limit := 1
+	readTurn := func(id int64, view TurnItemsView) Turn {
+		t.Helper()
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadTurnsList, ThreadTurnsListParams{
+			ThreadID:  threadID,
+			Limit:     &limit,
+			ItemsView: view,
+		}))
+		if response.Error != nil {
+			t.Fatalf("thread/turns/list %s error: %+v", view, response.Error)
+		}
+		page := response.Result.(*TurnsPage)
+		if len(page.Data) != 1 {
+			t.Fatalf("thread/turns/list %s page = %+v", view, page)
+		}
+		return page.Data[0]
+	}
+
+	full := readTurn(2, TurnItemsFull)
+	if full.ItemsView != TurnItemsFull || len(full.Items) != 3 {
+		t.Fatalf("full turn = %+v", full)
+	}
+	summary := readTurn(3, TurnItemsSummary)
+	if summary.ItemsView != TurnItemsSummary || len(summary.Items) != 2 || summary.Items[0].Text != "First from history" || summary.Items[1].Text != "Final answer" {
+		t.Fatalf("summary turn = %+v", summary)
+	}
+	notLoaded := readTurn(4, TurnItemsNotLoaded)
+	if notLoaded.ItemsView != TurnItemsNotLoaded || len(notLoaded.Items) != 0 || notLoaded.ID != full.ID || notLoaded.Status != full.Status || !sameInt64Ptr(notLoaded.StartedAt, full.StartedAt) || !sameInt64Ptr(notLoaded.CompletedAt, full.CompletedAt) {
+		t.Fatalf("notLoaded turn = %+v full=%+v", notLoaded, full)
+	}
+}
+
+func TestRuntimeRouterThreadResumeAndReadInterruptIncompleteRolloutTurnWhenIdleLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	runtimeRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: router,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	now := fixedTime()
+	threadID := "thread-incomplete-rollout"
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:     store.Root(),
+		SessionID:     threadID,
+		ThreadID:      threadID,
+		Source:        string(SessionSourceCli),
+		CWD:           "/repo",
+		ModelProvider: "openai",
+		HistoryMode:   string(ThreadHistoryLegacy),
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendItem(rollout.Item{ID: "user-1", Type: "message", Role: "user", Text: "Saved user message"}); err != nil {
+		t.Fatalf("AppendItem(user) error = %v", err)
+	}
+	const incompleteTurnID = "incomplete-turn"
+	if err := recorder.AppendTurnStarted(incompleteTurnID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("AppendTurnStarted() error = %v", err)
+	}
+	if err := recorder.AppendItem(rollout.Item{ID: "assistant-incomplete", Type: "agent_message", Role: "assistant", Text: "Still running"}); err != nil {
+		t.Fatalf("AppendItem(agent) error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	assertInterruptedTail := func(label string, thread *Thread) {
+		t.Helper()
+		if thread == nil || thread.Status.Type != "idle" || len(thread.Turns) != 2 {
+			t.Fatalf("%s thread = %+v, want idle with two turns", label, thread)
+		}
+		if thread.Turns[0].Status != TurnStatusCompleted {
+			t.Fatalf("%s first turn = %+v, want completed", label, thread.Turns[0])
+		}
+		if tail := thread.Turns[1]; tail.ID != incompleteTurnID || tail.Status != TurnStatusInterrupted {
+			t.Fatalf("%s tail turn = %+v, want interrupted %s", label, tail, incompleteTurnID)
+		}
+	}
+
+	resume := runtimeRouter.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	assertInterruptedTail("resume", resume.Result.(*ThreadResumeResponse).Thread)
+
+	resumeAgain := runtimeRouter.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resumeAgain.Error != nil {
+		t.Fatalf("second thread/resume error: %+v", resumeAgain.Error)
+	}
+	assertInterruptedTail("second resume", resumeAgain.Result.(*ThreadResumeResponse).Thread)
+
+	read := runtimeRouter.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{
+		ThreadID:     threadID,
+		IncludeTurns: true,
+	}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error: %+v", read.Error)
+	}
+	assertInterruptedTail("read", read.Result.(*ThreadReadResponse).Thread)
 }
 
 func TestRouterFork(t *testing.T) {
@@ -2694,6 +3350,27 @@ func TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread(t *testing.T) {
 	if len(rollbackResult.Thread.Turns) != 1 {
 		t.Fatalf("rollback turns = %+v", rollbackResult.Thread.Turns)
 	}
+	if rollbackResult.Thread.SessionID != "session-rollout" {
+		t.Fatalf("rollback thread SessionID = %q, want session-rollout", rollbackResult.Thread.SessionID)
+	}
+	rollbackData, err := json.Marshal(rollback.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/rollback result) error = %v", err)
+	}
+	var rollbackPayload map[string]any
+	if err := json.Unmarshal(rollbackData, &rollbackPayload); err != nil {
+		t.Fatalf("Unmarshal(thread/rollback result) error = %v", err)
+	}
+	rollbackThreadPayload, ok := rollbackPayload["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/rollback payload thread = %T, want object", rollbackPayload["thread"])
+	}
+	if value, ok := rollbackThreadPayload["name"]; !ok || value != nil {
+		t.Fatalf("thread/rollback payload thread.name = %v, present=%v; want explicit null", value, ok)
+	}
+	if value, ok := rollbackThreadPayload["sessionId"].(string); !ok || value != "session-rollout" {
+		t.Fatalf("thread/rollback payload thread.sessionId = %v, present=%v; want session-rollout", rollbackThreadPayload["sessionId"], ok)
+	}
 	fromRollout, err := rollout.RecordFromPath(recorder.Path(), false)
 	if err != nil {
 		t.Fatalf("RecordFromPath() error = %v", err)
@@ -2748,6 +3425,176 @@ func assertPermissionsSandboxConflict(t *testing.T, response *Response) {
 	if response == nil || response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "`permissions` cannot be combined with `sandbox`" {
 		t.Fatalf("permissions/sandbox response = %+v", response)
 	}
+}
+
+func sameInt64Ptr(left *int64, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func assertThreadPayloadField(t *testing.T, result any, method string, field string, want any) {
+	t.Helper()
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("Marshal(%s result) error = %v", method, err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal(%s result) error = %v", method, err)
+	}
+	threadPayload, ok := payload["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s payload thread = %T, want object", method, payload["thread"])
+	}
+	if got := threadPayload[field]; got != want {
+		t.Fatalf("%s payload thread.%s = %v, want %v", method, field, got, want)
+	}
+}
+
+func assertJSONPayload(t *testing.T, value any, label string, want map[string]any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal(%s) error = %v", label, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal(%s) error = %v", label, err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, want %v", label, got, want)
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("%s[%s] = %v, want %v", label, key, got[key], wantValue)
+		}
+	}
+}
+
+func assertRedactedResumeTurn(t *testing.T, turn Turn) {
+	t.Helper()
+	mcpItem := threadItemByTypeForTest(turn.Items, "mcpToolCall")
+	if mcpItem == nil {
+		t.Fatalf("redacted turn missing mcpToolCall: %+v", turn.Items)
+	}
+	if got := mcpItem.Data["arguments"]; got != RedactedThreadResumePayload {
+		t.Fatalf("redacted mcp arguments = %v, want %q", got, RedactedThreadResumePayload)
+	}
+	result, ok := mcpItem.Data["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("redacted mcp result = %T, want object", mcpItem.Data["result"])
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("redacted mcp result content = %#v", result["content"])
+	}
+	text, _ := content[0].(map[string]any)
+	if text["text"] != RedactedThreadResumePayload {
+		t.Fatalf("redacted mcp result text = %#v, want %q", text, RedactedThreadResumePayload)
+	}
+	if _, ok := result["structuredContent"]; ok {
+		t.Fatalf("redacted mcp structuredContent leaked: %#v", result)
+	}
+	if _, ok := result["_meta"]; ok {
+		t.Fatalf("redacted mcp _meta leaked: %#v", result)
+	}
+	if imageItem := threadItemByTypeForTest(turn.Items, "imageGeneration"); imageItem != nil {
+		t.Fatalf("redacted turn leaked imageGeneration item: %+v", imageItem)
+	}
+}
+
+func assertUnredactedResumeTurn(t *testing.T, turn Turn) {
+	t.Helper()
+	mcpItem := threadItemByTypeForTest(turn.Items, "mcpToolCall")
+	if mcpItem == nil {
+		t.Fatalf("normal turn missing mcpToolCall: %+v", turn.Items)
+	}
+	arguments, ok := mcpItem.Data["arguments"].(map[string]any)
+	if !ok || arguments["secret"] != "argument" {
+		t.Fatalf("normal mcp arguments = %#v", mcpItem.Data["arguments"])
+	}
+	result, ok := mcpItem.Data["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("normal mcp result = %T, want object", mcpItem.Data["result"])
+	}
+	if structured, ok := result["structuredContent"].(map[string]any); !ok || structured["secret"] != "structured" {
+		t.Fatalf("normal mcp structuredContent = %#v", result["structuredContent"])
+	}
+	if meta, ok := result["_meta"].(map[string]any); !ok || meta["secret"] != "meta" {
+		t.Fatalf("normal mcp _meta = %#v", result["_meta"])
+	}
+	if imageItem := threadItemByTypeForTest(turn.Items, "imageGeneration"); imageItem == nil {
+		t.Fatalf("normal turn missing imageGeneration: %+v", turn.Items)
+	}
+}
+
+func threadItemByTypeForTest(items []ThreadItem, itemType string) *ThreadItem {
+	for i := range items {
+		if items[i].Type == itemType {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func resumeTurnWithItemTypeForTest(t *testing.T, turns []Turn, itemType string) Turn {
+	t.Helper()
+	for _, turn := range turns {
+		if threadItemByTypeForTest(turn.Items, itemType) != nil {
+			return turn
+		}
+	}
+	t.Fatalf("turn with item type %q missing in %+v", itemType, turns)
+	return Turn{}
+}
+
+func openRouterTestSQLite(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll sqlite dir error = %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("Open sqlite error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func routerTestExecSQL(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	if _, err := db.Exec(query, args...); err != nil {
+		t.Fatalf("Exec %q error = %v", query, err)
+	}
+}
+
+func routerTestScalarInt(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var value int
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("QueryRow %q error = %v", query, err)
+	}
+	return value
+}
+
+func routerTestScalarString(t *testing.T, db *sql.DB, query string, args ...any) string {
+	t.Helper()
+	var value string
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("QueryRow %q error = %v", query, err)
+	}
+	return value
+}
+
+func routerTestScalarNullString(t *testing.T, db *sql.DB, query string, args ...any) sql.NullString {
+	t.Helper()
+	var value sql.NullString
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("QueryRow %q error = %v", query, err)
+	}
+	return value
 }
 
 func createRecord(t *testing.T, store *session.Store, id session.ThreadID, now time.Time) {

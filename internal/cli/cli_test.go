@@ -319,6 +319,13 @@ func TestParseDebugTooling(t *testing.T) {
 	}
 }
 
+func TestParseDebugRejectsUnknownSubcommandLikeRust(t *testing.T) {
+	_, err := Parse([]string{"debug", "unknown-tool"})
+	if err == nil || err.Error() != "unknown debug subcommand unknown-tool" {
+		t.Fatalf("Parse error = %v", err)
+	}
+}
+
 func TestParseRootReviewCommit(t *testing.T) {
 	parsed, err := Parse([]string{"review", "--commit", "abc123", "--title", "Fix bug"})
 	if err != nil {

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"codex_go/internal/applypatch"
@@ -14,13 +15,29 @@ type ApplyPatchExecutorOptions struct {
 	CWD                  string
 	IncludeEnvironmentID bool
 	ToolName             ToolName
+	Approval             ApplyPatchApprovalFunc
 }
 
 type ApplyPatchExecutor struct {
 	cwdPath              string
 	includeEnvironmentID bool
 	toolName             ToolName
+	approval             ApplyPatchApprovalFunc
 }
+
+type ApplyPatchApprovalDecision struct {
+	Approved     bool
+	AllowSession bool
+}
+
+type ApplyPatchApprovalRequest struct {
+	Action     *applypatch.Action
+	Changes    []map[string]any
+	CWD        string
+	Invocation *Invocation
+}
+
+type ApplyPatchApprovalFunc func(context.Context, *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error)
 
 func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecutor {
 	executor := &ApplyPatchExecutor{toolName: PlainName(DefaultApplyPatchToolName)}
@@ -29,6 +46,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	}
 	executor.cwdPath = options.CWD
 	executor.includeEnvironmentID = options.IncludeEnvironmentID
+	executor.approval = options.Approval
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -77,6 +95,35 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	if err := action.FillDeleteContent(applyOptions); err != nil {
 		return nil, RespondToModel(applyPatchErrorMessage(err))
 	}
+	changes := applyPatchFileChanges(action, e.cwd())
+	if e.approval != nil {
+		decision, approvalErr := e.approval(ctx, &ApplyPatchApprovalRequest{
+			Action:     action,
+			Changes:    changes,
+			CWD:        e.cwd(),
+			Invocation: invocation,
+		})
+		if approvalErr != nil {
+			body := "Patch approval request failed: " + approvalErr.Error()
+			return &Output{
+				Success:    false,
+				Body:       body,
+				Error:      body,
+				Data:       applyPatchApprovalData("failed", changes),
+				LogPreview: shellLogPreview(body),
+			}, nil
+		}
+		if !decision.Approved {
+			body := "Patch approval denied before applying changes."
+			return &Output{
+				Success:    false,
+				Body:       body,
+				Error:      body,
+				Data:       applyPatchApprovalData("declined", changes),
+				LogPreview: shellLogPreview(body),
+			}, nil
+		}
+	}
 	result, err := action.Apply(applyOptions)
 	if err != nil {
 		return nil, RespondToModel(applyPatchErrorMessage(err))
@@ -85,7 +132,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	return &Output{
 		Success:    true,
 		Body:       body,
-		Data:       applyPatchResultData(result, action),
+		Data:       applyPatchResultData(result, action, e.cwd()),
 		LogPreview: shellLogPreview(body),
 	}, nil
 }
@@ -149,7 +196,7 @@ func applyPatchHookToolName() *HookToolName {
 	return &HookToolName{Name: DefaultApplyPatchToolName, MatcherAliases: []string{"Write", "Edit"}}
 }
 
-func applyPatchResultData(result *applypatch.ApplyResult, action *applypatch.Action) map[string]any {
+func applyPatchResultData(result *applypatch.ApplyResult, action *applypatch.Action, cwd string) map[string]any {
 	data := map[string]any{"hook_response": "", "fileChange": true, "status": "completed"}
 	if result == nil {
 		return data
@@ -163,10 +210,19 @@ func applyPatchResultData(result *applypatch.ApplyResult, action *applypatch.Act
 	}
 	summary := result.Summary()
 	data["updated"] = updated
-	data["changes"] = applyPatchFileChanges(action)
+	data["changes"] = applyPatchFileChanges(action, cwd)
 	data["appliedChanges"] = applyPatchAppliedChanges(result)
 	data["hook_response"] = summary
 	return data
+}
+
+func applyPatchApprovalData(status string, changes []map[string]any) map[string]any {
+	return map[string]any{
+		"hook_response": "",
+		"fileChange":    true,
+		"status":        status,
+		"changes":       changes,
+	}
 }
 
 func applyPatchAppliedChanges(result *applypatch.ApplyResult) []map[string]any {
@@ -193,20 +249,43 @@ func applyPatchAppliedChanges(result *applypatch.ApplyResult) []map[string]any {
 	return changes
 }
 
-func applyPatchFileChanges(action *applypatch.Action) []map[string]any {
+func applyPatchFileChanges(action *applypatch.Action, cwd string) []map[string]any {
 	if action == nil {
 		return []map[string]any{}
 	}
 	changes := make([]map[string]any, 0, len(action.Hunks))
 	for _, hunk := range action.Hunks {
+		kind := applyPatchChangeKindData(&hunk)
+		if movePath, ok := kind["move_path"].(string); ok && strings.TrimSpace(movePath) != "" {
+			kind["move_path"] = applyPatchDisplayPath(cwd, movePath)
+		}
 		change := map[string]any{
-			"path": hunk.Path,
-			"kind": applyPatchChangeKindData(&hunk),
+			"path": applyPatchDisplayPath(cwd, hunk.Path),
+			"kind": kind,
 			"diff": applyPatchChangeDiff(&hunk),
 		}
 		changes = append(changes, change)
 	}
 	return changes
+}
+
+func applyPatchDisplayPath(cwd string, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	base := strings.TrimSpace(cwd)
+	if base == "" {
+		base = "."
+	}
+	abs, err := filepath.Abs(filepath.Join(base, path))
+	if err != nil {
+		return path
+	}
+	return filepath.Clean(abs)
 }
 
 func applyPatchChangeKindData(change *applypatch.Change) map[string]any {

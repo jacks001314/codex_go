@@ -264,11 +264,15 @@ func (s *ModelService) ProviderCapabilities(params *ProviderCapabilitiesReadPara
 }
 
 func parseStrategy(value string) RefreshStrategy {
-	switch RefreshStrategy(strings.TrimSpace(value)) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return RefreshOnlineIfUncached
+	}
+	switch RefreshStrategy(value) {
 	case RefreshOnline, RefreshOffline, RefreshOnlineIfUncached:
-		return RefreshStrategy(strings.TrimSpace(value))
+		return RefreshStrategy(value)
 	default:
-		return RefreshOffline
+		return RefreshOnlineIfUncached
 	}
 }
 

@@ -55,8 +55,14 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	}
 	if r.router == nil {
 		inputItems := append([]any(nil), request.InputItems...)
-		if items := drainSteerInputItems(r.steerMailbox, request); len(items) > 0 {
-			inputItems = append(inputItems, items...)
+		clientMetadata := cloneStringMap(request.ClientMetadata)
+		if steer := drainSteer(r.steerMailbox, request); steer != nil {
+			if len(steer.InputItems) > 0 {
+				inputItems = append(inputItems, steer.InputItems...)
+			}
+			if len(steer.ClientMetadata) > 0 {
+				clientMetadata = cloneStringMap(steer.ClientMetadata)
+			}
 		}
 		timing := request.Timing
 		if timing == nil {
@@ -86,7 +92,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ItemIDsEnabled:       request.ItemIDsEnabled,
 			ServiceTier:          request.ServiceTier,
 			PromptCacheKey:       request.PromptCacheKey,
-			ClientMetadata:       cloneStringMap(request.ClientMetadata),
+			ClientMetadata:       cloneStringMap(clientMetadata),
 			AttestationProvider:  request.AttestationProvider,
 			OutputSchema:         request.OutputSchema,
 			StreamHandler:        timingStreamHandler(timing, r.now),
@@ -129,6 +135,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Hooks:              r.hooks,
 			Now:                r.now,
 			PostToolInputItems: request.PostToolInputItems,
+			OnToolStarted:      request.OnToolStarted,
 		}),
 		MaxTurns: r.maxTurns,
 		Now:      r.now,

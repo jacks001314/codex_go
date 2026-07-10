@@ -244,10 +244,7 @@ func (p *CommandExecParams) Validate(defaultCWD string) error {
 	if err := p.Size.validateForMethod("command/exec"); err != nil {
 		return err
 	}
-	cwd := defaultCWD
-	if p.CWD != nil {
-		cwd = *p.CWD
-	}
+	cwd := commandExecCWD(p, defaultCWD)
 	if cwd != "" && !filepath.IsAbs(cwd) {
 		return fmt.Errorf("%w: cwd must be absolute", ErrInvalidFSRequest)
 	}

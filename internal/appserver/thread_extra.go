@@ -12,6 +12,7 @@ import (
 
 	"codex_go/internal/model"
 	"codex_go/internal/session"
+	"github.com/google/uuid"
 )
 
 var ErrInvalidThreadExtraRequest = errors.New("invalid thread request")
@@ -29,6 +30,7 @@ const (
 
 type Goal struct {
 	ThreadID        string     `json:"threadId"`
+	GoalID          string     `json:"goalId,omitempty"`
 	Objective       string     `json:"objective"`
 	TokenBudget     *int64     `json:"tokenBudget,omitempty"`
 	TokensUsed      int64      `json:"tokensUsed"`
@@ -276,6 +278,7 @@ type SettingsUpdateParams struct {
 	CollaborationMode     map[string]any             `json:"collaborationMode,omitempty"`
 	MultiAgentMode        *string                    `json:"multiAgentMode,omitempty"`
 	Personality           *string                    `json:"personality,omitempty"`
+	PersonalitySet        bool                       `json:"-"`
 	RuntimeWorkspaceRoots []string                   `json:"runtimeWorkspaceRoots,omitempty"`
 	Extra                 map[string]string          `json:"extra,omitempty"`
 }
@@ -354,6 +357,7 @@ type Settings struct {
 	CollaborationMode       map[string]any `json:"collaborationMode,omitempty"`
 	MultiAgentMode          string         `json:"multiAgentMode"`
 	Personality             *string        `json:"personality,omitempty"`
+	PersonalitySet          bool           `json:"-"`
 }
 
 func (s *Settings) MarshalJSON() ([]byte, error) {
@@ -725,6 +729,7 @@ func (s *ThreadExtraService) UpdateSettings(params *SettingsUpdateParams) (*Sett
 	}
 	if params.Personality != nil {
 		settings.Personality = cloneString(params.Personality)
+		settings.PersonalitySet = params.PersonalitySet
 	}
 	s.settings[params.ThreadID] = settings
 	return &SettingsUpdateResponse{}, nil
@@ -955,6 +960,7 @@ func buildGoalFromSetParams(params *GoalSetParams, existing *Goal, now int64) (G
 		return Goal{}, err
 	}
 	threadID := strings.TrimSpace(params.ThreadID)
+	goalID := ""
 	objective := ""
 	status := GoalActive
 	var tokenBudget *int64
@@ -962,6 +968,7 @@ func buildGoalFromSetParams(params *GoalSetParams, existing *Goal, now int64) (G
 	var timeUsedSeconds int64
 	createdAt := now
 	if existing != nil {
+		goalID = strings.TrimSpace(existing.GoalID)
 		objective = strings.TrimSpace(existing.Objective)
 		status = existing.Status
 		if status == "" {
@@ -987,8 +994,12 @@ func buildGoalFromSetParams(params *GoalSetParams, existing *Goal, now int64) (G
 	if params.Status != nil {
 		status = *params.Status
 	}
+	if goalID == "" {
+		goalID = uuid.NewString()
+	}
 	goal := Goal{
 		ThreadID:        threadID,
+		GoalID:          goalID,
 		Objective:       objective,
 		TokenBudget:     tokenBudget,
 		TokensUsed:      tokensUsed,
@@ -1026,6 +1037,10 @@ func goalFromRecord(record *session.Record) (*Goal, bool, error) {
 		goal.ThreadID = string(record.ID)
 	}
 	goal.ThreadID = strings.TrimSpace(goal.ThreadID)
+	goal.GoalID = strings.TrimSpace(goal.GoalID)
+	if goal.GoalID == "" {
+		goal.GoalID = uuid.NewString()
+	}
 	goal.Objective = strings.TrimSpace(goal.Objective)
 	goal.Status = GoalStatus(strings.TrimSpace(string(goal.Status)))
 	if goal.Status == "" {
@@ -1069,6 +1084,20 @@ func goalFromAny(raw any) (Goal, error) {
 func cloneGoal(goal Goal) Goal {
 	goal.TokenBudget = cloneInt64(goal.TokenBudget)
 	return goal
+}
+
+func goalRecordExtra(goal Goal) map[string]any {
+	return map[string]any{
+		"threadId":        strings.TrimSpace(goal.ThreadID),
+		"goalId":          strings.TrimSpace(goal.GoalID),
+		"objective":       strings.TrimSpace(goal.Objective),
+		"status":          goal.Status,
+		"tokenBudget":     cloneInt64(goal.TokenBudget),
+		"tokensUsed":      goal.TokensUsed,
+		"timeUsedSeconds": goal.TimeUsedSeconds,
+		"createdAt":       goal.CreatedAt,
+		"updatedAt":       goal.UpdatedAt,
+	}
 }
 
 func cloneInt64(value *int64) *int64 {

@@ -370,15 +370,21 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 }
 
 type ResponsesClientMetadataOptions struct {
-	InstallationID   string
-	SessionID        string
-	ThreadID         string
-	TurnID           string
-	WindowID         string
-	RequestKind      codexapi.ClientRequestKind
-	Extra            map[string]string
-	StartedAtMS      int64
-	UseResponsesLite bool
+	InstallationID     string
+	SessionID          string
+	ThreadID           string
+	TurnID             string
+	WindowID           string
+	RequestKind        codexapi.ClientRequestKind
+	ForkedFromThreadID string
+	ParentThreadID     string
+	SubagentHeader     string
+	SubagentKind       string
+	ThreadSource       string
+	Sandbox            string
+	Extra              map[string]string
+	StartedAtMS        int64
+	UseResponsesLite   bool
 }
 
 func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[string]string {
@@ -405,6 +411,12 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	if metadata.RequestKind == "" {
 		metadata.RequestKind = codexapi.ClientRequestTurn
 	}
+	metadata.ForkedFromThreadID = strings.TrimSpace(options.ForkedFromThreadID)
+	metadata.ParentThreadID = strings.TrimSpace(options.ParentThreadID)
+	metadata.SubagentHeader = strings.TrimSpace(options.SubagentHeader)
+	metadata.SubagentKind = strings.TrimSpace(options.SubagentKind)
+	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)
+	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	clientMetadata := metadata.ClientMetadata()

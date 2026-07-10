@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -80,9 +79,6 @@ func (s *PermissionProfileService) List(params *PermissionProfileListParams) (*P
 		limit = *params.Limit
 	}
 	profiles := cloneProfiles(s.profiles)
-	sort.SliceStable(profiles, func(i int, j int) bool {
-		return profiles[i].ID < profiles[j].ID
-	})
 	if start >= len(profiles) {
 		return &PermissionProfileListResponse{Data: []PermissionProfileSummary{}}, nil
 	}
@@ -113,10 +109,14 @@ func ProfileFromSandbox(id string, description string, policy *SandboxPolicy) Pe
 }
 
 func defaultProfiles() []PermissionProfileSummary {
+	return BuiltinPermissionProfileSummaries()
+}
+
+func BuiltinPermissionProfileSummaries() []PermissionProfileSummary {
 	return []PermissionProfileSummary{
-		ProfileFromSandbox(":danger-full-access", "Full filesystem and network access.", NewDangerFullAccessPolicy()),
-		ProfileFromSandbox(":read-only", "Read-only filesystem access.", NewReadOnlyPolicy()),
-		ProfileFromSandbox(":workspace", "Write access inside the workspace.", NewWorkspaceWritePolicy()),
+		ProfileFromSandbox(":read-only", "", NewReadOnlyPolicy()),
+		ProfileFromSandbox(":workspace", "", NewWorkspaceWritePolicy()),
+		ProfileFromSandbox(":danger-full-access", "", NewDangerFullAccessPolicy()),
 	}
 }
 

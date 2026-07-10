@@ -54,6 +54,72 @@ func TestListStatusAndToolCall(t *testing.T) {
 	}
 }
 
+func TestMCPServerStatusPreservesRawServerAndToolNames(t *testing.T) {
+	service := NewMCPService(nil)
+	title := "Lookup Server"
+	service.SetServer(MCPServerStatus{
+		Name:  "some-server",
+		State: MCPServerReady,
+		Server: MCPServerInfo{
+			Name:    "lookup-server",
+			Title:   &title,
+			Version: "1.0.0",
+		},
+		Tools: []MCPToolInfo{{Name: "look-up.raw", Description: "Look up test data."}},
+	})
+	service.SetServer(MCPServerStatus{
+		Name:  "some_server",
+		State: MCPServerReady,
+		Tools: []MCPToolInfo{{Name: "underscore_lookup"}},
+	})
+
+	response, err := service.ListStatusChecked(&MCPListServerStatusParams{Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull}})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal status returned error: %v", err)
+	}
+	var payload struct {
+		Data []struct {
+			Name       string                 `json:"name"`
+			ServerInfo *MCPServerInfo         `json:"serverInfo"`
+			Tools      map[string]MCPToolInfo `json:"tools"`
+			Resources  []MCPResource          `json:"resources"`
+			Templates  []MCPResourceTemplate  `json:"resourceTemplates"`
+			AuthStatus MCPAuthStatus          `json:"authStatus"`
+		} `json:"data"`
+		NextCursor *string `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("Unmarshal status returned error: %v", err)
+	}
+	if payload.NextCursor != nil || len(payload.Data) != 2 {
+		t.Fatalf("status payload = %#v", payload)
+	}
+	statusTools := map[string][]string{}
+	for _, status := range payload.Data {
+		for toolName, tool := range status.Tools {
+			statusTools[status.Name] = append(statusTools[status.Name], toolName)
+			if tool.Name != toolName {
+				t.Fatalf("tool key/name mismatch for %q: key=%q tool=%#v", status.Name, toolName, tool)
+			}
+		}
+		if status.Name == "some-server" {
+			if status.ServerInfo == nil || status.ServerInfo.Title == nil || *status.ServerInfo.Title != "Lookup Server" {
+				t.Fatalf("serverInfo for some-server = %#v", status.ServerInfo)
+			}
+		}
+		if status.Resources == nil || status.Templates == nil || status.AuthStatus == "" {
+			t.Fatalf("status should emit Rust v2 inventory/auth fields: %#v", status)
+		}
+	}
+	if strings.Join(statusTools["some-server"], ",") != "look-up.raw" || strings.Join(statusTools["some_server"], ",") != "underscore_lookup" {
+		t.Fatalf("status tools = %#v", statusTools)
+	}
+}
+
 func TestMCPServerStatusResourceWireShapeMatchesRustV2(t *testing.T) {
 	size := int64(42)
 	encoded, err := json.Marshal(&MCPServerStatus{

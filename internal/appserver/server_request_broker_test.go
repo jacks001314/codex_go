@@ -369,6 +369,7 @@ func TestServerRequestMarshalShape(t *testing.T) {
 		TurnID:                      "turn-1",
 		ItemID:                      "exec-1",
 		StartedAtMS:                 99,
+		NetworkApprovalContext:      &NetworkApprovalContext{Host: "example.test", Protocol: NetworkApprovalSocks5TCP},
 		ProposedExecPolicyAmendment: map[string]any{"type": "askUser"},
 		Action:                      map[string]any{"type": "internal"},
 		SuggestedProfile:            stringPointerForTest("read-only"),
@@ -389,6 +390,10 @@ func TestServerRequestMarshalShape(t *testing.T) {
 	}
 	if _, ok := params["proposedExecpolicyAmendment"]; !ok {
 		t.Fatalf("missing Rust proposedExecpolicyAmendment: %s", data)
+	}
+	networkContext, ok := params["networkApprovalContext"].(map[string]any)
+	if !ok || networkContext["protocol"] != "socks5_tcp" {
+		t.Fatalf("network approval context should use Rust snake_case protocol: %s", data)
 	}
 	if _, ok := params["proposedExecPolicyAmendment"]; ok {
 		t.Fatalf("non-Rust proposedExecPolicyAmendment should not be emitted: %s", data)

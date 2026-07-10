@@ -56,10 +56,11 @@ func (r *LocalShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellRe
 
 func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *ShellRequest, env map[string]string, started time.Time) (*ShellResult, error) {
 	runReq := &sandbox.CommandRunRequest{
-		ResolvedPermissionProfile:   req.PermissionProfile,
-		ResolvedPermissionProfileID: req.PermissionProfileID,
-		CWD:                         req.CWD,
-		Command:                     append([]string(nil), req.Command...),
+		ResolvedPermissionProfile:     req.PermissionProfile,
+		ResolvedPermissionProfileID:   req.PermissionProfileID,
+		ResolvedPermissionProfileJSON: req.PermissionProfileJSON,
+		CWD:                           req.CWD,
+		Command:                       append([]string(nil), req.Command...),
 	}
 	plan, err := sandbox.BuildCommandRunPlan(runReq)
 	if err != nil {

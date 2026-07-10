@@ -193,15 +193,58 @@ type UserInputResponse struct {
 type UserInputResponder func(context.Context, *RequestUserInputArgs) (*UserInputResponse, error)
 
 type RequestUserInputHandler struct {
-	responder UserInputResponder
+	responder      UserInputResponder
+	availableModes []string
 }
 
 func NewRequestUserInputHandler(responder UserInputResponder) *RequestUserInputHandler {
-	return &RequestUserInputHandler{responder: responder}
+	return NewRequestUserInputHandlerWithModes(responder, nil)
+}
+
+func NewRequestUserInputHandlerWithModes(responder UserInputResponder, modes []string) *RequestUserInputHandler {
+	return &RequestUserInputHandler{
+		responder:      responder,
+		availableModes: normalizeRequestUserInputAvailableModes(modes),
+	}
 }
 
 func (h *RequestUserInputHandler) Spec() Spec {
-	return Spec{Name: PlainName("request_user_input"), Description: "Requests short user input."}
+	return Spec{Name: PlainName("request_user_input"), Description: requestUserInputToolDescription(h.availableModes)}
+}
+
+func normalizeRequestUserInputAvailableModes(modes []string) []string {
+	if len(modes) == 0 {
+		return []string{"Plan"}
+	}
+	out := make([]string, 0, len(modes))
+	for _, mode := range modes {
+		mode = strings.TrimSpace(mode)
+		if mode != "" {
+			out = append(out, mode)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"Plan"}
+	}
+	return out
+}
+
+func requestUserInputToolDescription(modes []string) string {
+	allowedModes := requestUserInputAllowedModesText(normalizeRequestUserInputAvailableModes(modes))
+	return "Request user input for one to three short questions and wait for the response. Set autoResolutionMs, from 60000 to 240000 milliseconds, only when the question is useful but non-blocking and continuing with best judgment is acceptable if the user does not answer; omit it when explicit user input is required. This tool is only available in " + allowedModes + "."
+}
+
+func requestUserInputAllowedModesText(modes []string) string {
+	switch len(modes) {
+	case 0:
+		return "no modes"
+	case 1:
+		return modes[0] + " mode"
+	case 2:
+		return modes[0] + " or " + modes[1] + " mode"
+	default:
+		return "modes: " + strings.Join(modes, ",")
+	}
 }
 
 func (h *RequestUserInputHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
@@ -419,14 +462,15 @@ func (h *ClockSleepHandler) clockProvider() ClockProvider {
 }
 
 type CoreHandlerOptions struct {
-	PlanStore          *PlanStore
-	ContextStatus      func() compact.TokenStatus
-	UserInputResponder UserInputResponder
-	ClockProvider      ClockProvider
-	ThreadID           string
-	EnableCurrentTime  bool
-	EnableClockSleep   bool
-	EnableLegacySleep  bool
+	PlanStore                      *PlanStore
+	ContextStatus                  func() compact.TokenStatus
+	UserInputResponder             UserInputResponder
+	RequestUserInputAvailableModes []string
+	ClockProvider                  ClockProvider
+	ThreadID                       string
+	EnableCurrentTime              bool
+	EnableClockSleep               bool
+	EnableLegacySleep              bool
 }
 
 func RegisterCoreHandlers(registry *Registry, planStore *PlanStore, status func() compact.TokenStatus, responder UserInputResponder) error {
@@ -444,7 +488,7 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	}
 	handlers := []Executor{
 		NewPlanHandler(options.PlanStore),
-		NewRequestUserInputHandler(options.UserInputResponder),
+		NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes),
 		NewGetContextRemainingHandler(options.ContextStatus),
 	}
 	if options.EnableLegacySleep {

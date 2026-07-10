@@ -71,7 +71,7 @@ func RenderAvailableSkills(skills []InstructionsSkillMetadata, budget SkillMetad
 		budget = SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
 	}
 	skillLines, report := renderSkillLines(lines, budget)
-	warning := skillRenderWarning(report)
+	warning := skillRenderWarning(report, budget)
 	return &AvailableSkills{
 		Body:           renderAvailableSkillsBody(skillLines),
 		SkillLines:     skillLines,
@@ -212,7 +212,7 @@ func renderAvailableSkillsBody(skillLines []string) string {
 	return builder.String()
 }
 
-func skillRenderWarning(report *SkillRenderReport) *string {
+func skillRenderWarning(report *SkillRenderReport, budget SkillMetadataBudget) *string {
 	if report == nil {
 		return nil
 	}
@@ -223,7 +223,11 @@ func skillRenderWarning(report *SkillRenderReport) *string {
 			word = "skill"
 			verb = "was"
 		}
-		message := fmt.Sprintf("Exceeded skills context budget. All skill descriptions were removed and %d additional %s %s not included in the model-visible skills list.", report.OmittedCount, word, verb)
+		prefix := "Exceeded skills context budget."
+		if budget.Kind == SkillMetadataBudgetTokens {
+			prefix = fmt.Sprintf("Exceeded skills context budget of %d%%.", SkillMetadataContextWindowPercent)
+		}
+		message := fmt.Sprintf("%s All skill descriptions were removed and %d additional %s %s not included in the model-visible skills list.", prefix, report.OmittedCount, word, verb)
 		return &message
 	}
 	if report.TotalCount > 0 && (report.TruncatedDescriptionChars+report.TotalCount-1)/report.TotalCount > SkillDescriptionWarningThreshold {

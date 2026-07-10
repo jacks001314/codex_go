@@ -217,6 +217,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"trusted_projects":                     {},
 	"tui":                                  {},
 	"web_search":                           {},
+	"windows":                              {},
 	"windows_sandbox":                      {},
 }
 

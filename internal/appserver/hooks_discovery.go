@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"codex_go/internal/config"
+	"codex_go/internal/features"
 	"codex_go/internal/plugin"
 )
 
@@ -40,6 +41,10 @@ func (s *HookDiscoveryService) Discover(params *HookListParams, defaultCWD strin
 	response := &HookListResponse{Data: make([]HookListEntry, 0, len(cwds))}
 	for _, cwd := range cwds {
 		entry := HookListEntry{CWD: cwd}
+		if !s.hooksFeatureEnabled(cwd) {
+			response.Data = append(response.Data, entry)
+			continue
+		}
 		s.appendUserHooks(&entry)
 		s.appendProjectHooks(&entry, cwd)
 		s.appendPluginHooks(&entry)
@@ -47,6 +52,22 @@ func (s *HookDiscoveryService) Discover(params *HookListParams, defaultCWD strin
 		response.Data = append(response.Data, entry)
 	}
 	return response
+}
+
+func (s *HookDiscoveryService) hooksFeatureEnabled(cwd string) bool {
+	if s == nil || s.Config == nil {
+		return true
+	}
+	cwd = strings.TrimSpace(cwd)
+	readParams := &config.ConfigReadParams{}
+	if cwd != "" {
+		readParams.CWD = &cwd
+	}
+	read, err := s.Config.Read(readParams)
+	if err != nil || read == nil {
+		return true
+	}
+	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "hooks")
 }
 
 func MergeHookListResponses(left *HookListResponse, right *HookListResponse) *HookListResponse {

@@ -359,21 +359,68 @@ func minClientUint64(a uint64, b uint64) uint64 {
 }
 
 func ClientSubagentHeaderValue(sessionSource string) string {
-	switch sessionSource {
-	case "subagent:review":
-		return "review"
-	case "subagent:compact":
-		return "compact"
-	case "subagent:memory_consolidation", "internal:memory_consolidation":
-		return "memory_consolidation"
-	case "subagent:thread_spawn":
-		return "collab_spawn"
-	default:
-		if strings.HasPrefix(sessionSource, "subagent:") {
-			return strings.TrimPrefix(sessionSource, "subagent:")
-		}
-		return ""
+	header, _ := ClientSubagentMetadataFromSource(sessionSource)
+	return header
+}
+
+func ClientSubagentMetadataKind(sessionSource string) string {
+	_, kind := ClientSubagentMetadataFromSource(sessionSource)
+	return kind
+}
+
+func ClientSubagentMetadataFromSource(sessionSource string) (string, string) {
+	raw := strings.TrimSpace(sessionSource)
+	if raw == "" {
+		return "", ""
 	}
+	label, isSubagent := clientSubagentSourceLabel(raw)
+	normalizedLabel := clientNormalizeSubagentSource(label)
+	if isSubagent {
+		switch normalizedLabel {
+		case "review":
+			return "review", "review"
+		case "compact":
+			return "compact", "compact"
+		case "memoryconsolidation":
+			return "memory_consolidation", "memory_consolidation"
+		}
+		if strings.HasPrefix(normalizedLabel, "threadspawn") {
+			return "collab_spawn", "thread_spawn"
+		}
+		if trimmed := strings.TrimSpace(label); trimmed != "" {
+			return trimmed, trimmed
+		}
+		return "", ""
+	}
+	switch clientNormalizeSubagentSource(raw) {
+	case "internalmemoryconsolidation":
+		return "memory_consolidation", ""
+	case "review":
+		return "review", "review"
+	case "compact":
+		return "compact", "compact"
+	case "memoryconsolidation":
+		return "memory_consolidation", "memory_consolidation"
+	case "threadspawn":
+		return "collab_spawn", "thread_spawn"
+	default:
+		return "", ""
+	}
+}
+
+func clientSubagentSourceLabel(source string) (string, bool) {
+	lower := strings.ToLower(source)
+	for _, prefix := range []string{"subagent:", "subagent_", "subagent-"} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(source[len(prefix):]), true
+		}
+	}
+	return "", false
+}
+
+func clientNormalizeSubagentSource(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.NewReplacer("_", "", "-", "", ":", "", " ", "").Replace(value)
 }
 
 func (c *ClientCompactionMetadata) EnsureDefaults() {

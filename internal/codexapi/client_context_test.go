@@ -104,14 +104,34 @@ func TestClientBackoff(t *testing.T) {
 
 func TestClientSubagentHeaderValue(t *testing.T) {
 	cases := map[string]string{
-		"subagent:review":               "review",
-		"subagent:thread_spawn":         "collab_spawn",
-		"internal:memory_consolidation": "memory_consolidation",
-		"cli":                           "",
+		"subagent:review":                 "review",
+		"subagent:thread_spawn":           "collab_spawn",
+		"subagent_review":                 "review",
+		"subagent_thread_spawn_parent_d2": "collab_spawn",
+		"subagent_guardian":               "guardian",
+		"internal:memory_consolidation":   "memory_consolidation",
+		"internal_memory_consolidation":   "memory_consolidation",
+		"cli":                             "",
 	}
 	for input, want := range cases {
 		if got := ClientSubagentHeaderValue(input); got != want {
 			t.Fatalf("ClientSubagentHeaderValue(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestClientSubagentMetadataKind(t *testing.T) {
+	cases := map[string]string{
+		"subagent:review":                 "review",
+		"subagent:thread_spawn":           "thread_spawn",
+		"subagent_thread_spawn_parent_d2": "thread_spawn",
+		"subagent_guardian":               "guardian",
+		"internal_memory_consolidation":   "",
+		"cli":                             "",
+	}
+	for input, want := range cases {
+		if got := ClientSubagentMetadataKind(input); got != want {
+			t.Fatalf("ClientSubagentMetadataKind(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

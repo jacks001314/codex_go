@@ -206,6 +206,72 @@ func TestServiceReadConfigWithLayersAndOrigins(t *testing.T) {
 	}
 }
 
+func TestServiceReadToolsAndAppsOriginsMatchRustConfigRPC(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `
+model = "gpt-user"
+
+[tools.web_search]
+context_size = "low"
+allowed_domains = ["example.com"]
+
+[apps._default]
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
+
+[apps.app1]
+enabled = false
+approvals_reviewer = "user"
+destructive_enabled = false
+default_tools_approval_mode = "prompt"
+`)
+	service := NewConfigService(home)
+
+	response, err := service.Read(&ConfigReadParams{IncludeLayers: true})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	tools := response.Config["tools"].(map[string]any)
+	webSearch := tools["web_search"].(map[string]any)
+	if webSearch["context_size"] != "low" {
+		t.Fatalf("tools.web_search.context_size = %#v, want low", webSearch["context_size"])
+	}
+	allowedDomains := webSearch["allowed_domains"].([]any)
+	if len(allowedDomains) != 1 || allowedDomains[0] != "example.com" {
+		t.Fatalf("tools.web_search.allowed_domains = %#v", allowedDomains)
+	}
+	apps := response.Config["apps"].(map[string]any)
+	defaultApp := apps["_default"].(map[string]any)
+	if defaultApp["approvals_reviewer"] != "auto_review" || defaultApp["default_tools_approval_mode"] != "approve" {
+		t.Fatalf("apps._default = %#v", defaultApp)
+	}
+	app1 := apps["app1"].(map[string]any)
+	if app1["enabled"] != false || app1["approvals_reviewer"] != "user" || app1["destructive_enabled"] != false || app1["default_tools_approval_mode"] != "prompt" {
+		t.Fatalf("apps.app1 = %#v", app1)
+	}
+	for _, key := range []string{
+		"tools.web_search.context_size",
+		"tools.web_search.allowed_domains.0",
+		"apps._default.approvals_reviewer",
+		"apps._default.default_tools_approval_mode",
+		"apps.app1.enabled",
+		"apps.app1.approvals_reviewer",
+		"apps.app1.destructive_enabled",
+		"apps.app1.default_tools_approval_mode",
+	} {
+		origin, ok := response.Origins[key]
+		if !ok {
+			t.Fatalf("origin %s missing in %+v", key, response.Origins)
+		}
+		if origin.Name.Type != LayerSourceUser {
+			t.Fatalf("origin %s = %+v, want user layer", key, origin)
+		}
+	}
+	if len(response.Layers) != 1 || response.Layers[0].Name.Type != LayerSourceUser {
+		t.Fatalf("layers = %+v", response.Layers)
+	}
+}
+
 func TestServiceWriteValueAndBatchWrite(t *testing.T) {
 	home := t.TempDir()
 	writeConfig(t, home, "model = \"gpt-5\"\n[features]\nweb_search = false\n")
@@ -316,7 +382,7 @@ func TestServiceManagedLayersOverrideUserConfig(t *testing.T) {
 	writeConfig(t, home, "model = \"gpt-user\"\n")
 	service := NewConfigService(home)
 	service.SetManagedLayers([]Layer{{
-		Name:    LayerSource{Type: LayerSourceEnterpriseManaged, ID: "managed", Name: "Managed"},
+		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: filepath.Join(home, "managed_config.toml")},
 		Version: "managed-v1",
 		Config:  map[string]any{"model": "gpt-managed"},
 	}})
@@ -328,11 +394,42 @@ func TestServiceManagedLayersOverrideUserConfig(t *testing.T) {
 	if read.Config["model"] != "gpt-managed" {
 		t.Fatalf("model = %v, want managed", read.Config["model"])
 	}
-	if read.Origins["model"].Name.Type != LayerSourceEnterpriseManaged {
+	if read.Origins["model"].Name.Type != LayerSourceLegacyManagedConfigFromFile {
 		t.Fatalf("origin = %+v", read.Origins["model"])
 	}
-	if len(read.Layers) != 2 || read.Layers[1].Name.Type != LayerSourceEnterpriseManaged {
+	if len(read.Layers) != 2 || read.Layers[1].Name.Type != LayerSourceLegacyManagedConfigFromFile {
 		t.Fatalf("layers = %+v", read.Layers)
+	}
+}
+
+func TestNewConfigServiceLoadsManagedConfigFromAppServerEnvLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `
+model = "gpt-user"
+approval_policy = "on-request"
+`)
+	managedPath := filepath.Join(t.TempDir(), "managed_config.toml")
+	if err := os.WriteFile(managedPath, []byte(`
+model = "gpt-managed"
+approval_policy = "never"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile managed config error = %v", err)
+	}
+	t.Setenv(appServerManagedConfigPathEnv, managedPath)
+
+	service := NewConfigService(home)
+	read, err := service.Read(&ConfigReadParams{IncludeLayers: true})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if read.Config["model"] != "gpt-managed" || read.Config["approval_policy"] != "never" {
+		t.Fatalf("config = %+v, want managed model and approval policy", read.Config)
+	}
+	if read.Origins["model"].Name.Type != LayerSourceLegacyManagedConfigFromFile || read.Origins["model"].Name.File != managedPath {
+		t.Fatalf("model origin = %+v, want managed file", read.Origins["model"])
+	}
+	if len(read.Layers) != 2 || read.Layers[0].Name.Type != LayerSourceUser || read.Layers[1].Name.Type != LayerSourceLegacyManagedConfigFromFile {
+		t.Fatalf("layers = %+v, want user then managed file", read.Layers)
 	}
 }
 
@@ -415,7 +512,7 @@ func TestServiceManagedLayersOverrideProjectConfig(t *testing.T) {
 	}
 	service := NewConfigService(home)
 	service.SetManagedLayers([]Layer{{
-		Name:    LayerSource{Type: LayerSourceEnterpriseManaged, ID: "managed", Name: "Managed"},
+		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: filepath.Join(home, "managed_config.toml")},
 		Version: "managed-v1",
 		Config:  map[string]any{"model": "gpt-managed"},
 	}})
@@ -427,10 +524,10 @@ func TestServiceManagedLayersOverrideProjectConfig(t *testing.T) {
 	if read.Config["model"] != "gpt-managed" {
 		t.Fatalf("model = %v, want managed", read.Config["model"])
 	}
-	if read.Origins["model"].Name.Type != LayerSourceEnterpriseManaged {
+	if read.Origins["model"].Name.Type != LayerSourceLegacyManagedConfigFromFile {
 		t.Fatalf("origin = %+v", read.Origins["model"])
 	}
-	if len(read.Layers) != 3 || read.Layers[1].Name.Type != LayerSourceProject || read.Layers[2].Name.Type != LayerSourceEnterpriseManaged {
+	if len(read.Layers) != 3 || read.Layers[1].Name.Type != LayerSourceProject || read.Layers[2].Name.Type != LayerSourceLegacyManagedConfigFromFile {
 		t.Fatalf("layers = %+v", read.Layers)
 	}
 }
@@ -440,7 +537,7 @@ func TestServiceWriteReportsOverriddenByManagedLayer(t *testing.T) {
 	writeConfig(t, home, "model = \"gpt-user\"\n")
 	service := NewConfigService(home)
 	service.SetManagedLayers([]Layer{{
-		Name:    LayerSource{Type: LayerSourceEnterpriseManaged, ID: "managed"},
+		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: filepath.Join(home, "managed_config.toml")},
 		Version: "managed-v1",
 		Config:  map[string]any{"model": "gpt-managed"},
 	}})
@@ -607,6 +704,35 @@ func TestRequirementsClone(t *testing.T) {
 	}
 	if again.Requirements.Network.Domains["example.com"] != NetworkAllow {
 		t.Fatalf("requirements map mutation leaked")
+	}
+}
+
+func TestNewConfigServiceLoadsRequirementsFileLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := `
+[models.new_thread]
+model = "gpt-managed"
+model_reasoning_effort = "medium"
+service_tier = "fast"
+`
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+
+	service := NewConfigService(home)
+	read := service.Requirements()
+	if read.Requirements == nil || read.Requirements.Models == nil || read.Requirements.Models.NewThread == nil {
+		t.Fatalf("requirements = %#v, want new-thread model defaults", read.Requirements)
+	}
+	defaults := read.Requirements.Models.NewThread
+	if defaults.Model == nil || *defaults.Model != "gpt-managed" {
+		t.Fatalf("Model = %#v, want gpt-managed", defaults.Model)
+	}
+	if defaults.ModelReasoningEffort == nil || *defaults.ModelReasoningEffort != "medium" {
+		t.Fatalf("ModelReasoningEffort = %#v, want medium", defaults.ModelReasoningEffort)
+	}
+	if defaults.ServiceTier == nil || *defaults.ServiceTier != "fast" {
+		t.Fatalf("ServiceTier = %#v, want fast", defaults.ServiceTier)
 	}
 }
 

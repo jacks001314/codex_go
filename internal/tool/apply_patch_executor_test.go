@@ -42,7 +42,7 @@ func TestApplyPatchExecutorRunsPatchAndFormatsOutput(t *testing.T) {
 		t.Fatalf("changes = %#v", output.Data["changes"])
 	}
 	kind, ok := changes[0]["kind"].(map[string]any)
-	if !ok || kind["type"] != "add" || changes[0]["path"] != "hello.txt" || changes[0]["diff"] != "hello\n" {
+	if !ok || kind["type"] != "add" || changes[0]["path"] != filepath.Join(dir, "hello.txt") || changes[0]["diff"] != "hello\n" {
 		t.Fatalf("change = %#v", changes[0])
 	}
 	applied, ok := output.Data["appliedChanges"].([]map[string]any)
