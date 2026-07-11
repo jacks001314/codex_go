@@ -426,6 +426,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		Apps:         apps.NewAppService(nil),
 		Turns:        turn.NewTurnService(),
 		ThreadStatus: NewThreadStatusManager(),
+		Agent:        model.NewLocalAgentRunner(),
 		Reviews:      review.NewService(),
 		Misc:         NewMiscService(),
 		CommandExec:  NewCommandExecService(),
@@ -3923,6 +3924,12 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if r.hasRuntimeThreadStore() && r.activeRuntimeTurnIsReview(params.ThreadID, params.TurnID) {
+		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
+			r.finishReviewRuntimeInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
+			return &turn.TurnInterruptResponse{}, nil
+		}
+	}
 	response, err := r.requireTurns().Interrupt(&params)
 	if err != nil {
 		return nil, turnInterruptRuntimeError(err)
@@ -3951,7 +3958,123 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireReviews().Start(&params)
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	reviewThreadID, err := r.prepareDetachedReviewThread(request, &params)
+	if err != nil {
+		return nil, err
+	}
+	response, err := r.requireReviews().Start(&params)
+	if err != nil {
+		return nil, err
+	}
+	if reviewThreadID != "" {
+		response.ReviewThreadID = reviewThreadID
+	}
+	r.notifyEnteredReviewMode(&params, response)
+	r.startReviewRuntimeAsync(&params, response, request.normalizedConnectionID())
+	return response, nil
+}
+
+func (r *RuntimeRouter) prepareDetachedReviewThread(request *Request, params *review.StartParams) (string, error) {
+	if r == nil || request == nil || params == nil || !reviewDeliveryDetached(params) {
+		return "", nil
+	}
+	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return "", nil
+	}
+	parentID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	if err := r.ensureDetachedReviewParentMaterialized(parentID); err != nil {
+		return "", err
+	}
+	forkParams := ThreadForkParams{
+		ThreadID:     string(parentID),
+		ExcludeTurns: true,
+		Model:        r.detachedReviewModelOverride(),
+	}
+	forkRequest, err := requestWithRuntimeParams(request, forkParams)
+	if err != nil {
+		return "", err
+	}
+	forkRequest.Method = MethodThreadFork
+	result, err := r.handleThreadLifecycleRuntime(forkRequest)
+	if err != nil {
+		return "", err
+	}
+	response, ok := result.(*ThreadForkResponse)
+	if !ok || response.Thread == nil {
+		return "", nil
+	}
+	return response.Thread.ID, nil
+}
+
+func (r *RuntimeRouter) detachedReviewModelOverride() *string {
+	return r.reviewModelOverride()
+}
+
+func (r *RuntimeRouter) reviewModelOverride() *string {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	read, err := r.requireConfig().Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil
+	}
+	modelID := strings.TrimSpace(firstNonEmpty(stringFromMap(read.Config, "review_model"), stringFromMap(read.Config, "reviewModel")))
+	return stringPtrIfNotEmpty(modelID)
+}
+
+func reviewDeliveryDetached(params *review.StartParams) bool {
+	return params != nil && params.Delivery != nil && strings.TrimSpace(*params.Delivery) == "detached"
+}
+
+func (r *RuntimeRouter) ensureDetachedReviewParentMaterialized(threadID session.ThreadID) error {
+	record, err := r.threadRecord(threadID, true, true)
+	if err != nil {
+		return threadReadError(string(threadID), err)
+	}
+	if !unmaterializedThread(record) {
+		return nil
+	}
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = r.services.ThreadRouter.now().UTC()
+	}
+	return r.services.ThreadRouter.createThreadRollout(record, now)
+}
+
+func (r *RuntimeRouter) notifyEnteredReviewMode(params *review.StartParams, response *review.StartResponse) {
+	if r == nil || params == nil || response == nil {
+		return
+	}
+	nowMS := time.Now().UTC().UnixMilli()
+	threadID := strings.TrimSpace(response.ReviewThreadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	turnID := strings.TrimSpace(response.Turn.ID)
+	if turnID == "" {
+		turnID = "review-" + strings.TrimSpace(params.ThreadID)
+	}
+	item := ThreadItem{
+		ID:   turnID,
+		Type: "enteredReviewMode",
+		Text: review.UserFacingHintForTarget(params.Target.ToTarget()),
+	}
+	payload := threadItemPayload(item)
+	r.notify(NotificationItemStarted, &ItemStartedNotification{
+		Item:        payload,
+		ThreadID:    threadID,
+		TurnID:      turnID,
+		StartedAtMS: nowMS,
+	})
+	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+		Item:          payload,
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		CompletedAtMS: nowMS,
+	})
 }
 
 func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {

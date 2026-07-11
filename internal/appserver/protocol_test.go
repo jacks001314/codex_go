@@ -7,6 +7,7 @@ import (
 
 	"codex_go/internal/config"
 	"codex_go/internal/mcp"
+	"codex_go/internal/turn"
 )
 
 func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
@@ -43,6 +44,172 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 			if string(data) != tc.want {
 				t.Fatalf("encoded = %s, want %s", data, tc.want)
 			}
+		})
+	}
+}
+
+func TestRustRequestIDParity(t *testing.T) {
+	// Rust app-server-protocol/src/rpc.rs defines RequestId as string | i64.
+	valid := []struct {
+		name     string
+		raw      string
+		wantID   string
+		wantJSON string
+	}{
+		{name: "integer", raw: `{"id":7,"method":"initialize"}`, wantID: "7", wantJSON: "7"},
+		{name: "string", raw: `{"id":"request-7","method":"initialize"}`, wantID: "request-7", wantJSON: `"request-7"`},
+	}
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			request, err := ParseRequest([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("ParseRequest(%s) error = %v", tc.raw, err)
+			}
+			if request.ID.String() != tc.wantID {
+				t.Fatalf("request id = %q, want %q", request.ID.String(), tc.wantID)
+			}
+			data, err := json.Marshal(request.ID)
+			if err != nil {
+				t.Fatalf("Marshal(RequestID) error = %v", err)
+			}
+			if string(data) != tc.wantJSON {
+				t.Fatalf("Marshal(RequestID) = %s, want %s", data, tc.wantJSON)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name string
+		raw  string
+	}{
+		{name: "null", raw: `{"id":null,"method":"initialize"}`},
+		{name: "float", raw: `{"id":1.5,"method":"initialize"}`},
+		{name: "bool", raw: `{"id":true,"method":"initialize"}`},
+		{name: "object", raw: `{"id":{"value":7},"method":"initialize"}`},
+		{name: "missing", raw: `{"method":"initialize"}`},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseRequest([]byte(tc.raw)); err == nil {
+				t.Fatalf("ParseRequest(%s) returned nil error, want Rust RequestId rejection", tc.raw)
+			}
+		})
+	}
+}
+
+func TestRustCoreProtocolMethodParity(t *testing.T) {
+	// P0 surface from Rust protocol/common.rs and protocol/v2 thread/turn modules.
+	tests := []struct {
+		method Method
+		want   string
+	}{
+		{method: MethodInitialize, want: "initialize"},
+		{method: MethodThreadStart, want: "thread/start"},
+		{method: MethodTurnStart, want: "turn/start"},
+		{method: MethodThreadList, want: "thread/list"},
+		{method: MethodThreadRead, want: "thread/read"},
+	}
+	for _, tt := range tests {
+		if string(tt.method) != tt.want {
+			t.Fatalf("method constant = %q, want %q", tt.method, tt.want)
+		}
+	}
+}
+
+func TestRustCoreProtocolParamsDecodeParity(t *testing.T) {
+	cases := []struct {
+		name   string
+		raw    string
+		assert func(t *testing.T, request *Request)
+	}{
+		{
+			name: "initialize",
+			raw:  `{"id":1,"method":"initialize","params":{"clientInfo":{"name":"vscode","version":"1.0.0"},"capabilities":{"experimentalApi":true}}}`,
+			assert: func(t *testing.T, request *Request) {
+				var params InitializeParams
+				if err := request.DecodeParams(&params); err != nil {
+					t.Fatalf("DecodeParams initialize error = %v", err)
+				}
+				if err := params.Validate(); err != nil {
+					t.Fatalf("Validate initialize error = %v", err)
+				}
+				if params.ClientInfo.Name != "vscode" || params.Capabilities == nil || !params.Capabilities.ExperimentalAPI {
+					t.Fatalf("initialize params = %+v", params)
+				}
+			},
+		},
+		{
+			name: "thread/start",
+			raw:  `{"id":2,"method":"thread/start","params":{"cwd":"/repo","model":"gpt-5","modelProvider":"openai","permissions":"workspace-write","historyMode":"paginated","runtimeWorkspaceRoots":["/repo"],"allowProviderModelFallback":true}}`,
+			assert: func(t *testing.T, request *Request) {
+				var params ThreadStartParams
+				if err := request.DecodeParams(&params); err != nil {
+					t.Fatalf("DecodeParams thread/start error = %v", err)
+				}
+				if err := params.Validate(); err != nil {
+					t.Fatalf("Validate thread/start error = %v", err)
+				}
+				if params.CWD != "/repo" || params.ModelProvider != "openai" || params.Permissions == nil || *params.Permissions != "workspace-write" {
+					t.Fatalf("thread/start params = %+v", params)
+				}
+			},
+		},
+		{
+			name: "turn/start",
+			raw:  `{"id":3,"method":"turn/start","params":{"threadId":"thread-1","input":[{"type":"text","text":"hello","text_elements":[]}],"permissions":"workspace-write","runtimeWorkspaceRoots":["/repo"],"responsesapiClientMetadata":{"source":"parity"}}}`,
+			assert: func(t *testing.T, request *Request) {
+				var params turn.TurnStartParams
+				if err := request.DecodeParams(&params); err != nil {
+					t.Fatalf("DecodeParams turn/start error = %v", err)
+				}
+				if err := params.Validate(); err != nil {
+					t.Fatalf("Validate turn/start error = %v", err)
+				}
+				if params.ThreadID != "thread-1" || params.Permissions == nil || *params.Permissions != "workspace-write" || params.ResponsesAPIMetadata["source"] != "parity" {
+					t.Fatalf("turn/start params = %+v", params)
+				}
+			},
+		},
+		{
+			name: "thread/list",
+			raw:  `{"id":4,"method":"thread/list","params":{"limit":10,"sortKey":"updated_at","sortDirection":"desc","parentThreadId":"thread-parent"}}`,
+			assert: func(t *testing.T, request *Request) {
+				var params ThreadListParams
+				if err := request.DecodeParams(&params); err != nil {
+					t.Fatalf("DecodeParams thread/list error = %v", err)
+				}
+				if err := params.Validate(); err != nil {
+					t.Fatalf("Validate thread/list error = %v", err)
+				}
+				if params.Limit == nil || *params.Limit != 10 || params.ParentThreadID == nil || *params.ParentThreadID != "thread-parent" {
+					t.Fatalf("thread/list params = %+v", params)
+				}
+			},
+		},
+		{
+			name: "thread/read",
+			raw:  `{"id":5,"method":"thread/read","params":{"threadId":"thread-1","includeTurns":true}}`,
+			assert: func(t *testing.T, request *Request) {
+				var params ThreadReadParams
+				if err := request.DecodeParams(&params); err != nil {
+					t.Fatalf("DecodeParams thread/read error = %v", err)
+				}
+				if err := params.Validate(); err != nil {
+					t.Fatalf("Validate thread/read error = %v", err)
+				}
+				if params.ThreadID != "thread-1" || !params.IncludeTurns {
+					t.Fatalf("thread/read params = %+v", params)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request, err := ParseRequest([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("ParseRequest error = %v", err)
+			}
+			tc.assert(t, request)
 		})
 	}
 }

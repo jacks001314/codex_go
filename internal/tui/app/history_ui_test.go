@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 	"testing"
+
+	historycell "codex_go/internal/tui/history_cell"
 )
 
 func TestDesktopThreadMessagesMatchRust(t *testing.T) {
@@ -12,8 +14,23 @@ func TestDesktopThreadMessagesMatchRust(t *testing.T) {
 	if got := DesktopThreadOpenErrorMessage("launch failed"); got != "Failed to open this session in Codex Desktop: launch failed. Install or launch Codex Desktop and try again." {
 		t.Fatalf("DesktopThreadOpenErrorMessage() = %q", got)
 	}
-	if got := DesktopThreadURL(" thread-1 "); got != "codex://threads/thread-1" {
+	if got := DesktopThreadOpenErrorMessage(" launch failed "); got != "Failed to open this session in Codex Desktop:  launch failed . Install or launch Codex Desktop and try again." {
+		t.Fatalf("DesktopThreadOpenErrorMessage() preserved whitespace = %q", got)
+	}
+	if got := DesktopThreadURL(" thread-1 "); got != "codex://threads/ thread-1 " {
 		t.Fatalf("DesktopThreadURL() = %q", got)
+	}
+}
+
+func TestDesktopThreadHistoryCellsMatchRustSnapshots(t *testing.T) {
+	opened := historycell.NewInfoEvent(DesktopThreadOpenedMessage, "")
+	if got := strings.Join(opened.DisplayLines(80), "\n"); got != "• Opened this session in Codex Desktop." {
+		t.Fatalf("opened history = %q", got)
+	}
+
+	err := historycell.NewErrorEvent(DesktopThreadOpenErrorMessage("launch failed"))
+	if got := strings.Join(err.DisplayLines(80), "\n"); got != "■ Failed to open this session in Codex Desktop: launch failed. Install or launch Codex Desktop and try again." {
+		t.Fatalf("error history = %q", got)
 	}
 }
 

@@ -16,13 +16,11 @@ type Popup struct {
 }
 
 func NewPopup(candidates []Candidate) *Popup {
-	popup := &Popup{
+	return &Popup{
 		Candidates: append([]Candidate(nil), candidates...),
 		SearchMode: SearchModeResults,
 		Selected:   -1,
 	}
-	popup.ClampSelection()
-	return popup
 }
 
 func (p *Popup) SetCandidates(candidates []Candidate) {

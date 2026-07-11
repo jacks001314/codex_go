@@ -38,6 +38,9 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 			return sanitizeHistoryInputItem(raw)
 		}
 	}
+	if nonModelVisibleHistoryItemType(item.Type) || item.Type == "reasoning" {
+		return nil
+	}
 	switch item.Type {
 	case "message", "user_message", "agent_message", "assistant_message":
 		return messageInputItem(item)
@@ -140,7 +143,11 @@ func toolCallInputItem(item *Item) map[string]any {
 func sanitizeHistoryInputItem(input any) any {
 	switch typed := input.(type) {
 	case map[string]any:
-		if itemType, _ := typed["type"].(string); itemType == "image_generation_call" {
+		itemType, _ := typed["type"].(string)
+		if nonModelVisibleHistoryItemType(itemType) {
+			return nil
+		}
+		if itemType == "image_generation_call" {
 			result, _ := typed["result"].(string)
 			status, _ := typed["status"].(string)
 			typed["status"] = model.NormalizeImageGenerationStatus(status, result)
@@ -158,6 +165,15 @@ func sanitizeHistoryInputItem(input any) any {
 		return typed
 	default:
 		return input
+	}
+}
+
+func nonModelVisibleHistoryItemType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "todo_list", "error":
+		return true
+	default:
+		return false
 	}
 }
 

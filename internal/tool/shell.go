@@ -90,6 +90,8 @@ type ShellValidationOptions struct {
 	ApprovalPolicy               sandbox.AskForApproval
 	PermissionsPreapproved       bool
 	AllowLoginShell              bool
+	ShellMode                    UnifiedExecShellMode
+	ZshForkShell                 *Shell
 	CWD                          string
 	Env                          map[string]string
 	DefaultTimeoutMS             uint64
@@ -100,6 +102,19 @@ type ShellValidationOptions struct {
 type ResolvedCommand struct {
 	Command   []string
 	ShellType ShellType
+}
+
+type UnifiedExecShellMode string
+
+const (
+	UnifiedExecShellModeDirect  UnifiedExecShellMode = "direct"
+	UnifiedExecShellModeZshFork UnifiedExecShellMode = "zsh_fork"
+)
+
+type CommandResolutionOptions struct {
+	AllowLoginShell bool
+	ShellMode       UnifiedExecShellMode
+	ZshForkShell    *Shell
 }
 
 func NewDefaultShell() *Shell {
@@ -135,13 +150,13 @@ func (s *Shell) DeriveExecArgs(command string, useLoginShell bool) []string {
 	}
 	switch s.Type {
 	case ShellPowerShell:
-		args := []string{s.Path, "-NoLogo", "-NoProfile"}
-		if useLoginShell {
-			args = []string{s.Path, "-NoLogo"}
+		args := []string{s.Path}
+		if !useLoginShell {
+			args = append(args, "-NoProfile")
 		}
 		return append(args, "-Command", command)
 	case ShellCmd:
-		return []string{s.Path, "/C", command}
+		return []string{s.Path, "/c", command}
 	case ShellZsh:
 		if useLoginShell {
 			return []string{s.Path, "-lc", command}
@@ -156,18 +171,38 @@ func (s *Shell) DeriveExecArgs(command string, useLoginShell bool) []string {
 }
 
 func ResolveCommand(args *ExecCommandArgs, sessionShell *Shell, allowLoginShell bool) (*ResolvedCommand, error) {
+	return ResolveCommandWithOptions(args, sessionShell, CommandResolutionOptions{AllowLoginShell: allowLoginShell})
+}
+
+func ResolveCommandWithOptions(args *ExecCommandArgs, sessionShell *Shell, opts CommandResolutionOptions) (*ResolvedCommand, error) {
 	if args == nil {
 		return nil, errors.New("exec command args are required")
 	}
 	if strings.TrimSpace(args.Cmd) == "" {
 		return nil, errors.New("cmd must not be empty")
 	}
-	useLoginShell := allowLoginShell
+	useLoginShell := opts.AllowLoginShell
 	if args.Login != nil {
-		if *args.Login && !allowLoginShell {
+		if *args.Login && !opts.AllowLoginShell {
 			return nil, errors.New("login shell is disabled by config; omit login or set it to false")
 		}
 		useLoginShell = *args.Login
+	}
+	if opts.ShellMode == UnifiedExecShellModeZshFork {
+		if strings.TrimSpace(args.Shell) != "" {
+			return nil, errors.New("`shell` is not supported for local zsh-fork exec; omit `shell` to use zsh-fork, or target a remote environment where `shell` is supported.")
+		}
+		shell := opts.ZshForkShell
+		if shell == nil {
+			shell = sessionShell
+		}
+		if shell == nil || shell.Type != ShellZsh || strings.TrimSpace(shell.Path) == "" {
+			shell = &Shell{Type: ShellZsh, Path: "zsh"}
+		}
+		return &ResolvedCommand{
+			Command:   shell.DeriveExecArgs(args.Cmd, useLoginShell),
+			ShellType: ShellZsh,
+		}, nil
 	}
 	shell := sessionShell
 	if strings.TrimSpace(args.Shell) != "" {
@@ -190,7 +225,11 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := ResolveCommand(args, sessionShell, opts.AllowLoginShell)
+	resolved, err := ResolveCommandWithOptions(args, sessionShell, CommandResolutionOptions{
+		AllowLoginShell: opts.AllowLoginShell,
+		ShellMode:       opts.ShellMode,
+		ZshForkShell:    opts.ZshForkShell,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +240,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if sandboxPermissions == "" {
 		sandboxPermissions = sandbox.SandboxPermissionsUseDefault
 	}
+	sandboxPermissions = sandbox.SandboxPermissionsPreservingDeniedReads(sandboxPermissions, opts.PermissionProfile)
 	additionalPermissions, err := sandbox.NormalizeAndValidateAdditionalPermissions(
 		opts.AdditionalPermissionsAllowed,
 		opts.ApprovalPolicy,
@@ -338,6 +378,7 @@ func cloneShellPermissionProfile(profile *sandbox.PermissionProfile) *sandbox.Pe
 		policy.WritableRoots = append([]string(nil), profile.SandboxPolicy.WritableRoots...)
 		clone.SandboxPolicy = &policy
 	}
+	clone.DeniedReadEntries = append([]sandbox.FileSystemSandboxEntry(nil), profile.DeniedReadEntries...)
 	return &clone
 }
 

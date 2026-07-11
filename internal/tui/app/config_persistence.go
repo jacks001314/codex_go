@@ -140,8 +140,7 @@ func valueAsString(value any) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" || strings.TrimSpace(text) != text {
 		return "", false
 	}
 	return text, true

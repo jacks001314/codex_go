@@ -46,6 +46,8 @@ const (
 	MCPServerStopped   MCPServerStartupState = "stopped"
 )
 
+type MCPStartupObserver func(name string, status MCPServerStartupState, err error)
+
 type MCPAuthStatus string
 
 const (
@@ -796,6 +798,10 @@ func (s *MCPService) ListStatus(params *MCPListServerStatusParams) *MCPListServe
 }
 
 func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPListServerStatusResponse, error) {
+	return s.ListStatusCheckedWithObserver(params, nil)
+}
+
+func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusParams, observer MCPStartupObserver) (*MCPListServerStatusResponse, error) {
 	var detail *MCPServerStatusDetail
 	if params != nil {
 		detail = params.Detail
@@ -834,10 +840,13 @@ func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPL
 		if !ok || !detail.includesTools() {
 			continue
 		}
+		name := servers[i].effectiveName()
 		if dynamicConfigs[servers[i].effectiveName()] && (params == nil || params.Detail == nil) {
+			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
 			continue
 		}
-		inventory, err := s.listInventoryForConfig(servers[i].effectiveName(), &config, threadID)
+		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
+		inventory, err := s.listInventoryForConfig(name, &config, threadID)
 		if err == nil {
 			servers[i].Tools = inventory.Tools
 			if detail.includesInventory() {
@@ -856,6 +865,11 @@ func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPL
 		}
 		servers[i].AuthStatus = s.authStatusForConfig(servers[i].effectiveName(), &config)
 		s.recordInventoryStatus(servers[i].effectiveName(), servers[i], detail.includesTools(), detail.includesInventory())
+		if err != nil && servers[i].State == MCPServerFailed {
+			notifyMCPStartupObserver(observer, name, MCPServerFailed, err)
+		} else {
+			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
+		}
 	}
 	sort.SliceStable(servers, func(i int, j int) bool {
 		return servers[i].effectiveName() < servers[j].effectiveName()
@@ -865,6 +879,12 @@ func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPL
 		return nil, err
 	}
 	return &MCPListServerStatusResponse{Data: page, NextCursor: nextCursor, Servers: page}, nil
+}
+
+func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status MCPServerStartupState, err error) {
+	if observer != nil {
+		observer(name, status, err)
+	}
 }
 
 func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, includeTools bool, includeInventory bool) {

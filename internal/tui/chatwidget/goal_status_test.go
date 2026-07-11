@@ -44,6 +44,26 @@ func TestCompletedGoalUsage(t *testing.T) {
 	}
 }
 
+func TestFormatGoalElapsedSecondsMatchesRust(t *testing.T) {
+	tests := map[int64]string{
+		-1:                            "0s",
+		0:                             "0s",
+		59:                            "59s",
+		60:                            "1m",
+		30 * 60:                       "30m",
+		90 * 60:                       "1h 30m",
+		2 * 60 * 60:                   "2h",
+		24*60*60 - 1:                  "23h 59m",
+		24 * 60 * 60:                  "1d 0h 0m",
+		2*24*60*60 + 23*60*60 + 42*60: "2d 23h 42m",
+	}
+	for input, want := range tests {
+		if got := FormatGoalElapsedSeconds(input); got != want {
+			t.Fatalf("FormatGoalElapsedSeconds(%d) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestActiveGoalStatusIncludesCurrentTurnElapsedTime(t *testing.T) {
 	observedAt := time.Unix(1000, 0)
 	state := activeGoalState(observedAt, 60)

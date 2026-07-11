@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1356,7 +1357,7 @@ command = "codex-go-missing-mcp-test"
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 
-	service, statuses, tools := interactiveMCPRuntime(&cli.RootOptions{})
+	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{})
 	if service == nil {
 		t.Fatal("interactiveMCPRuntime returned nil service for configured MCP server")
 	}
@@ -1367,8 +1368,26 @@ command = "codex-go-missing-mcp-test"
 	if statuses[0].Auth != "Unsupported" {
 		t.Fatalf("auth = %q, want Unsupported", statuses[0].Auth)
 	}
-	if len(tools) != 0 {
-		t.Fatalf("tools = %#v, want none for missing helper", tools)
+	if !reflect.DeepEqual(expectedServers, []string{"angr"}) {
+		t.Fatalf("expected servers = %#v, want angr", expectedServers)
+	}
+
+	runner := codexexec.NewLocalRunner(home)
+	messages := interactiveMCPStartupMessages(context.Background(), service, runner, expectedServers)
+	var updates []codextea.MCPStartupUpdateMsg
+	for message := range messages {
+		if update, ok := message.(codextea.MCPStartupUpdateMsg); ok {
+			updates = append(updates, update)
+		}
+	}
+	if len(updates) < 2 || updates[0].Name != "angr" || updates[0].Status.Kind != chatwidget.McpStartupStarting {
+		t.Fatalf("startup updates = %#v", updates)
+	}
+	if updates[len(updates)-1].Status.Kind != chatwidget.McpStartupFailed {
+		t.Fatalf("final startup update = %#v, want failed", updates[len(updates)-1])
+	}
+	if len(runner.MCPTools) != 0 {
+		t.Fatalf("runner MCP tools = %#v, want none for missing helper", runner.MCPTools)
 	}
 }
 
@@ -4353,7 +4372,7 @@ func TestReviewEndToEnd(t *testing.T) {
 	if err := Run(context.Background(), []string{"-C", dir, "review", "--commit", sha, "--title", "Fix bug"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("review returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Review commit "+sha+" (Fix bug)") {
+	if !strings.Contains(stdout.String(), "Review the code changes introduced by commit "+sha+" (\"Fix bug\")") {
 		t.Fatalf("review stdout = %q", stdout.String())
 	}
 }
@@ -4368,7 +4387,7 @@ func TestExecReviewEndToEnd(t *testing.T) {
 	if err := Run(context.Background(), []string{"exec", "-C", dir, "review", "--uncommitted"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("exec review returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Review uncommitted changes") {
+	if !strings.Contains(stdout.String(), "Review the current code changes (staged, unstaged, and untracked files)") {
 		t.Fatalf("exec review stdout = %q", stdout.String())
 	}
 }
@@ -4381,7 +4400,7 @@ func TestReviewCustomPromptEndToEnd(t *testing.T) {
 	if err := Run(context.Background(), []string{"review", "check auth flow"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("review returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Review with custom instructions: check auth flow") {
+	if !strings.Contains(stdout.String(), "check auth flow") {
 		t.Fatalf("review stdout = %q", stdout.String())
 	}
 }

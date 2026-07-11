@@ -37,6 +37,6 @@ func SideReturnShortcutMatches(key string, control bool, press bool) bool {
 	if !press || !control {
 		return false
 	}
-	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ToLower(key)
 	return key == "c" || key == "d" || key == "ctrl-c" || key == "ctrl-d"
 }

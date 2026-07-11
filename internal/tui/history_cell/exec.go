@@ -1,6 +1,10 @@
 package historycell
 
-import "codex_go/internal/tui"
+import (
+	"codex_go/internal/tui"
+
+	"github.com/rivo/uniseg"
+)
 
 // Rust parity: codex-rs/tui/src/history_cell/exec.rs.
 
@@ -78,27 +82,45 @@ func (c UnifiedExecProcessesCell) DisplayLines(width int) []string {
 	}
 	lines := []string{"Background terminals", ""}
 	if len(c.Processes) == 0 {
-		return append(lines, "  - No background terminals running.")
+		return append(lines, "  \u2022 No background terminals running.")
 	}
 	maxProcesses := 16
 	shown := 0
+	processPrefix := "  \u2022 "
+	processPrefixWidth := tui.DisplayWidth(processPrefix)
 	for _, process := range c.Processes {
 		if shown >= maxProcesses {
 			break
 		}
-		command := truncateHistoryLine(firstLine(process.CommandDisplay), width-4)
-		lines = append(lines, "  - "+command)
+		if width <= processPrefixWidth {
+			lines = append(lines, processPrefix)
+			shown++
+			continue
+		}
+		snippet, needsSuffix := processCommandSnippet(process.CommandDisplay)
+		command := truncateHistoryLine(snippet, width-processPrefixWidth, needsSuffix)
+		lines = append(lines, processPrefix+command)
 		for index, chunk := range process.RecentChunks {
 			prefix := "    \u21b3 "
 			if index > 0 {
 				prefix = "      "
 			}
-			lines = append(lines, prefix+truncateHistoryLine(chunk, width-len(prefix)))
+			prefixWidth := tui.DisplayWidth(prefix)
+			if width <= prefixWidth {
+				lines = append(lines, prefix)
+				continue
+			}
+			lines = append(lines, prefix+truncateHistoryLine(chunk, width-prefixWidth, false))
 		}
 		shown++
 	}
 	if remaining := len(c.Processes) - shown; remaining > 0 {
-		lines = append(lines, "  - ... and "+tui.FormatInt(int64(remaining))+" more running")
+		more := "... and " + tui.FormatInt(int64(remaining)) + " more running"
+		if width <= processPrefixWidth {
+			lines = append(lines, processPrefix)
+		} else {
+			lines = append(lines, processPrefix+tui.TruncateToWidth(more, width-processPrefixWidth))
+		}
 	}
 	return lines
 }
@@ -108,23 +130,44 @@ func (c UnifiedExecProcessesCell) RawLines() []string {
 }
 
 func firstLine(text string) string {
-	for i, r := range text {
-		if r == '\n' || r == '\r' {
-			return text[:i]
-		}
-	}
-	return text
+	line, _ := splitFirstLine(text)
+	return line
 }
 
-func truncateHistoryLine(text string, width int) string {
+func splitFirstLine(text string) (string, bool) {
+	for i, r := range text {
+		if r == '\n' || r == '\r' {
+			return text[:i], true
+		}
+	}
+	return text, false
+}
+
+func processCommandSnippet(command string) (string, bool) {
+	line, hasMoreLines := splitFirstLine(command)
+	graphemes := uniseg.NewGraphemes(line)
+	count := 0
+	for graphemes.Next() {
+		if count == 80 {
+			start, _ := graphemes.Positions()
+			return line[:start], true
+		}
+		count++
+	}
+	return line, hasMoreLines
+}
+
+func truncateHistoryLine(text string, width int, forceSuffix bool) string {
 	if width <= 0 {
 		return ""
 	}
-	if tui.DisplayWidth(text) <= width {
+	if !forceSuffix && tui.DisplayWidth(text) <= width {
 		return text
 	}
-	if width <= 6 {
-		return tui.TruncateWithEllipsis(text, width)
+	const suffix = " [...]"
+	suffixWidth := tui.DisplayWidth(suffix)
+	if width > suffixWidth {
+		return tui.TruncateToWidth(text, width-suffixWidth) + suffix
 	}
-	return tui.TruncateToWidth(text, width-6) + " [...]"
+	return tui.TruncateToWidth(text, width)
 }

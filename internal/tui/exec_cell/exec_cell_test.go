@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/internal/utils"
 )
 
 func TestExecCellModelLifecycle(t *testing.T) {
@@ -65,6 +67,13 @@ func TestOutputLinesTruncatesWithTranscriptHint(t *testing.T) {
 	}
 }
 
+func TestOutputLinesNormalizesPowerShellCRLF(t *testing.T) {
+	lines := OutputLinesFor(&CommandOutput{AggregatedOutput: "alpha\r\nbeta\r\n"}, OutputLinesParams{LineLimit: 5})
+	if got := strings.Join(lines.Lines, "|"); got != "alpha|beta" {
+		t.Fatalf("CRLF output = %q, want alpha|beta", got)
+	}
+}
+
 func TestExecCellDisplayAndTranscript(t *testing.T) {
 	duration := time.Second
 	cell := NewExecCell(ExecCall{
@@ -79,7 +88,7 @@ func TestExecCellDisplayAndTranscript(t *testing.T) {
 		Duration: &duration,
 	}, false)
 	display := strings.Join(cell.DisplayLines(80), "\n")
-	if !strings.Contains(display, "✓ You ran echo hello") || !strings.Contains(display, "└ hello") {
+	if !strings.Contains(display, "• You ran echo hello") || !strings.Contains(display, "└ hello") {
 		t.Fatalf("display:\n%s", display)
 	}
 	transcript := strings.Join(cell.TranscriptLines(80), "\n")
@@ -88,6 +97,80 @@ func TestExecCellDisplayAndTranscript(t *testing.T) {
 	}
 	if !cell.ShouldFlush() {
 		t.Fatal("completed non-exploring cell should flush")
+	}
+
+	if got := StripShellCommand([]string{"pwsh", "-NoProfile", "-Command", "Get-ChildItem"}); got != "Get-ChildItem" {
+		t.Fatalf("powershell strip = %q", got)
+	}
+	if got := StripShellCommand([]string{"fish", "-lc", "echo hello"}); got != "fish -lc 'echo hello'" {
+		t.Fatalf("fish should not be stripped like Rust tui exec display: %q", got)
+	}
+	if got := StripShellCommand([]string{"foo", "bar baz", "weird&stuff"}); got != "foo 'bar baz' 'weird&stuff'" {
+		t.Fatalf("fallback quoting = %q", got)
+	}
+}
+
+func TestExecCellDisplayMatchesRustContinuationAndOutputLayout(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"pwsh", "-NoProfile", "-Command", "Get-NetIPConfiguration | Format-List InterfaceAlias,InterfaceIndex,NetProfile.Name,IPv4Address,IPv6Address,IPv4DefaultGateway,IPv6DefaultGateway,DNSServer; Get-NetAdapter | Format-Table -AutoSize Name,InterfaceDescription,Status,MacAddress,LinkSpeed"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+
+	clean := strings.Split(utils.StripANSI(strings.Join(cell.DisplayLinesWithTheme(72, "dracula"), "\n")), "\n")
+	if len(clean) == 0 || !strings.HasPrefix(clean[0], "• Ran ") {
+		t.Fatalf("Rust-style command header missing: %#v", clean)
+	}
+	continuations := 0
+	outputRows := 0
+	for _, line := range clean[1:] {
+		if strings.HasPrefix(line, "  │ ") {
+			continuations++
+		}
+		if strings.HasPrefix(line, "  └ ") || strings.HasPrefix(line, "    ") {
+			outputRows++
+		}
+	}
+	if continuations != 3 {
+		t.Fatalf("expected two command continuations plus one ellipsis, got %d: %#v", continuations, clean)
+	}
+	if outputRows > ToolCallMaxLines {
+		t.Fatalf("output rows = %d, want at most %d: %#v", outputRows, ToolCallMaxLines, clean)
+	}
+	if !strings.Contains(strings.Join(clean, "\n"), transcriptHint) {
+		t.Fatalf("truncated output should advertise transcript: %#v", clean)
+	}
+}
+
+func TestExecCellDisplayWithThemeHighlightsCommandAndKeepsRawPlain(t *testing.T) {
+	duration := time.Second
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"bash", "-lc", "echo 'hello'"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "hello\n",
+			FormattedOutput:  "hello\n",
+		},
+		Source:   ExecSourceAgent,
+		Duration: &duration,
+	}, false)
+
+	display := strings.Join(cell.DisplayLinesWithTheme(80, "dracula"), "\n")
+	if !strings.Contains(display, "\x1b[") {
+		t.Fatalf("themed display should include ANSI styling:\n%q", display)
+	}
+	clean := utils.StripANSI(display)
+	if !strings.Contains(clean, "Ran echo 'hello'") || !strings.Contains(clean, "hello") {
+		t.Fatalf("stripped themed display lost content:\n%s", clean)
+	}
+	raw := strings.Join(cell.RawLines(), "\n")
+	if strings.Contains(raw, "\x1b[") {
+		t.Fatalf("raw lines should stay unstyled:\n%q", raw)
 	}
 }
 
@@ -126,5 +209,13 @@ func TestUnifiedExecInteractionFormatting(t *testing.T) {
 	interacted := FormatUnifiedExecInteraction([]string{"bash", "-lc", "python server.py"}, "q")
 	if interacted != "Interacted with `python server.py`, sent `q`" {
 		t.Fatalf("interacted = %q", interacted)
+	}
+	zsh := FormatUnifiedExecInteraction([]string{"zsh", "-c", "echo hi"}, "")
+	if zsh != "Waited for `echo hi`" {
+		t.Fatalf("zsh interaction = %q", zsh)
+	}
+	powershell := FormatUnifiedExecInteraction([]string{"pwsh", "-NoProfile", "-Command", "Get-ChildItem"}, "")
+	if powershell != "Waited for `pwsh -NoProfile -Command Get-ChildItem`" {
+		t.Fatalf("powershell interaction should use Rust join fallback: %q", powershell)
 	}
 }

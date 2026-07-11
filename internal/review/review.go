@@ -2,7 +2,6 @@ package review
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -22,6 +21,10 @@ type DiffProvider interface {
 	Diff(Target) (string, error)
 }
 
+type mergeBaseProvider interface {
+	MergeBaseWithHead(branch string) (string, error)
+}
+
 func BuildTarget(opts cli.ReviewOptions, stdin io.Reader) (Target, error) {
 	switch {
 	case opts.Uncommitted:
@@ -37,11 +40,11 @@ func BuildTarget(opts cli.ReviewOptions, stdin io.Reader) (Target, error) {
 		}
 		prompt = strings.TrimSpace(prompt)
 		if prompt == "" {
-			return Target{}, errors.New("review prompt cannot be empty")
+			return Target{}, errors.New("Review prompt cannot be empty")
 		}
 		return Target{Kind: "custom", Instructions: prompt}, nil
 	default:
-		return Target{}, errors.New("specify --uncommitted, --base, --commit, or provide custom review instructions")
+		return Target{}, errors.New("Specify --uncommitted, --base, --commit, or provide custom review instructions")
 	}
 }
 
@@ -50,49 +53,60 @@ func BuildPromptFromOptions(opts cli.ReviewOptions, stdin io.Reader, provider Di
 	if err != nil {
 		return "", Target{}, err
 	}
-	if target.Kind == "custom" {
-		return PromptForTarget(target), target, nil
-	}
-	if provider == nil {
-		provider = &GitDiffProvider{}
-	}
-	diff, err := provider.Diff(target)
+	prompt, err := promptForReviewTarget(target, provider)
 	if err != nil {
 		return "", Target{}, err
 	}
-	return PromptWithDiff(target, diff), target, nil
+	return prompt, target, nil
 }
 
 func PromptForTarget(target Target) string {
-	return PromptWithDiff(target, "")
+	prompt, err := promptForReviewTarget(target, nil)
+	if err != nil {
+		return ""
+	}
+	return prompt
 }
 
-func PromptWithDiff(target Target, diff string) string {
-	header := promptHeader(target)
-	if target.Kind == "custom" {
-		return header
-	}
-	diff = strings.TrimRight(diff, "\n")
-	if strings.TrimSpace(diff) == "" {
-		return header + "\n\nNo git diff was found for this review target."
-	}
-	return header + "\n\nGit diff:\n```diff\n" + diff + "\n```"
+func PromptWithDiff(target Target, _ string) string {
+	return PromptForTarget(target)
 }
 
-func promptHeader(target Target) string {
+func promptForReviewTarget(target Target, provider DiffProvider) (string, error) {
+	promptTarget, err := promptTargetForReviewTarget(target, provider)
+	if err != nil {
+		return "", err
+	}
+	return Prompt(promptTarget)
+}
+
+func promptTargetForReviewTarget(target Target, provider DiffProvider) (*PromptTarget, error) {
 	switch target.Kind {
 	case "uncommitted":
-		return "Review uncommitted changes."
+		return &PromptTarget{Kind: PromptUncommittedChanges}, nil
 	case "base":
-		return fmt.Sprintf("Review changes against base branch %s.", target.Base)
-	case "commit":
-		if target.CommitTitle != "" {
-			return fmt.Sprintf("Review commit %s (%s).", target.Commit, target.CommitTitle)
+		mergeBaseSHA := ""
+		if provider == nil {
+			provider = &GitDiffProvider{}
 		}
-		return fmt.Sprintf("Review commit %s.", target.Commit)
+		if baseProvider, ok := provider.(mergeBaseProvider); ok {
+			var err error
+			mergeBaseSHA, err = baseProvider.MergeBaseWithHead(target.Base)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &PromptTarget{Kind: PromptBaseBranch, Branch: target.Base, MergeBaseSHA: mergeBaseSHA}, nil
+	case "commit":
+		var title *string
+		if target.CommitTitle != "" {
+			titleValue := target.CommitTitle
+			title = &titleValue
+		}
+		return &PromptTarget{Kind: PromptCommit, SHA: target.Commit, Title: title}, nil
 	case "custom":
-		return "Review with custom instructions: " + target.Instructions
+		return &PromptTarget{Kind: PromptCustom, Instructions: target.Instructions}, nil
 	default:
-		return "Review changes."
+		return nil, errors.New("review target is required")
 	}
 }

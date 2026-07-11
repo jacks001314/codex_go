@@ -80,7 +80,9 @@ func (r *BackgroundRequestRegistry) ensure() {
 }
 
 func MCPInventoryRequestThreadID(activeThreadID string, requestedThreadID string, navigation *AgentNavigationState) (string, bool) {
-	if requestedThreadID == "" || requestedThreadID != activeThreadID {
+	activeThreadID, activeOK := ParseAppServerThreadID(activeThreadID)
+	requestedThreadID, requestedOK := ParseAppServerThreadID(requestedThreadID)
+	if !activeOK || !requestedOK || requestedThreadID != activeThreadID {
 		return "", false
 	}
 	if navigation != nil {

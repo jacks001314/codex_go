@@ -120,6 +120,9 @@ func TestHistorySearchFooterCursorCompatibilityAndCaseInsensitiveRangesMatchRust
 	if got := CaseInsensitiveMatchRanges("git status GIT", "GIT"); !reflect.DeepEqual(got, []TextRange{{Start: 0, End: 3}, {Start: 11, End: 14}}) {
 		t.Fatalf("case ranges = %#v", got)
 	}
+	if got := CaseInsensitiveMatchRanges("a\u0130 i", "i"); !reflect.DeepEqual(got, []TextRange{{Start: 1, End: 3}, {Start: 4, End: 5}}) {
+		t.Fatalf("turkish dotted-I ranges = %#v", got)
+	}
 	if got := CaseInsensitiveMatchRanges("你好Git", "git"); !reflect.DeepEqual(got, []TextRange{{Start: len("你好"), End: len("你好Git")}}) {
 		t.Fatalf("unicode case ranges = %#v", got)
 	}

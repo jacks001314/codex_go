@@ -3,6 +3,7 @@ package tea
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	bottompane "codex_go/internal/tui/bottom_pane"
 	chatwidget "codex_go/internal/tui/chatwidget"
 	historycell "codex_go/internal/tui/history_cell"
+	"codex_go/internal/utils"
 )
 
 func TestModelViewRendersState(t *testing.T) {
@@ -32,9 +34,10 @@ func TestModelViewRendersState(t *testing.T) {
 
 	model := NewModel(state, Options{Width: 72, Height: 18})
 	view := model.View()
+	cleanView := utils.StripANSI(view)
 
-	for _, want := range []string{"Thread: thread-1", "Model: gpt-test", "• hello", "• hi there", "Enter send"} {
-		if !strings.Contains(view, want) {
+	for _, want := range []string{"Thread: thread-1", "Model: gpt-test", "› hello", "• hi there", "Enter send"} {
+		if !strings.Contains(cleanView, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
 	}
@@ -86,7 +89,7 @@ func TestModelSubmitPrompt(t *testing.T) {
 	if model.ComposerValue() != "" {
 		t.Fatalf("ComposerValue = %q, want empty", model.ComposerValue())
 	}
-	if !strings.Contains(model.View(), "• hello codex") {
+	if !strings.Contains(utils.StripANSI(model.View()), "› hello codex") {
 		t.Fatalf("View() should include submitted user message:\n%s", model.View())
 	}
 }
@@ -1106,8 +1109,9 @@ func TestModelAppliesThreadEvents(t *testing.T) {
 		t.Fatalf("Status = %q, want idle", state.Status)
 	}
 	view := model.View()
+	cleanView := utils.StripANSI(view)
 	for _, want := range []string{"• hello", "Ran date", "ok"} {
-		if !strings.Contains(view, want) {
+		if !strings.Contains(cleanView, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
 	}
@@ -1135,6 +1139,149 @@ func TestModelStreamsToolInputIntoHistoryCell(t *testing.T) {
 	}
 	if strings.Contains(view, "Tool input streaming") || strings.Contains(view, "Tool started:") {
 		t.Fatalf("view contains stale tool event log:\n%s", view)
+	}
+}
+
+func TestModelWaitsForActualExecCommandInput(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID("fc-1", "call-1", "exec_command", ""))})
+	view := model.View()
+	if strings.Contains(view, "Running exec_command") || strings.Contains(view, "Running shell command") {
+		t.Fatalf("empty exec_command input should not render a command cell:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `{"cmd":"`)})
+	view = model.View()
+	if strings.Contains(view, "Running exec_command") || strings.Contains(view, "Running shell command") || strings.Contains(view, `Running {"cmd":"`) {
+		t.Fatalf("partial exec_command JSON should not leak as a command:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `pwd"}`)})
+	view = model.View()
+	if !strings.Contains(view, "Running pwd") {
+		t.Fatalf("complete exec_command input should render the actual command:\n%s", view)
+	}
+	if strings.Contains(view, "Running exec_command") {
+		t.Fatalf("exec_command tool name leaked into running cell:\n%s", view)
+	}
+}
+
+func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-1", "Get-ChildItem test.pdf", "", nil, "in_progress"))})
+	view := model.View()
+	if !strings.Contains(view, "Running Get-ChildItem test.pdf") {
+		t.Fatalf("command execution start should show the actual command:\n%s", view)
+	}
+	if strings.Contains(view, "exec_command") || strings.Contains(view, "shell command") {
+		t.Fatalf("command execution start leaked a generic label:\n%s", view)
+	}
+
+	exitCode := 0
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.CommandExecutionItem("call-1", "Get-ChildItem test.pdf", "test.pdf\n", &exitCode, "completed"))})
+	view = model.View()
+	if !strings.Contains(view, "Ran Get-ChildItem test.pdf") || !strings.Contains(view, "test.pdf") {
+		t.Fatalf("command execution completion should update the active cell:\n%s", view)
+	}
+	if strings.Contains(view, "Running Get-ChildItem") || strings.Contains(view, "shell command") {
+		t.Fatalf("command execution completion left a stale running cell:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "已获取本机网络信息。")})
+	view = model.View()
+	if !strings.Contains(view, strings.Repeat("─", 20)) {
+		t.Fatalf("assistant output after command should use the Rust final-message separator:\n%s", view)
+	}
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {
+		t.Fatalf("history count = %d, want command cell plus separator; messages=%#v", got, state.Messages)
+	}
+}
+
+func TestModelRendersMCPStartupProgressLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{
+		Width:                     100,
+		Height:                    24,
+		MCPStartupExpectedServers: []string{"alpha", "beta"},
+	})
+	model.now = func() time.Time { return time.Unix(7, 0) }
+
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Starting MCP servers (0/2): alpha, beta (0s") {
+		t.Fatalf("initial MCP startup header missing:\n%s", view)
+	}
+
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "Starting MCP servers (1/2): beta") {
+		t.Fatalf("MCP progress header missing:\n%s", view)
+	}
+
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
+		t.Fatalf("completed MCP startup should clear its status header:\n%s", model.View())
+	}
+}
+
+func TestModelQueuesInputUntilMCPStartupFinishes(t *testing.T) {
+	state := codextui.NewState(nil)
+	var submitted []string
+	model := NewModel(state, Options{
+		MCPStartupExpectedServers: []string{"docs"},
+		OnSubmit: func(prompt string) bubbletea.Cmd {
+			submitted = append(submitted, prompt)
+			return nil
+		},
+	})
+	model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	typeText(t, model, "queued during startup")
+	model.Update(key(bubbletea.KeyEnter))
+	if len(submitted) != 0 || len(model.QueuedRequests()) != 1 {
+		t.Fatalf("input should remain queued during MCP startup: submitted=%#v queued=%#v", submitted, model.QueuedRequests())
+	}
+
+	model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	if !reflect.DeepEqual(submitted, []string{"queued during startup"}) {
+		t.Fatalf("queued input was not released after MCP startup: %#v", submitted)
+	}
+}
+
+func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta"}})
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+
+	view := utils.StripANSI(model.View())
+	for _, want := range []string{"alpha handshake failed", "MCP startup incomplete (failed: alpha)"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("MCP startup warning missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModelMCPStartupInterruptIgnoresLateTerminalUpdates(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta"}})
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupFinishAfterLagMsg{})
+	if model.mcpStartupActive {
+		t.Fatal("MCP startup remained active after interruption")
+	}
+
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
+		t.Fatalf("late terminal updates reopened MCP startup:\n%s", model.View())
 	}
 }
 
@@ -3101,6 +3248,73 @@ func TestModelThemeAppliesToAssistantMarkdownCodeBlocks(t *testing.T) {
 	github := model.View()
 	if dracula == github {
 		t.Fatalf("assistant code block did not re-render after theme change")
+	}
+}
+
+func TestAssistantMarkdownCodeBlockPreservesSourceLines(t *testing.T) {
+	source := "下面是 C 代码：\n\n```c\n#include <stdio.h>\n\nvoid swap(int *a, int *b) {\n    int temp = *a;\n    *a = *b;\n    *b = temp;\n}\n```"
+	lines := richMessageDisplayLines(codextui.Message{Role: codextui.RoleAssistant, Text: source}, 24, "dracula")
+	cleanLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		cleanLines = append(cleanLines, strings.TrimSpace(utils.StripANSI(line)))
+	}
+
+	for _, want := range []string{
+		"#include <stdio.h>",
+		"void swap(int *a, int *b) {",
+		"int temp = *a;",
+		"*a = *b;",
+		"*b = temp;",
+		"}",
+	} {
+		found := false
+		for _, line := range cleanLines {
+			if line == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("rendered code block lost source line %q:\n%s", want, strings.Join(cleanLines, "\n"))
+		}
+	}
+	for _, fragment := range []string{"#include", "void", "swap(int", "int temp", "= *a;"} {
+		for _, line := range cleanLines {
+			if line == fragment {
+				t.Fatalf("code line was split at ANSI token boundary %q:\n%s", fragment, strings.Join(cleanLines, "\n"))
+			}
+		}
+	}
+}
+
+func TestModelThemeAppliesToExecCommandCells(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	model := NewModel(state, Options{
+		Width:    100,
+		Height:   24,
+		TUITheme: "dracula",
+	})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID(
+		"fc-1",
+		"call-1",
+		"exec_command",
+		`{"cmd":"Get-ChildItem -LiteralPath 'tmp\\pdfs' -Filter 'test-*.png'"}`,
+	))})
+
+	view := model.View()
+	if !strings.Contains(view, "\x1b[") {
+		t.Fatalf("themed exec command should include ANSI styling:\n%s", view)
+	}
+	clean := utils.StripANSI(view)
+	if !strings.Contains(clean, "Running Get-ChildItem -LiteralPath 'tmp\\pdfs' -Filter 'test-*.png'") {
+		t.Fatalf("stripped themed exec command lost content:\n%s", clean)
+	}
+	if strings.Contains(clean, "Running exec_command") {
+		t.Fatalf("exec command tool name leaked into themed cell:\n%s", clean)
+	}
+	if len(state.Messages) == 0 || strings.Contains(state.Messages[0].RawText, "\x1b[") {
+		t.Fatalf("raw exec transcript should remain unstyled: %#v", state.Messages)
 	}
 }
 

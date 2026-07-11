@@ -43,6 +43,10 @@ func TestSideStartErrorMessageMatchRust(t *testing.T) {
 	if got := SideStartErrorMessage(err); got != "Failed to start side conversation: transport disconnected" {
 		t.Fatalf("SideStartErrorMessage(generic) = %q", got)
 	}
+	err = errors.New(" transport disconnected ")
+	if got := SideStartErrorMessage(err); got != "Failed to start side conversation:  transport disconnected " {
+		t.Fatalf("SideStartErrorMessage(preserve spaces) = %q", got)
+	}
 }
 
 func TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust(t *testing.T) {
@@ -109,6 +113,9 @@ func TestSideParentStatusForRequestKindMatchRust(t *testing.T) {
 	if got, ok := SideParentStatusForRequestKind("dynamic_tool_call"); ok || got != "" {
 		t.Fatalf("dynamic request status = %q/%v, want none", got, ok)
 	}
+	if got, ok := SideParentStatusForRequestKind(" " + ServerRequestUserInput + " "); ok || got != "" {
+		t.Fatalf("spaced request status = %q/%v, want none", got, ok)
+	}
 }
 
 func TestSideParentStatusChangeForNotificationMatchRust(t *testing.T) {
@@ -134,6 +141,9 @@ func TestSideParentStatusChangeForNotificationMatchRust(t *testing.T) {
 	if got, ok := SideParentStatusChangeForNotification(ServerNotificationTurnCompleted, appserver.TurnStatusInProgress); ok || got != (SideParentStatusChange{}) {
 		t.Fatalf("in-progress turn change = %#v/%v, want none", got, ok)
 	}
+	if got, ok := SideParentStatusChangeForNotification(" "+ServerNotificationTurnStarted+" ", ""); ok || got != (SideParentStatusChange{}) {
+		t.Fatalf("spaced notification change = %#v/%v, want none", got, ok)
+	}
 }
 
 func TestApplySideParentStatusChangeAndContextLabelMatchRust(t *testing.T) {
@@ -144,11 +154,14 @@ func TestApplySideParentStatusChangeAndContextLabelMatchRust(t *testing.T) {
 	if state.ParentStatus != SideParentStatusNeedsApproval {
 		t.Fatalf("parent status = %q", state.ParentStatus)
 	}
-	if got := SideContextLabel(true, "", state.ParentStatus); got != "Side from main thread - main needs approval - Ctrl+C to return" {
+	if got := SideContextLabel(true, "", state.ParentStatus); got != "Side from main thread · main needs approval · Ctrl+C to return" {
 		t.Fatalf("main context label = %q", got)
 	}
-	if got := SideContextLabel(false, "worker", SideParentStatusFinished); got != "Side from parent thread (worker) - parent finished - Ctrl+C to return" {
+	if got := SideContextLabel(false, "worker", SideParentStatusFinished); got != "Side from parent thread (worker) · parent finished · Ctrl+C to return" {
 		t.Fatalf("parent context label = %q", got)
+	}
+	if got := SideContextLabel(false, " worker ", ""); got != "Side from parent thread ( worker ) · Ctrl+C to return" {
+		t.Fatalf("parent raw label = %q", got)
 	}
 	if !ApplySideParentStatusChange(&state, SideParentStatusChange{Kind: SideParentStatusChangeClearActionable}) {
 		t.Fatal("clear actionable should change needs approval")
@@ -175,7 +188,16 @@ func TestSideStartBlockAndCloseErrorMessages(t *testing.T) {
 	if got, ok := SideStartBlockMessage(true, 0); ok || got != "" {
 		t.Fatalf("SideStartBlockMessage(clear) = %q/%v", got, ok)
 	}
-	if got := SideCloseErrorMessage("side-1", errors.New("transport disconnected")); got != "Failed to close side conversation side-1; it is still open: transport disconnected" {
+	if got := SideCloseErrorMessage(rustThreadID1, errors.New("transport disconnected")); got != "Failed to close side conversation "+rustThreadID1+"; it is still open: transport disconnected" {
 		t.Fatalf("SideCloseErrorMessage() = %q", got)
+	}
+	if got := SideCloseErrorMessage("00000000-0000-0000-0000-0000000000AA", errors.New("transport disconnected")); got != "Failed to close side conversation 00000000-0000-0000-0000-0000000000aa; it is still open: transport disconnected" {
+		t.Fatalf("SideCloseErrorMessage(uppercase) = %q", got)
+	}
+	if got := SideCloseErrorMessage(" "+rustThreadID1+" ", errors.New("transport disconnected")); got != "Failed to close side conversation side conversation; it is still open: transport disconnected" {
+		t.Fatalf("SideCloseErrorMessage(spaced) = %q", got)
+	}
+	if got := SideCloseErrorMessage(rustThreadID1, errors.New(" transport disconnected ")); got != "Failed to close side conversation "+rustThreadID1+"; it is still open:  transport disconnected " {
+		t.Fatalf("SideCloseErrorMessage(preserve spaces) = %q", got)
 	}
 }

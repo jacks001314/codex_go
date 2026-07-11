@@ -560,45 +560,62 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
 	runner := newCodexExecRunner(auth.DefaultCodexHome())
-	mcpService, mcpStatuses, mcpTools := interactiveMCPRuntime(root)
+	mcpService, mcpStatuses, mcpExpectedServers := interactiveMCPRuntime(root)
 	if runner != nil && mcpService != nil {
 		runner.MCPService = mcpService
-		runner.MCPTools = mcpTools
+	}
+	var initialMessages <-chan bubbletea.Msg
+	var cancelMCPStartup context.CancelFunc
+	if runner != nil && mcpService != nil && len(mcpExpectedServers) > 0 {
+		startupCtx := ctx
+		if startupCtx == nil {
+			startupCtx = context.Background()
+		}
+		startupCtx, cancelMCPStartup = context.WithCancel(startupCtx)
+		initialMessages = interactiveMCPStartupMessages(startupCtx, mcpService, runner, mcpExpectedServers)
 	}
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
 	userInputBroker := newInteractiveUserInputBroker()
 	interrupts := newInteractiveInterruptController()
 	options := codextea.Options{
-		NoAltScreen:             root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems:      interactiveSessionPickerItems(root),
-		SessionPickerCWD:        interactiveSessionPickerCWD(root),
-		SessionPickerView:       settings.SessionPickerView,
-		ShowSessionHeader:       true,
-		SessionHeaderVersion:    "dev",
-		OnSessionAction:         interactiveSessionActionHandler(root),
-		OnResumeSession:         interactiveResumeSessionHandler(root),
-		KeymapConfig:            interactiveKeymapConfig(root),
-		OnKeymapEdit:            interactiveKeymapEditHandler(root),
-		OnWriteSettings:         interactiveSettingsWriteHandler(root),
-		FeatureSettings:         settings.FeatureSettings,
-		Personality:             settings.Personality,
-		Notifications:           settings.Notifications,
-		NotificationMethod:      settings.NotificationMethod,
-		NotificationCondition:   settings.NotificationCondition,
-		PermissionRequirements:  settings.PermissionRequirements,
-		MCPServers:              mcpStatuses,
-		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
-		TUITheme:                settings.TUITheme,
-		TUIPet:                  settings.TUIPet,
-		OnPostNotification:      interactiveNotificationPoster(stdout),
-		OnReadDebugConfig:       interactiveDebugConfigReader(root),
-		OnReadSkills:            interactiveSkillsReader(root),
+		NoAltScreen:               root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:        interactiveSessionPickerItems(root),
+		SessionPickerCWD:          interactiveSessionPickerCWD(root),
+		SessionPickerView:         settings.SessionPickerView,
+		ShowSessionHeader:         true,
+		SessionHeaderVersion:      "dev",
+		OnSessionAction:           interactiveSessionActionHandler(root),
+		OnResumeSession:           interactiveResumeSessionHandler(root),
+		KeymapConfig:              interactiveKeymapConfig(root),
+		OnKeymapEdit:              interactiveKeymapEditHandler(root),
+		OnWriteSettings:           interactiveSettingsWriteHandler(root),
+		FeatureSettings:           settings.FeatureSettings,
+		Personality:               settings.Personality,
+		Notifications:             settings.Notifications,
+		NotificationMethod:        settings.NotificationMethod,
+		NotificationCondition:     settings.NotificationCondition,
+		PermissionRequirements:    settings.PermissionRequirements,
+		MCPServers:                mcpStatuses,
+		MCPStartupExpectedServers: mcpExpectedServers,
+		InitialMessages:           initialMessages,
+		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
+		TUITheme:                  settings.TUITheme,
+		TUIPet:                    settings.TUIPet,
+		OnPostNotification:        interactiveNotificationPoster(stdout),
+		OnReadDebugConfig:         interactiveDebugConfigReader(root),
+		OnReadSkills:              interactiveSkillsReader(root),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
+		},
+		OnInterruptMCPStartup: func() bubbletea.Cmd {
+			if cancelMCPStartup != nil {
+				cancelMCPStartup()
+			}
+			return func() bubbletea.Msg { return codextea.MCPStartupFinishAfterLagMsg{} }
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			approvalBroker.respond(response)
@@ -611,7 +628,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	return err
 }
 
-func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []mcp.RuntimeToolInfo) {
+func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []string) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
@@ -622,14 +639,90 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 		return nil, nil, nil
 	}
 	service := mcp.NewMCPService(runtimeConfig)
-	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
-		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
-	})
+	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{})
 	if err != nil || response == nil {
 		return service, nil, nil
 	}
 	statuses := interactiveHistoryMCPStatuses(response.Data)
-	return service, statuses, mcp.RuntimeToolsFromStatuses(response.Data)
+	expectedServers := make([]string, 0, len(response.Data))
+	for i := range response.Data {
+		if name := mcp.RuntimeServerNameFromStatus(&response.Data[i]); name != "" {
+			expectedServers = append(expectedServers, name)
+		}
+	}
+	return service, statuses, expectedServers
+}
+
+func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService, runner *codexexec.Runner, expectedServers []string) <-chan bubbletea.Msg {
+	capacity := len(expectedServers)*3 + 2
+	if capacity < 2 {
+		capacity = 2
+	}
+	messages := make(chan bubbletea.Msg, capacity)
+	go func() {
+		defer close(messages)
+		send := func(message bubbletea.Msg) bool {
+			select {
+			case messages <- message:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		for _, name := range expectedServers {
+			if !send(codextea.MCPStartupUpdateMsg{Name: name, Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}}) {
+				return
+			}
+		}
+		expectedSet := make(map[string]bool, len(expectedServers))
+		settledExpected := make(map[string]bool, len(expectedServers))
+		for _, name := range expectedServers {
+			expectedSet[name] = true
+		}
+		var finalUpdate *codextea.MCPStartupUpdateMsg
+		response, err := service.ListStatusCheckedWithObserver(&mcp.MCPListServerStatusParams{
+			Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
+		}, func(name string, status mcp.MCPServerStartupState, startupErr error) {
+			kind := chatwidget.McpStartupStatusKind(status)
+			if kind == "" {
+				kind = chatwidget.McpStartupFailed
+			}
+			message := ""
+			if startupErr != nil {
+				message = startupErr.Error()
+			}
+			update := codextea.MCPStartupUpdateMsg{Name: name, Status: chatwidget.McpStartupStatus{Kind: kind, Error: message}}
+			if kind != chatwidget.McpStartupStarting && expectedSet[name] {
+				settledExpected[name] = true
+			}
+			if expectedSet[name] && len(settledExpected) == len(expectedSet) && kind != chatwidget.McpStartupStarting {
+				cloned := update
+				finalUpdate = &cloned
+				return
+			}
+			_ = send(update)
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			for _, name := range expectedServers {
+				if !send(codextea.MCPStartupUpdateMsg{Name: name, Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: err.Error()}}) {
+					return
+				}
+			}
+			return
+		}
+		if response == nil {
+			return
+		}
+		runner.MCPTools = mcp.RuntimeToolsFromStatuses(response.Data)
+		if finalUpdate != nil && !send(*finalUpdate) {
+			return
+		}
+		_ = send(codextea.MCPStartupInventoryMsg{Servers: interactiveHistoryMCPStatuses(response.Data)})
+	}()
+	return messages
 }
 
 func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell.McpServerStatus {
@@ -1850,7 +1943,9 @@ func interactiveSkillInstructionsInputItem(skill promptctx.InstructionsSkillMeta
 		}
 		contents = string(data)
 	}
-	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(skill.Name, skill.Path, contents))
+	renderPath := firstNonEmptyLocal(skill.LocatorPath, skill.Path)
+	name, renderPath, contents, _ := promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
 		return nil
 	}

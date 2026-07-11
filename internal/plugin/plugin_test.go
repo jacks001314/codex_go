@@ -43,27 +43,31 @@ func TestListDiscoverablePluginsTrimsFilterIDs(t *testing.T) {
 
 func TestCollectToolMentionsFromMessages(t *testing.T) {
 	mentions := CollectToolMentionsFromMessages([]string{
-		"run $shell and $app://calendar but ignore @plugin://docs",
+		"run $review and [$calendar](app://calendar) but ignore @plugin://docs and $PATH",
 	})
-	if !mentions.PlainNames["shell"] {
-		t.Fatalf("plain mention shell missing")
+	if !mentions.PlainNames["review"] {
+		t.Fatalf("plain mention review missing")
 	}
 	if !mentions.Paths["app://calendar"] {
-		t.Fatalf("path mention app://calendar missing")
+		t.Fatalf("linked path mention app://calendar missing")
 	}
 	if mentions.Paths["plugin://docs"] {
-		t.Fatalf("plugin mention collected with tool sigil")
+		t.Fatalf("raw plugin mention collected as path")
+	}
+	if mentions.PlainNames["PATH"] {
+		t.Fatalf("common env var PATH should be ignored like Rust")
 	}
 }
 
 func TestCollectExplicitAppIDs(t *testing.T) {
 	got := CollectExplicitAppIDs([]UserInput{
-		{Type: "text", Text: "open $app://calendar"},
+		{Type: "text", Text: "open [$calendar](app://calendar) and ignore raw $app://ignored"},
 		{Type: "mention", Path: "app://mail"},
-		{Type: "text", Text: "then $app://team%20drive"},
+		{Type: "text", Text: "then [$team]( app://team%20drive )"},
+		{Type: "mention", Path: " app://spaced "},
 		{Type: "mention", Path: "plugin://docs"},
 	})
-	if !reflect.DeepEqual(got, map[string]bool{"calendar": true, "mail": true, "team drive": true}) {
+	if !reflect.DeepEqual(got, map[string]bool{"calendar": true, "mail": true, "team%20drive": true}) {
 		t.Fatalf("CollectExplicitAppIDs() = %v", got)
 	}
 }
@@ -72,12 +76,13 @@ func TestCollectExplicitPluginMentions(t *testing.T) {
 	plugins := []CapabilitySummary{
 		{ConfigName: "docs", DisplayName: "Docs"},
 		{ConfigName: "issues", DisplayName: "Issues"},
-		{ConfigName: "sample@debug", DisplayName: "Sample"},
+		{ConfigName: "sample%40debug", DisplayName: "Sample"},
+		{ConfigName: "raw", DisplayName: "Raw"},
 	}
 	got := CollectExplicitPluginMentions([]UserInput{
-		{Type: "text", Text: "use @plugin://docs"},
+		{Type: "text", Text: "use [@docs](plugin://docs) and ignore raw @plugin://raw"},
 		{Type: "mention", Path: "plugin://issues"},
-		{Type: "text", Text: "and @plugin://sample%40debug"},
+		{Type: "text", Text: "and [@sample](plugin://sample%40debug)"},
 	}, plugins)
 	if names(got) == nil {
 		t.Fatalf("names() unexpectedly nil")
@@ -87,7 +92,7 @@ func TestCollectExplicitPluginMentions(t *testing.T) {
 	}
 }
 
-func TestCollectExplicitPluginMentionsFromAppMention(t *testing.T) {
+func TestCollectExplicitPluginMentionsIgnoresAppMentionsLikeRust(t *testing.T) {
 	plugins := []CapabilitySummary{
 		{ConfigName: "docs", DisplayName: "Docs", AppConnectors: []string{"docs-app"}},
 		{ConfigName: "issues", DisplayName: "Issues", AppConnectors: []string{"issues-app"}},
@@ -95,8 +100,20 @@ func TestCollectExplicitPluginMentionsFromAppMention(t *testing.T) {
 	got := CollectExplicitPluginMentions([]UserInput{
 		{Type: "mention", Path: "app://docs-app"},
 	}, plugins)
-	if !reflect.DeepEqual(names(got), []string{"Docs"}) {
-		t.Fatalf("CollectExplicitPluginMentions(app) = %v, want Docs", names(got))
+	if len(got) != 0 {
+		t.Fatalf("CollectExplicitPluginMentions(app) = %v, want empty", names(got))
+	}
+}
+
+func TestCollectExplicitPluginMentionsMatchesOnlyConfigNameLikeRust(t *testing.T) {
+	plugins := []CapabilitySummary{
+		{ConfigName: "docs", RemotePluginID: "remote-docs", Name: "docs-name", DisplayName: "Docs"},
+	}
+	if got := CollectExplicitPluginMentions([]UserInput{{Type: "mention", Path: "plugin://Docs"}}, plugins); len(got) != 0 {
+		t.Fatalf("display-name path matched plugin unexpectedly: %v", names(got))
+	}
+	if got := CollectExplicitPluginMentions([]UserInput{{Type: "mention", Path: " plugin://docs "}}, plugins); len(got) != 0 {
+		t.Fatalf("spaced structured path matched plugin unexpectedly: %v", names(got))
 	}
 }
 

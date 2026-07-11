@@ -102,6 +102,25 @@ func ExtractShellCommand(command []string) (string, string, bool) {
 	return "", "", false
 }
 
+func ExtractPOSIXShellCommand(command []string) (string, string, bool) {
+	if len(command) != 3 {
+		return "", "", false
+	}
+	shellType, ok := DetectShellType(command[0])
+	if !ok {
+		return "", "", false
+	}
+	switch shellType {
+	case ShellBash, ShellZsh, ShellSh:
+	default:
+		return "", "", false
+	}
+	if command[1] != "-lc" && command[1] != "-c" {
+		return "", "", false
+	}
+	return command[0], command[2], true
+}
+
 const UTF8OutputPrefix = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n"
 
 func ExtractPowerShellCommand(command []string) (string, string, bool) {
@@ -138,6 +157,19 @@ func PrefixPowerShellScriptWithUTF8(command []string) []string {
 	result := append([]string(nil), command[:len(command)-1]...)
 	result = append(result, script)
 	return result
+}
+
+func StripShellCommandAndEscape(command []string) string {
+	if len(command) == 0 {
+		return ""
+	}
+	if _, script, ok := ExtractPOSIXShellCommand(command); ok {
+		return script
+	}
+	if _, script, ok := ExtractPowerShellCommand(command); ok {
+		return script
+	}
+	return ShlexJoin(command)
 }
 
 type ParsedCommand struct {

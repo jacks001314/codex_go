@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1430,6 +1432,232 @@ func TestHTTPMCPIncludesErrorBody(t *testing.T) {
 	err := client.Call("tools/list", map[string]any{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "418 I'm a teapot") || !strings.Contains(err.Error(), "short and stout") {
 		t.Fatalf("Call() error = %v", err)
+	}
+}
+
+func TestHTTPMCPInitializeRetriesRustTransientStatuses(t *testing.T) {
+	var initializeCount atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			if initializeCount.Add(1) == 1 {
+				http.Error(w, "temporary", http.StatusBadGateway)
+				return
+			}
+			w.Header().Set(mcpHTTPSessionIDHeader, "session-1")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "helper", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	var delays []time.Duration
+	client.retrySleep = func(delay time.Duration) { delays = append(delays, delay) }
+	if err := client.Call("tools/list", map[string]any{}, nil); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if initializeCount.Load() != 2 {
+		t.Fatalf("initialize attempts = %d, want 2", initializeCount.Load())
+	}
+	if len(delays) != 1 || delays[0] != 250*time.Millisecond {
+		t.Fatalf("retry delays = %v, want [250ms]", delays)
+	}
+}
+
+func TestHTTPMCPInitializeDoesNotRetryForbidden(t *testing.T) {
+	var initializeCount atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initializeCount.Add(1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	var delays []time.Duration
+	client.retrySleep = func(delay time.Duration) { delays = append(delays, delay) }
+	err := client.Call("tools/list", map[string]any{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
+		t.Fatalf("Call() error = %v, want 403", err)
+	}
+	if initializeCount.Load() != 1 {
+		t.Fatalf("initialize attempts = %d, want 1", initializeCount.Load())
+	}
+	if len(delays) != 0 {
+		t.Fatalf("retry delays = %v, want none", delays)
+	}
+}
+
+func TestHTTPMCPInitializedNotificationRetriesWholeHandshake(t *testing.T) {
+	var initializeCount atomic.Int64
+	var notificationCount atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			attempt := initializeCount.Add(1)
+			w.Header().Set(mcpHTTPSessionIDHeader, fmt.Sprintf("session-%d", attempt))
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "helper", "version": "test"},
+			})
+		case "notifications/initialized":
+			if notificationCount.Add(1) == 1 {
+				http.Error(w, "temporary", http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	client.retrySleep = func(time.Duration) {}
+	if err := client.Call("tools/list", map[string]any{}, nil); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if initializeCount.Load() != 2 || notificationCount.Load() != 2 {
+		t.Fatalf("initialize attempts = %d notifications = %d, want 2 each", initializeCount.Load(), notificationCount.Load())
+	}
+}
+
+func TestHTTPMCPToolsListRetriesTransientFailures(t *testing.T) {
+	var toolsListCount atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "session-1")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "helper", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			switch toolsListCount.Add(1) {
+			case 1:
+				http.Error(w, "temporary", http.StatusInternalServerError)
+			case 2:
+				http.Error(w, "temporary", http.StatusBadGateway)
+			default:
+				writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	var delays []time.Duration
+	client.retrySleep = func(delay time.Duration) { delays = append(delays, delay) }
+	if err := client.Call("tools/list", map[string]any{}, nil); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if toolsListCount.Load() != 3 {
+		t.Fatalf("tools/list attempts = %d, want 3", toolsListCount.Load())
+	}
+	wantDelays := []time.Duration{250 * time.Millisecond, time.Second}
+	if len(delays) != len(wantDelays) || delays[0] != wantDelays[0] || delays[1] != wantDelays[1] {
+		t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+	}
+}
+
+func TestHTTPMCPToolsCallDoesNotRetryTransientFailure(t *testing.T) {
+	var toolsCallCount atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "session-1")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "helper", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			toolsCallCount.Add(1)
+			http.Error(w, "temporary", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true})
+	var delays []time.Duration
+	client.retrySleep = func(delay time.Duration) { delays = append(delays, delay) }
+	err := client.Call("tools/call", map[string]any{"name": "echo"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "500 Internal Server Error") {
+		t.Fatalf("Call() error = %v, want 500", err)
+	}
+	if toolsCallCount.Load() != 1 || len(delays) != 0 {
+		t.Fatalf("tools/call attempts = %d retry delays = %v, want one attempt", toolsCallCount.Load(), delays)
+	}
+}
+
+func TestRetryableMCPStreamableHTTPErrorMatchesRustClassifier(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "request timeout", err: &mcpHTTPStatusError{StatusCode: http.StatusRequestTimeout}, want: true},
+		{name: "too many requests", err: &mcpHTTPStatusError{StatusCode: http.StatusTooManyRequests}, want: true},
+		{name: "internal server error", err: &mcpHTTPStatusError{StatusCode: http.StatusInternalServerError}, want: true},
+		{name: "bad gateway", err: &mcpHTTPStatusError{StatusCode: http.StatusBadGateway}, want: true},
+		{name: "service unavailable", err: &mcpHTTPStatusError{StatusCode: http.StatusServiceUnavailable}, want: true},
+		{name: "gateway timeout", err: &mcpHTTPStatusError{StatusCode: http.StatusGatewayTimeout}, want: true},
+		{name: "forbidden", err: &mcpHTTPStatusError{StatusCode: http.StatusForbidden}, want: false},
+		{name: "session expired", err: &mcpHTTPStatusError{StatusCode: http.StatusNotFound}, want: false},
+		{name: "transport rpc error", err: &MCPRemoteError{Code: -32603, Message: "http/request failed: reset"}, want: true},
+		{name: "other rpc error", err: &MCPRemoteError{Code: -32603, Message: "internal failure"}, want: false},
+		{name: "network error", err: &net.DNSError{Err: "temporary", Name: "mcp.test"}, want: true},
+		{name: "truncated stream", err: io.ErrUnexpectedEOF, want: true},
+		{name: "clean eof", err: io.EOF, want: false},
+		{name: "decode error", err: errors.New("invalid character"), want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isRetryableMCPStreamableHTTPError(test.err); got != test.want {
+				t.Fatalf("isRetryableMCPStreamableHTTPError(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
 	}
 }
 

@@ -2758,6 +2758,28 @@ func threadStartedNotificationForTest(t *testing.T, sink *NotificationBuffer) *T
 	return nil
 }
 
+func findThreadStartedNotificationAfter(t *testing.T, sink *NotificationBuffer, start int, threadID string) *ThreadStartedNotification {
+	t.Helper()
+	notifications := sink.List()
+	if start < 0 || start > len(notifications) {
+		start = 0
+	}
+	for _, notification := range notifications[start:] {
+		if notification == nil || notification.Method != NotificationThreadStarted {
+			continue
+		}
+		payload, ok := notification.Params.(*ThreadStartedNotification)
+		if !ok || payload == nil || payload.Thread == nil {
+			continue
+		}
+		if payload.Thread.ID == threadID {
+			return payload
+		}
+	}
+	t.Fatalf("thread/started notification for %s missing after %d in %+v", threadID, start, notifications)
+	return nil
+}
+
 func TestRuntimeRouterExperimentalAPICapabilityGate(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{
@@ -4941,7 +4963,7 @@ func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
 	}
 	if _, err := NewFSService().WriteFile(&WriteFileParams{
 		Path:       filepath.Join(skillDir, "SKILL.md"),
-		DataBase64: base64.StdEncoding.EncodeToString([]byte("# Skill A")),
+		DataBase64: base64.StdEncoding.EncodeToString([]byte("---\nname: skill-a\ndescription: Skill A\n---\n")),
 	}); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -5814,6 +5836,340 @@ func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {
 	interrupt := router.Handle(requestWithParams(t, IntID(10), MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}))
 	if interrupt.Error != nil {
 		t.Fatalf("interrupt = %+v", interrupt)
+	}
+}
+
+func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target:   review.APITarget{Type: "baseBranch", Branch: "main"},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	response := reviewStart.Result.(*review.StartResponse)
+	turnID := response.Turn.ID
+	if turnID != "review-"+threadID {
+		t.Fatalf("turn id = %q, want review-%s", turnID, threadID)
+	}
+
+	started := waitForItemStarted(t, sink, turnID)
+	startedItem := notificationItemMap(t, started.Item)
+	if started.ThreadID != threadID || started.TurnID != turnID || started.StartedAtMS == 0 {
+		t.Fatalf("started notification = %#v", started)
+	}
+	if startedItem["type"] != "enteredReviewMode" || startedItem["id"] != turnID || startedItem["review"] != "changes against 'main'" {
+		t.Fatalf("started item = %#v", startedItem)
+	}
+
+	completed := waitForItemCompleted(t, sink, turnID)
+	completedItem := notificationItemMap(t, completed.Item)
+	if completed.ThreadID != threadID || completed.TurnID != turnID || completed.CompletedAtMS == 0 {
+		t.Fatalf("completed notification = %#v", completed)
+	}
+	if !reflect.DeepEqual(completedItem, startedItem) {
+		t.Fatalf("completed item = %#v, want %#v", completedItem, startedItem)
+	}
+}
+
+func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("review_model = \"gpt-review\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Model: "gpt-parent"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	parentThread := threadStart.Result.(*ThreadStartResponse).Thread
+	if parentThread.Path == nil {
+		t.Fatal("parent thread path missing")
+	}
+	if _, err := os.Stat(*parentThread.Path); !os.IsNotExist(err) {
+		t.Fatalf("parent rollout should start unmaterialized, stat err = %v", err)
+	}
+	baselineNotifications := len(sink.List())
+	detached := "detached"
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: parentThread.ID,
+		Delivery: &detached,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "detached review",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	if _, err := os.Stat(*parentThread.Path); err != nil {
+		t.Fatalf("parent rollout should be materialized before detached fork: %v", err)
+	}
+	response := reviewStart.Result.(*review.StartResponse)
+	if response.ReviewThreadID == "" || response.ReviewThreadID == parentThread.ID {
+		t.Fatalf("reviewThreadId = %q, parent = %q", response.ReviewThreadID, parentThread.ID)
+	}
+	if response.Turn.ID == "" || len(response.Turn.Items) != 1 {
+		t.Fatalf("review turn = %+v", response.Turn)
+	}
+
+	startedThread := findThreadStartedNotificationAfter(t, sink, baselineNotifications, response.ReviewThreadID)
+	if startedThread.Thread.SessionID != response.ReviewThreadID {
+		t.Fatalf("review thread sessionId = %q, want %q", startedThread.Thread.SessionID, response.ReviewThreadID)
+	}
+	if len(startedThread.Thread.Turns) != 0 {
+		t.Fatalf("detached review thread/started turns = %+v, want omitted", startedThread.Thread.Turns)
+	}
+	readReviewThread := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: response.ReviewThreadID}))
+	if readReviewThread.Error != nil {
+		t.Fatalf("review thread should be readable: %+v", readReviewThread.Error)
+	}
+	reviewRecord, err := store.Read(session.ThreadID(response.ReviewThreadID), true, false)
+	if err != nil {
+		t.Fatalf("read review record: %v", err)
+	}
+	if reviewRecord.Metadata.Model != "gpt-review" {
+		t.Fatalf("review thread model = %q, want gpt-review", reviewRecord.Metadata.Model)
+	}
+	parentRecord, err := store.Read(session.ThreadID(parentThread.ID), true, false)
+	if err != nil {
+		t.Fatalf("read parent record: %v", err)
+	}
+	if parentRecord.Metadata.Model != "gpt-parent" {
+		t.Fatalf("parent thread model = %q, want gpt-parent", parentRecord.Metadata.Model)
+	}
+
+	started := waitForItemStarted(t, sink, response.Turn.ID)
+	startedItem := notificationItemMap(t, started.Item)
+	if started.ThreadID != response.ReviewThreadID || started.TurnID != response.Turn.ID {
+		t.Fatalf("entered review notification = %#v", started)
+	}
+	if startedItem["type"] != "enteredReviewMode" || startedItem["review"] != "detached review" {
+		t.Fatalf("entered review item = %#v", startedItem)
+	}
+}
+
+func TestRuntimeRouterReviewStartRunsReviewTurnAndEmitsExitLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("review_model = \"gpt-review\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	reviewerJSON := `{"findings":[{"title":"Unsafe write","body":"Check bounds before writing.","confidence_score":0.9,"priority":1,"code_location":{"absolute_file_path":"/tmp/file.rs","line_range":{"start":10,"end":20}}}],"overall_correctness":"patch is incorrect","overall_explanation":"Needs changes","overall_confidence_score":0.8}`
+	agent := newRecordingRuntimeAgent(reviewerJSON)
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+		Agent:        agent,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Model: "gpt-parent"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.TaskKind != model.AgentTaskReview {
+		t.Fatalf("task kind = %q, want review", request.TaskKind)
+	}
+	if request.Model != "gpt-review" {
+		t.Fatalf("model = %q, want review_model override", request.Model)
+	}
+	if strings.TrimSpace(request.Instructions) != strings.TrimSpace(review.ReviewPrompt) {
+		t.Fatalf("review instructions mismatch")
+	}
+	if !request.DisableHostedImageGeneration {
+		t.Fatalf("DisableHostedImageGeneration = false, want true")
+	}
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exited.ThreadID != threadID || exited.TurnID != turnID {
+		t.Fatalf("exited review notification = %#v", exited)
+	}
+	reviewText, _ := exitedItem["review"].(string)
+	if !strings.Contains(reviewText, "Unsafe write") || !strings.Contains(reviewText, "/tmp/file.rs:10-20") {
+		t.Fatalf("exited review text = %q", reviewText)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if !strings.Contains(fmt.Sprint(assistantItem["text"]), "Unsafe write") {
+		t.Fatalf("assistant review item = %#v", assistantItem)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	assertNoItemNotification(t, sink, "msg-1")
+}
+
+func TestRuntimeRouterReviewStartInterruptEmitsInterruptedExitLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	agent := newBlockingReviewRuntimeAgent()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        agent,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+	_ = waitForBlockingReviewRuntimeAgentRequest(t, agent)
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt review turn = %+v", interrupt.Error)
+	}
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exitedItem["review"] != review.FallbackMessage {
+		t.Fatalf("interrupted exited review item = %#v", exitedItem)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if assistantItem["text"] != review.InterruptedMessage {
+		t.Fatalf("interrupted assistant item = %#v", assistantItem)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterReviewStartRuntimeErrorEmitsFallbackExitAndCompletesLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        &apiErrorRuntimeAgent{err: errors.New("review runtime failed")},
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exitedItem["review"] != review.FallbackMessage {
+		t.Fatalf("runtime-error exited review item = %#v", exitedItem)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if assistantItem["text"] != review.InterruptedMessage {
+		t.Fatalf("runtime-error assistant item = %#v", assistantItem)
+	}
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if completed.Turn.Error != nil {
+		t.Fatalf("review runtime error should be swallowed like Rust, got turn error %#v", completed.Turn.Error)
+	}
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationError {
+			if payload, ok := notification.Params.(*ErrorNotification); ok && payload.TurnID == turnID {
+				t.Fatalf("review runtime error emitted generic error notification: %#v", payload)
+			}
+		}
+	}
+}
+
+func TestRuntimeRouterReviewRuntimeDisablesStandaloneWebAndImageToolsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	cfg := &config.Config{Values: map[string]any{
+		"features": map[string]any{
+			"standalone_web_search": true,
+			"image_generation":      true,
+			"imagegenext":           true,
+		},
+	}}
+	params := &turn.TurnStartParams{Originator: "review"}
+	webSearchOptions, err := router.webSearchOptionsForTurn(cfg, params)
+	if err != nil {
+		t.Fatalf("webSearchOptionsForTurn error = %v", err)
+	}
+	if webSearchOptions != nil {
+		t.Fatalf("review web search options = %#v, want nil", webSearchOptions)
+	}
+	imageGenerationOptions, err := router.imageGenerationOptionsForTurn(cfg, params)
+	if err != nil {
+		t.Fatalf("imageGenerationOptionsForTurn error = %v", err)
+	}
+	if imageGenerationOptions != nil {
+		t.Fatalf("review image generation options = %#v, want nil", imageGenerationOptions)
+	}
+	hostedTools, err := router.hostedToolsForTurn(params)
+	if err != nil {
+		t.Fatalf("hostedToolsForTurn error = %v", err)
+	}
+	if len(hostedTools) != 0 {
+		t.Fatalf("review hosted tools = %#v, want none", hostedTools)
 	}
 }
 
@@ -10406,6 +10762,29 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	appMentionTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{{
+			Type: "mention",
+			Path: "app://docs-app",
+		}, {
+			Type: "text",
+			Text: "use this app",
+		}},
+	}))
+	if appMentionTurn.Error != nil {
+		t.Fatalf("app mention turn start error: %+v", appMentionTurn.Error)
+	}
+	appMentionRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(appMentionRequest.Instructions, "## Plugins") {
+		t.Fatalf("available plugin instructions missing for app mention:\n%s", appMentionRequest.Instructions)
+	}
+	if strings.Contains(appMentionRequest.Instructions, "Capabilities from the `Docs` plugin:") {
+		t.Fatalf("app mention should not inject explicit plugin instructions like Rust:\n%s", appMentionRequest.Instructions)
+	}
+	appMentionTurnID := appMentionTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, appMentionTurnID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterFirstTurnAfterExternalLoginWaitsForRecommendedPluginsLikeRust(t *testing.T) {
@@ -10795,7 +11174,7 @@ func TestRuntimeRouterAppMentionInjectsAppContext(t *testing.T) {
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
-		Prompt:   "Use $app://drive and $app://missing",
+		Prompt:   "Use [$drive](app://drive) and [$missing](app://missing)",
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
@@ -10884,6 +11263,49 @@ func TestRuntimeRouterSkillsContextEmitsBudgetWarning(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterSkillsContextFollowsModelUsageInstructionsFlagLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "repo-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-helper\ndescription: Repo helper\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name         string
+		includeUsage bool
+		wantUsage    bool
+	}{
+		{name: "disabled", includeUsage: false, wantUsage: false},
+		{name: "enabled", includeUsage: true, wantUsage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modelID := "skills-usage-" + tc.name
+			router := NewRuntimeRouter(RuntimeServices{
+				Skills: NewSkillsService([]string{skillsRoot}),
+				Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+					Slug:                           modelID,
+					ContextWindow:                  100000,
+					IncludeSkillsUsageInstructions: tc.includeUsage,
+				}}})),
+			})
+			instructions, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{"model": modelID}}, &turn.TurnStartParams{}, "base")
+			if err != nil {
+				t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+			}
+			if !strings.Contains(instructions, "repo-helper") {
+				t.Fatalf("instructions missing skill:\n%s", instructions)
+			}
+			hasUsage := strings.Contains(instructions, "### How to use skills") || strings.Contains(instructions, "read its `SKILL.md` completely")
+			if hasUsage != tc.wantUsage {
+				t.Fatalf("usage instructions present = %v, want %v:\n%s", hasUsage, tc.wantUsage, instructions)
+			}
+		})
+	}
+}
+
 func TestRuntimeRouterSkillsContextIncludesCWDRepoSkills(t *testing.T) {
 	cwd := t.TempDir()
 	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
@@ -10965,6 +11387,42 @@ func warningNotificationsForTest(sink *NotificationBuffer) []*WarningNotificatio
 		}
 	}
 	return out
+}
+
+func TestRuntimeRouterSkillInstructionsInputItemTruncatesMainPromptLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+
+	name := strings.Repeat("n", promptctx.SkillNameMaxBytes+10)
+	locatorPath := "skill://" + strings.Repeat("p", promptctx.SkillPathMaxBytes+20)
+	contents := strings.Repeat("a", promptctx.SkillMainPromptMaxBytes-1) + "é" + "tail"
+	items := router.explicitSkillInputItems("thread-skill-truncation", &turn.TurnStartParams{
+		Prompt: "[$" + name + "](" + locatorPath + ")",
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:        name,
+		Path:        "environment://remote/skills/long/SKILL.md",
+		LocatorPath: locatorPath,
+		Contents:    contents,
+	}})
+	if len(items) != 1 {
+		t.Fatalf("explicitSkillInputItems() = %#v", items)
+	}
+	text := inputItemText(items)
+	if !strings.Contains(text, "<name>"+strings.Repeat("n", promptctx.SkillNameMaxBytes)+"</name>") || strings.Contains(text, "<name>"+name+"</name>") {
+		t.Fatalf("skill name was not truncated like Rust:\n%s", text)
+	}
+	wantPath := locatorPath[:promptctx.SkillPathMaxBytes]
+	if !strings.Contains(text, "<path>"+wantPath+"</path>") || strings.Contains(text, locatorPath+"</path>") {
+		t.Fatalf("skill path was not truncated like Rust:\n%s", text)
+	}
+	if !strings.Contains(text, strings.Repeat("a", promptctx.SkillMainPromptMaxBytes-1)) || strings.Contains(text, "é") || strings.Contains(text, "tail") {
+		t.Fatalf("skill contents were not truncated at UTF-8 boundary like Rust:\n%s", text)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || warnings[0].Message != promptctx.SkillMainPromptTruncatedWarning(name) {
+		t.Fatalf("warnings = %#v", warnings)
+	}
 }
 
 func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
@@ -11167,22 +11625,91 @@ policy:
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	remoteSkillPath := "environment://remote/remote/skills/remote-skill/SKILL.md"
+	remoteDisplayPath := "skill://remote-cap-root/remote/skills/remote-skill/SKILL.md"
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
-		Prompt:   "use [remote-skill](skill://" + remoteSkillPath + ")",
+		Prompt:   "use [$remote-skill](" + remoteDisplayPath + ")",
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "remote-skill") || !strings.Contains(request.Instructions, "Remote capability skill") || !strings.Contains(request.Instructions, "(environment: "+remoteSkillPath+")") {
+	if !strings.Contains(request.Instructions, "remote-skill") || !strings.Contains(request.Instructions, "Remote capability skill") || !strings.Contains(request.Instructions, "(environment resource: "+remoteDisplayPath+")") {
 		t.Fatalf("instructions missing remote selected capability skill:\n%s", request.Instructions)
 	}
-	for _, want := range []string{"<skill>", "<name>remote-skill</name>", remoteSkillPath, "Remote capability skill"} {
+	for _, want := range []string{"<skill>", "<name>remote-skill</name>", remoteDisplayPath, "Remote capability skill"} {
 		if !agentRequestInputItemsContain(request, want) {
 			t.Fatalf("input items missing remote explicit skill fragment %q: %#v", want, request.InputItems)
 		}
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	waitEnvironmentInfoExecServerForTest(t, done)
+}
+
+func TestRuntimeRouterTurnStartWarnsAndSkipsInvalidRemoteEnvironmentSkillLikeRust(t *testing.T) {
+	rootURI := "file:///remote/skills"
+	skillURI := "file:///remote/skills/legacy/SKILL.md"
+	execServerURL, done := newRemoteSkillsExecServerForTest(t, rootURI, map[string]string{
+		skillURI: "# Legacy remote skill\nbody\n",
+	})
+	environment := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "")
+	if _, err := environment.Add(&EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: execServerURL}); err != nil {
+		t.Fatalf("environment Add() error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		Environment:  environment,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID: "remote-cap-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "remote",
+				Path:          rootURI,
+			},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect selected remote capabilities",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, forbidden := range []string{"Legacy remote skill", "legacy"} {
+		if strings.Contains(request.Instructions, forbidden) || agentRequestInputItemsContain(request, forbidden) {
+			t.Fatalf("request exposed invalid remote skill %q:\ninstructions=%s\ninputItems=%#v", forbidden, request.Instructions, request.InputItems)
+		}
+	}
+	warnings := warningNotificationsForTest(sink)
+	found := false
+	for _, warning := range warnings {
+		if warning.ThreadID != nil &&
+			*warning.ThreadID == threadID &&
+			strings.Contains(warning.Message, "Failed to load environment skill at "+skillURI+": missing YAML frontmatter delimited by ---") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %+v, want invalid remote environment skill warning", warnings)
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
@@ -17561,6 +18088,49 @@ func waitForItemCompleted(t *testing.T, sink *NotificationBuffer, itemID string)
 	return nil
 }
 
+func waitForItemCompletedType(t *testing.T, sink *NotificationBuffer, itemID string, itemType string) *ItemCompletedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationItemCompleted {
+				continue
+			}
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if !ok || payload == nil || payload.Item["id"] != itemID {
+				continue
+			}
+			item := notificationItemMap(t, payload.Item)
+			if item["type"] == itemType {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for completed %s item %s in %s", itemType, itemID, notificationsDebugJSON(last))
+	return nil
+}
+
+func assertNoItemNotification(t *testing.T, sink *NotificationBuffer, itemID string) {
+	t.Helper()
+	for _, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationItemStarted:
+			payload, ok := notification.Params.(*ItemStartedNotification)
+			if ok && payload != nil && payload.Item["id"] == itemID {
+				t.Fatalf("unexpected item/started for %s: %#v", itemID, payload.Item)
+			}
+		case NotificationItemCompleted:
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if ok && payload != nil && payload.Item["id"] == itemID {
+				t.Fatalf("unexpected item/completed for %s: %#v", itemID, payload.Item)
+			}
+		}
+	}
+}
+
 func notificationsDebugJSON(notifications []*Notification) string {
 	data, err := json.Marshal(notifications)
 	if err != nil {
@@ -18425,6 +18995,10 @@ type recordingRuntimeAgent struct {
 	requests chan model.AgentRequest
 }
 
+type blockingReviewRuntimeAgent struct {
+	requests chan model.AgentRequest
+}
+
 type recordingTurnEventSink struct {
 	events            chan telemetry.CodexTurnEventRequest
 	threadInitialized chan telemetry.CodexThreadInitializedEventRequest
@@ -18494,6 +19068,10 @@ func (a *apiErrorRuntimeAgent) Run(ctx context.Context, request *model.AgentRequ
 
 func newRecordingRuntimeAgent(message string) *recordingRuntimeAgent {
 	return &recordingRuntimeAgent{message: message, requests: make(chan model.AgentRequest, 1)}
+}
+
+func newBlockingReviewRuntimeAgent() *blockingReviewRuntimeAgent {
+	return &blockingReviewRuntimeAgent{requests: make(chan model.AgentRequest, 1)}
 }
 
 func newRecordingTurnEventSink() *recordingTurnEventSink {
@@ -18702,6 +19280,18 @@ func (a *recordingRuntimeAgent) Run(ctx context.Context, request *model.AgentReq
 		Model:      request.Model,
 		ProviderID: request.ProviderID,
 	}, nil
+}
+
+func (a *blockingReviewRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests <- *request
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (a *standaloneWebSearchRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
@@ -18971,6 +19561,17 @@ func waitForRuntimeAgentRequest(t *testing.T, agent *recordingRuntimeAgent) mode
 		return request
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runtime agent request")
+	}
+	return model.AgentRequest{}
+}
+
+func waitForBlockingReviewRuntimeAgentRequest(t *testing.T, agent *blockingReviewRuntimeAgent) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-agent.requests:
+		return request
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocking review runtime agent request")
 	}
 	return model.AgentRequest{}
 }

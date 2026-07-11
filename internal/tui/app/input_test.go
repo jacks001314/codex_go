@@ -80,7 +80,7 @@ func TestBacktrackEscGatingMatchesRust(t *testing.T) {
 	if ShouldConfirmBacktrackFromMain(true, BacktrackNoSelection, true) || ShouldConfirmBacktrackFromMain(false, 0, true) || ShouldConfirmBacktrackFromMain(true, 0, false) {
 		t.Fatal("backtrack confirm accepted in invalid state")
 	}
-	if !ShouldResetPrimedBacktrackOnKeyPress(true, "a") || ShouldResetPrimedBacktrackOnKeyPress(true, "esc") || ShouldResetPrimedBacktrackOnKeyPress(false, "a") {
+	if !ShouldResetPrimedBacktrackOnKeyPress(true, "a") || ShouldResetPrimedBacktrackOnKeyPress(true, "esc") || !ShouldResetPrimedBacktrackOnKeyPress(true, " esc ") || ShouldResetPrimedBacktrackOnKeyPress(false, "a") {
 		t.Fatal("primed backtrack reset mismatch")
 	}
 }

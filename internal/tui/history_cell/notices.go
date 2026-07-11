@@ -68,7 +68,7 @@ func (c UpdateAvailableHistoryCell) RawLines() []string {
 }
 
 func NewWarningEvent(message string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell(strings.TrimSpace(message), "\u26a0 ", "  ")
+	return NewPrefixedWrappedHistoryCell(message, "\u26a0 ", "  ")
 }
 
 type SafetyAccessBlockCell struct {
@@ -78,29 +78,29 @@ type SafetyAccessBlockCell struct {
 
 func NewSafetyAccessBlockEvent() SafetyAccessBlockCell {
 	return SafetyAccessBlockCell{
-		Body:             "We take extra caution with requests involving biological research and applications that could pose safety risks. If you're a researcher at an approved organization, you may be able to apply for Trusted Access.",
+		Body:             "We take extra caution with requests involving biological research and applications that could pose safety risks. If you’re a researcher at an approved organization, you may be able to apply for Trusted Access.",
 		TrustedAccessURL: "https://openai.com/form/trusted-access-for-life-sciences",
 	}
 }
 
 func NewCyberPolicyErrorEvent() SafetyAccessBlockCell {
 	return SafetyAccessBlockCell{
-		Body:             "We take extra caution with cybersecurity requests. If you're a security professional, you may be able to apply for Trusted Access.",
+		Body:             "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
 		TrustedAccessURL: "https://openai.com/form/enterprise-trusted-access-for-cyber/",
 	}
 }
 
 func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
 	width = max(width, 1)
+	wrapWidth := max(width-2, 1)
 	lines := []string{"\u24d8 " + SafetyAccessBlockTitle}
 	for _, line := range []string{
-		c.Body,
-		"Trusted Access: " + c.TrustedAccessURL,
-		"Learn more: " + SafetyAccessBlockLearnMoreURL,
+		"  " + c.Body,
+		"  Trusted Access: " + c.TrustedAccessURL,
+		"  Learn more: " + SafetyAccessBlockLearnMoreURL,
 	} {
 		lines = append(lines, tui.AdaptiveWrapLine(line, tui.WrapOptions{
-			Width:            width,
-			InitialIndent:    "  ",
+			Width:            wrapWidth,
 			SubsequentIndent: "  ",
 			BreakWords:       true,
 		})...)
@@ -123,17 +123,12 @@ type DeprecationNoticeCell struct {
 }
 
 func NewDeprecationNotice(summary string, details string) DeprecationNoticeCell {
-	return DeprecationNoticeCell{Summary: strings.TrimSpace(summary), Details: strings.TrimSpace(details)}
+	return DeprecationNoticeCell{Summary: summary, Details: details}
 }
 
 func (c DeprecationNoticeCell) DisplayLines(width int) []string {
 	width = max(width, 1)
-	lines := tui.AdaptiveWrapLine(c.Summary, tui.WrapOptions{
-		Width:            width,
-		InitialIndent:    "\u26a0 ",
-		SubsequentIndent: "  ",
-		BreakWords:       true,
-	})
+	lines := []string{"\u26a0 " + c.Summary}
 	if c.Details != "" {
 		lines = append(lines, tui.AdaptiveWrapLine(c.Details, tui.WrapOptions{
 			Width:            max(width-4, 1),
@@ -155,15 +150,15 @@ func (c DeprecationNoticeCell) RawLines() []string {
 }
 
 func NewInfoEvent(message string, hint string) PlainHistoryCell {
-	line := "\u2022 " + strings.TrimSpace(message)
-	if strings.TrimSpace(hint) != "" {
-		line += " " + strings.TrimSpace(hint)
+	line := "\u2022 " + message
+	if hint != "" {
+		line += " " + hint
 	}
 	return NewPlainHistoryCell([]string{line})
 }
 
 func NewErrorEvent(message string) PlainHistoryCell {
-	return NewPlainHistoryCell([]string{"\u25a0 " + strings.TrimSpace(message)})
+	return NewPlainHistoryCell([]string{"\u25a0 " + message})
 }
 
 func padRightRunes(text string, width int) string {

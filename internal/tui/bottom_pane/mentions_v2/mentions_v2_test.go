@@ -68,6 +68,33 @@ func TestSearchCatalogPluginAndSkillCandidatesMatchRust(t *testing.T) {
 	}
 }
 
+func TestSearchCatalogCandidateEdgeCasesMatchRust(t *testing.T) {
+	skill := SkillCandidate(SkillMetadata{Name: "docs:review", Path: "skills/review/SKILL.md"})
+	if skill.DisplayName != "review (docs)" || !reflect.DeepEqual(skill.SearchTerms, []string{"docs:review", "review (docs)"}) {
+		t.Fatalf("plugin skill candidate = %#v", skill)
+	}
+
+	plugin := PluginCandidate(PluginCapabilitySummary{ConfigName: "sample@market"})
+	if plugin.DisplayName != "" || plugin.Label != "" {
+		t.Fatalf("empty plugin display should stay empty like Rust: %#v", plugin)
+	}
+	if !reflect.DeepEqual(plugin.SearchTerms, []string{"sample", "sample@market", "", "market"}) {
+		t.Fatalf("empty plugin display search terms = %#v", plugin.SearchTerms)
+	}
+	if plugin.Selection.InsertText != "@Sample" || plugin.Selection.Path != "plugin://sample@market" {
+		t.Fatalf("empty plugin display selection = %#v", plugin.Selection)
+	}
+	rows := FilteredCandidates([]Candidate{plugin}, nil, "", SearchModeTools, false)
+	if len(rows) != 1 || rows[0].DisplayName != "" {
+		t.Fatalf("filtered candidate normalized display unexpectedly: %#v", rows)
+	}
+
+	whitespaceDescription := PluginDescription(PluginCapabilitySummary{ConfigName: "docs", Description: "   "})
+	if whitespaceDescription != "   " {
+		t.Fatalf("whitespace plugin description = %q, want original whitespace", whitespaceDescription)
+	}
+}
+
 func TestFilteredCandidatesSortFuzzyTermsAndFileMatchesMatchRust(t *testing.T) {
 	candidates := []Candidate{
 		{
@@ -153,6 +180,10 @@ func TestPopupFileSearchSelectionModesAndRenderingMatchRustCore(t *testing.T) {
 	}
 
 	popup = NewPopup([]Candidate{{DisplayName: "MCP Search", MentionType: MentionTypePlugin, Selection: ToolSelection("@MCP-Search", "plugin://mcp-search")}})
+	if _, ok := popup.SelectedSelection(); ok || popup.Selected != -1 {
+		t.Fatalf("new popup should not preselect before query sync: selected=%d ok=%v", popup.Selected, ok)
+	}
+	popup.SetQuery("")
 	rows := RenderPopup(popup, 48, 5)
 	if len(rows) != 3 {
 		t.Fatalf("rendered rows len = %d rows=%#v", len(rows), rows)
@@ -180,6 +211,27 @@ func TestMentionRenderUsesDisplayWidthTruncationMatchRust(t *testing.T) {
 	}
 	if !strings.Contains(line, "\u2026") || strings.Contains(line, "...") {
 		t.Fatalf("line should use Rust ellipsis truncation: %q", line)
+	}
+}
+
+func TestMentionRenderFileNameSplitMatchesRust(t *testing.T) {
+	trailing := SearchResult{
+		DisplayName: "src/",
+		MentionType: MentionTypeDirectory,
+		Selection:   FileSelection("src/"),
+	}
+	if primaryText(trailing) != "" || secondaryText(trailing) != "src/" {
+		t.Fatalf("trailing separator split primary=%q secondary=%q", primaryText(trailing), secondaryText(trailing))
+	}
+
+	backslash := SearchResult{
+		DisplayName: "src\\main.go",
+		Description: "changed",
+		MentionType: MentionTypeFile,
+		Selection:   FileSelection("src\\main.go"),
+	}
+	if primaryText(backslash) != "main.go" || secondaryText(backslash) != "src\\  changed" {
+		t.Fatalf("backslash split primary=%q secondary=%q", primaryText(backslash), secondaryText(backslash))
 	}
 }
 

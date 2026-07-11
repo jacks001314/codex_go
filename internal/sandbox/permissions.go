@@ -28,9 +28,10 @@ func (p *ActivePermissionProfile) MarshalJSON() ([]byte, error) {
 }
 
 type PermissionProfile struct {
-	Disabled       bool
-	SandboxPolicy  *SandboxPolicy
-	NetworkEnabled bool
+	Disabled          bool
+	SandboxPolicy     *SandboxPolicy
+	NetworkEnabled    bool
+	DeniedReadEntries []FileSystemSandboxEntry `json:"denyReadEntries,omitempty"`
 }
 
 type AdditionalPermissionProfile struct {
@@ -193,6 +194,24 @@ func (p *PermissionProfile) AllowsNetwork() bool {
 		return true
 	}
 	return p.SandboxPolicy != nil && p.SandboxPolicy.HasFullNetworkAccess()
+}
+
+func (p *PermissionProfile) HasDenyReadEntries() bool {
+	if p == nil {
+		return false
+	}
+	return len(p.DeniedReadEntries) > 0
+}
+
+func UnsandboxedExecutionAllowed(profile *PermissionProfile) bool {
+	return profile == nil || !profile.HasDenyReadEntries()
+}
+
+func SandboxPermissionsPreservingDeniedReads(permissions SandboxPermissions, profile *PermissionProfile) SandboxPermissions {
+	if permissions == SandboxPermissionsRequireEscalated && !UnsandboxedExecutionAllowed(profile) {
+		return SandboxPermissionsUseDefault
+	}
+	return permissions
 }
 
 func (p *SandboxPermissions) UsesAdditionalPermissions() bool {

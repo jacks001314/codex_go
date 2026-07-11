@@ -35,6 +35,47 @@ func TestShlexJoin(t *testing.T) {
 	}
 }
 
+func TestStripShellCommandAndEscapeMatchesRustDisplay(t *testing.T) {
+	cases := []struct {
+		name    string
+		command []string
+		want    string
+	}{
+		{
+			name:    "bash login command",
+			command: []string{"bash", "-lc", "echo hello"},
+			want:    "echo hello",
+		},
+		{
+			name:    "zsh command flag",
+			command: []string{"/usr/bin/zsh", "-c", "echo hello"},
+			want:    "echo hello",
+		},
+		{
+			name:    "powershell command with profile flags",
+			command: []string{"pwsh", "-NoProfile", "-Command", "Get-ChildItem"},
+			want:    "Get-ChildItem",
+		},
+		{
+			name:    "fish is not stripped in rust tui display helper",
+			command: []string{"fish", "-lc", "echo hello"},
+			want:    "fish -lc 'echo hello'",
+		},
+		{
+			name:    "fallback shell quoting",
+			command: []string{"foo", "bar baz", "weird&stuff"},
+			want:    "foo 'bar baz' 'weird&stuff'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := StripShellCommandAndEscape(tc.command); got != tc.want {
+				t.Fatalf("StripShellCommandAndEscape() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPowerShellExtractionAndPrefix(t *testing.T) {
 	command := []string{"pwsh", "-NoProfile", "-Command", "Write-Host hi"}
 	_, script, ok := ExtractPowerShellCommand(command)

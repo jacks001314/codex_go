@@ -104,15 +104,15 @@ func (t *APITarget) Validate() error {
 		return nil
 	case "base", "baseBranch":
 		if strings.TrimSpace(t.Base) == "" && strings.TrimSpace(t.Branch) == "" {
-			return fmt.Errorf("%w: review target branch is required", ErrInvalidRequest)
+			return fmt.Errorf("%w: branch must not be empty", ErrInvalidRequest)
 		}
 	case "commit":
 		if strings.TrimSpace(t.Commit) == "" && strings.TrimSpace(t.SHA) == "" {
-			return fmt.Errorf("%w: review target sha is required", ErrInvalidRequest)
+			return fmt.Errorf("%w: sha must not be empty", ErrInvalidRequest)
 		}
 	case "custom":
 		if strings.TrimSpace(t.Prompt) == "" && strings.TrimSpace(t.Instructions) == "" {
-			return fmt.Errorf("%w: custom review instructions are required", ErrInvalidRequest)
+			return fmt.Errorf("%w: instructions must not be empty", ErrInvalidRequest)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported review target type %q", ErrInvalidRequest, t.Type)
@@ -136,7 +136,11 @@ func (t *APITarget) ToTarget() Target {
 		if commit == "" {
 			commit = strings.TrimSpace(t.SHA)
 		}
-		return Target{Kind: "commit", Commit: commit}
+		title := ""
+		if t.Title != nil {
+			title = strings.TrimSpace(*t.Title)
+		}
+		return Target{Kind: "commit", Commit: commit, CommitTitle: title}
 	case "custom":
 		prompt := strings.TrimSpace(t.Prompt)
 		if prompt == "" {
@@ -157,12 +161,17 @@ const (
 
 type Turn struct {
 	ID        string `json:"id"`
+	Items     []map[string]any
 	Status    string `json:"status"`
 	StartedAt int64  `json:"startedAt"`
 }
 
 func (t *Turn) MarshalJSON() ([]byte, error) {
 	status := normalizeTurnStatus(t.Status)
+	items := t.Items
+	if items == nil {
+		items = []map[string]any{}
+	}
 	return json.Marshal(struct {
 		ID          string           `json:"id"`
 		Items       []map[string]any `json:"items"`
@@ -174,7 +183,7 @@ func (t *Turn) MarshalJSON() ([]byte, error) {
 		DurationMS  *int64           `json:"durationMs"`
 	}{
 		ID:        t.ID,
-		Items:     []map[string]any{},
+		Items:     items,
 		ItemsView: "notLoaded",
 		Status:    status,
 		Error:     nil,
@@ -211,11 +220,51 @@ func (s *Service) Start(params *StartParams) (*StartResponse, error) {
 	if params.Delivery != nil && strings.TrimSpace(*params.Delivery) == "detached" {
 		reviewThreadID = "review-" + params.ThreadID
 	}
-	return &StartResponse{Turn: Turn{
-		ID:        "review-" + params.ThreadID,
+	turnID := "review-" + params.ThreadID
+	return &StartResponse{Turn: buildReviewTurn(turnID, UserFacingHintForTarget(params.Target.ToTarget()), s.now), ReviewThreadID: reviewThreadID}, nil
+}
+
+func buildReviewTurn(turnID string, displayText string, now func() time.Time) Turn {
+	var items []map[string]any
+	if displayText != "" {
+		items = []map[string]any{{
+			"type":     "userMessage",
+			"id":       turnID,
+			"clientId": nil,
+			"content": []map[string]any{{
+				"type":          "text",
+				"text":          displayText,
+				"text_elements": []any{},
+			}},
+		}}
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return Turn{
+		ID:        turnID,
+		Items:     items,
 		Status:    TurnStatusInProgress,
-		StartedAt: s.now().UTC().Unix(),
-	}, ReviewThreadID: reviewThreadID}, nil
+		StartedAt: now().UTC().Unix(),
+	}
+}
+
+func UserFacingHintForTarget(target Target) string {
+	switch target.Kind {
+	case "base":
+		return Hint(&PromptTarget{Kind: PromptBaseBranch, Branch: target.Base})
+	case "commit":
+		var title *string
+		if target.CommitTitle != "" {
+			titleValue := target.CommitTitle
+			title = &titleValue
+		}
+		return Hint(&PromptTarget{Kind: PromptCommit, SHA: target.Commit, Title: title})
+	case "custom":
+		return Hint(&PromptTarget{Kind: PromptCustom, Instructions: target.Instructions})
+	default:
+		return Hint(&PromptTarget{Kind: PromptUncommittedChanges})
+	}
 }
 
 func normalizeTurnStatus(status string) string {

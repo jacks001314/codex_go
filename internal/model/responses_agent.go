@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/internal/auth"
@@ -71,9 +72,15 @@ type ResponsesAgentRunner struct {
 	IncludeAttestation         bool
 	AttestationProvider        codexapi.AttestationProvider
 	providerAuthFetchedAt      time.Time
-	turnState                  string
+	turnState                  *responsesTurnStateCache
 	agentIdentityTried         bool
 	agentIdentityBypass        bool
+}
+
+type responsesTurnStateCache struct {
+	mu     sync.Mutex
+	turnID string
+	value  string
 }
 
 type AgentIdentityOptions struct {
@@ -277,6 +284,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		IncludeAttestation:         options.IncludeAttestation,
 		AttestationProvider:        options.AttestationProvider,
 		providerAuthFetchedAt:      providerAuthFetchedAt,
+		turnState:                  &responsesTurnStateCache{},
 	}
 }
 
@@ -354,7 +362,9 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	instructions := responsesInstructions(request)
 	inputItems := responsesInputItems(request)
 	tools := cloneAnySlice(request.Tools)
-	tools = r.withHostedToolsForRequest(tools, &modelInfo)
+	if !request.DisableHostedImageGeneration {
+		tools = r.withHostedToolsForRequest(tools, &modelInfo)
+	}
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	if modelInfo.UseResponsesLite {
 		inputItems = responsesLiteInputItems(inputItems, tools, instructions)
@@ -399,7 +409,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		return nil, responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
 	}
-	r.rememberTurnStateFromHeaders(httpResponse.Header)
+	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	var apiResponse responsesAgentAPIResponse
 	if err := json.Unmarshal(responseBody, &apiResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode responses API response: %w", err)
@@ -630,7 +640,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	}
 	addResponsesLiteHeader(httpRequest.Header, apiRequest.UseResponsesLite)
 	addIncludeTimingMetricsHeader(httpRequest.Header, apiRequest.IncludeTimingMetrics)
-	addTurnStateHeader(httpRequest.Header, r.turnState)
+	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
@@ -674,6 +684,46 @@ func (r *ResponsesAgentRunner) addAttestationHeader(ctx context.Context, headers
 	}
 	headers.Set(codexapi.AttestationHeader, value)
 	return nil
+}
+
+func (r *ResponsesAgentRunner) turnStateForRequest(request *AgentRequest) string {
+	if r == nil || r.turnState == nil {
+		return ""
+	}
+	turnID := turnStateRequestTurnID(request)
+	if turnID == "" {
+		return ""
+	}
+	r.turnState.mu.Lock()
+	defer r.turnState.mu.Unlock()
+	if r.turnState.turnID != turnID {
+		return ""
+	}
+	return r.turnState.value
+}
+
+func turnStateRequestTurnID(request *AgentRequest) string {
+	if request == nil {
+		return ""
+	}
+	if turnID := strings.TrimSpace(request.TurnID); turnID != "" {
+		return turnID
+	}
+	if turnID := strings.TrimSpace(request.ClientMetadata[codexapi.TurnIDKey]); turnID != "" {
+		return turnID
+	}
+	turnMetadata := strings.TrimSpace(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
+	if turnMetadata == "" {
+		turnMetadata = strings.TrimSpace(request.ClientMetadata[codexapi.TurnMetadataHeader])
+	}
+	if turnMetadata == "" {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(turnMetadata), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(responseToolString(payload[codexapi.TurnIDKey]))
 }
 
 func (r *ResponsesAgentRunner) shouldCompressResponsesRequest() bool {

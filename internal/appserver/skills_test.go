@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,7 +19,7 @@ func TestListSkillsAndConfig(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("# Useful skill\nbody"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: skill-a\ndescription: Useful skill\n---\nbody\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	service := NewSkillsService([]string{root})
@@ -62,13 +63,161 @@ func TestListSkillsAndConfig(t *testing.T) {
 	}
 }
 
+func TestListSkillsSkipsInvalidSkillAndReportsErrorLikeRust(t *testing.T) {
+	root := t.TempDir()
+	validDir := filepath.Join(root, "valid")
+	invalidDir := filepath.Join(root, "invalid")
+	overlongNameDir := filepath.Join(root, "overlong-name")
+	if err := os.MkdirAll(validDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(valid) error = %v", err)
+	}
+	if err := os.MkdirAll(invalidDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(invalid) error = %v", err)
+	}
+	if err := os.MkdirAll(overlongNameDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(overlong name) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(validDir, SkillFilename), []byte("---\nname: valid\ndescription: Valid skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(valid) error = %v", err)
+	}
+	invalidPath := filepath.Join(invalidDir, SkillFilename)
+	if err := os.WriteFile(invalidPath, []byte("---\nname: invalid"), 0o600); err != nil {
+		t.Fatalf("WriteFile(invalid) error = %v", err)
+	}
+	overlongNamePath := filepath.Join(overlongNameDir, SkillFilename)
+	if err := os.WriteFile(overlongNamePath, []byte("---\nname: "+strings.Repeat("n", skillMaxNameLen+1)+"\ndescription: too long name\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(overlong name) error = %v", err)
+	}
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 || response.Skills[0].Name != "valid" {
+		t.Fatalf("skills = %#v, want only valid skill", response.Skills)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Errors) != 2 {
+		t.Fatalf("data errors = %#v, want invalid skill errors", response.Data)
+	}
+	errorsByPath := map[string]string{}
+	for _, skillErr := range response.Data[0].Errors {
+		errorsByPath[skillErr.Path] = skillErr.Message
+	}
+	if message := errorsByPath[filepath.Clean(invalidPath)]; !strings.Contains(message, "missing YAML frontmatter delimited by ---") {
+		t.Fatalf("invalid frontmatter error = %q", message)
+	}
+	if message := errorsByPath[filepath.Clean(overlongNamePath)]; !strings.Contains(message, "invalid name: exceeds maximum length of 64 characters") {
+		t.Fatalf("overlong name error = %q", message)
+	}
+
+	systemService := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: root, Scope: "system"}},
+	})
+	systemResponse, err := systemService.List(&SkillsListParams{ForceReload: true})
+	if err != nil {
+		t.Fatalf("system List() error = %v", err)
+	}
+	if len(systemResponse.Skills) != 1 || len(systemResponse.Data) != 1 || len(systemResponse.Data[0].Errors) != 0 {
+		t.Fatalf("system response = %#v, want invalid system skill ignored without error", systemResponse)
+	}
+}
+
+func TestListSkillsPreservesOverlongDescriptionsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "long-description")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	overlong := strings.Repeat("x", skillMaxDescriptionLen+1)
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: long-description\ndescription: "+overlong+"\nmetadata:\n  short-description: "+overlong+"\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 {
+		t.Fatalf("skills = %#v", response.Skills)
+	}
+	if response.Skills[0].Description != overlong || response.Skills[0].ShortDescription != overlong {
+		t.Fatalf("descriptions = description len %d short len %d", len(response.Skills[0].Description), len(response.Skills[0].ShortDescription))
+	}
+}
+
+func TestListSkillsHonorsRustScanDepthLimit(t *testing.T) {
+	root := t.TempDir()
+	depthSix := filepath.Join(root, "d1", "d2", "d3", "d4", "d5", "d6")
+	depthSeven := filepath.Join(depthSix, "d7")
+	if err := os.MkdirAll(depthSix, 0o755); err != nil {
+		t.Fatalf("MkdirAll(depthSix) error = %v", err)
+	}
+	if err := os.MkdirAll(depthSeven, 0o755); err != nil {
+		t.Fatalf("MkdirAll(depthSeven) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depthSix, SkillFilename), []byte("---\nname: depth-six\ndescription: Depth six\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(depthSix) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depthSeven, SkillFilename), []byte("---\nname: depth-seven\ndescription: Depth seven\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(depthSeven) error = %v", err)
+	}
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 || response.Skills[0].Name != "depth-six" {
+		t.Fatalf("skills = %#v, want only depth-six like Rust max scan depth", response.Skills)
+	}
+}
+
+func TestListSkillsFollowsDirectorySymlinksOutsideSystemLikeRust(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	skillDir := filepath.Join(target, "linked-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skillDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: linked-skill\ndescription: Linked skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	linkPath := filepath.Join(root, "linked")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("directory symlinks are unavailable in this environment: %v", err)
+	}
+
+	userResponse, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: root, Scope: "user"}},
+	}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("user List() error = %v", err)
+	}
+	if len(userResponse.Skills) != 1 || userResponse.Skills[0].Name != "linked-skill" {
+		t.Fatalf("user skills = %#v, want symlinked skill", userResponse.Skills)
+	}
+	expectedPath, err := filepath.EvalSymlinks(filepath.Join(skillDir, SkillFilename))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(skill) error = %v", err)
+	}
+	if userResponse.Skills[0].Path != filepath.Clean(expectedPath) {
+		t.Fatalf("symlinked skill path = %q, want canonical %q", userResponse.Skills[0].Path, filepath.Clean(expectedPath))
+	}
+
+	systemResponse, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: root, Scope: "system"}},
+	}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("system List() error = %v", err)
+	}
+	if len(systemResponse.Skills) != 0 {
+		t.Fatalf("system skills = %#v, want symlink dir ignored like Rust", systemResponse.Skills)
+	}
+}
+
 func TestSkillsServiceLoadsPersistentConfig(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "skill-a")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("# Skill A"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: skill-a\ndescription: Skill A\n---\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(skill) error = %v", err)
 	}
 	home := t.TempDir()
@@ -119,7 +268,7 @@ func TestWriteConfigPersistsAndRemovesSkillOverride(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(skillPath, []byte("# Skill A"), 0o600); err != nil {
+	if err := os.WriteFile(skillPath, []byte("---\nname: skill-a\ndescription: Skill A\n---\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(skill) error = %v", err)
 	}
 	home := t.TempDir()
@@ -175,7 +324,7 @@ func TestSetExtraRoots(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "skill-b"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "skill-b", SkillFilename), []byte("Skill B"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "skill-b", SkillFilename), []byte("---\nname: skill-b\ndescription: Skill B\n---\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	service := NewSkillsService(nil)
@@ -427,7 +576,7 @@ policy:
 	}
 }
 
-func TestListSkillsParsesMetadataAliases(t *testing.T) {
+func TestListSkillsIgnoresGoOnlyMetadataAliasesLikeRust(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "skill-alias")
 	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
@@ -472,39 +621,56 @@ policy:
 		t.Fatalf("skills = %#v", response.Skills)
 	}
 	skill := response.Skills[0]
-	if skill.ShortDescription != "Alias short" {
-		t.Fatalf("ShortDescription = %q", skill.ShortDescription)
+	if skill.Description != "Long alias description" || skill.ShortDescription != "" {
+		t.Fatalf("skill descriptions = description:%q short:%q", skill.Description, skill.ShortDescription)
 	}
-	if skill.Interface == nil || skill.Interface.DisplayName != "Alias Skill" || skill.Interface.ShortDescription != "UI alias short" {
-		t.Fatalf("Interface aliases = %#v", skill.Interface)
+	if skill.Interface != nil {
+		t.Fatalf("Go-only interface aliases should be ignored like Rust: %#v", skill.Interface)
 	}
-	if skill.Interface.IconSmall == nil || *skill.Interface.IconSmall != filepath.Join(skillDir, "assets", "icon.png") {
-		t.Fatalf("IconSmall alias = %#v", skill.Interface.IconSmall)
+	if skill.Dependencies != nil {
+		t.Fatalf("Go-only dependency aliases should be ignored like Rust: %#v", skill.Dependencies)
 	}
-	if skill.Interface.BrandColor == nil || *skill.Interface.BrandColor != "#123456" {
-		t.Fatalf("BrandColor alias = %#v", skill.Interface.BrandColor)
+	if skill.Policy != nil {
+		t.Fatalf("Go-only policy aliases should be ignored like Rust: %#v", skill.Policy)
 	}
-	if skill.Interface.DefaultPrompt == nil || *skill.Interface.DefaultPrompt != "Use aliases" {
-		t.Fatalf("DefaultPrompt alias = %#v", skill.Interface.DefaultPrompt)
+}
+
+func TestListSkillsFiltersPolicyProductsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	writeSkill := func(name string, metadata string) {
+		t.Helper()
+		skillDir := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: "+name+"\ndescription: "+name+" skill\n---\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s skill) error = %v", name, err)
+		}
+		if strings.TrimSpace(metadata) != "" {
+			if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte(metadata), 0o600); err != nil {
+				t.Fatalf("WriteFile(%s metadata) error = %v", name, err)
+			}
+		}
 	}
-	if skill.Dependencies == nil || len(skill.Dependencies.Tools) != 2 {
-		t.Fatalf("Dependency aliases = %#v", skill.Dependencies)
+	writeSkill("codex-skill", "policy:\n  products: [codex]\n")
+	writeSkill("chatgpt-skill", "policy:\n  products: [chatgpt]\n")
+	writeSkill("open-skill", "")
+
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
 	}
-	first := skill.Dependencies.Tools[0]
-	if first.Type != "mcp" || first.Value != "alias-calendar" || first.Transport != "stdio" || first.Command == nil || *first.Command != "alias-calendar-mcp" {
-		t.Fatalf("first dependency alias = %#v", first)
+	names := make([]string, 0, len(response.Skills))
+	for _, skill := range response.Skills {
+		names = append(names, skill.Name)
 	}
-	second := skill.Dependencies.Tools[1]
-	if second.Type != "mcp" || second.Value != "alias-docs" || second.URL == nil || *second.URL != "https://mcp.example.test" {
-		t.Fatalf("second dependency alias = %#v", second)
-	}
-	if skill.AllowsImplicitInvocation() {
-		t.Fatalf("AllowsImplicitInvocation() = true, want false from camelCase alias")
+	if strings.Join(names, ",") != "codex-skill,open-skill" {
+		t.Fatalf("skill names = %v, want Codex product filtering like Rust", names)
 	}
 }
 
 func TestRemoteSkillMetadataAssetsUseEnvironmentLocator(t *testing.T) {
-	entry := remoteSkillEntryFromContents("remote-env", "file:///remote/skills/demo/SKILL.md", `---
+	entry, warning, ok := remoteSkillEntryFromContents("remote-env", "file:///remote/skills/demo/SKILL.md", `---
 name: demo
 description: Remote demo
 ---
@@ -512,7 +678,10 @@ description: Remote demo
 interface:
   icon_small: assets/icon.png
   icon_large: assets/large.png
-`)
+`, "")
+	if !ok {
+		t.Fatalf("remoteSkillEntryFromContents() ok = false, warning = %q", warning)
+	}
 	if entry.Interface == nil || entry.Interface.IconSmall == nil || entry.Interface.IconLarge == nil {
 		t.Fatalf("remote interface = %#v", entry.Interface)
 	}
@@ -521,6 +690,123 @@ interface:
 	}
 	if *entry.Interface.IconLarge != "environment://remote-env/remote/skills/demo/assets/large.png" {
 		t.Fatalf("icon large = %q", *entry.Interface.IconLarge)
+	}
+}
+
+func TestRemoteSkillEntrySkipsInvalidFrontmatterLikeRust(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{
+			name:     "missing frontmatter",
+			contents: "# Legacy heading\nbody\n",
+		},
+		{
+			name: "missing description",
+			contents: `---
+name: demo
+---
+body
+`,
+		},
+		{
+			name:     "overlong name",
+			contents: "---\nname: " + strings.Repeat("n", skillMaxNameLen+1) + "\ndescription: Remote demo\n---\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if entry, warning, ok := remoteSkillEntryFromContents("remote-env", "file:///remote/skills/demo/SKILL.md", tc.contents, "", ""); ok {
+				t.Fatalf("remoteSkillEntryFromContents() = %#v, want skipped", entry)
+			} else if !strings.Contains(warning, "Failed to load environment skill at file:///remote/skills/demo/SKILL.md:") {
+				t.Fatalf("warning = %q, want Rust environment skill load warning", warning)
+			}
+		})
+	}
+}
+
+func TestRemoteSkillEntryAppliesPluginNamespaceAndQualifiedNameLimitLikeRust(t *testing.T) {
+	entry, warning, ok := remoteSkillEntryFromContents("remote-env", "file:///remote/plugin/skills/deploy/SKILL.md", `---
+name: deploy
+description: Deploy remotely
+---
+`, "", "demo-plugin")
+	if !ok {
+		t.Fatalf("remoteSkillEntryFromContents() ok = false, warning = %q", warning)
+	}
+	if entry.Name != "demo-plugin:deploy" {
+		t.Fatalf("entry.Name = %q, want namespaced skill", entry.Name)
+	}
+
+	_, warning, ok = remoteSkillEntryFromContents("remote-env", "file:///remote/plugin/skills/deploy/SKILL.md", `---
+name: deploy
+description: Deploy remotely
+---
+`, "", strings.Repeat("n", skillMaxQualifiedNameLen))
+	if ok {
+		t.Fatal("remoteSkillEntryFromContents() ok = true, want overlong qualified name skipped")
+	}
+	if !strings.Contains(warning, "invalid qualified name: exceeds maximum length of 128 characters") {
+		t.Fatalf("warning = %q", warning)
+	}
+}
+
+func TestDiscoverRemoteEnvironmentSkillsNamespacesAndSortsLikeRust(t *testing.T) {
+	rootURI := "file:///remote/plugin"
+	manifestURI := "file:///remote/plugin/.codex-plugin/plugin.json"
+	alphaPath := "file:///remote/plugin/skills/z-path/SKILL.md"
+	chatgptPath := "file:///remote/plugin/skills/chatgpt-only/SKILL.md"
+	chatgptMetadataPath := "file:///remote/plugin/skills/chatgpt-only/agents/openai.yaml"
+	zetaPath := "file:///remote/plugin/skills/a-path/SKILL.md"
+	execServerURL, done := newRemoteSkillsExecServerForTest(t, rootURI, map[string]string{
+		manifestURI:         `{"name":"demo-plugin"}`,
+		alphaPath:           "---\nname: alpha\ndescription: Alpha skill\n---\n",
+		chatgptPath:         "---\nname: chatgpt-only\ndescription: ChatGPT-only skill\n---\n",
+		chatgptMetadataPath: "policy:\n  products: [chatgpt]\n",
+		zetaPath:            "---\nname: zeta\ndescription: Zeta skill\n---\n",
+	})
+	entries, warnings, err := discoverRemoteEnvironmentSkills(context.Background(), &EnvironmentRecord{
+		EnvironmentID: "remote-env",
+		ExecServerURL: execServerURL,
+	}, rootURI)
+	if err != nil {
+		t.Fatalf("discoverRemoteEnvironmentSkills() error = %v", err)
+	}
+	waitEnvironmentInfoExecServerForTest(t, done)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", warnings)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if entries[0].Name != "demo-plugin:alpha" || entries[1].Name != "demo-plugin:zeta" {
+		t.Fatalf("entry names = %q, %q; want Rust namespace and name sort", entries[0].Name, entries[1].Name)
+	}
+	if entries[0].Path != "environment://remote-env/remote/plugin/skills/z-path/SKILL.md" {
+		t.Fatalf("alpha path = %q", entries[0].Path)
+	}
+}
+
+func TestRemoteEnvironmentSkillWalkWarningsLikeRust(t *testing.T) {
+	warnings := remoteEnvironmentSkillWalkWarnings("file:///remote/skills", remoteFSWalkResponse{
+		Errors: []remoteFSWalkError{{
+			Path:    "file:///remote/skills/private",
+			Message: "permission denied",
+		}},
+		Truncated: true,
+	})
+	want := []string{
+		"failed to scan skill path file:///remote/skills/private: permission denied",
+		"skills scan reached its traversal limit (root: file:///remote/skills)",
+	}
+	if len(warnings) != len(want) {
+		t.Fatalf("warnings = %#v, want %#v", warnings, want)
+	}
+	for i := range want {
+		if warnings[i] != want[i] {
+			t.Fatalf("warnings[%d] = %q, want %q", i, warnings[i], want[i])
+		}
 	}
 }
 

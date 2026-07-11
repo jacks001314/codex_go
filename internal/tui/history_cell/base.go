@@ -143,7 +143,14 @@ func joinCellLines(parts []HistoryCell, width int, raw bool) []string {
 }
 
 func rawLinesFromSource(source string) []string {
-	source = strings.TrimRight(source, "\r\n")
+	switch {
+	case strings.HasSuffix(source, "\r\n"):
+		source = strings.TrimSuffix(source, "\r\n")
+	case strings.HasSuffix(source, "\n"):
+		source = strings.TrimSuffix(source, "\n")
+	case strings.HasSuffix(source, "\r"):
+		source = strings.TrimSuffix(source, "\r")
+	}
 	if source == "" {
 		return nil
 	}

@@ -74,6 +74,77 @@ func (p *GitDiffProvider) Diff(target Target) (string, error) {
 	}
 }
 
+func (p *GitDiffProvider) MergeBaseWithHead(branch string) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return "", nil
+	}
+	if _, err := p.git("rev-parse", "--show-toplevel"); err != nil {
+		return "", err
+	}
+	head, ok, err := p.resolveGitRef("HEAD")
+	if err != nil || !ok {
+		return "", err
+	}
+	branchRef, ok, err := p.resolveGitRef(branch)
+	if err != nil || !ok {
+		return "", err
+	}
+	preferredRef := branchRef
+	upstream, err := p.upstreamIfRemoteAhead(branch)
+	if err != nil {
+		return "", err
+	}
+	if upstream != "" {
+		if upstreamRef, ok, err := p.resolveGitRef(upstream); err != nil {
+			return "", err
+		} else if ok {
+			preferredRef = upstreamRef
+		}
+	}
+	mergeBase, err := p.git("merge-base", head, preferredRef)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(mergeBase), nil
+}
+
+func (p *GitDiffProvider) resolveGitRef(ref string) (string, bool, error) {
+	output, err := p.git("rev-parse", "--verify", ref)
+	if err != nil {
+		return "", false, nil
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "", false, nil
+	}
+	return output, true, nil
+}
+
+func (p *GitDiffProvider) upstreamIfRemoteAhead(branch string) (string, error) {
+	upstream, err := p.git("rev-parse", "--abbrev-ref", "--symbolic-full-name", branch+"@{upstream}")
+	if err != nil {
+		return "", nil
+	}
+	upstream = strings.TrimSpace(upstream)
+	if upstream == "" {
+		return "", nil
+	}
+	counts, err := p.git("rev-list", "--left-right", "--count", branch+"..."+upstream)
+	if err != nil {
+		return "", nil
+	}
+	parts := strings.Fields(counts)
+	if len(parts) < 2 {
+		return "", nil
+	}
+	right, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || right <= 0 {
+		return "", nil
+	}
+	return upstream, nil
+}
+
 func (p *GitDiffProvider) uncommittedDiff() (string, error) {
 	unstaged, err := p.git("diff", "--no-ext-diff", "--binary")
 	if err != nil {

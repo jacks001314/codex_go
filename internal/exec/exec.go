@@ -36,6 +36,8 @@ import (
 	"codex_go/internal/session"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
+
+	"github.com/google/uuid"
 )
 
 type Request struct {
@@ -126,7 +128,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	instructions, err := baseInstructionsForConfig(cfg)
+	instructions, err := baseInstructionsForRequest(req, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +140,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	requestInputs := cloneTurnUserInputs(req.Input)
+	requestInputs := requestTurnUserInputs(req)
 	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 {
-		return nil, errors.New("no prompt provided")
+		return nil, errors.New("No prompt provided. Either specify one as an argument or pipe the prompt into stdin.")
 	}
 	identityPrompt := firstNonEmpty(prompt, turnUserInputsSummary(requestInputs))
 
@@ -191,7 +193,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	if !req.Exec.JSON && stderr != nil {
-		fmt.Fprintf(stderr, "approval: %s\n", approvalPolicy)
+		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
 	}
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
@@ -202,18 +204,23 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink}
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg)
-	imageGenerationOptions, err := r.imageGenerationOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, inputItems)
-	if err != nil {
-		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
-		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
-		return nil, err
+	var imageGenerationOptions *turn.ImageGenerationOptions
+	var hostedTools []any
+	if req.Exec.Subcommand != "review" {
+		imageGenerationOptions, err = r.imageGenerationOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, inputItems)
+		if err != nil {
+			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+			return nil, err
+		}
+		hostedTools, err = r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, imageGenerationOptions)
+		if err != nil {
+			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+			return nil, err
+		}
 	}
-	hostedTools, err := r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, imageGenerationOptions)
-	if err != nil {
-		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
-		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
-		return nil, err
-	}
+	subagentHeader, subagentKind := execReviewSubagentMetadata(req)
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
 		Prompt:               runPrompt,
 		InputItems:           inputItems,
@@ -239,19 +246,22 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			TurnID:           turnID,
 			WindowID:         threadID + ":1",
 			RequestKind:      codexapi.ClientRequestTurn,
+			SubagentHeader:   subagentHeader,
+			SubagentKind:     subagentKind,
 			Extra:            cfg.ResponsesAPIClientMetadata(),
 			UseResponsesLite: useResponsesLite,
 		}),
-		OutputSchema:        outputSchema,
-		ApprovalPolicy:      approvalPolicy,
-		StreamEvents:        streamCollector,
-		PermissionProfileID: sandboxPermissionProfileID(permissionProfile),
-		PermissionProfile:   sandboxPermissionProfile(permissionProfile),
-		MCPService:          mcpService,
-		MCPTools:            mcpTools,
-		MCPConnectors:       mcpConnectors,
-		ImageGeneration:     imageGenerationOptions,
-		HostedTools:         hostedTools,
+		OutputSchema:                 outputSchema,
+		ApprovalPolicy:               approvalPolicy,
+		StreamEvents:                 streamCollector,
+		PermissionProfileID:          sandboxPermissionProfileID(permissionProfile),
+		PermissionProfile:            sandboxPermissionProfile(permissionProfile),
+		MCPService:                   mcpService,
+		MCPTools:                     mcpTools,
+		MCPConnectors:                mcpConnectors,
+		ImageGeneration:              imageGenerationOptions,
+		HostedTools:                  hostedTools,
+		DisableHostedImageGeneration: req.Exec.Subcommand == "review",
 	})
 	if err != nil {
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
@@ -261,16 +271,18 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := eventSink.Err(); err != nil {
 		return nil, err
 	}
-	response := turnResult.Response
-	lastMessage := response.Message
+	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
 	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext)
 	if err != nil {
 		return nil, err
 	}
 
 	if req.Exec.LastMessageFile != "" {
-		if err := os.WriteFile(req.Exec.LastMessageFile, []byte(lastMessage+"\n"), 0o600); err != nil {
+		if err := os.WriteFile(req.Exec.LastMessageFile, []byte(lastMessage), 0o600); err != nil {
 			return nil, err
+		}
+		if !hasLastMessage && stderr != nil {
+			fmt.Fprintf(stderr, "Warning: no last agent message; wrote empty content to %s\n", req.Exec.LastMessageFile)
 		}
 	}
 
@@ -284,8 +296,10 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 				fmt.Fprintf(stderr, "tokens used\n%s\n", formatIntWithSeparators(total))
 			}
 		}
-		if err := writeHumanFinalMessage(stdout, stderr, lastMessage); err != nil {
-			return nil, err
+		if hasLastMessage {
+			if err := writeHumanFinalMessage(stdout, stderr, lastMessage); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -299,36 +313,44 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}, nil
 }
 
+func execReviewSubagentMetadata(req *Request) (string, string) {
+	if req != nil && req.Exec.Subcommand == "review" {
+		return string(model.AgentTaskReview), string(model.AgentTaskReview)
+	}
+	return "", ""
+}
+
 type agentRunConfig struct {
-	Prompt               string
-	Instructions         string
-	InputItems           []any
-	Model                string
-	ProviderID           string
-	TaskKind             model.AgentTaskKind
-	ThreadID             string
-	TurnID               string
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
-	ModelVerbosity       string
-	IncludeTimingMetrics bool
-	BetaFeaturesHeader   string
-	ItemIDsEnabled       bool
-	PromptCacheKey       string
-	ServiceTier          string
-	ClientMetadata       map[string]string
-	OutputSchema         any
-	ApprovalPolicy       sandbox.AskForApproval
-	StreamEvents         *execStreamEventCollector
-	PermissionProfileID  string
-	PermissionProfile    *sandbox.PermissionProfile
-	MCPService           *mcp.MCPService
-	MCPTools             []mcp.RuntimeToolInfo
-	MCPConnectors        []mcp.RuntimeConnector
-	ImageGeneration      *turn.ImageGenerationOptions
-	HostedTools          []any
+	Prompt                       string
+	Instructions                 string
+	InputItems                   []any
+	Model                        string
+	ProviderID                   string
+	TaskKind                     model.AgentTaskKind
+	ThreadID                     string
+	TurnID                       string
+	PreviousResponseID           string
+	ParallelToolCalls            bool
+	ReasoningEffort              string
+	ReasoningSummary             string
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	PromptCacheKey               string
+	ServiceTier                  string
+	ClientMetadata               map[string]string
+	OutputSchema                 any
+	ApprovalPolicy               sandbox.AskForApproval
+	StreamEvents                 *execStreamEventCollector
+	PermissionProfileID          string
+	PermissionProfile            *sandbox.PermissionProfile
+	MCPService                   *mcp.MCPService
+	MCPTools                     []mcp.RuntimeToolInfo
+	MCPConnectors                []mcp.RuntimeConnector
+	ImageGeneration              *turn.ImageGenerationOptions
+	HostedTools                  []any
+	DisableHostedImageGeneration bool
 }
 
 type execStreamEventCollector struct {
@@ -341,82 +363,42 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		return
 	}
 	switch event.Kind {
-	case model.ResponsesStreamEventRateLimits:
-		if event.RateLimit != nil {
-			c.emit(protocol.RateLimitSnapshotEvent(protocolRateLimitSnapshotFromModel(event.RateLimit)))
-		}
 	case model.ResponsesStreamEventOutputAdded:
-		if event.Item != nil && event.Item.Type == "reasoning" {
+		if event.Item == nil || event.Item.Type == "" || event.Item.Type == "agent_message" || event.Item.Type == "reasoning" {
+			return
+		}
+		// Rust creates command cells from the execution lifecycle, after the
+		// complete command is known. The model's output-added event can carry
+		// empty arguments and must not create a generic exec_command cell.
+		if event.Item.Name == tool.DefaultExecCommandToolName {
 			return
 		}
 		item := protocolItemFromStreamAgentItem(event.Item)
 		if item.ID != "" {
 			c.emit(protocol.ItemStarted(item))
 		}
-	case model.ResponsesStreamEventOutputText:
-		itemID := firstNonEmpty(event.ItemID, "agent-message")
-		if event.Delta != "" {
-			c.emit(protocol.AgentMessageDelta(itemID, event.Delta))
-		}
-	case model.ResponsesStreamEventToolInputDelta:
-		itemID := firstNonEmpty(event.ItemID, event.CallID, "tool-call")
-		if event.Delta != "" {
-			c.emit(protocol.ToolCallInputDelta(itemID, event.CallID, event.Delta))
+	case model.ResponsesStreamEventModelReroute:
+		if message := modelRerouteErrorMessage(event.Reroute); message != "" {
+			c.emit(protocol.ItemCompleted(protocol.ErrorItem("model-reroute", message)))
 		}
 	}
 }
 
-func protocolRateLimitSnapshotFromModel(snapshot *model.ResponsesRateLimitSnapshot) protocol.RateLimitSnapshot {
-	if snapshot == nil {
-		return protocol.RateLimitSnapshot{}
+func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *tool.Invocation, _ time.Time) {
+	if c == nil || invocation == nil || invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
+		return
 	}
-	return protocol.RateLimitSnapshot{
-		LimitID:              snapshot.LimitID,
-		LimitName:            snapshot.LimitName,
-		Primary:              protocolRateLimitWindowFromModel(snapshot.Primary),
-		Secondary:            protocolRateLimitWindowFromModel(snapshot.Secondary),
-		Credits:              protocolCreditsSnapshotFromModel(snapshot.Credits),
-		PlanType:             snapshot.PlanType,
-		RateLimitReachedType: snapshot.RateLimitReachedType,
+	command := commandFromShellInvocation(invocation)
+	if command == "" {
+		return
 	}
-}
-
-func protocolRateLimitWindowFromModel(window *model.ResponsesRateLimitWindow) *protocol.RateLimitWindow {
-	if window == nil {
-		return nil
-	}
-	return &protocol.RateLimitWindow{
-		UsedPercent:        window.UsedPercent,
-		WindowDurationMins: cloneInt64PtrExec(window.WindowDurationMins),
-		ResetsAt:           cloneInt64PtrExec(window.ResetsAt),
-	}
-}
-
-func protocolCreditsSnapshotFromModel(credits *model.ResponsesCreditsSnapshot) *protocol.CreditsSnapshot {
-	if credits == nil {
-		return nil
-	}
-	return &protocol.CreditsSnapshot{
-		HasCredits: credits.HasCredits,
-		Unlimited:  credits.Unlimited,
-		Balance:    cloneStringPtrExec(credits.Balance),
-	}
-}
-
-func cloneInt64PtrExec(value *int64) *int64 {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
-}
-
-func cloneStringPtrExec(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
+	c.emit(protocol.ItemStarted(protocol.CommandExecutionItem(
+		firstNonEmpty(invocation.CallID, "command-execution"),
+		command,
+		"",
+		nil,
+		"in_progress",
+	)))
 }
 
 func (c *execStreamEventCollector) emit(event protocol.ThreadEvent) {
@@ -440,6 +422,48 @@ func (c *execStreamEventCollector) Events() []protocol.ThreadEvent {
 	return append([]protocol.ThreadEvent(nil), c.events...)
 }
 
+func modelRerouteErrorMessage(reroute *model.ResponsesModelReroute) string {
+	if reroute == nil {
+		return ""
+	}
+	fromModel := strings.TrimSpace(reroute.FromModel)
+	toModel := strings.TrimSpace(reroute.ToModel)
+	reason := rustStyleModelRerouteReason(reroute.Reason)
+	if fromModel == "" && toModel == "" {
+		return ""
+	}
+	if reason != "" {
+		return fmt.Sprintf("model rerouted: %s -> %s (%s)", fromModel, toModel, reason)
+	}
+	return fmt.Sprintf("model rerouted: %s -> %s", fromModel, toModel)
+}
+
+func rustStyleModelRerouteReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(reason, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+	var out strings.Builder
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		lower := strings.ToLower(part)
+		out.WriteString(strings.ToUpper(lower[:1]))
+		if len(lower) > 1 {
+			out.WriteString(lower[1:])
+		}
+	}
+	if out.Len() == 0 {
+		return reason
+	}
+	return out.String()
+}
+
 type execEventSink struct {
 	mu      sync.Mutex
 	events  []protocol.ThreadEvent
@@ -451,6 +475,7 @@ func newExecEventSink(stdout io.Writer, encodeJSON bool) *execEventSink {
 	sink := &execEventSink{}
 	if encodeJSON && stdout != nil {
 		sink.encoder = json.NewEncoder(stdout)
+		sink.encoder.SetEscapeHTML(false)
 	}
 	return sink
 }
@@ -461,6 +486,14 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if event.Type == "item.started" && event.Item != nil {
+		for i := range s.events {
+			previous := s.events[i]
+			if previous.Type == event.Type && previous.Item != nil && previous.Item.ID == event.Item.ID && previous.Item.Type == event.Item.Type {
+				return s.err
+			}
+		}
+	}
 	s.events = append(s.events, event)
 	if s.err != nil {
 		return s.err
@@ -515,27 +548,29 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		Now:      r.now,
 		MaxTurns: r.MaxToolTurns,
 	}).Run(ctx, &turn.AgentLoopRequest{
-		Prompt:               run.Prompt,
-		Instructions:         run.Instructions,
-		InputItems:           append([]any(nil), run.InputItems...),
-		HostedTools:          append([]any(nil), run.HostedTools...),
-		Model:                run.Model,
-		ProviderID:           run.ProviderID,
-		TaskKind:             run.TaskKind,
-		ThreadID:             run.ThreadID,
-		TurnID:               run.TurnID,
-		PreviousResponseID:   run.PreviousResponseID,
-		ParallelToolCalls:    run.ParallelToolCalls,
-		ReasoningEffort:      run.ReasoningEffort,
-		ReasoningSummary:     run.ReasoningSummary,
-		ModelVerbosity:       run.ModelVerbosity,
-		IncludeTimingMetrics: run.IncludeTimingMetrics,
-		BetaFeaturesHeader:   run.BetaFeaturesHeader,
-		ItemIDsEnabled:       run.ItemIDsEnabled,
-		PromptCacheKey:       run.PromptCacheKey,
-		ServiceTier:          run.ServiceTier,
-		ClientMetadata:       cloneStringMap(run.ClientMetadata),
-		OutputSchema:         run.OutputSchema,
+		Prompt:                       run.Prompt,
+		Instructions:                 run.Instructions,
+		InputItems:                   append([]any(nil), run.InputItems...),
+		HostedTools:                  append([]any(nil), run.HostedTools...),
+		Model:                        run.Model,
+		ProviderID:                   run.ProviderID,
+		TaskKind:                     run.TaskKind,
+		ThreadID:                     run.ThreadID,
+		TurnID:                       run.TurnID,
+		PreviousResponseID:           run.PreviousResponseID,
+		ParallelToolCalls:            run.ParallelToolCalls,
+		ReasoningEffort:              run.ReasoningEffort,
+		ReasoningSummary:             run.ReasoningSummary,
+		ModelVerbosity:               run.ModelVerbosity,
+		IncludeTimingMetrics:         run.IncludeTimingMetrics,
+		BetaFeaturesHeader:           run.BetaFeaturesHeader,
+		ItemIDsEnabled:               run.ItemIDsEnabled,
+		PromptCacheKey:               run.PromptCacheKey,
+		ServiceTier:                  run.ServiceTier,
+		ClientMetadata:               cloneStringMap(run.ClientMetadata),
+		OutputSchema:                 run.OutputSchema,
+		DisableHostedImageGeneration: run.DisableHostedImageGeneration,
+		OnToolStarted:                run.StreamEvents.ToolStarted,
 	})
 }
 
@@ -877,7 +912,7 @@ func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execR
 		if req.Exec.Resume.Prompt == "" && len(req.Input) > 0 {
 			return "", &execResumeContext{Record: record}, nil
 		}
-		resumePrompt, err := prompt.Resolve(req.Exec.Resume.Prompt, stdin)
+		resumePrompt, err := resolveExecResumePrompt(req.Exec.Resume.Prompt, stdin)
 		if err != nil {
 			return "", nil, err
 		}
@@ -888,6 +923,35 @@ func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execR
 	}
 	resolved, err := prompt.Resolve(req.Exec.Prompt, stdin)
 	return resolved, nil, err
+}
+
+func resolveExecResumePrompt(promptArg string, stdin io.Reader) (string, error) {
+	if promptArg != "" && promptArg != "-" {
+		return promptArg, nil
+	}
+	return prompt.Resolve(promptArg, stdin)
+}
+
+func requestTurnUserInputs(req *Request) []turn.TurnUserInput {
+	inputs := cloneTurnUserInputs(req.Input)
+	for _, path := range requestImagePaths(req) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		inputs = append(inputs, turn.TurnUserInput{Type: "localImage", Path: path})
+	}
+	return inputs
+}
+
+func requestImagePaths(req *Request) []string {
+	if req == nil {
+		return nil
+	}
+	images := make([]string, 0, len(req.Root.Shared.Images)+len(req.Exec.Shared.Images))
+	images = append(images, req.Root.Shared.Images...)
+	images = append(images, req.Exec.Shared.Images...)
+	return images
 }
 
 func cloneTurnUserInputs(values []turn.TurnUserInput) []turn.TurnUserInput {
@@ -1134,11 +1198,11 @@ func loadOutputSchema(path string) (any, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read output schema file %s: %w", path, err)
+		return nil, fmt.Errorf("Failed to read output schema file %s: %w", path, err)
 	}
 	var value any
 	if err := json.Unmarshal(data, &value); err != nil {
-		return nil, fmt.Errorf("output schema file %s is not valid JSON: %w", path, err)
+		return nil, fmt.Errorf("Output schema file %s is not valid JSON: %w", path, err)
 	}
 	return value, nil
 }
@@ -1156,6 +1220,13 @@ func baseInstructionsForConfig(cfg *config.Config) (string, error) {
 		return text, nil
 	}
 	return stringConfigValue(cfg, "instructions"), nil
+}
+
+func baseInstructionsForRequest(req *Request, cfg *config.Config) (string, error) {
+	if req != nil && req.Exec.Subcommand == "review" {
+		return review.ReviewPrompt, nil
+	}
+	return baseInstructionsForConfig(cfg)
 }
 
 func deterministicThreadID(prompt string) string {
@@ -1191,7 +1262,7 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 	}
 	usage := agentUsageForResult(result)
 	executionIndex := 0
-	streamedAgentMessages := collectStreamedAgentMessages(sink.Events())
+	todoLists := &execTodoListState{}
 	for _, response := range result.ModelResponses() {
 		if response == nil {
 			continue
@@ -1199,15 +1270,12 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 		toolItemCount := 0
 		for i := range response.Items {
 			item := response.Items[i]
-			if isToolAgentItemForSession(&item) {
+			if isToolAgentItemForExecEvents(&item) {
 				toolItemCount++
 				continue
 			}
 			protocolItem := protocolItemFromStreamAgentItem(&item)
 			if protocolItem.ID == "" {
-				continue
-			}
-			if streamedAgentMessages.seen(protocolItem) {
 				continue
 			}
 			if err := sink.Emit(protocol.ItemCompleted(protocolItem)); err != nil {
@@ -1223,6 +1291,14 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 			}
 		}
 		for i := range toolExecutions {
+			if isPlanUpdateExecution(&toolExecutions[i]) {
+				for _, event := range todoLists.eventsForPlanUpdate(&toolExecutions[i]) {
+					if err := sink.Emit(event); err != nil {
+						return err
+					}
+				}
+				continue
+			}
 			if event, ok := eventFromToolOutputExecution(&toolExecutions[i]); ok {
 				if err := sink.Emit(event); err != nil {
 					return err
@@ -1232,21 +1308,32 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 		executionIndex += len(toolExecutions)
 		if len(response.Items) == 0 && strings.TrimSpace(response.Message) != "" {
 			item := protocol.AgentMessageItem("agent-message", response.Message)
-			if streamedAgentMessages.seen(item) {
-				continue
-			}
 			if err := sink.Emit(protocol.ItemCompleted(item)); err != nil {
 				return err
 			}
 		}
 	}
 	for executionIndex < len(result.ToolExecutions) {
+		if isPlanUpdateExecution(&result.ToolExecutions[executionIndex]) {
+			for _, event := range todoLists.eventsForPlanUpdate(&result.ToolExecutions[executionIndex]) {
+				if err := sink.Emit(event); err != nil {
+					return err
+				}
+			}
+			executionIndex++
+			continue
+		}
 		for _, event := range eventsFromToolExecution(&result.ToolExecutions[executionIndex]) {
 			if err := sink.Emit(event); err != nil {
 				return err
 			}
 		}
 		executionIndex++
+	}
+	if event, ok := todoLists.completionEvent(); ok {
+		if err := sink.Emit(event); err != nil {
+			return err
+		}
 	}
 	return sink.Emit(protocol.TurnCompleted(protocol.Usage{
 		InputTokens:           usage.InputTokens,
@@ -1256,61 +1343,16 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 	}))
 }
 
-type streamedAgentMessageSet struct {
-	ids   map[string]struct{}
-	texts map[string]struct{}
-}
-
-func collectStreamedAgentMessages(events []protocol.ThreadEvent) streamedAgentMessageSet {
-	set := streamedAgentMessageSet{}
-	textByID := map[string]*strings.Builder{}
-	for _, event := range events {
-		if event.Type != "item.delta" || event.Delta == nil || event.Delta.Text == "" {
-			continue
-		}
-		itemID := strings.TrimSpace(event.Delta.ItemID)
-		if itemID == "" {
-			itemID = "agent-message"
-		}
-		if set.ids == nil {
-			set.ids = map[string]struct{}{}
-		}
-		set.ids[itemID] = struct{}{}
-		builder := textByID[itemID]
-		if builder == nil {
-			builder = &strings.Builder{}
-			textByID[itemID] = builder
-		}
-		builder.WriteString(event.Delta.Text)
-	}
-	for _, builder := range textByID {
-		text := strings.TrimSpace(builder.String())
-		if text == "" {
-			continue
-		}
-		if set.texts == nil {
-			set.texts = map[string]struct{}{}
-		}
-		set.texts[text] = struct{}{}
-	}
-	return set
-}
-
-func (s streamedAgentMessageSet) seen(item protocol.ThreadItem) bool {
-	if item.Type != "agent_message" {
+func isToolAgentItemForExecEvents(item *model.AgentItem) bool {
+	if item == nil {
 		return false
 	}
-	if itemID := strings.TrimSpace(item.ID); itemID != "" {
-		if _, ok := s.ids[itemID]; ok {
-			return true
-		}
+	switch item.Type {
+	case "function_call", "custom_tool_call":
+		return true
+	default:
+		return false
 	}
-	if text := strings.TrimSpace(item.Text); text != "" {
-		if _, ok := s.texts[text]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func agentUsageForResult(result *turn.AgentLoopResult) model.AgentUsage {
@@ -1362,7 +1404,66 @@ func formatIntWithSeparators(value int64) string {
 	return out.String()
 }
 
+func writeHumanConfigSummary(stderr io.Writer, req *Request, cfg *config.Config, promptSummary string, threadID string, modelID string, providerID string, approvalPolicy sandbox.AskForApproval, permissions *config.SandboxPermissionProfileResolution, reasoningEffort string) {
+	if stderr == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "OpenAI Codex v%s\n", execHumanVersion())
+	fmt.Fprintln(stderr, "--------")
+	fmt.Fprintf(stderr, "workdir: %s\n", absoluteRequestCWD(req))
+	fmt.Fprintf(stderr, "model: %s\n", displayHumanConfigValue(modelID, "default"))
+	fmt.Fprintf(stderr, "provider: %s\n", displayHumanConfigValue(providerID, model.OpenAIProviderID))
+	fmt.Fprintf(stderr, "approval: %s\n", approvalPolicy)
+	fmt.Fprintf(stderr, "sandbox: %s\n", execHumanSandboxSummary(permissions, requestCWD(req)))
+	fmt.Fprintf(stderr, "reasoning effort: %s\n", displayHumanConfigValue(reasoningEffort, "none"))
+	fmt.Fprintf(stderr, "reasoning summaries: %s\n", displayHumanConfigValue(effectiveReasoningSummary(cfg), "none"))
+	fmt.Fprintf(stderr, "session id: %s\n", threadID)
+	fmt.Fprintln(stderr, "--------")
+	fmt.Fprintln(stderr, "user")
+	fmt.Fprintln(stderr, promptSummary)
+}
+
+func execHumanVersion() string {
+	return "dev"
+}
+
+func displayHumanConfigValue(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func execHumanSandboxSummary(resolution *config.SandboxPermissionProfileResolution, cwd string) string {
+	profile := sandboxPermissionProfile(resolution)
+	if profile == nil {
+		return "read-only"
+	}
+	if profile.Disabled {
+		return "danger-full-access"
+	}
+	policy := profile.LegacySandboxPolicy()
+	summary := sandbox.SandboxPolicyTag(policy, cwd)
+	if policy != nil && policy.Kind == "external-sandbox" && policy.HasFullNetworkAccess() {
+		return summary + " (network access enabled)"
+	}
+	return summary
+}
+
+func effectiveReasoningSummary(cfg *config.Config) string {
+	return firstNonEmpty(
+		stringConfigValue(cfg, "model_reasoning_summary"),
+		stringConfigValue(cfg, "modelReasoningSummary"),
+		stringConfigValue(cfg, "reasoning_summary"),
+		stringConfigValue(cfg, "reasoningSummary"),
+	)
+}
+
 func writeHumanFinalMessage(stdout io.Writer, stderr io.Writer, message string) error {
+	if message == "" {
+		return nil
+	}
 	if isTerminalWriter(stdout) && isTerminalWriter(stderr) {
 		_, err := fmt.Fprintf(stderr, "codex\n%s\n", message)
 		return err
@@ -1379,19 +1480,73 @@ func isTerminalWriter(writer io.Writer) bool {
 	return ok && terminal.IsTerminal()
 }
 
+func finalMessageForAgentResult(result *turn.AgentLoopResult) (string, bool) {
+	if result == nil {
+		return "", false
+	}
+	responses := result.ModelResponses()
+	for i := len(responses) - 1; i >= 0; i-- {
+		if message, ok := finalMessageFromAgentResponse(responses[i]); ok {
+			return message, true
+		}
+	}
+	return finalMessageFromAgentResponse(result.Response)
+}
+
+func finalMessageForRequest(req *Request, result *turn.AgentLoopResult) (string, bool) {
+	message, ok := finalMessageForAgentResult(result)
+	if !ok {
+		return message, ok
+	}
+	if req != nil && req.Exec.Subcommand == "review" {
+		return review.RenderOutputText(review.ParseOutputEvent(message)), true
+	}
+	return message, true
+}
+
+func finalMessageFromAgentResponse(response *model.AgentResponse) (string, bool) {
+	if response == nil {
+		return "", false
+	}
+	if response.Message != "" {
+		return response.Message, true
+	}
+	for i := len(response.Items) - 1; i >= 0; i-- {
+		item := response.Items[i]
+		if item.Type == "" || item.Type == "agent_message" {
+			return item.Text, true
+		}
+	}
+	for i := len(response.Items) - 1; i >= 0; i-- {
+		item := response.Items[i]
+		if item.Type == "plan" {
+			return item.Text, true
+		}
+	}
+	return "", false
+}
+
 func eventsFromAgentResponse(threadID string, response *model.AgentResponse, executions []turn.ToolExecutionResult, streamEvents []protocol.ThreadEvent) []protocol.ThreadEvent {
 	events := []protocol.ThreadEvent{
 		protocol.ThreadStarted(threadID),
 		protocol.TurnStarted(),
 	}
 	events = append(events, streamEvents...)
+	todoLists := &execTodoListState{}
 	for i := range executions {
+		if isPlanUpdateExecution(&executions[i]) {
+			events = append(events, todoLists.eventsForPlanUpdate(&executions[i])...)
+			continue
+		}
 		events = append(events, eventsFromToolExecution(&executions[i])...)
 	}
 	for _, item := range response.Items {
 		if item.Type == "" || item.Type == "agent_message" {
 			events = append(events, protocol.ItemCompleted(protocol.AgentMessageItem(item.ID, item.Text)))
 		}
+	}
+	if event, ok := todoLists.completionEvent(); ok {
+		events = append(events, event)
 	}
 	events = append(events, protocol.TurnCompleted(protocol.Usage{
 		InputTokens:           response.Usage.InputTokens,
@@ -1429,7 +1584,9 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 		return protocol.ThreadItem{}
 	}
 	switch item.Type {
-	case "function_call", "custom_tool_call", "tool_search_call":
+	case "tool_search_call":
+		return protocolWebSearchItemFromAgentItem(item)
+	case "function_call", "custom_tool_call":
 		return protocol.ToolCallItemWithCallID(
 			firstNonEmpty(item.ID, "tool-call-"+safeSessionItemID(item.CallID)),
 			item.CallID,
@@ -1456,6 +1613,91 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 			Type: item.Type,
 			Text: firstNonEmpty(item.Text, item.Arguments, item.Input),
 		}
+	}
+}
+
+func protocolWebSearchItemFromAgentItem(item *model.AgentItem) protocol.ThreadItem {
+	if item == nil {
+		return protocol.ThreadItem{}
+	}
+	query, action := webSearchActionFromAgentItem(item)
+	return protocol.WebSearchItem(firstNonEmpty(item.ID, item.CallID, "web-search"), query, action)
+}
+
+func webSearchActionFromAgentItem(item *model.AgentItem) (string, map[string]any) {
+	if item == nil {
+		return "", map[string]any{"type": "other"}
+	}
+	search := cloneMap(item.Search)
+	if len(search) == 0 {
+		search = responseArgumentsMapForExecEvents(item.Arguments)
+	}
+	if nested, ok := search["action"].(map[string]any); ok {
+		action := cloneMap(nested)
+		return firstNonEmpty(execStringFromAny(search["query"]), execStringFromAny(action["query"])), webSearchActionWithDefault(action)
+	}
+	query := execStringFromAny(search["query"])
+	queries := stringListFromAny(search["queries"])
+	if query != "" || len(queries) > 0 {
+		action := map[string]any{"type": "search"}
+		if query != "" {
+			action["query"] = query
+		}
+		if len(queries) > 0 {
+			action["queries"] = queries
+			if query == "" {
+				query = queries[0]
+			}
+		}
+		return query, action
+	}
+	url := execStringFromAny(search["url"])
+	pattern := execStringFromAny(search["pattern"])
+	if url != "" && pattern != "" {
+		return "", map[string]any{"type": "find_in_page", "url": url, "pattern": pattern}
+	}
+	if url != "" {
+		return "", map[string]any{"type": "open_page", "url": url}
+	}
+	return "", map[string]any{"type": "other"}
+}
+
+func responseArgumentsMapForExecEvents(arguments string) map[string]any {
+	if strings.TrimSpace(arguments) == "" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(arguments), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func webSearchActionWithDefault(action map[string]any) map[string]any {
+	if len(action) == 0 {
+		return map[string]any{"type": "other"}
+	}
+	if execStringFromAny(action["type"]) == "" {
+		action["type"] = "other"
+	}
+	return action
+}
+
+func stringListFromAny(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := execStringFromAny(item)
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -1521,7 +1763,57 @@ func reasoningSummaryStrings(data map[string]any) []string {
 	}
 }
 
+type execTodoListState struct {
+	id    string
+	items []protocol.TodoItem
+}
+
+func (s *execTodoListState) eventsForPlanUpdate(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
+	if s == nil || execution == nil || execution.Output == nil {
+		return nil
+	}
+	items := todoItemsFromPlanUpdateOutput(execution.Output)
+	if s.id == "" {
+		s.id = todoListIDFromPlanUpdateExecution(execution)
+		s.items = append([]protocol.TodoItem(nil), items...)
+		return []protocol.ThreadEvent{protocol.ItemStarted(protocol.TodoListItem(s.id, s.items))}
+	}
+	s.items = append([]protocol.TodoItem(nil), items...)
+	return []protocol.ThreadEvent{protocol.ItemUpdated(protocol.TodoListItem(s.id, s.items))}
+}
+
+func (s *execTodoListState) completionEvent() (protocol.ThreadEvent, bool) {
+	if s == nil || s.id == "" {
+		return protocol.ThreadEvent{}, false
+	}
+	items := append([]protocol.TodoItem(nil), s.items...)
+	return protocol.ItemCompleted(protocol.TodoListItem(s.id, items)), true
+}
+
+func todoListIDFromPlanUpdateExecution(execution *turn.ToolExecutionResult) string {
+	if execution == nil || execution.Invocation == nil {
+		return "todo-list"
+	}
+	if execution.Output != nil {
+		if id := firstNonEmpty(
+			execStringFromAny(execution.Output.Data["item_id"]),
+			execStringFromAny(execution.Output.Data["itemId"]),
+		); id != "" {
+			return id
+		}
+	}
+	return "todo-list-" + safeSessionItemID(execution.Invocation.CallID)
+}
+
 func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
+	if isPlanUpdateExecution(execution) {
+		todoLists := &execTodoListState{}
+		events := todoLists.eventsForPlanUpdate(execution)
+		if event, ok := todoLists.completionEvent(); ok {
+			events = append(events, event)
+		}
+		return events
+	}
 	events := eventsFromToolCallExecution(execution)
 	if event, ok := eventFromToolOutputExecution(execution); ok {
 		events = append(events, event)
@@ -1533,7 +1825,19 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 	if execution == nil || execution.Invocation == nil {
 		return nil
 	}
-	if isPlanUpdateExecution(execution) {
+	if isCollabExecution(execution) {
+		item := collabToolCallProtocolItem(execution, "in_progress")
+		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
+	}
+	if isMCPExecution(execution) {
+		item := mcpToolCallProtocolItem(execution, "in_progress")
+		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
+	}
+	if isCommandExecution(execution) {
+		item := commandExecutionProtocolItem(execution, "in_progress")
+		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
+	}
+	if isPlanUpdateExecution(execution) || isFileChangeExecution(execution) {
 		return nil
 	}
 	callID := execution.Invocation.CallID
@@ -1552,6 +1856,20 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	if isPlanUpdateExecution(execution) {
 		items := todoItemsFromPlanUpdateOutput(execution.Output)
 		return protocol.ItemCompleted(protocol.TodoListItem("todo-list-"+safeSessionItemID(execution.Invocation.CallID), items)), true
+	}
+	if isFileChangeExecution(execution) {
+		changes := fileChangesFromToolOutput(execution.Output)
+		status := fileChangeStatusFromToolOutput(execution.Output)
+		return protocol.ItemCompleted(protocol.FileChangeItem("file-change-"+safeSessionItemID(execution.Invocation.CallID), changes, status)), true
+	}
+	if isCollabExecution(execution) {
+		return protocol.ItemCompleted(collabToolCallProtocolItem(execution, collabToolCallStatusFromOutput(execution.Output))), true
+	}
+	if isMCPExecution(execution) {
+		return protocol.ItemCompleted(mcpToolCallProtocolItem(execution, mcpToolCallStatusFromOutput(execution.Output))), true
+	}
+	if isCommandExecution(execution) {
+		return protocol.ItemCompleted(commandExecutionProtocolItem(execution, commandExecutionStatusFromOutput(execution.Output))), true
 	}
 	callID := execution.Invocation.CallID
 	toolName := execution.Invocation.ToolName.Key()
@@ -1578,6 +1896,670 @@ func isPlanUpdateExecution(execution *turn.ToolExecutionResult) bool {
 	}
 	marker, _ := execution.Output.Data["planUpdate"].(bool)
 	return marker
+}
+
+func isCommandExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil || execution.Invocation == nil || execution.Output == nil {
+		return false
+	}
+	if execution.Invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
+		return false
+	}
+	_, ok := intFromAny(execution.Output.Data["exit_code"])
+	return ok
+}
+
+func commandExecutionProtocolItem(execution *turn.ToolExecutionResult, status string) protocol.ThreadItem {
+	if execution == nil || execution.Invocation == nil {
+		return protocol.ThreadItem{}
+	}
+	command := commandFromShellInvocation(execution.Invocation)
+	aggregated := ""
+	var exitCode *int
+	if execution.Output != nil && status != "in_progress" {
+		if hookResponse, ok := execution.Output.Data["hook_response"].(string); ok && hookResponse != "" {
+			aggregated = hookResponse
+		} else {
+			aggregated = execution.Output.Body
+		}
+		if code, ok := intFromAny(execution.Output.Data["exit_code"]); ok {
+			exitCode = &code
+		}
+	}
+	return protocol.CommandExecutionItem(
+		firstNonEmpty(execution.Invocation.CallID, "command-execution"),
+		command,
+		aggregated,
+		exitCode,
+		status,
+	)
+}
+
+func commandFromShellInvocation(invocation *tool.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	var args struct {
+		Cmd     string   `json:"cmd"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if raw := strings.TrimSpace(invocation.Payload.Arguments); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &args); err == nil {
+			if strings.TrimSpace(args.Cmd) != "" {
+				return strings.TrimSpace(args.Cmd)
+			}
+			if strings.TrimSpace(args.Command) != "" {
+				return strings.TrimSpace(args.Command)
+			}
+			if len(args.Args) > 0 {
+				return strings.Join(args.Args, " ")
+			}
+		}
+	}
+	return strings.TrimSpace(invocation.Payload.Input)
+}
+
+func commandExecutionStatusFromOutput(output *tool.Output) string {
+	if output == nil {
+		return "in_progress"
+	}
+	if output.Success {
+		return "completed"
+	}
+	return "failed"
+}
+
+func intFromAny(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		number, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func isCollabExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	if execution.Output != nil {
+		if marker, _ := execution.Output.Data["collabToolCall"].(bool); marker {
+			return true
+		}
+	}
+	if execution.Invocation != nil {
+		if _, ok := normalizeCollabToolName(execution.Invocation.ToolName); ok {
+			return true
+		}
+	}
+	if execution.Output != nil {
+		if _, ok := normalizeCollabToolName(execution.Output.ToolName); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func collabToolCallProtocolItem(execution *turn.ToolExecutionResult, status string) protocol.ThreadItem {
+	if execution == nil || execution.Invocation == nil {
+		return protocol.ThreadItem{}
+	}
+	toolName, _ := collabToolNameFromExecution(execution)
+	prompt := collabPromptFromExecution(execution)
+	receiverThreadIDs := collabReceiverThreadIDsFromExecution(execution, status)
+	return protocol.CollabToolCallItem(
+		firstNonEmpty(execution.Invocation.CallID, "collab-tool-call"),
+		toolName,
+		collabSenderThreadIDFromExecution(execution),
+		receiverThreadIDs,
+		prompt,
+		collabAgentStatesFromExecution(execution, receiverThreadIDs),
+		status,
+	)
+}
+
+func collabToolNameFromExecution(execution *turn.ToolExecutionResult) (string, bool) {
+	if execution != nil && execution.Output != nil {
+		if toolName, ok := normalizeCollabToolString(execStringFromAny(execution.Output.Data["tool"])); ok {
+			return toolName, true
+		}
+	}
+	if execution != nil && execution.Invocation != nil {
+		if toolName, ok := normalizeCollabToolName(execution.Invocation.ToolName); ok {
+			return toolName, true
+		}
+	}
+	if execution != nil && execution.Output != nil {
+		if toolName, ok := normalizeCollabToolName(execution.Output.ToolName); ok {
+			return toolName, true
+		}
+	}
+	return "", false
+}
+
+func normalizeCollabToolName(name tool.ToolName) (string, bool) {
+	if strings.TrimSpace(name.Namespace) == "agent" {
+		if toolName, ok := normalizeCollabToolString(name.Name); ok {
+			return toolName, true
+		}
+		return "", false
+	}
+	return normalizeCollabToolString(name.Key())
+}
+
+func normalizeCollabToolString(raw string) (string, bool) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	value = strings.ReplaceAll(value, ".", "_")
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "agent_spawn_agent", "spawn_agent", "spawnagent":
+		return "spawn_agent", true
+	case "agent_send_input", "send_input", "sendinput":
+		return "send_input", true
+	case "agent_wait_agent", "wait_agent", "agent_wait", "wait", "waitagent":
+		return "wait", true
+	case "agent_close_agent", "close_agent", "closeagent":
+		return "close_agent", true
+	default:
+		return "", false
+	}
+}
+
+func collabSenderThreadIDFromExecution(execution *turn.ToolExecutionResult) string {
+	if execution == nil {
+		return ""
+	}
+	if execution.Output != nil {
+		if sender := firstNonEmpty(
+			execStringFromAny(execution.Output.Data["sender_thread_id"]),
+			execStringFromAny(execution.Output.Data["senderThreadId"]),
+		); sender != "" {
+			return sender
+		}
+	}
+	if execution.Invocation != nil && execution.Invocation.Context != nil {
+		return firstNonEmpty(
+			execStringFromAny(execution.Invocation.Context["sender_thread_id"]),
+			execStringFromAny(execution.Invocation.Context["senderThreadId"]),
+			execStringFromAny(execution.Invocation.Context["thread_id"]),
+			execStringFromAny(execution.Invocation.Context["threadId"]),
+		)
+	}
+	return ""
+}
+
+func collabPromptFromExecution(execution *turn.ToolExecutionResult) *string {
+	if execution == nil {
+		return nil
+	}
+	if execution.Output != nil {
+		if prompt := firstNonEmpty(
+			execStringFromAny(execution.Output.Data["prompt"]),
+			execStringFromAny(execution.Output.Data["message"]),
+		); prompt != "" {
+			return stringPointerIfNotEmpty(prompt)
+		}
+	}
+	if execution.Invocation == nil {
+		return nil
+	}
+	args := toolInvocationArgumentsMap(execution.Invocation)
+	if prompt := firstNonEmpty(execStringFromAny(args["prompt"]), execStringFromAny(args["message"])); prompt != "" {
+		return stringPointerIfNotEmpty(prompt)
+	}
+	return nil
+}
+
+func collabReceiverThreadIDsFromExecution(execution *turn.ToolExecutionResult, status string) []string {
+	if execution == nil {
+		return nil
+	}
+	if status == "in_progress" {
+		return nil
+	}
+	if execution.Output != nil {
+		if values := stringListFromAny(firstNonNil(
+			execution.Output.Data["receiver_thread_ids"],
+			execution.Output.Data["receiverThreadIds"],
+		)); len(values) > 0 {
+			return values
+		}
+		if result, ok := execution.Output.Data["result"]; ok {
+			if values := collabReceiverThreadIDsFromResult(result, execution); len(values) > 0 {
+				return values
+			}
+		}
+	}
+	if execution.Invocation == nil {
+		return nil
+	}
+	args := toolInvocationArgumentsMap(execution.Invocation)
+	if values := stringListFromAny(firstNonNil(args["targets"], args["receiver_thread_ids"], args["receiverThreadIds"])); len(values) > 0 {
+		return values
+	}
+	target := firstNonEmpty(execStringFromAny(args["target"]), execStringFromAny(args["id"]))
+	if target != "" {
+		return []string{target}
+	}
+	return nil
+}
+
+func collabReceiverThreadIDsFromResult(result any, execution *turn.ToolExecutionResult) []string {
+	switch typed := result.(type) {
+	case map[string]any:
+		if id := firstNonEmpty(
+			execStringFromAny(typed["agent_id"]),
+			execStringFromAny(typed["agentId"]),
+			execStringFromAny(typed["target"]),
+			execStringFromAny(typed["id"]),
+		); id != "" {
+			return []string{id}
+		}
+	case fmt.Stringer:
+		value := strings.TrimSpace(typed.String())
+		if value != "" {
+			return []string{value}
+		}
+	default:
+		data, err := json.Marshal(typed)
+		if err == nil {
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err == nil {
+				return collabReceiverThreadIDsFromResult(decoded, execution)
+			}
+		}
+	}
+	if execution == nil || execution.Invocation == nil {
+		return nil
+	}
+	args := toolInvocationArgumentsMap(execution.Invocation)
+	target := firstNonEmpty(execStringFromAny(args["target"]), execStringFromAny(args["id"]))
+	if target != "" {
+		return []string{target}
+	}
+	return nil
+}
+
+func collabAgentStatesFromExecution(execution *turn.ToolExecutionResult, receiverThreadIDs []string) map[string]protocol.CollabAgentState {
+	if execution == nil || execution.Output == nil {
+		return nil
+	}
+	if states := collabAgentStatesFromAny(firstNonNil(
+		execution.Output.Data["agents_states"],
+		execution.Output.Data["agentsStates"],
+	)); len(states) > 0 {
+		return states
+	}
+	if result, ok := execution.Output.Data["result"]; ok {
+		if states := collabAgentStatesFromResult(result); len(states) > 0 {
+			return states
+		}
+	}
+	if execution.Output.Success {
+		if toolName, ok := collabToolNameFromExecution(execution); ok && toolName == "spawn_agent" && len(receiverThreadIDs) > 0 {
+			states := map[string]protocol.CollabAgentState{}
+			for _, threadID := range receiverThreadIDs {
+				states[threadID] = protocol.CollabAgentState{Status: "running"}
+			}
+			return states
+		}
+	}
+	return nil
+}
+
+func collabAgentStatesFromResult(result any) map[string]protocol.CollabAgentState {
+	switch typed := result.(type) {
+	case map[string]any:
+		if status, ok := typed["status"]; ok {
+			return collabAgentStatesFromAny(status)
+		}
+	case map[string]protocol.CollabAgentState:
+		return collabAgentStatesFromAny(typed)
+	default:
+		data, err := json.Marshal(typed)
+		if err == nil {
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err == nil {
+				return collabAgentStatesFromResult(decoded)
+			}
+		}
+	}
+	return nil
+}
+
+func collabAgentStatesFromAny(value any) map[string]protocol.CollabAgentState {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]protocol.CollabAgentState:
+		out := make(map[string]protocol.CollabAgentState, len(typed))
+		for key, state := range typed {
+			out[key] = protocol.CollabAgentState{
+				Status:  normalizeCollabAgentStatus(state.Status),
+				Message: cloneExecStringPointer(state.Message),
+			}
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]protocol.CollabAgentState, len(typed))
+		for key, raw := range typed {
+			state, ok := collabAgentStateFromAny(raw)
+			if ok {
+				out[key] = state
+			}
+		}
+		return out
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return nil
+		}
+		return collabAgentStatesFromAny(decoded)
+	}
+}
+
+func collabAgentStateFromAny(value any) (protocol.CollabAgentState, bool) {
+	switch typed := value.(type) {
+	case protocol.CollabAgentState:
+		return protocol.CollabAgentState{
+			Status:  normalizeCollabAgentStatus(typed.Status),
+			Message: cloneExecStringPointer(typed.Message),
+		}, true
+	case map[string]any:
+		return protocol.CollabAgentState{
+			Status:  normalizeCollabAgentStatus(execStringFromAny(typed["status"])),
+			Message: stringPointerIfNotEmpty(execStringFromAny(typed["message"])),
+		}, true
+	default:
+		status := normalizeCollabAgentStatus(execStringFromAny(typed))
+		if status == "" {
+			return protocol.CollabAgentState{}, false
+		}
+		return protocol.CollabAgentState{Status: status}, true
+	}
+}
+
+func normalizeCollabAgentStatus(status string) string {
+	value := strings.ToLower(strings.TrimSpace(status))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "pendinginit", "pending_init":
+		return "pending_init"
+	case "running", "interrupted", "completed", "errored", "shutdown":
+		return value
+	case "notfound", "not_found":
+		return "not_found"
+	default:
+		return value
+	}
+}
+
+func collabToolCallStatusFromOutput(output *tool.Output) string {
+	if output == nil {
+		return "in_progress"
+	}
+	status := normalizeCollabToolCallStatus(execStringFromAny(output.Data["status"]))
+	if status != "" {
+		return status
+	}
+	if output.Success {
+		return "completed"
+	}
+	return "failed"
+}
+
+func normalizeCollabToolCallStatus(status string) string {
+	value := strings.ToLower(strings.TrimSpace(status))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "inprogress", "in_progress":
+		return "in_progress"
+	case "completed":
+		return "completed"
+	case "failed", "declined":
+		return "failed"
+	default:
+		return ""
+	}
+}
+
+func toolInvocationArgumentsMap(invocation *tool.Invocation) map[string]any {
+	if invocation == nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(invocation.Payload.Arguments)), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func cloneExecStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func isMCPExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	if isCollabExecution(execution) {
+		return false
+	}
+	if execution.Invocation != nil &&
+		strings.TrimSpace(execution.Invocation.ToolName.Namespace) != "" &&
+		strings.TrimSpace(execution.Invocation.ToolName.Namespace) != "agent" {
+		return true
+	}
+	if execution.Output != nil {
+		marker, _ := execution.Output.Data["mcpToolCall"].(bool)
+		return marker
+	}
+	return false
+}
+
+func mcpToolCallProtocolItem(execution *turn.ToolExecutionResult, status string) protocol.ThreadItem {
+	if execution == nil || execution.Invocation == nil {
+		return protocol.ThreadItem{}
+	}
+	invocation := execution.Invocation
+	server := strings.TrimSpace(invocation.ToolName.Namespace)
+	toolName := strings.TrimSpace(invocation.ToolName.Name)
+	if server == "" && execution.Output != nil {
+		server = execStringFromAny(execution.Output.Data["server"])
+	}
+	if toolName == "" && execution.Output != nil {
+		toolName = execStringFromAny(execution.Output.Data["tool"])
+	}
+	var result *protocol.MCPToolResult
+	var callErr *protocol.MCPToolError
+	if execution.Output != nil && status == "completed" {
+		result = mcpToolResultFromOutput(execution.Output)
+	}
+	if execution.Output != nil && status == "failed" {
+		callErr = &protocol.MCPToolError{Message: firstNonEmpty(strings.TrimSpace(execution.Output.Body), "MCP tool call failed")}
+	}
+	return protocol.MCPToolCallItem(
+		firstNonEmpty(invocation.CallID, "mcp-tool-call"),
+		server,
+		toolName,
+		toolInvocationArgumentsAny(invocation),
+		result,
+		callErr,
+		status,
+	)
+}
+
+func mcpToolCallStatusFromOutput(output *tool.Output) string {
+	if output == nil {
+		return "in_progress"
+	}
+	if output.Success {
+		return "completed"
+	}
+	return "failed"
+}
+
+func mcpToolResultFromOutput(output *tool.Output) *protocol.MCPToolResult {
+	result := &protocol.MCPToolResult{
+		Content: anySliceFromAny(output.Data["content"]),
+	}
+	if result.Content == nil {
+		result.Content = []any{}
+	}
+	if meta, ok := output.Data["_meta"]; ok {
+		result.Meta = meta
+	}
+	if structured, ok := output.Data["structuredContent"]; ok {
+		result.StructuredContent = structured
+	} else if structured, ok := output.Data["structured_content"]; ok {
+		result.StructuredContent = structured
+	}
+	return result
+}
+
+func anySliceFromAny(value any) []any {
+	switch typed := value.(type) {
+	case []any:
+		return append([]any(nil), typed...)
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, cloneMap(item))
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func toolInvocationArgumentsAny(invocation *tool.Invocation) any {
+	if invocation == nil {
+		return nil
+	}
+	if raw := strings.TrimSpace(invocation.Payload.Arguments); raw != "" {
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err == nil {
+			return value
+		}
+		return raw
+	}
+	return nil
+}
+
+func isFileChangeExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil || execution.Output == nil {
+		return false
+	}
+	marker, _ := execution.Output.Data["fileChange"].(bool)
+	return marker
+}
+
+func fileChangesFromToolOutput(output *tool.Output) []protocol.FileChange {
+	if output == nil {
+		return nil
+	}
+	return fileChangesFromAny(output.Data["changes"])
+}
+
+func fileChangesFromAny(value any) []protocol.FileChange {
+	switch typed := value.(type) {
+	case []map[string]any:
+		out := make([]protocol.FileChange, 0, len(typed))
+		for _, item := range typed {
+			if change, ok := fileChangeFromMap(item); ok {
+				out = append(out, change)
+			}
+		}
+		return out
+	case []any:
+		out := make([]protocol.FileChange, 0, len(typed))
+		for _, raw := range typed {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if change, ok := fileChangeFromMap(item); ok {
+				out = append(out, change)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func fileChangeFromMap(item map[string]any) (protocol.FileChange, bool) {
+	path := execStringFromAny(item["path"])
+	kind := fileChangeKindFromAny(item["kind"])
+	if path == "" || kind == "" {
+		return protocol.FileChange{}, false
+	}
+	return protocol.FileChange{Path: path, Kind: kind}, true
+}
+
+func fileChangeKindFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return normalizeFileChangeKind(typed)
+	case map[string]any:
+		return normalizeFileChangeKind(execStringFromAny(typed["type"]))
+	default:
+		return ""
+	}
+}
+
+func normalizeFileChangeKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "add", "delete", "update":
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return ""
+	}
+}
+
+func fileChangeStatusFromToolOutput(output *tool.Output) string {
+	if output == nil {
+		return "failed"
+	}
+	status := strings.ToLower(strings.TrimSpace(execStringFromAny(output.Data["status"])))
+	switch status {
+	case "completed", "in_progress":
+		return status
+	case "failed", "declined":
+		return "failed"
+	}
+	if output.Success {
+		return "completed"
+	}
+	return "failed"
 }
 
 func todoItemsFromPlanUpdateOutput(output *tool.Output) []protocol.TodoItem {
@@ -1706,16 +2688,21 @@ func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) 
 	resume := &req.Exec.Resume
 	var threadID session.ThreadID
 	if resume.Last {
-		record, err := latestExecResumeRecord(store, resume)
+		record, err := latestExecResumeRecord(store, resume, requestCWD(req))
 		if err != nil {
 			return nil, err
 		}
 		threadID = record.ID
 	} else {
-		threadID = session.ThreadID(strings.TrimSpace(resume.SessionID))
-		if threadID == "" {
+		target := strings.TrimSpace(resume.SessionID)
+		if target == "" {
 			return nil, errors.New("exec resume requires SESSION_ID or --last")
 		}
+		resolved, err := execResumeThreadIDForTarget(store, resume, target, requestCWD(req))
+		if err != nil {
+			return nil, err
+		}
+		threadID = resolved
 	}
 	return store.Read(threadID, true, true)
 }
@@ -1763,45 +2750,87 @@ func (r *Runner) appendExecRollout(threadID session.ThreadID, items []session.It
 	return rollout.AppendSessionItems(recorder, items, now)
 }
 
-func latestExecResumeRecord(store *session.Store, resume *cli.ExecResumeOptions) (*session.Record, error) {
+func latestExecResumeRecord(store *session.Store, resume *cli.ExecResumeOptions, cwd string) (*session.Record, error) {
 	if store == nil {
 		return nil, errors.New("session store is nil")
 	}
-	activePage, err := store.List(session.ListOptions{
-		PageSize:       1,
+	options := session.ListOptions{
 		SortKey:        session.SortUpdatedAt,
 		SortDirection:  session.SortDesc,
 		Archived:       false,
 		IncludeHistory: false,
-	})
+	}
+	if resume == nil || !resume.All {
+		if strings.TrimSpace(cwd) != "" {
+			options.CWDs = []string{cwd}
+		}
+	}
+	activePage, err := store.List(options)
 	if err != nil {
 		return nil, err
 	}
-	candidates := append([]session.Record(nil), activePage.Records...)
-	if resume != nil && resume.All {
-		archivedPage, err := store.List(session.ListOptions{
-			PageSize:       1,
-			SortKey:        session.SortUpdatedAt,
-			SortDirection:  session.SortDesc,
-			Archived:       true,
-			IncludeHistory: false,
-		})
-		if err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, archivedPage.Records...)
-	}
-	if len(candidates) == 0 {
+	if len(activePage.Records) == 0 {
 		return nil, session.ErrThreadNotFound
 	}
-	newest := &candidates[0]
-	for i := 1; i < len(candidates); i++ {
-		if candidates[i].UpdatedAt.After(newest.UpdatedAt) ||
-			(candidates[i].UpdatedAt.Equal(newest.UpdatedAt) && candidates[i].ID > newest.ID) {
-			newest = &candidates[i]
+	return &activePage.Records[0], nil
+}
+
+func execResumeThreadIDForTarget(store *session.Store, resume *cli.ExecResumeOptions, target string, cwd string) (session.ThreadID, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", errors.New("exec resume requires SESSION_ID or --last")
+	}
+	if execResumeTargetIsUUID(target) {
+		return session.ThreadID(target), nil
+	}
+	if record, err := execResumeRecordByExactName(store, resume, target, cwd); err == nil {
+		return record.ID, nil
+	} else if !errors.Is(err, session.ErrThreadNotFound) {
+		return "", err
+	}
+	if record, err := store.Read(session.ThreadID(target), true, false); err == nil {
+		return record.ID, nil
+	} else if !errors.Is(err, session.ErrThreadNotFound) && !errors.Is(err, session.ErrInvalidThreadID) {
+		return "", err
+	}
+	return "", fmt.Errorf("No session found matching '%s'.", target)
+}
+
+func execResumeRecordByExactName(store *session.Store, resume *cli.ExecResumeOptions, name string, cwd string) (*session.Record, error) {
+	if store == nil {
+		return nil, errors.New("session store is nil")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, session.ErrThreadNotFound
+	}
+	options := session.ListOptions{
+		SortKey:        session.SortUpdatedAt,
+		SortDirection:  session.SortDesc,
+		Archived:       false,
+		Search:         name,
+		IncludeHistory: false,
+	}
+	if resume == nil || !resume.All {
+		if strings.TrimSpace(cwd) != "" {
+			options.CWDs = []string{cwd}
 		}
 	}
-	return newest, nil
+	page, err := store.List(options)
+	if err != nil {
+		return nil, err
+	}
+	for i := range page.Records {
+		if strings.TrimSpace(page.Records[i].Title) == name {
+			return &page.Records[i], nil
+		}
+	}
+	return nil, session.ErrThreadNotFound
+}
+
+func execResumeTargetIsUUID(value string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(value))
+	return err == nil
 }
 
 const execSkillInstructionsKind = "skill_instructions"
@@ -2434,6 +3463,11 @@ func taskKind(req *Request) model.AgentTaskKind {
 }
 
 func effectiveModel(req *Request, cfg *config.Config) string {
+	if req != nil && req.Exec.Subcommand == "review" {
+		if value := stringConfigValue(cfg, "review_model"); value != "" {
+			return value
+		}
+	}
 	if req != nil {
 		if value := firstNonEmpty(req.Exec.Shared.Model, req.Root.Shared.Model); value != "" {
 			return value

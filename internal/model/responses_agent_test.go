@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,17 +225,18 @@ func TestResponsesAgentRunnerSkipsAttestationHeaderWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestResponsesAgentRunnerReplaysTurnStateHeader(t *testing.T) {
+func TestResponsesAgentRunnerTurnStatePersistsWithinTurnAndResetsAfter(t *testing.T) {
 	attempts := 0
-	var replayedTurnState string
+	var recordedTurnStates []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		if attempts == 2 {
-			replayedTurnState = r.Header.Get(responsesCodexTurnStateHeader)
-		}
+		recordedTurnStates = append(recordedTurnStates, r.Header.Get(responsesCodexTurnStateHeader))
 		w.Header().Set("Content-Type", "application/json")
-		if attempts == 1 {
+		switch attempts {
+		case 1:
 			w.Header().Set(responsesCodexTurnStateHeader, "turn-state-1")
+		case 2:
+			w.Header().Set(responsesCodexTurnStateHeader, "turn-state-2")
 		}
 		_, _ = w.Write([]byte(`{
 			"id":"resp-1",
@@ -248,14 +250,66 @@ func TestResponsesAgentRunnerReplaysTurnStateHeader(t *testing.T) {
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
 		Provider: &APIProvider{BaseURL: server.URL + "/v1"},
 	})
-	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "first", Model: "gpt-test"}); err != nil {
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "first", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
 		t.Fatalf("first Run error = %v", err)
 	}
-	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "second", Model: "gpt-test"}); err != nil {
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "same turn follow-up", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
 		t.Fatalf("second Run error = %v", err)
 	}
-	if replayedTurnState != "turn-state-1" {
-		t.Fatalf("replayed turn state = %q", replayedTurnState)
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "same turn second follow-up", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
+		t.Fatalf("third Run error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "next turn", Model: "gpt-test", TurnID: "turn-2"}); err != nil {
+		t.Fatalf("fourth Run error = %v", err)
+	}
+	want := []string{"", "turn-state-1", "turn-state-1", ""}
+	if strings.Join(recordedTurnStates, ",") != strings.Join(want, ",") {
+		t.Fatalf("turn state headers = %#v, want %#v", recordedTurnStates, want)
+	}
+}
+
+func TestResponsesAgentRunnerStreamsTurnStatePersistsWithinTurnAndResetsAfter(t *testing.T) {
+	attempts := 0
+	var recordedTurnStates []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		recordedTurnStates = append(recordedTurnStates, r.Header.Get(responsesCodexTurnStateHeader))
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch attempts {
+		case 1:
+			w.Header().Set(responsesCodexTurnStateHeader, "turn-state-1")
+		case 2:
+			w.Header().Set(responsesCodexTurnStateHeader, "turn-state-2")
+		}
+		_, _ = w.Write([]byte(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-stream"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-stream","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-stream","delta":"done"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-stream","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-stream","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "first", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
+		t.Fatalf("first Run error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "same turn follow-up", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
+		t.Fatalf("second Run error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "same turn second follow-up", Model: "gpt-test", TurnID: "turn-1"}); err != nil {
+		t.Fatalf("third Run error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "next turn", Model: "gpt-test", TurnID: "turn-2"}); err != nil {
+		t.Fatalf("fourth Run error = %v", err)
+	}
+	want := []string{"", "turn-state-1", "turn-state-1", ""}
+	if strings.Join(recordedTurnStates, ",") != strings.Join(want, ",") {
+		t.Fatalf("stream turn state headers = %#v, want %#v", recordedTurnStates, want)
 	}
 }
 
@@ -1633,8 +1687,70 @@ func TestResponsesAgentRunnerStreamsRetryAndIdleTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
 		t.Fatalf("Run error = %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("attempts = %d", attempts)
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want request retry plus one dropped-stream retry", attempts)
+	}
+}
+
+func TestResponsesAgentRunnerRetriesDroppedSSEStreamLikeRust(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			_, _ = w.Write([]byte(responsesSSE(`{"type":"response.created","response":{"id":"resp-dropped"}}`)))
+			return
+		}
+		_, _ = w.Write([]byte(responsesSSE(
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"recovered"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-recovered","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{
+			BaseURL:          server.URL + "/v1",
+			StreamMaxRetries: 1,
+		},
+		Stream: true,
+	})
+	response, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts.Load())
+	}
+	if response.ResponseID != "resp-recovered" || response.Message != "recovered" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestResponsesAgentRunnerDoesNotRetryResponseFailed(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(responsesSSE(
+			`{"type":"response.failed","response":{"id":"resp-1","error":{"code":"invalid_request","message":"bad request"}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{
+			BaseURL:          server.URL + "/v1",
+			StreamMaxRetries: 2,
+		},
+		Stream: true,
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err == nil || !strings.Contains(err.Error(), "bad request") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
 	}
 }
 

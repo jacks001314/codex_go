@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"codex_go/internal/protocol"
+	"codex_go/internal/shell"
 )
 
 func approvalRequestFromToolOutput(item *protocol.ThreadItem) (ApprovalRequestMsg, bool) {
@@ -44,7 +45,7 @@ func approvalCommandText(metadata map[string]any) string {
 	if len(command) == 0 {
 		return ""
 	}
-	return strings.Join(command, " ")
+	return shell.StripShellCommandAndEscape(command)
 }
 
 func metadataBool(metadata map[string]any, key string) bool {

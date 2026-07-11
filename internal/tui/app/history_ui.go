@@ -25,11 +25,11 @@ func (s *HistoryUIState) Clear() {
 }
 
 func DesktopThreadURL(threadID string) string {
-	return "codex://threads/" + strings.TrimSpace(threadID)
+	return "codex://threads/" + threadID
 }
 
 func DesktopThreadOpenErrorMessage(err string) string {
-	return "Failed to open this session in Codex Desktop: " + strings.TrimSpace(err) + ". Install or launch Codex Desktop and try again."
+	return "Failed to open this session in Codex Desktop: " + err + ". Install or launch Codex Desktop and try again."
 }
 
 func PowershellSingleQuotedString(value string) string {

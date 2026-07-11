@@ -73,6 +73,21 @@ func TestEffectiveConfigPermissionFieldsMatchRust(t *testing.T) {
 	if _, ok := SandboxModeFromEffectiveConfig(invalid); ok {
 		t.Fatal("invalid sandbox ok = true")
 	}
+
+	spaced := &config.ConfigReadResponse{Config: map[string]any{
+		"approval_policy":    " on-request ",
+		"approvals_reviewer": " auto_review ",
+		"sandbox_mode":       " workspace-write ",
+	}}
+	if _, ok := ApprovalPolicyFromEffectiveConfig(spaced); ok {
+		t.Fatal("spaced approval policy ok = true")
+	}
+	if _, ok := ApprovalsReviewerFromEffectiveConfig(spaced); ok {
+		t.Fatal("spaced reviewer ok = true")
+	}
+	if _, ok := SandboxModeFromEffectiveConfig(spaced); ok {
+		t.Fatal("spaced sandbox ok = true")
+	}
 }
 
 func TestEffectiveConfigMemoriesAndWindowsHelpersMatchRust(t *testing.T) {
@@ -96,5 +111,9 @@ func TestEffectiveConfigMemoriesAndWindowsHelpersMatchRust(t *testing.T) {
 	missing := &config.ConfigReadResponse{Config: map[string]any{"windows": map[string]any{"sandbox": "bad"}}}
 	if _, ok := WindowsSandboxModeFromEffectiveConfig(missing); ok {
 		t.Fatal("invalid windows sandbox mode ok = true")
+	}
+	spaced := &config.ConfigReadResponse{Config: map[string]any{"windows": map[string]any{"sandbox": " elevated "}}}
+	if _, ok := WindowsSandboxModeFromEffectiveConfig(spaced); ok {
+		t.Fatal("spaced windows sandbox mode ok = true")
 	}
 }

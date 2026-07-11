@@ -2942,11 +2942,25 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		return protocol.AgentMessageItem(id, remotePayloadString(payload, "text"))
 	case "commandExecution":
 		command := remotePayloadString(payload, "command")
-		if completed {
-			success := remotePayloadString(payload, "status") != string(appserver.CommandExecutionFailed) && remotePayloadString(payload, "status") != string(appserver.CommandExecutionDeclined)
-			return protocol.ToolOutputItem(id, "exec_command", remoteFirstPayloadString(payload, "aggregatedOutput", "output"), success)
+		status := remotePayloadString(payload, "status")
+		if !completed || status == string(appserver.CommandExecutionInProgress) {
+			status = "in_progress"
+		} else if status == "" {
+			status = "completed"
 		}
-		return protocol.ToolCallItem(id, "exec_command", command)
+		var exitCode *int
+		if value, ok := remotePayloadInt(payload, "exitCode", "exit_code"); ok {
+			exitCode = &value
+		}
+		item := protocol.CommandExecutionItem(
+			id,
+			command,
+			remoteFirstPayloadRawString(payload, "aggregatedOutput", "output"),
+			exitCode,
+			status,
+		)
+		item.CallID = id
+		return item
 	case "mcpToolCall":
 		toolName := remotePayloadString(payload, "tool")
 		if server := remotePayloadString(payload, "server"); server != "" {
@@ -2996,6 +3010,49 @@ func remoteFirstPayloadString(payload map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func remoteFirstPayloadRawString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			if text != "" {
+				return text
+			}
+			continue
+		}
+		return fmt.Sprint(value)
+	}
+	return ""
+}
+
+func remotePayloadInt(payload map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case int:
+			return typed, true
+		case int32:
+			return int(typed), true
+		case int64:
+			return int(typed), true
+		case float64:
+			return int(typed), true
+		case json.Number:
+			parsed, err := strconv.Atoi(typed.String())
+			return parsed, err == nil
+		case string:
+			parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+			return parsed, err == nil
+		}
+	}
+	return 0, false
 }
 
 func remotePayloadJSON(value any) string {

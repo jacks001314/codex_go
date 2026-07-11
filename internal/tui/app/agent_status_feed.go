@@ -1,6 +1,11 @@
 package app
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+
+	codextui "codex_go/internal/tui"
+)
 
 const (
 	AgentStatusPreviewLines     = 3
@@ -83,12 +88,10 @@ func NewAgentStatusThreadPreview(agentPath string, events []AgentActivityEvent) 
 		if event.EventType != AgentActivityEventItemStarted && event.EventType != AgentActivityEventItemCompleted {
 			continue
 		}
-		if event.Item.ID != "" {
-			if _, ok := seenItemIDs[event.Item.ID]; ok {
-				continue
-			}
-			seenItemIDs[event.Item.ID] = struct{}{}
+		if _, ok := seenItemIDs[event.Item.ID]; ok {
+			continue
 		}
+		seenItemIDs[event.Item.ID] = struct{}{}
 		if summary, ok := AgentActivitySummary(event.Item); ok {
 			activity = append(activity, summary)
 			if len(activity) == AgentStatusPreviewItems {
@@ -125,9 +128,9 @@ func AgentActivitySummary(item AgentActivityItem) (string, bool) {
 		}
 		return BoundedAgentActivitySummary(item.ReasoningSummaries[len(item.ReasoningSummaries)-1])
 	case AgentActivityCommandExecution:
-		return BoundedAgentActivitySummary("$ " + truncateRunesApp(item.Command, AgentStatusPreviewGraphemes-len("$ ")))
+		return BoundedAgentActivitySummary("$ " + codextui.TruncateText(item.Command, AgentStatusPreviewGraphemes-len("$ ")))
 	case AgentActivityFileChange:
-		return BoundedAgentActivitySummary("Updated " + intStringApp(item.Changes) + " file(s)")
+		return BoundedAgentActivitySummary("Updated " + strconv.Itoa(item.Changes) + " file(s)")
 	case AgentActivityMcpToolCall:
 		return BoundedAgentActivitySummary("MCP " + item.Server + "/" + item.Tool)
 	case AgentActivityDynamicToolCall:
@@ -182,7 +185,7 @@ func AgentActivitySummary(item AgentActivityItem) (string, bool) {
 }
 
 func BoundedAgentActivitySummary(summary string) (string, bool) {
-	summary = truncateRunesApp(summary, AgentStatusPreviewGraphemes)
+	summary = codextui.TruncateText(summary, AgentStatusPreviewGraphemes)
 	summary = strings.Join(strings.Fields(summary), " ")
 	if summary == "" {
 		return "", false
@@ -194,65 +197,11 @@ func wrapWords(text string, width int) []string {
 	if width <= 0 {
 		width = 1
 	}
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return nil
-	}
-	lines := []string{}
-	current := ""
-	for _, word := range words {
-		if current == "" {
-			current = word
-			continue
-		}
-		if len([]rune(current))+1+len([]rune(word)) <= width {
-			current += " " + word
-			continue
-		}
-		lines = append(lines, current)
-		current = word
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
-	return lines
-}
-
-func truncateRunesApp(text string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	if maxRunes < 3 {
-		return string(runes[:maxRunes])
-	}
-	return string(runes[:maxRunes-3]) + "..."
+	return codextui.WrapLine(text, codextui.WrapOptions{Width: width, BreakWords: true})
 }
 
 func reverseStrings(values []string) {
 	for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
 		values[i], values[j] = values[j], values[i]
 	}
-}
-
-func intStringApp(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	digits := []byte{}
-	for value > 0 {
-		digits = append([]byte{byte('0' + value%10)}, digits...)
-		value /= 10
-	}
-	if negative {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
 }

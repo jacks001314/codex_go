@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -51,9 +52,43 @@ func TestSplitEditorCommandLineQuotedPath(t *testing.T) {
 }
 
 func TestSplitEditorCommandLineRejectsUnclosedQuote(t *testing.T) {
-	_, err := splitEditorCommandLine(`"vim`)
+	got, err := splitEditorCommandLine(`"vim`)
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("splitEditorCommandLine() error = %v, want nil on Windows", err)
+		}
+		if want := []string{"vim"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("splitEditorCommandLine() = %#v, want %#v", got, want)
+		}
+		return
+	}
 	if !errors.Is(err, errExternalEditorParse) {
 		t.Fatalf("splitEditorCommandLine() error = %v, want parse error", err)
+	}
+}
+
+func TestSplitEditorCommandLinePreservesQuotedEmptyArgsLikeRust(t *testing.T) {
+	got, err := splitEditorCommandLine(`vim "" " "`)
+	if err != nil {
+		t.Fatalf("splitEditorCommandLine() error = %v", err)
+	}
+	want := []string{"vim", "", " "}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("splitEditorCommandLine() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSplitEditorCommandLineSingleQuoteMatchesRustPlatform(t *testing.T) {
+	got, err := splitEditorCommandLine(`vim 'two words'`)
+	if err != nil {
+		t.Fatalf("splitEditorCommandLine() error = %v", err)
+	}
+	want := []string{"vim", "two words"}
+	if runtime.GOOS == "windows" {
+		want = []string{"vim", "'two", "words'"}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("splitEditorCommandLine() = %#v, want %#v", got, want)
 	}
 }
 

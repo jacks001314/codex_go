@@ -2,6 +2,7 @@ package status
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -273,7 +274,7 @@ func FormatCreditBalance(raw string) (string, bool) {
 
 func FormatCreditAmount(raw string) (string, bool) {
 	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil || value < 0 {
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 		return "", false
 	}
 	return formatWithSeparators(roundToInt64(value)), true

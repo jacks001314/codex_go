@@ -15,6 +15,8 @@ func populatedAgentNavigationState() (*AgentNavigationState, string, string, str
 	return state, mainThreadID, firstAgentID, secondAgentID
 }
 
+const unknownAgentThreadID = "00000000-0000-0000-0000-000000000999"
+
 func TestAgentNavigationUpsertPreservesFirstSeenOrderMatchRust(t *testing.T) {
 	state, mainThreadID, firstAgentID, secondAgentID := populatedAgentNavigationState()
 
@@ -48,8 +50,11 @@ func TestAgentNavigationAdjacentThreadIDWrapsInSpawnOrderMatchRust(t *testing.T)
 	if got, ok := state.AdjacentThreadID(mainThreadID, AgentNavigationPrevious); !ok || got != secondAgentID {
 		t.Fatalf("previous from main = %q ok=%v, want second", got, ok)
 	}
-	if got, ok := state.AdjacentThreadID("missing", AgentNavigationNext); ok || got != "" {
+	if got, ok := state.AdjacentThreadID(unknownAgentThreadID, AgentNavigationNext); ok || got != "" {
 		t.Fatalf("missing adjacent = %q ok=%v", got, ok)
+	}
+	if got, ok := state.AdjacentThreadID("thread-1", AgentNavigationNext); ok || got != "" {
+		t.Fatalf("invalid adjacent = %q ok=%v", got, ok)
 	}
 }
 
@@ -62,8 +67,11 @@ func TestAgentNavigationActiveAgentLabelMatchRust(t *testing.T) {
 	if got, ok := state.ActiveAgentLabel(mainThreadID, mainThreadID); !ok || got != "Main [default]" {
 		t.Fatalf("main label = %q ok=%v", got, ok)
 	}
-	if got, ok := state.ActiveAgentLabel("missing", mainThreadID); !ok || got != "Agent" {
+	if got, ok := state.ActiveAgentLabel(unknownAgentThreadID, mainThreadID); !ok || got != "Agent" {
 		t.Fatalf("missing label = %q ok=%v", got, ok)
+	}
+	if got, ok := state.ActiveAgentLabel(" "+firstAgentID+" ", mainThreadID); ok || got != "" {
+		t.Fatalf("invalid spaced label = %q ok=%v", got, ok)
 	}
 }
 
@@ -117,8 +125,31 @@ func TestAgentNavigationPickerItemsMatchRust(t *testing.T) {
 		t.Fatalf("clear did not reset state: %#v", state.OrderedThreadIDs())
 	}
 	state.MarkClosed("thread-closed")
-	entry, ok := state.Get("thread-closed")
+	if len(state.OrderedThreadIDs()) != 0 {
+		t.Fatalf("invalid mark closed should be ignored: %#v", state.OrderedThreadIDs())
+	}
+	state.MarkClosed(unknownAgentThreadID)
+	entry, ok := state.Get(unknownAgentThreadID)
 	if !ok || !entry.IsClosed || entry.IsRunning {
 		t.Fatalf("mark closed missing entry = %#v ok=%v", entry, ok)
+	}
+}
+
+func TestAgentNavigationCanonicalizesUUIDThreadIDsLikeRust(t *testing.T) {
+	state := NewAgentNavigationState()
+	upper := "00000000-0000-0000-0000-0000000000AA"
+	canonical := "00000000-0000-0000-0000-0000000000aa"
+	state.Upsert(upper, "Upper", "role", false)
+
+	got := state.TrackedThreadIDs()
+	if len(got) != 1 || got[0] != canonical {
+		t.Fatalf("canonical order = %#v, want %q", got, canonical)
+	}
+	if _, ok := state.Get(upper); !ok {
+		t.Fatalf("Get uppercase UUID should resolve canonical entry")
+	}
+	state.Upsert(" "+canonical+" ", "Bad", "role", false)
+	if got := state.TrackedThreadIDs(); len(got) != 1 || got[0] != canonical {
+		t.Fatalf("spaced UUID should be ignored, got %#v", got)
 	}
 }

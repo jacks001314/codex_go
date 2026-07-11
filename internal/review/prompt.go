@@ -1,12 +1,14 @@
 package review
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"strings"
 )
 
-const ReviewPrompt = "You are reviewing code changes. Prioritize bugs, regressions, security risks, and missing tests."
+//go:embed rubric.md
+var ReviewPrompt string
 
 type PromptTargetKind string
 
@@ -55,21 +57,21 @@ func Prompt(target *PromptTarget) (string, error) {
 			return "", errors.New("base branch is required")
 		}
 		if target.MergeBaseSHA != "" {
-			return fmt.Sprintf("Review the code changes against the base branch %q. The merge base commit for this comparison is %s. Run `git diff %s` to inspect the changes relative to %s. Provide prioritized, actionable findings.", target.Branch, target.MergeBaseSHA, target.MergeBaseSHA, target.Branch), nil
+			return fmt.Sprintf("Review the code changes against the base branch '%s'. The merge base commit for this comparison is %s. Run `git diff %s` to inspect the changes relative to %s. Provide prioritized, actionable findings.", target.Branch, target.MergeBaseSHA, target.MergeBaseSHA, target.Branch), nil
 		}
-		return fmt.Sprintf("Review the code changes against the base branch %q. Start by finding the merge diff between the current branch and %s's upstream, then run git diff against that SHA. Provide prioritized, actionable findings.", target.Branch, target.Branch), nil
+		return fmt.Sprintf("Review the code changes against the base branch '%s'. Start by finding the merge diff between the current branch and %s's upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"%s@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the %s branch. Provide prioritized, actionable findings.", target.Branch, target.Branch, target.Branch, target.Branch), nil
 	case PromptCommit:
 		if target.SHA == "" {
 			return "", errors.New("commit sha is required")
 		}
 		if target.Title != nil {
-			return fmt.Sprintf("Review the code changes introduced by commit %s (%q). Provide prioritized, actionable findings.", target.SHA, *target.Title), nil
+			return fmt.Sprintf("Review the code changes introduced by commit %s (\"%s\"). Provide prioritized, actionable findings.", target.SHA, *target.Title), nil
 		}
 		return fmt.Sprintf("Review the code changes introduced by commit %s. Provide prioritized, actionable findings.", target.SHA), nil
 	case PromptCustom:
 		prompt := strings.TrimSpace(target.Instructions)
 		if prompt == "" {
-			return "", errors.New("review prompt cannot be empty")
+			return "", errors.New("Review prompt cannot be empty")
 		}
 		return prompt, nil
 	default:

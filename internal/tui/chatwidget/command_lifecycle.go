@@ -1,6 +1,10 @@
 package chatwidget
 
-import "strings"
+import (
+	"strings"
+
+	"codex_go/internal/shell"
+)
 
 type CommandLifecycleState struct {
 	UnifiedExecProcesses []UnifiedExecProcessSummary
@@ -236,14 +240,33 @@ func UnifiedExecCommandDisplay(command string) string {
 	if len(parts) == 0 {
 		return strings.TrimSpace(command)
 	}
-	return StripShellCommand(parts)
+	return shell.StripShellCommandAndEscape(parts)
 }
 
 func SplitCommandString(command string) []string {
-	command = strings.TrimSpace(command)
-	if command == "" {
+	parts, ok := splitCommandStringLoose(command)
+	if !ok {
+		return []string{command}
+	}
+	if len(parts) == 0 {
 		return nil
 	}
+	roundTrip := shell.ShlexJoin(parts)
+	if roundTrip == command || (!strings.Contains(command, `:\`) && stringSlicesEqual(splitCommandStringLooseMust(roundTrip), parts)) {
+		return parts
+	}
+	return []string{command}
+}
+
+func splitCommandStringLooseMust(command string) []string {
+	parts, ok := splitCommandStringLoose(command)
+	if !ok {
+		return []string{command}
+	}
+	return parts
+}
+
+func splitCommandStringLoose(command string) ([]string, bool) {
 	var parts []string
 	var builder strings.Builder
 	var quote rune
@@ -275,17 +298,13 @@ func SplitCommandString(command string) []string {
 	if escaped {
 		builder.WriteRune('\\')
 	}
+	if quote != 0 {
+		return nil, false
+	}
 	if builder.Len() > 0 {
 		parts = append(parts, builder.String())
 	}
-	return parts
-}
-
-func StripShellCommand(command []string) string {
-	if len(command) >= 3 && isShellCommandName(command[0]) && command[1] == "-lc" {
-		return strings.TrimSpace(command[2])
-	}
-	return strings.TrimSpace(strings.Join(command, " "))
+	return parts, true
 }
 
 func (s *CommandLifecycleState) commandDisplayForProcess(processID string) string {
@@ -306,14 +325,14 @@ func (s *CommandLifecycleState) ensureCommandMaps() {
 	}
 }
 
-func isShellCommandName(name string) bool {
-	name = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
-	switch {
-	case name == "bash", name == "sh", name == "zsh", name == "fish":
-		return true
-	case strings.HasSuffix(name, "/bash"), strings.HasSuffix(name, "/sh"), strings.HasSuffix(name, "/zsh"), strings.HasSuffix(name, "/fish"):
-		return true
-	default:
+func stringSlicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
 		return false
 	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

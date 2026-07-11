@@ -159,6 +159,17 @@ type TurnInterruptedMsg struct {
 	Err error
 }
 
+type MCPStartupUpdateMsg struct {
+	Name   string
+	Status chatwidget.McpStartupStatus
+}
+
+type MCPStartupInventoryMsg struct {
+	Servers []historycell.McpServerStatus
+}
+
+type MCPStartupFinishAfterLagMsg struct{}
+
 type ThreadEventMsg struct {
 	Event protocol.ThreadEvent
 }
@@ -340,6 +351,7 @@ type Options struct {
 	OnSubmit                      SubmitFunc
 	OnSubmitRequest               SubmitRequestFunc
 	OnInterrupt                   InterruptFunc
+	OnInterruptMCPStartup         InterruptFunc
 	OnExternalEditor              ExternalEditorFunc
 	KeymapConfig                  *codextui.KeymapConfig
 	OnKeymapEdit                  KeymapEditFunc
@@ -383,6 +395,8 @@ type Options struct {
 	PermissionRequirements         *chatwidget.PermissionRequirements
 	BackgroundProcesses            []historycell.UnifiedExecProcessDetails
 	MCPServers                     []historycell.McpServerStatus
+	MCPStartupExpectedServers      []string
+	InitialMessages                <-chan bubbletea.Msg
 	FeatureSettings                map[string]bool
 	Personality                    chatwidget.Personality
 	HideRateLimitModelNudge        *bool
@@ -418,6 +432,12 @@ type Model struct {
 	bottomStyle lipgloss.Style
 
 	lastTurnError                    string
+	needsFinalMessageSeparator       bool
+	activeAssistantDeltaItemID       string
+	mcpStartup                       chatwidget.McpStartupRoundState
+	mcpStartupHeader                 string
+	mcpStartupActive                 bool
+	initialMessages                  <-chan bubbletea.Msg
 	notice                           string
 	bottom                           []string
 	attachments                      []bottompane.ComposerAttachment
@@ -444,6 +464,7 @@ type Model struct {
 	onSubmit                         SubmitFunc
 	onSubmitRequest                  SubmitRequestFunc
 	onInterrupt                      InterruptFunc
+	onInterruptMCPStartup            InterruptFunc
 	onExternalEditor                 ExternalEditorFunc
 	keymapConfig                     *codextui.KeymapConfig
 	onKeymapEdit                     KeymapEditFunc
@@ -569,6 +590,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sessionPickerDensity:           normalizeSessionPickerDensityTea(options.SessionPickerView),
 		backgroundProcesses:            cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
 		mcpServers:                     cloneMcpServerStatuses(options.MCPServers),
+		mcpStartup:                     chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
+		initialMessages:                options.InitialMessages,
 		featureSettings:                cloneBoolMapTea(options.FeatureSettings),
 		personality:                    initialPersonality(state, options.Personality),
 		tuiTheme:                       strings.TrimSpace(options.TUITheme),
@@ -576,6 +599,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSubmit:                       options.OnSubmit,
 		onSubmitRequest:                options.OnSubmitRequest,
 		onInterrupt:                    options.OnInterrupt,
+		onInterruptMCPStartup:          options.OnInterruptMCPStartup,
 		onExternalEditor:               options.OnExternalEditor,
 		keymapConfig:                   options.KeymapConfig.Clone(),
 		onKeymapEdit:                   options.OnKeymapEdit,
@@ -681,7 +705,11 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 }
 
 func (m *Model) Init() bubbletea.Cmd {
-	return m.composer.Focus()
+	commands := []bubbletea.Cmd{m.composer.Focus()}
+	if m.initialMessages != nil {
+		commands = append(commands, waitForStream(m.initialMessages))
+	}
+	return bubbletea.Batch(commands...)
 }
 
 func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
@@ -713,6 +741,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case TurnInterruptedMsg:
 		m.applyTurnInterrupted(msg)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued())
+	case MCPStartupUpdateMsg:
+		return m, m.applyMCPStartupUpdate(msg)
+	case MCPStartupInventoryMsg:
+		m.mcpServers = cloneMcpServerStatuses(msg.Servers)
+		return m, nil
+	case MCPStartupFinishAfterLagMsg:
+		return m, m.finishMCPStartupAfterLag()
 	case ExternalEditorFinishedMsg:
 		m.applyExternalEditorFinished(msg)
 		return m, nil
@@ -1165,6 +1200,8 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
 	m.lastTurnError = ""
+	m.needsFinalMessageSeparator = false
+	m.activeAssistantDeltaItemID = ""
 	m.State.AddMessage(codextui.RoleUser, displayPrompt)
 	if m.onSubmit == nil && m.onSubmitRequest == nil {
 		m.setStatus("pending")
@@ -1222,12 +1259,61 @@ func (m *Model) submitNextQueued() bubbletea.Cmd {
 	return m.submitRequest(next.Request, next.ParseCommand)
 }
 
+func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	status := message.Status
+	if status.Kind == chatwidget.McpStartupFailed && status.Error == "" {
+		status.Error = "MCP client for `" + message.Name + "` failed to start"
+	}
+	result := m.mcpStartup.Update(message.Name, status, true)
+	for _, warning := range result.Warnings {
+		m.applyHistoryCell(historycell.NewWarningEvent(warning))
+		m.notice = warning
+	}
+	if result.Finished {
+		m.mcpStartupActive = false
+		m.mcpStartupHeader = ""
+	} else if result.Active {
+		m.mcpStartupActive = true
+		m.mcpStartupHeader = result.Header
+	}
+	m.syncTaskRunningTimer()
+	m.refreshTranscript()
+	if result.Finished {
+		return m.submitNextQueued()
+	}
+	return nil
+}
+
+func (m *Model) finishMCPStartupAfterLag() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	result := m.mcpStartup.FinishAfterLag()
+	for _, warning := range result.Warnings {
+		m.applyHistoryCell(historycell.NewWarningEvent(warning))
+		m.notice = warning
+	}
+	if result.Finished {
+		m.mcpStartupActive = false
+		m.mcpStartupHeader = ""
+	}
+	m.syncTaskRunningTimer()
+	m.refreshTranscript()
+	if result.Finished {
+		return m.submitNextQueued()
+	}
+	return nil
+}
+
 func (m *Model) isTaskRunning() bool {
-	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")
+	return m != nil && ((m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) || m.mcpStartupActive)
 }
 
 func (m *Model) isIdle() bool {
-	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "idle")
+	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "idle") && !m.mcpStartupActive
 }
 
 func (m *Model) setStatus(status string) {
@@ -1260,6 +1346,9 @@ func (m *Model) renderWorkingIndicator() string {
 		m.taskStartedAt = now
 	}
 	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
+	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
+		indicator.Header = m.mcpStartupHeader
+	}
 	indicator.InterruptHint = m.interruptHintBinding()
 	indicator.SetInterruptHintVisible(indicator.InterruptHint != "")
 	width := m.width
@@ -1447,6 +1536,12 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 		return nil
 	}
 	m.clearComposerPasteWindow()
+	if m.mcpStartupActive && (m.State == nil || !strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) {
+		if m.onInterruptMCPStartup != nil {
+			return m.onInterruptMCPStartup()
+		}
+		return func() bubbletea.Msg { return MCPStartupFinishAfterLagMsg{} }
+	}
 	if m.onInterrupt != nil {
 		if cmd := m.onInterrupt(); cmd != nil {
 			return cmd
@@ -1500,6 +1595,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		return
 	}
 	switch item.Type {
+	case "command_execution":
+		m.renderCommandExecutionItem(item)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
 	case "agent_message":
@@ -1516,6 +1613,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	switch item.Type {
 	case "agent_message":
 		m.mergeAssistantFinal(item.Text)
+	case "command_execution":
+		m.renderCommandExecutionItem(item)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
 	case "tool_output":
@@ -1547,7 +1646,7 @@ func (m *Model) applyDelta(delta *protocol.Delta) {
 		return
 	}
 	if delta.Text != "" {
-		m.appendAssistantDelta(delta.Text)
+		m.appendAssistantDelta(delta.ItemID, delta.Text)
 		return
 	}
 	if strings.TrimSpace(delta.Input) != "" {
@@ -1580,6 +1679,9 @@ func (m *Model) startOrUpdateToolCall(item *protocol.ThreadItem) {
 		}
 		return
 	}
+	if !toolCallStateReadyForDisplay(state, nil) {
+		return
+	}
 	m.renderToolCallState(state, nil)
 }
 
@@ -1604,6 +1706,9 @@ func (m *Model) appendToolCallInputDelta(delta *protocol.Delta) {
 		if m.renderPlanUpdateToolCall(state) {
 			return
 		}
+		return
+	}
+	if !toolCallStateReadyForDisplay(state, nil) {
 		return
 	}
 	m.renderToolCallState(state, nil)
@@ -1642,7 +1747,69 @@ func (m *Model) completeToolOutput(item *protocol.ThreadItem) {
 		}
 		return
 	}
+	if !toolCallStateReadyForDisplay(state, item) {
+		state.Completed = true
+		return
+	}
 	m.renderToolCallState(state, item)
+}
+
+func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
+	if m == nil || item == nil || strings.TrimSpace(item.Command) == "" {
+		return
+	}
+	state := m.toolCallStateForItem(item, true)
+	if state == nil {
+		return
+	}
+	state.ToolName = "exec_command"
+	state.Input = strings.TrimSpace(item.Command)
+	state.CallID = firstNonEmpty(strings.TrimSpace(item.CallID), strings.TrimSpace(item.ID))
+	if state.StartedAt.IsZero() {
+		state.StartedAt = m.currentTime()
+	}
+	m.registerToolCallState(state, toolCallAliasesFromItem(item)...)
+
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	call := execcell.ExecCall{
+		CallID:  firstNonEmpty(state.CallID, state.ID),
+		Command: shellScriptCommandForDisplay(item.Command),
+		Source:  execcell.ExecSourceAgent,
+	}
+	if commandExecutionInProgress(item.Status) {
+		started := state.StartedAt
+		call.StartTime = &started
+	} else {
+		exitCode := 0
+		if item.ExitCode != nil {
+			exitCode = *item.ExitCode
+		} else if strings.EqualFold(strings.TrimSpace(item.Status), "failed") || strings.EqualFold(strings.TrimSpace(item.Status), "declined") {
+			exitCode = 1
+		}
+		output := ""
+		if item.AggregatedOutput != nil {
+			output = *item.AggregatedOutput
+		}
+		call.Output = &execcell.CommandOutput{
+			ExitCode:         exitCode,
+			AggregatedOutput: output,
+			FormattedOutput:  output,
+		}
+		state.Completed = true
+	}
+	cell := execcell.NewExecCell(call, false)
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+	if state.Completed {
+		m.needsFinalMessageSeparator = true
+	}
+}
+
+func commandExecutionInProgress(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status == "" || status == "in_progress" || status == "inprogress" || status == "running"
 }
 
 func (m *Model) applyPlanUpdateItem(item *protocol.ThreadItem) {
@@ -1752,7 +1919,7 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 		call.StartTime = &started
 	}
 	cell := execcell.NewExecCell(call, false)
-	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if output != nil {
 		state.Completed = true
 	}
@@ -1774,6 +1941,10 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 
 func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message string) {
 	if m == nil || state == nil {
+		return
+	}
+	if !toolCallStateReadyForDisplay(state, nil) {
+		state.Completed = true
 		return
 	}
 	width := m.width
@@ -1807,7 +1978,7 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 		Duration: duration,
 	}
 	cell := execcell.NewExecCell(call, false)
-	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	state.Completed = true
 }
 
@@ -1963,6 +2134,30 @@ func outputMetadata(item *protocol.ThreadItem) map[string]any {
 	return item.Metadata
 }
 
+func toolCallStateReadyForDisplay(state *toolCallDisplayState, outputItem *protocol.ThreadItem) bool {
+	if state == nil {
+		return false
+	}
+	if !isShellToolName(state.ToolName) {
+		return true
+	}
+	metadata := outputMetadata(outputItem)
+	if command := metadataStringSlice(metadata, "command"); len(command) > 0 {
+		return true
+	}
+	if command := metadataString(metadata, "hook_command"); command != "" {
+		return true
+	}
+	input := strings.TrimSpace(state.Input)
+	if execCommandInputCommand(input) != "" {
+		return true
+	}
+	if input == "" || strings.HasPrefix(input, "{") {
+		return false
+	}
+	return input != ""
+}
+
 func commandForToolDisplay(toolName string, input string, metadata map[string]any) []string {
 	if command := metadataStringSlice(metadata, "command"); len(command) > 0 {
 		return command
@@ -1971,7 +2166,7 @@ func commandForToolDisplay(toolName string, input string, metadata map[string]an
 		return []string{command}
 	}
 	if command := execCommandInputCommand(input); command != "" {
-		return []string{command}
+		return shellScriptCommandForDisplay(command)
 	}
 	toolName = strings.TrimSpace(toolName)
 	input = strings.TrimSpace(input)
@@ -1981,10 +2176,18 @@ func commandForToolDisplay(toolName string, input string, metadata map[string]an
 	case input == "":
 		return []string{toolName}
 	case isShellToolName(toolName):
-		return []string{input}
+		return shellScriptCommandForDisplay(input)
 	default:
 		return []string{strings.TrimSpace(toolName + " " + input)}
 	}
+}
+
+func shellScriptCommandForDisplay(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
+	return []string{"bash", "-lc", command}
 }
 
 func execCommandInputCommand(input string) string {
@@ -2612,7 +2815,7 @@ func (m *Model) refreshTranscript() {
 	}
 	wasAtBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset
-	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width, m.tuiTheme))
+	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width, m.activeTUITheme()))
 	if wasAtBottom {
 		m.transcript.GotoBottom()
 		return
@@ -2626,7 +2829,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.ensureSize()
 	if m.overlay == nil {
-		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscript(m.State, m.rawOutput, m.width, m.tuiTheme))
+		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscript(m.State, m.rawOutput, m.width, m.activeTUITheme()))
 		m.overlayTranscript = true
 	} else {
 		m.overlayTranscript = true
@@ -2660,7 +2863,19 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.overlayTranscript {
 		return
 	}
-	m.overlay.SetContent(renderTranscript(m.State, m.rawOutput, m.width, m.tuiTheme))
+	m.overlay.SetContent(renderTranscript(m.State, m.rawOutput, m.width, m.activeTUITheme()))
+}
+
+func (m *Model) activeTUITheme() string {
+	if m == nil {
+		return ""
+	}
+	if m.modal != nil && m.modal.themePicker != nil {
+		if themeID := strings.TrimSpace(m.modal.themePicker.PreviewThemeID()); themeID != "" {
+			return themeID
+		}
+	}
+	return m.tuiTheme
 }
 
 func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
@@ -2822,16 +3037,7 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 }
 
 func defaultGitDiffReader(cwd string) (string, bool, error) {
-	provider := &review.GitDiffProvider{Dir: strings.TrimSpace(cwd)}
-	diff, err := provider.Diff(review.Target{Kind: "uncommitted"})
-	if err != nil {
-		message := strings.ToLower(err.Error())
-		if strings.Contains(message, "not a git repository") || strings.Contains(message, "not a git repo") {
-			return "", false, nil
-		}
-		return "", true, err
-	}
-	return diff, true, nil
+	return codextui.ReadGitDiff(strings.TrimSpace(cwd))
 }
 
 func (m *Model) applyPsCommand() {
@@ -2875,18 +3081,47 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	return true
 }
 
-func (m *Model) appendAssistantDelta(delta string) {
+func (m *Model) appendAssistantDelta(itemID string, delta string) {
 	if m == nil || delta == "" {
 		return
 	}
+	m.insertFinalMessageSeparatorIfNeeded()
+	itemID = strings.TrimSpace(itemID)
+	if itemID != "" && m.activeAssistantDeltaItemID != "" && itemID != m.activeAssistantDeltaItemID {
+		m.State.Messages = append(m.State.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
+		m.activeAssistantDeltaItemID = itemID
+		return
+	}
 	m.State.Messages = appendAssistantDeltaToMessages(m.State.Messages, delta)
+	if itemID != "" {
+		m.activeAssistantDeltaItemID = itemID
+	}
 }
 
 func (m *Model) mergeAssistantFinal(text string) {
 	if m == nil {
 		return
 	}
+	if strings.TrimSpace(text) != "" {
+		m.insertFinalMessageSeparatorIfNeeded()
+	}
 	m.State.Messages = mergeAssistantFinalToMessages(m.State.Messages, text)
+}
+
+func (m *Model) insertFinalMessageSeparatorIfNeeded() {
+	if m == nil || m.State == nil || !m.needsFinalMessageSeparator {
+		return
+	}
+	if index := len(m.State.Messages) - 1; index >= 0 && m.State.Messages[index].Role == codextui.RoleAssistant {
+		return
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	cell := historycell.NewFinalMessageSeparator(nil, nil)
+	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	m.needsFinalMessageSeparator = false
 }
 
 func appendAssistantDeltaToMessages(messages []codextui.Message, delta string) []codextui.Message {
@@ -3024,11 +3259,14 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 		cell := historycell.NewUserPrompt(text, nil, nil, nil)
 		return trimBlankDisplayEdges(cell.DisplayLines(width))
 	case codextui.RoleAssistant:
-		rendered, err := markdown.RenderWithTheme(text, width, themeID)
+		contentWidth := width - 2
+		if contentWidth < 1 {
+			contentWidth = 1
+		}
+		rendered, err := markdown.RenderWithTheme(text, contentWidth, themeID)
 		if err == nil && strings.TrimSpace(rendered) != "" {
 			lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
-			cell := historycell.NewAgentMessageCell(lines, true)
-			return trimBlankDisplayEdges(cell.DisplayLines(width))
+			return prefixPrewrappedAgentLines(lines, true)
 		}
 		lines := rawLinesTrimmed(text)
 		if len(lines) == 0 {
@@ -3043,6 +3281,21 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 		}
 		return []string{roleTitle(role) + ":", indentLines(text, "  ")}
 	}
+}
+
+func prefixPrewrappedAgentLines(lines []string, isFirstLine bool) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lines))
+	for index, line := range lines {
+		prefix := "  "
+		if index == 0 && isFirstLine {
+			prefix = "\u2022 "
+		}
+		out = append(out, prefix+line)
+	}
+	return out
 }
 
 func rawLinesTrimmed(text string) []string {

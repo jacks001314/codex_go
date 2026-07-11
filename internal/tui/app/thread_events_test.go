@@ -142,6 +142,29 @@ func TestThreadEventStoreFileChangeChangesMatchRust(t *testing.T) {
 	if changes, ok = store.FileChangeChanges("turn-missing", "patch-1"); ok || len(changes) != 0 {
 		t.Fatalf("missing turn changes = %#v ok=%v", changes, ok)
 	}
+
+	if changes, ok = store.FileChangeChanges(" turn-1 ", "patch-1"); ok || len(changes) != 0 {
+		t.Fatalf("spaced turn id changes = %#v ok=%v, want none", changes, ok)
+	}
+	if changes, ok = store.FileChangeChanges("turn-1", " patch-1 "); ok || len(changes) != 0 {
+		t.Fatalf("spaced item id changes = %#v ok=%v, want none", changes, ok)
+	}
+
+	emptyIDStore := NewThreadEventStore(8)
+	emptyIDStore.SetTurns([]appserver.Turn{{
+		ID: "turn-empty",
+		Items: []appserver.ThreadItem{{
+			ID:   "",
+			Type: "fileChange",
+			Data: map[string]any{
+				"changes": []appserver.FileUpdateChange{{Path: "empty.go"}},
+			},
+		}},
+	}})
+	changes, ok = emptyIDStore.FileChangeChanges("turn-empty", "")
+	if !ok || len(changes) != 1 || changes[0].Path != "empty.go" {
+		t.Fatalf("empty item id changes = %#v ok=%v", changes, ok)
+	}
 }
 
 func TestFileUpdateChangesFromAnyParsesMovePath(t *testing.T) {
@@ -152,5 +175,14 @@ func TestFileUpdateChangesFromAnyParsesMovePath(t *testing.T) {
 	}})
 	if len(changes) != 1 || changes[0].Path != "renamed.go" || changes[0].Kind.Type != "update" || changes[0].Kind.MovePath == nil || *changes[0].Kind.MovePath != "old.go" || changes[0].Diff != "@@" {
 		t.Fatalf("changes = %#v", changes)
+	}
+
+	changes = FileUpdateChangesFromAny([]map[string]any{{
+		"path": " renamed.go ",
+		"kind": map[string]any{"type": " update ", "movePath": ""},
+		"diff": " @@ ",
+	}})
+	if len(changes) != 1 || changes[0].Path != " renamed.go " || changes[0].Kind.Type != " update " || changes[0].Kind.MovePath == nil || *changes[0].Kind.MovePath != "" || changes[0].Diff != " @@ " {
+		t.Fatalf("changes preserving whitespace = %#v", changes)
 	}
 }

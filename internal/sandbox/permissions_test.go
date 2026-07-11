@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -135,5 +136,57 @@ func TestMergePermissionProfiles(t *testing.T) {
 	}
 	if len(merged.FileSystem) != 2 {
 		t.Fatalf("file system permissions = %#v", merged.FileSystem)
+	}
+}
+
+func TestRuntimePermissionProfilePreservesDenyReadEntriesLikeRust(t *testing.T) {
+	raw := `{
+		"type": "managed",
+		"file_system": {
+			"type": "restricted",
+			"entries": [
+				{"path": {"type": "glob_pattern", "pattern": "**/*.env"}, "access": "deny"}
+			]
+		},
+		"network": "restricted"
+	}`
+	profile, err := ParseRuntimePermissionProfileJSON(raw)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	if !profile.HasDenyReadEntries() || len(profile.DeniedReadEntries) != 1 {
+		t.Fatalf("DeniedReadEntries = %#v", profile.DeniedReadEntries)
+	}
+	entry := profile.DeniedReadEntries[0]
+	if entry.Access != FileSystemAccessDeny || entry.Path.Type != "glob_pattern" || entry.Path.Pattern != "**/*.env" {
+		t.Fatalf("deny entry = %#v", entry)
+	}
+	encoded, err := RuntimePermissionProfileJSON(*profile)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	if !strings.Contains(encoded, `"access":"deny"`) || !strings.Contains(encoded, `"pattern":"**/*.env"`) {
+		t.Fatalf("encoded profile lost deny-read entry: %s", encoded)
+	}
+}
+
+func TestSandboxPermissionsPreserveDeniedReadsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "**/*.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	if UnsandboxedExecutionAllowed(&profile) {
+		t.Fatal("UnsandboxedExecutionAllowed() = true for deny-read profile")
+	}
+	if got := SandboxPermissionsPreservingDeniedReads(SandboxPermissionsRequireEscalated, &profile); got != SandboxPermissionsUseDefault {
+		t.Fatalf("RequireEscalated preserving denied reads = %q", got)
+	}
+	if got := SandboxPermissionsPreservingDeniedReads(SandboxPermissionsWithAdditionalPermissions, &profile); got != SandboxPermissionsWithAdditionalPermissions {
+		t.Fatalf("WithAdditionalPermissions preserving denied reads = %q", got)
+	}
+	plain := WorkspaceWritePermissionProfile()
+	if got := SandboxPermissionsPreservingDeniedReads(SandboxPermissionsRequireEscalated, &plain); got != SandboxPermissionsRequireEscalated {
+		t.Fatalf("RequireEscalated without denied reads = %q", got)
 	}
 }

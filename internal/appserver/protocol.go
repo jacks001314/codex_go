@@ -259,8 +259,9 @@ func (id *RequestID) String() string {
 	case string:
 		return value
 	case float64:
-		if value == float64(int64(value)) {
-			return strconv.FormatInt(int64(value), 10)
+		intValue := int64(value)
+		if value == float64(intValue) {
+			return strconv.FormatInt(intValue, 10)
 		}
 		return strconv.FormatFloat(value, 'f', -1, 64)
 	case int:
@@ -286,9 +287,17 @@ func (id RequestID) MarshalJSON() ([]byte, error) {
 	case int64:
 		return json.Marshal(value)
 	case float64:
-		return json.Marshal(value)
+		intValue := int64(value)
+		if value != float64(intValue) {
+			return nil, fmt.Errorf("%w: request id must be an integer", ErrInvalidRequest)
+		}
+		return json.Marshal(intValue)
 	case json.Number:
-		return []byte(value.String()), nil
+		intValue, err := value.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("%w: request id must be an integer", ErrInvalidRequest)
+		}
+		return json.Marshal(intValue)
 	default:
 		return nil, fmt.Errorf("%w: unsupported request id %T", ErrInvalidRequest, value)
 	}
@@ -314,7 +323,11 @@ func (id *RequestID) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&value); err != nil {
 		return err
 	}
-	id.value = value
+	intValue, err := value.Int64()
+	if err != nil {
+		return fmt.Errorf("%w: request id must be an integer", ErrInvalidRequest)
+	}
+	id.value = intValue
 	return nil
 }
 

@@ -1,9 +1,12 @@
 package historycell
 
 import (
+	"strconv"
 	"strings"
 
-	"codex_go/internal/tui"
+	"codex_go/internal/shell"
+
+	"github.com/rivo/uniseg"
 )
 
 // Rust parity: codex-rs/tui/src/history_cell/approvals.rs.
@@ -27,9 +30,17 @@ const (
 	ApprovalActorGuardian ApprovalDecisionActor = "guardian"
 )
 
+type NetworkPolicyRuleAction string
+
+const (
+	NetworkPolicyRuleAllow NetworkPolicyRuleAction = "allow"
+	NetworkPolicyRuleDeny  NetworkPolicyRuleAction = "deny"
+)
+
 type ApprovalDecisionSubject struct {
-	Command       []string
-	NetworkTarget string
+	Command             []string
+	NetworkTarget       string
+	NetworkPolicyAction NetworkPolicyRuleAction
 }
 
 func NewCommandApprovalSubject(command []string) ApprovalDecisionSubject {
@@ -37,15 +48,15 @@ func NewCommandApprovalSubject(command []string) ApprovalDecisionSubject {
 }
 
 func NewNetworkApprovalSubject(target string) ApprovalDecisionSubject {
-	return ApprovalDecisionSubject{NetworkTarget: strings.TrimSpace(target)}
+	return ApprovalDecisionSubject{NetworkTarget: target}
+}
+
+func NewNetworkPolicyApprovalSubject(target string, action NetworkPolicyRuleAction) ApprovalDecisionSubject {
+	return ApprovalDecisionSubject{NetworkTarget: target, NetworkPolicyAction: action}
 }
 
 func NewApprovalDecisionCell(subject ApprovalDecisionSubject, decision ReviewDecision, actor ApprovalDecisionActor) PrefixedWrappedHistoryCell {
-	symbol := "\u2713 "
-	if decision == ReviewDenied || decision == ReviewTimedOut || decision == ReviewAbort {
-		symbol = "\u2717 "
-	}
-	return NewPrefixedWrappedHistoryCell(approvalDecisionSummary(subject, decision, actor), symbol, "  ")
+	return NewPrefixedWrappedHistoryCell(approvalDecisionSummary(subject, decision, actor), approvalDecisionSymbol(subject, decision), "  ")
 }
 
 func NewGuardianDeniedPatchRequest(files []string) PrefixedWrappedHistoryCell {
@@ -53,11 +64,11 @@ func NewGuardianDeniedPatchRequest(files []string) PrefixedWrappedHistoryCell {
 }
 
 func NewGuardianDeniedActionRequest(summary string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell("Request denied for "+strings.TrimSpace(summary), "\u2717 ", "  ")
+	return NewPrefixedWrappedHistoryCell("Request denied for "+summary, "\u2717 ", "  ")
 }
 
 func NewGuardianApprovedActionRequest(summary string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell("Request approved for "+strings.TrimSpace(summary), "\u2713 ", "  ")
+	return NewPrefixedWrappedHistoryCell("Request approved for "+summary, "\u2714 ", "  ")
 }
 
 func NewGuardianTimedOutPatchRequest(files []string) PrefixedWrappedHistoryCell {
@@ -65,17 +76,17 @@ func NewGuardianTimedOutPatchRequest(files []string) PrefixedWrappedHistoryCell 
 }
 
 func NewGuardianTimedOutActionRequest(summary string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell("Review timed out before "+strings.TrimSpace(summary), "\u2717 ", "  ")
+	return NewPrefixedWrappedHistoryCell("Review timed out before "+summary, "\u2717 ", "  ")
 }
 
 func NewReviewStatusLine(message string) PlainHistoryCell {
-	return NewPlainHistoryCell([]string{strings.TrimSpace(message)})
+	return NewPlainHistoryCell([]string{message})
 }
 
 func approvalDecisionSummary(subject ApprovalDecisionSubject, decision ReviewDecision, actor ApprovalDecisionActor) string {
 	actorSubject := approvalActorSubject(actor)
 	commandSnippet := nonEmptyExecSnippet(subject.Command)
-	target := strings.TrimSpace(subject.NetworkTarget)
+	target := subject.NetworkTarget
 	isNetwork := target != ""
 	switch decision {
 	case ReviewApproved:
@@ -87,10 +98,7 @@ func approvalDecisionSummary(subject ApprovalDecisionSubject, decision ReviewDec
 		}
 		return actorSubject + "approved this request this time"
 	case ReviewApprovedExecpolicyAmendment:
-		if commandSnippet != "" {
-			return actorSubject + "approved codex to always run commands that start with " + commandSnippet
-		}
-		return actorSubject + "approved codex to always run matching commands"
+		return actorSubject + "approved codex to always run commands that start with " + execSnippet(subject.Command)
 	case ReviewApprovedForSession:
 		if isNetwork {
 			return actorSubject + "approved codex network access to " + target + " every time this session"
@@ -102,6 +110,9 @@ func approvalDecisionSummary(subject ApprovalDecisionSubject, decision ReviewDec
 	case ReviewNetworkPolicyAmendment:
 		if target == "" {
 			target = commandSnippet
+		}
+		if subject.NetworkPolicyAction == NetworkPolicyRuleDeny {
+			return actorSubject + "denied codex network access to " + target + " and saved that rule"
 		}
 		return actorSubject + "persisted Codex network access to " + target
 	case ReviewDenied:
@@ -142,6 +153,14 @@ func approvalDecisionSummary(subject ApprovalDecisionSubject, decision ReviewDec
 	}
 }
 
+func approvalDecisionSymbol(subject ApprovalDecisionSubject, decision ReviewDecision) string {
+	if decision == ReviewDenied || decision == ReviewTimedOut || decision == ReviewAbort ||
+		(decision == ReviewNetworkPolicyAmendment && subject.NetworkPolicyAction == NetworkPolicyRuleDeny) {
+		return "\u2717 "
+	}
+	return "\u2714 "
+}
+
 func approvalActorSubject(actor ApprovalDecisionActor) string {
 	if actor == ApprovalActorGuardian {
 		return "Auto-reviewer "
@@ -150,21 +169,15 @@ func approvalActorSubject(actor ApprovalDecisionActor) string {
 }
 
 func guardianPatchSummary(prefix string, files []string) string {
-	cleaned := make([]string, 0, len(files))
-	for _, file := range files {
-		if trimmed := strings.TrimSpace(file); trimmed != "" {
-			cleaned = append(cleaned, trimmed)
-		}
+	if len(files) == 1 {
+		return prefix + "a patch touching " + files[0]
 	}
-	if len(cleaned) == 1 {
-		return prefix + "a patch touching " + cleaned[0]
-	}
-	return prefix + "a patch touching " + tui.FormatInt(int64(len(cleaned))) + " files"
+	return prefix + "a patch touching " + strconv.Itoa(len(files)) + " files"
 }
 
 func nonEmptyExecSnippet(command []string) string {
 	snippet := execSnippet(command)
-	if strings.TrimSpace(snippet) == "" {
+	if snippet == "" {
 		return ""
 	}
 	return snippet
@@ -174,26 +187,45 @@ func execSnippet(command []string) string {
 	if len(command) == 0 {
 		return ""
 	}
-	full := strings.Join(command, " ")
-	if len(command) >= 3 {
-		shell := strings.ToLower(strings.ReplaceAll(command[0], "\\", "/"))
-		if (strings.HasSuffix(shell, "/bash") || strings.HasSuffix(shell, "/sh") || strings.HasSuffix(shell, "/zsh") || strings.HasSuffix(shell, "/fish") || shell == "bash" || shell == "sh" || shell == "zsh" || shell == "fish") && command[1] == "-lc" {
-			full = command[2]
-		}
-	}
+	full := shell.StripShellCommandAndEscape(command)
 	if first, _, ok := strings.Cut(full, "\n"); ok {
 		full = first + " ..."
 	}
-	return truncateApprovalSnippet(strings.TrimSpace(full), 80)
+	return truncateApprovalSnippet(full, 80)
 }
 
-func truncateApprovalSnippet(text string, maxRunes int) string {
-	runes := []rune(text)
-	if maxRunes <= 0 || len(runes) <= maxRunes {
+func truncateApprovalSnippet(text string, maxGraphemes int) string {
+	if maxGraphemes <= 0 {
+		return ""
+	}
+	overflow, cutAtMax := approvalGraphemeBoundaryAfter(text, maxGraphemes)
+	if !overflow {
 		return text
 	}
-	if maxRunes <= 1 {
-		return string(runes[:maxRunes])
+	if maxGraphemes < 3 {
+		return text[:cutAtMax]
 	}
-	return string(runes[:maxRunes-1]) + "\u2026"
+	_, cutAtPrefix := approvalGraphemeBoundaryAfter(text, maxGraphemes-3)
+	return text[:cutAtPrefix] + "..."
+}
+
+func approvalGraphemeBoundaryAfter(text string, count int) (bool, int) {
+	if count <= 0 {
+		return text != "", 0
+	}
+	graphemes := uniseg.NewGraphemes(text)
+	seen := 0
+	cut := len(text)
+	for graphemes.Next() {
+		if seen == count {
+			start, _ := graphemes.Positions()
+			return true, start
+		}
+		seen++
+		_, end := graphemes.Positions()
+		if seen == count {
+			cut = end
+		}
+	}
+	return false, cut
 }

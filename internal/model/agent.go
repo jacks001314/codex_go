@@ -19,31 +19,32 @@ const (
 )
 
 type AgentRequest struct {
-	Prompt               string
-	Instructions         string
-	InputItems           []any
-	Tools                []any
-	Model                string
-	ProviderID           string
-	TaskKind             AgentTaskKind
-	ThreadID             string
-	TurnID               string
-	Originator           string
-	Store                bool
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
-	ModelVerbosity       string
-	IncludeTimingMetrics bool
-	BetaFeaturesHeader   string
-	ItemIDsEnabled       bool
-	ServiceTier          string
-	PromptCacheKey       string
-	ClientMetadata       map[string]string
-	AttestationProvider  codexapi.AttestationProvider
-	OutputSchema         any
-	StreamHandler        ResponsesStreamHandler
+	Prompt                       string
+	Instructions                 string
+	InputItems                   []any
+	Tools                        []any
+	Model                        string
+	ProviderID                   string
+	TaskKind                     AgentTaskKind
+	ThreadID                     string
+	TurnID                       string
+	Originator                   string
+	Store                        bool
+	PreviousResponseID           string
+	ParallelToolCalls            bool
+	ReasoningEffort              string
+	ReasoningSummary             string
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	ServiceTier                  string
+	PromptCacheKey               string
+	ClientMetadata               map[string]string
+	AttestationProvider          codexapi.AttestationProvider
+	OutputSchema                 any
+	StreamHandler                ResponsesStreamHandler
+	DisableHostedImageGeneration bool
 }
 
 type AgentUsage struct {

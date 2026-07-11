@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"codex_go/internal/appserver"
+	codextui "codex_go/internal/tui"
+	"codex_go/internal/tui/chatwidget"
 )
 
 // Rust parity subset: codex-rs/tui/src/app/thread_goal_actions.rs.
@@ -25,7 +27,7 @@ const (
 	ThreadGoalSetReplaceExisting ThreadGoalSetMode = "replace_existing"
 	ThreadGoalSetUpdateExisting  ThreadGoalSetMode = "update_existing"
 
-	ThreadGoalUsageMessage = "Usage: /goal <objective|clear|edit|pause|resume>"
+	ThreadGoalUsageMessage = "Usage: /goal [<objective>|clear|edit|pause|resume]"
 )
 
 type ThreadGoalReadDecision struct {
@@ -232,19 +234,8 @@ func ReplaceThreadGoalConfirmation(threadID string, objective string) ReplaceThr
 	}
 }
 
-func TruncateGoalObjective(objective string, maxRunes int) string {
-	objective = strings.TrimSpace(objective)
-	if maxRunes <= 0 {
-		return ""
-	}
-	runes := []rune(objective)
-	if len(runes) <= maxRunes {
-		return objective
-	}
-	if maxRunes <= 3 {
-		return string(runes[:maxRunes])
-	}
-	return string(runes[:maxRunes-3]) + "..."
+func TruncateGoalObjective(objective string, maxGraphemes int) string {
+	return codextui.TruncateText(objective, maxGraphemes)
 }
 
 func IsEphemeralThreadGoalError(err error) bool {
@@ -292,16 +283,14 @@ func GoalStatusLabelForThreadGoal(status appserver.GoalStatus) string {
 }
 
 func GoalUsageSummaryForThreadGoal(goal appserver.Goal) string {
-	parts := []string{}
-	if goal.TokenBudget != nil {
-		parts = append(parts, fmt.Sprintf("%d/%d tokens", goal.TokensUsed, *goal.TokenBudget))
-	} else if goal.TokensUsed > 0 {
-		parts = append(parts, fmt.Sprintf("%d tokens used", goal.TokensUsed))
-	}
+	parts := []string{"Objective: " + goal.Objective}
 	if goal.TimeUsedSeconds > 0 {
-		parts = append(parts, fmt.Sprintf("%ds elapsed", goal.TimeUsedSeconds))
+		parts = append(parts, "Time: "+chatwidget.FormatGoalElapsedSeconds(goal.TimeUsedSeconds)+".")
 	}
-	return strings.Join(parts, " | ")
+	if goal.TokenBudget != nil {
+		parts = append(parts, "Tokens: "+chatwidget.FormatTokensCompact(goal.TokensUsed)+"/"+chatwidget.FormatTokensCompact(*goal.TokenBudget)+".")
+	}
+	return strings.Join(parts, " ")
 }
 
 func GoalStatusShouldPromptResumeAfterResume(status appserver.GoalStatus) bool {

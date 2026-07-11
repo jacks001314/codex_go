@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"codex_go/internal/auth"
+	"codex_go/internal/config"
+	"codex_go/internal/sandbox"
 )
 
 func TestAccountStatusDisplayMatchesRustStatusAccountDisplay(t *testing.T) {
@@ -50,6 +52,131 @@ func TestRemoteConnectionStatusValueMatchesRust(t *testing.T) {
 	invalid := RemoteConnectionStatusValue(RemoteConnectionWebSocket, "not a url", nil)
 	if invalid == nil || invalid.Address != "<invalid websocket URL>" {
 		t.Fatalf("invalid websocket status = %#v", invalid)
+	}
+}
+
+func TestStatusPermissionsLabelMatchesRustStatusSnapshots(t *testing.T) {
+	approval := StatusApprovalLabel(sandbox.ApprovalOnRequest, config.ApprovalsReviewerUser, "on-request")
+	if approval != "Ask for approval" {
+		t.Fatalf("user approval label = %q", approval)
+	}
+	autoApproval := StatusApprovalLabel(sandbox.ApprovalOnRequest, config.ApprovalsReviewerAutoReview, "on-request")
+	if autoApproval != "Approve for me" {
+		t.Fatalf("auto-review approval label = %q", autoApproval)
+	}
+	if got := StatusApprovalLabel(sandbox.ApprovalNever, config.ApprovalsReviewerAutoReview, "never"); got != "never" {
+		t.Fatalf("non on-request approval label = %q", got)
+	}
+
+	workspace := &sandbox.ActivePermissionProfile{ID: sandbox.BuiltInPermissionProfileWorkspace}
+	readOnly := &sandbox.ActivePermissionProfile{ID: sandbox.BuiltInPermissionProfileReadOnly}
+	fullAccess := &sandbox.ActivePermissionProfile{ID: sandbox.BuiltInPermissionProfileDangerFullAccess}
+	disabled := &sandbox.PermissionProfile{Disabled: true}
+
+	tests := []struct {
+		name     string
+		active   *sandbox.ActivePermissionProfile
+		profile  *sandbox.PermissionProfile
+		policy   sandbox.AskForApproval
+		sandbox  string
+		approval string
+		suffix   string
+		want     string
+	}{
+		{
+			name:     "custom workspace network",
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "workspace with network access",
+			approval: approval,
+			want:     "Custom (workspace with network access, Ask for approval)",
+		},
+		{
+			name:     "named read only",
+			active:   readOnly,
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "read-only",
+			approval: approval,
+			want:     "Read Only (Ask for approval)",
+		},
+		{
+			name:     "named workspace",
+			active:   workspace,
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "workspace",
+			approval: approval,
+			want:     "Workspace (Ask for approval)",
+		},
+		{
+			name:     "workspace auto review",
+			active:   workspace,
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "workspace",
+			approval: autoApproval,
+			want:     "Workspace (Approve for me)",
+		},
+		{
+			name:     "workspace roots",
+			active:   &sandbox.ActivePermissionProfile{ID: ":workspace"},
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "workspace",
+			approval: approval,
+			suffix:   " [/workspace/extra]",
+			want:     "Workspace [/workspace/extra] (Ask for approval)",
+		},
+		{
+			name:     "broadened workspace",
+			active:   workspace,
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "workspace with network access",
+			approval: approval,
+			want:     "Workspace with network access (Ask for approval)",
+		},
+		{
+			name:     "user defined profile",
+			active:   &sandbox.ActivePermissionProfile{ID: "locked"},
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "read-only",
+			approval: approval,
+			want:     "Profile locked (read-only, Ask for approval)",
+		},
+		{
+			name:     "full access never",
+			active:   fullAccess,
+			profile:  disabled,
+			policy:   sandbox.ApprovalNever,
+			sandbox:  "danger-full-access",
+			approval: "never",
+			want:     "Full Access",
+		},
+		{
+			name:     "full access on request",
+			active:   fullAccess,
+			profile:  disabled,
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "danger-full-access",
+			approval: approval,
+			want:     "No Sandbox (Ask for approval)",
+		},
+		{
+			name:     "managed unrestricted with network",
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "danger-full-access",
+			approval: approval,
+			want:     "Custom (danger-full-access, Ask for approval)",
+		},
+		{
+			name:     "managed unrestricted without network",
+			policy:   sandbox.ApprovalOnRequest,
+			sandbox:  "external-sandbox",
+			approval: approval,
+			want:     "Custom (external-sandbox, Ask for approval)",
+		},
+	}
+	for _, tt := range tests {
+		got := StatusPermissionsLabel(tt.active, tt.profile, tt.policy, tt.sandbox, tt.approval, tt.suffix)
+		if got != tt.want {
+			t.Fatalf("%s StatusPermissionsLabel() = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -195,5 +322,10 @@ func TestRateLimitRenderingAndCreditFormatting(t *testing.T) {
 	}
 	if got, ok := FormatCreditAmount("12345.6"); !ok || got != "12,346" {
 		t.Fatalf("credit amount = %q ok=%v", got, ok)
+	}
+	for _, input := range []string{"NaN", "+Inf", "-Inf", "-1"} {
+		if got, ok := FormatCreditAmount(input); ok {
+			t.Fatalf("FormatCreditAmount(%q) = %q ok=true, want hidden like Rust", input, got)
+		}
 	}
 }

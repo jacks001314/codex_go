@@ -181,22 +181,33 @@ func splitEditorCommandLine(value string) ([]string, error) {
 	var quote rune
 	escaped := false
 	escapeBackslash := runtime.GOOS != "windows"
+	argStarted := false
+
+	isQuote := func(r rune) bool {
+		if runtime.GOOS == "windows" {
+			return r == '"'
+		}
+		return r == '\'' || r == '"'
+	}
 
 	flush := func() {
-		if builder.Len() == 0 {
+		if !argStarted {
 			return
 		}
 		args = append(args, builder.String())
 		builder.Reset()
+		argStarted = false
 	}
 
 	for _, r := range value {
 		if escaped {
+			argStarted = true
 			builder.WriteRune(r)
 			escaped = false
 			continue
 		}
 		if escapeBackslash && r == '\\' && quote != '\'' {
+			argStarted = true
 			escaped = true
 			continue
 		}
@@ -204,6 +215,7 @@ func splitEditorCommandLine(value string) ([]string, error) {
 			if r == quote {
 				quote = 0
 			} else {
+				argStarted = true
 				builder.WriteRune(r)
 			}
 			continue
@@ -211,27 +223,24 @@ func splitEditorCommandLine(value string) ([]string, error) {
 		switch {
 		case unicode.IsSpace(r):
 			flush()
-		case r == '\'' || r == '"':
+		case isQuote(r):
+			argStarted = true
 			quote = r
 		default:
+			argStarted = true
 			builder.WriteRune(r)
 		}
 	}
 	if escaped {
+		argStarted = true
 		builder.WriteRune('\\')
 	}
-	if quote != 0 {
+	if quote != 0 && runtime.GOOS != "windows" {
 		return nil, errExternalEditorParse
 	}
 	flush()
 	if len(args) == 0 {
 		return nil, errExternalEditorEmpty
-	}
-	for i, arg := range args {
-		if strings.TrimSpace(arg) == "" {
-			return nil, errExternalEditorEmpty
-		}
-		args[i] = arg
 	}
 	return args, nil
 }

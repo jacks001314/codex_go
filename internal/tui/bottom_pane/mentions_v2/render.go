@@ -1,7 +1,6 @@
 package mentionsv2
 
 import (
-	"path/filepath"
 	"strings"
 
 	codextui "codex_go/internal/tui"
@@ -10,7 +9,6 @@ import (
 // Rust parity subset: codex-rs/tui/src/bottom_pane/mentions_v2/render.rs.
 
 func RenderCandidate(candidate Candidate) string {
-	candidate = candidate.normalized()
 	return candidate.DisplayName
 }
 
@@ -109,14 +107,14 @@ func contentText(row SearchResult, primaryColumnWidth int) string {
 }
 
 func primaryText(row SearchResult) string {
-	if fileName := fileName(row); fileName != "" {
+	if fileName, ok := fileName(row); ok {
 		return fileName
 	}
 	return row.DisplayName
 }
 
 func secondaryText(row SearchResult) string {
-	if fileName(row) != "" {
+	if _, ok := fileName(row); ok {
 		path := pathPrefix(row)
 		if path == "" {
 			path = "./"
@@ -133,35 +131,36 @@ func primaryTextWidth(row SearchResult) int {
 	return len([]rune(primaryText(row)))
 }
 
-func fileName(row SearchResult) string {
+func fileName(row SearchResult) (string, bool) {
 	if row.Selection.Kind != SelectionFile || !row.MentionType.IsFilesystem() {
-		return ""
+		return "", false
 	}
 	path := row.DisplayName
-	if path == "" {
-		path = row.Selection.Path
+	start := fileNameStart(path)
+	if start == 0 {
+		return path, true
 	}
-	base := filepath.Base(path)
-	if base == "." || base == string(filepath.Separator) {
-		return path
-	}
-	return base
+	return path[start:], true
 }
 
 func pathPrefix(row SearchResult) string {
 	path := row.DisplayName
-	if path == "" {
-		path = row.Selection.Path
-	}
-	base := fileName(row)
-	if base == "" || base == path {
+	if row.Selection.Kind != SelectionFile || !row.MentionType.IsFilesystem() {
 		return ""
 	}
-	idx := strings.LastIndex(path, base)
+	start := fileNameStart(path)
+	if start == 0 {
+		return ""
+	}
+	return path[:start]
+}
+
+func fileNameStart(path string) int {
+	idx := strings.LastIndexAny(path, "/\\")
 	if idx < 0 {
-		return ""
+		return 0
 	}
-	return path[:idx]
+	return idx + 1
 }
 
 func truncateRunes(value string, width int) string {

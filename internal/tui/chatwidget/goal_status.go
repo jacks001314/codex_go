@@ -91,7 +91,27 @@ func CompletedGoalUsage(tokenBudget *int64, tokensUsed int64, timeUsedSeconds in
 }
 
 func FormatGoalElapsedSeconds(seconds int64) string {
-	return FormatOptionalDuration(&seconds)
+	if seconds < 0 {
+		seconds = 0
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := minutes / 60
+	remainingMinutes := minutes % 60
+	if hours >= 24 {
+		days := hours / 24
+		remainingHours := hours % 24
+		return fmt.Sprintf("%dd %dh %dm", days, remainingHours, remainingMinutes)
+	}
+	if remainingMinutes == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh %dm", hours, remainingMinutes)
 }
 
 func GoalSummaryLines(goal appserver.Goal) []string {

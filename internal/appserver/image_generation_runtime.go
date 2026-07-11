@@ -11,7 +11,7 @@ import (
 )
 
 func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams) (*turn.ImageGenerationOptions, error) {
-	if cfg == nil {
+	if cfg == nil || turnStartReviewRuntime(params) {
 		return nil, nil
 	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
@@ -63,6 +63,9 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 }
 
 func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams) ([]any, error) {
+	if turnStartReviewRuntime(params) {
+		return nil, nil
+	}
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, err

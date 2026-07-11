@@ -18,6 +18,7 @@ func TestSideReturnShortcutMatchesCtrlCAndCtrlDMatchRust(t *testing.T) {
 	}{
 		{key: "esc", control: false, press: true},
 		{key: "c", control: false, press: true},
+		{key: " c ", control: true, press: true},
 		{key: "d", control: true, press: false},
 	} {
 		if SideReturnShortcutMatches(tc.key, tc.control, tc.press) {

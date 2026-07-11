@@ -7,6 +7,98 @@ import (
 	"testing"
 )
 
+func TestRustSubcommandSurfaceParity(t *testing.T) {
+	// This table is derived from codex-rs/cli/src/main.rs Subcommand.
+	// Keep it ordered like the Rust enum so command-surface drift is visible.
+	tests := []struct {
+		name string
+		args []string
+		want Command
+	}{
+		{name: "exec", args: []string{"exec", "hello"}, want: CommandExec},
+		{name: "review", args: []string{"review", "--uncommitted"}, want: CommandReview},
+		{name: "login", args: []string{"login", "status"}, want: CommandLogin},
+		{name: "logout", args: []string{"logout"}, want: CommandLogout},
+		{name: "mcp", args: []string{"mcp", "list"}, want: CommandMCP},
+		{name: "plugin", args: []string{"plugin", "list"}, want: CommandPlugin},
+		{name: "mcp-server", args: []string{"mcp-server"}, want: CommandMCPServer},
+		{name: "app-server", args: []string{"app-server", "--listen", "off"}, want: CommandAppServer},
+		{name: "remote-control", args: []string{"remote-control", "pair"}, want: CommandRemoteControl},
+		{name: "app", args: []string{"app", "."}, want: CommandApp},
+		{name: "completion", args: []string{"completion", "bash"}, want: CommandCompletion},
+		{name: "update", args: []string{"update"}, want: CommandUpdate},
+		{name: "doctor", args: []string{"doctor", "--summary"}, want: CommandDoctor},
+		{name: "sandbox", args: []string{"sandbox", "--", "echo"}, want: CommandSandbox},
+		{name: "debug", args: []string{"debug", "models"}, want: CommandDebug},
+		{name: "execpolicy", args: []string{"execpolicy", "check", "--rules", "policy.rules", "echo"}, want: CommandExecpolicy},
+		{name: "apply", args: []string{"apply", "*** Begin Patch\n*** End Patch"}, want: CommandApply},
+		{name: "resume", args: []string{"resume", "--last"}, want: CommandResume},
+		{name: "archive", args: []string{"archive", "thread-1"}, want: CommandArchive},
+		{name: "delete", args: []string{"delete", "thread-1"}, want: CommandDelete},
+		{name: "unarchive", args: []string{"unarchive", "thread-1"}, want: CommandUnarchive},
+		{name: "fork", args: []string{"fork", "--last"}, want: CommandFork},
+		{name: "cloud", args: []string{"cloud", "status", "task-1"}, want: CommandCloud},
+		{name: "responses-api-proxy", args: []string{"responses-api-proxy", "--port", "3456"}, want: CommandResponsesAPIProxy},
+		{name: "stdio-to-uds", args: []string{"stdio-to-uds", `\\.\pipe\codex-test`}, want: CommandStdioToUDS},
+		{name: "exec-server", args: []string{"exec-server", "--listen", "stdio"}, want: CommandExecServer},
+		{name: "features", args: []string{"features", "list"}, want: CommandFeatures},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, ok := knownCommands[tt.args[0]]
+			if !ok {
+				t.Fatalf("knownCommands is missing Rust subcommand %q", tt.args[0])
+			}
+			if cmd != tt.want {
+				t.Fatalf("knownCommands[%q] = %q, want %q", tt.args[0], cmd, tt.want)
+			}
+
+			parsed, err := Parse(tt.args)
+			if err != nil {
+				t.Fatalf("Parse(%v) returned error: %v", tt.args, err)
+			}
+			if parsed.Command != tt.want {
+				t.Fatalf("Parse(%v).Command = %q, want %q", tt.args, parsed.Command, tt.want)
+			}
+		})
+	}
+}
+
+func TestRustSubcommandAliasParity(t *testing.T) {
+	// Rust visible_alias/alias attributes in codex-rs/cli/src/main.rs:
+	// exec -> e, apply -> a, cloud -> cloud-tasks.
+	tests := []struct {
+		alias string
+		args  []string
+		want  Command
+	}{
+		{alias: "e", args: []string{"e", "hello"}, want: CommandExec},
+		{alias: "a", args: []string{"a", "*** Begin Patch\n*** End Patch"}, want: CommandApply},
+		{alias: "cloud-tasks", args: []string{"cloud-tasks", "status", "task-1"}, want: CommandCloud},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.alias, func(t *testing.T) {
+			cmd, ok := knownCommands[tt.alias]
+			if !ok {
+				t.Fatalf("knownCommands is missing Rust alias %q", tt.alias)
+			}
+			if cmd != tt.want {
+				t.Fatalf("knownCommands[%q] = %q, want %q", tt.alias, cmd, tt.want)
+			}
+
+			parsed, err := Parse(tt.args)
+			if err != nil {
+				t.Fatalf("Parse(%v) returned error: %v", tt.args, err)
+			}
+			if parsed.Command != tt.want {
+				t.Fatalf("Parse(%v).Command = %q, want %q", tt.args, parsed.Command, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseExecWithRootOptions(t *testing.T) {
 	parsed, err := Parse([]string{
 		"-c", `model="gpt-5.2"`,
@@ -402,6 +494,17 @@ func TestParseExecResume(t *testing.T) {
 		!parsed.Exec.SkipGitRepoCheck || !parsed.Exec.Ephemeral ||
 		!parsed.Exec.IgnoreUserConfig || !parsed.Exec.IgnoreRules {
 		t.Fatalf("exec resume flags = %#v", parsed.Exec)
+	}
+
+	parsed, err = Parse([]string{"exec", "resume", "--last", "--image", "a.png,b.png", "-i", "c.png", "inspect"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !parsed.Exec.Resume.Last || parsed.Exec.Resume.Prompt != "inspect" {
+		t.Fatalf("resume image prompt = %#v", parsed.Exec.Resume)
+	}
+	if got := parsed.Exec.Shared.Images; len(got) != 3 || got[0] != "a.png" || got[1] != "b.png" || got[2] != "c.png" {
+		t.Fatalf("resume images = %#v", got)
 	}
 }
 

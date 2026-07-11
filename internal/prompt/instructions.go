@@ -1,7 +1,6 @@
 package prompt
 
 import (
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,6 +297,9 @@ type InstructionsSkillMetadata struct {
 	Name                    string
 	Scope                   string
 	Path                    string
+	LocatorPath             string
+	LocatorKind             string
+	Root                    string
 	Description             string
 	PluginID                string
 	Contents                string
@@ -344,22 +346,20 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 
 	for i := range options.Inputs {
 		input := options.Inputs[i]
-		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
+		if input.Type != "skill" {
 			continue
 		}
-		name := strings.TrimSpace(input.Name)
-		if name != "" {
-			blockedPlainNames[name] = true
-		}
+		blockedPlainNames[input.Name] = true
 		path := normalizeMentionSkillPath(input.Path)
 		if path == "" || seenPaths[path] {
 			continue
 		}
 		for _, skill := range options.Skills {
-			if normalizeMentionSkillPath(skill.Path) != path {
+			if skillMentionPathSeen(skill, seenPaths) || !skillMatchesMentionPath(skill, path) {
 				continue
 			}
 			selected = append(selected, skill)
+			markSkillMentionPaths(skill, seenPaths)
 			seenPaths[path] = true
 			seenNames[skill.Name] = true
 			break
@@ -368,7 +368,7 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 
 	for i := range options.Inputs {
 		input := options.Inputs[i]
-		if strings.TrimSpace(input.Text) == "" {
+		if input.Text == "" {
 			continue
 		}
 		mentions := extractToolMentions(input.Text)
@@ -376,13 +376,12 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 			continue
 		}
 		for _, skill := range options.Skills {
-			path := normalizeMentionSkillPath(skill.Path)
-			if path == "" || seenPaths[path] {
+			if skillMentionPathSeen(skill, seenPaths) {
 				continue
 			}
-			if mentions.skillPaths[path] {
+			if skillMatchesAnyMentionPath(skill, mentions.skillPaths) {
 				selected = append(selected, skill)
-				seenPaths[path] = true
+				markSkillMentionPaths(skill, seenPaths)
 				seenNames[skill.Name] = true
 			}
 		}
@@ -390,8 +389,7 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 			if strings.TrimSpace(skill.Name) == "" || blockedPlainNames[skill.Name] || seenNames[skill.Name] {
 				continue
 			}
-			path := normalizeMentionSkillPath(skill.Path)
-			if path == "" || seenPaths[path] {
+			if skillMentionPathSeen(skill, seenPaths) {
 				continue
 			}
 			if !mentions.plainNames[skill.Name] {
@@ -404,11 +402,72 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 				continue
 			}
 			selected = append(selected, skill)
-			seenPaths[path] = true
+			markSkillMentionPaths(skill, seenPaths)
 			seenNames[skill.Name] = true
 		}
 	}
 	return selected
+}
+
+func skillMentionPaths(skill InstructionsSkillMetadata) []string {
+	values := []string{
+		normalizeMentionSkillPath(skill.Path),
+		normalizeMentionSkillPath(skill.LocatorPath),
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func skillMatchesMentionPath(skill InstructionsSkillMetadata, path string) bool {
+	path = normalizeMentionSkillPath(path)
+	if path == "" {
+		return false
+	}
+	for _, candidate := range skillMentionPaths(skill) {
+		if candidate == path {
+			return true
+		}
+	}
+	return false
+}
+
+func skillMatchesAnyMentionPath(skill InstructionsSkillMetadata, paths map[string]bool) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, candidate := range skillMentionPaths(skill) {
+		if paths[candidate] {
+			return true
+		}
+	}
+	return false
+}
+
+func skillMentionPathSeen(skill InstructionsSkillMetadata, seen map[string]bool) bool {
+	if len(seen) == 0 {
+		return false
+	}
+	for _, candidate := range skillMentionPaths(skill) {
+		if seen[candidate] {
+			return true
+		}
+	}
+	return false
+}
+
+func markSkillMentionPaths(skill InstructionsSkillMetadata, seen map[string]bool) {
+	for _, candidate := range skillMentionPaths(skill) {
+		seen[candidate] = true
+	}
 }
 
 func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata, command string, workdir string) *InstructionsSkillMetadata {
@@ -483,13 +542,10 @@ func extractToolMentions(text string) *toolMentions {
 }
 
 func parseLinkedToolMention(text string, bytes []byte, start int) (string, string, int, bool) {
-	if start+1 >= len(bytes) || bytes[start] != '[' {
+	if start+1 >= len(bytes) || bytes[start] != '[' || bytes[start+1] != '$' {
 		return "", "", start + 1, false
 	}
-	nameStart := start + 1
-	if bytes[nameStart] == '$' {
-		nameStart++
-	}
+	nameStart := start + 2
 	if nameStart >= len(bytes) || !isMentionNameChar(bytes[nameStart]) {
 		return "", "", start + 1, false
 	}
@@ -501,7 +557,7 @@ func parseLinkedToolMention(text string, bytes []byte, start int) (string, strin
 		return "", "", start + 1, false
 	}
 	pathStart := nameEnd + 1
-	for pathStart < len(bytes) && (bytes[pathStart] == ' ' || bytes[pathStart] == '\t' || bytes[pathStart] == '\n' || bytes[pathStart] == '\r') {
+	for pathStart < len(bytes) && isASCIIWhitespace(bytes[pathStart]) {
 		pathStart++
 	}
 	if pathStart >= len(bytes) || bytes[pathStart] != '(' {
@@ -538,31 +594,16 @@ func isCommonEnvVarMention(name string) bool {
 }
 
 func isNonSkillResourcePath(path string) bool {
-	path = strings.TrimSpace(path)
 	return strings.HasPrefix(path, "app://") || strings.HasPrefix(path, "mcp://") || strings.HasPrefix(path, "plugin://")
 }
 
 func normalizeMentionSkillPath(path string) string {
-	path = strings.TrimSpace(path)
 	path = strings.TrimPrefix(path, "skill://")
-	if path == "" {
-		return ""
-	}
-	if strings.Contains(path, "://") {
-		parsed, err := url.Parse(path)
-		if err == nil && parsed.Scheme != "" {
-			parsed.RawPath = ""
-			return parsed.String()
-		}
-		return path
-	}
-	if unescaped, err := url.PathUnescape(path); err == nil {
-		path = unescaped
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	return filepath.Clean(path)
+	return path
+}
+
+func isASCIIWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
 }
 
 func instructionsPathFromRoot(root string, cwd string) []string {

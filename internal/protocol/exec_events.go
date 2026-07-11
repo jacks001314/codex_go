@@ -1,5 +1,10 @@
 package protocol
 
+import (
+	"bytes"
+	"encoding/json"
+)
+
 type ThreadEvent struct {
 	Type string `json:"type"`
 
@@ -48,22 +53,58 @@ type ThreadItem struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 
-	Text          string         `json:"text,omitempty"`
-	ToolName      string         `json:"tool_name,omitempty"`
-	CallID        string         `json:"call_id,omitempty"`
-	Input         string         `json:"input,omitempty"`
-	Output        string         `json:"output,omitempty"`
-	Status        string         `json:"status,omitempty"`
-	RevisedPrompt string         `json:"revised_prompt,omitempty"`
-	SavedPath     string         `json:"saved_path,omitempty"`
-	Success       *bool          `json:"success,omitempty"`
-	Items         []TodoItem     `json:"items,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	Message           string                       `json:"message,omitempty"`
+	Text              string                       `json:"text,omitempty"`
+	ToolName          string                       `json:"tool_name,omitempty"`
+	CallID            string                       `json:"call_id,omitempty"`
+	Input             string                       `json:"input,omitempty"`
+	Output            string                       `json:"output,omitempty"`
+	Query             string                       `json:"query,omitempty"`
+	Action            map[string]any               `json:"action,omitempty"`
+	Changes           []FileChange                 `json:"changes,omitempty"`
+	Server            string                       `json:"server,omitempty"`
+	Tool              string                       `json:"tool,omitempty"`
+	SenderThreadID    string                       `json:"sender_thread_id,omitempty"`
+	ReceiverThreadIDs *[]string                    `json:"receiver_thread_ids,omitempty"`
+	Prompt            *string                      `json:"prompt,omitempty"`
+	AgentsStates      *map[string]CollabAgentState `json:"agents_states,omitempty"`
+	Arguments         *any                         `json:"arguments,omitempty"`
+	Result            *MCPToolResult               `json:"result,omitempty"`
+	CallError         *MCPToolError                `json:"error,omitempty"`
+	Command           string                       `json:"command,omitempty"`
+	AggregatedOutput  *string                      `json:"aggregated_output,omitempty"`
+	ExitCode          *int                         `json:"exit_code,omitempty"`
+	Status            string                       `json:"status,omitempty"`
+	RevisedPrompt     string                       `json:"revised_prompt,omitempty"`
+	SavedPath         string                       `json:"saved_path,omitempty"`
+	Success           *bool                        `json:"success,omitempty"`
+	Items             []TodoItem                   `json:"items,omitempty"`
+	Metadata          map[string]any               `json:"metadata,omitempty"`
 }
 
 type TodoItem struct {
 	Text      string `json:"text"`
 	Completed bool   `json:"completed"`
+}
+
+type FileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+type MCPToolResult struct {
+	Content           []any `json:"content"`
+	Meta              any   `json:"_meta,omitempty"`
+	StructuredContent any   `json:"structured_content"`
+}
+
+type MCPToolError struct {
+	Message string `json:"message"`
+}
+
+type CollabAgentState struct {
+	Status  string  `json:"status"`
+	Message *string `json:"message"`
 }
 
 type Delta struct {
@@ -154,9 +195,213 @@ func TodoListItem(id string, items []TodoItem) ThreadItem {
 	}
 }
 
+func MCPToolCallItem(id string, server string, tool string, arguments any, result *MCPToolResult, callErr *MCPToolError, status string) ThreadItem {
+	return ThreadItem{
+		ID:        id,
+		Type:      "mcp_tool_call",
+		Server:    server,
+		Tool:      tool,
+		Arguments: anyValue(arguments),
+		Result:    result,
+		CallError: callErr,
+		Status:    status,
+	}
+}
+
+func CollabToolCallItem(id string, collabTool string, senderThreadID string, receiverThreadIDs []string, prompt *string, agentsStates map[string]CollabAgentState, status string) ThreadItem {
+	receivers := append([]string(nil), receiverThreadIDs...)
+	if receivers == nil {
+		receivers = []string{}
+	}
+	states := cloneCollabAgentStates(agentsStates)
+	if states == nil {
+		states = map[string]CollabAgentState{}
+	}
+	return ThreadItem{
+		ID:                id,
+		Type:              "collab_tool_call",
+		Tool:              collabTool,
+		SenderThreadID:    senderThreadID,
+		ReceiverThreadIDs: &receivers,
+		Prompt:            cloneStringPointer(prompt),
+		AgentsStates:      &states,
+		Status:            status,
+	}
+}
+
+func CommandExecutionItem(id string, command string, aggregatedOutput string, exitCode *int, status string) ThreadItem {
+	return ThreadItem{
+		ID:               id,
+		Type:             "command_execution",
+		Command:          command,
+		AggregatedOutput: stringValue(aggregatedOutput),
+		ExitCode:         cloneIntPointer(exitCode),
+		Status:           status,
+	}
+}
+
+func ErrorItem(id string, message string) ThreadItem {
+	return ThreadItem{
+		ID:      id,
+		Type:    "error",
+		Message: message,
+	}
+}
+
+func FileChangeItem(id string, changes []FileChange, status string) ThreadItem {
+	copied := append([]FileChange(nil), changes...)
+	return ThreadItem{
+		ID:      id,
+		Type:    "file_change",
+		Changes: copied,
+		Status:  status,
+	}
+}
+
+func WebSearchItem(id string, query string, action map[string]any) ThreadItem {
+	if action == nil {
+		action = map[string]any{"type": "other"}
+	}
+	return ThreadItem{
+		ID:     id,
+		Type:   "web_search",
+		Query:  query,
+		Action: cloneAnyMap(action),
+	}
+}
+
+func (i ThreadItem) MarshalJSON() ([]byte, error) {
+	switch i.Type {
+	case "mcp_tool_call":
+		var arguments any
+		if i.Arguments != nil {
+			arguments = *i.Arguments
+		}
+		return marshalThreadItemJSON(struct {
+			ID        string         `json:"id"`
+			Type      string         `json:"type"`
+			Server    string         `json:"server"`
+			Tool      string         `json:"tool"`
+			Arguments any            `json:"arguments"`
+			Result    *MCPToolResult `json:"result"`
+			Error     *MCPToolError  `json:"error"`
+			Status    string         `json:"status"`
+		}{
+			ID:        i.ID,
+			Type:      i.Type,
+			Server:    i.Server,
+			Tool:      i.Tool,
+			Arguments: arguments,
+			Result:    i.Result,
+			Error:     i.CallError,
+			Status:    i.Status,
+		})
+	case "collab_tool_call":
+		receivers := []string{}
+		if i.ReceiverThreadIDs != nil {
+			receivers = append([]string(nil), (*i.ReceiverThreadIDs)...)
+		}
+		if receivers == nil {
+			receivers = []string{}
+		}
+		states := map[string]CollabAgentState{}
+		if i.AgentsStates != nil {
+			states = cloneCollabAgentStates(*i.AgentsStates)
+		}
+		return marshalThreadItemJSON(struct {
+			ID                string                      `json:"id"`
+			Type              string                      `json:"type"`
+			Tool              string                      `json:"tool"`
+			SenderThreadID    string                      `json:"sender_thread_id"`
+			ReceiverThreadIDs []string                    `json:"receiver_thread_ids"`
+			Prompt            *string                     `json:"prompt"`
+			AgentsStates      map[string]CollabAgentState `json:"agents_states"`
+			Status            string                      `json:"status"`
+		}{
+			ID:                i.ID,
+			Type:              i.Type,
+			Tool:              i.Tool,
+			SenderThreadID:    i.SenderThreadID,
+			ReceiverThreadIDs: receivers,
+			Prompt:            cloneStringPointer(i.Prompt),
+			AgentsStates:      states,
+			Status:            i.Status,
+		})
+	default:
+		type threadItemAlias ThreadItem
+		return marshalThreadItemJSON(threadItemAlias(i))
+	}
+}
+
+func marshalThreadItemJSON(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buf.Bytes()), nil
+}
+
+func stringValue(value string) *string {
+	return &value
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func anyValue(value any) *any {
+	return &value
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneCollabAgentStates(values map[string]CollabAgentState) map[string]CollabAgentState {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]CollabAgentState, len(values))
+	for key, value := range values {
+		out[key] = CollabAgentState{
+			Status:  value.Status,
+			Message: cloneStringPointer(value.Message),
+		}
+	}
+	return out
+}
+
 func ItemStarted(item ThreadItem) ThreadEvent {
 	return ThreadEvent{
 		Type: "item.started",
+		Item: &item,
+	}
+}
+
+func ItemUpdated(item ThreadItem) ThreadEvent {
+	return ThreadEvent{
+		Type: "item.updated",
 		Item: &item,
 	}
 }

@@ -55,6 +55,40 @@ func TestToolDispatcherExecutesFunctionAndCustomCalls(t *testing.T) {
 	}
 }
 
+func TestToolDispatcherAddsThreadAndTurnContextToInvocations(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("inspect")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		if invocation.Context["thread_id"] != "thread-parent" || invocation.Context["threadId"] != "thread-parent" {
+			t.Fatalf("thread context = %#v", invocation.Context)
+		}
+		if invocation.Context["turn_id"] != "turn-1" || invocation.Context["turnId"] != "turn-1" {
+			t.Fatalf("turn context = %#v", invocation.Context)
+		}
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register inspect: %v", err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+		Router:   tool.NewRouter(registry),
+		ThreadID: "thread-parent",
+		TurnID:   "turn-1",
+	})
+
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		ID:        "call-1",
+		Type:      "function_call",
+		Name:      "inspect",
+		CallID:    "call-1",
+		Arguments: `{}`,
+	}})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Output.Body != "ok" {
+		t.Fatalf("results = %#v", results)
+	}
+}
+
 func TestToolDispatcherToolSearchOutput(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := tool.RegisterToolSearchHandler(registry, []tool.Spec{{

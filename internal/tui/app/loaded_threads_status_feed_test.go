@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	codextui "codex_go/internal/tui"
 )
 
 func TestFindLoadedSubagentThreadsForPrimaryWalksSpawnTree(t *testing.T) {
@@ -80,6 +82,19 @@ func TestAgentStatusThreadPreviewUsesRecentUniqueItems(t *testing.T) {
 	}
 }
 
+func TestAgentStatusThreadPreviewDeduplicatesEmptyItemIDsLikeRust(t *testing.T) {
+	events := []AgentActivityEvent{
+		{EventType: AgentActivityEventItemStarted, Item: AgentActivityItem{Kind: AgentActivityAgentMessage, Text: "older empty id"}},
+		{EventType: AgentActivityEventItemCompleted, Item: AgentActivityItem{Kind: AgentActivityAgentMessage, Text: "newer empty id"}},
+	}
+
+	preview := NewAgentStatusThreadPreview("agents/scout.md", events)
+	want := []string{"newer empty id"}
+	if !reflect.DeepEqual(preview.Activity, want) {
+		t.Fatalf("activity = %#v, want %#v", preview.Activity, want)
+	}
+}
+
 func TestAgentStatusThreadPreviewWrapsAndKeepsLastThreeLines(t *testing.T) {
 	preview := AgentStatusThreadPreview{Activity: []string{
 		"alpha beta gamma delta",
@@ -87,6 +102,17 @@ func TestAgentStatusThreadPreviewWrapsAndKeepsLastThreeLines(t *testing.T) {
 	}}
 	lines := preview.PreviewLines(10)
 	want := []string{"epsilon", "zeta eta", "theta"}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("preview lines = %#v, want %#v", lines, want)
+	}
+}
+
+func TestAgentStatusThreadPreviewWrapsByDisplayWidthLikeRust(t *testing.T) {
+	preview := AgentStatusThreadPreview{Activity: []string{
+		"界界 界界 界界",
+	}}
+	lines := preview.PreviewLines(5)
+	want := []string{"界界", "界界", "界界"}
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("preview lines = %#v, want %#v", lines, want)
 	}
@@ -100,5 +126,17 @@ func TestBoundedAgentActivitySummaryTruncatesAndCompactsWhitespace(t *testing.T)
 	}
 	if strings.Contains(got, "\n") || strings.Contains(got, "\t") || len([]rune(got)) > AgentStatusPreviewGraphemes {
 		t.Fatalf("summary not compact/truncated: %q", got)
+	}
+}
+
+func TestAgentActivityCommandSummaryTruncatesByGraphemeLikeRust(t *testing.T) {
+	command := strings.Repeat("e\u0301", AgentStatusPreviewGraphemes)
+	got, ok := AgentActivitySummary(AgentActivityItem{Kind: AgentActivityCommandExecution, Command: command})
+	if !ok {
+		t.Fatal("command summary should be present")
+	}
+	want := "$ " + codextui.TruncateText(command, AgentStatusPreviewGraphemes-len("$ "))
+	if got != want {
+		t.Fatalf("command summary = %q, want %q", got, want)
 	}
 }

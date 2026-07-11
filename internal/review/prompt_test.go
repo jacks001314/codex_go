@@ -11,14 +11,26 @@ func TestPromptForCommitWithTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prompt() error = %v", err)
 	}
-	if !strings.Contains(prompt, "abcdef123") || !strings.Contains(prompt, "fix parser") {
-		t.Fatalf("unexpected prompt: %s", prompt)
+	want := "Review the code changes introduced by commit abcdef123 (\"fix parser\"). Provide prioritized, actionable findings."
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestPromptForBaseBranchBackupMatchesRustTemplate(t *testing.T) {
+	prompt, err := Prompt(&PromptTarget{Kind: PromptBaseBranch, Branch: "main"})
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	want := "Review the code changes against the base branch 'main'. Start by finding the merge diff between the current branch and main's upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"main@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the main branch. Provide prioritized, actionable findings."
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
 	}
 }
 
 func TestPromptRejectsEmptyCustom(t *testing.T) {
-	if _, err := Prompt(&PromptTarget{Kind: PromptCustom, Instructions: " \n"}); err == nil {
-		t.Fatalf("expected custom prompt error")
+	if _, err := Prompt(&PromptTarget{Kind: PromptCustom, Instructions: " \n"}); err == nil || err.Error() != "Review prompt cannot be empty" {
+		t.Fatalf("error = %v, want Rust empty prompt error", err)
 	}
 }
 

@@ -220,6 +220,71 @@ func TestStatusControlsHelpersAndPreviewData(t *testing.T) {
 	}
 }
 
+func TestStatusLineRateLimitWindowSelectionMatchesRust(t *testing.T) {
+	fiveHours := int64(5 * 60)
+	weekly := int64(7 * 24 * 60)
+	monthly := int64(30 * 24 * 60)
+	tests := []struct {
+		name       string
+		primary    *RateLimitWindow
+		secondary  *RateLimitWindow
+		wantFive   string
+		wantFiveOK bool
+		wantWeekly string
+		wantWeekOK bool
+	}{
+		{
+			name:       "five hour primary and weekly secondary",
+			primary:    &RateLimitWindow{UsedPercent: 40, WindowDurationMins: &fiveHours},
+			secondary:  &RateLimitWindow{UsedPercent: 94, WindowDurationMins: &weekly},
+			wantFive:   "5h 60% left",
+			wantFiveOK: true,
+			wantWeekly: "weekly 6% left",
+			wantWeekOK: true,
+		},
+		{
+			name:       "secondary non weekly when primary is weekly",
+			primary:    &RateLimitWindow{UsedPercent: 94, WindowDurationMins: &weekly},
+			secondary:  &RateLimitWindow{UsedPercent: 35, WindowDurationMins: &monthly},
+			wantFive:   "monthly 65% left",
+			wantFiveOK: true,
+			wantWeekly: "weekly 6% left",
+			wantWeekOK: true,
+		},
+		{
+			name:       "weekly only omits five hour item",
+			primary:    &RateLimitWindow{UsedPercent: 9, WindowDurationMins: &weekly},
+			wantWeekly: "weekly 91% left",
+			wantWeekOK: true,
+		},
+		{
+			name:       "single monthly primary omits weekly item",
+			primary:    &RateLimitWindow{UsedPercent: 35, WindowDurationMins: &monthly},
+			wantFive:   "monthly 65% left",
+			wantFiveOK: true,
+		},
+		{
+			name:       "secondary only non weekly omits five hour item",
+			secondary:  &RateLimitWindow{UsedPercent: 35, WindowDurationMins: &monthly},
+			wantWeekly: "monthly 65% left",
+			wantWeekOK: true,
+		},
+	}
+	for _, tt := range tests {
+		state := NewStatusControlsState(StatusControlsRuntime{
+			RateLimitSnapshots: map[string]RateLimitSnapshot{
+				"codex": {Primary: tt.primary, Secondary: tt.secondary},
+			},
+		})
+		if got, ok := state.StatusLineValueForItem(bottompane.StatusLineFiveHourLimit); got != tt.wantFive || ok != tt.wantFiveOK {
+			t.Fatalf("%s five-hour item = %q ok=%v, want %q ok=%v", tt.name, got, ok, tt.wantFive, tt.wantFiveOK)
+		}
+		if got, ok := state.StatusLineValueForItem(bottompane.StatusLineWeeklyLimit); got != tt.wantWeekly || ok != tt.wantWeekOK {
+			t.Fatalf("%s weekly item = %q ok=%v, want %q ok=%v", tt.name, got, ok, tt.wantWeekly, tt.wantWeekOK)
+		}
+	}
+}
+
 func TestStatusSetupViewsExposeRustItemMetadataAndPreviews(t *testing.T) {
 	data := NewStatusSurfacePreviewData(map[StatusSurfacePreviewItem]string{
 		StatusPreviewModel:         "gpt-5",

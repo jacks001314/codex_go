@@ -30,35 +30,36 @@ type AgentLoop struct {
 }
 
 type AgentLoopRequest struct {
-	Prompt               string
-	Instructions         string
-	Model                string
-	ProviderID           string
-	TaskKind             model.AgentTaskKind
-	ThreadID             string
-	TurnID               string
-	Originator           string
-	InputItems           []any
-	SteerMailbox         *SteerMailbox
-	Tools                []any
-	HostedTools          []any
-	Store                bool
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
-	ModelVerbosity       string
-	IncludeTimingMetrics bool
-	BetaFeaturesHeader   string
-	ItemIDsEnabled       bool
-	ServiceTier          string
-	PromptCacheKey       string
-	ClientMetadata       map[string]string
-	AttestationProvider  codexapi.AttestationProvider
-	OutputSchema         any
-	PostToolInputItems   ToolPostExecutionInputItems
-	OnToolStarted        ToolStartedCallback
-	Timing               *TimingState
+	Prompt                       string
+	Instructions                 string
+	Model                        string
+	ProviderID                   string
+	TaskKind                     model.AgentTaskKind
+	ThreadID                     string
+	TurnID                       string
+	Originator                   string
+	InputItems                   []any
+	SteerMailbox                 *SteerMailbox
+	Tools                        []any
+	HostedTools                  []any
+	Store                        bool
+	PreviousResponseID           string
+	ParallelToolCalls            bool
+	ReasoningEffort              string
+	ReasoningSummary             string
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	ServiceTier                  string
+	PromptCacheKey               string
+	ClientMetadata               map[string]string
+	AttestationProvider          codexapi.AttestationProvider
+	OutputSchema                 any
+	DisableHostedImageGeneration bool
+	PostToolInputItems           ToolPostExecutionInputItems
+	OnToolStarted                ToolStartedCallback
+	Timing                       *TimingState
 }
 
 type AgentLoopResult struct {
@@ -155,31 +156,32 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 		sampling := timing.BeginSampling(l.now())
 		response, err := l.agent.Run(ctx, &model.AgentRequest{
-			Prompt:               prompt,
-			Instructions:         request.Instructions,
-			InputItems:           inputItems,
-			Tools:                append([]any(nil), request.Tools...),
-			Model:                request.Model,
-			ProviderID:           request.ProviderID,
-			TaskKind:             request.TaskKind,
-			ThreadID:             request.ThreadID,
-			TurnID:               request.TurnID,
-			Originator:           request.Originator,
-			Store:                request.Store,
-			PreviousResponseID:   previousResponseID,
-			ParallelToolCalls:    request.ParallelToolCalls,
-			ReasoningEffort:      request.ReasoningEffort,
-			ReasoningSummary:     request.ReasoningSummary,
-			ModelVerbosity:       request.ModelVerbosity,
-			IncludeTimingMetrics: request.IncludeTimingMetrics,
-			BetaFeaturesHeader:   request.BetaFeaturesHeader,
-			ItemIDsEnabled:       request.ItemIDsEnabled,
-			ServiceTier:          request.ServiceTier,
-			PromptCacheKey:       request.PromptCacheKey,
-			ClientMetadata:       cloneStringMap(clientMetadata),
-			AttestationProvider:  request.AttestationProvider,
-			OutputSchema:         request.OutputSchema,
-			StreamHandler:        timingStreamHandler(timing, l.now),
+			Prompt:                       prompt,
+			Instructions:                 request.Instructions,
+			InputItems:                   inputItems,
+			Tools:                        append([]any(nil), request.Tools...),
+			Model:                        request.Model,
+			ProviderID:                   request.ProviderID,
+			TaskKind:                     request.TaskKind,
+			ThreadID:                     request.ThreadID,
+			TurnID:                       request.TurnID,
+			Originator:                   request.Originator,
+			Store:                        request.Store,
+			PreviousResponseID:           previousResponseID,
+			ParallelToolCalls:            request.ParallelToolCalls,
+			ReasoningEffort:              request.ReasoningEffort,
+			ReasoningSummary:             request.ReasoningSummary,
+			ModelVerbosity:               request.ModelVerbosity,
+			IncludeTimingMetrics:         request.IncludeTimingMetrics,
+			BetaFeaturesHeader:           request.BetaFeaturesHeader,
+			ItemIDsEnabled:               request.ItemIDsEnabled,
+			ServiceTier:                  request.ServiceTier,
+			PromptCacheKey:               request.PromptCacheKey,
+			ClientMetadata:               cloneStringMap(clientMetadata),
+			AttestationProvider:          request.AttestationProvider,
+			OutputSchema:                 request.OutputSchema,
+			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
+			StreamHandler:                timingStreamHandler(timing, l.now),
 		})
 		sampling.CloseAt(l.now())
 		if err != nil {

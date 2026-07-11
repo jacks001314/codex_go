@@ -27,11 +27,11 @@ func TestModelTerminalSnapshots(t *testing.T) {
 
 		assertTerminalSnapshot(t, model.View(), `
 Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sand...
-• summarize the repo
+
+› summarize the repo
+
 
 • The repo has a Go TUI shell.
-
-
 
 
 

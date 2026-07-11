@@ -248,18 +248,7 @@ func (c *stdioClient) Call(method string, params any, out any) error {
 }
 
 func (c *stdioClient) CallWithOptions(options *stdioCallOptions, method string, params any, out any) error {
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		err := c.callWithOptionsOnce(options, method, params, out)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !stdioCallRetryable(err) {
-			return err
-		}
-	}
-	return lastErr
+	return c.callWithOptionsOnce(options, method, params, out)
 }
 
 func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method string, params any, out any) error {
@@ -328,13 +317,6 @@ func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, 
 		c.failTransport(ctx.Err())
 		return nil, ctx.Err()
 	}
-}
-
-func stdioCallRetryable(err error) bool {
-	if err == nil || isMCPRemoteError(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return false
-	}
-	return true
 }
 
 func isMCPRemoteError(err error) bool {

@@ -3,6 +3,7 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/internal/sandbox"
@@ -18,9 +19,16 @@ func TestShellDeriveExecArgs(t *testing.T) {
 	}
 
 	powershell := &Shell{Type: ShellPowerShell, Path: "pwsh"}
-	got := powershell.DeriveExecArgs("Write-Output hi", false)
-	if len(got) == 0 || got[len(got)-2] != "-Command" {
-		t.Fatalf("powershell args = %#v", got)
+	if got := powershell.DeriveExecArgs("Write-Output hi", false); !stringSlicesEqual(got, []string{"pwsh", "-NoProfile", "-Command", "Write-Output hi"}) {
+		t.Fatalf("powershell non-login args = %#v", got)
+	}
+	if got := powershell.DeriveExecArgs("Write-Output hi", true); !stringSlicesEqual(got, []string{"pwsh", "-Command", "Write-Output hi"}) {
+		t.Fatalf("powershell login args = %#v", got)
+	}
+
+	cmd := &Shell{Type: ShellCmd, Path: "cmd"}
+	if got := cmd.DeriveExecArgs("echo hi", false); !stringSlicesEqual(got, []string{"cmd", "/c", "echo hi"}) {
+		t.Fatalf("cmd args = %#v", got)
 	}
 }
 
@@ -48,6 +56,83 @@ func TestResolveCommandUsesRequestedShell(t *testing.T) {
 	}
 	if resolved.Command[0] != "/bin/zsh" {
 		t.Fatalf("Command = %#v", resolved.Command)
+	}
+}
+
+func TestResolveCommandMatchesRustUnifiedExecExplicitShells(t *testing.T) {
+	cases := []struct {
+		name      string
+		shell     string
+		wantType  ShellType
+		wantArgv  []string
+		allowBool bool
+	}{
+		{
+			name:      "bash",
+			shell:     "/bin/bash",
+			wantType:  ShellBash,
+			wantArgv:  []string{"/bin/bash", "-lc", "echo hello"},
+			allowBool: true,
+		},
+		{
+			name:      "powershell",
+			shell:     "powershell",
+			wantType:  ShellPowerShell,
+			wantArgv:  []string{"powershell", "-Command", "echo hello"},
+			allowBool: true,
+		},
+		{
+			name:      "cmd",
+			shell:     "cmd",
+			wantType:  ShellCmd,
+			wantArgv:  []string{"cmd", "/c", "echo hello"},
+			allowBool: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := ResolveCommand(&ExecCommandArgs{
+				Cmd:   "echo hello",
+				Shell: tc.shell,
+			}, &Shell{Type: ShellBash, Path: "/bin/bash"}, tc.allowBool)
+			if err != nil {
+				t.Fatalf("ResolveCommand returned error: %v", err)
+			}
+			if resolved.ShellType != tc.wantType || !stringSlicesEqual(resolved.Command, tc.wantArgv) {
+				t.Fatalf("resolved = %#v", resolved)
+			}
+		})
+	}
+}
+
+func TestResolveCommandRejectsExplicitShellInZshForkModeLikeRust(t *testing.T) {
+	_, err := ResolveCommandWithOptions(&ExecCommandArgs{
+		Cmd:   "echo hello",
+		Shell: "/bin/bash",
+	}, &Shell{Type: ShellBash, Path: "/bin/bash"}, CommandResolutionOptions{
+		AllowLoginShell: true,
+		ShellMode:       UnifiedExecShellModeZshFork,
+		ZshForkShell:    &Shell{Type: ShellZsh, Path: "/opt/codex/zsh"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "`shell` is not supported for local zsh-fork exec") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResolveCommandUsesZshForkShellWhenConfiguredLikeRust(t *testing.T) {
+	resolved, err := ResolveCommandWithOptions(&ExecCommandArgs{
+		Cmd: "echo hello",
+	}, &Shell{Type: ShellBash, Path: "/bin/bash"}, CommandResolutionOptions{
+		AllowLoginShell: true,
+		ShellMode:       UnifiedExecShellModeZshFork,
+		ZshForkShell:    &Shell{Type: ShellZsh, Path: "/opt/codex/zsh"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveCommandWithOptions returned error: %v", err)
+	}
+	want := []string{"/opt/codex/zsh", "-lc", "echo hello"}
+	if resolved.ShellType != ShellZsh || !stringSlicesEqual(resolved.Command, want) {
+		t.Fatalf("resolved = %#v, want %v", resolved, want)
 	}
 }
 
@@ -244,6 +329,36 @@ func TestBuildShellRequestRequireEscalatedPreapprovalUsesFullAccessProfile(t *te
 	}
 }
 
+func TestBuildShellRequestPreservesDeniedReadsForEscalationLikeRust(t *testing.T) {
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "**/*.env"},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	req, err := BuildShellRequest(&ExecCommandArgs{
+		Cmd:                "cat .env",
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}, &Shell{Type: ShellBash, Path: "/bin/bash"}, ShellValidationOptions{
+		ApprovalPolicy:         sandbox.ApprovalOnRequest,
+		CWD:                    t.TempDir(),
+		PermissionProfileID:    sandbox.BuiltInPermissionProfileWorkspace,
+		PermissionProfile:      &profile,
+		PermissionsPreapproved: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest returned error: %v", err)
+	}
+	if req.SandboxPermissions != sandbox.SandboxPermissionsUseDefault {
+		t.Fatalf("SandboxPermissions = %q, want use_default to preserve deny-read", req.SandboxPermissions)
+	}
+	if req.PermissionProfile == nil || !req.PermissionProfile.HasDenyReadEntries() {
+		t.Fatalf("PermissionProfile lost deny-read entries: %#v", req.PermissionProfile)
+	}
+	if req.PermissionProfileID == sandbox.BuiltInPermissionProfileDangerFullAccess || req.PermissionProfile.Disabled {
+		t.Fatalf("PermissionProfile = %#v id %q, should not escalate to full access", req.PermissionProfile, req.PermissionProfileID)
+	}
+}
+
 func TestBuildShellRequestMergesAdditionalPermissionsIntoProfile(t *testing.T) {
 	network := true
 	extra := filepath.Join(t.TempDir(), "cache")
@@ -293,4 +408,16 @@ func cleanAbsForTest(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(abs)
+}
+
+func stringSlicesEqual(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

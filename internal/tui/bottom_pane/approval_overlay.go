@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codex_go/internal/sandbox"
+	"codex_go/internal/shell"
 	"codex_go/internal/tui"
 )
 
@@ -116,6 +117,7 @@ const (
 	ApprovalEventFileChangeDecision     ApprovalEventKind = "file_change_decision"
 	ApprovalEventMcpElicitationDecision ApprovalEventKind = "mcp_elicitation_decision"
 	ApprovalEventSelectThread           ApprovalEventKind = "select_thread"
+	ApprovalEventFullScreenRequest      ApprovalEventKind = "fullscreen_approval_request"
 )
 
 type ApprovalEvent struct {
@@ -129,6 +131,7 @@ type ApprovalEvent struct {
 	Permissions     ApprovalPermissionsDecision
 	FileChange      ApprovalFileChangeDecision
 	McpElicitation  ApprovalMcpElicitationDecision
+	Request         *ApprovalRequest
 }
 
 type ApprovalOverlay struct {
@@ -170,6 +173,17 @@ func (o *ApprovalOverlay) HandleKey(key string) {
 	}
 	key = normalizeApprovalKey(key)
 	switch key {
+	case "ctrl-a", "ctrl-shift-a":
+		if o.CurrentRequest != nil {
+			o.events = append(o.events, ApprovalEvent{
+				Kind:     ApprovalEventFullScreenRequest,
+				ThreadID: o.CurrentRequest.ThreadID,
+				ID:       o.CurrentRequest.ID,
+				CallID:   o.CurrentRequest.CallID,
+				Request:  cloneApprovalRequest(*o.CurrentRequest),
+			})
+		}
+		return
 	case "up", "k", "left", "ctrl-h", "backtab":
 		if o.Selected > 0 {
 			o.Selected--
@@ -281,20 +295,28 @@ func (o *ApprovalOverlay) Rows(width int) []string {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, "", "Press enter to confirm or esc to cancel")
+	rows = append(rows, "", ApprovalFooterHint(*o.CurrentRequest))
 	return rows
 }
 
 func (o *ApprovalOverlay) DismissResolvedRequest(kind ApprovalRequestKind, id string, serverName string, requestID string) bool {
-	if o == nil || o.CurrentRequest == nil {
+	if o == nil {
 		return false
 	}
-	if !ApprovalRequestMatchesResolved(*o.CurrentRequest, kind, id, serverName, requestID) {
-		return false
+	queueLen := len(o.Queue)
+	filtered := o.Queue[:0]
+	for _, queued := range o.Queue {
+		if !ApprovalRequestMatchesResolved(queued, kind, id, serverName, requestID) {
+			filtered = append(filtered, queued)
+		}
 	}
-	o.currentComplete = true
-	o.advanceQueue()
-	return true
+	o.Queue = filtered
+	if o.CurrentRequest != nil && ApprovalRequestMatchesResolved(*o.CurrentRequest, kind, id, serverName, requestID) {
+		o.currentComplete = true
+		o.advanceQueue()
+		return true
+	}
+	return len(o.Queue) != queueLen
 }
 
 func (o *ApprovalOverlay) setCurrent(request ApprovalRequest) {
@@ -318,8 +340,9 @@ func (o *ApprovalOverlay) advanceQueue() {
 		o.done = true
 		return
 	}
-	next := o.Queue[0]
-	o.Queue = o.Queue[1:]
+	last := len(o.Queue) - 1
+	next := o.Queue[last]
+	o.Queue = o.Queue[:last]
 	o.setCurrent(next)
 }
 
@@ -413,6 +436,14 @@ func ApprovalTitleForRequest(request ApprovalRequest) string {
 	}
 }
 
+func ApprovalFooterHint(request ApprovalRequest) string {
+	hint := "Press enter to confirm or esc to cancel"
+	if request.ThreadLabel != "" {
+		hint += " or o to open thread"
+	}
+	return hint
+}
+
 func ExecApprovalOptions(available []ApprovalCommandDecision, network *ApprovalNetworkContext, additional *sandbox.RequestPermissionProfile) []ApprovalOption {
 	options := []ApprovalOption{}
 	for _, decision := range available {
@@ -425,7 +456,7 @@ func ExecApprovalOptions(available []ApprovalCommandDecision, network *ApprovalN
 			options = append(options, ApprovalOption{ID: "accept", Label: label, Shortcut: "y", Decision: ApprovalDecision{Kind: ApprovalRequestExec, Command: decision}})
 		case ApprovalCommandAcceptWithExecpolicyAmendment:
 			prefix := StripBashLCAndEscape(decision.ExecpolicyCommand)
-			if prefix == "" || strings.ContainsAny(prefix, "\r\n") || network != nil || additional != nil {
+			if strings.ContainsAny(prefix, "\r\n") {
 				continue
 			}
 			label := "Yes, and don't ask again for commands that start with `" + prefix + "`"
@@ -493,9 +524,9 @@ func BuildApprovalHeaderRows(request ApprovalRequest, width int) []string {
 			rows = append(rows, "Reason: "+request.Reason, "")
 		}
 	}
-	appendCommon()
 	switch request.Kind {
 	case ApprovalRequestExec:
+		appendCommon()
 		if rule := FormatApprovalPermissionsRule(request.AdditionalPermissions); rule != "" {
 			rows = append(rows, "Permission rule: "+rule, "")
 		}
@@ -506,16 +537,24 @@ func BuildApprovalHeaderRows(request ApprovalRequest, width int) []string {
 			}
 		}
 	case ApprovalRequestPermissions:
+		appendCommon()
 		if rule := FormatApprovalPermissionsRule(request.Permissions); rule != "" {
 			rows = append(rows, "Permission rule: "+rule)
 		}
 	case ApprovalRequestApplyPatch:
-		for _, change := range request.Changes {
-			if strings.TrimSpace(change) != "" {
-				rows = append(rows, change)
+		if request.ThreadLabel != "" {
+			rows = append(rows, "Thread: "+request.ThreadLabel)
+		}
+		if request.Reason != "" {
+			if len(rows) > 0 {
+				rows = append(rows, "")
 			}
+			rows = appendWrappedApprovalRows(rows, "Reason: "+request.Reason, width)
 		}
 	case ApprovalRequestMcpElicitation:
+		if request.ThreadLabel != "" {
+			rows = append(rows, "Thread: "+request.ThreadLabel, "")
+		}
 		rows = append(rows, "Server: "+request.ServerName, "")
 		if request.Message != "" {
 			rows = appendWrappedApprovalRows(rows, request.Message, width)
@@ -550,16 +589,7 @@ func FormatApprovalPermissionsRule(permissions *sandbox.RequestPermissionProfile
 }
 
 func StripBashLCAndEscape(command []string) string {
-	if len(command) == 0 {
-		return ""
-	}
-	if len(command) == 3 && command[0] == "bash" && command[1] == "-lc" {
-		return command[2]
-	}
-	if len(command) == 2 && command[0] == "sh" && command[1] != "" {
-		return command[1]
-	}
-	return strings.Join(command, " ")
+	return shell.StripShellCommandAndEscape(command)
 }
 
 func approvalFileSystemEntryPaths(paths []string, entries []sandbox.FileSystemSandboxEntry, access sandbox.FileSystemAccessMode) string {

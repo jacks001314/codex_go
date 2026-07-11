@@ -54,6 +54,9 @@ func TestRenderHelpersWrapBottomAlignFooterAndTruncateMatchRustCore(t *testing.T
 	if got := RenderQuestionWrapped("Pick the deployment strategy for the next rollout", 18); !reflect.DeepEqual(got, []string{"Pick the", "deployment", "strategy for the", "next rollout"}) {
 		t.Fatalf("wrapped question = %#v", got)
 	}
+	if got := WrapText("部署计划 下一步", 4); !reflect.DeepEqual(got, []string{"部署", "计划", "下一", "步"}) {
+		t.Fatalf("wide text wrap = %#v", got)
+	}
 	if got := RenderRowsBottomAligned([]string{"one", "two"}, 4, "empty"); !reflect.DeepEqual(got, []string{"", "", "one", "two"}) {
 		t.Fatalf("bottom aligned rows = %#v", got)
 	}
@@ -62,6 +65,17 @@ func TestRenderHelpersWrapBottomAlignFooterAndTruncateMatchRustCore(t *testing.T
 	}
 	if got := WrapFooterTips(24, []FooterTip{{Text: "enter submit", Highlight: true}, {Text: "esc close"}, {Text: "tab notes"}}); !reflect.DeepEqual(got, []string{"[enter submit]", "esc close | tab notes"}) {
 		t.Fatalf("footer tips = %#v", got)
+	}
+	if got := WrapFooterTips(6, []FooterTip{{Text: "averylongtip"}, {Text: "ok"}}); !reflect.DeepEqual(got, []string{"averylongtip", "ok"}) {
+		t.Fatalf("long footer tip should not split = %#v", got)
+	}
+	optionTips := FooterTipsWithOptionProgress([]FooterTip{{Text: "enter submit", Highlight: true}}, true, 1, 5)
+	if got := WrapFooterTips(32, optionTips); !reflect.DeepEqual(got, []string{"option 2/5 | [enter submit]"}) {
+		t.Fatalf("option progress footer tips = %#v", got)
+	}
+	clampedTips := FooterTipsWithOptionProgress(nil, true, 99, 2)
+	if got := WrapFooterTips(32, clampedTips); !reflect.DeepEqual(got, []string{"option 2/2"}) {
+		t.Fatalf("clamped option progress footer tips = %#v", got)
 	}
 	if got := truncateLineWordBoundaryWithEllipsis("alpha beta gamma", 12); got != "alpha beta\u2026" {
 		t.Fatalf("truncated = %q", got)
@@ -86,11 +100,14 @@ func TestRenderUIPlacesSectionsAndFooter(t *testing.T) {
 		FooterPreferredHeight:  1,
 	})
 	lines := RenderUI(RenderInput{
-		Sections:   sections,
-		Progress:   "Question 1/1",
-		OptionRows: []string{"1. Plan", "2. Ship"},
-		Notes:      "Add notes",
-		FooterTips: []FooterTip{{Text: "enter submit", Highlight: true}, {Text: "esc close"}},
+		Sections:            sections,
+		Progress:            "Question 1/1",
+		OptionRows:          []string{"1. Plan", "2. Ship"},
+		Notes:               "Add notes",
+		FooterTips:          []FooterTip{{Text: "enter submit", Highlight: true}, {Text: "esc close"}},
+		OptionsHidden:       true,
+		SelectedOptionIndex: 1,
+		OptionsLen:          2,
 	}, 32)
 	if len(lines) == 0 || lines[0] != "Question 1/1" {
 		t.Fatalf("render lines = %#v", lines)
@@ -105,7 +122,7 @@ func TestRenderUIPlacesSectionsAndFooter(t *testing.T) {
 		if line == "Add notes" {
 			foundNotes = true
 		}
-		if line == "[enter submit] | esc close" {
+		if line == "option 2/2 | [enter submit]" || line == "[enter submit] | esc close" {
 			foundFooter = true
 		}
 	}

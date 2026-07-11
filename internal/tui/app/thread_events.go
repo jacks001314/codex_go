@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"strings"
 
 	"codex_go/internal/appserver"
 )
@@ -80,7 +79,7 @@ func (c *ThreadEventChannel) Attachment() ThreadEventAttachment {
 }
 
 func (s *ThreadEventStore) FileChangeChanges(turnID string, itemID string) ([]appserver.FileUpdateChange, bool) {
-	if s == nil || strings.TrimSpace(itemID) == "" {
+	if s == nil {
 		return nil, false
 	}
 	for i := len(s.Buffer) - 1; i >= 0; i-- {
@@ -115,12 +114,11 @@ func (s *ThreadEventStore) FileChangeChanges(turnID string, itemID string) ([]ap
 }
 
 func turnIDMatches(requestTurnID string, candidateTurnID string) bool {
-	requestTurnID = strings.TrimSpace(requestTurnID)
-	return requestTurnID == "" || requestTurnID == strings.TrimSpace(candidateTurnID)
+	return requestTurnID == "" || requestTurnID == candidateTurnID
 }
 
 func fileChangeItemChanges(item *appserver.ThreadItem, itemID string) ([]appserver.FileUpdateChange, bool) {
-	if item == nil || strings.TrimSpace(item.ID) != strings.TrimSpace(itemID) {
+	if item == nil || item.ID != itemID {
 		return nil, false
 	}
 	changes := FileUpdateChangesFromAny(firstFileChangeDataValue(item.Data, "changes", "fileChanges", "file_changes"))
@@ -217,10 +215,11 @@ func fileUpdateChangeKindFromAny(value any) appserver.PatchChangeKind {
 		}
 		return *typed
 	case string:
-		return appserver.PatchChangeKind{Type: strings.TrimSpace(typed)}
+		return appserver.PatchChangeKind{Type: typed}
 	case map[string]any:
 		kind := appserver.PatchChangeKind{Type: fileChangeStringFromAny(firstMapValue(typed, "type"))}
-		if movePath := fileChangeStringFromAny(firstMapValue(typed, "move_path", "movePath")); strings.TrimSpace(movePath) != "" {
+		if value, ok := firstMapValueOK(typed, "move_path", "movePath"); ok && value != nil {
+			movePath := fileChangeStringFromAny(value)
 			kind.MovePath = &movePath
 		}
 		return kind
@@ -240,7 +239,7 @@ func threadItemLooksLikeFileChange(item *appserver.ThreadItem) bool {
 	if item == nil {
 		return false
 	}
-	itemType := strings.TrimSpace(item.Type)
+	itemType := item.Type
 	if itemType == "fileChange" || itemType == "file_change" {
 		return true
 	}
@@ -250,7 +249,7 @@ func threadItemLooksLikeFileChange(item *appserver.ThreadItem) bool {
 	if marker, ok := item.Data["file_change"].(bool); ok && marker {
 		return true
 	}
-	return strings.TrimSpace(item.Name) == "apply_patch" && itemType == "custom_tool_call"
+	return item.Name == "apply_patch" && itemType == "custom_tool_call"
 }
 
 func firstFileChangeDataValue(data map[string]any, keys ...string) any {
@@ -261,24 +260,29 @@ func firstFileChangeDataValue(data map[string]any, keys ...string) any {
 }
 
 func firstMapValue(values map[string]any, keys ...string) any {
+	value, _ := firstMapValueOK(values, keys...)
+	return value
+}
+
+func firstMapValueOK(values map[string]any, keys ...string) (any, bool) {
 	for _, key := range keys {
 		if value, ok := values[key]; ok {
-			return value
+			return value, true
 		}
 	}
-	return nil
+	return nil, false
 }
 
 func fileChangeStringFromAny(value any) string {
 	switch typed := value.(type) {
 	case string:
-		return strings.TrimSpace(typed)
+		return typed
 	case []byte:
-		return strings.TrimSpace(string(typed))
+		return string(typed)
 	case json.RawMessage:
 		var decoded string
 		if err := json.Unmarshal(typed, &decoded); err == nil {
-			return strings.TrimSpace(decoded)
+			return decoded
 		}
 	}
 	return ""

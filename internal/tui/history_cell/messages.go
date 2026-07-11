@@ -4,9 +4,17 @@ import (
 	"strings"
 
 	"codex_go/internal/tui"
+	"codex_go/internal/utils"
 )
 
 // Rust parity: codex-rs/tui/src/history_cell/messages.rs.
+
+const (
+	ansiUserMessageBackground = "\x1b[48;5;235m"
+	ansiUserMessagePrefix     = "\x1b[1;2m"
+	ansiUserMessagePrefixEnd  = "\x1b[22m"
+	ansiUserMessageReset      = "\x1b[0m"
+)
 
 type TextElement struct {
 	Start int
@@ -55,22 +63,31 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 	if len(wrappedRemoteImages) == 0 && len(wrappedMessage) == 0 {
 		return nil
 	}
-	lines := []string{""}
+	lines := []string{styleUserMessageLine("", width)}
 	for _, line := range wrappedRemoteImages {
-		lines = append(lines, "  "+line)
+		lines = append(lines, styleUserMessageLine("  "+line, width))
 	}
 	if len(wrappedRemoteImages) > 0 && len(wrappedMessage) > 0 {
-		lines = append(lines, "")
+		lines = append(lines, styleUserMessageLine("", width))
 	}
 	for index, line := range wrappedMessage {
 		prefix := "  "
 		if index == 0 {
-			prefix = "\u2022 "
+			prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
 		}
-		lines = append(lines, prefix+line)
+		lines = append(lines, styleUserMessageLine(prefix+line, width))
 	}
-	lines = append(lines, "")
+	lines = append(lines, styleUserMessageLine("", width))
 	return lines
+}
+
+func styleUserMessageLine(content string, width int) string {
+	width = max(width, 1)
+	padding := width - tui.DisplayWidth(utils.StripANSI(content))
+	if padding < 0 {
+		padding = 0
+	}
+	return ansiUserMessageBackground + content + strings.Repeat(" ", padding) + ansiUserMessageReset
 }
 
 func (c UserHistoryCell) RawLines() []string {

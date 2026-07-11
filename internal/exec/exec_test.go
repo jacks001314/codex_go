@@ -21,6 +21,7 @@ import (
 	"codex_go/internal/mcp"
 	"codex_go/internal/model"
 	"codex_go/internal/protocol"
+	"codex_go/internal/review"
 	"codex_go/internal/rollout"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
@@ -83,6 +84,79 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	}
 	if record.Metadata.Source != "cli" || record.Metadata.ThreadSource != string(model.AgentTaskRegular) {
 		t.Fatalf("session metadata = %#v", record.Metadata)
+	}
+}
+
+func TestRunJSONRustPromptStdinGolden(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "fixture hello"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt: "Summarize this concisely",
+			JSON:   true,
+		},
+	}, strings.NewReader("my output\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	wantPrompt := "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
+	if result.Prompt != wantPrompt || agent.request == nil || agent.request.Prompt != wantPrompt {
+		t.Fatalf("prompt result=%q agent=%#v want %q", result.Prompt, agent.request, wantPrompt)
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	if got := execEventTypes(events); strings.Join(got, ",") != "thread.started,turn.started,item.completed,turn.completed" {
+		t.Fatalf("event types = %#v stdout=%q", got, stdout.String())
+	}
+	if events[2].Item == nil || events[2].Item.Type != "agent_message" || events[2].Item.Text != "fixture hello" {
+		t.Fatalf("agent message event = %#v", events[2])
+	}
+	if events[3].Usage == nil || events[3].Usage.InputTokens != 2 || events[3].Usage.OutputTokens != 3 {
+		t.Fatalf("turn completed usage = %#v", events[3].Usage)
+	}
+}
+
+func TestRunJSONRustToolCallGolden(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool says hi"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &toolLoopRecordingAgent{}
+	runner.ToolRouter = tool.NewRouter(registry)
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt: "use echo",
+			JSON:   true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	want := []string{"thread.started", "turn.started", "item.started", "item.completed", "item.completed", "item.completed", "turn.completed"}
+	if got := execEventTypes(events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event types = %#v, want %#v stdout=%q", got, want, stdout.String())
+	}
+	if events[2].Item == nil || events[2].Item.Type != "tool_call" || events[2].Item.CallID != "call-1" {
+		t.Fatalf("tool call started = %#v", events[2])
+	}
+	if events[4].Item == nil || events[4].Item.Type != "tool_output" || events[4].Item.Output != "tool says hi" {
+		t.Fatalf("tool output completed = %#v", events[4])
 	}
 }
 
@@ -252,8 +326,82 @@ func TestRunHumanPrintsTokenUsageToStderr(t *testing.T) {
 	if result.LastMessage != "done" || stdout.String() != "done\n" {
 		t.Fatalf("stdout = %q, result = %#v", stdout.String(), result)
 	}
-	if got := stderr.String(); got != "approval: never\ntokens used\n1,100\n" {
-		t.Fatalf("stderr = %q", got)
+	for _, want := range []string{
+		"OpenAI Codex v",
+		"workdir:",
+		"approval: never",
+		"sandbox: read-only",
+		"session id:",
+		"user\nhello",
+		"tokens used\n1,100\n",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q: %q", want, stderr.String())
+		}
+	}
+}
+
+func TestRunHumanRecoversFinalMessageFromAgentItemsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	lastMessage := filepath.Join(t.TempDir(), "last.txt")
+	runner := NewRunner(home)
+	runner.Agent = &staticResponseAgent{response: &model.AgentResponse{
+		Items: []model.AgentItem{{
+			ID:   "msg-1",
+			Type: "agent_message",
+			Text: "item final",
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}}
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "hello", LastMessageFile: lastMessage},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.LastMessage != "item final" || stdout.String() != "item final\n" {
+		t.Fatalf("result=%#v stdout=%q", result, stdout.String())
+	}
+	data, err := os.ReadFile(lastMessage)
+	if err != nil {
+		t.Fatalf("ReadFile last message returned error: %v", err)
+	}
+	if string(data) != "item final" {
+		t.Fatalf("last message file = %q", string(data))
+	}
+}
+
+func TestRunHumanMissingFinalMessageWritesEmptyLastMessageLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	lastMessage := filepath.Join(t.TempDir(), "last.txt")
+	runner := NewRunner(home)
+	runner.Agent = &staticResponseAgent{response: &model.AgentResponse{}}
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "hello", LastMessageFile: lastMessage},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.LastMessage != "" || stdout.String() != "" {
+		t.Fatalf("result=%#v stdout=%q", result, stdout.String())
+	}
+	data, err := os.ReadFile(lastMessage)
+	if err != nil {
+		t.Fatalf("ReadFile last message returned error: %v", err)
+	}
+	if string(data) != "" {
+		t.Fatalf("last message file = %q, want empty", string(data))
+	}
+	if !strings.Contains(stderr.String(), "Warning: no last agent message; wrote empty content to "+lastMessage) {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -574,6 +722,54 @@ func TestRunResponsesRequestIncludesHostedImageGenerationLikeRust(t *testing.T) 
 	}
 }
 
+func TestRunResponsesReviewRequestDisablesImageGenerationToolsLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("access-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-review-tools"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-review-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-review-tools","delta":"ready"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-review-tools","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-review-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\nimagegenext = true\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Review:     cli.ReviewOptions{Prompt: "check image tools"},
+			JSON:       true,
+			Ephemeral:  true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, body = %#v", recordedBody["tools"], recordedBody)
+	}
+	if responseToolsContainTypeForExecTest(tools, "image_generation") ||
+		responseToolsContainNamespaceFunctionForExecTest(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("review request should disable image generation tools like Rust: %#v", tools)
+	}
+}
+
 func TestRunResponsesRequestIncludesHostedImageGenerationForOpenAIAPIKeyProvider(t *testing.T) {
 	t.Setenv(auth.OpenAIAPIKeyEnv, "")
 	t.Setenv(auth.CodexAPIKeyEnv, "")
@@ -681,8 +877,15 @@ func TestRunHumanPrintsFinalMessageToStderrWhenBothStreamsAreTTY(t *testing.T) {
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if got := stderr.String(); got != "approval: never\ntokens used\n15\ncodex\ndone\n" {
-		t.Fatalf("stderr = %q", got)
+	for _, want := range []string{
+		"OpenAI Codex v",
+		"approval: never",
+		"tokens used\n15\n",
+		"codex\ndone\n",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q: %q", want, stderr.String())
+		}
 	}
 }
 
@@ -731,7 +934,7 @@ func TestRunRejectsInvalidOutputSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run returned nil error, want failure")
 	}
-	if !strings.Contains(err.Error(), "not valid JSON") {
+	if !strings.Contains(err.Error(), "Output schema file "+schema+" is not valid JSON") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -764,6 +967,91 @@ func TestRunPassesOutputSchemaToAgent(t *testing.T) {
 	schemaBody, ok := agent.request.OutputSchema.(map[string]any)
 	if !ok || schemaBody["type"] != "object" || schemaBody["additionalProperties"] != false {
 		t.Fatalf("OutputSchema = %#v", agent.request.OutputSchema)
+	}
+}
+
+func TestRunResponsesRequestIncludesOutputSchemaLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	schema := filepath.Join(t.TempDir(), "schema.json")
+	schemaJSON := `{
+  "type": "object",
+  "properties": {
+    "answer": { "type": "string" }
+  },
+  "required": ["answer"],
+  "additionalProperties": false
+}`
+	if err := os.WriteFile(schema, []byte(schemaJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile schema returned error: %v", err)
+	}
+
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("request path = %q, want /v1/responses", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-output-schema"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-output-schema","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-output-schema","delta":"fixture hello"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-output-schema","type":"message","role":"assistant","content":[{"type":"output_text","text":"fixture hello"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-output-schema","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.1\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := NewRunner(home).Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt:       "tell me a joke",
+			OutputSchema: schema,
+			JSON:         true,
+			Ephemeral:    true,
+			Shared:       cli.SharedOptions{CWD: t.TempDir()},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+
+	text, ok := recordedBody["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing text field: %#v", recordedBody)
+	}
+	format, ok := text["format"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing text.format field: %#v", text)
+	}
+	if format["name"] != "codex_output_schema" || format["type"] != "json_schema" || format["strict"] != true {
+		t.Fatalf("text.format metadata = %#v", format)
+	}
+	schemaBody, ok := format["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("text.format.schema = %#v", format["schema"])
+	}
+	properties, ok := schemaBody["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema.properties = %#v", schemaBody["properties"])
+	}
+	answer, ok := properties["answer"].(map[string]any)
+	if !ok || answer["type"] != "string" {
+		t.Fatalf("schema.properties.answer = %#v", properties["answer"])
+	}
+	required, ok := schemaBody["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "answer" {
+		t.Fatalf("schema.required = %#v", schemaBody["required"])
+	}
+	if schemaBody["type"] != "object" || schemaBody["additionalProperties"] != false {
+		t.Fatalf("schema body = %#v", schemaBody)
 	}
 }
 
@@ -848,15 +1136,167 @@ func TestRunExecReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !strings.Contains(result.Prompt, "custom instructions: check concurrency") {
+	if result.Prompt != "check concurrency" {
 		t.Fatalf("Prompt = %q", result.Prompt)
 	}
-	if !strings.Contains(stdout.String(), "Review with custom instructions: check concurrency") {
+	if !strings.Contains(stdout.String(), "check concurrency") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	record := loadSessionRecord(t, home, result.ThreadID)
 	if record.Metadata.ThreadSource != string(model.AgentTaskReview) {
 		t.Fatalf("ThreadSource = %q, want review", record.Metadata.ThreadSource)
+	}
+}
+
+func TestRunExecReviewUsesReviewModelFromConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-session\"\nreview_model = \"gpt-review\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Shared:     cli.SharedOptions{Model: "gpt-cli"},
+			Review:     cli.ReviewOptions{Prompt: "check concurrency"},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if agent.request == nil || agent.request.Model != "gpt-review" {
+		t.Fatalf("agent model = %#v, want review_model", agent.request)
+	}
+}
+
+func TestRunExecReviewFallsBackToSessionModelWhenReviewModelUnsetLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-session\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Review:     cli.ReviewOptions{Prompt: "check concurrency"},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if agent.request == nil || agent.request.Model != "gpt-session" {
+		t.Fatalf("agent model = %#v, want session model", agent.request)
+	}
+}
+
+func TestRunExecReviewUsesRustReviewRubricInstructions(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	instructionsFile := filepath.Join(t.TempDir(), "instructions.md")
+	if err := os.WriteFile(instructionsFile, []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile instructions returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_instructions_file = \""+strings.ReplaceAll(instructionsFile, "\\", "\\\\")+"\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Review:     cli.ReviewOptions{Prompt: "check concurrency"},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if agent.request == nil || agent.request.Instructions != review.ReviewPrompt {
+		t.Fatalf("instructions = %q, want Rust review rubric", agent.request.Instructions)
+	}
+	if strings.Contains(agent.request.Instructions, "project instructions") {
+		t.Fatalf("review instructions should not use project instructions: %q", agent.request.Instructions)
+	}
+}
+
+func TestRunExecReviewAddsReviewSubagentMetadataLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Review:     cli.ReviewOptions{Prompt: "check concurrency"},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if agent.request == nil || agent.request.ClientMetadata["x-openai-subagent"] != "review" {
+		t.Fatalf("client metadata = %#v", agent.request)
+	}
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(agent.request.ClientMetadata["x-codex-turn-metadata"]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v metadata=%#v", err, agent.request.ClientMetadata)
+	}
+	if turnMetadata["subagent_kind"] != "review" {
+		t.Fatalf("turn metadata = %#v", turnMetadata)
+	}
+}
+
+func TestRunExecReviewRendersStructuredOutputLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	message := `{"findings":[{"title":"Bug","body":"details","confidence_score":0.7,"priority":1,"code_location":{"absolute_file_path":"/repo/a.go","line_range":{"start":10,"end":12}}}],"overall_correctness":"patch is incorrect","overall_explanation":"summary","overall_confidence_score":0.8}`
+	agent := &recordingAgent{message: message}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	lastMessagePath := filepath.Join(t.TempDir(), "last.txt")
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Subcommand:      "review",
+			LastMessageFile: lastMessagePath,
+			Review:          cli.ReviewOptions{Prompt: "check concurrency"},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "overall_correctness") || !strings.Contains(stdout.String(), "summary") || !strings.Contains(stdout.String(), "Review comment:") || !strings.Contains(stdout.String(), "Bug") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if result.LastMessage != strings.TrimSpace(stdout.String()) {
+		t.Fatalf("LastMessage = %q stdout = %q", result.LastMessage, stdout.String())
+	}
+	data, err := os.ReadFile(lastMessagePath)
+	if err != nil {
+		t.Fatalf("ReadFile last message returned error: %v", err)
+	}
+	if string(data) != result.LastMessage {
+		t.Fatalf("last message file = %q, want %q", string(data), result.LastMessage)
 	}
 }
 
@@ -875,6 +1315,10 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		RecencyAt: now,
+		Metadata: session.Metadata{
+			LastResponseID:     "resp-last",
+			PreviousResponseID: "resp-previous",
+		},
 		Items: []session.Item{
 			{ID: "old-user", Type: "message", Role: "user", Text: "old user", CreatedAt: now},
 			{ID: "old-assistant", Type: "agent_message", Role: "assistant", Text: "old answer", CreatedAt: now},
@@ -908,6 +1352,9 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 	if !agentRequestInputItemsHaveText(agent.request, "old user") || !agentRequestInputItemsHaveText(agent.request, "old answer") {
 		t.Fatalf("agent input items = %#v", agent.request.InputItems)
 	}
+	if agent.request.PreviousResponseID != "resp-last" {
+		t.Fatalf("PreviousResponseID = %q, want latest response id", agent.request.PreviousResponseID)
+	}
 	record := loadSessionRecord(t, home, "thread-existing")
 	if len(record.Items) != 4 {
 		t.Fatalf("items = %#v", record.Items)
@@ -938,10 +1385,10 @@ func TestRunExecResumeLastSelectsNewestSession(t *testing.T) {
 	}
 	now := fixedExecTime()
 	store := session.NewStore(filepath.Join(home, "sessions"))
-	if err := store.Save(&session.Record{ID: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
+	if err := store.Save(&session.Record{ID: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: "."}}); err != nil {
 		t.Fatalf("Save old returned error: %v", err)
 	}
-	if err := store.Save(&session.Record{ID: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute)}); err != nil {
+	if err := store.Save(&session.Record{ID: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute), Metadata: session.Metadata{CWD: "."}}); err != nil {
 		t.Fatalf("Save new returned error: %v", err)
 	}
 	runner := NewRunner(home)
@@ -964,14 +1411,79 @@ func TestRunExecResumeLastSelectsNewestSession(t *testing.T) {
 	}
 }
 
-func TestRunExecResumeLastAllSelectsNewestArchivedSession(t *testing.T) {
+func TestRunExecResumeLastFiltersCWDUnlessAllLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	cwdA := t.TempDir()
+	cwdB := t.TempDir()
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        "cwd-a",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: cwdA},
+	}); err != nil {
+		t.Fatalf("Save cwd-a returned error: %v", err)
+	}
+	if err := store.Save(&session.Record{
+		ID:        "cwd-b-newer",
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
+		RecencyAt: now.Add(time.Minute),
+		Metadata:  session.Metadata{CWD: cwdB},
+	}); err != nil {
+		t.Fatalf("Save cwd-b returned error: %v", err)
+	}
+	selected, err := latestExecResumeRecord(store, &cli.ExecResumeOptions{Last: true}, cwdA)
+	if err != nil {
+		t.Fatalf("latest cwd-filtered returned error: %v", err)
+	}
+	if selected.ID != "cwd-a" {
+		t.Fatalf("cwd-filtered selected = %q", selected.ID)
+	}
+	selected, err = latestExecResumeRecord(store, &cli.ExecResumeOptions{Last: true, All: true}, cwdA)
+	if err != nil {
+		t.Fatalf("latest --all returned error: %v", err)
+	}
+	if selected.ID != "cwd-b-newer" {
+		t.Fatalf("--all selected = %q", selected.ID)
+	}
+
+	runner := NewRunner(home)
+	runner.Agent = &recordingAgent{message: "ok"}
+	runner.Now = func() time.Time { return now.Add(2 * time.Minute) }
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Shared:     cli.SharedOptions{CWD: cwdA},
+			Subcommand: "resume",
+			Resume: cli.ExecResumeOptions{
+				Last:   true,
+				All:    true,
+				Prompt: "continue",
+			},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run --all returned error: %v", err)
+	}
+	if result.ThreadID != "cwd-b-newer" {
+		t.Fatalf("--all ThreadID = %q", result.ThreadID)
+	}
+}
+
+func TestRunExecResumeLastAllIgnoresArchivedLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
 	now := fixedExecTime()
 	store := session.NewStore(filepath.Join(home, "sessions"))
-	if err := store.Save(&session.Record{ID: "active", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
+	if err := store.Save(&session.Record{ID: "active", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: "."}}); err != nil {
 		t.Fatalf("Save active returned error: %v", err)
 	}
 	if err := store.Save(&session.Record{
@@ -980,6 +1492,7 @@ func TestRunExecResumeLastAllSelectsNewestArchivedSession(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now.Add(time.Minute),
 		RecencyAt: now.Add(time.Minute),
+		Metadata:  session.Metadata{CWD: "."},
 	}); err != nil {
 		t.Fatalf("Save archived returned error: %v", err)
 	}
@@ -999,8 +1512,269 @@ func TestRunExecResumeLastAllSelectsNewestArchivedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if result.ThreadID != "archived-new" {
+	if result.ThreadID != "active" {
 		t.Fatalf("ThreadID = %q", result.ThreadID)
+	}
+}
+
+func TestRunExecResumeAcceptsImagesAfterSubcommandLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	imageDir := t.TempDir()
+	imageA := filepath.Join(imageDir, "resume-a.png")
+	imageB := filepath.Join(imageDir, "resume-b.png")
+	if err := os.WriteFile(imageA, []byte("fake image a"), 0o600); err != nil {
+		t.Fatalf("WriteFile imageA returned error: %v", err)
+	}
+	if err := os.WriteFile(imageB, []byte("fake image b"), 0o600); err != nil {
+		t.Fatalf("WriteFile imageB returned error: %v", err)
+	}
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        "thread-image-resume",
+		SessionID: "thread-image-resume",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Items: []session.Item{
+			{ID: "old-user", Type: "message", Role: "user", Text: "old user", CreatedAt: now},
+			{ID: "old-assistant", Type: "agent_message", Role: "assistant", Text: "old answer", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "resume answer"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	runner.Now = func() time.Time { return now.Add(time.Minute) }
+
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Shared:     cli.SharedOptions{Images: []string{imageA, imageB}},
+			Subcommand: "resume",
+			Resume: cli.ExecResumeOptions{
+				SessionID: "thread-image-resume",
+				Prompt:    "inspect these",
+			},
+		},
+	}, strings.NewReader("stdin should be ignored for resume prompt\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.ThreadID != "thread-image-resume" {
+		t.Fatalf("ThreadID = %q", result.ThreadID)
+	}
+	item := agentRequestInputItemWithText(agent.request, "inspect these")
+	if item == nil {
+		t.Fatalf("input items missing resume prompt = %#v", agent.request.InputItems)
+	}
+	content, ok := item["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("content = %#v", item["content"])
+	}
+	imageBlocks := 0
+	for i := range content {
+		if content[i]["type"] == "input_image" {
+			imageBlocks++
+			if !strings.HasPrefix(fmt.Sprint(content[i]["image_url"]), "data:") {
+				t.Fatalf("image block = %#v", content[i])
+			}
+		}
+		if strings.Contains(fmt.Sprint(content[i]["text"]), "stdin should be ignored") {
+			t.Fatalf("resume prompt should not append stdin like root exec: %#v", content)
+		}
+	}
+	if imageBlocks != 2 {
+		t.Fatalf("image block count = %d content=%#v", imageBlocks, content)
+	}
+
+	record := loadSessionRecord(t, home, "thread-image-resume")
+	if len(record.Items) != 4 {
+		t.Fatalf("items = %#v", record.Items)
+	}
+	userItem := record.Items[2]
+	if len(userItem.Content) != 3 ||
+		userItem.Content[0].Text != "inspect these" ||
+		userItem.Content[1].Type != "localImage" ||
+		userItem.Content[1].ImageURL != imageA ||
+		userItem.Content[2].Type != "localImage" ||
+		userItem.Content[2].ImageURL != imageB {
+		t.Fatalf("session resumed user content = %#v", userItem.Content)
+	}
+}
+
+func TestRunExecResumeByExactNameFiltersCWDUnlessAllLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	cwdA := t.TempDir()
+	cwdB := t.TempDir()
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        "name-cwd-a",
+		SessionID: "name-cwd-a",
+		Title:     "Design Review",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: cwdA},
+		Items: []session.Item{
+			{ID: "old-a", Type: "message", Role: "user", Text: "old a", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save cwd-a returned error: %v", err)
+	}
+	if err := store.Save(&session.Record{
+		ID:        "name-cwd-b-newer",
+		SessionID: "name-cwd-b-newer",
+		Title:     "Design Review",
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
+		RecencyAt: now.Add(time.Minute),
+		Metadata:  session.Metadata{CWD: cwdB},
+		Items: []session.Item{
+			{ID: "old-b", Type: "message", Role: "user", Text: "old b", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save cwd-b returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &recordingAgent{message: "ok"}
+	runner.Now = func() time.Time { return now.Add(2 * time.Minute) }
+
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Shared:     cli.SharedOptions{CWD: cwdA},
+			Subcommand: "resume",
+			Resume: cli.ExecResumeOptions{
+				SessionID: "Design Review",
+				All:       true,
+				Prompt:    "continue newest",
+			},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run --all returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.ThreadID != "name-cwd-b-newer" {
+		t.Fatalf("--all ThreadID = %q", result.ThreadID)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	runner.Now = func() time.Time { return now.Add(3 * time.Minute) }
+	result, err = runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Shared:     cli.SharedOptions{CWD: cwdA},
+			Subcommand: "resume",
+			Resume: cli.ExecResumeOptions{
+				SessionID: "Design Review",
+				Prompt:    "continue cwd",
+			},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run cwd-filtered returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.ThreadID != "name-cwd-a" {
+		t.Fatalf("cwd-filtered ThreadID = %q", result.ThreadID)
+	}
+}
+
+func TestRunExecResumeHumanConfigSummaryUsesCLIOverridesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	cwd := t.TempDir()
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        "resume-config",
+		SessionID: "resume-config",
+		Title:     "Config",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: cwd},
+		Items: []session.Item{
+			{ID: "old", Type: "message", Role: "user", Text: "seed", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &recordingAgent{message: "ok"}
+	runner.Now = func() time.Time { return now.Add(time.Minute) }
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Shared: cli.SharedOptions{
+				CWD:     cwd,
+				Model:   "gpt-5.1-high",
+				Sandbox: "workspace-write",
+			},
+			Subcommand: "resume",
+			Resume: cli.ExecResumeOptions{
+				SessionID: "resume-config",
+				Prompt:    "continue with overrides",
+			},
+		},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	for _, want := range []string{
+		"model: gpt-5.1-high",
+		"approval: never",
+		"sandbox: workspace-write",
+		"user\ncontinue with overrides",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q: %q", want, stderr.String())
+		}
+	}
+}
+
+func TestExecResumeTargetUUIDTakesPrecedenceOverNameLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedExecTime()
+	uuidTarget := "11111111-2222-3333-4444-555555555555"
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(uuidTarget),
+		SessionID: uuidTarget,
+		Title:     "Direct UUID",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+	}); err != nil {
+		t.Fatalf("Save uuid record returned error: %v", err)
+	}
+	if err := store.Save(&session.Record{
+		ID:        "name-matches-uuid-newer",
+		SessionID: "name-matches-uuid-newer",
+		Title:     uuidTarget,
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
+		RecencyAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("Save name match returned error: %v", err)
+	}
+
+	threadID, err := execResumeThreadIDForTarget(store, &cli.ExecResumeOptions{}, uuidTarget, ".")
+	if err != nil {
+		t.Fatalf("execResumeThreadIDForTarget returned error: %v", err)
+	}
+	if threadID != session.ThreadID(uuidTarget) {
+		t.Fatalf("threadID = %q, want UUID target", threadID)
 	}
 }
 
@@ -1645,7 +2419,430 @@ func TestEmitFinalEventsFromAgentResultPreservesLoopOrder(t *testing.T) {
 	}
 }
 
-func TestEmitFinalEventsSkipsStreamedAgentMessages(t *testing.T) {
+func TestEmitFinalEventsMapsToolSearchCallToWebSearchLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:     "search-1",
+				Type:   "tool_search_call",
+				CallID: "search-1",
+				Search: map[string]any{"query": "rust async await"},
+			}, {
+				ID:   "msg-final",
+				Type: "agent_message",
+				Text: "done",
+			}},
+		},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	searchIndex := execEventItemIndex(events, "search-1")
+	if searchIndex < 0 {
+		t.Fatalf("web search event missing: %#v", events)
+	}
+	search := events[searchIndex].Item
+	if search.Type != "web_search" || search.Query != "rust async await" {
+		t.Fatalf("web search item = %#v", search)
+	}
+	if search.Action["type"] != "search" || search.Action["query"] != "rust async await" {
+		t.Fatalf("web search action = %#v", search.Action)
+	}
+	for _, event := range events {
+		if event.Item != nil && event.Item.Type == "tool_call" && event.Item.ID == "search-1" {
+			t.Fatalf("tool_search_call should not emit generic tool_call: %#v", events)
+		}
+	}
+}
+
+func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID:     "call-apply",
+			Type:   "custom_tool_call",
+			Name:   tool.DefaultApplyPatchToolName,
+			CallID: "call-apply",
+			Input:  "*** Begin Patch\n*** Add File: a/added.txt\n+hi\n*** End Patch",
+		}}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "call-apply",
+				ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+				Payload:  tool.Payload{Kind: tool.PayloadCustom, Input: "patch"},
+			},
+			Output: &tool.Output{
+				CallID:   "call-apply",
+				ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+				Success:  true,
+				Data: map[string]any{
+					"fileChange": true,
+					"status":     "completed",
+					"changes": []map[string]any{{
+						"path": "a/added.txt",
+						"kind": map[string]any{"type": "add"},
+					}, {
+						"path": "b/deleted.txt",
+						"kind": map[string]any{"type": "delete"},
+					}, {
+						"path": "c/modified.txt",
+						"kind": map[string]any{"type": "update", "move_path": nil},
+					}},
+				},
+			},
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	fileChangeIndex := execEventItemIndex(events, "file-change-call-apply")
+	if fileChangeIndex < 0 {
+		t.Fatalf("file_change event missing: %#v", events)
+	}
+	item := events[fileChangeIndex].Item
+	if item.Type != "file_change" || item.Status != "completed" || len(item.Changes) != 3 {
+		t.Fatalf("file_change item = %#v", item)
+	}
+	if item.Changes[0].Kind != "add" || item.Changes[1].Kind != "delete" || item.Changes[2].Kind != "update" {
+		t.Fatalf("file_change changes = %#v", item.Changes)
+	}
+	if execEventItemIndex(events, "tool-call-call-apply") >= 0 || execEventItemIndex(events, "tool-output-call-apply") >= 0 {
+		t.Fatalf("file change should not emit generic apply_patch tool events: %#v", events)
+	}
+}
+
+func TestEmitFinalEventsMapsDeclinedFileChangeToFailedLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "patch-2",
+				ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+			},
+			Output: &tool.Output{
+				CallID:   "patch-2",
+				ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+				Success:  false,
+				Data: map[string]any{
+					"fileChange": true,
+					"status":     "declined",
+					"changes": []any{map[string]any{
+						"path": "file.txt",
+						"kind": map[string]any{"type": "update"},
+					}},
+				},
+			},
+		}},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	fileChangeIndex := execEventItemIndex(events, "file-change-patch-2")
+	if fileChangeIndex < 0 {
+		t.Fatalf("file_change event missing: %#v", events)
+	}
+	if got := events[fileChangeIndex].Item.Status; got != "failed" {
+		t.Fatalf("file_change status = %q, want failed", got)
+	}
+}
+
+func TestEmitFinalEventsMapsMCPToolCallLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID:        "call-mcp",
+			Type:      "function_call",
+			Name:      "search",
+			Namespace: "docs",
+			CallID:    "call-mcp",
+			Arguments: `{"q":"rust parity"}`,
+		}}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "call-mcp",
+				ToolName: tool.NamespacedName("docs", "search"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"q":"rust parity"}`},
+			},
+			Output: &tool.Output{
+				CallID:   "call-mcp",
+				ToolName: tool.NamespacedName("docs", "search"),
+				Success:  true,
+				Body:     "done",
+				Data: map[string]any{
+					"mcpToolCall": true,
+					"content": []map[string]any{{
+						"type": "text",
+						"text": "done",
+					}},
+					"structuredContent": map[string]any{"status": "ok"},
+				},
+			},
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	startedIndex := execEventTypeAndItemIndex(events, "item.started", "call-mcp")
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "call-mcp")
+	if startedIndex < 0 || completedIndex < 0 || !(startedIndex < completedIndex) {
+		t.Fatalf("mcp start/completed events missing or out of order: %#v", events)
+	}
+	started := events[startedIndex].Item
+	if started.Type != "mcp_tool_call" || started.Server != "docs" || started.Tool != "search" || started.Status != "in_progress" {
+		t.Fatalf("mcp started item = %#v", started)
+	}
+	if started.Arguments == nil {
+		t.Fatalf("mcp started arguments missing: %#v", started)
+	}
+	startedArgs, ok := (*started.Arguments).(map[string]any)
+	if !ok || startedArgs["q"] != "rust parity" {
+		t.Fatalf("mcp started arguments = %#v", started.Arguments)
+	}
+	completed := events[completedIndex].Item
+	if completed.Status != "completed" || completed.Result == nil || len(completed.Result.Content) != 1 {
+		t.Fatalf("mcp completed item = %#v", completed)
+	}
+	if structured, ok := completed.Result.StructuredContent.(map[string]any); !ok || structured["status"] != "ok" {
+		t.Fatalf("mcp structured content = %#v", completed.Result.StructuredContent)
+	}
+	if execEventItemIndex(events, "tool-call-call-mcp") >= 0 || execEventItemIndex(events, "tool-output-call-mcp") >= 0 {
+		t.Fatalf("mcp tool call should not emit generic tool events: %#v", events)
+	}
+}
+
+func TestEmitFinalEventsMapsFailedMCPToolCallLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "mcp-2",
+				ToolName: tool.NamespacedName("server_b", "tool_y"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"param":42}`},
+			},
+			Output: &tool.Output{
+				CallID:   "mcp-2",
+				ToolName: tool.NamespacedName("server_b", "tool_y"),
+				Success:  false,
+				Body:     "tool exploded",
+				Data:     map[string]any{"mcpToolCall": true},
+			},
+		}},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "mcp-2")
+	if completedIndex < 0 {
+		t.Fatalf("mcp completed event missing: %#v", events)
+	}
+	item := events[completedIndex].Item
+	if item.Status != "failed" || item.CallError == nil || item.CallError.Message != "tool exploded" {
+		t.Fatalf("mcp failed item = %#v", item)
+	}
+}
+
+func TestEmitFinalEventsMapsCollabToolCallLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID:        "collab-1",
+			Type:      "function_call",
+			Namespace: "agent",
+			Name:      "spawn_agent",
+			CallID:    "collab-1",
+			Arguments: `{"message":"draft a plan"}`,
+		}}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "collab-1",
+				ToolName: tool.NamespacedName("agent", "spawn_agent"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"message":"draft a plan"}`},
+				Context:  map[string]any{"thread_id": "thread-parent"},
+			},
+			Output: &tool.Output{
+				CallID:   "collab-1",
+				ToolName: tool.NamespacedName("agent", "spawn_agent"),
+				Success:  true,
+				Body:     `{"agent_id":"thread-child"}`,
+				Data: map[string]any{
+					"result": map[string]any{"agent_id": "thread-child"},
+				},
+			},
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	startedIndex := execEventTypeAndItemIndex(events, "item.started", "collab-1")
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "collab-1")
+	if startedIndex < 0 || completedIndex < 0 || !(startedIndex < completedIndex) {
+		t.Fatalf("collab start/completed events missing or out of order: %#v", events)
+	}
+	started := events[startedIndex].Item
+	if started.Type != "collab_tool_call" || started.Tool != "spawn_agent" || started.Status != "in_progress" ||
+		started.SenderThreadID != "thread-parent" || started.Prompt == nil || *started.Prompt != "draft a plan" {
+		t.Fatalf("collab started item = %#v", started)
+	}
+	if started.ReceiverThreadIDs == nil || len(*started.ReceiverThreadIDs) != 0 {
+		t.Fatalf("collab started receivers = %#v", started.ReceiverThreadIDs)
+	}
+	completed := events[completedIndex].Item
+	if completed.Type != "collab_tool_call" || completed.Tool != "spawn_agent" || completed.Status != "completed" {
+		t.Fatalf("collab completed item = %#v", completed)
+	}
+	if completed.ReceiverThreadIDs == nil || len(*completed.ReceiverThreadIDs) != 1 || (*completed.ReceiverThreadIDs)[0] != "thread-child" {
+		t.Fatalf("collab completed receivers = %#v", completed.ReceiverThreadIDs)
+	}
+	if completed.AgentsStates == nil || (*completed.AgentsStates)["thread-child"].Status != "running" {
+		t.Fatalf("collab completed states = %#v", completed.AgentsStates)
+	}
+	if execEventItemIndex(events, "tool-call-collab-1") >= 0 || execEventItemIndex(events, "tool-output-collab-1") >= 0 {
+		t.Fatalf("collab tool call should not emit generic tool events: %#v", events)
+	}
+}
+
+func TestEmitFinalEventsMapsCollabWaitAgentToRustWait(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "collab-wait",
+				ToolName: tool.NamespacedName("agent", "wait_agent"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"targets":["thread-child"]}`},
+				Context:  map[string]any{"thread_id": "thread-parent"},
+			},
+			Output: &tool.Output{
+				CallID:   "collab-wait",
+				ToolName: tool.NamespacedName("agent", "wait_agent"),
+				Success:  true,
+				Data: map[string]any{
+					"result": map[string]any{
+						"status": map[string]any{
+							"thread-child": map[string]any{"status": "notFound", "message": "gone"},
+						},
+						"timed_out": false,
+					},
+				},
+			},
+		}},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "collab-wait")
+	if completedIndex < 0 {
+		t.Fatalf("collab wait completed event missing: %#v", events)
+	}
+	item := events[completedIndex].Item
+	if item.Type != "collab_tool_call" || item.Tool != "wait" || item.Status != "completed" {
+		t.Fatalf("collab wait item = %#v", item)
+	}
+	if item.AgentsStates == nil || (*item.AgentsStates)["thread-child"].Status != "not_found" {
+		t.Fatalf("collab wait states = %#v", item.AgentsStates)
+	}
+}
+
+func TestEmitFinalEventsMapsExecCommandToCommandExecutionLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID:        "call-cmd",
+			Type:      "function_call",
+			Name:      tool.DefaultExecCommandToolName,
+			CallID:    "call-cmd",
+			Arguments: `{"cmd":"ls"}`,
+		}}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "call-cmd",
+				ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"ls"}`},
+			},
+			Output: &tool.Output{
+				CallID:   "call-cmd",
+				ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+				Success:  true,
+				Body:     "a.txt\n",
+				Data: map[string]any{
+					"exit_code":     0,
+					"hook_response": "a.txt\n",
+				},
+			},
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	startedIndex := execEventTypeAndItemIndex(events, "item.started", "call-cmd")
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "call-cmd")
+	if startedIndex < 0 || completedIndex < 0 || !(startedIndex < completedIndex) {
+		t.Fatalf("command_execution start/completed events missing or out of order: %#v", events)
+	}
+	started := events[startedIndex].Item
+	if started.Type != "command_execution" || started.Command != "ls" || started.Status != "in_progress" || started.AggregatedOutput == nil || *started.AggregatedOutput != "" {
+		t.Fatalf("command started item = %#v", started)
+	}
+	completed := events[completedIndex].Item
+	if completed.Type != "command_execution" || completed.Status != "completed" || completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("command completed item = %#v", completed)
+	}
+	if completed.AggregatedOutput == nil || *completed.AggregatedOutput != "a.txt\n" {
+		t.Fatalf("command aggregated output = %#v", completed.AggregatedOutput)
+	}
+	if execEventItemIndex(events, "tool-call-call-cmd") >= 0 || execEventItemIndex(events, "tool-output-call-cmd") >= 0 {
+		t.Fatalf("exec_command should not emit generic tool events after command_execution mapping: %#v", events)
+	}
+}
+
+func TestEmitFinalEventsKeepsApprovalRequiredExecCommandAsToolOutput(t *testing.T) {
+	event, ok := eventFromToolOutputExecution(&turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{CallID: "call-approval", ToolName: tool.PlainName(tool.DefaultExecCommandToolName)},
+		Output: &tool.Output{
+			Success: false,
+			Body:    "Approval required before running command.",
+			Data: map[string]any{
+				"approval_required": true,
+				"reason":            "command requested sandbox permissions",
+			},
+		},
+	})
+	if !ok || event.Item == nil {
+		t.Fatalf("event = %#v ok=%v", event, ok)
+	}
+	if event.Item.Type != "tool_output" || event.Item.Type == "command_execution" {
+		t.Fatalf("approval required should remain tool_output: %#v", event.Item)
+	}
+	if event.Item.Metadata["approval_required"] != true || event.Item.Metadata["reason"] != "command requested sandbox permissions" {
+		t.Fatalf("metadata = %#v", event.Item.Metadata)
+	}
+}
+
+func TestEmitFinalEventsIncludesAgentMessagesAfterStreaming(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Responses: []*model.AgentResponse{{
 			ResponseID: "resp-first",
@@ -1678,22 +2875,14 @@ func TestEmitFinalEventsSkipsStreamedAgentMessages(t *testing.T) {
 	}
 	result.Response = result.Responses[1]
 	sink := newExecEventSink(nil, false)
-	if err := sink.Emit(protocol.AgentMessageDelta("msg-skill", "Using the openai-docs skill because you invoked it.")); err != nil {
-		t.Fatalf("Emit skill delta error = %v", err)
-	}
-	if err := sink.Emit(protocol.AgentMessageDelta("msg-ready", "Ready - I'll use official OpenAI docs/manual sources.")); err != nil {
-		t.Fatalf("Emit ready delta error = %v", err)
-	}
 
 	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 
 	events := sink.Events()
-	for _, event := range events {
-		if event.Type == "item.completed" && event.Item != nil && event.Item.Type == "agent_message" {
-			t.Fatalf("streamed agent message was replayed as final item: %#v", event)
-		}
+	if execEventItemIndex(events, "msg-skill") < 0 || execEventItemIndex(events, "msg-ready") < 0 {
+		t.Fatalf("agent message completed events missing: %#v", events)
 	}
 	if execEventItemIndex(events, "tool-output-call-1") < 0 {
 		t.Fatalf("tool output event missing: %#v", events)
@@ -1771,11 +2960,13 @@ func TestEmitFinalEventsMapsUpdatePlanToTodoList(t *testing.T) {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
-	todoIndex := execEventItemIndex(events, "todo-list-plan-1")
-	if todoIndex < 0 {
-		t.Fatalf("todo list event missing: %#v", events)
+	startedIndex := execEventTypeAndItemIndex(events, "item.started", "todo-list-plan-1")
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "todo-list-plan-1")
+	turnCompletedIndex := execEventTypeIndex(events, "turn.completed")
+	if startedIndex < 0 || completedIndex < 0 || turnCompletedIndex < 0 || !(startedIndex < completedIndex && completedIndex < turnCompletedIndex) {
+		t.Fatalf("todo list lifecycle missing or out of order: %#v", events)
 	}
-	todo := events[todoIndex].Item
+	todo := events[completedIndex].Item
 	if todo.Type != "todo_list" || len(todo.Items) != 2 || todo.Items[0].Text != "step one" || todo.Items[0].Completed || !todo.Items[1].Completed {
 		t.Fatalf("todo list item = %#v", todo)
 	}
@@ -1784,7 +2975,79 @@ func TestEmitFinalEventsMapsUpdatePlanToTodoList(t *testing.T) {
 	}
 }
 
-func TestExecStreamEventCollectorBuildsProtocolEvents(t *testing.T) {
+func TestEmitFinalEventsMapsMultipleUpdatePlansToTodoListLifecycleLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "plan-1",
+				ToolName: tool.PlainName("update_plan"),
+			},
+			Output: &tool.Output{
+				CallID:   "plan-1",
+				ToolName: tool.PlainName("update_plan"),
+				Success:  true,
+				Data: map[string]any{
+					"planUpdate": true,
+					"plan": []tool.PlanItem{{
+						Step:   "step one",
+						Status: tool.PlanPending,
+					}, {
+						Step:   "step two",
+						Status: tool.PlanInProgress,
+					}},
+				},
+			},
+		}, {
+			Invocation: &tool.Invocation{
+				CallID:   "plan-2",
+				ToolName: tool.PlainName("update_plan"),
+			},
+			Output: &tool.Output{
+				CallID:   "plan-2",
+				ToolName: tool.PlainName("update_plan"),
+				Success:  true,
+				Data: map[string]any{
+					"planUpdate": true,
+					"plan": []tool.PlanItem{{
+						Step:   "step one",
+						Status: tool.PlanCompleted,
+					}, {
+						Step:   "step two",
+						Status: tool.PlanInProgress,
+					}},
+				},
+			},
+		}},
+	}
+	sink := newExecEventSink(nil, false)
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	events := sink.Events()
+	startedIndex := execEventTypeAndItemIndex(events, "item.started", "todo-list-plan-1")
+	updatedIndex := execEventTypeAndItemIndex(events, "item.updated", "todo-list-plan-1")
+	completedIndex := execEventTypeAndItemIndex(events, "item.completed", "todo-list-plan-1")
+	if startedIndex < 0 || updatedIndex < 0 || completedIndex < 0 || !(startedIndex < updatedIndex && updatedIndex < completedIndex) {
+		t.Fatalf("todo list lifecycle missing or out of order: %#v", events)
+	}
+	updated := events[updatedIndex].Item
+	if len(updated.Items) != 2 || !updated.Items[0].Completed || updated.Items[1].Completed {
+		t.Fatalf("updated todo items = %#v", updated.Items)
+	}
+	completed := events[completedIndex].Item
+	if len(completed.Items) != 2 || !completed.Items[0].Completed || completed.Items[1].Completed {
+		t.Fatalf("completed todo items = %#v", completed.Items)
+	}
+	if execEventItemIndex(events, "tool-call-plan-1") >= 0 ||
+		execEventItemIndex(events, "tool-output-plan-1") >= 0 ||
+		execEventItemIndex(events, "tool-call-plan-2") >= 0 ||
+		execEventItemIndex(events, "tool-output-plan-2") >= 0 {
+		t.Fatalf("update_plan should not emit generic tool events: %#v", events)
+	}
+}
+
+func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T) {
 	collector := &execStreamEventCollector{}
 	collector.Handle(&model.ResponsesStreamEvent{
 		Kind: model.ResponsesStreamEventOutputAdded,
@@ -1801,65 +3064,41 @@ func TestExecStreamEventCollectorBuildsProtocolEvents(t *testing.T) {
 		CallID: "call-1",
 		Delta:  "patch",
 	})
-	events := collector.Events()
-	if len(events) != 3 {
-		t.Fatalf("events = %#v", events)
-	}
-	if events[0].Type != "item.started" || events[0].Item.ID != "msg-1" {
-		t.Fatalf("started event = %#v", events[0])
-	}
-	if events[1].Type != "item.delta" || events[1].Delta.Text != "hello " {
-		t.Fatalf("text delta = %#v", events[1])
-	}
-	if events[2].Type != "item.delta" || events[2].Delta.Input != "patch" || events[2].Delta.CallID != "call-1" {
-		t.Fatalf("tool delta = %#v", events[2])
-	}
-}
-
-func TestExecStreamEventCollectorBuildsRateLimitProtocolEvent(t *testing.T) {
-	minutes := int64(5 * 60)
-	reset := int64(1710000000)
-	balance := "0"
-	collector := &execStreamEventCollector{}
 	collector.Handle(&model.ResponsesStreamEvent{
 		Kind: model.ResponsesStreamEventRateLimits,
 		RateLimit: &model.ResponsesRateLimitSnapshot{
-			LimitID:   "codex",
-			LimitName: "Codex",
-			Primary: &model.ResponsesRateLimitWindow{
-				UsedPercent:        90,
-				WindowDurationMins: &minutes,
-				ResetsAt:           &reset,
-			},
-			Credits: &model.ResponsesCreditsSnapshot{
-				HasCredits: true,
-				Unlimited:  false,
-				Balance:    &balance,
-			},
-			PlanType:             "plus",
-			RateLimitReachedType: "primary",
+			LimitID: "codex",
 		},
 	})
-
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{
+			ID:        "call-1",
+			Type:      "function_call",
+			Name:      "exec_command",
+			CallID:    "call-1",
+			Arguments: `{"cmd":"date"}`,
+		},
+	})
 	events := collector.Events()
-	if len(events) != 1 {
-		t.Fatalf("events = %#v", events)
+	if len(events) != 0 {
+		t.Fatalf("model output-added should not create a generic exec cell: %#v", events)
 	}
-	event := events[0]
-	if event.Type != "response.rate_limits" || event.RateLimit == nil {
-		t.Fatalf("rate limit event = %#v", event)
+
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "call-1",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"cmd":"date"}`,
+		},
+	}, time.Now())
+	events = collector.Events()
+	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil {
+		t.Fatalf("tool start event = %#v", events)
 	}
-	if event.RateLimit.LimitID != "codex" || event.RateLimit.Primary == nil || event.RateLimit.Primary.UsedPercent != 90 {
-		t.Fatalf("rate limit snapshot = %#v", event.RateLimit)
-	}
-	if event.RateLimit.Primary.WindowDurationMins == nil || *event.RateLimit.Primary.WindowDurationMins != minutes {
-		t.Fatalf("rate limit window minutes = %#v", event.RateLimit.Primary)
-	}
-	if event.RateLimit.Primary.ResetsAt == nil || *event.RateLimit.Primary.ResetsAt != reset {
-		t.Fatalf("rate limit reset = %#v", event.RateLimit.Primary)
-	}
-	if event.RateLimit.Credits == nil || event.RateLimit.Credits.Balance == nil || *event.RateLimit.Credits.Balance != balance {
-		t.Fatalf("credits = %#v", event.RateLimit.Credits)
+	if events[0].Item.Type != "command_execution" || events[0].Item.ID != "call-1" || events[0].Item.Command != "date" {
+		t.Fatalf("command start item = %#v", events[0].Item)
 	}
 }
 
@@ -1898,7 +3137,28 @@ func TestEventFromToolOutputExecutionCarriesOutputDataMetadata(t *testing.T) {
 	}
 }
 
-func TestRunJSONStreamsResponsesEventsImmediately(t *testing.T) {
+func TestExecStreamEventCollectorMapsModelRerouteToErrorItemLikeRust(t *testing.T) {
+	collector := &execStreamEventCollector{}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventModelReroute,
+		Reroute: &model.ResponsesModelReroute{
+			FromModel: "gpt-5",
+			ToModel:   "gpt-5-mini",
+			Reason:    "high_risk_cyber_activity",
+		},
+	})
+
+	events := collector.Events()
+	if len(events) != 1 || events[0].Type != "item.completed" || events[0].Item == nil {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Item.Type != "error" ||
+		events[0].Item.Message != "model rerouted: gpt-5 -> gpt-5-mini (HighRiskCyberActivity)" {
+		t.Fatalf("error item = %#v", events[0].Item)
+	}
+}
+
+func TestRunJSONSuppressesResponsesDeltasUntilFinalEvents(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
 		t.Fatalf("Save auth returned error: %v", err)
@@ -1948,8 +3208,8 @@ func TestRunJSONStreamsResponsesEventsImmediately(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not send delta")
 	}
-	if !waitForBufferContains(stdout, `"type":"item.delta"`, `"hello "`) {
-		t.Fatalf("stdout before completion = %q", stdout.String())
+	if strings.Contains(stdout.String(), `"type":"item.delta"`) || strings.Contains(stdout.String(), "hello ") {
+		t.Fatalf("stdout before completion leaked stream delta = %q", stdout.String())
 	}
 	close(releaseCompletion)
 
@@ -1969,8 +3229,11 @@ func TestRunJSONStreamsResponsesEventsImmediately(t *testing.T) {
 		!strings.Contains(stdout.String(), `"output_tokens":2`) {
 		t.Fatalf("stdout after completion = %q", stdout.String())
 	}
-	if strings.Contains(stdout.String(), `"type":"item.completed","item":{"id":"msg-1","type":"agent_message"`) {
-		t.Fatalf("streamed assistant message was replayed as completed item: %q", stdout.String())
+	if !strings.Contains(stdout.String(), `"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"hello world"}`) {
+		t.Fatalf("stdout missing final assistant item = %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `"type":"item.delta"`) {
+		t.Fatalf("stdout emitted non-Rust delta event: %q", stdout.String())
 	}
 }
 
@@ -2169,6 +3432,24 @@ func (a *recordingAgent) Run(ctx context.Context, request *model.AgentRequest) (
 	}, nil
 }
 
+type staticResponseAgent struct {
+	response *model.AgentResponse
+	request  *model.AgentRequest
+}
+
+func (a *staticResponseAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.request = request
+	if a.response == nil {
+		return &model.AgentResponse{}, nil
+	}
+	response := *a.response
+	response.Items = append([]model.AgentItem(nil), a.response.Items...)
+	return &response, nil
+}
+
 type failingAgent struct {
 	err error
 }
@@ -2224,6 +3505,32 @@ func loadSessionRecord(t *testing.T, home string, threadID string) *session.Reco
 		t.Fatalf("Load session record returned error: %v", err)
 	}
 	return record
+}
+
+func decodeExecJSONLines(t *testing.T, output string) []protocol.ThreadEvent {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	events := make([]protocol.ThreadEvent, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event protocol.ThreadEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("Unmarshal event line %q error = %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func execEventTypes(events []protocol.ThreadEvent) []string {
+	out := make([]string, 0, len(events))
+	for i := range events {
+		out = append(out, events[i].Type)
+	}
+	return out
 }
 
 func itemTypes(items []session.Item) []string {
@@ -2288,6 +3595,15 @@ func execEventTypeIndex(events []protocol.ThreadEvent, eventType string) int {
 	return -1
 }
 
+func execEventTypeAndItemIndex(events []protocol.ThreadEvent, eventType string, itemID string) int {
+	for i := range events {
+		if events[i].Type == eventType && events[i].Item != nil && events[i].Item.ID == itemID {
+			return i
+		}
+	}
+	return -1
+}
+
 func containsAll(values []string, required []string) bool {
 	seen := map[string]bool{}
 	for _, value := range values {
@@ -2321,25 +3637,6 @@ func (b *synchronizedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buffer.String()
-}
-
-func waitForBufferContains(buffer *synchronizedBuffer, parts ...string) bool {
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text := buffer.String()
-		ok := true
-		for _, part := range parts {
-			if !strings.Contains(text, part) {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return false
 }
 
 func writeExecResponseSSE(w http.ResponseWriter, payload string) {

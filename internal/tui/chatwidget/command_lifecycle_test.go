@@ -143,8 +143,21 @@ func TestCommandLifecycleCommandDisplayParsingMatchesRustCore(t *testing.T) {
 	if got := UnifiedExecCommandDisplay(`bash -lc "go test ./internal/tui"`); got != "go test ./internal/tui" {
 		t.Fatalf("bash display = %q", got)
 	}
-	if got := UnifiedExecCommandDisplay(`C:\tools\bash -lc "npm test"`); got != "npm test" {
-		t.Fatalf("path bash display = %q", got)
+	if got := UnifiedExecCommandDisplay(`/bin/zsh -lc "npm test"`); got != "npm test" {
+		t.Fatalf("path zsh display = %q", got)
+	}
+	if got := UnifiedExecCommandDisplay(`pwsh -NoProfile -Command "Get-ChildItem"`); got != "Get-ChildItem" {
+		t.Fatalf("powershell display = %q", got)
+	}
+	if got := UnifiedExecCommandDisplay(`fish -lc "echo hello"`); got != "fish -lc 'echo hello'" {
+		t.Fatalf("fish display = %q", got)
+	}
+	if got := UnifiedExecCommandDisplay(`foo "bar baz" "weird&stuff"`); got != "foo 'bar baz' 'weird&stuff'" {
+		t.Fatalf("quoted fallback display = %q", got)
+	}
+	windowsCommand := `C:\Program Files\Git\bin\bash.exe -lc "echo hi"`
+	if got := UnifiedExecCommandDisplay(windowsCommand); got != `'C:\Program Files\Git\bin\bash.exe -lc "echo hi"'` {
+		t.Fatalf("non-roundtrippable windows command display = %q", got)
 	}
 	if got := UnifiedExecCommandDisplay(`git status --short`); got != "git status --short" {
 		t.Fatalf("plain display = %q", got)

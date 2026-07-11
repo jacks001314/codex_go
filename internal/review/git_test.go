@@ -43,6 +43,91 @@ func TestGitDiffProviderCommit(t *testing.T) {
 	}
 }
 
+func TestGitDiffProviderMergeBaseWithHeadReturnsSharedCommit(t *testing.T) {
+	dir := initGitRepo(t)
+	initialBranch := strings.TrimSpace(git(t, dir, "branch", "--show-current"))
+	expected := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD"))
+	git(t, dir, "checkout", "-b", "feature/review")
+	writeFile(t, dir, "feature.txt", "feature change\n")
+	git(t, dir, "add", "feature.txt")
+	git(t, dir, "commit", "-m", "feature change")
+	git(t, dir, "checkout", initialBranch)
+	writeFile(t, dir, "base.txt", "base change\n")
+	git(t, dir, "add", "base.txt")
+	git(t, dir, "commit", "-m", "base change")
+	git(t, dir, "checkout", "feature/review")
+
+	provider := &GitDiffProvider{Dir: dir}
+	mergeBase, err := provider.MergeBaseWithHead(initialBranch)
+	if err != nil {
+		t.Fatalf("MergeBaseWithHead returned error: %v", err)
+	}
+	if mergeBase != expected {
+		t.Fatalf("merge base = %q, want %q", mergeBase, expected)
+	}
+}
+
+func TestGitDiffProviderMergeBaseWithHeadPrefersUpstreamWhenRemoteAhead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "repo")
+	remote := filepath.Join(root, "remote.git")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll repo returned error: %v", err)
+	}
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatalf("MkdirAll remote returned error: %v", err)
+	}
+	git(t, remote, "init", "--bare")
+	git(t, dir, "init", "--initial-branch=main")
+	git(t, dir, "config", "user.email", "codex@example.test")
+	git(t, dir, "config", "user.name", "Codex Test")
+	writeFile(t, dir, "base.txt", "base\n")
+	git(t, dir, "add", "base.txt")
+	git(t, dir, "commit", "-m", "base commit")
+	git(t, dir, "remote", "add", "origin", remote)
+	git(t, dir, "push", "-u", "origin", "main")
+
+	git(t, dir, "checkout", "-b", "feature")
+	writeFile(t, dir, "feature.txt", "feature change\n")
+	git(t, dir, "add", "feature.txt")
+	git(t, dir, "commit", "-m", "feature commit")
+
+	git(t, dir, "checkout", "--orphan", "rewrite")
+	git(t, dir, "rm", "-rf", ".")
+	writeFile(t, dir, "new-main.txt", "rewritten main\n")
+	git(t, dir, "add", "new-main.txt")
+	git(t, dir, "commit", "-m", "rewrite main")
+	git(t, dir, "branch", "-M", "rewrite", "main")
+	git(t, dir, "branch", "--set-upstream-to=origin/main", "main")
+	git(t, dir, "checkout", "feature")
+	git(t, dir, "fetch", "origin")
+
+	expected := strings.TrimSpace(git(t, dir, "merge-base", "HEAD", "origin/main"))
+	provider := &GitDiffProvider{Dir: dir}
+	mergeBase, err := provider.MergeBaseWithHead("main")
+	if err != nil {
+		t.Fatalf("MergeBaseWithHead returned error: %v", err)
+	}
+	if mergeBase != expected {
+		t.Fatalf("merge base = %q, want upstream %q", mergeBase, expected)
+	}
+}
+
+func TestGitDiffProviderMergeBaseWithHeadReturnsEmptyWhenBranchMissing(t *testing.T) {
+	dir := initGitRepo(t)
+	provider := &GitDiffProvider{Dir: dir}
+	mergeBase, err := provider.MergeBaseWithHead("missing-branch")
+	if err != nil {
+		t.Fatalf("MergeBaseWithHead returned error: %v", err)
+	}
+	if mergeBase != "" {
+		t.Fatalf("merge base = %q, want empty", mergeBase)
+	}
+}
+
 func TestGitInventoryBranchesAndCommits(t *testing.T) {
 	dir := initGitRepo(t)
 	initialBranch := strings.TrimSpace(git(t, dir, "branch", "--show-current"))

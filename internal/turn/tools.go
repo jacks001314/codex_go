@@ -105,6 +105,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			return nil, err
 		}
 	}
+	if err := registerSkillsTools(registry, options); err != nil {
+		return nil, err
+	}
 	if options.EnableAgents {
 		if err := agent.RegisterMultiAgentHandlers(registry, options.AgentController, options.AgentExposure); err != nil {
 			return nil, err

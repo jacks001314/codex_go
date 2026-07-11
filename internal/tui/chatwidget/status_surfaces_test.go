@@ -42,6 +42,12 @@ func TestStatusSurfaceSelectionsDefaultsAliasesAndInvalids(t *testing.T) {
 	if !reflect.DeepEqual(selection.TerminalTitleItems, wantTitle) || !reflect.DeepEqual(selection.InvalidTerminalTitleItems, []string{`"bad-title"`}) {
 		t.Fatalf("title parse = %#v invalid=%#v", selection.TerminalTitleItems, selection.InvalidTerminalTitleItems)
 	}
+	if _, ok := ParseStatusLineItem(" model "); ok {
+		t.Fatalf("status line item parsing should be exact like Rust")
+	}
+	if _, ok := ParseTerminalTitleItem(" spinner "); ok {
+		t.Fatalf("terminal title item parsing should be exact like Rust")
+	}
 }
 
 func TestStatusSurfaceSelectionsUsageFlags(t *testing.T) {
@@ -140,5 +146,11 @@ func TestTerminalTitleFrameAndTruncate(t *testing.T) {
 	}
 	if got := TruncateTerminalTitlePart("abcdef", 3); got != "abc" {
 		t.Fatalf("small truncate = %q", got)
+	}
+	if got := TruncateTerminalTitlePart("e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301", 5); got != "e\u0301e\u0301..." {
+		t.Fatalf("grapheme truncate = %q", got)
+	}
+	if got := TruncateTerminalTitlePart("e\u0301e\u0301e\u0301e\u0301", 3); got != "e\u0301e\u0301e\u0301" {
+		t.Fatalf("small grapheme truncate = %q", got)
 	}
 }

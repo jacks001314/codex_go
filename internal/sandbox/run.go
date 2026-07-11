@@ -395,10 +395,15 @@ func (r rustPermissionProfileWire) toPermissionProfile() (*PermissionProfile, er
 		return &profile, nil
 	case "managed":
 		policy := NewReadOnlyPolicy()
+		deniedReadEntries := []FileSystemSandboxEntry{}
 		if r.FileSys != nil && r.FileSys.Type == "unrestricted" {
 			policy = NewDangerFullAccessPolicy()
 		} else if r.FileSys != nil {
 			for _, entry := range r.FileSys.Entries {
+				if strings.EqualFold(entry.Access, string(FileSystemAccessDeny)) {
+					deniedReadEntries = append(deniedReadEntries, entry.toFileSystemSandboxEntry())
+					continue
+				}
 				if strings.EqualFold(entry.Access, string(FileSystemAccessWrite)) {
 					if path := entry.Path.resolvedSandboxPolicyPath(); path != "" {
 						if policy.Kind != SandboxWorkspaceWrite {
@@ -412,7 +417,7 @@ func (r rustPermissionProfileWire) toPermissionProfile() (*PermissionProfile, er
 			}
 		}
 		policy.NetworkAccess = networkEnabled
-		profile := PermissionProfile{SandboxPolicy: policy, NetworkEnabled: networkEnabled}
+		profile := PermissionProfile{SandboxPolicy: policy, NetworkEnabled: networkEnabled, DeniedReadEntries: deniedReadEntries}
 		return &profile, nil
 	default:
 		return nil, fmt.Errorf("unsupported permission profile type %q", r.Type)
@@ -472,7 +477,7 @@ func rustPermissionProfileWireFromPermissionProfile(profile *PermissionProfile) 
 		network = string(NetworkEnabled)
 	}
 	policy := profile.LegacySandboxPolicy()
-	if policy.HasFullDiskWriteAccess() {
+	if policy.HasFullDiskWriteAccess() && !profile.HasDenyReadEntries() {
 		return rustPermissionProfileWire{
 			Type:    "managed",
 			FileSys: &rustPermissionFilesystem{Type: "unrestricted"},
@@ -503,6 +508,15 @@ func rustPermissionProfileWireFromPermissionProfile(profile *PermissionProfile) 
 			Access: string(access),
 		})
 	}
+	addDeniedReadEntries := func(denied []FileSystemSandboxEntry) {
+		for _, entry := range denied {
+			path := rustPermissionFilesystemPathFromFileSystemPath(entry.Path)
+			if path.Type == "" {
+				continue
+			}
+			entries = append(entries, rustPermissionFilesystemEntry{Path: path, Access: string(FileSystemAccessDeny)})
+		}
+	}
 	switch policy.Kind {
 	case SandboxWorkspaceWrite:
 		addSpecial(FileSystemAccessRead, "root", "")
@@ -522,6 +536,7 @@ func rustPermissionProfileWireFromPermissionProfile(profile *PermissionProfile) 
 	default:
 		addSpecial(FileSystemAccessRead, "root", "")
 	}
+	addDeniedReadEntries(profile.DeniedReadEntries)
 	return rustPermissionProfileWire{
 		Type: "managed",
 		FileSys: &rustPermissionFilesystem{
@@ -537,6 +552,58 @@ func isRustPermissionProfileType(raw json.RawMessage, profileType string) bool {
 		Type string `json:"type"`
 	}
 	return len(raw) > 0 && json.Unmarshal(raw, &wire) == nil && wire.Type == profileType
+}
+
+func (e rustPermissionFilesystemEntry) toFileSystemSandboxEntry() FileSystemSandboxEntry {
+	return FileSystemSandboxEntry{
+		Path:   e.Path.toFileSystemPath(),
+		Access: FileSystemAccessMode(e.Access),
+	}
+}
+
+func (p rustPermissionFilesystemPath) toFileSystemPath() FileSystemPath {
+	switch p.Type {
+	case "glob_pattern":
+		return FileSystemPath{Type: "glob_pattern", Pattern: p.Pattern}
+	case "special":
+		return FileSystemPath{
+			Type:  "special",
+			Value: &FileSystemSpecialPath{Kind: p.Value.Kind, Subpath: p.Value.Subpath},
+		}
+	default:
+		pathType := p.Type
+		if pathType == "" {
+			pathType = "path"
+		}
+		return FileSystemPath{Type: pathType, Path: p.Path}
+	}
+}
+
+func rustPermissionFilesystemPathFromFileSystemPath(path FileSystemPath) rustPermissionFilesystemPath {
+	switch path.Type {
+	case "glob_pattern":
+		return rustPermissionFilesystemPath{Type: "glob_pattern", Pattern: path.Pattern}
+	case "special":
+		if path.Value == nil {
+			return rustPermissionFilesystemPath{}
+		}
+		return rustPermissionFilesystemPath{
+			Type: "special",
+			Value: rustPermissionFilesystemSpecial{
+				Kind:    path.Value.Kind,
+				Subpath: path.Value.Subpath,
+			},
+		}
+	default:
+		pathType := path.Type
+		if pathType == "" {
+			pathType = "path"
+		}
+		if strings.TrimSpace(path.Path) == "" {
+			return rustPermissionFilesystemPath{}
+		}
+		return rustPermissionFilesystemPath{Type: pathType, Path: path.Path}
+	}
 }
 
 func (p rustPermissionFilesystemPath) resolvedSandboxPolicyPath() string {
@@ -649,6 +716,7 @@ func clonePermissionProfile(profile *PermissionProfile) PermissionProfile {
 		policy.WritableRoots = append([]string(nil), profile.SandboxPolicy.WritableRoots...)
 		clone.SandboxPolicy = &policy
 	}
+	clone.DeniedReadEntries = append([]FileSystemSandboxEntry(nil), profile.DeniedReadEntries...)
 	return clone
 }
 

@@ -1,6 +1,11 @@
 package app
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+
+	"github.com/google/uuid"
+)
 
 // Rust parity subset: codex-rs/tui/src/app/app_server_event_targets.rs.
 
@@ -94,8 +99,8 @@ func ServerRequestThreadID(request *ServerRequest) (string, bool) {
 	if request == nil {
 		return "", false
 	}
-	threadID := strings.TrimSpace(request.ThreadID)
-	if !ValidAppServerThreadID(threadID) {
+	threadID, valid := ParseAppServerThreadID(request.ThreadID)
+	if !valid {
 		return "", false
 	}
 	switch request.Kind {
@@ -119,9 +124,9 @@ func ServerNotificationThreadTargetForEvent(notification *ServerEvent) ServerNot
 	if serverNotificationKindIsAlwaysGlobal(notification.Name) {
 		return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetGlobal}
 	}
-	threadID := strings.TrimSpace(notification.ThreadID)
+	threadID := notification.ThreadID
 	if threadID == "" {
-		threadID = strings.TrimSpace(notification.Target.ThreadID)
+		threadID = notification.Target.ThreadID
 	}
 	if notification.Name == ServerNotificationMcpServerStatusUpdated && threadID == "" {
 		return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetAppScoped}
@@ -129,39 +134,38 @@ func ServerNotificationThreadTargetForEvent(notification *ServerEvent) ServerNot
 	if threadID == "" {
 		return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetGlobal}
 	}
-	if !ValidAppServerThreadID(threadID) {
+	parsedThreadID, valid := ParseAppServerThreadID(threadID)
+	if !valid {
 		return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetInvalid, ThreadID: threadID}
 	}
-	return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetThread, ThreadID: threadID}
+	return ServerNotificationThreadTarget{Kind: ServerNotificationThreadTargetThread, ThreadID: parsedThreadID}
 }
 
 func EventTargetFromServerEvent(event ServerEvent) EventTarget {
 	target := event.Target
-	if strings.TrimSpace(target.ThreadID) == "" {
-		target.ThreadID = strings.TrimSpace(event.ThreadID)
+	if target.ThreadID == "" {
+		target.ThreadID = event.ThreadID
 	}
-	if strings.TrimSpace(target.TurnID) == "" {
-		target.TurnID = strings.TrimSpace(event.TurnID)
+	if target.TurnID == "" {
+		target.TurnID = event.TurnID
 	}
 	return target
 }
 
 func ValidAppServerThreadID(threadID string) bool {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return false
+	_, ok := ParseAppServerThreadID(threadID)
+	return ok
+}
+
+func ParseAppServerThreadID(threadID string) (string, bool) {
+	if threadID == "" || strings.ContainsFunc(threadID, unicode.IsSpace) {
+		return "", false
 	}
-	for _, ch := range threadID {
-		switch {
-		case ch >= 'a' && ch <= 'z':
-		case ch >= 'A' && ch <= 'Z':
-		case ch >= '0' && ch <= '9':
-		case ch == '-' || ch == '_' || ch == '.':
-		default:
-			return false
-		}
+	parsed, err := uuid.Parse(threadID)
+	if err != nil {
+		return "", false
 	}
-	return true
+	return parsed.String(), true
 }
 
 func serverNotificationKindIsAlwaysGlobal(kind string) bool {

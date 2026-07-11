@@ -5,6 +5,8 @@ import (
 	"unicode"
 
 	bottompane "codex_go/internal/tui/bottom_pane"
+
+	"github.com/rivo/uniseg"
 )
 
 var DefaultStatusLineItems = []string{"model-with-reasoning", "current-dir"}
@@ -166,7 +168,7 @@ func ParseTerminalTitleItemsWithInvalids(ids []string) ([]TerminalTitleItem, []s
 }
 
 func ParseStatusLineItem(id string) (bottompane.StatusLineItem, bool) {
-	switch strings.TrimSpace(id) {
+	switch id {
 	case "model", "model-name":
 		return bottompane.StatusLineModelName, true
 	case "model-with-reasoning":
@@ -284,7 +286,7 @@ func StatusLineItemID(item bottompane.StatusLineItem) string {
 }
 
 func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
-	switch strings.TrimSpace(id) {
+	switch id {
 	case "app-name":
 		return TerminalTitleAppName, true
 	case "project-name", "project":
@@ -636,14 +638,18 @@ func TruncateTerminalTitlePart(value string, maxChars int) string {
 	if maxChars <= 0 {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) <= maxChars || maxChars <= 3 {
-		if len(runes) > maxChars {
-			runes = runes[:maxChars]
-		}
-		return string(runes)
+	graphemes := []string{}
+	iter := uniseg.NewGraphemes(value)
+	for iter.Next() {
+		graphemes = append(graphemes, iter.Str())
 	}
-	return string(runes[:maxChars-3]) + "..."
+	if len(graphemes) <= maxChars || maxChars <= 3 {
+		if len(graphemes) > maxChars {
+			graphemes = graphemes[:maxChars]
+		}
+		return strings.Join(graphemes, "")
+	}
+	return strings.Join(graphemes[:maxChars-3], "") + "..."
 }
 
 func terminalTitleValue(item TerminalTitleItem, data StatusSurfacePreviewData, opts TerminalTitleRenderOptions) (string, bool) {

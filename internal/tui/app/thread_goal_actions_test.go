@@ -32,6 +32,12 @@ func TestThreadGoalErrorMessagePreservesGenericFailureContextMatchRust(t *testin
 	}
 }
 
+func TestThreadGoalUsageMessageMatchesRust(t *testing.T) {
+	if ThreadGoalUsageMessage != "Usage: /goal [<objective>|clear|edit|pause|resume]" {
+		t.Fatalf("ThreadGoalUsageMessage = %q", ThreadGoalUsageMessage)
+	}
+}
+
 func TestShouldConfirmBeforeReplacingGoalMatchRust(t *testing.T) {
 	if ShouldConfirmBeforeReplacingGoal(nil) {
 		t.Fatal("nil goal should not require confirmation")
@@ -148,9 +154,9 @@ func TestSetThreadGoalDraftPreflightDecisionMatchRust(t *testing.T) {
 
 func TestThreadGoalActionResultDecisionsMatchRust(t *testing.T) {
 	budget := int64(2000)
-	goal := appserver.Goal{Status: appserver.GoalBudgetLimited, TokenBudget: &budget, TokensUsed: 2100, TimeUsedSeconds: 9}
+	goal := appserver.Goal{Objective: "ship parity", Status: appserver.GoalBudgetLimited, TokenBudget: &budget, TokensUsed: 2100, TimeUsedSeconds: 9}
 	success := ThreadGoalSetSuccessDecision(true, goal)
-	if success.InfoMessage != "Goal limited by budget" || success.Hint != "2100/2000 tokens | 9s elapsed" || !success.MaybeSendQueuedInput {
+	if success.InfoMessage != "Goal limited by budget" || success.Hint != "Objective: ship parity Time: 9s. Tokens: 2.1K/2K." || !success.MaybeSendQueuedInput {
 		t.Fatalf("success decision = %#v", success)
 	}
 	setErr := ThreadGoalSetErrorDecision(true, true, errors.New("boom"))
@@ -184,8 +190,35 @@ func TestReplaceThreadGoalConfirmationMatchRust(t *testing.T) {
 	if view.Title != "Replace goal?" || view.Subtitle != "New objective: new objective" || view.ReplaceName != "Replace current goal" || view.ReplaceHint != "Set the new objective and start it now" || view.CancelName != "Cancel" || view.CancelHint != "Keep the current goal" || view.ReplacementMode != ThreadGoalSetReplaceExisting {
 		t.Fatalf("view = %#v", view)
 	}
+	spaced := ReplaceThreadGoalConfirmation("thread-1", " new objective ")
+	if spaced.Subtitle != "New objective:  new objective " {
+		t.Fatalf("spaced subtitle = %q", spaced.Subtitle)
+	}
+	if got := TruncateGoalObjective("a\u0301b", 1); got != "a\u0301" {
+		t.Fatalf("grapheme truncate = %q", got)
+	}
 	long := ReplaceThreadGoalConfirmation("thread-1", strings.Repeat("a", 205))
 	if len([]rune(long.Subtitle)) != len("New objective: ")+200 || long.Subtitle[len(long.Subtitle)-3:] != "..." {
 		t.Fatalf("long subtitle = %q", long.Subtitle)
+	}
+}
+
+func TestGoalUsageSummaryForThreadGoalMatchesRust(t *testing.T) {
+	budget := int64(50_000)
+	goal := appserver.Goal{
+		Objective:       "Complete the task described in ../gameboy-long-running-prompt5.txt",
+		Status:          appserver.GoalBudgetLimited,
+		TokenBudget:     &budget,
+		TokensUsed:      63_876,
+		TimeUsedSeconds: 120,
+	}
+	want := "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
+	if got := GoalUsageSummaryForThreadGoal(goal); got != want {
+		t.Fatalf("GoalUsageSummaryForThreadGoal() = %q, want %q", got, want)
+	}
+
+	unbudgeted := appserver.Goal{Objective: "only objective", TokensUsed: 99}
+	if got := GoalUsageSummaryForThreadGoal(unbudgeted); got != "Objective: only objective" {
+		t.Fatalf("unbudgeted summary = %q", got)
 	}
 }

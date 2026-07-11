@@ -168,8 +168,8 @@ func TestCollectExplicitSkillMentions(t *testing.T) {
 		Inputs: []SkillMentionInput{{Type: "text", Text: "[$test](skill://" + encodedPath + ")"}},
 		Skills: []InstructionsSkillMetadata{{Name: "test", Path: spacePath}},
 	})
-	if len(selected) != 1 || selected[0].Path != spacePath {
-		t.Fatalf("CollectExplicitSkillMentions(encoded local path) = %#v", selected)
+	if len(selected) != 0 {
+		t.Fatalf("CollectExplicitSkillMentions(encoded local path) = %#v, want none", selected)
 	}
 
 	selected = CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
@@ -190,12 +190,21 @@ func TestCollectExplicitSkillMentions(t *testing.T) {
 		t.Fatalf("CollectExplicitSkillMentions(remote URI) = %#v", selected)
 	}
 
+	remoteLocatorPath := "skill://remote-root/workspace/skills/deploy/SKILL.md"
+	selected = CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+		Inputs: []SkillMentionInput{{Type: "text", Text: "[$deploy](" + remoteLocatorPath + ") and $deploy"}},
+		Skills: []InstructionsSkillMetadata{{Name: "deploy", Path: remotePath, LocatorPath: remoteLocatorPath}},
+	})
+	if len(selected) != 1 || selected[0].Path != remotePath {
+		t.Fatalf("CollectExplicitSkillMentions(remote locator path) = %#v", selected)
+	}
+
 	selected = CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
 		Inputs: []SkillMentionInput{{Type: "text", Text: "[deploy](skill://" + remotePath + ")"}},
 		Skills: []InstructionsSkillMetadata{{Name: "deploy", Path: remotePath}},
 	})
-	if len(selected) != 1 || selected[0].Path != remotePath {
-		t.Fatalf("CollectExplicitSkillMentions(remote URI without dollar) = %#v", selected)
+	if len(selected) != 0 {
+		t.Fatalf("CollectExplicitSkillMentions(remote URI without dollar) = %#v, want none", selected)
 	}
 
 	encodedRemotePath := "environment://remote/workspace/skills/deploy%20app/SKILL.md"
@@ -203,7 +212,7 @@ func TestCollectExplicitSkillMentions(t *testing.T) {
 		Inputs: []SkillMentionInput{{Type: "text", Text: "[deploy](skill://environment://remote/workspace/skills/deploy app/SKILL.md)"}},
 		Skills: []InstructionsSkillMetadata{{Name: "deploy", Path: encodedRemotePath}},
 	})
-	if len(selected) != 1 || selected[0].Path != encodedRemotePath {
-		t.Fatalf("CollectExplicitSkillMentions(remote URI with spaces) = %#v", selected)
+	if len(selected) != 0 {
+		t.Fatalf("CollectExplicitSkillMentions(remote URI with spaces) = %#v, want none", selected)
 	}
 }

@@ -1,6 +1,7 @@
 package requestuserinput
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -17,13 +18,16 @@ type FooterTip struct {
 }
 
 type RenderInput struct {
-	Sections      LayoutSections
-	Progress      string
-	QuestionLines []string
-	OptionRows    []string
-	Notes         string
-	FooterTips    []FooterTip
-	EmptyOptions  string
+	Sections            LayoutSections
+	Progress            string
+	QuestionLines       []string
+	OptionRows          []string
+	Notes               string
+	FooterTips          []FooterTip
+	EmptyOptions        string
+	OptionsHidden       bool
+	SelectedOptionIndex int
+	OptionsLen          int
 }
 
 func RenderQuestion(question string) []string {
@@ -91,7 +95,7 @@ func RenderUI(input RenderInput, width int) []string {
 		put(input.Sections.NotesArea, WrapText(input.Notes, input.Sections.NotesArea.Width))
 	}
 	if len(input.FooterTips) > 0 && input.Sections.FooterLines > 0 {
-		footerLines := WrapFooterTips(width, input.FooterTips)
+		footerLines := WrapFooterTips(width, FooterTipsWithOptionProgress(input.FooterTips, input.OptionsHidden, input.SelectedOptionIndex, input.OptionsLen))
 		footerArea := Rect{
 			X:      0,
 			Y:      input.Sections.NotesArea.Y + input.Sections.NotesArea.Height,
@@ -101,6 +105,21 @@ func RenderUI(input RenderInput, width int) []string {
 		put(footerArea, footerLines)
 	}
 	return canvas
+}
+
+func FooterTipsWithOptionProgress(tips []FooterTip, optionsHidden bool, selectedIndex int, optionsLen int) []FooterTip {
+	out := append([]FooterTip(nil), tips...)
+	if !optionsHidden || optionsLen <= 0 {
+		return out
+	}
+	if selectedIndex < 0 {
+		selectedIndex = 0
+	}
+	if selectedIndex >= optionsLen {
+		selectedIndex = optionsLen - 1
+	}
+	prefix := FooterTip{Text: "option " + strconv.Itoa(selectedIndex+1) + "/" + strconv.Itoa(optionsLen)}
+	return append([]FooterTip{prefix}, out...)
 }
 
 func RenderRowsBottomAligned(rows []string, height int, emptyMessage string) []string {
@@ -148,7 +167,7 @@ func WrapText(text string, width int) []string {
 			current = word
 			continue
 		}
-		if len([]rune(current))+1+len([]rune(word)) <= width {
+		if codextui.DisplayWidth(current)+1+codextui.DisplayWidth(word) <= width {
 			current += " " + word
 			continue
 		}
@@ -167,22 +186,27 @@ func wrapJoinedParts(parts []string, separator string, width int) []string {
 	}
 	lines := []string{}
 	current := ""
+	used := 0
+	separatorWidth := codextui.DisplayWidth(separator)
 	for _, part := range parts {
-		candidate := part
+		partWidth := minInt(codextui.DisplayWidth(part), width)
+		extra := partWidth
 		if current != "" {
-			candidate = current + separator + part
+			extra = separatorWidth + partWidth
 		}
-		if len([]rune(candidate)) <= width {
-			current = candidate
-			continue
-		}
-		if current != "" {
+		if current != "" && used+extra > width {
 			lines = append(lines, current)
 			current = part
+			used = partWidth
 			continue
 		}
-		lines = append(lines, breakLongWord(part, width)...)
-		current = ""
+		if current != "" {
+			current += separator + part
+			used += extra
+			continue
+		}
+		current = part
+		used = partWidth
 	}
 	if current != "" {
 		lines = append(lines, current)
@@ -238,17 +262,29 @@ func truncateLineWordBoundaryWithEllipsis(line string, maxWidth int) string {
 }
 
 func breakLongWord(value string, width int) []string {
-	if width <= 0 || len([]rune(value)) <= width {
+	if width <= 0 || codextui.DisplayWidth(value) <= width {
 		return []string{value}
 	}
-	runes := []rune(value)
 	out := []string{}
-	for len(runes) > width {
-		out = append(out, string(runes[:width]))
-		runes = runes[width:]
+	var builder strings.Builder
+	used := 0
+	for _, r := range value {
+		ch := string(r)
+		runeWidth := codextui.DisplayWidth(ch)
+		if used > 0 && used+runeWidth > width {
+			out = append(out, builder.String())
+			builder.Reset()
+			used = 0
+		}
+		if used == 0 && runeWidth > width {
+			out = append(out, ch)
+			continue
+		}
+		builder.WriteRune(r)
+		used += runeWidth
 	}
-	if len(runes) > 0 {
-		out = append(out, string(runes))
+	if builder.Len() > 0 {
+		out = append(out, builder.String())
 	}
 	return out
 }

@@ -15,18 +15,29 @@ import (
 )
 
 const (
-	remoteSkillWalkMaxDepth       = 8
-	remoteSkillWalkMaxDirectories = 256
-	remoteSkillWalkMaxEntries     = 4096
+	remoteSkillWalkMaxDepth       = skillMaxScanDepth
+	remoteSkillWalkMaxDirectories = skillMaxDirsPerRoot
+	remoteSkillWalkMaxEntries     = 20000
 )
+
+var remoteDiscoverablePluginManifestPaths = []string{
+	".codex-plugin/plugin.json",
+	".claude-plugin/plugin.json",
+}
 
 type remoteFSWalkEntry struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
 }
 
+type remoteFSWalkError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
 type remoteFSWalkResponse struct {
 	Entries   []remoteFSWalkEntry `json:"entries"`
+	Errors    []remoteFSWalkError `json:"errors"`
 	Truncated bool                `json:"truncated"`
 }
 
@@ -34,19 +45,23 @@ type remoteFSReadFileResponse struct {
 	DataBase64 string `json:"dataBase64"`
 }
 
-func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRecord, rootPath string) ([]SkillsListEntry, error) {
+type remoteFSGetMetadataResponse struct {
+	IsFile bool `json:"isFile"`
+}
+
+func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRecord, rootPath string) ([]SkillsListEntry, []string, error) {
 	if record == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rootPath = strings.TrimSpace(rootPath)
 	if rootPath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
@@ -57,16 +72,16 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 			"clientName": "codex-go",
 		},
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, err := readExecServerResponse(ctx, conn, 1); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  "initialized",
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	walkRaw, err := callRemoteEnvironmentFS(ctx, conn, 2, "fs/walk", map[string]any{
 		"path": rootPath,
@@ -74,43 +89,235 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 			"maxDepth":                remoteSkillWalkMaxDepth,
 			"maxDirectories":          remoteSkillWalkMaxDirectories,
 			"maxEntries":              remoteSkillWalkMaxEntries,
-			"followDirectorySymlinks": false,
+			"followDirectorySymlinks": true,
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var walk remoteFSWalkResponse
 	if err := json.Unmarshal(walkRaw, &walk); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	warnings := remoteEnvironmentSkillWalkWarnings(rootPath, walk)
 	sort.SliceStable(walk.Entries, func(i int, j int) bool {
 		return walk.Entries[i].Path < walk.Entries[j].Path
 	})
 	remoteFiles := map[string]bool{}
 	for _, entry := range walk.Entries {
 		if entry.Kind == "file" {
-			remoteFiles[entry.Path] = true
+			remoteFiles[remoteNormalizePathKey(entry.Path)] = true
 		}
 	}
-	entries := make([]SkillsListEntry, 0)
 	nextID := 3
+	pluginNamespaces := remotePluginNamespacesFromInventory(ctx, conn, &nextID, remoteFiles)
+	pluginNamespaces = remotePluginNamespacesFromRootAncestors(ctx, conn, &nextID, rootPath, pluginNamespaces)
+	entries := make([]SkillsListEntry, 0)
 	for _, entry := range walk.Entries {
 		if entry.Kind != "file" || remotePathBase(entry.Path) != SkillFilename {
 			continue
 		}
 		contents, err := readRemoteEnvironmentText(ctx, conn, &nextID, entry.Path)
 		if err != nil {
-			return nil, err
+			return nil, warnings, err
 		}
 		metadataPath := remoteSkillMetadataPath(entry.Path)
 		metadataContents := ""
-		if remoteFiles[metadataPath] {
+		if remoteFiles[remoteNormalizePathKey(metadataPath)] {
 			metadataContents, _ = readRemoteEnvironmentText(ctx, conn, &nextID, metadataPath)
 		}
-		entries = append(entries, remoteSkillEntryFromContents(record.EnvironmentID, entry.Path, contents, metadataContents))
+		pluginNamespace := remotePluginNamespaceForSkill(entry.Path, pluginNamespaces)
+		if skillEntry, warning, ok := remoteSkillEntryFromContents(record.EnvironmentID, entry.Path, contents, metadataContents, pluginNamespace); ok {
+			if !skillMatchesCodexProductRestriction(&skillEntry) {
+				continue
+			}
+			entries = append(entries, skillEntry)
+		} else if strings.TrimSpace(warning) != "" {
+			warnings = append(warnings, warning)
+		}
 	}
-	return entries, nil
+	sort.SliceStable(entries, func(i int, j int) bool {
+		if entries[i].Name != entries[j].Name {
+			return entries[i].Name < entries[j].Name
+		}
+		return entries[i].Path < entries[j].Path
+	})
+	return entries, warnings, nil
+}
+
+func remoteEnvironmentSkillWalkWarnings(rootPath string, walk remoteFSWalkResponse) []string {
+	warnings := make([]string, 0, len(walk.Errors)+1)
+	for _, walkErr := range walk.Errors {
+		path := strings.TrimSpace(walkErr.Path)
+		if path == "" {
+			path = rootPath
+		}
+		warnings = append(warnings, fmt.Sprintf("failed to scan skill path %s: %s", path, walkErr.Message))
+	}
+	if walk.Truncated {
+		warnings = append(warnings, fmt.Sprintf("skills scan reached its traversal limit (root: %s)", rootPath))
+	}
+	return warnings
+}
+
+type remotePluginManifestCandidate struct {
+	path     string
+	priority int
+}
+
+type remotePluginManifestName struct {
+	Name string `json:"name"`
+}
+
+func remotePluginNamespacesFromInventory(ctx context.Context, conn *websocket.Conn, nextID *int, remoteFiles map[string]bool) map[string]string {
+	if len(remoteFiles) == 0 {
+		return nil
+	}
+	candidates := map[string]remotePluginManifestCandidate{}
+	for path := range remoteFiles {
+		root, priority, ok := remotePluginRootFromManifestPath(path)
+		if !ok {
+			continue
+		}
+		key := remoteNormalizePathKey(root)
+		existing, exists := candidates[key]
+		if !exists || priority < existing.priority {
+			candidates[key] = remotePluginManifestCandidate{path: path, priority: priority}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	roots := make([]string, 0, len(candidates))
+	for root := range candidates {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	namespaces := make(map[string]string, len(roots))
+	for _, root := range roots {
+		contents, err := readRemoteEnvironmentText(ctx, conn, nextID, candidates[root].path)
+		if err != nil {
+			continue
+		}
+		var manifest remotePluginManifestName
+		if err := json.Unmarshal([]byte(contents), &manifest); err != nil {
+			continue
+		}
+		name := manifest.Name
+		if strings.TrimSpace(name) == "" {
+			name = remotePluginNamespaceFallbackName(root)
+		}
+		if name != "" {
+			namespaces[root] = name
+		}
+	}
+	if len(namespaces) == 0 {
+		return nil
+	}
+	return namespaces
+}
+
+func remotePluginNamespacesFromRootAncestors(ctx context.Context, conn *websocket.Conn, nextID *int, rootPath string, existing map[string]string) map[string]string {
+	current := remoteNormalizePathKey(rootPath)
+	for i := 0; current != "" && i < 64; i++ {
+		if _, ok := existing[current]; !ok {
+			if namespace, ok := remotePluginNamespaceForRoot(ctx, conn, nextID, current); ok {
+				if existing == nil {
+					existing = map[string]string{}
+				}
+				existing[current] = namespace
+			}
+		}
+		parent := remoteNormalizePathKey(remoteSkillDir(current))
+		if parent == "" || parent == current {
+			break
+		}
+		current = parent
+	}
+	return existing
+}
+
+func remotePluginNamespaceForRoot(ctx context.Context, conn *websocket.Conn, nextID *int, pluginRoot string) (string, bool) {
+	for _, relativePath := range remoteDiscoverablePluginManifestPaths {
+		manifestPath := remoteJoin(pluginRoot, relativePath)
+		metadata, err := getRemoteEnvironmentMetadata(ctx, conn, nextID, manifestPath)
+		if err != nil || metadata == nil || !metadata.IsFile {
+			continue
+		}
+		contents, err := readRemoteEnvironmentText(ctx, conn, nextID, manifestPath)
+		if err != nil {
+			return "", false
+		}
+		var manifest remotePluginManifestName
+		if err := json.Unmarshal([]byte(contents), &manifest); err != nil {
+			return "", false
+		}
+		name := manifest.Name
+		if strings.TrimSpace(name) == "" {
+			name = remotePluginNamespaceFallbackName(pluginRoot)
+		}
+		return name, name != ""
+	}
+	return "", false
+}
+
+func remotePluginRootFromManifestPath(manifestPath string) (string, int, bool) {
+	normalized := remoteNormalizePathKey(manifestPath)
+	parsed, err := url.Parse(normalized)
+	for priority, relativePath := range remoteDiscoverablePluginManifestPaths {
+		suffix := "/" + relativePath
+		if err == nil && parsed.Scheme != "" {
+			cleanPath := "/" + strings.TrimPrefix(pathpkg.Clean(parsed.Path), "/")
+			if !strings.HasSuffix(cleanPath, suffix) {
+				continue
+			}
+			rootPath := strings.TrimSuffix(cleanPath, suffix)
+			if rootPath == "" {
+				rootPath = "/"
+			}
+			root := *parsed
+			root.Path = rootPath
+			root.RawPath = ""
+			return root.String(), priority, true
+		}
+		cleanPath := strings.TrimPrefix(pathpkg.Clean(strings.ReplaceAll(normalized, "\\", "/")), "/")
+		if cleanPath == relativePath {
+			return ".", priority, true
+		}
+		if strings.HasSuffix(cleanPath, suffix) {
+			root := strings.TrimSuffix(cleanPath, suffix)
+			if root == "" {
+				root = "."
+			}
+			return root, priority, true
+		}
+	}
+	return "", 0, false
+}
+
+func remotePluginNamespaceForSkill(skillPath string, pluginNamespaces map[string]string) string {
+	if len(pluginNamespaces) == 0 {
+		return ""
+	}
+	current := remoteNormalizePathKey(remoteSkillDir(skillPath))
+	for {
+		if namespace := pluginNamespaces[current]; namespace != "" {
+			return namespace
+		}
+		parent := remoteNormalizePathKey(remoteSkillDir(current))
+		if parent == "" || parent == current {
+			return ""
+		}
+		current = parent
+	}
+}
+
+func remotePluginNamespaceFallbackName(pluginRoot string) string {
+	name := remotePathBase(pluginRoot)
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+	return firstNonEmpty(name, "plugin")
 }
 
 func callRemoteEnvironmentFS(ctx context.Context, conn *websocket.Conn, id int, method string, params any) (json.RawMessage, error) {
@@ -146,25 +353,42 @@ func readRemoteEnvironmentText(ctx context.Context, conn *websocket.Conn, nextID
 	return string(data), nil
 }
 
-func remoteSkillEntryFromContents(environmentID string, skillPath string, contents string, metadataContents string) SkillsListEntry {
+func getRemoteEnvironmentMetadata(ctx context.Context, conn *websocket.Conn, nextID *int, path string) (*remoteFSGetMetadataResponse, error) {
+	if nextID == nil {
+		return nil, fmt.Errorf("remote fs request id is nil")
+	}
+	id := *nextID
+	*nextID = *nextID + 1
+	raw, err := callRemoteEnvironmentFS(ctx, conn, id, "fs/getMetadata", map[string]any{"path": path})
+	if err != nil {
+		return nil, err
+	}
+	var response remoteFSGetMetadataResponse
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func remoteSkillEntryFromContents(environmentID string, skillPath string, contents string, metadataContents string, pluginNamespace string) (SkillsListEntry, string, bool) {
 	defaultName := remoteSkillDefaultName(skillPath)
-	name := defaultName
-	description := ""
-	shortDescription := ""
-	if parsed, ok := parseSkillFrontmatter(contents, defaultName); ok {
-		name = parsed.Name
-		description = parsed.Description
-		shortDescription = firstNonEmpty(parsed.ShortDescription, parsed.Description)
-	} else {
-		description = firstLineFromText(contents)
-		shortDescription = description
+	parsed, err := parseSkillFrontmatterResult(contents, defaultName)
+	if err != nil {
+		return SkillsListEntry{}, fmt.Sprintf("Failed to load environment skill at %s: %s", skillPath, err), false
+	}
+	name := parsed.Name
+	if pluginNamespace != "" {
+		name = pluginNamespace + ":" + name
+	}
+	if len([]rune(name)) > skillMaxQualifiedNameLen {
+		return SkillsListEntry{}, fmt.Sprintf("Failed to load environment skill at %s: %s", skillPath, invalidSkillFieldError("qualified name", skillMaxQualifiedNameLen)), false
 	}
 	entry := SkillsListEntry{
 		Name:             name,
 		Path:             remoteSkillSourcePath(environmentID, skillPath),
 		Scope:            "environment",
-		Description:      description,
-		ShortDescription: shortDescription,
+		Description:      parsed.Description,
+		ShortDescription: parsed.ShortDescription,
 		Enabled:          true,
 		Contents:         contents,
 	}
@@ -176,7 +400,7 @@ func remoteSkillEntryFromContents(environmentID string, skillPath string, conten
 			entry.Policy = resolveSkillPolicy(parsed.Policy)
 		}
 	}
-	return entry
+	return entry, "", true
 }
 
 func resolveRemoteSkillInterface(metadata *skillMetadataInterface, environmentID string, skillDir string) *SkillInterface {
@@ -265,6 +489,27 @@ func remoteSkillDefaultName(skillPath string) string {
 		name = unescaped
 	}
 	return firstNonEmpty(name, "skill")
+}
+
+func remoteNormalizePathKey(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	parsed, err := url.Parse(path)
+	if err == nil && parsed.Scheme != "" {
+		cleaned := pathpkg.Clean(parsed.Path)
+		if cleaned == "." {
+			cleaned = "/"
+		}
+		if !strings.HasPrefix(cleaned, "/") {
+			cleaned = "/" + cleaned
+		}
+		parsed.Path = cleaned
+		parsed.RawPath = ""
+		return parsed.String()
+	}
+	return pathpkg.Clean(strings.ReplaceAll(path, "\\", "/"))
 }
 
 func remoteJoin(base string, parts ...string) string {

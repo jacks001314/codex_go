@@ -2,6 +2,10 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -37,6 +41,27 @@ func (c *fakeDynamicToolCaller) Request(ctx context.Context, method string, para
 	return nil
 }
 
+func writeTurnTestMCPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}); err != nil {
+		t.Fatalf("Encode response = %v", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildToolRegistryIncludesCoreAndRuntimeTools(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.MCPTools = []mcp.RuntimeToolInfo{{
@@ -61,6 +86,157 @@ func TestBuildToolRegistryIncludesCoreAndRuntimeTools(t *testing.T) {
 		if _, ok := registry.Lookup(name); !ok {
 			t.Fatalf("missing tool %s", name.Key())
 		}
+	}
+}
+
+func TestSkillsToolsListAndReadOrchestratorResourcesLikeRust(t *testing.T) {
+	var methods []string
+	skillPackage := "skill://drive/docs"
+	mainResource := skillPackage + "/SKILL.md"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		methods = append(methods, request.Method)
+		switch request.Method {
+		case "initialize":
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{
+				"resources": []map[string]any{
+					{
+						"uri":         skillPackage,
+						"name":        "docs",
+						"description": "Use <docs> & keep quotes \"as-is\"",
+						"mimeType":    "mcp/skill",
+						"_meta": map[string]any{
+							"plugin_name": "Drive",
+							"skill_name":  "doc search",
+						},
+					},
+					{
+						"uri":         "skill://drive/bad",
+						"name":        "bad",
+						"description": "missing plugin name",
+						"mimeType":    "mcp/skill",
+						"_meta":       map[string]any{"skill_name": "bad"},
+					},
+				},
+			})
+		case "resources/templates/list":
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{"resourceTemplates": []any{}})
+		case "resources/read":
+			var params struct {
+				URI string `json:"uri"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				t.Fatalf("resources/read params = %v", err)
+			}
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{
+				"contents": []map[string]string{{"uri": params.URI, "text": "# Docs\nUse this skill."}},
+			})
+		default:
+			writeTurnTestMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	mcpService := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+		mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+	}})
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.MCPService = mcpService
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	listOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "skills-list",
+		ToolName: tool.NamespacedName("skills", "list"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"orchestrator"}}`},
+	})
+	if err != nil {
+		t.Fatalf("skills.list error = %v", err)
+	}
+	var listed skillsListResponse
+	if err := json.Unmarshal([]byte(listOutput.Body), &listed); err != nil {
+		t.Fatalf("skills.list JSON = %v in %s", err, listOutput.Body)
+	}
+	if len(listed.Skills) != 1 {
+		t.Fatalf("listed skills = %#v", listed.Skills)
+	}
+	got := listed.Skills[0]
+	if got.Authority.Kind != "orchestrator" || got.Package != skillPackage || got.MainResource != mainResource || got.Name != "Drive:doc search" {
+		t.Fatalf("listed skill = %#v", got)
+	}
+	if got.Description != "Use &lt;docs&gt; &amp; keep quotes \"as-is\"" {
+		t.Fatalf("description = %q", got.Description)
+	}
+	if len(listed.Warnings) != 1 || listed.Warnings[0] != "Skipped 1 malformed orchestrator skill resources." {
+		t.Fatalf("warnings = %#v", listed.Warnings)
+	}
+
+	readOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "skills-read",
+		ToolName: tool.NamespacedName("skills", "read"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"orchestrator"},"package":"` + skillPackage + `","resource":"` + mainResource + `"}`},
+	})
+	if err != nil {
+		t.Fatalf("skills.read error = %v", err)
+	}
+	var read skillsReadResponse
+	if err := json.Unmarshal([]byte(readOutput.Body), &read); err != nil {
+		t.Fatalf("skills.read JSON = %v in %s", err, readOutput.Body)
+	}
+	if read.Resource != mainResource || !strings.Contains(read.Contents, "Use this skill") {
+		t.Fatalf("read = %#v", read)
+	}
+	if !containsString(methods, "resources/list") || !containsString(methods, "resources/read") {
+		t.Fatalf("methods = %#v", methods)
+	}
+}
+
+func TestSkillsToolsRejectUnsupportedAuthorityLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.MCPService = mcp.NewMCPService(nil)
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	_, err = tool.NewRouter(registry).Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "skills-list",
+		ToolName: tool.NamespacedName("skills", "list"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor"}}`},
+	})
+	var callErr *tool.FunctionCallError
+	if !errors.As(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), "expected `orchestrator`") {
+		t.Fatalf("error = %#v", err)
 	}
 }
 

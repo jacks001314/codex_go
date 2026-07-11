@@ -104,6 +104,42 @@ func TestParseCommand(t *testing.T) {
 	}
 }
 
+func TestSlashCommandFrameDescriptionsMatchRust(t *testing.T) {
+	frames := map[string]SlashCommandFrame{}
+	for _, frame := range SlashCommandFrames() {
+		frames[frame.Name] = frame
+	}
+	want := map[string]string{
+		"model":                "choose what model and reasoning effort to use",
+		"ide":                  "include current selection, open files, and other context from your IDE",
+		"permissions":          "choose what Codex is allowed to do",
+		"keymap":               "remap TUI shortcuts",
+		"review":               "review my current changes and find issues",
+		"side":                 "start a side conversation in an ephemeral fork",
+		"copy":                 "copy last response as markdown",
+		"raw":                  "toggle raw scrollback mode for copy-friendly terminal selection",
+		"diff":                 "show git diff (including untracked files)",
+		"status":               "show current session configuration and token usage",
+		"usage":                "view account usage or use a usage limit reset",
+		"mcp":                  "list configured MCP tools; use /mcp verbose for details",
+		"approve":              "approve one retry of a recent auto-review denial",
+		"memories":             "configure memory use and generation",
+		"app":                  "continue this session in Codex Desktop",
+		"import":               "import setup, this project, and recent chats from Claude Code",
+		"sandbox-add-read-dir": "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>",
+		"rollout":              "print the rollout file path",
+	}
+	for name, description := range want {
+		frame, ok := frames[name]
+		if !ok {
+			t.Fatalf("missing slash command frame %q", name)
+		}
+		if frame.Description != description {
+			t.Fatalf("%s description = %q, want %q", name, frame.Description, description)
+		}
+	}
+}
+
 func TestValidApprovalPolicy(t *testing.T) {
 	for _, value := range []string{"untrusted", "on-request", "never"} {
 		if !ValidApprovalPolicy(value) {

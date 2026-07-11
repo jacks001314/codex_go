@@ -23,8 +23,11 @@ const (
 	SkillMetadataDir      = "agents"
 	SkillMetadataFilename = "openai.yaml"
 
-	skillMaxNameLen        = 64
-	skillMaxDescriptionLen = 1024
+	skillMaxNameLen          = 64
+	skillMaxQualifiedNameLen = 128
+	skillMaxDescriptionLen   = 1024
+	skillMaxScanDepth        = 6
+	skillMaxDirsPerRoot      = 2000
 )
 
 var ErrInvalidSkillsRequest = errors.New("invalid skills request")
@@ -41,6 +44,7 @@ type SkillsListEntry struct {
 
 	Name             string             `json:"name,omitempty"`
 	Path             string             `json:"path,omitempty"`
+	DisplayPath      string             `json:"-"`
 	Scope            string             `json:"scope,omitempty"`
 	Description      string             `json:"description,omitempty"`
 	ShortDescription string             `json:"shortDescription,omitempty"`
@@ -50,6 +54,7 @@ type SkillsListEntry struct {
 	PluginID         string             `json:"pluginId,omitempty"`
 	Policy           *SkillPolicy       `json:"-"`
 	Contents         string             `json:"-"`
+	Root             string             `json:"-"`
 }
 
 func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
@@ -180,6 +185,18 @@ func (e *SkillsListEntry) AllowsImplicitInvocation() bool {
 	return *e.Policy.AllowImplicitInvocation
 }
 
+func skillMatchesCodexProductRestriction(entry *SkillsListEntry) bool {
+	if entry == nil || entry.Policy == nil || len(entry.Policy.Products) == 0 {
+		return true
+	}
+	for _, product := range entry.Policy.Products {
+		if strings.EqualFold(strings.TrimSpace(product), "codex") {
+			return true
+		}
+	}
+	return false
+}
+
 type SkillErrorInfo struct {
 	Path    string `json:"path"`
 	Message string `json:"message"`
@@ -302,7 +319,12 @@ type SkillsService struct {
 	config            []ConfigEntry
 	configFingerprint string
 	configService     *config.ConfigService
-	cache             map[string][]SkillsListEntry
+	cache             map[string]skillsCacheEntry
+}
+
+type skillsCacheEntry struct {
+	skills []SkillsListEntry
+	errors []SkillErrorInfo
 }
 
 func NewSkillsService(roots []string) *SkillsService {
@@ -321,7 +343,7 @@ func NewSkillsServiceWithOptions(options *SkillsServiceOptions) *SkillsService {
 	return &SkillsService{
 		roots:         dedupeSkillsRoots(roots),
 		configService: options.Config,
-		cache:         map[string][]SkillsListEntry{},
+		cache:         map[string]skillsCacheEntry{},
 	}
 }
 
@@ -338,7 +360,7 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	if hasPersistentConfig && persistentFingerprint != s.configFingerprint {
 		s.config = persistentConfig
 		s.configFingerprint = persistentFingerprint
-		s.cache = map[string][]SkillsListEntry{}
+		s.cache = map[string]skillsCacheEntry{}
 	}
 	configEntries := cloneConfigEntries(s.config)
 	configFingerprint := s.configFingerprint
@@ -348,19 +370,21 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	key := strings.Join(params.CWDs, "\x00") + "\x00" + strings.Join(s.extraRoots, "\x00") + "\x00" + configFingerprint
 	if !params.ForceReload {
 		if cached, ok := s.cache[key]; ok {
-			return skillsListResponse(cloneSkills(cached), params.CWDs), nil
+			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs), nil
 		}
 	}
 	roots := cloneSkillsRoots(s.roots)
 	roots = append(roots, skillsRootsFromPaths(s.extraRoots, "user")...)
 	roots = append(roots, skillsRootsForCWDs(params.CWDs)...)
 	entries := make([]SkillsListEntry, 0)
+	skillErrors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
-		found, err := discover(root)
+		found, foundErrors, err := discover(root)
 		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, found...)
+		skillErrors = append(skillErrors, foundErrors...)
 	}
 	entries = applyConfig(entries, configEntries)
 	sort.SliceStable(entries, func(i int, j int) bool {
@@ -369,8 +393,8 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		}
 		return entries[i].Name < entries[j].Name
 	})
-	s.cache[key] = cloneSkills(entries)
-	return skillsListResponse(entries, params.CWDs), nil
+	s.cache[key] = skillsCacheEntry{skills: cloneSkills(entries), errors: cloneSkillErrors(skillErrors)}
+	return skillsListResponse(entries, skillErrors, params.CWDs), nil
 }
 
 func (s *SkillsService) ClearCache() {
@@ -379,7 +403,7 @@ func (s *SkillsService) ClearCache() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache = map[string][]SkillsListEntry{}
+	s.cache = map[string]skillsCacheEntry{}
 }
 
 func (s *SkillsService) SetExtraRoots(params *SkillsExtraRootsSetParams) (*SkillsExtraRootsSetResponse, error) {
@@ -393,7 +417,7 @@ func (s *SkillsService) SetExtraRoots(params *SkillsExtraRootsSetParams) (*Skill
 		roots = params.Roots
 	}
 	s.extraRoots = cleanStringSlice(roots)
-	s.cache = map[string][]SkillsListEntry{}
+	s.cache = map[string]skillsCacheEntry{}
 	return &SkillsExtraRootsSetResponse{}, nil
 }
 
@@ -420,7 +444,7 @@ func (s *SkillsService) WriteConfig(params *SkillsConfigWriteParams) (*SkillsCon
 		s.mu.Lock()
 		s.config = persistentConfig
 		s.configFingerprint = persistentFingerprint
-		s.cache = map[string][]SkillsListEntry{}
+		s.cache = map[string]skillsCacheEntry{}
 		s.mu.Unlock()
 		return &SkillsConfigWriteResponse{EffectiveEnabled: params.Enabled, Updated: true}, nil
 	}
@@ -428,7 +452,7 @@ func (s *SkillsService) WriteConfig(params *SkillsConfigWriteParams) (*SkillsCon
 	defer s.mu.Unlock()
 	s.config = applyConfigEntryEdit(s.config, &ConfigEntry{Name: strings.TrimSpace(params.Name), Path: normalizeSkillConfigPathAppserver(params.Path), Enabled: params.Enabled})
 	s.configFingerprint = configEntriesFingerprint(s.config)
-	s.cache = map[string][]SkillsListEntry{}
+	s.cache = map[string]skillsCacheEntry{}
 	return &SkillsConfigWriteResponse{EffectiveEnabled: params.Enabled, Updated: true}, nil
 }
 
@@ -444,63 +468,196 @@ func (s *SkillsService) loadPersistentConfig() ([]ConfigEntry, string, bool, err
 	return entries, configEntriesFingerprint(entries), true, nil
 }
 
-func discover(root SkillsRoot) ([]SkillsListEntry, error) {
+func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	root.Path = strings.TrimSpace(root.Path)
 	if root.Scope == "" {
 		root.Scope = "local"
 	}
 	if root.Path == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rootPath := root.Path
 	info, err := os.Stat(rootPath)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !info.IsDir() && filepath.Base(rootPath) == SkillFilename {
-		return []SkillsListEntry{entryFromPath(rootPath, root.Scope, root.PluginID)}, nil
+		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID)
+		if skillErr != nil {
+			return nil, []SkillErrorInfo{*skillErr}, nil
+		}
+		if !ok {
+			return nil, nil, nil
+		}
+		if !skillMatchesCodexProductRestriction(&entry) {
+			return nil, nil, nil
+		}
+		entry.Root = canonicalSkillRootForIdentity(filepath.Dir(rootPath))
+		return []SkillsListEntry{entry}, nil, nil
 	}
 	if !info.IsDir() {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var entries []SkillsListEntry
-	err = filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && path != rootPath && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		if !d.IsDir() && d.Name() == SkillFilename {
-			entries = append(entries, entryFromPath(path, root.Scope, root.PluginID))
-		}
-		return nil
-	})
-	return entries, err
+	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID)
+	return entries, skillErrors, err
 }
 
-func entryFromPath(path string, scope string, pluginID string) SkillsListEntry {
-	skillDir := filepath.Dir(path)
-	name := filepath.Base(skillDir)
-	description := ""
-	shortDescription := ""
-	if data, err := os.ReadFile(path); err == nil {
-		text := string(data)
-		if parsed, ok := parseSkillFrontmatter(text, name); ok {
-			name = parsed.Name
-			description = parsed.Description
-			shortDescription = firstNonEmpty(parsed.ShortDescription, parsed.Description)
-		} else {
-			description = firstLineFromText(text)
-			shortDescription = description
+type skillRootWalker struct {
+	root           string
+	scope          string
+	pluginID       string
+	followSymlinks bool
+	seenDirs       map[string]bool
+	directoryCount int
+	entries        []SkillsListEntry
+	errors         []SkillErrorInfo
+}
+
+func walkSkillRoot(rootPath string, scope string, pluginID string) ([]SkillsListEntry, []SkillErrorInfo, error) {
+	walker := &skillRootWalker{
+		root:           rootPath,
+		scope:          scope,
+		pluginID:       pluginID,
+		followSymlinks: !strings.EqualFold(strings.TrimSpace(scope), "system"),
+		seenDirs:       map[string]bool{},
+		directoryCount: 1,
+	}
+	walker.markSeen(rootPath)
+	if err := walker.walkDir(rootPath, 0); err != nil {
+		return nil, nil, err
+	}
+	return walker.entries, walker.errors, nil
+}
+
+func (w *skillRootWalker) walkDir(dir string, depth int) error {
+	children, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(children, func(i int, j int) bool {
+		return children[i].Name() < children[j].Name()
+	})
+	for _, child := range children {
+		name := child.Name()
+		path := filepath.Join(dir, name)
+		if child.Type()&os.ModeSymlink != 0 {
+			if err := w.walkSymlink(path, name, depth); err != nil {
+				return err
+			}
+			continue
+		}
+		if child.IsDir() {
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			if err := w.walkChildDir(path, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		if name == SkillFilename {
+			w.addSkill(path)
 		}
 	}
-	entry := SkillsListEntry{Name: name, Path: filepath.Clean(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID}
+	return nil
+}
+
+func (w *skillRootWalker) walkSymlink(path string, name string, parentDepth int) error {
+	if !w.followSymlinks || strings.HasPrefix(name, ".") {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	return w.walkChildDir(path, parentDepth+1)
+}
+
+func (w *skillRootWalker) walkChildDir(path string, depth int) error {
+	if depth > skillMaxScanDepth {
+		return nil
+	}
+	if w.directoryCount >= skillMaxDirsPerRoot {
+		return nil
+	}
+	identity := w.dirIdentity(path)
+	if w.seenDirs[identity] {
+		return nil
+	}
+	w.seenDirs[identity] = true
+	w.directoryCount++
+	return w.walkDir(path, depth)
+}
+
+func (w *skillRootWalker) addSkill(path string) {
+	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID)
+	if skillErr != nil {
+		w.errors = append(w.errors, *skillErr)
+		return
+	}
+	if ok && skillMatchesCodexProductRestriction(&entry) {
+		entry.Root = canonicalSkillRootForIdentity(w.root)
+		w.entries = append(w.entries, entry)
+	}
+}
+
+func (w *skillRootWalker) markSeen(path string) {
+	w.seenDirs[w.dirIdentity(path)] = true
+}
+
+func (w *skillRootWalker) dirIdentity(path string) string {
+	if w.followSymlinks {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Clean(resolved)
+		}
+	}
+	return filepath.Clean(path)
+}
+
+func entryFromPath(path string, scope string, pluginID string) (SkillsListEntry, *SkillErrorInfo, bool) {
+	skillDir := filepath.Dir(path)
+	name := filepath.Base(skillDir)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if skillErr := skillParseErrorInfo(path, scope, "failed to read file: "+err.Error()); skillErr != nil {
+			return SkillsListEntry{}, skillErr, false
+		}
+		return SkillsListEntry{}, nil, false
+	}
+	parsed, err := parseSkillFrontmatterResult(string(data), name)
+	if err != nil {
+		if skillErr := skillParseErrorInfo(path, scope, err.Error()); skillErr != nil {
+			return SkillsListEntry{}, skillErr, false
+		}
+		return SkillsListEntry{}, nil, false
+	}
+	name = parsed.Name
+	description := parsed.Description
+	shortDescription := parsed.ShortDescription
+	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID}
 	loadSkillMetadata(&entry, skillDir)
-	return entry
+	return entry, nil, true
+}
+
+func canonicalSkillPathForIdentity(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
+func canonicalSkillRootForIdentity(path string) string {
+	return canonicalSkillPathForIdentity(path)
+}
+
+func skillParseErrorInfo(path string, scope string, message string) *SkillErrorInfo {
+	if strings.EqualFold(strings.TrimSpace(scope), "system") {
+		return nil
+	}
+	return &SkillErrorInfo{Path: filepath.Clean(path), Message: message}
 }
 
 func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEntry {
@@ -542,40 +699,56 @@ func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEn
 }
 
 func parseSkillFrontmatter(contents string, defaultName string) (*parsedSkillFrontmatter, bool) {
+	parsed, err := parseSkillFrontmatterResult(contents, defaultName)
+	if err != nil {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func parseSkillFrontmatterResult(contents string, defaultName string) (*parsedSkillFrontmatter, error) {
 	frontmatter, _, ok := extractSkillFrontmatter(contents)
 	if !ok {
-		return nil, false
+		return nil, errors.New("missing YAML frontmatter delimited by ---")
 	}
 	var parsed skillFrontmatter
 	if err := yaml.Unmarshal([]byte(frontmatter), &parsed); err != nil {
+		originalErr := err
 		repaired, repairedOK := repairSkillFrontmatterScalarFields(frontmatter)
 		if !repairedOK {
-			return nil, false
+			return nil, fmt.Errorf("invalid YAML: %v", originalErr)
 		}
 		if err := yaml.Unmarshal([]byte(repaired), &parsed); err != nil {
-			return nil, false
+			return nil, fmt.Errorf("invalid YAML: %v", originalErr)
 		}
 	}
-	name := resolveSkillString(parsed.Name, skillMaxNameLen)
+	name := sanitizeSkillSingleLine(parsed.Name)
 	if name == "" {
-		name = resolveSkillString(defaultName, skillMaxNameLen)
+		name = sanitizeSkillSingleLine(defaultName)
 	}
 	if name == "" {
 		name = "skill"
 	}
-	description := resolveSkillString(parsed.Description, skillMaxDescriptionLen)
+	if len([]rune(name)) > skillMaxNameLen {
+		return nil, invalidSkillFieldError("name", skillMaxNameLen)
+	}
+	description := sanitizeSkillSingleLine(parsed.Description)
 	if description == "" {
-		return nil, false
+		return nil, errors.New("missing field `description`")
 	}
 	return &parsedSkillFrontmatter{
 		Name:             name,
 		Description:      description,
-		ShortDescription: resolveSkillString(parsed.Metadata.shortDescription(), skillMaxDescriptionLen),
-	}, true
+		ShortDescription: sanitizeSkillSingleLine(parsed.Metadata.shortDescription()),
+	}, nil
+}
+
+func invalidSkillFieldError(field string, maxLen int) error {
+	return fmt.Errorf("invalid %s: exceeds maximum length of %d characters", field, maxLen)
 }
 
 func (m skillFrontmatterMetadata) shortDescription() string {
-	return firstNonEmpty(m.ShortDescription, m.ShortDescriptionSnake, m.ShortDescriptionCamel)
+	return m.ShortDescription
 }
 
 func extractSkillFrontmatter(contents string) (string, string, bool) {
@@ -751,69 +924,63 @@ func (m *skillMetadataInterface) displayName() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.DisplayName, m.DisplayNameCamel, m.DisplayNameKebab)
+	return m.DisplayName
 }
 
 func (m *skillMetadataInterface) shortDescription() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.ShortDescription, m.ShortDescriptionCamel, m.ShortDescriptionKebab)
+	return m.ShortDescription
 }
 
 func (m *skillMetadataInterface) iconSmall() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.IconSmall, m.IconSmallCamel, m.IconSmallKebab)
+	return m.IconSmall
 }
 
 func (m *skillMetadataInterface) iconLarge() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.IconLarge, m.IconLargeCamel, m.IconLargeKebab)
+	return m.IconLarge
 }
 
 func (m *skillMetadataInterface) brandColor() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.BrandColor, m.BrandColorCamel, m.BrandColorKebab)
+	return m.BrandColor
 }
 
 func (m *skillMetadataInterface) defaultPrompt() string {
 	if m == nil {
 		return ""
 	}
-	return firstNonEmpty(m.DefaultPrompt, m.DefaultPromptCamel, m.DefaultPromptKebab)
+	return m.DefaultPrompt
 }
 
 func (m *skillMetadataPolicy) allowImplicitInvocation() *bool {
 	if m == nil {
 		return nil
 	}
-	if m.AllowImplicitInvocation != nil {
-		return m.AllowImplicitInvocation
-	}
-	if m.AllowImplicitInvocationCamel != nil {
-		return m.AllowImplicitInvocationCamel
-	}
-	return m.AllowImplicitInvocationKebab
+	return m.AllowImplicitInvocation
 }
 
 func (t *skillMetadataDependencyTool) kind() string {
 	if t == nil {
 		return ""
 	}
-	return firstNonEmpty(t.Type, t.TypeKind)
+	return t.Type
 }
 
 func (t *skillMetadataDependencyTool) value() string {
 	if t == nil {
 		return ""
 	}
-	return firstNonEmpty(t.Value, t.ValueName, t.ValueServer, t.ValueMCPServer, t.ValueMCPCamel)
+	return t.Value
 }
 
 func resolveSkillDependencies(metadata *skillMetadataDependencies) *SkillDependencies {
@@ -906,8 +1073,12 @@ func optionalSkillString(value string, maxLen int) *string {
 	return &value
 }
 
+func sanitizeSkillSingleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
 func resolveSkillString(value string, maxLen int) string {
-	value = strings.Join(strings.Fields(value), " ")
+	value = sanitizeSkillSingleLine(value)
 	if value == "" || len([]rune(value)) > maxLen {
 		return ""
 	}
@@ -1179,14 +1350,24 @@ func cloneSkills(skills []SkillsListEntry) []SkillsListEntry {
 	return out
 }
 
-func skillsListResponse(skills []SkillsListEntry, cwds []string) *SkillsListResponse {
+func cloneSkillErrors(errors []SkillErrorInfo) []SkillErrorInfo {
+	if errors == nil {
+		return nil
+	}
+	return append([]SkillErrorInfo(nil), errors...)
+}
+
+func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, cwds []string) *SkillsListResponse {
 	response := &SkillsListResponse{Skills: cloneSkills(skills)}
 	if len(cwds) == 0 {
 		response.Data = []SkillsListEntry{{
 			CWD:    "",
 			Skills: cloneSkills(skills),
-			Errors: []SkillErrorInfo{},
+			Errors: cloneSkillErrors(skillErrors),
 		}}
+		if response.Data[0].Errors == nil {
+			response.Data[0].Errors = []SkillErrorInfo{}
+		}
 		return response
 	}
 	data := make([]SkillsListEntry, 0, len(cwds))
@@ -1201,10 +1382,32 @@ func skillsListResponse(skills []SkillsListEntry, cwds []string) *SkillsListResp
 				scoped = append(scoped, cloneSkill(skill))
 			}
 		}
-		data = append(data, SkillsListEntry{CWD: cwd, Skills: scoped, Errors: []SkillErrorInfo{}})
+		data = append(data, SkillsListEntry{CWD: cwd, Skills: scoped, Errors: skillErrorsForCWD(skillErrors, cwd)})
 	}
 	response.Data = data
 	return response
+}
+
+func skillErrorsForCWD(errors []SkillErrorInfo, cwd string) []SkillErrorInfo {
+	if len(errors) == 0 {
+		return []SkillErrorInfo{}
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return cloneSkillErrors(errors)
+	}
+	cleanCWD := filepath.Clean(cwd)
+	out := make([]SkillErrorInfo, 0, len(errors))
+	for _, skillErr := range errors {
+		path := filepath.Clean(skillErr.Path)
+		if path == cleanCWD || strings.HasPrefix(path, cleanCWD+string(os.PathSeparator)) {
+			out = append(out, skillErr)
+		}
+	}
+	if out == nil {
+		out = []SkillErrorInfo{}
+	}
+	return out
 }
 
 func skillAppliesToCWD(skill SkillsListEntry, cwd string) bool {

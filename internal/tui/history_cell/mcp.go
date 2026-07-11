@@ -195,7 +195,6 @@ func formatMcpResources(resources []McpResource) string {
 		}
 		parts = append(parts, label)
 	}
-	sort.Strings(parts)
 	return strings.Join(parts, ", ")
 }
 
@@ -211,7 +210,6 @@ func formatMcpResourceTemplates(templates []McpResourceTemplate) string {
 		}
 		parts = append(parts, label)
 	}
-	sort.Strings(parts)
 	return strings.Join(parts, ", ")
 }
 

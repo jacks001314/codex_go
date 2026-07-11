@@ -44,20 +44,23 @@ func TestBackgroundRequestRegistryTracksActiveRequests(t *testing.T) {
 
 func TestMCPInventoryRequestThreadIDMatchRust(t *testing.T) {
 	nav := NewAgentNavigationState()
-	nav.Upsert("thread-1", "", "", false)
+	nav.Upsert(rustThreadID1, "", "", false)
 
-	if got, ok := MCPInventoryRequestThreadID("thread-1", "thread-1", nav); !ok || got != "thread-1" {
+	if got, ok := MCPInventoryRequestThreadID(rustThreadID1, rustThreadID1, nav); !ok || got != rustThreadID1 {
 		t.Fatalf("active open thread id = %q/%v", got, ok)
 	}
-	if got, ok := MCPInventoryRequestThreadID("thread-1", "thread-2", nav); ok || got != "" {
+	if got, ok := MCPInventoryRequestThreadID(rustThreadID1, rustThreadID2, nav); ok || got != "" {
 		t.Fatalf("inactive thread id = %q/%v, want none", got, ok)
 	}
-	nav.MarkClosed("thread-1")
-	if got, ok := MCPInventoryRequestThreadID("thread-1", "thread-1", nav); ok || got != "" {
+	nav.MarkClosed(rustThreadID1)
+	if got, ok := MCPInventoryRequestThreadID(rustThreadID1, rustThreadID1, nav); ok || got != "" {
 		t.Fatalf("closed thread id = %q/%v, want none", got, ok)
 	}
-	if got, ok := MCPInventoryRequestThreadID("thread-1", "thread-1", nil); !ok || got != "thread-1" {
+	if got, ok := MCPInventoryRequestThreadID("00000000-0000-0000-0000-0000000000AA", "00000000-0000-0000-0000-0000000000aa", nil); !ok || got != "00000000-0000-0000-0000-0000000000aa" {
 		t.Fatalf("nil nav thread id = %q/%v", got, ok)
+	}
+	if got, ok := MCPInventoryRequestThreadID(rustThreadID1, " "+rustThreadID1+" ", nav); ok || got != "" {
+		t.Fatalf("spaced thread id = %q/%v, want none", got, ok)
 	}
 }
 

@@ -8,11 +8,20 @@ import (
 )
 
 func TestTextFormattingHelpers(t *testing.T) {
+	if got := CapitalizeFirst("éclair"); got != "Éclair" {
+		t.Fatalf("CapitalizeFirst unicode = %q, want Éclair", got)
+	}
 	if got := TruncateText("abcdef", 4); got != "a..." {
 		t.Fatalf("TruncateText = %q, want a...", got)
 	}
 	if got := TruncateText("abcdef", 2); got != "ab" {
 		t.Fatalf("TruncateText short max = %q, want ab", got)
+	}
+	if got := TruncateText("e\u0301e\u0301e\u0301e\u0301", 3); got != "..." {
+		t.Fatalf("TruncateText combining ellipsis = %q, want ...", got)
+	}
+	if got := TruncateText("e\u0301e\u0301e\u0301e\u0301", 2); got != "e\u0301e\u0301" {
+		t.Fatalf("TruncateText combining short max = %q", got)
 	}
 
 	formatted, ok := FormatJSONCompact(`{"b":2,"a":{"x":1}}`)
@@ -30,6 +39,19 @@ func TestTextFormattingHelpers(t *testing.T) {
 	truncated := CenterTruncatePath(path, 24)
 	if !strings.Contains(truncated, "\u2026") || !strings.HasSuffix(truncated, filepath.Join("gamma", "delta.txt")) {
 		t.Fatalf("CenterTruncatePath = %q", truncated)
+	}
+	sep := string(filepath.Separator)
+	longPath := "~" + sep + "hello" + sep + "the" + sep + "fox" + sep + "is" + sep + "very" + sep + "fast"
+	if got, want := CenterTruncatePath(longPath, 24), "~"+sep+"hello"+sep+"the"+sep+"…"+sep+"very"+sep+"fast"; got != want {
+		t.Fatalf("CenterTruncatePath long = %q, want %q", got, want)
+	}
+	windowsStyle := "C:" + sep + "Users" + sep + "codex" + sep + "Projects" + sep + "super" + sep + "long" + sep + "windows" + sep + "path" + sep + "file.txt"
+	if got, want := CenterTruncatePath(windowsStyle, 36), "C:"+sep+"Users"+sep+"codex"+sep+"…"+sep+"path"+sep+"file.txt"; got != want {
+		t.Fatalf("CenterTruncatePath windows = %q, want %q", got, want)
+	}
+	longSegment := "~" + sep + "supercalifragilisticexpialidocious"
+	if got, want := CenterTruncatePath(longSegment, 18), "~"+sep+"…cexpialidocious"; got != want {
+		t.Fatalf("CenterTruncatePath long segment = %q, want %q", got, want)
 	}
 
 	if got := ProperJoin(nil); got != "" {

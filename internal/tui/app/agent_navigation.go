@@ -57,6 +57,10 @@ func (s *AgentNavigationState) Get(threadID string) (codextui.AgentThreadEntry, 
 	if s == nil || s.threads == nil {
 		return codextui.AgentThreadEntry{}, false
 	}
+	threadID, ok := ParseAppServerThreadID(threadID)
+	if !ok {
+		return codextui.AgentThreadEntry{}, false
+	}
 	entry, ok := s.threads[threadID]
 	return entry, ok
 }
@@ -66,7 +70,9 @@ func (s *AgentNavigationState) IsEmpty() bool {
 }
 
 func (s *AgentNavigationState) Upsert(threadID string, agentNickname string, agentRole string, isClosed bool) {
-	if s == nil || strings.TrimSpace(threadID) == "" {
+	var ok bool
+	threadID, ok = ParseAppServerThreadID(threadID)
+	if s == nil || !ok {
 		return
 	}
 	s.ensure()
@@ -86,23 +92,29 @@ func (s *AgentNavigationState) Upsert(threadID string, agentNickname string, age
 }
 
 func (s *AgentNavigationState) RecordSubAgentActivity(activity SubAgentActivityDisplay) {
-	if s == nil || strings.TrimSpace(activity.ThreadID) == "" {
+	threadID, ok := ParseAppServerThreadID(activity.ThreadID)
+	if s == nil || !ok {
 		return
 	}
 	s.ensure()
-	entry, exists := s.threads[activity.ThreadID]
+	entry, exists := s.threads[threadID]
 	if !exists {
-		s.order = append(s.order, activity.ThreadID)
-		entry.ThreadID = activity.ThreadID
+		s.order = append(s.order, threadID)
+		entry.ThreadID = threadID
 	}
 	entry.AgentPath = activity.AgentPath
 	entry.IsRunning = activity.IsRunningHint
 	entry.IsClosed = false
-	s.threads[activity.ThreadID] = entry
+	s.threads[threadID] = entry
 }
 
 func (s *AgentNavigationState) SetRunning(threadID string, isRunning bool) {
 	if s == nil || s.threads == nil {
+		return
+	}
+	var ok bool
+	threadID, ok = ParseAppServerThreadID(threadID)
+	if !ok {
 		return
 	}
 	entry, ok := s.threads[threadID]
@@ -117,6 +129,11 @@ func (s *AgentNavigationState) SetAgentPath(threadID string, agentPath string) {
 	if s == nil || s.threads == nil {
 		return
 	}
+	var ok bool
+	threadID, ok = ParseAppServerThreadID(threadID)
+	if !ok {
+		return
+	}
 	entry, ok := s.threads[threadID]
 	if !ok {
 		return
@@ -126,7 +143,9 @@ func (s *AgentNavigationState) SetAgentPath(threadID string, agentPath string) {
 }
 
 func (s *AgentNavigationState) MarkClosed(threadID string) {
-	if s == nil || strings.TrimSpace(threadID) == "" {
+	var ok bool
+	threadID, ok = ParseAppServerThreadID(threadID)
+	if s == nil || !ok {
 		return
 	}
 	s.ensure()
@@ -152,6 +171,11 @@ func (s *AgentNavigationState) Remove(threadID string) {
 	if s == nil || s.threads == nil {
 		return
 	}
+	var ok bool
+	threadID, ok = ParseAppServerThreadID(threadID)
+	if !ok {
+		return
+	}
 	delete(s.threads, threadID)
 	out := s.order[:0]
 	for _, candidate := range s.order {
@@ -166,8 +190,9 @@ func (s *AgentNavigationState) HasNonPrimaryThread(primaryThreadID string) bool 
 	if s == nil || s.threads == nil {
 		return false
 	}
+	primary, hasPrimary := ParseAppServerThreadID(primaryThreadID)
 	for threadID := range s.threads {
-		if primaryThreadID == "" || threadID != primaryThreadID {
+		if !hasPrimary || threadID != primary {
 			return true
 		}
 	}
@@ -192,17 +217,19 @@ func (s *AgentNavigationState) OrderedThreadIDs() []string {
 }
 
 func (s *AgentNavigationState) PickerItems(currentThreadID string, primaryThreadID string) ([]AgentNavigationPickerItem, int) {
+	currentThreadID, hasCurrent := ParseAppServerThreadID(currentThreadID)
+	primaryThreadID, hasPrimary := ParseAppServerThreadID(primaryThreadID)
 	ordered := s.OrderedThreads()
 	items := make([]AgentNavigationPickerItem, 0, len(ordered))
 	selected := -1
 	for index, entry := range ordered {
-		isPrimary := primaryThreadID != "" && entry.ThreadID == primaryThreadID
+		isPrimary := hasPrimary && entry.ThreadID == primaryThreadID
 		name := codextui.FormatAgentPickerItemName(entry.AgentNickname, entry.AgentRole, isPrimary)
 		item := AgentNavigationPickerItem{
 			ThreadID:    entry.ThreadID,
 			Name:        name,
 			Description: entry.ThreadID,
-			IsCurrent:   currentThreadID != "" && entry.ThreadID == currentThreadID,
+			IsCurrent:   hasCurrent && entry.ThreadID == currentThreadID,
 			IsPrimary:   isPrimary,
 			IsClosed:    entry.IsClosed,
 			SearchValue: strings.TrimSpace(name + " " + entry.ThreadID),
@@ -216,10 +243,11 @@ func (s *AgentNavigationState) PickerItems(currentThreadID string, primaryThread
 }
 
 func (s *AgentNavigationState) OrderedPathBackedSubagentThreads(primaryThreadID string) []codextui.AgentThreadEntry {
+	primaryThreadID, hasPrimary := ParseAppServerThreadID(primaryThreadID)
 	ordered := s.OrderedThreads()
 	out := make([]codextui.AgentThreadEntry, 0, len(ordered))
 	for _, entry := range ordered {
-		if entry.ThreadID == primaryThreadID {
+		if hasPrimary && entry.ThreadID == primaryThreadID {
 			continue
 		}
 		if strings.TrimSpace(entry.AgentPath) == "" {
@@ -241,7 +269,8 @@ func (s *AgentNavigationState) TrackedThreadIDs() []string {
 
 func (s *AgentNavigationState) AdjacentThreadID(currentDisplayedThreadID string, direction AgentNavigationDirection) (string, bool) {
 	ordered := s.TrackedThreadIDs()
-	if len(ordered) < 2 || strings.TrimSpace(currentDisplayedThreadID) == "" {
+	currentDisplayedThreadID, ok := ParseAppServerThreadID(currentDisplayedThreadID)
+	if len(ordered) < 2 || !ok {
 		return "", false
 	}
 	currentIndex := -1
@@ -268,11 +297,13 @@ func (s *AgentNavigationState) AdjacentThreadID(currentDisplayedThreadID string,
 }
 
 func (s *AgentNavigationState) ActiveAgentLabel(currentDisplayedThreadID string, primaryThreadID string) (string, bool) {
-	if s == nil || len(s.threads) <= 1 || strings.TrimSpace(currentDisplayedThreadID) == "" {
+	currentDisplayedThreadID, ok := ParseAppServerThreadID(currentDisplayedThreadID)
+	if s == nil || len(s.threads) <= 1 || !ok {
 		return "", false
 	}
+	primaryThreadID, hasPrimary := ParseAppServerThreadID(primaryThreadID)
 	entry, ok := s.threads[currentDisplayedThreadID]
-	isPrimary := primaryThreadID != "" && currentDisplayedThreadID == primaryThreadID
+	isPrimary := hasPrimary && currentDisplayedThreadID == primaryThreadID
 	if ok && !isPrimary {
 		if agentPath := strings.TrimSpace(entry.AgentPath); agentPath != "" {
 			return "`" + agentPath + "`", true

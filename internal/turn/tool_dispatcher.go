@@ -19,6 +19,8 @@ type ToolDispatcherOptions struct {
 	Now                func() time.Time
 	PostToolInputItems ToolPostExecutionInputItems
 	OnToolStarted      ToolStartedCallback
+	ThreadID           string
+	TurnID             string
 }
 
 type ToolDispatcher struct {
@@ -27,6 +29,8 @@ type ToolDispatcher struct {
 	now                func() time.Time
 	postToolInputItems ToolPostExecutionInputItems
 	onToolStarted      ToolStartedCallback
+	threadID           string
+	turnID             string
 	clockMu            sync.Mutex
 }
 
@@ -120,6 +124,8 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		now:                now,
 		postToolInputItems: options.PostToolInputItems,
 		onToolStarted:      options.OnToolStarted,
+		threadID:           strings.TrimSpace(options.ThreadID),
+		turnID:             strings.TrimSpace(options.TurnID),
 	}
 }
 
@@ -143,6 +149,7 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 		if !ok {
 			continue
 		}
+		d.addInvocationContext(invocation)
 		invocations = append(invocations, invocation)
 	}
 	if len(invocations) == 0 {
@@ -156,6 +163,23 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 		return []ToolExecutionResult{*result}, nil
 	}
 	return d.executeToolInvocations(ctx, invocations)
+}
+
+func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
+	if d == nil || invocation == nil {
+		return
+	}
+	if invocation.Context == nil {
+		invocation.Context = map[string]any{}
+	}
+	if d.threadID != "" {
+		invocation.Context["thread_id"] = d.threadID
+		invocation.Context["threadId"] = d.threadID
+	}
+	if d.turnID != "" {
+		invocation.Context["turn_id"] = d.turnID
+		invocation.Context["turnId"] = d.turnID
+	}
 }
 
 func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,7 +22,10 @@ import (
 const (
 	mcpHTTPProtocolVersionHeader = "MCP-Protocol-Version"
 	mcpHTTPSessionIDHeader       = "Mcp-Session-Id"
+	mcpJSONRPCInternalErrorCode  = int64(-32603)
 )
+
+var mcpStreamableHTTPRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
 
 type httpRPCResponse struct {
 	JSONRPC string           `json:"jsonrpc"`
@@ -66,6 +70,7 @@ type httpClient struct {
 	elicitation MCPElicitationHandler
 	progress    MCPProgressHandler
 	openAIForm  bool
+	retrySleep  func(time.Duration)
 }
 
 type httpClientCallOptions struct {
@@ -262,6 +267,7 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 		config:     config,
 		client:     &http.Client{Timeout: 15 * time.Second},
 		openAIForm: openAIForm,
+		retrySleep: time.Sleep,
 	}
 }
 
@@ -329,24 +335,18 @@ func (c *httpClient) CallWithOptions(options *httpClientCallOptions, method stri
 	defer c.mu.Unlock()
 	c.applyCallOptions(options)
 	if !c.initialized {
-		sessionID, err := c.initialize()
-		if err != nil {
+		if err := c.reinitialize(); err != nil {
 			return err
 		}
-		c.sessionID = sessionID
-		if err := c.notifyInitialized(sessionID); err != nil {
-			return err
-		}
-		c.initialized = true
 	}
-	err := c.callWithSession(method, params, out, c.sessionID)
+	err := c.callWithTransientRetries(method, params, out)
 	if err == nil || !isMCPHTTPSessionInvalidError(err) || strings.TrimSpace(c.sessionID) == "" {
 		return err
 	}
 	if resetErr := c.reinitialize(); resetErr != nil {
 		return resetErr
 	}
-	return c.callWithSession(method, params, out, c.sessionID)
+	return c.callWithTransientRetries(method, params, out)
 }
 
 func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
@@ -396,17 +396,43 @@ func (c *httpClient) notifyInitialized(sessionID string) error {
 func (c *httpClient) reinitialize() error {
 	c.initialized = false
 	c.sessionID = ""
-	sessionID, err := c.initialize()
-	if err != nil {
-		return err
-	}
-	c.sessionID = sessionID
-	if err := c.notifyInitialized(sessionID); err != nil {
+	for attempt := 0; ; attempt++ {
+		sessionID, err := c.initialize()
+		if err == nil {
+			c.sessionID = sessionID
+			err = c.notifyInitialized(sessionID)
+			if err == nil {
+				c.initialized = true
+				return nil
+			}
+		}
 		c.sessionID = ""
-		return err
+		if attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {
+			return err
+		}
+		c.sleepBeforeRetry(mcpStreamableHTTPRetryDelays[attempt])
 	}
-	c.initialized = true
-	return nil
+}
+
+func (c *httpClient) callWithTransientRetries(method string, params any, out any) error {
+	for attempt := 0; ; attempt++ {
+		err := c.callWithSession(method, params, out, c.sessionID)
+		if err == nil {
+			return nil
+		}
+		if method != "tools/list" || attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {
+			return err
+		}
+		c.sleepBeforeRetry(mcpStreamableHTTPRetryDelays[attempt])
+	}
+}
+
+func (c *httpClient) sleepBeforeRetry(delay time.Duration) {
+	if c.retrySleep != nil {
+		c.retrySleep(delay)
+		return
+	}
+	time.Sleep(delay)
 }
 
 func (c *httpClient) callWithSession(method string, params any, out any, sessionID string) error {
@@ -480,6 +506,35 @@ func isMCPHTTPSessionInvalidError(err error) bool {
 		return false
 	}
 	return statusErr.IsStatus(http.StatusNotFound) || statusErr.IsStatus(http.StatusGone)
+}
+
+func isRetryableMCPStreamableHTTPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *mcpHTTPStatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.StatusCode {
+		case http.StatusRequestTimeout,
+			http.StatusTooManyRequests,
+			http.StatusInternalServerError,
+			http.StatusBadGateway,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+	var remoteErr *MCPRemoteError
+	if errors.As(err, &remoteErr) {
+		return remoteErr.Code == mcpJSONRPCInternalErrorCode && strings.HasPrefix(remoteErr.Message, "http/request failed:")
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID string, bearerToken string) (*http.Response, error) {

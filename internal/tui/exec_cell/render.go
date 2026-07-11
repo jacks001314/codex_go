@@ -4,7 +4,9 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/internal/shell"
 	"codex_go/internal/tui"
+	"codex_go/internal/utils"
 )
 
 // Rust parity: codex-rs/tui/src/exec_cell/render.rs.
@@ -13,7 +15,13 @@ const (
 	ToolCallMaxLines          = 5
 	UserShellToolCallMaxLines = 50
 	maxInteractionPreview     = 80
+	commandContinuationLines  = 2
 	transcriptHint            = "ctrl + t to view transcript"
+	ansiReset                 = "\x1b[0m"
+	ansiBold                  = "\x1b[1m"
+	ansiDim                   = "\x1b[2m"
+	ansiGreenBold             = "\x1b[1;32m"
+	ansiRedBold               = "\x1b[1;31m"
 )
 
 type OutputLinesParams struct {
@@ -48,10 +56,7 @@ func OutputLinesFor(output *CommandOutput, params OutputLinesParams) OutputLines
 	if lineLimit <= 0 {
 		lineLimit = ToolCallMaxLines
 	}
-	sourceLines := strings.Split(strings.TrimRight(output.AggregatedOutput, "\n"), "\n")
-	if len(sourceLines) == 1 && sourceLines[0] == "" {
-		sourceLines = nil
-	}
+	sourceLines := splitCommandOutputLines(output.AggregatedOutput)
 	total := len(sourceLines)
 	headEnd := min(total, lineLimit)
 	out := []string{}
@@ -86,6 +91,16 @@ func (c ExecCell) DisplayLines(width int) []string {
 	return c.commandDisplayLines(width)
 }
 
+func (c ExecCell) DisplayLinesWithTheme(width int, themeID string) []string {
+	if strings.TrimSpace(themeID) == "" {
+		return c.DisplayLines(width)
+	}
+	if c.IsExploringCell() {
+		return c.exploringDisplayLines(width)
+	}
+	return c.commandDisplayLinesWithTheme(width, themeID)
+}
+
 func (c ExecCell) TranscriptLines(width int) []string {
 	out := []string{}
 	for index, call := range c.Calls {
@@ -100,7 +115,7 @@ func (c ExecCell) TranscriptLines(width int) []string {
 			BreakWords:       true,
 		})...)
 		if call.Output != nil && !call.IsUnifiedExecInteraction() {
-			out = append(out, strings.Split(strings.TrimRight(call.Output.FormattedOutput, "\n"), "\n")...)
+			out = append(out, splitCommandOutputLines(call.Output.FormattedOutput)...)
 		}
 		if call.Output != nil {
 			result := "✓"
@@ -142,17 +157,31 @@ func (c ExecCell) exploringDisplayLines(width int) []string {
 }
 
 func (c ExecCell) commandDisplayLines(width int) []string {
+	return c.commandDisplayLinesStyled(width, "", false)
+}
+
+func (c ExecCell) commandDisplayLinesWithTheme(width int, themeID string) []string {
+	return c.commandDisplayLinesStyled(width, themeID, true)
+}
+
+func (c ExecCell) commandDisplayLinesStyled(width int, themeID string, styled bool) []string {
 	if len(c.Calls) != 1 {
 		return nil
 	}
+	width = max(width, 1)
 	call := c.Calls[0]
 	success := call.Output != nil && call.Output.ExitCode == 0
 	failed := call.Output != nil && call.Output.ExitCode != 0
 	bullet := "•"
-	if failed {
-		bullet = "×"
-	} else if success {
-		bullet = "✓"
+	if styled {
+		switch {
+		case failed:
+			bullet = ansiWrap(ansiRedBold, bullet)
+		case success:
+			bullet = ansiWrap(ansiGreenBold, bullet)
+		default:
+			bullet = ansiWrap(ansiDim, bullet)
+		}
 	}
 	title := "Running"
 	if call.Output != nil {
@@ -167,32 +196,162 @@ func (c ExecCell) commandDisplayLines(width int) []string {
 		cmdDisplay = FormatUnifiedExecInteraction(call.Command, call.InteractionInput)
 		title = ""
 	}
-	header := strings.TrimSpace(bullet + " " + title + " " + cmdDisplay)
-	lines := tui.AdaptiveWrapLine(header, tui.WrapOptions{Width: width, BreakWords: true})
+	headerPrefix := bullet + " "
+	if title != "" {
+		if styled {
+			headerPrefix += ansiWrap(ansiBold, title) + " "
+		} else {
+			headerPrefix += title + " "
+		}
+	}
+	lines := commandHeaderLines(headerPrefix, cmdDisplay, width, themeID, styled)
 	if call.Output != nil {
 		limit := ToolCallMaxLines
+		displayLimit := ToolCallMaxLines
 		if call.IsUserShellCommand() {
 			limit = UserShellToolCallMaxLines
+			displayLimit = UserShellToolCallMaxLines
 		}
 		output := OutputLinesFor(call.Output, OutputLinesParams{LineLimit: limit})
 		if len(output.Lines) == 0 && !call.IsUnifiedExecInteraction() {
-			lines = append(lines, "  └ (no output)")
+			line := "  └ (no output)"
+			if styled {
+				line = ansiWrap(ansiDim, line)
+			}
+			lines = append(lines, line)
 		} else {
+			wrappedOutput := make([]string, 0, len(output.Lines))
 			for _, line := range output.Lines {
-				lines = append(lines, tui.AdaptiveWrapLine(line, tui.WrapOptions{
-					Width:            width,
-					InitialIndent:    "  └ ",
-					SubsequentIndent: "    ",
-					BreakWords:       true,
+				wrappedOutput = append(wrappedOutput, tui.AdaptiveWrapLine(line, tui.WrapOptions{
+					Width:      max(width-4, 1),
+					BreakWords: true,
 				})...)
+			}
+			prefixedOutput := make([]string, 0, len(wrappedOutput))
+			for index, line := range wrappedOutput {
+				prefix := "    "
+				if index == 0 {
+					prefix = "  └ "
+				}
+				prefixedOutput = append(prefixedOutput, prefix+line)
+			}
+			for _, line := range truncateOutputLinesMiddle(prefixedOutput, displayLimit, width, output.Omitted) {
+				if styled {
+					line = ansiWrap(ansiDim, line)
+				}
+				lines = append(lines, line)
 			}
 		}
 	}
 	return lines
 }
 
+func commandHeaderLines(prefix string, command string, width int, themeID string, styled bool) []string {
+	if width <= 0 {
+		width = 1
+	}
+	prefixWidth := tui.DisplayWidth(utils.StripANSI(prefix))
+	initialIndent := strings.Repeat(" ", min(prefixWidth, max(width-1, 0)))
+	wrapped := tui.AdaptiveWrapLine(command, tui.WrapOptions{
+		Width:            width,
+		InitialIndent:    initialIndent,
+		SubsequentIndent: "    ",
+		BreakWords:       true,
+	})
+	if len(wrapped) == 0 {
+		wrapped = []string{initialIndent}
+	}
+	first := strings.TrimPrefix(wrapped[0], initialIndent)
+	lines := []string{prefix + highlightCommandLine(first, themeID, styled)}
+	continuation := make([]string, 0, len(wrapped)-1)
+	for _, line := range wrapped[1:] {
+		continuation = append(continuation, strings.TrimPrefix(line, "    "))
+	}
+	if len(continuation) > commandContinuationLines {
+		omitted := len(continuation) - commandContinuationLines
+		continuation = append(append([]string(nil), continuation[:commandContinuationLines]...), "… +"+tui.FormatInt(int64(omitted))+" lines")
+	}
+	for _, line := range continuation {
+		continuationPrefix := "  │ "
+		if styled {
+			continuationPrefix = ansiWrap(ansiDim, continuationPrefix)
+		}
+		lines = append(lines, continuationPrefix+highlightCommandLine(line, themeID, styled))
+	}
+	return lines
+}
+
+func highlightCommandLine(line string, themeID string, styled bool) string {
+	if !styled {
+		return line
+	}
+	return tui.HighlightBashANSI(line, themeID)
+}
+
+func truncateOutputLinesMiddle(lines []string, maxRows int, width int, omittedHint *int) []string {
+	if maxRows <= 0 || len(lines) == 0 {
+		return nil
+	}
+	width = max(width, 1)
+	rows := make([]int, len(lines))
+	totalRows := 0
+	for index, line := range lines {
+		lineWidth := tui.DisplayWidth(utils.StripANSI(line))
+		rows[index] = max(1, (lineWidth+width-1)/width)
+		totalRows += rows[index]
+	}
+	if totalRows <= maxRows {
+		return lines
+	}
+	baseOmitted := 0
+	if omittedHint != nil {
+		baseOmitted = *omittedHint
+	}
+	estimatedOmitted := baseOmitted + len(lines)
+	if omittedHint != nil {
+		estimatedOmitted--
+	}
+	ellipsis := "    " + OutputEllipsisText(estimatedOmitted)
+	ellipsisRows := max(1, (tui.DisplayWidth(ellipsis)+width-1)/width)
+	if ellipsisRows >= maxRows {
+		return []string{ellipsis}
+	}
+
+	availableRows := maxRows - ellipsisRows
+	headBudget := availableRows / 2
+	tailBudget := availableRows - headBudget
+	headEnd := 0
+	headRows := 0
+	for headEnd < len(lines) && headRows+rows[headEnd] <= headBudget {
+		headRows += rows[headEnd]
+		headEnd++
+	}
+	tailStart := len(lines)
+	tailRows := 0
+	for tailStart > headEnd && tailRows+rows[tailStart-1] <= tailBudget {
+		tailStart--
+		tailRows += rows[tailStart]
+	}
+	additional := len(lines) - headEnd - (len(lines) - tailStart)
+	if omittedHint != nil && additional > 0 {
+		additional--
+	}
+	ellipsis = "    " + OutputEllipsisText(baseOmitted+additional)
+	out := append([]string(nil), lines[:headEnd]...)
+	out = append(out, ellipsis)
+	out = append(out, lines[tailStart:]...)
+	return out
+}
+
+func ansiWrap(code string, text string) string {
+	if text == "" {
+		return ""
+	}
+	return code + text + ansiReset
+}
+
 func FormatUnifiedExecInteraction(command []string, input string) string {
-	commandDisplay := StripShellCommand(command)
+	commandDisplay := formatUnifiedExecInteractionCommand(command)
 	if input != "" {
 		return "Interacted with `" + commandDisplay + "`, sent `" + SummarizeInteractionInput(input) + "`"
 	}
@@ -214,8 +373,12 @@ func OutputEllipsisText(omitted int) string {
 }
 
 func StripShellCommand(command []string) string {
-	if len(command) >= 3 && (strings.HasSuffix(command[0], "bash") || strings.HasSuffix(command[0], "sh")) && command[1] == "-lc" {
-		return command[2]
+	return shell.StripShellCommandAndEscape(command)
+}
+
+func formatUnifiedExecInteractionCommand(command []string) string {
+	if _, script, ok := shell.ExtractPOSIXShellCommand(command); ok {
+		return script
 	}
 	return strings.Join(command, " ")
 }
@@ -250,4 +413,16 @@ func outputPrefix(index int, params OutputLinesParams) string {
 		return "  └ "
 	}
 	return "    "
+}
+
+func splitCommandOutputLines(output string) []string {
+	output = strings.TrimRight(output, "\r\n")
+	if output == "" {
+		return nil
+	}
+	lines := strings.Split(output, "\n")
+	for index := range lines {
+		lines[index] = strings.TrimSuffix(lines[index], "\r")
+	}
+	return lines
 }

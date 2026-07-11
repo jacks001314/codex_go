@@ -39,11 +39,11 @@ func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 
 	assertVT100Snapshot(t, model.View(), 82, 24, `
 Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | San...
-• summarize the repo
+
+› summarize the repo
+
 
 • The repo has a Go TUI shell.
-
-
 
 
 

@@ -2,10 +2,8 @@ package plugin
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
-	"unicode"
 )
 
 const (
@@ -142,24 +140,11 @@ func CollectExplicitPluginMentions(input []UserInput, plugins []CapabilitySummar
 		}
 	}
 	if len(mentioned) == 0 {
-		appIDs := CollectExplicitAppIDs(input)
-		if len(appIDs) == 0 {
-			return nil
-		}
-		for _, plugin := range plugins {
-			if hasAny(plugin.AppConnectors, appIDs) {
-				if key := firstNonEmpty(plugin.ConfigName, plugin.Name, plugin.RemotePluginID, plugin.DisplayName); key != "" {
-					mentioned[key] = true
-				}
-			}
-		}
-		if len(mentioned) == 0 {
-			return nil
-		}
+		return nil
 	}
 	out := make([]CapabilitySummary, 0, len(plugins))
 	for _, plugin := range plugins {
-		if mentioned[plugin.ConfigName] || mentioned[plugin.Name] || mentioned[plugin.RemotePluginID] || mentioned[plugin.DisplayName] {
+		if mentioned[plugin.ConfigName] {
 			out = append(out, cloneCapability(&plugin))
 		}
 	}
@@ -234,35 +219,94 @@ func collectToolMentionsFromMessagesWithSigil(messages []string, sigil rune) *To
 }
 
 func collectMentionsFromText(text string, sigil rune, mentions *ToolMentions) {
-	runes := []rune(text)
-	for i := 0; i < len(runes); i++ {
-		if runes[i] != sigil {
+	if sigil > 127 {
+		return
+	}
+	sigilByte := byte(sigil)
+	textBytes := []byte(text)
+	for i := 0; i < len(textBytes); {
+		if textBytes[i] == '[' {
+			if name, path, end, ok := parseLinkedToolMention(text, textBytes, i, sigilByte); ok {
+				if !isCommonEnvVar(name) {
+					mentions.Paths[path] = true
+				}
+				i = end
+				continue
+			}
+		}
+		if textBytes[i] != sigilByte {
+			i++
 			continue
 		}
 		start := i + 1
-		if start >= len(runes) || !isMentionStart(runes[start]) {
+		if start >= len(textBytes) || !isMentionNameChar(textBytes[start]) {
+			i++
 			continue
 		}
-		end := start
-		for end < len(runes) && isMentionChar(runes[end]) {
+		end := start + 1
+		for end < len(textBytes) && isMentionNameChar(textBytes[end]) {
 			end++
 		}
-		token := string(runes[start:end])
-		if strings.Contains(token, "://") {
-			mentions.Paths[token] = true
-		} else {
+		token := text[start:end]
+		if !isCommonEnvVar(token) {
 			mentions.PlainNames[token] = true
 		}
-		i = end - 1
+		i = end
 	}
 }
 
-func isMentionStart(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.'
+func parseLinkedToolMention(text string, textBytes []byte, start int, sigil byte) (string, string, int, bool) {
+	sigilIndex := start + 1
+	if sigilIndex >= len(textBytes) || textBytes[sigilIndex] != sigil {
+		return "", "", 0, false
+	}
+	nameStart := sigilIndex + 1
+	if nameStart >= len(textBytes) || !isMentionNameChar(textBytes[nameStart]) {
+		return "", "", 0, false
+	}
+	nameEnd := nameStart + 1
+	for nameEnd < len(textBytes) && isMentionNameChar(textBytes[nameEnd]) {
+		nameEnd++
+	}
+	if nameEnd >= len(textBytes) || textBytes[nameEnd] != ']' {
+		return "", "", 0, false
+	}
+	pathStart := nameEnd + 1
+	for pathStart < len(textBytes) && isASCIIWhitespace(textBytes[pathStart]) {
+		pathStart++
+	}
+	if pathStart >= len(textBytes) || textBytes[pathStart] != '(' {
+		return "", "", 0, false
+	}
+	pathEnd := pathStart + 1
+	for pathEnd < len(textBytes) && textBytes[pathEnd] != ')' {
+		pathEnd++
+	}
+	if pathEnd >= len(textBytes) || textBytes[pathEnd] != ')' {
+		return "", "", 0, false
+	}
+	path := strings.TrimSpace(text[pathStart+1 : pathEnd])
+	if path == "" {
+		return "", "", 0, false
+	}
+	return text[nameStart:nameEnd], path, pathEnd + 1, true
 }
 
-func isMentionChar(r rune) bool {
-	return isMentionStart(r) || r == ':' || r == '/' || r == '%' || r == '@'
+func isMentionNameChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == ':'
+}
+
+func isASCIIWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
+}
+
+func isCommonEnvVar(name string) bool {
+	switch strings.ToUpper(name) {
+	case "PATH", "HOME", "USER", "SHELL", "PWD", "TMPDIR", "TEMP", "TMP", "LANG", "TERM", "XDG_CONFIG_HOME":
+		return true
+	default:
+		return false
+	}
 }
 
 func textMessages(input []UserInput) []string {
@@ -276,7 +320,6 @@ func textMessages(input []UserInput) []string {
 }
 
 func toolKindForPath(path string) string {
-	path = strings.TrimSpace(path)
 	switch {
 	case strings.HasPrefix(path, "plugin://"):
 		return "plugin"
@@ -296,15 +339,14 @@ func appIDFromPath(path string) string {
 }
 
 func mentionIDFromPath(path string, prefix string) string {
-	path = strings.TrimSpace(path)
 	value := strings.TrimPrefix(path, prefix)
 	if value == path {
 		return ""
 	}
-	if unescaped, err := url.PathUnescape(value); err == nil {
-		value = unescaped
+	if value == "" {
+		return ""
 	}
-	return strings.TrimSpace(value)
+	return value
 }
 
 func connectorDisplayLabel(app *AppInfo) string {

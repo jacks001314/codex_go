@@ -113,7 +113,7 @@ func (s SideParentStatus) IsActionable() bool {
 }
 
 func SideParentStatusForRequestKind(kind string) (SideParentStatus, bool) {
-	switch strings.TrimSpace(kind) {
+	switch kind {
 	case ServerRequestUserInput:
 		return SideParentStatusNeedsInput, true
 	case ServerRequestCommandExecutionApproval,
@@ -131,7 +131,7 @@ func SideParentStatusForRequestKind(kind string) (SideParentStatus, bool) {
 }
 
 func SideParentStatusChangeForNotification(kind string, turnStatus appserver.TurnStatus) (SideParentStatusChange, bool) {
-	switch strings.TrimSpace(kind) {
+	switch kind {
 	case ServerNotificationTurnStarted:
 		return SideParentStatusChange{Kind: SideParentStatusChangeClear}, true
 	case ServerNotificationTurnCompleted:
@@ -177,17 +177,13 @@ func SideContextLabel(parentIsMain bool, parentLabel string, parentStatus SidePa
 	if parentIsMain {
 		parts = append(parts, "from main thread")
 	} else {
-		parentLabel = strings.TrimSpace(parentLabel)
-		if parentLabel == "" {
-			parentLabel = "unknown"
-		}
 		parts = append(parts, "from parent thread ("+parentLabel+")")
 	}
 	if statusLabel := parentStatus.Label(parentIsMain); statusLabel != "" {
 		parts = append(parts, statusLabel)
 	}
 	parts = append(parts, "Ctrl+C to return")
-	return "Side " + strings.Join(parts, " - ")
+	return "Side " + strings.Join(parts, " · ")
 }
 
 func SideDeveloperInstructions(existingInstructions string) string {
@@ -218,20 +214,16 @@ func SideStartErrorMessage(err error) string {
 	) {
 		return SideNoStartedConversationMessage
 	}
-	return "Failed to start side conversation: " + strings.TrimSpace(err.Error())
+	return "Failed to start side conversation: " + err.Error()
 }
 
 func SideCloseErrorMessage(sideThreadID string, err error) string {
-	threadID := strings.TrimSpace(sideThreadID)
-	if threadID == "" {
+	threadID, ok := ParseAppServerThreadID(sideThreadID)
+	if !ok {
 		threadID = "side conversation"
 	}
 	if err == nil {
 		return ""
 	}
-	message := strings.TrimSpace(err.Error())
-	if message == "" {
-		message = "unknown error"
-	}
-	return "Failed to close side conversation " + threadID + "; it is still open: " + message
+	return "Failed to close side conversation " + threadID + "; it is still open: " + err.Error()
 }

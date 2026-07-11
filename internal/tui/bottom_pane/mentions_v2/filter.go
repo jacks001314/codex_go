@@ -29,7 +29,6 @@ func FilteredCandidates(candidates []Candidate, fileMatches []filesearch.FileMat
 	filter := strings.TrimSpace(query)
 	out := []SearchResult{}
 	for _, candidate := range candidates {
-		candidate = candidate.normalized()
 		if !searchMode.Accepts(candidate.MentionType) {
 			continue
 		}

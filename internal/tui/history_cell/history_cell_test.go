@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"codex_go/internal/tui"
+	"codex_go/internal/utils"
 )
 
 func TestBaseCellsDisplayRawAndHyperlinks(t *testing.T) {
@@ -40,13 +41,34 @@ func TestBaseCellsDisplayRawAndHyperlinks(t *testing.T) {
 	}
 }
 
+func TestRawLinesFromSourceMatchesRustTranscriptSemantics(t *testing.T) {
+	if got := strings.Join(rawLinesFromSource("alpha\n\nbeta\n"), "|"); got != "alpha||beta" {
+		t.Fatalf("explicit blank lines = %q", got)
+	}
+	if got := strings.Join(rawLinesFromSource("alpha\n\n"), "|"); got != "alpha|" {
+		t.Fatalf("trailing blank without trailing newline = %q", got)
+	}
+	if got := rawLinesFromSource(""); len(got) != 0 {
+		t.Fatalf("empty source raw lines = %#v", got)
+	}
+}
+
 func TestUserAndAgentMessageCells(t *testing.T) {
 	user := NewUserPrompt("hello\nworld\n", nil, nil, []string{"https://example.com/image.png", "https://example.com/2.png"})
 	display := user.DisplayLines(40)
 	joined := strings.Join(display, "\n")
-	for _, want := range []string{"[image]", "[image 2]", "• hello", "  world"} {
-		if !strings.Contains(joined, want) {
+	clean := utils.StripANSI(joined)
+	for _, want := range []string{"[image]", "[image 2]", "› hello", "  world"} {
+		if !strings.Contains(clean, want) {
 			t.Fatalf("user display missing %q:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(joined, "\x1b[48;5;235m") {
+		t.Fatalf("user display should use the Rust-style shaded background:\n%q", joined)
+	}
+	for _, line := range display {
+		if got := tui.DisplayWidth(utils.StripANSI(line)); got != 40 {
+			t.Fatalf("user line width = %d, want 40: %q", got, line)
 		}
 	}
 	raw := strings.Join(user.RawLines(), "\n")
@@ -141,10 +163,37 @@ func TestHookHistoryCells(t *testing.T) {
 func TestApprovalHistoryCells(t *testing.T) {
 	approved := NewApprovalDecisionCell(NewCommandApprovalSubject([]string{"/bin/bash", "-lc", "go test ./...\nsecond"}), ReviewApprovedForSession, ApprovalActorUser)
 	display := strings.Join(approved.DisplayLines(80), "\n")
-	for _, want := range []string{"✓ You approved codex to run go test ./... ... every time this session"} {
+	for _, want := range []string{"✔ You approved codex to run go test ./... ... every time this session"} {
 		if !strings.Contains(display, want) {
 			t.Fatalf("approval display missing %q:\n%s", want, display)
 		}
+	}
+
+	quoted := NewApprovalDecisionCell(NewCommandApprovalSubject([]string{"foo", "bar baz", "weird&stuff"}), ReviewApproved, ApprovalActorUser)
+	if got := strings.Join(quoted.RawLines(), "\n"); !strings.Contains(got, "You approved codex to run foo 'bar baz' 'weird&stuff' this time") {
+		t.Fatalf("quoted command raw:\n%s", got)
+	}
+
+	fish := NewApprovalDecisionCell(NewCommandApprovalSubject([]string{"fish", "-lc", "echo hello"}), ReviewApproved, ApprovalActorUser)
+	if got := strings.Join(fish.RawLines(), "\n"); !strings.Contains(got, "You approved codex to run fish -lc 'echo hello' this time") {
+		t.Fatalf("fish command should not be stripped like Rust:\n%s", got)
+	}
+
+	powershell := NewApprovalDecisionCell(NewCommandApprovalSubject([]string{"pwsh", "-NoProfile", "-Command", "Get-ChildItem"}), ReviewApproved, ApprovalActorUser)
+	if got := strings.Join(powershell.RawLines(), "\n"); !strings.Contains(got, "You approved codex to run Get-ChildItem this time") {
+		t.Fatalf("powershell command raw:\n%s", got)
+	}
+
+	emptyExecpolicyPrefix := NewApprovalDecisionCell(NewCommandApprovalSubject(nil), ReviewApprovedExecpolicyAmendment, ApprovalActorUser)
+	if got := strings.Join(emptyExecpolicyPrefix.RawLines(), "\n"); got != "You approved codex to always run commands that start with " {
+		t.Fatalf("empty execpolicy prefix raw = %q", got)
+	}
+
+	longGraphemeCommand := strings.Repeat("e\u0301", 90)
+	longGrapheme := NewApprovalDecisionCell(NewCommandApprovalSubject([]string{"bash", "-lc", longGraphemeCommand}), ReviewApproved, ApprovalActorUser)
+	wantLong := "You approved codex to run " + strings.Repeat("e\u0301", 77) + "... this time"
+	if got := strings.Join(longGrapheme.RawLines(), "\n"); !strings.Contains(got, wantLong) {
+		t.Fatalf("long grapheme command raw:\n%s\nwant contains:\n%s", got, wantLong)
 	}
 
 	denied := NewApprovalDecisionCell(NewNetworkApprovalSubject("api.example.com"), ReviewDenied, ApprovalActorUser)
@@ -152,9 +201,44 @@ func TestApprovalHistoryCells(t *testing.T) {
 		t.Fatalf("network denial display:\n%s", got)
 	}
 
+	allowPolicy := NewApprovalDecisionCell(NewNetworkPolicyApprovalSubject("api.example.com", NetworkPolicyRuleAllow), ReviewNetworkPolicyAmendment, ApprovalActorUser)
+	if got := strings.Join(allowPolicy.RawLines(), "\n"); got != "You persisted Codex network access to api.example.com" {
+		t.Fatalf("network policy allow raw = %q", got)
+	}
+	denyPolicy := NewApprovalDecisionCell(NewNetworkPolicyApprovalSubject("api.example.com", NetworkPolicyRuleDeny), ReviewNetworkPolicyAmendment, ApprovalActorUser)
+	if got := strings.Join(denyPolicy.DisplayLines(120), "\n"); !strings.Contains(got, "✗ You denied codex network access to api.example.com and saved that rule") {
+		t.Fatalf("network policy deny display:\n%s", got)
+	}
+
 	patch := NewGuardianDeniedPatchRequest([]string{"a.go", "b.go"})
 	if got := strings.Join(patch.RawLines(), "|"); got != "Request denied for codex to apply a patch touching 2 files" {
 		t.Fatalf("patch raw = %q", got)
+	}
+
+	patchWithWhitespace := NewGuardianDeniedPatchRequest([]string{"  a.go  "})
+	if got := strings.Join(patchWithWhitespace.RawLines(), "|"); got != "Request denied for codex to apply a patch touching   a.go  " {
+		t.Fatalf("patch whitespace raw = %q", got)
+	}
+	manyFiles := make([]string, 1000)
+	manyPatch := NewGuardianTimedOutPatchRequest(manyFiles)
+	if got := strings.Join(manyPatch.RawLines(), "|"); got != "Review timed out before codex could apply a patch touching 1000 files" {
+		t.Fatalf("many patch raw = %q", got)
+	}
+
+	approvedAction := NewGuardianApprovedActionRequest("  run check  ")
+	if got := strings.Join(approvedAction.DisplayLines(120), "\n"); !strings.Contains(got, "✔ Request approved for run check") {
+		t.Fatalf("guardian approved action display:\n%s", got)
+	}
+	if got := strings.Join(approvedAction.RawLines(), "|"); got != "Request approved for   run check  " {
+		t.Fatalf("guardian approved action raw = %q", got)
+	}
+	deniedAction := NewGuardianDeniedActionRequest("  run check  ")
+	if got := strings.Join(deniedAction.RawLines(), "|"); got != "Request denied for   run check  " {
+		t.Fatalf("guardian denied action raw = %q", got)
+	}
+	status := NewReviewStatusLine("  still reviewing  ")
+	if got := strings.Join(status.RawLines(), "|"); got != "  still reviewing  " {
+		t.Fatalf("review status raw = %q", got)
 	}
 }
 
@@ -211,16 +295,36 @@ func TestNoticeHistoryCells(t *testing.T) {
 	if got := strings.Join(info.DisplayLines(80), "\n"); got != "• Background task finished open /ps" {
 		t.Fatalf("info display = %q", got)
 	}
+	info = NewInfoEvent("  Background task finished  ", " open /ps ")
+	if got := strings.Join(info.DisplayLines(80), "\n"); got != "•   Background task finished    open /ps " {
+		t.Fatalf("info whitespace display = %q", got)
+	}
+	err := NewErrorEvent(" launch failed ")
+	if got := strings.Join(err.DisplayLines(80), "\n"); got != "■  launch failed " {
+		t.Fatalf("error whitespace display = %q", got)
+	}
 
 	safety := NewSafetyAccessBlockEvent()
 	safetyDisplay := strings.Join(safety.DisplayLines(80), "\n")
-	if !strings.Contains(safetyDisplay, SafetyAccessBlockTitle) || !strings.Contains(safetyDisplay, "Trusted Access: https://openai.com/form/trusted-access-for-life-sciences") {
+	if !strings.Contains(safetyDisplay, SafetyAccessBlockTitle) || !strings.Contains(safetyDisplay, "you’re a researcher") || !strings.Contains(safetyDisplay, "Trusted Access: https://openai.com/form/trusted-access-for-life-sciences") {
 		t.Fatalf("safety display:\n%s", safetyDisplay)
+	}
+	cyber := NewCyberPolicyErrorEvent()
+	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you’re a security professional") || !strings.Contains(got, "https://openai.com/form/enterprise-trusted-access-for-cyber/") {
+		t.Fatalf("cyber raw:\n%s", got)
 	}
 
 	deprecation := NewDeprecationNotice("Old flag is deprecated", "Use --new instead.")
 	if got := strings.Join(deprecation.RawLines(), "|"); got != "Old flag is deprecated|Use --new instead." {
 		t.Fatalf("deprecation raw = %q", got)
+	}
+	deprecation = NewDeprecationNotice("  Old flag is deprecated  ", "  Use --new instead.  ")
+	if got := strings.Join(deprecation.RawLines(), "|"); got != "  Old flag is deprecated  |  Use --new instead.  " {
+		t.Fatalf("deprecation whitespace raw = %q", got)
+	}
+	longSummary := NewDeprecationNotice("abcdef ghijkl", "")
+	if got := strings.Join(longSummary.DisplayLines(8), "\n"); got != "⚠ abcdef ghijkl" {
+		t.Fatalf("deprecation summary should not wrap like Rust = %q", got)
 	}
 }
 
@@ -289,6 +393,31 @@ func TestMCPHistoryCells(t *testing.T) {
 	}, true)
 	if got := strings.Join(inventory.DisplayLines(80), "\n"); !strings.Contains(got, "• Tools: read, search") || !strings.Contains(got, "Resources: guide (file://guide)") {
 		t.Fatalf("inventory display:\n%s", got)
+	}
+	ordered := NewMCPToolsOutputFromStatuses([]McpServerStatus{
+		{
+			Name:  "docs",
+			Auth:  "OAuth",
+			Tools: []string{"zeta", "alpha"},
+			Resources: []McpResource{
+				{Name: "z-resource", URI: "file://z"},
+				{Name: "a-resource", URI: "file://a"},
+			},
+			ResourceTemplates: []McpResourceTemplate{
+				{Name: "z-template", URITemplate: "docs://z/{id}"},
+				{Name: "a-template", URITemplate: "docs://a/{id}"},
+			},
+		},
+	}, true)
+	orderedDisplay := strings.Join(ordered.DisplayLines(120), "\n")
+	if !strings.Contains(orderedDisplay, "• Tools: alpha, zeta") {
+		t.Fatalf("tools should stay sorted like Rust:\n%s", orderedDisplay)
+	}
+	if !strings.Contains(orderedDisplay, "Resources: z-resource (file://z), a-resource (file://a)") {
+		t.Fatalf("resources should preserve app-server order like Rust:\n%s", orderedDisplay)
+	}
+	if !strings.Contains(orderedDisplay, "Resource templates: z-template (docs://z/{id}), a-template (docs://a/{id})") {
+		t.Fatalf("resource templates should preserve app-server order like Rust:\n%s", orderedDisplay)
 	}
 }
 
@@ -363,5 +492,26 @@ func TestExecHistoryCells(t *testing.T) {
 	lines := strings.Join(cell.DisplayLines(40), "\n")
 	if !strings.Contains(lines, "/ps") || !strings.Contains(lines, "Background terminals") || !strings.Contains(lines, "... and 2 more running") {
 		t.Fatalf("process lines:\n%s", lines)
+	}
+	emptyProcesses := UnifiedExecProcessesCell{}
+	if got := strings.Join(emptyProcesses.DisplayLines(80), "\n"); !strings.Contains(got, "  • No background terminals running.") {
+		t.Fatalf("empty process lines:\n%s", got)
+	}
+	multiline := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
+		CommandDisplay: "echo one\necho two",
+		RecentChunks:   []string{"recent output"},
+	}}}
+	multilineDisplay := strings.Join(multiline.DisplayLines(80), "\n")
+	if !strings.Contains(multilineDisplay, "  • echo one [...]") || !strings.Contains(multilineDisplay, "    ↳ recent output") {
+		t.Fatalf("multiline process display:\n%s", multilineDisplay)
+	}
+	narrow := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
+		CommandDisplay: "部署计划下一步",
+		RecentChunks:   []string{"输出内容很长"},
+	}}}
+	for _, line := range narrow.DisplayLines(12)[2:] {
+		if tui.DisplayWidth(line) > 12 {
+			t.Fatalf("process line exceeds width: %q width=%d", line, tui.DisplayWidth(line))
+		}
 	}
 }

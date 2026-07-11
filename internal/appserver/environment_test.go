@@ -166,6 +166,20 @@ func newRemoteSkillsExecServerForTest(t *testing.T, rootPath string, files map[s
 			if params["path"] != rootPath {
 				return fmt.Errorf("fs/walk path = %v, want %s", params["path"], rootPath)
 			}
+			options, _ := params["options"].(map[string]any)
+			for key, want := range map[string]int{
+				"maxDepth":       remoteSkillWalkMaxDepth,
+				"maxDirectories": remoteSkillWalkMaxDirectories,
+				"maxEntries":     remoteSkillWalkMaxEntries,
+			} {
+				got, _ := options[key].(float64)
+				if int(got) != want {
+					return fmt.Errorf("fs/walk option %s = %v, want %d", key, options[key], want)
+				}
+			}
+			if options["followDirectorySymlinks"] != true {
+				return fmt.Errorf("fs/walk followDirectorySymlinks = %v, want true", options["followDirectorySymlinks"])
+			}
 			entries := make([]map[string]any, 0, len(paths))
 			for _, path := range paths {
 				entries = append(entries, map[string]any{"path": path, "kind": "file"})
@@ -175,17 +189,31 @@ func newRemoteSkillsExecServerForTest(t *testing.T, rootPath string, files map[s
 			done <- err
 			return
 		}
-		for range files {
-			if err := expectExecServerRequestForTest(ctx, conn, "fs/readFile", func(request map[string]any) error {
+		remainingReads := len(files)
+		for remainingReads > 0 {
+			if err := expectExecServerRequestForTest(ctx, conn, "", func(request map[string]any) error {
 				params, _ := request["params"].(map[string]any)
 				path, _ := params["path"].(string)
-				contents, ok := files[path]
-				if !ok {
-					return fmt.Errorf("unexpected fs/readFile path %q", path)
+				switch request["method"] {
+				case "fs/getMetadata":
+					_, ok := files[path]
+					return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{
+						"isFile":      ok,
+						"isDirectory": false,
+						"isSymlink":   false,
+					})
+				case "fs/readFile":
+					contents, ok := files[path]
+					if !ok {
+						return fmt.Errorf("unexpected fs/readFile path %q", path)
+					}
+					remainingReads--
+					return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{
+						"dataBase64": base64.StdEncoding.EncodeToString([]byte(contents)),
+					})
+				default:
+					return fmt.Errorf("method = %v, want fs/getMetadata or fs/readFile", request["method"])
 				}
-				return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{
-					"dataBase64": base64.StdEncoding.EncodeToString([]byte(contents)),
-				})
 			}); err != nil {
 				done <- err
 				return
@@ -221,7 +249,7 @@ func expectExecServerRequestForTest(ctx context.Context, conn *websocket.Conn, m
 	if err := json.Unmarshal(data, &request); err != nil {
 		return err
 	}
-	if request["method"] != method {
+	if method != "" && request["method"] != method {
 		return fmt.Errorf("method = %v, want %s", request["method"], method)
 	}
 	if respond != nil {

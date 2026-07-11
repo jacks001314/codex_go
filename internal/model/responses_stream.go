@@ -135,6 +135,8 @@ type responsesSSEEvent struct {
 	Data  []byte
 }
 
+var errResponsesStreamFailed = errors.New("response.failed event received")
+
 type responsesStreamAccumulator struct {
 	responseID            string
 	serverModel           string
@@ -148,6 +150,22 @@ type responsesStreamAccumulator struct {
 }
 
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
+	maxRetries := r.streamMaxRetries()
+	for attempt := uint64(0); ; attempt++ {
+		response, err := r.runStreamingOnce(ctx, request, apiRequest)
+		if err == nil {
+			return response, nil
+		}
+		if attempt >= maxRetries || !isRetryableResponsesStreamError(err) {
+			return nil, err
+		}
+		if err := sleepWithContext(ctx, responsesRetryDelay(nil, attempt+1)); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	httpResponse, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "text/event-stream", r.streamMaxRetries())
 	if err != nil {
 		return nil, err
@@ -160,7 +178,7 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		}
 		return nil, responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
 	}
-	r.rememberTurnStateFromHeaders(httpResponse.Header)
+	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
 	response, err := parseResponsesStream(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler)
@@ -168,6 +186,17 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		return nil, err
 	}
 	return applyResponsesHeaderMetadata(response, httpResponse.Header), nil
+}
+
+func isRetryableResponsesStreamError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errResponsesStreamFailed) {
+		return false
+	}
+	var apiErr *ResponsesAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode >= 500
+	}
+	return true
 }
 
 func combinedResponsesStreamHandler(handlers ...ResponsesStreamHandler) ResponsesStreamHandler {
@@ -312,12 +341,23 @@ func responsesHeadersEvent(headers http.Header) *ResponsesStreamEvent {
 	}
 }
 
-func (r *ResponsesAgentRunner) rememberTurnStateFromHeaders(headers http.Header) {
-	if r == nil {
+func (r *ResponsesAgentRunner) rememberTurnStateFromHeaders(request *AgentRequest, headers http.Header) {
+	if r == nil || r.turnState == nil {
 		return
 	}
-	if turnState := responseHeaderValue(headers, codexapi.ClientCodexTurnStateHeader); turnState != "" {
-		r.turnState = turnState
+	turnID := turnStateRequestTurnID(request)
+	if turnID == "" {
+		return
+	}
+	turnState := responseHeaderValue(headers, codexapi.ClientCodexTurnStateHeader)
+	r.turnState.mu.Lock()
+	defer r.turnState.mu.Unlock()
+	if r.turnState.turnID != turnID {
+		r.turnState.turnID = turnID
+		r.turnState.value = ""
+	}
+	if r.turnState.value == "" && turnState != "" {
+		r.turnState.value = turnState
 	}
 }
 
@@ -1400,16 +1440,16 @@ func responseFailedError(data []byte) error {
 		Error *responsesAgentAPIErrorBody `json:"error"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return fmt.Errorf("response.failed event received")
+		return errResponsesStreamFailed
 	}
 	errBody := payload.Error
 	if errBody == nil {
 		errBody = payload.Response.Error
 	}
 	if errBody != nil && strings.TrimSpace(errBody.Message) != "" {
-		return fmt.Errorf("response.failed event received: %s", strings.TrimSpace(errBody.Message))
+		return fmt.Errorf("%w: %s", errResponsesStreamFailed, strings.TrimSpace(errBody.Message))
 	}
-	return fmt.Errorf("response.failed event received")
+	return errResponsesStreamFailed
 }
 
 func jsonStringField(data []byte, key string) string {

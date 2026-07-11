@@ -81,7 +81,6 @@ type SearchResult struct {
 }
 
 func (c Candidate) ToResult(matchIndices []int, score int) SearchResult {
-	c = c.normalized()
 	return SearchResult{
 		DisplayName:  c.DisplayName,
 		Description:  c.Description,
@@ -90,32 +89,4 @@ func (c Candidate) ToResult(matchIndices []int, score int) SearchResult {
 		MatchIndices: append([]int(nil), matchIndices...),
 		Score:        score,
 	}
-}
-
-func (c Candidate) normalized() Candidate {
-	if c.DisplayName == "" {
-		c.DisplayName = c.Label
-	}
-	if c.DisplayName == "" {
-		c.DisplayName = c.ID
-	}
-	if len(c.SearchTerms) == 0 {
-		if c.ID != "" {
-			c.SearchTerms = append(c.SearchTerms, c.ID)
-		}
-		if c.Label != "" && c.Label != c.ID {
-			c.SearchTerms = append(c.SearchTerms, c.Label)
-		}
-		if c.DisplayName != "" && c.DisplayName != c.ID && c.DisplayName != c.Label {
-			c.SearchTerms = append(c.SearchTerms, c.DisplayName)
-		}
-	}
-	if c.MentionType == "" {
-		if c.Selection.Kind == SelectionFile {
-			c.MentionType = MentionTypeFile
-		} else {
-			c.MentionType = MentionTypeSkill
-		}
-	}
-	return c
 }

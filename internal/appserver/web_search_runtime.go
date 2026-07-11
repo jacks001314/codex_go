@@ -12,7 +12,7 @@ import (
 )
 
 func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams) (*turn.WebSearchOptions, error) {
-	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "standalone_web_search") {
+	if cfg == nil || turnStartReviewRuntime(params) || !features.Enabled(cfg.FeatureSettings(), "standalone_web_search") {
 		return nil, nil
 	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)

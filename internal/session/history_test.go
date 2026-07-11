@@ -20,6 +20,42 @@ func TestInputItemsFromRecordUsesRawItem(t *testing.T) {
 	}
 }
 
+func TestInputItemsFromRecordOmitsNonModelVisibleThreadItemsLikeRust(t *testing.T) {
+	rawCommand := json.RawMessage(`{"type":"command_execution","id":"cmd-raw","command":"pwd","aggregated_output":"workspace"}`)
+	rawReasoning := json.RawMessage(`{"type":"reasoning","id":"reasoning-raw","summary":[],"encrypted_content":null}`)
+	record := &Record{Items: []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "keep user text"},
+		{ID: "cmd-1", Type: "command_execution", Text: "workspace"},
+		{ID: "patch-1", Type: "file_change", Text: "changed files"},
+		{ID: "mcp-1", Type: "mcp_tool_call", Text: "tool result"},
+		{ID: "collab-1", Type: "collab_tool_call", Text: "spawned child"},
+		{ID: "todo-1", Type: "todo_list", Text: "done"},
+		{ID: "err-1", Type: "error", Text: "boom"},
+		{ID: "reasoning-summary", Type: "reasoning", Text: "summary without raw should not become user text"},
+		{ID: "cmd-raw", Type: "command_execution", Raw: rawCommand},
+		{ID: "reasoning-raw", Type: "reasoning", Raw: rawReasoning},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "keep assistant text"},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 3 {
+		t.Fatalf("items len = %d, want 3: %#v", len(items), items)
+	}
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("item = %#v", item)
+		}
+		if nonModelVisibleHistoryItemType(raw["type"].(string)) {
+			t.Fatalf("non-model-visible item was replayed: %#v", raw)
+		}
+	}
+	if got := items[1].(map[string]any)["type"]; got != "reasoning" {
+		t.Fatalf("raw reasoning type = %v, want reasoning", got)
+	}
+}
+
 func TestInputItemsFromRecordBuildsMessagesAndToolItems(t *testing.T) {
 	record := &Record{Items: []Item{
 		{ID: "u1", Type: "message", Role: "user", Text: "hello"},

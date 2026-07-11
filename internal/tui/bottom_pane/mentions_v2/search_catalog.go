@@ -40,10 +40,7 @@ func NewSearchCatalog(skills []SkillMetadata, plugins []PluginCapabilitySummary)
 }
 
 func SkillCandidate(skill SkillMetadata) Candidate {
-	displayName := skill.DisplayName
-	if displayName == "" {
-		displayName = skill.Name
-	}
+	displayName := SkillDisplayName(skill)
 	searchTerms := []string{skill.Name}
 	if displayName != skill.Name {
 		searchTerms = append(searchTerms, displayName)
@@ -59,6 +56,17 @@ func SkillCandidate(skill SkillMetadata) Candidate {
 	}
 }
 
+func SkillDisplayName(skill SkillMetadata) string {
+	if skill.DisplayName != "" {
+		return skill.DisplayName
+	}
+	pluginName, skillName, ok := strings.Cut(skill.Name, ":")
+	if ok && pluginName != "" && skillName != "" {
+		return skillName + " (" + pluginName + ")"
+	}
+	return skill.Name
+}
+
 func PluginCandidate(plugin PluginCapabilitySummary) Candidate {
 	pluginName, marketplaceName, _ := strings.Cut(plugin.ConfigName, "@")
 	if pluginName == "" {
@@ -66,20 +74,16 @@ func PluginCandidate(plugin PluginCapabilitySummary) Candidate {
 	}
 	mentionName := PluginMentionName(pluginName, plugin.DisplayName)
 	searchTerms := []string{pluginName, plugin.ConfigName}
-	if plugin.DisplayName != "" && plugin.DisplayName != pluginName {
+	if plugin.DisplayName != pluginName {
 		searchTerms = append(searchTerms, plugin.DisplayName)
 	}
 	if marketplaceName != "" {
 		searchTerms = append(searchTerms, marketplaceName)
 	}
-	displayName := plugin.DisplayName
-	if displayName == "" {
-		displayName = TitleCasePluginName(pluginName)
-	}
 	return Candidate{
 		ID:          plugin.ConfigName,
-		Label:       displayName,
-		DisplayName: displayName,
+		Label:       plugin.DisplayName,
+		DisplayName: plugin.DisplayName,
 		Description: PluginDescription(plugin),
 		SearchTerms: searchTerms,
 		MentionType: MentionTypePlugin,
@@ -168,7 +172,7 @@ func TitleCasePluginName(pluginName string) string {
 }
 
 func PluginDescription(plugin PluginCapabilitySummary) string {
-	if strings.TrimSpace(plugin.Description) != "" {
+	if plugin.Description != "" {
 		return plugin.Description
 	}
 	labels := PluginCapabilityLabels(plugin)

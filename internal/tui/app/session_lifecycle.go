@@ -2,7 +2,6 @@ package app
 
 import (
 	"os"
-	"strings"
 
 	"codex_go/internal/appserver"
 	codextui "codex_go/internal/tui"
@@ -90,9 +89,19 @@ func CanFallbackFromIncludeTurnsError(err error) bool {
 }
 
 func RefreshAgentPickerThreadLiveness(nav *AgentNavigationState, read AgentPickerLivenessRead) AgentPickerLivenessResult {
-	threadID := strings.TrimSpace(read.ThreadID)
-	if threadID == "" && read.Thread != nil {
-		threadID = strings.TrimSpace(read.Thread.ID)
+	threadID := ""
+	if read.ThreadID != "" {
+		var ok bool
+		threadID, ok = ParseAppServerThreadID(read.ThreadID)
+		if !ok {
+			return AgentPickerLivenessResult{}
+		}
+	} else if read.Thread != nil {
+		var ok bool
+		threadID, ok = ParseAppServerThreadID(read.Thread.ID)
+		if !ok {
+			return AgentPickerLivenessResult{}
+		}
 	}
 	if nav == nil || threadID == "" {
 		return AgentPickerLivenessResult{}
@@ -100,12 +109,16 @@ func RefreshAgentPickerThreadLiveness(nav *AgentNavigationState, read AgentPicke
 
 	existing, hasExisting := nav.Get(threadID)
 	if read.Thread != nil && read.ReadError == nil {
-		nickname := stringPtrValueSession(read.Thread.AgentNickname)
-		if strings.TrimSpace(nickname) == "" && hasExisting {
+		nickname := ""
+		if read.Thread.AgentNickname != nil {
+			nickname = *read.Thread.AgentNickname
+		} else if hasExisting {
 			nickname = existing.AgentNickname
 		}
-		role := stringPtrValueSession(read.Thread.AgentRole)
-		if strings.TrimSpace(role) == "" && hasExisting {
+		role := ""
+		if read.Thread.AgentRole != nil {
+			role = *read.Thread.AgentRole
+		} else if hasExisting {
 			role = existing.AgentRole
 		}
 		isRunning := read.Thread.Status.Type == "active"
@@ -153,15 +166,17 @@ func ShouldAttachLiveThreadForSelection(hasThreadEventChannel bool, entryExists 
 }
 
 func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelectionDecision {
-	if strings.TrimSpace(input.ThreadID) == "" {
+	threadID, ok := ParseAppServerThreadID(input.ThreadID)
+	if !ok {
 		return AgentThreadSelectionDecision{}
 	}
-	if input.ActiveThreadID == input.ThreadID {
+	activeThreadID, hasActiveThreadID := ParseAppServerThreadID(input.ActiveThreadID)
+	if hasActiveThreadID && activeThreadID == threadID {
 		return AgentThreadSelectionDecision{Noop: true}
 	}
 	if !input.LivenessAvailable {
 		return AgentThreadSelectionDecision{
-			ErrorMessage:      "Agent thread " + input.ThreadID + " is no longer available.",
+			ErrorMessage:      "Agent thread " + threadID + " is no longer available.",
 			NoLongerAvailable: true,
 		}
 	}
@@ -172,7 +187,7 @@ func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelec
 		if input.AttachAttempted && input.AttachError != nil {
 			return AgentThreadSelectionDecision{
 				ShouldAttachLive: true,
-				ErrorMessage:     "Failed to attach to agent thread " + input.ThreadID + ": " + strings.TrimSpace(input.AttachError.Error()),
+				ErrorMessage:     "Failed to attach to agent thread " + threadID + ": " + input.AttachError.Error(),
 			}
 		}
 		if input.AttachAttempted && !input.LiveAttached {
@@ -193,7 +208,7 @@ func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelec
 
 	if !input.HasThreadEventChannel && isReplayOnly {
 		return AgentThreadSelectionDecision{
-			ErrorMessage:      "Agent thread " + input.ThreadID + " is no longer available.",
+			ErrorMessage:      "Agent thread " + threadID + " is no longer available.",
 			NoLongerAvailable: true,
 		}
 	}
@@ -201,7 +216,11 @@ func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelec
 }
 
 func ReplayOnlyAgentThreadMessage(threadID string, attachedReplayOnly bool) string {
-	threadID = strings.TrimSpace(threadID)
+	parsedThreadID, ok := ParseAppServerThreadID(threadID)
+	if !ok {
+		return ""
+	}
+	threadID = parsedThreadID
 	if attachedReplayOnly {
 		return "Agent thread " + threadID + " could not be resumed live. Replaying saved transcript."
 	}
@@ -209,10 +228,10 @@ func ReplayOnlyAgentThreadMessage(threadID string, attachedReplayOnly bool) stri
 }
 
 func StartupThreadStartedDecisionForResult(pendingStartup bool, startedThreadID string, resultErr error) StartupThreadStartedDecision {
-	startedThreadID = strings.TrimSpace(startedThreadID)
 	if !pendingStartup {
 		decision := StartupThreadStartedDecision{IgnoreUnexpectedCompleted: true}
-		if resultErr == nil && startedThreadID != "" {
+		if parsedThreadID, ok := ParseAppServerThreadID(startedThreadID); resultErr == nil && ok {
+			startedThreadID = parsedThreadID
 			decision.UnsubscribeStaleThreadID = startedThreadID
 			decision.DiscardStaleThreadID = startedThreadID
 		}
@@ -229,7 +248,7 @@ func StartupThreadStartedDecisionForResult(pendingStartup bool, startedThreadID 
 	if resultErr != nil {
 		decision.EnqueuePrimaryThread = false
 		decision.MaybeSendQueuedInput = false
-		decision.ErrorMessage = "Failed to start a fresh session through the app server: " + strings.TrimSpace(resultErr.Error())
+		decision.ErrorMessage = "Failed to start a fresh session through the app server: " + resultErr.Error()
 	}
 	return decision
 }
@@ -247,11 +266,10 @@ func SessionSummaryForThread(tokenUsage codextui.TokenUsage, threadID string, th
 }
 
 func ResumeHintForResumableThread(threadID string, threadName string, rolloutPath string) string {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" || !RolloutPathIsResumable(rolloutPath) {
+	threadID, ok := ParseAppServerThreadID(threadID)
+	if !ok || !RolloutPathIsResumable(rolloutPath) {
 		return ""
 	}
-	threadName = strings.TrimSpace(threadName)
 	if threadName != "" {
 		return "codex resume, then select " + threadName + " (" + threadID + ")"
 	}
@@ -259,7 +277,6 @@ func ResumeHintForResumableThread(threadID string, threadName string, rolloutPat
 }
 
 func RolloutPathIsResumable(rolloutPath string) bool {
-	rolloutPath = strings.TrimSpace(rolloutPath)
 	if rolloutPath == "" {
 		return false
 	}
@@ -272,8 +289,8 @@ func ApplyLoadedSubagentBackfill(nav *AgentNavigationState, loaded []LoadedSubag
 		return
 	}
 	for _, thread := range loaded {
-		threadID := strings.TrimSpace(thread.ThreadID)
-		if threadID == "" {
+		threadID, ok := ParseAppServerThreadID(thread.ThreadID)
+		if !ok {
 			continue
 		}
 		nav.Upsert(threadID, thread.AgentNickname, thread.AgentRole, false)
@@ -295,11 +312,4 @@ func (s *SessionLifecycleState) MarkClosed() {
 		return
 	}
 	s.Closed = true
-}
-
-func stringPtrValueSession(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }

@@ -120,6 +120,40 @@ func TestMCPServerStatusPreservesRawServerAndToolNames(t *testing.T) {
 	}
 }
 
+func TestListStatusCheckedObserverReportsStartupLifecycle(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"missing": {
+			Name: "missing",
+			Config: ServerConfig{
+				Command: "codex-go-missing-mcp-observer-test",
+				Enabled: true,
+			},
+		},
+	}})
+	defer service.Close()
+
+	type update struct {
+		name   string
+		status MCPServerStartupState
+		err    error
+	}
+	var updates []update
+	response, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{
+		Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull},
+	}, func(name string, status MCPServerStartupState, startupErr error) {
+		updates = append(updates, update{name: name, status: status, err: startupErr})
+	})
+	if err != nil || response == nil {
+		t.Fatalf("ListStatusCheckedWithObserver response=%#v err=%v", response, err)
+	}
+	if len(updates) != 2 || updates[0].name != "missing" || updates[0].status != MCPServerStarting {
+		t.Fatalf("updates = %#v", updates)
+	}
+	if updates[1].status != MCPServerFailed || updates[1].err == nil {
+		t.Fatalf("terminal update = %#v, want failed with error", updates[1])
+	}
+}
+
 func TestMCPServerStatusResourceWireShapeMatchesRustV2(t *testing.T) {
 	size := int64(42)
 	encoded, err := json.Marshal(&MCPServerStatus{

@@ -55,7 +55,7 @@ const (
 	SideStartingContextLabel        = "Side starting..."
 	SideSlashCommandUnavailableHint = "Press Ctrl+C to return to the main thread first."
 	GoalUsageHint                   = "Example: /goal improve benchmark coverage"
-	GoalUsageText                   = "Usage: /goal <objective|clear|edit|pause|resume>"
+	GoalUsageText                   = "Usage: /goal [<objective>|clear|edit|pause|resume]"
 	RawUsageText                    = "Usage: /raw [on|off]"
 	UsageChatGPTLoginRequired       = "Sign in with ChatGPT to use /usage."
 )

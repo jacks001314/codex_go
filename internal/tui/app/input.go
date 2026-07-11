@@ -68,5 +68,5 @@ func ShouldConfirmBacktrackFromMain(primed bool, nthUserMessage int, composerEmp
 }
 
 func ShouldResetPrimedBacktrackOnKeyPress(primed bool, key string) bool {
-	return primed && strings.ToLower(strings.TrimSpace(key)) != "esc"
+	return primed && strings.ToLower(key) != "esc"
 }

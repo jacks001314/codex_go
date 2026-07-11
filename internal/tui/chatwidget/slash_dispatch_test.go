@@ -231,8 +231,18 @@ func TestPreparedSlashArgsPlanGoalAndSideMatchRust(t *testing.T) {
 		Source:       SlashCommandDispatchQueued,
 		GoalsEnabled: true,
 	})
-	if goalQueuedBeforeSession.Action != PreparedSlashArgsInfo || !strings.Contains(goalQueuedBeforeSession.Hint, "set a goal") {
+	if goalQueuedBeforeSession.Action != PreparedSlashArgsInfo || goalQueuedBeforeSession.InfoMessage != GoalUsageText || !strings.Contains(goalQueuedBeforeSession.Hint, "set a goal") {
 		t.Fatalf("goal queued before session = %#v", goalQueuedBeforeSession)
+	}
+
+	goalPauseBeforeSession := DispatchPreparedSlashArgs(PreparedSlashArgsContext{
+		Command:      codextui.CommandGoal,
+		Args:         "pause",
+		Source:       SlashCommandDispatchLive,
+		GoalsEnabled: true,
+	})
+	if goalPauseBeforeSession.Action != PreparedSlashArgsInfo || goalPauseBeforeSession.InfoMessage != GoalUsageText || !goalPauseBeforeSession.ClearLiveGoalSubmission {
+		t.Fatalf("goal pause before session = %#v", goalPauseBeforeSession)
 	}
 
 	goalPause := DispatchPreparedSlashArgs(PreparedSlashArgsContext{
