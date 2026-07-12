@@ -2842,6 +2842,38 @@ func TestEmitFinalEventsKeepsApprovalRequiredExecCommandAsToolOutput(t *testing.
 	}
 }
 
+func TestWriteStdinCompletionMapsToOriginalCommandExecutionLikeRust(t *testing.T) {
+	running := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{CallID: "write-running", ToolName: tool.PlainName(tool.DefaultWriteStdinToolName)},
+		Output: &tool.Output{Success: true, Data: map[string]any{
+			"process_id":    42,
+			"event_call_id": "exec-original",
+			"hook_command":  "sleep then print",
+		}},
+	}
+	if events := eventsFromToolExecution(running); len(events) != 0 {
+		t.Fatalf("running write_stdin events = %#v, want none", events)
+	}
+
+	completed := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{CallID: "write-complete", ToolName: tool.PlainName(tool.DefaultWriteStdinToolName)},
+		Output: &tool.Output{Success: true, Data: map[string]any{
+			"exit_code":     0,
+			"event_call_id": "exec-original",
+			"hook_command":  "sleep then print",
+			"hook_response": "done\n",
+		}},
+	}
+	events := eventsFromToolExecution(completed)
+	if len(events) != 1 || events[0].Type != "item.completed" || events[0].Item == nil {
+		t.Fatalf("completed write_stdin events = %#v", events)
+	}
+	item := events[0].Item
+	if item.Type != "command_execution" || item.ID != "exec-original" || item.Command != "sleep then print" || item.ExitCode == nil || *item.ExitCode != 0 || item.AggregatedOutput == nil || *item.AggregatedOutput != "done\n" {
+		t.Fatalf("command completion item = %#v", item)
+	}
+}
+
 func TestEmitFinalEventsIncludesAgentMessagesAfterStreaming(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Responses: []*model.AgentResponse{{

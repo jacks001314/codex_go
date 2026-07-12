@@ -1,19 +1,23 @@
 package appserver
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"codex_go/internal/config"
 	"codex_go/internal/install"
+	"codex_go/internal/systemskills"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,8 +37,9 @@ const (
 var ErrInvalidSkillsRequest = errors.New("invalid skills request")
 
 type SkillsListParams struct {
-	CWDs        []string `json:"cwds,omitempty"`
-	ForceReload bool     `json:"forceReload,omitempty"`
+	CWDs        []string      `json:"cwds,omitempty"`
+	ForceReload bool          `json:"forceReload,omitempty"`
+	Config      []ConfigEntry `json:"-"`
 }
 
 type SkillsListEntry struct {
@@ -51,10 +56,11 @@ type SkillsListEntry struct {
 	Interface        *SkillInterface    `json:"interface,omitempty"`
 	Dependencies     *SkillDependencies `json:"dependencies,omitempty"`
 	Enabled          bool               `json:"enabled"`
-	PluginID         string             `json:"pluginId,omitempty"`
+	PluginID         string             `json:"-"`
 	Policy           *SkillPolicy       `json:"-"`
 	Contents         string             `json:"-"`
 	Root             string             `json:"-"`
+	ApplicableCWDs   []string           `json:"-"`
 }
 
 func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
@@ -89,7 +95,6 @@ func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
 		Path             string             `json:"path"`
 		Scope            string             `json:"scope"`
 		Enabled          bool               `json:"enabled"`
-		PluginID         string             `json:"pluginId,omitempty"`
 	}{
 		Name:             e.Name,
 		Description:      e.Description,
@@ -99,13 +104,13 @@ func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
 		Path:             e.Path,
 		Scope:            e.Scope,
 		Enabled:          e.Enabled,
-		PluginID:         e.PluginID,
 	})
 }
 
 type SkillsListResponse struct {
 	Data   []SkillsListEntry `json:"data,omitempty"`
 	Skills []SkillsListEntry `json:"skills"`
+	Errors []SkillErrorInfo  `json:"-"`
 }
 
 func (r *SkillsListResponse) MarshalJSON() ([]byte, error) {
@@ -198,8 +203,9 @@ func skillMatchesCodexProductRestriction(entry *SkillsListEntry) bool {
 }
 
 type SkillErrorInfo struct {
-	Path    string `json:"path"`
-	Message string `json:"message"`
+	Path           string   `json:"path"`
+	Message        string   `json:"message"`
+	ApplicableCWDs []string `json:"-"`
 }
 
 type SkillsExtraRootsSetParams struct {
@@ -227,19 +233,23 @@ type ConfigEntry struct {
 }
 
 type SkillsRoot struct {
-	Path     string
-	Scope    string
-	PluginID string
+	Path       string
+	Scope      string
+	PluginID   string
+	PluginRoot string
+	CWDs       []string
 }
 
 type SkillsServiceOptions struct {
-	Roots               []string
-	RootSpecs           []SkillsRoot
-	Config              *config.ConfigService
-	CodexHome           string
-	HomeDir             string
-	InstallContext      *install.InstallContext
-	IncludeDefaultRoots bool
+	Roots                []string
+	RootSpecs            []SkillsRoot
+	Config               *config.ConfigService
+	CodexHome            string
+	HomeDir              string
+	InstallContext       *install.InstallContext
+	IncludeDefaultRoots  bool
+	BundledSkillsEnabled *bool
+	WatchInterval        time.Duration
 }
 
 type skillFrontmatter struct {
@@ -320,6 +330,12 @@ type SkillsService struct {
 	configFingerprint string
 	configService     *config.ConfigService
 	cache             map[string]skillsCacheEntry
+	watchMu           sync.Mutex
+	watchCallback     func()
+	watchedRoots      map[string]string
+	watchStop         chan struct{}
+	watchDone         chan struct{}
+	watchInterval     time.Duration
 }
 
 type skillsCacheEntry struct {
@@ -338,12 +354,31 @@ func NewSkillsServiceWithOptions(options *SkillsServiceOptions) *SkillsService {
 	roots := skillsRootsFromPaths(options.Roots, "local")
 	roots = append(roots, options.RootSpecs...)
 	if options.IncludeDefaultRoots {
-		roots = append(roots, defaultSkillsRoots(options.CodexHome, options.HomeDir, bundledSystemSkillsRoot(options.InstallContext))...)
+		bundledRoot := bundledSystemSkillsRoot(options.InstallContext)
+		bundledEnabled := bundledSkillsEnabled(options)
+		if !bundledEnabled {
+			systemskills.Uninstall(options.CodexHome)
+			bundledRoot = ""
+		} else if strings.TrimSpace(options.CodexHome) != "" {
+			if err := systemskills.Install(options.CodexHome); err != nil {
+				slog.Warn("failed to install embedded system skills", "error", err)
+			} else {
+				bundledRoot = ""
+			}
+		}
+		roots = append(roots, defaultSkillsRoots(options.CodexHome, options.HomeDir, bundledRoot, bundledEnabled)...)
+		roots = append(roots, skillsRootsFromConfigLayers(options.Config)...)
+	}
+	watchInterval := options.WatchInterval
+	if watchInterval <= 0 {
+		watchInterval = 10 * time.Second
 	}
 	return &SkillsService{
 		roots:         dedupeSkillsRoots(roots),
 		configService: options.Config,
 		cache:         map[string]skillsCacheEntry{},
+		watchedRoots:  map[string]string{},
+		watchInterval: watchInterval,
 	}
 }
 
@@ -363,8 +398,9 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		s.cache = map[string]skillsCacheEntry{}
 	}
 	configEntries := cloneConfigEntries(s.config)
+	configEntries = append(configEntries, cloneConfigEntries(params.Config)...)
 	configFingerprint := s.configFingerprint
-	if !hasPersistentConfig {
+	if !hasPersistentConfig || len(params.Config) > 0 {
 		configFingerprint = configEntriesFingerprint(configEntries)
 	}
 	key := strings.Join(params.CWDs, "\x00") + "\x00" + strings.Join(s.extraRoots, "\x00") + "\x00" + configFingerprint
@@ -376,6 +412,10 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	roots := cloneSkillsRoots(s.roots)
 	roots = append(roots, skillsRootsFromPaths(s.extraRoots, "user")...)
 	roots = append(roots, skillsRootsForCWDs(params.CWDs)...)
+	sort.SliceStable(roots, func(i int, j int) bool {
+		return skillScopeRank(roots[i].Scope) < skillScopeRank(roots[j].Scope)
+	})
+	roots = dedupeSkillsRoots(roots)
 	entries := make([]SkillsListEntry, 0)
 	skillErrors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
@@ -386,8 +426,12 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		entries = append(entries, found...)
 		skillErrors = append(skillErrors, foundErrors...)
 	}
+	entries = dedupeSkillsByPath(entries)
 	entries = applyConfig(entries, configEntries)
 	sort.SliceStable(entries, func(i int, j int) bool {
+		if skillScopeRank(entries[i].Scope) != skillScopeRank(entries[j].Scope) {
+			return skillScopeRank(entries[i].Scope) < skillScopeRank(entries[j].Scope)
+		}
 		if entries[i].Name == entries[j].Name {
 			return entries[i].Path < entries[j].Path
 		}
@@ -406,18 +450,186 @@ func (s *SkillsService) ClearCache() {
 	s.cache = map[string]skillsCacheEntry{}
 }
 
+func (s *SkillsService) SetChangedCallback(callback func()) {
+	if s == nil {
+		return
+	}
+	s.watchMu.Lock()
+	s.watchCallback = callback
+	if callback != nil && s.watchStop == nil {
+		s.watchStop = make(chan struct{})
+		s.watchDone = make(chan struct{})
+		go s.watchSkillsLoop(s.watchStop, s.watchDone)
+	}
+	s.watchMu.Unlock()
+}
+
+func (s *SkillsService) WatchCWDs(cwds []string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	roots := cloneSkillsRoots(s.roots)
+	roots = append(roots, skillsRootsFromPaths(s.extraRoots, "user")...)
+	s.mu.Unlock()
+	roots = append(roots, skillsRootsForCWDs(cwds)...)
+	sort.SliceStable(roots, func(i int, j int) bool {
+		return skillScopeRank(roots[i].Scope) < skillScopeRank(roots[j].Scope)
+	})
+	s.registerWatchedRoots(dedupeSkillsRoots(roots))
+}
+
+func (s *SkillsService) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.watchMu.Lock()
+	stop := s.watchStop
+	done := s.watchDone
+	s.watchStop = nil
+	s.watchDone = nil
+	s.watchCallback = nil
+	s.watchMu.Unlock()
+	if stop != nil {
+		close(stop)
+		if done != nil {
+			<-done
+		}
+	}
+	return nil
+}
+
+func (s *SkillsService) registerWatchedRoots(roots []SkillsRoot) {
+	if s == nil || len(roots) == 0 {
+		return
+	}
+	for _, root := range roots {
+		path := strings.TrimSpace(root.Path)
+		if path == "" || strings.EqualFold(strings.TrimSpace(root.Scope), "environment") || strings.EqualFold(strings.TrimSpace(root.Scope), "plugin") {
+			continue
+		}
+		path = filepath.Clean(path)
+		s.watchMu.Lock()
+		_, exists := s.watchedRoots[path]
+		s.watchMu.Unlock()
+		if exists {
+			continue
+		}
+		fingerprint := skillWatchFingerprint(path)
+		s.watchMu.Lock()
+		if _, exists := s.watchedRoots[path]; !exists {
+			s.watchedRoots[path] = fingerprint
+		}
+		s.watchMu.Unlock()
+	}
+}
+
+func (s *SkillsService) watchSkillsLoop(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	interval := s.watchInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.pollWatchedSkills()
+		}
+	}
+}
+
+func (s *SkillsService) pollWatchedSkills() {
+	s.watchMu.Lock()
+	roots := make(map[string]string, len(s.watchedRoots))
+	for path, fingerprint := range s.watchedRoots {
+		roots[path] = fingerprint
+	}
+	s.watchMu.Unlock()
+	changed := false
+	updates := make(map[string]string, len(roots))
+	for path, previous := range roots {
+		current := skillWatchFingerprint(path)
+		updates[path] = current
+		if current != previous {
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	s.watchMu.Lock()
+	for path, fingerprint := range updates {
+		if _, exists := s.watchedRoots[path]; exists {
+			s.watchedRoots[path] = fingerprint
+		}
+	}
+	callback := s.watchCallback
+	s.watchMu.Unlock()
+	s.ClearCache()
+	if callback != nil {
+		callback()
+	}
+}
+
+func skillWatchFingerprint(root string) string {
+	hash := sha256.New()
+	info, err := os.Stat(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(hash, "missing:%v", err)
+		return fmt.Sprintf("%x", hash.Sum(nil))
+	}
+	if !info.IsDir() {
+		writeSkillWatchFile(hash, root, info)
+		return fmt.Sprintf("%x", hash.Sum(nil))
+	}
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			_, _ = fmt.Fprintf(hash, "error:%s:%v\x00", path, walkErr)
+			return nil
+		}
+		if entry.IsDir() {
+			if path != root && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		fileInfo, statErr := entry.Info()
+		if statErr != nil {
+			_, _ = fmt.Fprintf(hash, "error:%s:%v\x00", path, statErr)
+			return nil
+		}
+		writeSkillWatchFile(hash, path, fileInfo)
+		return nil
+	})
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func writeSkillWatchFile(hash interface{ Write([]byte) (int, error) }, path string, info os.FileInfo) {
+	_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\x00", filepath.Clean(path), info.Size(), info.ModTime().UnixNano())
+	if contents, err := os.ReadFile(path); err == nil {
+		_, _ = hash.Write(contents)
+	}
+	_, _ = hash.Write([]byte{0})
+}
+
 func (s *SkillsService) SetExtraRoots(params *SkillsExtraRootsSetParams) (*SkillsExtraRootsSetResponse, error) {
 	if params == nil {
 		return nil, fmt.Errorf("%w: params are nil", ErrInvalidSkillsRequest)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	roots := params.ExtraRoots
 	if params.ExtraRoots == nil && params.Roots != nil {
 		roots = params.Roots
 	}
 	s.extraRoots = cleanStringSlice(roots)
 	s.cache = map[string]skillsCacheEntry{}
+	registeredRoots := skillsRootsFromPaths(s.extraRoots, "user")
+	s.mu.Unlock()
+	s.registerWatchedRoots(registeredRoots)
 	return &SkillsExtraRootsSetResponse{}, nil
 }
 
@@ -468,6 +680,26 @@ func (s *SkillsService) loadPersistentConfig() ([]ConfigEntry, string, bool, err
 	return entries, configEntriesFingerprint(entries), true, nil
 }
 
+func (s *SkillsService) applyConfigEntries(entries []SkillsListEntry, turnConfig []ConfigEntry) ([]SkillsListEntry, error) {
+	if s == nil {
+		return applyConfig(entries, turnConfig), nil
+	}
+	persistentConfig, persistentFingerprint, hasPersistentConfig, err := s.loadPersistentConfig()
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if hasPersistentConfig && persistentFingerprint != s.configFingerprint {
+		s.config = persistentConfig
+		s.configFingerprint = persistentFingerprint
+		s.cache = map[string]skillsCacheEntry{}
+	}
+	configEntries := cloneConfigEntries(s.config)
+	s.mu.Unlock()
+	configEntries = append(configEntries, cloneConfigEntries(turnConfig)...)
+	return applyConfig(entries, configEntries), nil
+}
+
 func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	root.Path = strings.TrimSpace(root.Path)
 	if root.Scope == "" {
@@ -485,8 +717,9 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 		return nil, nil, err
 	}
 	if !info.IsDir() && filepath.Base(rootPath) == SkillFilename {
-		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID)
+		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID, root.PluginRoot)
 		if skillErr != nil {
+			skillErr.ApplicableCWDs = append([]string(nil), root.CWDs...)
 			return nil, []SkillErrorInfo{*skillErr}, nil
 		}
 		if !ok {
@@ -496,12 +729,13 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 			return nil, nil, nil
 		}
 		entry.Root = canonicalSkillRootForIdentity(filepath.Dir(rootPath))
+		entry.ApplicableCWDs = append([]string(nil), root.CWDs...)
 		return []SkillsListEntry{entry}, nil, nil
 	}
 	if !info.IsDir() {
 		return nil, nil, nil
 	}
-	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID)
+	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID, root.PluginRoot, root.CWDs)
 	return entries, skillErrors, err
 }
 
@@ -509,6 +743,8 @@ type skillRootWalker struct {
 	root           string
 	scope          string
 	pluginID       string
+	pluginRoot     string
+	applicableCWDs []string
 	followSymlinks bool
 	seenDirs       map[string]bool
 	directoryCount int
@@ -516,11 +752,13 @@ type skillRootWalker struct {
 	errors         []SkillErrorInfo
 }
 
-func walkSkillRoot(rootPath string, scope string, pluginID string) ([]SkillsListEntry, []SkillErrorInfo, error) {
+func walkSkillRoot(rootPath string, scope string, pluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	walker := &skillRootWalker{
 		root:           rootPath,
 		scope:          scope,
 		pluginID:       pluginID,
+		pluginRoot:     pluginRoot,
+		applicableCWDs: append([]string(nil), applicableCWDs...),
 		followSymlinks: !strings.EqualFold(strings.TrimSpace(scope), "system"),
 		seenDirs:       map[string]bool{},
 		directoryCount: 1,
@@ -593,13 +831,15 @@ func (w *skillRootWalker) walkChildDir(path string, depth int) error {
 }
 
 func (w *skillRootWalker) addSkill(path string) {
-	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID)
+	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID, w.pluginRoot)
 	if skillErr != nil {
+		skillErr.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.errors = append(w.errors, *skillErr)
 		return
 	}
 	if ok && skillMatchesCodexProductRestriction(&entry) {
 		entry.Root = canonicalSkillRootForIdentity(w.root)
+		entry.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.entries = append(w.entries, entry)
 	}
 }
@@ -617,7 +857,7 @@ func (w *skillRootWalker) dirIdentity(path string) string {
 	return filepath.Clean(path)
 }
 
-func entryFromPath(path string, scope string, pluginID string) (SkillsListEntry, *SkillErrorInfo, bool) {
+func entryFromPath(path string, scope string, pluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
 	skillDir := filepath.Dir(path)
 	name := filepath.Base(skillDir)
 	data, err := os.ReadFile(path)
@@ -638,7 +878,7 @@ func entryFromPath(path string, scope string, pluginID string) (SkillsListEntry,
 	description := parsed.Description
 	shortDescription := parsed.ShortDescription
 	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID}
-	loadSkillMetadata(&entry, skillDir)
+	loadSkillMetadata(&entry, skillDir, pluginRoot)
 	return entry, nil, true
 }
 
@@ -688,13 +928,18 @@ func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEn
 			}
 		}
 	}
-	out := make([]SkillsListEntry, 0, len(entries))
-	for _, entry := range entries {
-		if disabled[normalizeSkillConfigPathAppserver(entry.Path)] {
-			continue
+	out := cloneSkills(entries)
+	var applyEnabled func([]SkillsListEntry)
+	applyEnabled = func(values []SkillsListEntry) {
+		for i := range values {
+			if len(values[i].Skills) > 0 {
+				applyEnabled(values[i].Skills)
+				continue
+			}
+			values[i].Enabled = !disabled[normalizeSkillConfigPathAppserver(values[i].Path)]
 		}
-		out = append(out, entry)
 	}
+	applyEnabled(out)
 	return out
 }
 
@@ -883,7 +1128,7 @@ func firstLineFromText(text string) string {
 	return resolveSkillString(text, skillMaxDescriptionLen)
 }
 
-func loadSkillMetadata(entry *SkillsListEntry, skillDir string) {
+func loadSkillMetadata(entry *SkillsListEntry, skillDir string, pluginRoot string) {
 	metadataPath := filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename)
 	info, err := os.Stat(metadataPath)
 	if err != nil || info.IsDir() {
@@ -897,20 +1142,23 @@ func loadSkillMetadata(entry *SkillsListEntry, skillDir string) {
 	if err := yaml.Unmarshal(data, &parsed); err != nil {
 		return
 	}
-	entry.Interface = resolveSkillInterface(parsed.Interface, skillDir)
+	if !skillMetadataProductsValid(parsed.Policy) {
+		return
+	}
+	entry.Interface = resolveSkillInterface(parsed.Interface, skillDir, pluginRoot)
 	entry.Dependencies = resolveSkillDependencies(parsed.Dependencies)
 	entry.Policy = resolveSkillPolicy(parsed.Policy)
 }
 
-func resolveSkillInterface(metadata *skillMetadataInterface, skillDir string) *SkillInterface {
+func resolveSkillInterface(metadata *skillMetadataInterface, skillDir string, pluginRoot string) *SkillInterface {
 	if metadata == nil {
 		return nil
 	}
 	value := &SkillInterface{
 		DisplayName:      resolveSkillString(metadata.displayName(), skillMaxNameLen),
 		ShortDescription: resolveSkillString(metadata.shortDescription(), skillMaxDescriptionLen),
-		IconSmall:        resolveSkillAssetPath(skillDir, metadata.iconSmall()),
-		IconLarge:        resolveSkillAssetPath(skillDir, metadata.iconLarge()),
+		IconSmall:        resolveSkillAssetPath(skillDir, pluginRoot, metadata.iconSmall()),
+		IconLarge:        resolveSkillAssetPath(skillDir, pluginRoot, metadata.iconLarge()),
 		BrandColor:       resolveSkillColor(metadata.brandColor()),
 		DefaultPrompt:    optionalSkillString(metadata.defaultPrompt(), skillMaxDescriptionLen),
 	}
@@ -1023,21 +1271,63 @@ func resolveSkillPolicy(metadata *skillMetadataPolicy) *SkillPolicy {
 			policy.Products = append(policy.Products, product)
 		}
 	}
-	if policy.AllowImplicitInvocation == nil && len(policy.Products) == 0 {
-		return nil
-	}
 	return policy
 }
 
-func resolveSkillAssetPath(skillDir string, value string) *string {
+func skillScopeRank(scope string) int {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "repo":
+		return 0
+	case "system":
+		return 2
+	case "admin":
+		return 3
+	default:
+		return 1
+	}
+}
+
+func dedupeSkillsByPath(entries []SkillsListEntry) []SkillsListEntry {
+	out := make([]SkillsListEntry, 0, len(entries))
+	seen := map[string]int{}
+	for _, entry := range entries {
+		key := normalizeSkillConfigPathAppserver(entry.Path)
+		if index, ok := seen[key]; ok {
+			out[index].ApplicableCWDs = mergeSkillCWDs(out[index].ApplicableCWDs, entry.ApplicableCWDs)
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, entry)
+	}
+	return out
+}
+
+func skillMetadataProductsValid(metadata *skillMetadataPolicy) bool {
+	if metadata == nil {
+		return true
+	}
+	for _, product := range metadata.Products {
+		switch product {
+		case "chatgpt", "codex", "atlas", "CHATGPT", "CODEX", "ATLAS":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func resolveSkillAssetPath(skillDir string, pluginRoot string, value string) *string {
 	value = strings.TrimSpace(value)
 	if value == "" || filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
 		return nil
 	}
 	normalized := strings.ReplaceAll(value, "\\", "/")
 	cleaned := pathpkg.Clean(normalized)
-	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
+	if cleaned == "." {
 		return nil
+	}
+	if strings.HasPrefix(cleaned, "../") || cleaned == ".." {
+		return resolvePluginSharedSkillAssetPath(skillDir, pluginRoot, cleaned)
 	}
 	parts := strings.Split(cleaned, "/")
 	if len(parts) == 0 || parts[0] != "assets" {
@@ -1049,6 +1339,23 @@ func resolveSkillAssetPath(skillDir string, value string) *string {
 		}
 	}
 	resolved := filepath.Join(append([]string{skillDir}, parts...)...)
+	return &resolved
+}
+
+func resolvePluginSharedSkillAssetPath(skillDir string, pluginRoot string, value string) *string {
+	pluginRoot = strings.TrimSpace(pluginRoot)
+	if pluginRoot == "" {
+		return nil
+	}
+	pluginAssets := filepath.Clean(filepath.Join(pluginRoot, "assets"))
+	resolved := filepath.Clean(filepath.Join(skillDir, filepath.FromSlash(value)))
+	relative, err := filepath.Rel(pluginAssets, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	if absolute, err := filepath.Abs(resolved); err == nil {
+		resolved = absolute
+	}
 	return &resolved
 }
 
@@ -1085,14 +1392,14 @@ func resolveSkillString(value string, maxLen int) string {
 	return value
 }
 
-func defaultSkillsRoots(codexHome string, homeDir string, bundledSystemRoot string) []SkillsRoot {
+func defaultSkillsRoots(codexHome string, homeDir string, bundledSystemRoot string, bundledSkillsEnabled bool) []SkillsRoot {
 	var roots []SkillsRoot
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome != "" {
-		roots = append(roots,
-			SkillsRoot{Path: filepath.Join(codexHome, "skills"), Scope: "user"},
-			SkillsRoot{Path: filepath.Join(codexHome, "skills", ".system"), Scope: "system"},
-		)
+		roots = append(roots, SkillsRoot{Path: filepath.Join(codexHome, "skills"), Scope: "user"})
+		if bundledSkillsEnabled {
+			roots = append(roots, SkillsRoot{Path: filepath.Join(codexHome, "skills", ".system"), Scope: "system"})
+		}
 	}
 	homeDir = strings.TrimSpace(homeDir)
 	if homeDir == "" {
@@ -1103,10 +1410,63 @@ func defaultSkillsRoots(codexHome string, homeDir string, bundledSystemRoot stri
 	if homeDir != "" {
 		roots = append(roots, SkillsRoot{Path: filepath.Join(homeDir, ".agents", "skills"), Scope: "user"})
 	}
-	if bundledSystemRoot = strings.TrimSpace(bundledSystemRoot); bundledSystemRoot != "" {
+	if bundledSkillsEnabled {
+		bundledSystemRoot = strings.TrimSpace(bundledSystemRoot)
+	}
+	if bundledSkillsEnabled && bundledSystemRoot != "" {
 		roots = append(roots, SkillsRoot{Path: bundledSystemRoot, Scope: "system"})
 	}
 	return roots
+}
+
+func skillsRootsFromConfigLayers(service *config.ConfigService) []SkillsRoot {
+	if service == nil {
+		return nil
+	}
+	read, err := service.Read(&config.ConfigReadParams{IncludeLayers: true})
+	if err != nil || read == nil {
+		return nil
+	}
+	roots := make([]SkillsRoot, 0, len(read.Layers))
+	for _, layer := range read.Layers {
+		file := strings.TrimSpace(layer.Name.File)
+		if file == "" {
+			continue
+		}
+		switch layer.Name.Type {
+		case config.LayerSourceUser:
+			roots = append(roots, SkillsRoot{Path: filepath.Join(filepath.Dir(file), "skills"), Scope: "user"})
+		case config.LayerSourceSystem:
+			roots = append(roots, SkillsRoot{Path: filepath.Join(filepath.Dir(file), "skills"), Scope: "admin"})
+		}
+	}
+	return roots
+}
+
+func bundledSkillsEnabled(options *SkillsServiceOptions) bool {
+	if options == nil {
+		return true
+	}
+	if options.BundledSkillsEnabled != nil {
+		return *options.BundledSkillsEnabled
+	}
+	if options.Config == nil {
+		return true
+	}
+	read, err := options.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return true
+	}
+	skills, ok := read.Config["skills"].(map[string]any)
+	if !ok {
+		return true
+	}
+	bundled, ok := skills["bundled"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := bundled["enabled"].(bool)
+	return !ok || enabled
 }
 
 func bundledSystemSkillsRoot(context *install.InstallContext) string {
@@ -1133,10 +1493,11 @@ func skillsRootsFromPaths(paths []string, scope string) []SkillsRoot {
 func skillsRootsForCWDs(cwds []string) []SkillsRoot {
 	var roots []SkillsRoot
 	for _, cwd := range cleanStringSlice(cwds) {
-		roots = append(roots, SkillsRoot{Path: cwd, Scope: "repo"})
-		roots = append(roots, SkillsRoot{Path: filepath.Join(cwd, ".codex", "skills"), Scope: "repo"})
+		for _, dotCodex := range config.ProjectDotCodexFolders(cwd) {
+			roots = append(roots, SkillsRoot{Path: filepath.Join(dotCodex, "skills"), Scope: "repo", CWDs: []string{cwd}})
+		}
 		for _, agentsRoot := range repoAgentsSkillsRoots(cwd) {
-			roots = append(roots, SkillsRoot{Path: agentsRoot, Scope: "repo"})
+			roots = append(roots, SkillsRoot{Path: agentsRoot, Scope: "repo", CWDs: []string{cwd}})
 		}
 	}
 	return dedupeSkillsRoots(roots)
@@ -1151,9 +1512,16 @@ func repoAgentsSkillsRoots(cwd string) []string {
 	if err != nil {
 		current = filepath.Clean(cwd)
 	}
+	if info, statErr := os.Stat(current); statErr == nil && !info.IsDir() {
+		current = filepath.Dir(current)
+	}
+	projectRoot := filepath.Clean(config.ActiveProjectRoot(current))
 	var roots []string
 	for {
 		roots = append(roots, filepath.Join(current, ".agents", "skills"))
+		if filepath.Clean(current) == projectRoot {
+			break
+		}
 		parent := filepath.Dir(current)
 		if parent == current {
 			break
@@ -1165,7 +1533,7 @@ func repoAgentsSkillsRoots(cwd string) []string {
 
 func dedupeSkillsRoots(roots []SkillsRoot) []SkillsRoot {
 	out := make([]SkillsRoot, 0, len(roots))
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, root := range roots {
 		root.Path = strings.TrimSpace(root.Path)
 		root.Scope = strings.TrimSpace(root.Scope)
@@ -1176,18 +1544,49 @@ func dedupeSkillsRoots(roots []SkillsRoot) []SkillsRoot {
 			continue
 		}
 		key := filepath.Clean(root.Path)
-		if seen[key] {
+		if index, ok := seen[key]; ok {
+			out[index].CWDs = mergeSkillCWDs(out[index].CWDs, root.CWDs)
 			continue
 		}
-		seen[key] = true
+		seen[key] = len(out)
+		root.CWDs = mergeSkillCWDs(nil, root.CWDs)
 		out = append(out, root)
 	}
 	return out
 }
 
+func mergeSkillCWDs(left []string, right []string) []string {
+	out := append([]string(nil), left...)
+	seen := map[string]bool{}
+	for _, cwd := range out {
+		seen[canonicalSkillCWD(cwd)] = true
+	}
+	for _, cwd := range right {
+		cwd = strings.TrimSpace(cwd)
+		key := canonicalSkillCWD(cwd)
+		if cwd == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, cwd)
+	}
+	return out
+}
+
+func canonicalSkillCWD(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if absolute, err := filepath.Abs(cwd); err == nil {
+		cwd = absolute
+	}
+	return filepath.Clean(cwd)
+}
+
 func cloneSkillsRoots(roots []SkillsRoot) []SkillsRoot {
 	out := make([]SkillsRoot, len(roots))
-	copy(out, roots)
+	for i := range roots {
+		out[i] = roots[i]
+		out[i].CWDs = append([]string(nil), roots[i].CWDs...)
+	}
 	return out
 }
 
@@ -1207,6 +1606,17 @@ func skillConfigEntriesFromConfig(response *config.ConfigReadResponse) []ConfigE
 		return nil
 	}
 	skills, ok := response.Config["skills"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return skillConfigEntriesFromValue(skills["config"])
+}
+
+func skillConfigEntriesFromValues(values map[string]any) []ConfigEntry {
+	if values == nil {
+		return nil
+	}
+	skills, ok := values["skills"].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -1354,11 +1764,15 @@ func cloneSkillErrors(errors []SkillErrorInfo) []SkillErrorInfo {
 	if errors == nil {
 		return nil
 	}
-	return append([]SkillErrorInfo(nil), errors...)
+	out := append([]SkillErrorInfo(nil), errors...)
+	for i := range out {
+		out[i].ApplicableCWDs = append([]string(nil), errors[i].ApplicableCWDs...)
+	}
+	return out
 }
 
 func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, cwds []string) *SkillsListResponse {
-	response := &SkillsListResponse{Skills: cloneSkills(skills)}
+	response := &SkillsListResponse{Skills: cloneSkills(skills), Errors: cloneSkillErrors(skillErrors)}
 	if len(cwds) == 0 {
 		response.Data = []SkillsListEntry{{
 			CWD:    "",
@@ -1399,6 +1813,13 @@ func skillErrorsForCWD(errors []SkillErrorInfo, cwd string) []SkillErrorInfo {
 	cleanCWD := filepath.Clean(cwd)
 	out := make([]SkillErrorInfo, 0, len(errors))
 	for _, skillErr := range errors {
+		if skillCWDMatches(skillErr.ApplicableCWDs, cwd) {
+			out = append(out, skillErr)
+			continue
+		}
+		if len(skillErr.ApplicableCWDs) > 0 {
+			continue
+		}
 		path := filepath.Clean(skillErr.Path)
 		if path == cleanCWD || strings.HasPrefix(path, cleanCWD+string(os.PathSeparator)) {
 			out = append(out, skillErr)
@@ -1411,6 +1832,9 @@ func skillErrorsForCWD(errors []SkillErrorInfo, cwd string) []SkillErrorInfo {
 }
 
 func skillAppliesToCWD(skill SkillsListEntry, cwd string) bool {
+	if len(skill.ApplicableCWDs) > 0 {
+		return skillCWDMatches(skill.ApplicableCWDs, cwd)
+	}
 	if !strings.EqualFold(strings.TrimSpace(skill.Scope), "repo") {
 		return true
 	}
@@ -1425,10 +1849,21 @@ func skillAppliesToCWD(skill SkillsListEntry, cwd string) bool {
 		skill.Path == cleanCWD
 }
 
+func skillCWDMatches(applicable []string, cwd string) bool {
+	want := canonicalSkillCWD(cwd)
+	for _, candidate := range applicable {
+		if canonicalSkillCWD(candidate) == want {
+			return true
+		}
+	}
+	return false
+}
+
 func cloneSkill(skill SkillsListEntry) SkillsListEntry {
 	out := skill
+	out.ApplicableCWDs = append([]string(nil), skill.ApplicableCWDs...)
 	out.Skills = cloneSkills(skill.Skills)
-	out.Errors = append([]SkillErrorInfo(nil), skill.Errors...)
+	out.Errors = cloneSkillErrors(skill.Errors)
 	if skill.Interface != nil {
 		value := *skill.Interface
 		value.IconSmall = cloneLocalStringPtr(skill.Interface.IconSmall)

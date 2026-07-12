@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -69,21 +71,40 @@ type skillsToolExecutor struct {
 	mcpService *mcp.MCPService
 	threadID   string
 	name       string
+	catalog    *orchestratorSkillCatalogCache
+}
+
+type OrchestratorSkillMetadata struct {
+	Package      string
+	Name         string
+	Description  string
+	MainResource string
+}
+
+type OrchestratorSkillCatalog struct {
+	Skills   []OrchestratorSkillMetadata
+	Warnings []string
+}
+
+type orchestratorSkillCatalogCache struct {
+	once    sync.Once
+	catalog OrchestratorSkillCatalog
 }
 
 func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) error {
-	if registry == nil || options == nil || options.MCPService == nil {
+	if registry == nil || options == nil || options.MCPService == nil || options.OrchestratorSkillsEnabled != nil && !*options.OrchestratorSkillsEnabled {
 		return nil
 	}
-	list := newSkillsToolExecutor(options, skillsToolListName, "List enabled skills owned by the requested authority. Only orchestrator-owned skills are currently supported. Returns the opaque package and main-resource handles required by skills.read.")
+	catalog := &orchestratorSkillCatalogCache{}
+	list := newSkillsToolExecutor(options, skillsToolListName, "List enabled skills owned by the requested authority. Only orchestrator-owned skills are currently supported. Returns the opaque package and main-resource handles required by skills.read.", catalog)
 	if err := registry.Register(list); err != nil {
 		return err
 	}
-	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one complete resource from an enabled skill. Pass the exact authority and package returned by skills.list; resource identifiers remain opaque and are routed to that authority.")
+	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one complete resource from an enabled skill. Pass the exact authority and package returned by skills.list; resource identifiers remain opaque and are routed to that authority.", catalog)
 	return registry.Register(read)
 }
 
-func newSkillsToolExecutor(options *ToolRegistryOptions, name string, description string) *skillsToolExecutor {
+func newSkillsToolExecutor(options *ToolRegistryOptions, name string, description string, catalog *orchestratorSkillCatalogCache) *skillsToolExecutor {
 	return &skillsToolExecutor{
 		spec: tool.Spec{
 			Name:                 tool.NamespacedName(skillsToolNamespace, name),
@@ -95,6 +116,7 @@ func newSkillsToolExecutor(options *ToolRegistryOptions, name string, descriptio
 		mcpService: options.MCPService,
 		threadID:   strings.TrimSpace(options.ThreadID),
 		name:       name,
+		catalog:    catalog,
 	}
 }
 
@@ -131,9 +153,19 @@ func (e *skillsToolExecutor) executeList(invocation *tool.Invocation) (*tool.Out
 		return nil, err
 	}
 	catalog := e.orchestratorSkillCatalog()
+	listed := make([]listedSkill, 0, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		listed = append(listed, listedSkill{
+			Authority:    skillsToolAuthority{Kind: "orchestrator"},
+			Package:      skill.Package,
+			Name:         skill.Name,
+			Description:  skill.Description,
+			MainResource: skill.MainResource,
+		})
+	}
 	response := skillsListResponse{
-		Skills:   catalog.skills,
-		Warnings: boundedSkillToolWarnings(catalog.warnings),
+		Skills:   listed,
+		Warnings: boundedSkillToolWarnings(catalog.Warnings),
 	}
 	return skillsToolJSONOutput(invocation, response)
 }
@@ -159,19 +191,8 @@ func (e *skillsToolExecutor) executeRead(invocation *tool.Invocation) (*tool.Out
 	if !e.orchestratorSkillPackageAvailable(args.Package) {
 		return nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
-	response, err := e.mcpService.ReadResource(&mcp.MCPResourceReadParams{
-		ThreadID: stringPtrIfNotEmpty(e.threadID),
-		Server:   mcp.RuntimeCodexAppsMCPServerName,
-		URI:      args.Resource,
-	})
+	contents, err := ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, args.Resource)
 	if err != nil {
-		return nil, tool.RespondToModel("failed to read skill resource")
-	}
-	contents, ok := matchingOrchestratorSkillText(response, args.Resource)
-	if !ok {
-		return nil, tool.RespondToModel("failed to read skill resource")
-	}
-	if len(contents) > maxOrchestratorSkillResourceBytes {
 		return nil, tool.RespondToModel("failed to read skill resource")
 	}
 	return skillsToolJSONOutput(invocation, skillsReadResponse{
@@ -180,51 +201,121 @@ func (e *skillsToolExecutor) executeRead(invocation *tool.Invocation) (*tool.Out
 	})
 }
 
-type orchestratorCatalog struct {
-	skills   []listedSkill
-	warnings []string
+func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog {
+	if e == nil {
+		return OrchestratorSkillCatalog{Skills: []OrchestratorSkillMetadata{}, Warnings: []string{}}
+	}
+	if e.catalog == nil {
+		e.catalog = &orchestratorSkillCatalogCache{}
+	}
+	e.catalog.once.Do(func() {
+		catalog, err := LoadOrchestratorSkillCatalog(e.mcpService, e.threadID)
+		if err != nil {
+			catalog.Warnings = append(catalog.Warnings, "orchestrator skills unavailable: "+err.Error())
+		}
+		e.catalog.catalog = catalog
+	})
+	return cloneOrchestratorSkillCatalog(e.catalog.catalog)
 }
 
-func (e *skillsToolExecutor) orchestratorSkillCatalog() orchestratorCatalog {
-	if e == nil || e.mcpService == nil {
-		return orchestratorCatalog{skills: []listedSkill{}, warnings: []string{}}
+func LoadOrchestratorSkillCatalog(service *mcp.MCPService, threadID string) (OrchestratorSkillCatalog, error) {
+	out := OrchestratorSkillCatalog{Skills: []OrchestratorSkillMetadata{}, Warnings: []string{}}
+	if service == nil {
+		return out, nil
 	}
-	status := e.mcpService.ListStatus(&mcp.MCPListServerStatusParams{
-		ThreadID: stringPtrIfNotEmpty(e.threadID),
+	status := service.ListStatus(&mcp.MCPListServerStatusParams{
+		ThreadID: stringPtrIfNotEmpty(threadID),
 		Detail:   &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
 	})
-	out := orchestratorCatalog{skills: []listedSkill{}, warnings: []string{}}
 	for _, server := range status.Data {
 		if server.Name != mcp.RuntimeCodexAppsMCPServerName && server.Server.Name != mcp.RuntimeCodexAppsMCPServerName {
 			continue
 		}
+		if server.State == mcp.MCPServerFailed && server.Error != nil {
+			return out, fmt.Errorf("failed to list orchestrator skill resources: %s", strings.TrimSpace(*server.Error))
+		}
 		skipped := 0
+		seen := 0
+		truncated := false
 		for _, resource := range server.Resources {
 			if resource.MimeType != orchestratorSkillMimeType {
 				continue
 			}
-			entry, ok := listedSkillFromOrchestratorResource(resource)
+			if seen >= 100 {
+				truncated = true
+				break
+			}
+			seen++
+			entry, ok := orchestratorSkillMetadataFromResource(resource)
 			if !ok {
 				skipped++
 				continue
 			}
-			out.skills = append(out.skills, entry)
+			out.Skills = append(out.Skills, entry)
+		}
+		if truncated {
+			out.Warnings = append(out.Warnings, "Orchestrator skill discovery was truncated at 100 skills or 10 resource pages.")
 		}
 		if skipped > 0 {
-			out.warnings = append(out.warnings, fmt.Sprintf("Skipped %d malformed orchestrator skill resources.", skipped))
+			out.Warnings = append(out.Warnings, fmt.Sprintf("Skipped %d malformed orchestrator skill resources.", skipped))
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (e *skillsToolExecutor) orchestratorSkillPackageAvailable(pkg string) bool {
 	catalog := e.orchestratorSkillCatalog()
-	for _, skill := range catalog.skills {
+	for _, skill := range catalog.Skills {
 		if skill.Package == pkg {
 			return true
 		}
 	}
 	return false
+}
+
+func ReadOrchestratorSkillResource(service *mcp.MCPService, threadID string, pkg string, resource string) (string, error) {
+	if service == nil {
+		return "", errors.New("session MCP resource client is not configured")
+	}
+	if !orchestratorResourceBelongsToPackage(pkg, resource) {
+		return "", errors.New("orchestrator skill resource does not match its package")
+	}
+	response, err := service.ReadResource(&mcp.MCPResourceReadParams{
+		ThreadID: stringPtrIfNotEmpty(threadID),
+		Server:   mcp.RuntimeCodexAppsMCPServerName,
+		URI:      resource,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to read orchestrator skill resource %s: %w", resource, err)
+	}
+	contents, ok := matchingOrchestratorSkillText(response, resource)
+	if !ok {
+		return "", fmt.Errorf("orchestrator skill resource %s did not return matching text contents", resource)
+	}
+	if len(contents) > maxOrchestratorSkillResourceBytes {
+		return "", fmt.Errorf("orchestrator skill resource %s exceeds the %d-byte read limit", resource, maxOrchestratorSkillResourceBytes)
+	}
+	return contents, nil
+}
+
+func orchestratorSkillMetadataFromResource(resource mcp.MCPResource) (OrchestratorSkillMetadata, bool) {
+	entry, ok := listedSkillFromOrchestratorResource(resource)
+	if !ok {
+		return OrchestratorSkillMetadata{}, false
+	}
+	return OrchestratorSkillMetadata{
+		Package:      entry.Package,
+		Name:         entry.Name,
+		Description:  entry.Description,
+		MainResource: entry.MainResource,
+	}, true
+}
+
+func cloneOrchestratorSkillCatalog(catalog OrchestratorSkillCatalog) OrchestratorSkillCatalog {
+	return OrchestratorSkillCatalog{
+		Skills:   append([]OrchestratorSkillMetadata(nil), catalog.Skills...),
+		Warnings: append([]string(nil), catalog.Warnings...),
+	}
 }
 
 func listedSkillFromOrchestratorResource(resource mcp.MCPResource) (listedSkill, bool) {

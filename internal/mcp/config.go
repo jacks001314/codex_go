@@ -26,6 +26,8 @@ type ServerConfig struct {
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
 	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
 	OAuthResource     string            `json:"oauth_resource,omitempty"`
+	Scopes            []string          `json:"scopes,omitempty"`
+	ScopesConfigured  bool              `json:"-"`
 	OAuthServerName   string            `json:"-"`
 	CodexHome         string            `json:"-"`
 	Enabled           bool              `json:"enabled"`
@@ -183,6 +185,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.EnvHTTPHeaders = runtimeConfigStringMap(values, "env_http_headers")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
+		server.Scopes, server.ScopesConfigured = runtimeConfigOptionalStringSlice(values, "scopes")
 		return server
 	}
 	server.Command = runtimeConfigString(values, "command")
@@ -233,6 +236,16 @@ func runtimeConfigStringSliceAny(values map[string]any, keys ...string) []string
 		}
 	}
 	return nil
+}
+
+func runtimeConfigOptionalStringSlice(values map[string]any, key string) ([]string, bool) {
+	if values == nil {
+		return nil, false
+	}
+	if _, ok := values[key]; !ok {
+		return nil, false
+	}
+	return runtimeConfigStringSlice(values, key), true
 }
 
 func runtimeConfigString(values map[string]any, key string) string {
@@ -613,6 +626,7 @@ func cloneServerConfig(config *ServerConfig) ServerConfig {
 	cloned := *config
 	cloned.Args = append([]string(nil), config.Args...)
 	cloned.EnvVars = append([]EnvVar(nil), config.EnvVars...)
+	cloned.Scopes = append([]string(nil), config.Scopes...)
 	if config.Env != nil {
 		cloned.Env = make(map[string]string, len(config.Env))
 		for key, value := range config.Env {

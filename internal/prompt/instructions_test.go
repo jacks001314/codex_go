@@ -113,23 +113,49 @@ func TestSkillHelpers(t *testing.T) {
 	if counts["build"] != 2 || counts["test"] != 1 {
 		t.Fatalf("BuildInstructionsSkillNameCounts() = %v", counts)
 	}
-	candidate := DetectImplicitSkillInvocationForCommand(skills, "please build", filepath.Join("repo", "skills", "build"))
-	if candidate == nil || candidate.Name != "build" {
-		t.Fatalf("DetectImplicitSkillInvocationForCommand() = %#v", candidate)
+}
+
+func TestDetectImplicitSkillInvocationForCommandMatchesRustFixtures(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "skill-test")
+	scriptsDir := filepath.Join(skillDir, "scripts")
+	if err := os.MkdirAll(filepath.Join(scriptsDir, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	candidate = DetectImplicitSkillInvocationForCommand(skills, "please build", filepath.Join("repo", "skills", "build", "..draft"))
-	if candidate == nil || candidate.Name != "build" {
-		t.Fatalf("DetectImplicitSkillInvocationForCommand(inside ..draft) = %#v", candidate)
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("skill"), 0o600); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
 	}
-	candidate = DetectImplicitSkillInvocationForCommand(skills, "please build", filepath.Join("repo", "skills", "build-other"))
-	if candidate != nil {
-		t.Fatalf("DetectImplicitSkillInvocationForCommand(outside sibling) = %#v, want nil", candidate)
+	scriptPath := filepath.Join(scriptsDir, "nested", "fetch_comments.py")
+	if err := os.WriteFile(scriptPath, []byte("print(1)"), 0o600); err != nil {
+		t.Fatalf("WriteFile(script) error = %v", err)
 	}
 	disabled := false
-	skills[0].AllowImplicitInvocation = &disabled
-	candidate = DetectImplicitSkillInvocationForCommand(skills, "please build", filepath.Join("repo", "skills", "build"))
-	if candidate != nil {
-		t.Fatalf("DetectImplicitSkillInvocationForCommand(disabled) = %#v, want nil", candidate)
+	skills := []InstructionsSkillMetadata{{
+		Name:                    "test-skill",
+		Path:                    skillPath,
+		AllowImplicitInvocation: &disabled,
+	}}
+
+	for _, test := range []struct {
+		name    string
+		command string
+		workdir string
+		want    bool
+	}{
+		{name: "relative script", command: "python3 -u scripts/nested/fetch_comments.py", workdir: skillDir, want: true},
+		{name: "absolute script", command: "python3 " + filepath.ToSlash(scriptPath), workdir: root, want: true},
+		{name: "python inline", command: `python3 -c "print(1)"`, workdir: skillDir},
+		{name: "absolute doc read", command: "cat " + filepath.ToSlash(skillPath) + " | head", workdir: root, want: true},
+		{name: "shared nl parser", command: "nl -ba SKILL.md", workdir: skillDir, want: true},
+		{name: "name text is not evidence", command: "echo test-skill", workdir: skillDir},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := DetectImplicitSkillInvocationForCommand(skills, test.command, test.workdir)
+			if (candidate != nil) != test.want {
+				t.Fatalf("DetectImplicitSkillInvocationForCommand() = %#v, want match %v", candidate, test.want)
+			}
+		})
 	}
 }
 

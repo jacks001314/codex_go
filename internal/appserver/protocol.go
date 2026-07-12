@@ -2706,7 +2706,7 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 	}
 	items := make([]ThreadItem, 0, len(record.Items))
 	for _, item := range record.Items {
-		if sessionItemIsHiddenContextInstruction(&item) {
+		if sessionItemIsHiddenThreadItem(&item) {
 			continue
 		}
 		threadItem := BuildThreadItem(item)
@@ -4520,7 +4520,7 @@ func turnsFromItems(items []session.Item) []Turn {
 	turnsByID := map[string]*Turn{}
 	var order []string
 	for index, item := range items {
-		if sessionItemIsHiddenContextInstruction(&item) {
+		if sessionItemIsHiddenThreadItem(&item) {
 			continue
 		}
 		threadItem := BuildThreadItem(item)
@@ -5069,7 +5069,7 @@ func resumeHistoryTurnID(payload map[string]any, id string, index int) string {
 
 func historyPreview(items []session.Item) string {
 	for i := range items {
-		if sessionItemIsHiddenContextInstruction(&items[i]) {
+		if sessionItemIsHiddenThreadItem(&items[i]) {
 			continue
 		}
 		if items[i].Role == "user" && strings.TrimSpace(items[i].Text) != "" {
@@ -5077,7 +5077,7 @@ func historyPreview(items []session.Item) string {
 		}
 	}
 	for i := range items {
-		if sessionItemIsHiddenContextInstruction(&items[i]) {
+		if sessionItemIsHiddenThreadItem(&items[i]) {
 			continue
 		}
 		if strings.TrimSpace(items[i].Text) != "" {

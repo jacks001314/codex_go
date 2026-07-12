@@ -894,7 +894,7 @@ func TestUpgradeMarketplaceRefreshesInstalledLocalPlugin(t *testing.T) {
 	}
 	roots := service.EnabledSkillRoots()
 	wantRoot := filepath.Join(home, InstalledMarketplacesDir, "debug", "plugins", "sample", "skills")
-	if len(roots) != 1 || roots[0].Root != wantRoot {
+	if len(roots) != 1 || roots[0].Root != wantRoot || roots[0].PluginNamespace != "sample" {
 		t.Fatalf("enabled skill roots = %#v, want root %q", roots, wantRoot)
 	}
 }

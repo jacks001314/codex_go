@@ -252,12 +252,21 @@ func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, inv
 }
 
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
+	toolCtx, cancel := context.WithCancelCause(ctx)
+	invocation.Cancel = cancel
+	defer func() {
+		invocation.Cancel = nil
+		cancel(nil)
+	}()
 	startedAt := d.nowUTC()
 	if d.onToolStarted != nil {
-		d.onToolStarted(ctx, invocation, startedAt)
+		d.onToolStarted(toolCtx, invocation, startedAt)
 	}
-	output, dispatchErr := d.router.DispatchWithHooks(ctx, invocation, d.hooks)
+	output, dispatchErr := d.router.DispatchWithHooks(toolCtx, invocation, d.hooks)
 	if dispatchErr != nil {
+		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			dispatchErr = cause
+		}
 		callErr := toolCallErrorForModel(dispatchErr)
 		if callErr.IsFatal() {
 			return nil, dispatchErr
@@ -278,11 +287,12 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	if finishedAt.IsZero() {
 		finishedAt = d.nowUTC()
 	}
+	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
 	return &ToolExecutionResult{
 		Invocation: invocation,
 		Output:     output,
 		Response:   ToolResponseFromOutput(invocation, output),
-		InputItems: d.postExecutionInputItems(ctx, invocation, output),
+		InputItems: inputItems,
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
 	}, nil

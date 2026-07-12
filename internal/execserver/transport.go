@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -76,6 +77,7 @@ func (s *Server) ServeWebSocket(ctx context.Context, address string, stdout io.W
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	defer s.shutdownSessions()
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
@@ -133,10 +135,51 @@ func (s *Server) ServeWebSocket(ctx context.Context, address string, stdout io.W
 }
 
 func (s *Server) serveWebSocketConnection(ctx context.Context, conn *websocket.Conn) error {
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	for {
-		messageType, data, err := conn.Read(ctx)
+	defer conn.CloseNow()
+	baseCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var requests sync.WaitGroup
+	var writeMu sync.Mutex
+	errCh := make(chan error, 1)
+	reportError := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
+		cancel()
+	}
+	writeJSON := func(value any) error {
+		encoded, err := json.Marshal(value)
 		if err != nil {
+			return err
+		}
+		writeCtx, writeCancel := context.WithTimeout(baseCtx, 30*time.Second)
+		defer writeCancel()
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.Write(writeCtx, websocket.MessageText, encoded)
+	}
+	notify := processNotifier(func(method string, params any) {
+		if err := writeJSON(map[string]any{"jsonrpc": "2.0", "method": method, "params": params}); err != nil {
+			reportError(err)
+		}
+	})
+	connectionCtx := withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(baseCtx, processNotifierContextKey{}, notify)))
+	defer s.detachConnection(connectionCtx)
+	for {
+		messageType, data, err := conn.Read(connectionCtx)
+		if err != nil {
+			cancel()
+			s.detachConnection(connectionCtx)
+			requests.Wait()
+			select {
+			case requestErr := <-errCh:
+				return requestErr
+			default:
+			}
 			if ctx.Err() != nil || websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway {
 				return nil
 			}
@@ -149,19 +192,57 @@ func (s *Server) serveWebSocketConnection(ctx context.Context, conn *websocket.C
 		if len(line) == 0 {
 			continue
 		}
-		out, ok := s.handleLine(ctx, line)
-		if !ok {
+		requestData := append([]byte(nil), line...)
+		if clientMessageClosesConnection(connectionCtx, requestData) {
+			cancel()
+			requests.Wait()
+			return nil
+		}
+		hasID, idErr := lineHasTopLevelID(requestData)
+		if idErr != nil {
+			malformed := errorResponse(
+				RequestID{value: -1},
+				-32600,
+				"failed to parse websocket JSON-RPC message from exec-server websocket: "+idErr.Error(),
+			)
+			if err := writeJSON(malformed); err != nil {
+				reportError(err)
+			}
 			continue
 		}
-		encoded, err := json.Marshal(out)
-		if err != nil {
-			return err
+		if !hasID {
+			out, ok := s.handleLineWithLabel(connectionCtx, requestData, "exec-server websocket")
+			if ok {
+				if err := writeJSON(out); err != nil {
+					reportError(err)
+				}
+			}
+			continue
 		}
-		writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err = conn.Write(writeCtx, websocket.MessageText, encoded)
-		cancel()
-		if err != nil {
-			return err
-		}
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			requestCtx, afterResponse := withAfterResponseActions(connectionCtx)
+			out, ok := s.handleLineWithLabel(requestCtx, requestData, "exec-server websocket")
+			if !ok {
+				return
+			}
+			if err := writeJSON(out); err != nil {
+				afterResponse.run()
+				reportError(err)
+				return
+			}
+			afterResponse.run()
+		}()
 	}
+}
+
+type processNotifierContextKey struct{}
+
+func processNotifierFromContext(ctx context.Context) processNotifier {
+	if ctx == nil {
+		return nil
+	}
+	notify, _ := ctx.Value(processNotifierContextKey{}).(processNotifier)
+	return notify
 }

@@ -78,7 +78,13 @@ type ProxyUnixSocketPermissions struct {
 }
 
 type ProxyConfig struct {
-	Network ProxySettings
+	Network               ProxySettings
+	PolicyDecider         ProxyPolicyDecider
+	BlockedObserver       ProxyBlockedRequestObserver
+	AuditSink             ProxyPolicyAuditSink
+	AuditMetadata         ProxyAuditMetadata
+	AuditMetadataProvider ProxyAuditMetadataProvider
+	EnvironmentID         string
 }
 
 type ProxySettings struct {
@@ -165,13 +171,20 @@ func (s *ProxySettings) UpsertDomainPermission(host string, permission ProxyDoma
 }
 
 func (s *ProxySettings) SetAllowUnixSockets(paths []string) {
-	if len(paths) == 0 {
-		s.UnixSockets = nil
-		return
-	}
 	entries := map[string]ProxyUnixSocketPermission{}
+	if s.UnixSockets != nil {
+		for path, permission := range s.UnixSockets.Entries {
+			if permission != ProxyUnixSocketAllow {
+				entries[path] = permission
+			}
+		}
+	}
 	for _, path := range paths {
 		entries[path] = ProxyUnixSocketAllow
+	}
+	if len(entries) == 0 {
+		s.UnixSockets = nil
+		return
 	}
 	s.UnixSockets = &ProxyUnixSocketPermissions{Entries: entries}
 }
@@ -226,6 +239,18 @@ type ProxyRuntimeConfig struct {
 }
 
 func ResolveProxyRuntime(config ProxyConfig) (ProxyRuntimeConfig, error) {
+	if _, err := CompileProxyDomainMatcher(config.Network.AllowedDomains(), false); err != nil {
+		return ProxyRuntimeConfig{}, fmt.Errorf("compile network.allowed_domains: %w", err)
+	}
+	if _, err := CompileProxyDomainMatcher(config.Network.DeniedDomains(), true); err != nil {
+		return ProxyRuntimeConfig{}, err
+	}
+	if config.Network.CredentialBroker && !config.Network.MITM {
+		return ProxyRuntimeConfig{}, fmt.Errorf("network.credential_broker requires network.mitm = true")
+	}
+	if err := ValidateProxyMITMHookConfig(config); err != nil {
+		return ProxyRuntimeConfig{}, err
+	}
 	if err := ValidateProxyUnixSocketAllowlistPaths(config); err != nil {
 		return ProxyRuntimeConfig{}, err
 	}

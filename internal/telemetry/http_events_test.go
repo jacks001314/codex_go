@@ -84,6 +84,51 @@ func TestAnalyticsEventsClientPostsRustTrackEventsRequest(t *testing.T) {
 	}
 }
 
+func TestAnalyticsEventsClientPostsSkillInvocationEventLikeRust(t *testing.T) {
+	bodies := make(chan TrackEventsRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload TrackEventsRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload error = %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		bodies <- payload
+	}))
+	defer server.Close()
+
+	client := NewAnalyticsEventsClient(AnalyticsEventsClientOptions{BaseURL: server.URL, HTTPClient: server.Client()})
+	defer client.Close()
+	client.TrackSkillInvocationEvent(context.Background(), SkillInvocationEventRequest{
+		EventType: SkillInvocationEventType,
+		SkillID:   "skill-sha1",
+		SkillName: "doc",
+		EventParams: SkillInvocationEventParams{
+			ProductClientID: stringPtrTelemetry("codex-cli"),
+			SkillScope:      stringPtrTelemetry("user"),
+			ThreadID:        stringPtrTelemetry("thread-1"),
+			TurnID:          stringPtrTelemetry("turn-1"),
+			InvokeType:      stringPtrTelemetry(SkillInvocationTypeExplicit),
+			ModelSlug:       stringPtrTelemetry("gpt-5"),
+		},
+	})
+
+	select {
+	case payload := <-bodies:
+		if len(payload.Events) != 1 {
+			t.Fatalf("events = %#v", payload.Events)
+		}
+		var event SkillInvocationEventRequest
+		if err := json.Unmarshal(payload.Events[0], &event); err != nil {
+			t.Fatalf("decode event error = %v", err)
+		}
+		if event.EventType != SkillInvocationEventType || event.SkillID != "skill-sha1" || event.SkillName != "doc" || event.EventParams.PluginID != nil || event.EventParams.RepoURL != nil {
+			t.Fatalf("event = %#v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for skill invocation event")
+	}
+}
+
 func TestAnalyticsEventsClientPostsThreadInitializedUnionEventLikeRust(t *testing.T) {
 	bodies := make(chan TrackEventsRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -53,6 +53,7 @@ type Spec struct {
 	Name                 ToolName       `json:"name"`
 	Description          string         `json:"description,omitempty"`
 	InputSchema          map[string]any `json:"inputSchema,omitempty"`
+	OutputSchema         map[string]any `json:"outputSchema,omitempty"`
 	Freeform             *FreeformSpec  `json:"freeform,omitempty"`
 	Search               *SearchInfo    `json:"search,omitempty"`
 	Exposure             Exposure       `json:"exposure,omitempty"`
@@ -97,6 +98,7 @@ type Invocation struct {
 	Source    string
 	StartedAt time.Time
 	Context   map[string]any
+	Cancel    context.CancelCauseFunc
 }
 
 func (i *Invocation) DecodeArguments(target any) error {

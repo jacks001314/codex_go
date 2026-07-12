@@ -363,13 +363,13 @@ func RuntimeDependencyToServerConfig(dependency RuntimeDependency) (RuntimeServe
 		if url == "" {
 			return RuntimeServerConfig{}, fmt.Errorf("missing url for streamable_http dependency")
 		}
-		return RuntimeServerConfig{Name: name, Transport: "streamable_http", URL: url, Enabled: true, Required: true}, nil
+		return RuntimeServerConfig{Name: name, Transport: "streamable_http", URL: url, Enabled: true}, nil
 	}
 	if transport == "stdio" {
 		if command == "" {
 			return RuntimeServerConfig{}, fmt.Errorf("missing command for stdio dependency")
 		}
-		return RuntimeServerConfig{Name: name, Transport: "stdio", Command: command, Enabled: true, Required: true}, nil
+		return RuntimeServerConfig{Name: name, Transport: "stdio", Command: command, Enabled: true}, nil
 	}
 	return RuntimeServerConfig{}, fmt.Errorf("unsupported transport %s", transport)
 }

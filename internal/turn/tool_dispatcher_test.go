@@ -332,6 +332,35 @@ func TestToolDispatcherRunsParallelSupportedCallsConcurrently(t *testing.T) {
 	}
 }
 
+func TestToolDispatcherTurnsAttributedCancelCauseIntoModelVisibleToolError(t *testing.T) {
+	registry := tool.NewRegistry()
+	executor := tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("exec_command")}, func(ctx context.Context, _ *tool.Invocation) (*tool.Output, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if err := registry.Register(executor); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+		Router: tool.NewRouter(registry),
+		OnToolStarted: func(_ context.Context, invocation *tool.Invocation, _ time.Time) {
+			invocation.Cancel(tool.RespondToModel("Network access was blocked by policy."))
+		},
+	})
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		Type:      "function_call",
+		CallID:    "call-network",
+		Name:      "exec_command",
+		Arguments: `{}`,
+	}})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Output.Success || results[0].Output.Body != "Network access was blocked by policy." {
+		t.Fatalf("results = %#v", results)
+	}
+}
+
 func TestToolDispatcherSerializesNonParallelCalls(t *testing.T) {
 	registry := tool.NewRegistry()
 	firstStarted := make(chan struct{})

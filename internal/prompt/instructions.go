@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	codexshell "codex_go/internal/shell"
 )
 
 const (
@@ -304,6 +306,19 @@ type InstructionsSkillMetadata struct {
 	PluginID                string
 	Contents                string
 	AllowImplicitInvocation *bool
+	AuthorityKind           string
+	AuthorityID             string
+	PackageID               string
+	ResourceID              string
+	Dependencies            []InstructionsSkillDependency
+}
+
+type InstructionsSkillDependency struct {
+	Type      string
+	Value     string
+	Transport string
+	Command   string
+	URL       string
 }
 
 func (s *InstructionsSkillMetadata) AllowsImplicitInvocation() bool {
@@ -471,27 +486,87 @@ func markSkillMentionPaths(skill InstructionsSkillMetadata, seen map[string]bool
 }
 
 func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata, command string, workdir string) *InstructionsSkillMetadata {
+	workdir = canonicalizeImplicitSkillPath(workdir)
+	tokens := codexshell.SplitCommandLine(command)
+
+	byScriptsDir := make(map[string]InstructionsSkillMetadata, len(skills))
+	bySkillDocPath := make(map[string]InstructionsSkillMetadata, len(skills))
 	for _, skill := range skills {
-		if !skill.AllowsImplicitInvocation() {
+		if skill.Path == "" || strings.Contains(skill.Path, "://") {
 			continue
 		}
-		if skill.Path != "" {
-			if strings.Contains(skill.Path, "://") {
-				continue
-			}
-			dir := filepath.Dir(skill.Path)
-			if rel, err := filepath.Rel(dir, workdir); err == nil && pathIsInsideOrSame(rel) && strings.Contains(command, skill.Name) {
+		docPath := canonicalizeImplicitSkillPath(skill.Path)
+		bySkillDocPath[docPath] = skill
+		scriptsDir := canonicalizeImplicitSkillPath(filepath.Join(filepath.Dir(skill.Path), "scripts"))
+		byScriptsDir[scriptsDir] = skill
+	}
+
+	if scriptToken := implicitSkillScriptToken(tokens); scriptToken != "" {
+		scriptPath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, scriptToken))
+		for path := scriptPath; ; path = filepath.Dir(path) {
+			if skill, ok := byScriptsDir[path]; ok {
 				copied := skill
 				return &copied
 			}
+			parent := filepath.Dir(path)
+			if parent == path {
+				break
+			}
+		}
+	}
+
+	for _, path := range codexshell.ReadPaths(tokens) {
+		candidatePath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, path))
+		if skill, ok := bySkillDocPath[candidatePath]; ok {
+			copied := skill
+			return &copied
 		}
 	}
 	return nil
 }
 
-func pathIsInsideOrSame(rel string) bool {
-	rel = filepath.Clean(strings.TrimSpace(rel))
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+func implicitSkillScriptToken(tokens []string) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	runner := strings.ToLower(filepath.Base(tokens[0]))
+	runner = strings.TrimSuffix(runner, ".exe")
+	switch runner {
+	case "python", "python3", "bash", "zsh", "sh", "node", "deno", "ruby", "perl", "pwsh":
+	default:
+		return ""
+	}
+	for _, token := range tokens[1:] {
+		if token == "--" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		lower := strings.ToLower(token)
+		for _, extension := range []string{".py", ".sh", ".js", ".ts", ".rb", ".pl", ".ps1"} {
+			if strings.HasSuffix(lower, extension) {
+				return token
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+func resolveImplicitSkillPath(workdir string, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(workdir, path)
+}
+
+func canonicalizeImplicitSkillPath(path string) string {
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return path
 }
 
 type toolMentions struct {

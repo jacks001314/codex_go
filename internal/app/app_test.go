@@ -832,7 +832,7 @@ func TestInteractiveDebugConfigReaderUsesRustStyleRenderer(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfigApp(project)+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_web_search_modes = []\nallow_remote_control = false\n[network]\nenabled = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_web_search_modes = []\nallow_remote_control = false\n[experimental_network]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile requirements error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
@@ -871,7 +871,7 @@ func trustedProjectConfigApp(path string) string {
 
 func TestAppServerRequirementsFromFileParsesFullRequirements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "requirements.toml")
-	if err := os.WriteFile(path, []byte("allowed_sandbox_modes = [\"workspace-write\"]\nallowed_web_search_modes = []\nallow_remote_control = true\n[network]\nenabled = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("allowed_sandbox_modes = [\"workspace-write\"]\nallowed_web_search_modes = []\nallow_remote_control = true\n[experimental_network]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile requirements error = %v", err)
 	}
 

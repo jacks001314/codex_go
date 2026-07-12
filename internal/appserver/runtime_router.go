@@ -28,6 +28,7 @@ import (
 	"codex_go/internal/install"
 	"codex_go/internal/mcp"
 	"codex_go/internal/model"
+	"codex_go/internal/network"
 	"codex_go/internal/plugin"
 	promptctx "codex_go/internal/prompt"
 	"codex_go/internal/realtime"
@@ -37,53 +38,60 @@ import (
 	"codex_go/internal/runtimeutil"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+	"codex_go/internal/skillprovider"
 	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
 )
 
 type RuntimeServices struct {
-	ThreadRouter            *Router
-	ThreadExtras            *ThreadExtraService
-	Realtime                *realtime.Manager
-	FS                      *FSService
-	Remote                  *remotecontrol.Manager
-	Environment             *EnvironmentManager
-	Windows                 *sandbox.WindowsManager
-	WindowsSetupRunner      WindowsSandboxSetupRunner
-	Feedback                *FeedbackSnapshot
-	Config                  *config.ConfigService
-	Account                 *auth.AccountManager
-	Hooks                   *HookRegistry
-	HooksDiscovery          *HookDiscoveryService
-	HookRunner              *HookRunner
-	Skills                  *SkillsService
-	Plugins                 *plugin.PluginService
-	Models                  *model.ModelService
-	Permissions             *sandbox.PermissionProfileService
-	Collaboration           *CollaborationModeService
-	MCP                     *mcp.MCPService
-	Features                *features.FeatureService
-	Apps                    *apps.AppService
-	Turns                   *turn.TurnService
-	SteerMailbox            *turn.SteerMailbox
-	ThreadStatus            *ThreadStatusManager
-	Agent                   model.AgentRunner
-	CompactRunner           compact.RemoteRunner
-	ToolRouter              *tool.Router
-	TurnRuntime             *turn.Runtime
-	Reviews                 *review.Service
-	Misc                    *MiscService
-	CommandExec             *CommandExecService
-	Processes               *ProcessService
-	ServerRequests          *ServerRequestBroker
-	AccountHTTP             chatgptapi.HTTPDoer
-	HTTPClient              model.HTTPDoer
-	SpawnGraph              agent.Store
-	Analytics               telemetry.TurnEventSink
-	AnalyticsRPCTransport   telemetry.AppServerRPCTransport
-	DefaultCWD              string
-	LocalEnvironmentEnabled *bool
+	ThreadRouter                 *Router
+	ThreadExtras                 *ThreadExtraService
+	Realtime                     *realtime.Manager
+	FS                           *FSService
+	Remote                       *remotecontrol.Manager
+	Environment                  *EnvironmentManager
+	Windows                      *sandbox.WindowsManager
+	WindowsSetupRunner           WindowsSandboxSetupRunner
+	Feedback                     *FeedbackSnapshot
+	Config                       *config.ConfigService
+	Account                      *auth.AccountManager
+	Hooks                        *HookRegistry
+	HooksDiscovery               *HookDiscoveryService
+	HookRunner                   *HookRunner
+	Skills                       *SkillsService
+	Plugins                      *plugin.PluginService
+	Models                       *model.ModelService
+	Permissions                  *sandbox.PermissionProfileService
+	Collaboration                *CollaborationModeService
+	MCP                          *mcp.MCPService
+	Features                     *features.FeatureService
+	Apps                         *apps.AppService
+	Turns                        *turn.TurnService
+	SteerMailbox                 *turn.SteerMailbox
+	ThreadStatus                 *ThreadStatusManager
+	Agent                        model.AgentRunner
+	CompactRunner                compact.RemoteRunner
+	ToolRouter                   *tool.Router
+	TurnRuntime                  *turn.Runtime
+	Reviews                      *review.Service
+	Misc                         *MiscService
+	CommandExec                  *CommandExecService
+	Processes                    *ProcessService
+	ServerRequests               *ServerRequestBroker
+	AccountHTTP                  chatgptapi.HTTPDoer
+	HTTPClient                   model.HTTPDoer
+	SpawnGraph                   agent.Store
+	Analytics                    telemetry.TurnEventSink
+	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
+	BrowserOpen                  func(string) error
+	CustomSkills                 *skillprovider.Registry
+	UnifiedExec                  *tool.UnifiedExecManager
+	ManagedNetwork               *network.PreparedProxyManagedNetwork
+	ManagedNetworkRequirements   *config.NetworkRequirements
+	DefaultCWD                   string
+	LocalEnvironmentEnabled      *bool
+	WorkspaceCodexPluginsEnabled *bool
 
 	RemoteControlDisabledByRequirements bool
 }
@@ -112,29 +120,66 @@ type RuntimeRouterOptions struct {
 }
 
 type RuntimeRouter struct {
-	services            RuntimeServices
-	mu                  sync.RWMutex
-	sink                NotificationSink
-	requests            ServerRequestSink
-	turnsMu             sync.Mutex
-	active              map[string]*activeRuntimeTurn
-	diffs               map[string]*runtimeutil.DiffTracker
-	ephemeralMu         sync.RWMutex
-	ephemeralThreads    map[string]*session.Record
-	subscriptionsMu     sync.Mutex
-	threadSubscriptions map[string]map[string]struct{}
-	clientInfoMu        sync.RWMutex
-	clientInfo          map[string]ClientInfo
-	notificationOptOut  map[string]map[NotificationMethod]struct{}
-	experimentalAPI     map[string]bool
-	requestAttestation  map[string]bool
-	mcpOpenAIForm       map[string]bool
-	authRevisionMu      sync.Mutex
-	authRevision        uint64
-	approvalSessionsMu  sync.RWMutex
-	commandApprovals    map[string]struct{}
-	fileApprovals       map[string]struct{}
-	toolItemReviews     map[string]toolItemReviewSummary
+	services               RuntimeServices
+	mu                     sync.RWMutex
+	sink                   NotificationSink
+	requests               ServerRequestSink
+	turnsMu                sync.Mutex
+	active                 map[string]*activeRuntimeTurn
+	diffs                  map[string]*runtimeutil.DiffTracker
+	ephemeralMu            sync.RWMutex
+	ephemeralThreads       map[string]*session.Record
+	subscriptionsMu        sync.Mutex
+	threadSubscriptions    map[string]map[string]struct{}
+	clientInfoMu           sync.RWMutex
+	clientInfo             map[string]ClientInfo
+	notificationOptOut     map[string]map[NotificationMethod]struct{}
+	experimentalAPI        map[string]bool
+	requestAttestation     map[string]bool
+	mcpOpenAIForm          map[string]bool
+	authRevisionMu         sync.Mutex
+	authRevision           uint64
+	approvalSessionsMu     sync.RWMutex
+	commandApprovals       map[string]struct{}
+	fileApprovals          map[string]struct{}
+	toolItemReviews        map[string]toolItemReviewSummary
+	skillMCPPromptMu       sync.Mutex
+	skillMCPPrompted       map[string]struct{}
+	orchestratorSkillMu    sync.Mutex
+	orchestratorSkills     map[string]*runtimeOrchestratorSkillCatalog
+	orchestratorWarned     map[string]bool
+	selectedSkillMu        sync.Mutex
+	selectedSkills         map[string]map[string]*runtimeSelectedSkillCatalog
+	unifiedExecPersistMu   sync.Mutex
+	unifiedExecAnalyticsMu sync.Mutex
+	unifiedExecAnalytics   map[string]unifiedExecAnalyticsContext
+	networkApproval        *networkApprovalService
+	managedNetworkReloadMu sync.Mutex
+	managedNetworkReload   *managedNetworkReloadWatcher
+	managedNetworksMu      sync.Mutex
+	managedNetworks        map[string]*network.PreparedProxyManagedNetwork
+	managedNetworkInputs   map[string]managedNetworkReloadInput
+}
+
+type unifiedExecAnalyticsContext struct {
+	ConnectionID string
+	RunConfig    *appTurnRunConfig
+}
+
+type runtimeOrchestratorSkillCatalog struct {
+	once          sync.Once
+	catalog       turn.OrchestratorSkillCatalog
+	err           error
+	resourceMu    sync.Mutex
+	resources     map[string]string
+	resourceBytes int
+}
+
+type runtimeSelectedSkillCatalog struct {
+	once     sync.Once
+	entries  []SkillsListEntry
+	warnings []string
+	err      error
 }
 
 const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
@@ -142,22 +187,33 @@ const remoteControlExternalAuthRecoveryTimeout = 30 * time.Second
 
 func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	router := &RuntimeRouter{
-		services:            services,
-		active:              map[string]*activeRuntimeTurn{},
-		diffs:               map[string]*runtimeutil.DiffTracker{},
-		ephemeralThreads:    map[string]*session.Record{},
-		threadSubscriptions: map[string]map[string]struct{}{},
-		clientInfo:          map[string]ClientInfo{},
-		notificationOptOut:  map[string]map[NotificationMethod]struct{}{},
-		experimentalAPI:     map[string]bool{},
-		requestAttestation:  map[string]bool{},
-		mcpOpenAIForm:       map[string]bool{},
-		commandApprovals:    map[string]struct{}{},
-		fileApprovals:       map[string]struct{}{},
-		toolItemReviews:     map[string]toolItemReviewSummary{},
+		services:             services,
+		active:               map[string]*activeRuntimeTurn{},
+		diffs:                map[string]*runtimeutil.DiffTracker{},
+		ephemeralThreads:     map[string]*session.Record{},
+		threadSubscriptions:  map[string]map[string]struct{}{},
+		clientInfo:           map[string]ClientInfo{},
+		notificationOptOut:   map[string]map[NotificationMethod]struct{}{},
+		experimentalAPI:      map[string]bool{},
+		requestAttestation:   map[string]bool{},
+		mcpOpenAIForm:        map[string]bool{},
+		commandApprovals:     map[string]struct{}{},
+		fileApprovals:        map[string]struct{}{},
+		toolItemReviews:      map[string]toolItemReviewSummary{},
+		skillMCPPrompted:     map[string]struct{}{},
+		orchestratorSkills:   map[string]*runtimeOrchestratorSkillCatalog{},
+		orchestratorWarned:   map[string]bool{},
+		selectedSkills:       map[string]map[string]*runtimeSelectedSkillCatalog{},
+		unifiedExecAnalytics: map[string]unifiedExecAnalyticsContext{},
+		managedNetworks:      map[string]*network.PreparedProxyManagedNetwork{},
+		managedNetworkInputs: map[string]managedNetworkReloadInput{},
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
+	}
+	router.networkApproval = newNetworkApprovalService(router)
+	if router.services.UnifiedExec == nil {
+		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
 	if router.services.Config != nil {
 		_, _ = router.services.Config.MaybeMigratePersonality()
@@ -168,6 +224,11 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		router.services.ThreadRouter.SetSpawnGraph(router.services.SpawnGraph)
 	}
 	router.configureFSChangedCallback()
+	if router.services.Skills != nil {
+		router.services.Skills.SetChangedCallback(func() {
+			router.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
+		})
+	}
 	return router
 }
 
@@ -436,14 +497,51 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
 	}
+	if options != nil && options.Requirements != nil {
+		services.ManagedNetworkRequirements = cloneRuntimeNetworkRequirements(options.Requirements.Network)
+	}
 	router := NewRuntimeRouter(services)
 	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
 	router.configureMCPFromConfig()
+	router.configureManagedNetworkFromConfig()
 	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
 	return router
+}
+
+func (r *RuntimeRouter) configureManagedNetworkFromConfig() {
+	if r == nil || r.services.ManagedNetwork != nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	if err := validateManagedNetworkRequirements(r.services.ManagedNetworkRequirements); err != nil {
+		slog.Warn("failed to validate managed network requirements", "error", err)
+		return
+	}
+	proxyConfig, shouldStart, err := r.buildManagedNetworkProxyConfig(read.Config)
+	if err != nil || !shouldStart {
+		if err != nil {
+			slog.Warn("failed to build managed network proxy", "error", err)
+		}
+		return
+	}
+	baseEnv := map[string]string{}
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && key != "" {
+			baseEnv[key] = value
+		}
+	}
+	prepared, err := network.StartProxyManagedNetwork(context.Background(), *proxyConfig, baseEnv)
+	if err == nil {
+		r.services.ManagedNetwork = prepared
+		r.startManagedNetworkReloadWatcher()
+	}
 }
 
 func (r *RuntimeRouter) configureAnalyticsFromConfig(codexHome string, options *RuntimeRouterOptions) {
@@ -690,6 +788,27 @@ func (r *RuntimeRouter) Close() error {
 	}
 	if r.services.Remote != nil {
 		if err := r.services.Remote.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	if r.services.Skills != nil {
+		if err := r.services.Skills.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	if r.services.UnifiedExec != nil {
+		if err := r.services.UnifiedExec.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	if err := r.closeManagedNetworkReloadWatcher(); err != nil && closeErr == nil {
+		closeErr = err
+	}
+	if err := r.closeThreadManagedNetworks(); err != nil && closeErr == nil {
+		closeErr = err
+	}
+	if r.services.ManagedNetwork != nil {
+		if err := r.services.ManagedNetwork.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 	}
@@ -1936,9 +2055,16 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			if r.services.Skills != nil && r.localEnvironmentEnabled() {
+				r.services.Skills.WatchCWDs([]string{response.Thread.CWD})
+			}
 			r.emitThreadStartAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
+			var forkParams ThreadForkParams
+			if request.DecodeParams(&forkParams) == nil && r.networkApproval != nil {
+				r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
+			}
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
 			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notifyRestoredTokenUsage(response)
@@ -2609,6 +2735,12 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	}
 	r.requireThreadStatus().RemoveThread(threadID)
 	r.clearThreadSubscriptions(threadID)
+	if err := r.closeThreadManagedNetwork(threadID); err != nil {
+		slog.Warn("failed to close thread managed network", "thread_id", threadID, "error", err)
+	}
+	if r.networkApproval != nil {
+		r.networkApproval.clearThread(threadID)
+	}
 }
 
 func (r *RuntimeRouter) subscribeThreadConnection(threadID string, connectionID string) {
@@ -4140,7 +4272,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 			return nil, err
 		}
-		return r.requireThreadExtras().CleanBackgroundTerminals(&params)
+		return r.cleanBackgroundTerminals(&params)
 	case MethodThreadBackgroundTerminalsList:
 		var params BackgroundTerminalsListParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -4152,7 +4284,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 			return nil, err
 		}
-		return r.requireThreadExtras().ListBackgroundTerminals(&params)
+		return r.listBackgroundTerminals(&params)
 	case MethodThreadBackgroundTerminalsTerminate:
 		var params BackgroundTerminalsTerminateParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -4164,10 +4296,58 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 			return nil, err
 		}
-		return r.requireThreadExtras().TerminateBackgroundTerminal(&params)
+		return r.terminateBackgroundTerminal(&params)
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
 	}
+}
+
+func (r *RuntimeRouter) cleanBackgroundTerminals(params *BackgroundTerminalsCleanParams) (*BackgroundTerminalsCleanResponse, error) {
+	response, err := r.requireThreadExtras().CleanBackgroundTerminals(params)
+	if err != nil {
+		return nil, err
+	}
+	if r != nil && r.services.UnifiedExec != nil {
+		r.services.UnifiedExec.TerminateAll(strings.TrimSpace(params.ThreadID))
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) listBackgroundTerminals(params *BackgroundTerminalsListParams) (*BackgroundTerminalsListResponse, error) {
+	base, err := r.requireThreadExtras().ListBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: params.ThreadID})
+	if err != nil {
+		return nil, err
+	}
+	terminals := append([]BackgroundTerminal(nil), base.Data...)
+	if r != nil && r.services.UnifiedExec != nil {
+		for _, process := range r.services.UnifiedExec.ListProcesses(strings.TrimSpace(params.ThreadID)) {
+			terminals = append(terminals, BackgroundTerminal{
+				ItemID:    process.ItemID,
+				ProcessID: strconv.Itoa(process.ProcessID),
+				Command:   process.Command,
+				CWD:       process.CWD,
+			})
+		}
+	}
+	sort.Slice(terminals, func(i int, j int) bool { return terminals[i].ProcessID < terminals[j].ProcessID })
+	page, next, err := PaginateBackgroundTerminals(terminals, params.Cursor, params.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return &BackgroundTerminalsListResponse{Data: page, NextCursor: next}, nil
+}
+
+func (r *RuntimeRouter) terminateBackgroundTerminal(params *BackgroundTerminalsTerminateParams) (*BackgroundTerminalsTerminateResponse, error) {
+	response, err := r.requireThreadExtras().TerminateBackgroundTerminal(params)
+	if err != nil || response.Terminated || r == nil || r.services.UnifiedExec == nil {
+		return response, err
+	}
+	processID, parseErr := strconv.Atoi(strings.TrimSpace(params.ProcessID))
+	if parseErr != nil {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("invalid background terminal process id: %v", parseErr))
+	}
+	response.Terminated = r.services.UnifiedExec.TerminateProcess(strings.TrimSpace(params.ThreadID), processID)
+	return response, nil
 }
 
 func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string) (*GoalSetResponse, error) {
@@ -5156,7 +5336,72 @@ func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse,
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireSkills().List(&params)
+	if len(params.CWDs) == 0 {
+		params.CWDs = []string{r.threadStartDefaultCWD()}
+	}
+	requestedCWDs := append([]string(nil), params.CWDs...)
+	loadParams := params
+	if !r.localEnvironmentEnabled() {
+		loadParams.CWDs = nil
+	}
+	response, err := r.requireSkills().List(&loadParams)
+	if err != nil {
+		return nil, err
+	}
+	pluginEntries, pluginErrors, err := r.pluginSkillEntriesAndErrorsForRuntime()
+	if err != nil {
+		return nil, err
+	}
+	pluginCWDs := r.pluginEnabledCWDs(requestedCWDs)
+	if len(pluginCWDs) == 0 {
+		pluginEntries = nil
+		pluginErrors = nil
+	}
+	pluginEntries, err = r.requireSkills().applyConfigEntries(pluginEntries, nil)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pluginEntries {
+		pluginEntries[i].Scope = "user"
+		pluginEntries[i].ApplicableCWDs = append([]string(nil), pluginCWDs...)
+	}
+	entries := append(cloneSkills(response.Skills), pluginEntries...)
+	entries = dedupeSkillsByPath(entries)
+	sort.SliceStable(entries, func(i int, j int) bool {
+		if skillScopeRank(entries[i].Scope) != skillScopeRank(entries[j].Scope) {
+			return skillScopeRank(entries[i].Scope) < skillScopeRank(entries[j].Scope)
+		}
+		if entries[i].Name == entries[j].Name {
+			return entries[i].Path < entries[j].Path
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	errors := append(cloneSkillErrors(response.Errors), pluginErrors...)
+	return skillsListResponse(entries, errors, requestedCWDs), nil
+}
+
+func (r *RuntimeRouter) pluginEnabledCWDs(cwds []string) []string {
+	if r == nil || r.services.WorkspaceCodexPluginsEnabled != nil && !*r.services.WorkspaceCodexPluginsEnabled {
+		return nil
+	}
+	out := make([]string, 0, len(cwds))
+	for _, cwd := range cwds {
+		if r.pluginFeatureEnabledForCWD(cwd) {
+			out = append(out, cwd)
+		}
+	}
+	return out
+}
+
+func (r *RuntimeRouter) pluginFeatureEnabledForCWD(cwd string) bool {
+	if r == nil || r.services.Config == nil || strings.TrimSpace(r.services.Config.CodexHome()) == "" {
+		return true
+	}
+	cfg, err := config.LoadWithOptions(r.services.Config.CodexHome(), &config.LoadOptions{CWD: cwd})
+	if err != nil || cfg == nil {
+		return true
+	}
+	return features.Enabled(cfg.FeatureSettings(), "plugins")
 }
 
 func (r *RuntimeRouter) handleSkillsExtraRootsSet(request *Request) (*SkillsExtraRootsSetResponse, error) {
@@ -5176,11 +5421,7 @@ func (r *RuntimeRouter) handleSkillsConfigWrite(request *Request) (*SkillsConfig
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, err := r.requireSkills().WriteConfig(&params)
-	if err == nil {
-		r.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
-	}
-	return response, err
+	return r.requireSkills().WriteConfig(&params)
 }
 
 func (r *RuntimeRouter) handleMarketplaceAdd(request *Request) (*plugin.MarketplaceAddResponse, error) {
@@ -5212,7 +5453,9 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().List(&params), nil
+	response := r.requirePlugins().List(&params)
+	r.startInstalledRemotePluginSync()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginInstalledResponse, error) {
@@ -7089,6 +7332,9 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
 	}
 	items := []ThreadItem{}
 	for _, item := range r.sessionItemsForTurn(turnID, params, nil, createdAt) {
+		if sessionItemIsHiddenThreadItem(&item) {
+			continue
+		}
 		items = append(items, BuildThreadItem(item))
 	}
 	return &Turn{
@@ -7168,6 +7414,7 @@ func (r *RuntimeRouter) requireToolRouter(cwd string) (*tool.Router, error) {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	options.UnifiedExec = r.services.UnifiedExec
 	options.EnableMCP = false
 	options.EnableAgents = false
 	router, err := turn.BuildToolRouter(options)
@@ -7227,6 +7474,10 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	if err != nil {
 		return nil, err
 	}
+	managedNetwork, err := r.managedNetworkForTurn(threadID, cwd, cfg, turnConfigOverrides(params))
+	if err != nil {
+		return nil, err
+	}
 	if cfg != nil {
 		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled {
 			enableCurrentTimeTool = true
@@ -7241,12 +7492,30 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	options.UnifiedExec = r.services.UnifiedExec
+	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
 	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
 		options.Shell.Validation.PermissionProfile = permissionProfile.Profile
 	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	if options.Shell != nil {
+		if managedNetwork != nil {
+			options.Shell.ManagedNetworkResolver = func(environmentID string) (map[string]string, *network.ProxyManagedNetworkSandboxContext, error) {
+				env, sandboxContext, err := managedNetwork.PrepareForEnvironment(environmentID)
+				if err != nil {
+					return nil, nil, err
+				}
+				return env, &sandboxContext, nil
+			}
+		}
+		if cfg != nil {
+			options.Shell.MaxOutputTokens = cfg.ToolOutputTokenLimit()
+			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelFromConfigValues(cfg.Values)
+			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopFromConfigValues(cfg.Values)
+		}
+		options.Shell.UnifiedExecEvents = r.runtimeUnifiedExecEventSink(threadID, strings.TrimSpace(turnID))
+		options.Shell.UnifiedExecEnvironments = r.unifiedExecEnvironmentsForTurn(params)
 		options.Shell.Validation.ApprovalPolicy = approvalPolicy
 		if r.commandApprovalForSession(threadID) {
 			options.Shell.Validation.PermissionsPreapproved = true
@@ -7264,6 +7533,8 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	if r != nil {
 		options.MCPService = r.services.MCP
 	}
+	orchestratorSkillsEnabled := cfg == nil || cfg.OrchestratorSkillsEnabled()
+	options.OrchestratorSkillsEnabled = &orchestratorSkillsEnabled
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
 	options.EnableAgents = false
@@ -7294,6 +7565,55 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+func windowsSandboxPrivateDesktopFromConfigValues(values map[string]any) bool {
+	permissions, _ := values["permissions"].(map[string]any)
+	value, _ := permissions["windows_sandbox_private_desktop"].(bool)
+	if !value {
+		value, _ = permissions["windowsSandboxPrivateDesktop"].(bool)
+	}
+	return value
+}
+
+func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartParams) []tool.UnifiedExecEnvironment {
+	if r == nil || params == nil || len(params.Environments) == 0 || r.services.Environment == nil {
+		return nil
+	}
+	out := make([]tool.UnifiedExecEnvironment, 0, len(params.Environments))
+	for _, selected := range params.Environments {
+		environmentID := strings.TrimSpace(firstNonEmpty(
+			threadItemStringFromAnyMap(selected, "environmentId"),
+			threadItemStringFromAnyMap(selected, "environment_id"),
+		))
+		record, ok := r.services.Environment.Record(environmentID)
+		if !ok || record == nil {
+			continue
+		}
+		cwd := strings.TrimSpace(firstNonEmpty(
+			threadItemStringFromAnyMap(selected, "cwd"),
+			threadItemStringFromAnyMap(selected, "CWD"),
+		))
+		shellInfo := record.Shell
+		if info, err := r.services.Environment.InfoContext(context.Background(), &EnvironmentInfoParams{EnvironmentID: environmentID}); err == nil && info != nil {
+			shellInfo = info.Shell
+		} else if !record.InfoOverride {
+			shellInfo = EnvironmentShellInfo{}
+		}
+		shellPath := strings.TrimSpace(shellInfo.Path)
+		var environmentShell *tool.Shell
+		if shellPath != "" {
+			environmentShell = &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
+		}
+		out = append(out, tool.UnifiedExecEnvironment{
+			ID:            environmentID,
+			CWD:           cwd,
+			Shell:         environmentShell,
+			ExecServerURL: strings.TrimSpace(record.ExecServerURL),
+			NoiseProvider: record.NoiseProvider,
+		})
+	}
+	return out
 }
 
 func (r *RuntimeRouter) serverRequestSinkConfigured() bool {

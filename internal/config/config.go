@@ -216,6 +216,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"tools":                                {},
 	"trusted_projects":                     {},
 	"tui":                                  {},
+	"tool_output_token_limit":              {},
 	"web_search":                           {},
 	"windows":                              {},
 	"windows_sandbox":                      {},
@@ -266,6 +267,10 @@ func ProjectDotCodexFolders(cwd string) []string {
 	return folders
 }
 
+func ActiveProjectRoot(cwd string) string {
+	return activeProjectRoot(cwd)
+}
+
 func ProjectHooksDotCodexFolder(cwd string, dotCodexFolder string) string {
 	dotCodexFolder = strings.TrimSpace(dotCodexFolder)
 	if dotCodexFolder == "" {
@@ -290,6 +295,51 @@ func ProjectHooksDotCodexFolder(cwd string, dotCodexFolder string) string {
 func (c *Config) FeatureSettings() map[string]bool {
 	settings, _ := c.FeatureSettingsWithLegacyUsages()
 	return settings
+}
+
+func (c *Config) IncludeSkillInstructions() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	skills, ok := c.Values["skills"].(map[string]any)
+	if !ok {
+		return true
+	}
+	include, ok := skills["include_instructions"].(bool)
+	if !ok {
+		return true
+	}
+	return include
+}
+
+func (c *Config) OrchestratorSkillsEnabled() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	orchestrator, ok := c.Values["orchestrator"].(map[string]any)
+	if !ok {
+		return true
+	}
+	skills, ok := orchestrator["skills"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := skills["enabled"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
+func (c *Config) ToolOutputTokenLimit() *int {
+	if c == nil || c.Values == nil {
+		return nil
+	}
+	value, ok := nonNegativeIntFromConfigValue(c.Values["tool_output_token_limit"])
+	if !ok {
+		return nil
+	}
+	return &value
 }
 
 func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featureflags.LegacyFeatureUsage) {
@@ -493,6 +543,30 @@ func uint64FromConfigValue(value any) uint64 {
 	return 0
 }
 
+func nonNegativeIntFromConfigValue(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, v >= 0
+	case int64:
+		if v < 0 || uint64(v) > uint64(^uint(0)>>1) {
+			return 0, false
+		}
+		return int(v), true
+	case uint64:
+		if v > uint64(^uint(0)>>1) {
+			return 0, false
+		}
+		return int(v), true
+	case float64:
+		if v < 0 || v != float64(int64(v)) || v > float64(^uint(0)>>1) {
+			return 0, false
+		}
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
 func currentTimeSourceFromConfig(value any) CurrentTimeSource {
 	switch strings.TrimSpace(strings.ToLower(stringFromConfigValue(value))) {
 	case string(CurrentTimeSourceSystem):
@@ -589,6 +663,9 @@ func projectAncestorDirs(cwd string) []string {
 	start, err := filepath.Abs(cwd)
 	if err != nil {
 		start = filepath.Clean(cwd)
+	}
+	if info, statErr := os.Stat(start); statErr == nil && !info.IsDir() {
+		start = filepath.Dir(start)
 	}
 	var dirs []string
 	for dir := start; dir != ""; {

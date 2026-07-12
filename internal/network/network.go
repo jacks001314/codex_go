@@ -290,7 +290,6 @@ func applyRequirements(config Config, requirements *Requirements, permissionKind
 	}
 	if requirements.SocksPort > 0 {
 		config.SocksURL = fmt.Sprintf("http://127.0.0.1:%d", requirements.SocksPort)
-		config.EnableSocks5 = true
 	}
 	if requirements.AllowUpstreamProxy != nil {
 		config.AllowUpstreamProxy = *requirements.AllowUpstreamProxy
@@ -336,11 +335,11 @@ func applyRequirements(config Config, requirements *Requirements, permissionKind
 }
 
 func allowlistExpansionEnabled(permissionKind PermissionProfileKind, hardDeny bool) bool {
-	return permissionKind != PermissionManaged && !hardDeny
+	return permissionKind == PermissionManaged && !hardDeny
 }
 
 func denylistExpansionEnabled(permissionKind PermissionProfileKind) bool {
-	return permissionKind != PermissionManaged
+	return permissionKind == PermissionManaged
 }
 
 func setDomains(config *Config, hosts []string, permission DomainPermission) {

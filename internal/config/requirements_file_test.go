@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/internal/sandbox"
@@ -32,7 +33,7 @@ windows_managed_dir = "C:\\managed\\hooks"
 matcher = "shell"
 hooks = [{ type = "command", command = "echo ok", timeout_sec = 5, async = true, status_message = "checking" }]
 
-[network]
+[experimental_network]
 enabled = true
 http_port = 1234
 socks_port = 5678
@@ -42,11 +43,11 @@ dangerously_allow_all_unix_sockets = true
 managed_allowed_domains_only = false
 allow_local_binding = true
 
-[network.domains]
+[experimental_network.domains]
 "a.example" = "allow"
 "b.example" = "deny"
 
-[network.unix_sockets]
+[experimental_network.unix_sockets]
 "/tmp/a.sock" = "allow"
 "/tmp/b.sock" = "deny"
 
@@ -108,5 +109,107 @@ func TestLoadRequirementsFileMissingReturnsNil(t *testing.T) {
 	}
 	if requirements != nil {
 		t.Fatalf("requirements = %#v, want nil", requirements)
+	}
+}
+
+func TestLoadRequirementsFileRejectsMixedCanonicalAndLegacyNetworkShapesLikeRust(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "domains",
+			body: `[experimental_network]
+allowed_domains = ["api.example.com"]
+
+[experimental_network.domains]
+"*.openai.com" = "allow"
+`,
+			want: "`experimental_network.domains` cannot be combined",
+		},
+		{
+			name: "unix sockets",
+			body: `[experimental_network]
+allow_unix_sockets = ["/tmp/example.sock"]
+
+[experimental_network.unix_sockets]
+"/tmp/another.sock" = "allow"
+`,
+			want: "`experimental_network.unix_sockets` cannot be combined",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "requirements.toml")
+			if err := os.WriteFile(path, []byte(test.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadRequirementsFile(path)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadRequirementsFile() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRequirementsFileRejectsInvalidNetworkValuesLikeRust(t *testing.T) {
+	tests := []string{
+		`[experimental_network]\nenabled = "true"`,
+		`[experimental_network]\nhttp_port = 70000`,
+		`[experimental_network.domains]\n"api.example.com" = "ALLOW"`,
+		`[experimental_network.unix_sockets]\n"/tmp/example.sock" = 1`,
+	}
+	for _, body := range tests {
+		path := filepath.Join(t.TempDir(), "requirements.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadRequirementsFile(path); err == nil {
+			t.Fatalf("LoadRequirementsFile() accepted invalid network requirements: %s", body)
+		}
+	}
+}
+
+func TestLoadRequirementsFileNormalizesLegacyNetworkListsLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	body := `[experimental_network]
+allowed_domains = ["api.example.com", "same.example.com"]
+denied_domains = ["blocked.example.com", "same.example.com"]
+allow_unix_sockets = ["/tmp/example.sock"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := LoadRequirementsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requirements == nil || requirements.Network == nil {
+		t.Fatalf("requirements = %#v", requirements)
+	}
+	network := requirements.Network
+	if network.Domains["api.example.com"] != NetworkAllow || network.Domains["blocked.example.com"] != NetworkDeny || network.Domains["same.example.com"] != NetworkDeny {
+		t.Fatalf("domains = %#v", network.Domains)
+	}
+	if network.UnixSockets["/tmp/example.sock"] != NetworkAllow {
+		t.Fatalf("unix sockets = %#v", network.UnixSockets)
+	}
+	if network.AllowedDomains != nil || network.DeniedDomains != nil || network.AllowUnixSockets != nil {
+		t.Fatalf("legacy fields were not normalized: %#v", network)
+	}
+}
+
+func TestLoadRequirementsFileIgnoresNonRustNetworkTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	if err := os.WriteFile(path, []byte("[network]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := LoadRequirementsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requirements != nil && requirements.Network != nil {
+		t.Fatalf("network = %#v, want Rust-compatible ignored table", requirements.Network)
 	}
 }

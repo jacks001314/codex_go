@@ -7,9 +7,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/gobwas/glob"
 )
 
 const (
@@ -673,7 +674,7 @@ func sortedMapKeys[T any](m map[string]T) []string {
 }
 
 func validateGlobPattern(pattern string) error {
-	_, err := globRegexp(pattern, false)
+	_, err := compileGlob(pattern, false)
 	if err != nil {
 		return fmt.Errorf("invalid glob pattern %q: %w", pattern, err)
 	}
@@ -681,47 +682,16 @@ func validateGlobPattern(pattern string) error {
 }
 
 func globMatch(pattern string, candidate string, literalSeparator bool) bool {
-	re, err := globRegexp(pattern, literalSeparator)
+	matcher, err := compileGlob(pattern, literalSeparator)
 	if err != nil {
 		return false
 	}
-	return re.MatchString(candidate)
+	return matcher.Match(candidate)
 }
 
-func globRegexp(pattern string, literalSeparator bool) (*regexp.Regexp, error) {
-	var builder strings.Builder
-	builder.WriteString("^")
-	escaped := false
-	for _, ch := range pattern {
-		if escaped {
-			builder.WriteString(regexp.QuoteMeta(string(ch)))
-			escaped = false
-			continue
-		}
-		switch ch {
-		case '\\':
-			escaped = true
-		case '*':
-			if literalSeparator {
-				builder.WriteString("[^/]*")
-			} else {
-				builder.WriteString(".*")
-			}
-		case '?':
-			if literalSeparator {
-				builder.WriteString("[^/]")
-			} else {
-				builder.WriteString(".")
-			}
-		case '[':
-			return nil, fmt.Errorf("character classes are not supported")
-		default:
-			builder.WriteString(regexp.QuoteMeta(string(ch)))
-		}
+func compileGlob(pattern string, literalSeparator bool) (glob.Glob, error) {
+	if literalSeparator {
+		return glob.Compile(pattern, '/')
 	}
-	if escaped {
-		builder.WriteString(regexp.QuoteMeta("\\"))
-	}
-	builder.WriteString("$")
-	return regexp.Compile(builder.String())
+	return glob.Compile(pattern)
 }

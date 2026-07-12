@@ -1,7 +1,9 @@
 package appserver
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -20,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +32,7 @@ import (
 	"codex_go/internal/codexapi"
 	"codex_go/internal/compact"
 	"codex_go/internal/config"
+	"codex_go/internal/execserver"
 	"codex_go/internal/features"
 	"codex_go/internal/mcp"
 	"codex_go/internal/model"
@@ -39,6 +43,7 @@ import (
 	"codex_go/internal/rollout"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+	"codex_go/internal/skillprovider"
 	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
@@ -1059,6 +1064,7 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 	if len(imageURLs) != 2 || imageURLs[0] != "data:image/png;base64,AAAA" || !strings.HasPrefix(imageURLs[1], "data:image/png;base64,") {
 		t.Fatalf("input image URLs = %#v, input items = %#v", imageURLs, request.InputItems)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartEmitsUserMessageStartedWithTextElements(t *testing.T) {
@@ -1132,6 +1138,7 @@ func TestRuntimeRouterTurnStartEmitsUserMessageStartedWithTextElements(t *testin
 
 func TestRuntimeRouterTurnStartLocalImageReadFailureBecomesInputText(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -1139,6 +1146,7 @@ func TestRuntimeRouterTurnStartLocalImageReadFailureBecomesInputText(t *testing.
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
 	if threadStart.Error != nil {
@@ -1161,6 +1169,7 @@ func TestRuntimeRouterTurnStartLocalImageReadFailureBecomesInputText(t *testing.
 	if urls := inputImageURLs(request.InputItems); len(urls) != 0 {
 		t.Fatalf("input image URLs = %#v, want none", urls)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterFSWatchUsesConnectionScope(t *testing.T) {
@@ -1673,6 +1682,7 @@ func TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows(t *testing.T) {
 		"cwd":   "file:///workspace",
 	})
 	envManager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{
 		Remote:             remotecontrol.NewManager("codex", "install"),
 		Environment:        envManager,
@@ -1680,6 +1690,7 @@ func TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows(t *testing.T) {
 		Config:             config.NewConfigService(t.TempDir()),
 		WindowsSetupRunner: func(*WindowsSandboxSetupRuntimeRequest) error { return nil },
 	})
+	router.SetNotificationSink(sink)
 	enable := router.Handle(requestWithParams(t, IntID(1), MethodRemoteControlEnable, remotecontrol.EnableParams{}))
 	if enable.Error != nil || enable.Result.(*remotecontrol.EnableResponse).Status != remotecontrol.StatusConnected {
 		t.Fatalf("remote enable = %+v", enable)
@@ -1704,6 +1715,7 @@ func TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows(t *testing.T) {
 	if setup.Error != nil || !setup.Result.(*sandbox.WindowsSetupStartResponse).Started {
 		t.Fatalf("windows setup = %+v", setup)
 	}
+	waitForNotificationMethod(t, sink, NotificationWindowsSandboxSetupCompleted)
 }
 
 func TestRuntimeRouterWindowsSandboxSetupStartEmitsCompletionNotificationLikeRust(t *testing.T) {
@@ -1916,6 +1928,22 @@ func TestWindowsSandboxLevelFromConfigValuesMatchesRust(t *testing.T) {
 				t.Fatalf("windowsSandboxLevelFromConfigValues() = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWindowsSandboxPrivateDesktopFromConfigValuesMatchesRust(t *testing.T) {
+	if windowsSandboxPrivateDesktopFromConfigValues(nil) {
+		t.Fatal("nil config enabled private desktop")
+	}
+	if !windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
+		"permissions": map[string]any{"windows_sandbox_private_desktop": true},
+	}) {
+		t.Fatal("snake_case private desktop config was not enabled")
+	}
+	if !windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
+		"permissions": map[string]any{"windowsSandboxPrivateDesktop": true},
+	}) {
+		t.Fatal("camelCase private desktop config was not enabled")
 	}
 }
 
@@ -5003,8 +5031,8 @@ func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
 	if configWrite.Error != nil || configWrite.Result.(*SkillsConfigWriteResponse).EffectiveEnabled {
 		t.Fatalf("skills config write = %+v", configWrite)
 	}
-	if len(sink.List()) <= notificationCount {
-		t.Fatalf("skills changed notification missing after config write: %+v", sink.List())
+	if len(sink.List()) != notificationCount {
+		t.Fatalf("skills config write emitted immediate notification unlike Rust: %+v", sink.List())
 	}
 	marketplace := router.Handle(requestWithParams(t, IntID(2), MethodMarketplaceAdd, plugin.MarketplaceAddParams{URL: "https://github.com/acme/plugins.git"}))
 	if marketplace.Error != nil || marketplace.Result.(*plugin.MarketplaceAddResponse).Marketplace.Name != "plugins" {
@@ -5047,6 +5075,464 @@ func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
 	invalidMCPToolCall := router.Handle(requestWithParams(t, IntID(61), MethodMCPServerToolCall, mcp.MCPToolCallParams{ServerName: "custom"}))
 	if invalidMCPToolCall.Error == nil || invalidMCPToolCall.Error.Code != -32600 || invalidMCPToolCall.Error.Message != "server and tool are required" {
 		t.Fatalf("invalid mcp tool call = %+v", invalidMCPToolCall)
+	}
+}
+
+func TestRuntimeRouterSkillsListDefaultsCWDAndIncludesConfiguredPluginSkillsLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repo skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoSkillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: repo skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(repo skill) error = %v", err)
+	}
+	pluginRoot := t.TempDir()
+	pluginSkillDir := filepath.Join(pluginRoot, "skills", "review")
+	if err := os.MkdirAll(pluginSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginSkillDir, SkillFilename), []byte("---\nname: review\ndescription: plugin review\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+	home := t.TempDir()
+	configService := config.NewConfigService(home)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Name: "docs:review", Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig(plugin) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "docs",
+			MarketplaceName: "local",
+			DisplayName:     "Docs",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD: cwd,
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Config: configService,
+		}),
+		Plugins: plugins,
+	})
+
+	result := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{}))
+	if result.Error != nil {
+		t.Fatalf("skills/list error = %+v", result.Error)
+	}
+	response := result.Result.(*SkillsListResponse)
+	if len(response.Data) != 1 || response.Data[0].CWD != cwd {
+		t.Fatalf("response = %#v, want default cwd entry", response)
+	}
+	byName := map[string]SkillsListEntry{}
+	for _, skill := range response.Data[0].Skills {
+		byName[skill.Name] = skill
+	}
+	if byName["repo-skill"].Scope != "repo" {
+		t.Fatalf("repo skill = %#v", byName["repo-skill"])
+	}
+	pluginSkill, ok := byName["docs:review"]
+	if !ok || pluginSkill.Enabled || pluginSkill.Scope != "user" || pluginSkill.PluginID == "" {
+		t.Fatalf("plugin skill = %#v, want retained disabled user-scope plugin skill", pluginSkill)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal(response) error = %v", err)
+	}
+	if strings.Contains(string(payload), "pluginId") || strings.Contains(string(payload), `"scope":"plugin"`) {
+		t.Fatalf("skills/list payload diverges from Rust SkillMetadata: %s", payload)
+	}
+}
+
+func TestRuntimeRouterSkillsListRefreshesRemoteInstalledPluginCacheAfterPluginListLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	pluginRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", "local")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".codex-plugin"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin manifest) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), []byte(`{"name":"linear"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin manifest) error = %v", err)
+	}
+	skillDir := filepath.Join(pluginRoot, "skills", "triage-issues")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: triage-issues\ndescription: Triage Linear issues\n---\n\n# Body\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+
+	var requestMu sync.Mutex
+	requestsByScope := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/ps/plugins/installed" {
+			http.NotFound(w, request)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer chatgpt-token" || request.Header.Get("ChatGPT-Account-ID") != "account-123" {
+			http.Error(w, "missing auth headers", http.StatusUnauthorized)
+			return
+		}
+		if request.URL.Query().Get("includeDownloadUrls") != "true" {
+			http.Error(w, "missing includeDownloadUrls", http.StatusBadRequest)
+			return
+		}
+		scope := request.URL.Query().Get("scope")
+		requestMu.Lock()
+		requestsByScope[scope]++
+		requestMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if scope == "GLOBAL" {
+			_, _ = w.Write([]byte(`{"plugins":[{"id":"plugins~Plugin_linear","name":"linear","enabled":true,"disabled_skill_names":[],"release":{"display_name":"Linear","description":"Track work in Linear"}}],"pagination":{"next_page_token":null}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"plugins":[],"pagination":{"next_page_token":null}}`))
+	}))
+	defer server.Close()
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\n\n[features]\nplugins = true\n", server.URL)), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	account := auth.NewAccountManager()
+	if _, err := account.Login(&auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      "chatgpt-token",
+		ChatGPTAccountID: "account-123",
+	}); err != nil {
+		t.Fatalf("Login(chatgptAuthTokens) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.SetCodexHome(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:  cwd,
+		Config:      config.NewConfigService(home),
+		Account:     account,
+		AccountHTTP: server.Client(),
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Config: config.NewConfigService(home),
+		}),
+		Plugins: plugins,
+	})
+
+	initial := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if initial.Error != nil {
+		t.Fatalf("initial skills/list error = %+v", initial.Error)
+	}
+	if _, ok := skillByName(initial.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+		t.Fatal("remote installed plugin skill was visible before plugin/list refreshed the cache")
+	}
+	listed := router.Handle(requestWithParams(t, IntID(2), MethodPluginList, plugin.PluginListParams{}))
+	if listed.Error != nil {
+		t.Fatalf("plugin/list error = %+v", listed.Error)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var refreshed *SkillsListEntry
+	for time.Now().Before(deadline) {
+		response := router.Handle(requestWithParams(t, IntID(3), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}}))
+		if response.Error != nil {
+			t.Fatalf("refreshed skills/list error = %+v", response.Error)
+		}
+		if skill, ok := skillByName(response.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+			refreshed = skill
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if refreshed == nil {
+		t.Fatal("remote installed plugin skill did not appear after plugin/list cache refresh")
+	}
+	if refreshed.Path != skillPath || !refreshed.Enabled || refreshed.Scope != "user" {
+		t.Fatalf("refreshed remote plugin skill = %#v", refreshed)
+	}
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
+		if requestsByScope[scope] != 1 {
+			t.Fatalf("installed plugin requests = %#v, want one request for %s", requestsByScope, scope)
+		}
+	}
+}
+
+func TestRuntimeRouterPluginListDownloadsVersionedRemoteInstalledPluginBundleLikeRust(t *testing.T) {
+	t.Setenv("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
+	home := t.TempDir()
+	cwd := t.TempDir()
+	staleRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "stale", "local")
+	if err := os.MkdirAll(staleRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stale cache) error = %v", err)
+	}
+	bundle := remotePluginBundleForTest(t, "linear", "triage-issues")
+	var bundleRequests atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/ps/plugins/installed":
+			w.Header().Set("Content-Type", "application/json")
+			if request.URL.Query().Get("scope") == "GLOBAL" {
+				body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_linear","name":"linear","scope":"GLOBAL","enabled":true,"release":{"version":"1.2.3","display_name":"Linear","description":"Track work","bundle_download_url":%q}}],"pagination":{"next_page_token":null}}`, server.URL+"/bundle.tar.gz")
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte(`{"plugins":[],"pagination":{"next_page_token":null}}`))
+		case "/bundle.tar.gz":
+			bundleRequests.Add(1)
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\n\n[features]\nplugins = true\n", server.URL)), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	account := auth.NewAccountManager()
+	if _, err := account.Login(&auth.LoginAccountParams{Type: "chatgptAuthTokens", AccessToken: "chatgpt-token", ChatGPTAccountID: "account-123"}); err != nil {
+		t.Fatalf("Login(chatgptAuthTokens) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.SetCodexHome(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:  cwd,
+		Config:      config.NewConfigService(home),
+		Account:     account,
+		AccountHTTP: server.Client(),
+		Skills:      NewSkillsService(nil),
+		Plugins:     plugins,
+	})
+	listed := router.Handle(requestWithParams(t, IntID(1), MethodPluginList, plugin.PluginListParams{}))
+	if listed.Error != nil {
+		t.Fatalf("plugin/list error = %+v", listed.Error)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var downloaded *SkillsListEntry
+	for time.Now().Before(deadline) {
+		response := router.Handle(requestWithParams(t, IntID(2), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}}))
+		if response.Error != nil {
+			t.Fatalf("skills/list error = %+v", response.Error)
+		}
+		if skill, ok := skillByName(response.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+			downloaded = skill
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if downloaded == nil {
+		t.Fatal("downloaded remote plugin skill did not appear")
+	}
+	wantRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", "1.2.3")
+	if downloaded.Path != filepath.Join(wantRoot, "skills", "triage-issues", SkillFilename) {
+		t.Fatalf("downloaded skill path = %q", downloaded.Path)
+	}
+	if bundleRequests.Load() != 1 {
+		t.Fatalf("bundle requests = %d, want 1", bundleRequests.Load())
+	}
+	manifestContents, err := os.ReadFile(filepath.Join(wantRoot, ".codex-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(installed manifest) error = %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestContents, &manifest); err != nil || manifest["version"] != "1.2.3" {
+		t.Fatalf("installed manifest = %s err=%v", manifestContents, err)
+	}
+	metadataContents, err := os.ReadFile(filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", remotePluginInstallMetadataFilename))
+	if err != nil || !strings.Contains(string(metadataContents), "plugins~Plugin_linear") {
+		t.Fatalf("remote install metadata = %s err=%v", metadataContents, err)
+	}
+	if _, err := os.Stat(filepath.Dir(staleRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale remote plugin cache still exists: %v", err)
+	}
+}
+
+func remotePluginBundleForTest(t *testing.T, pluginName string, skillName string) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	gzipWriter := gzip.NewWriter(&output)
+	archive := tar.NewWriter(gzipWriter)
+	files := map[string]string{
+		".codex-plugin/plugin.json":         fmt.Sprintf(`{"name":%q}`, pluginName),
+		"skills/" + skillName + "/SKILL.md": "---\nname: " + skillName + "\ndescription: Remote skill\n---\n\n# Body\n",
+	}
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		contents := []byte(files[path])
+		if err := archive.WriteHeader(&tar.Header{Name: path, Mode: 0o600, Size: int64(len(contents)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("WriteHeader(%s) error = %v", path, err)
+		}
+		if _, err := archive.Write(contents); err != nil {
+			t.Fatalf("Write(%s) error = %v", path, err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("Close(tar) error = %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("Close(gzip) error = %v", err)
+	}
+	return output.Bytes()
+}
+
+func skillByName(response *SkillsListResponse, name string) (*SkillsListEntry, bool) {
+	if response == nil {
+		return nil, false
+	}
+	for dataIndex := range response.Data {
+		for skillIndex := range response.Data[dataIndex].Skills {
+			if response.Data[dataIndex].Skills[skillIndex].Name == name {
+				return &response.Data[dataIndex].Skills[skillIndex], true
+			}
+		}
+	}
+	return nil, false
+}
+
+func TestRuntimeRouterSkillsWatcherClearsCacheAndNotifiesLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: demo\ndescription: initial\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(initial) error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{Roots: []string{root}, WatchInterval: 25 * time.Millisecond})
+	router := NewRuntimeRouter(RuntimeServices{Skills: service})
+	t.Cleanup(func() { _ = router.Close() })
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	service.WatchCWDs([]string{t.TempDir()})
+	initial, err := service.List(&SkillsListParams{})
+	if err != nil || len(initial.Skills) != 1 || initial.Skills[0].Description != "initial" {
+		t.Fatalf("initial skills = %#v err=%v", initial, err)
+	}
+	if err := os.WriteFile(skillPath, []byte("---\nname: demo\ndescription: updated\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(updated) error = %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !sinkHasMethod(sink, NotificationSkillsChanged) && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !sinkHasMethod(sink, NotificationSkillsChanged) {
+		t.Fatalf("skills/changed notification missing: %#v", sink.List())
+	}
+	updated, err := service.List(&SkillsListParams{})
+	if err != nil || len(updated.Skills) != 1 || updated.Skills[0].Description != "updated" {
+		t.Fatalf("updated skills = %#v err=%v", updated, err)
+	}
+}
+
+func TestRuntimeRouterSkillsListSkipsCWDRootsWhenLocalEnvironmentDisabledLikeRust(t *testing.T) {
+	userRoot := t.TempDir()
+	userSkillDir := filepath.Join(userRoot, "home-skill")
+	if err := os.MkdirAll(userSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(user skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userSkillDir, SkillFilename), []byte("---\nname: home-skill\ndescription: home\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user skill) error = %v", err)
+	}
+	cwd := t.TempDir()
+	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repo skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoSkillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: repo\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(repo skill) error = %v", err)
+	}
+	disabled := false
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills:                  NewSkillsServiceWithOptions(&SkillsServiceOptions{RootSpecs: []SkillsRoot{{Path: userRoot, Scope: "user"}}}),
+		LocalEnvironmentEnabled: &disabled,
+	})
+	t.Cleanup(func() { _ = router.Close() })
+	result := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("skills/list error = %+v", result.Error)
+	}
+	response := result.Result.(*SkillsListResponse)
+	if len(response.Data) != 1 || response.Data[0].CWD != cwd {
+		t.Fatalf("response = %#v", response)
+	}
+	names := map[string]bool{}
+	for _, skill := range response.Data[0].Skills {
+		names[skill.Name] = true
+	}
+	if !names["home-skill"] || names["repo-skill"] {
+		t.Fatalf("skills = %#v, want global skill without cwd skill", names)
+	}
+}
+
+func TestRuntimeRouterSkillsListHonorsPluginFeatureAndWorkspaceGateLikeRust(t *testing.T) {
+	pluginRoot := t.TempDir()
+	skillDir := filepath.Join(pluginRoot, "skills", "plugin-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: plugin-skill\ndescription: plugin\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "demo-plugin",
+			MarketplaceName: "local",
+			DisplayName:     "demo-plugin",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	cwd := t.TempDir()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[features]\nplugins = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	featureRouter := NewRuntimeRouter(RuntimeServices{
+		Skills:  NewSkillsService(nil),
+		Plugins: plugins,
+		Config:  config.NewConfigService(home),
+	})
+	t.Cleanup(func() { _ = featureRouter.Close() })
+	result := featureRouter.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("feature-gated skills/list error = %+v", result.Error)
+	}
+	for _, skill := range result.Result.(*SkillsListResponse).Data[0].Skills {
+		if skill.Name == "demo-plugin:plugin-skill" {
+			t.Fatalf("plugin skill visible with features.plugins=false: %#v", skill)
+		}
+	}
+
+	workspaceDisabled := false
+	workspaceRouter := NewRuntimeRouter(RuntimeServices{
+		Skills:                       NewSkillsService(nil),
+		Plugins:                      plugins,
+		WorkspaceCodexPluginsEnabled: &workspaceDisabled,
+	})
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+	result = workspaceRouter.Handle(requestWithParams(t, IntID(2), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("workspace-gated skills/list error = %+v", result.Error)
+	}
+	for _, skill := range result.Result.(*SkillsListResponse).Data[0].Skills {
+		if skill.Name == "demo-plugin:plugin-skill" {
+			t.Fatalf("plugin skill visible with workspace plugins disabled: %#v", skill)
+		}
 	}
 }
 
@@ -7298,6 +7784,385 @@ func TestRuntimeRouterToolRouterForTurnExposesMCPStatusTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterUnifiedExecToolSurfaceFollowsEffectiveFeatureConfigLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			body := fmt.Sprintf("[features]\nunified_exec = %t\n", tc.enabled)
+			if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+			defer router.Close()
+
+			toolRouter, err := router.toolRouterForTurn(t.TempDir(), &turn.TurnStartParams{
+				ThreadID: "thread-unified-exec",
+			}, "turn-unified-exec")
+			if err != nil {
+				t.Fatalf("toolRouterForTurn() error = %v", err)
+			}
+			visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+			if visible[tool.DefaultWriteStdinToolName] != tc.enabled {
+				t.Fatalf("model-visible specs = %#v, write_stdin enabled = %t", visible, tc.enabled)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
+	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
+	if err := store.Save(&session.Record{ID: "thread-unified", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("save thread: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Analytics:    analyticsSink,
+	})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	router.clientInfo["conn-unified"] = ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	router.active["thread-unified"] = &activeRuntimeTurn{
+		ThreadID:     "thread-unified",
+		TurnID:       "turn-unified",
+		ConnectionID: "conn-unified",
+		RunConfig:    &appTurnRunConfig{},
+	}
+	emit := router.runtimeUnifiedExecEventSink("thread-unified", "turn-unified")
+	startedAt := time.Now().Add(-time.Second).UTC()
+
+	emit(tool.UnifiedExecEvent{
+		Kind:        tool.UnifiedExecEventBegin,
+		CallID:      "call-unified",
+		HookCommand: "printf hello",
+		CWD:         t.TempDir(),
+		ProcessID:   42,
+		StartedAt:   startedAt,
+	})
+	emit(tool.UnifiedExecEvent{Kind: tool.UnifiedExecEventOutputDelta, CallID: "call-unified", ProcessID: 42, Output: "hello"})
+	emit(tool.UnifiedExecEvent{Kind: tool.UnifiedExecEventTerminalInteraction, CallID: "call-unified", ProcessID: 42, Input: "quit\n"})
+	emit(tool.UnifiedExecEvent{
+		Kind:        tool.UnifiedExecEventEnd,
+		CallID:      "call-unified",
+		HookCommand: "printf hello",
+		CWD:         t.TempDir(),
+		ProcessID:   42,
+		Output:      "hello",
+		ExitCode:    7,
+		Duration:    1500 * time.Millisecond,
+		StartedAt:   startedAt,
+	})
+
+	notifications := sink.List()
+	if len(notifications) != 4 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	started, ok := notifications[0].Params.(*ItemStartedNotification)
+	if !ok || notifications[0].Method != NotificationItemStarted || started.ThreadID != "thread-unified" || started.TurnID != "turn-unified" {
+		t.Fatalf("started notification = %#v", notifications[0])
+	}
+	if started.Item["id"] != "call-unified" || started.Item["source"] != string(CommandExecutionSourceUnifiedExecStartup) || started.Item["processId"] != "42" || started.Item["status"] != string(CommandExecutionInProgress) {
+		t.Fatalf("started item = %#v", started.Item)
+	}
+	delta, ok := notifications[1].Params.(*CommandExecutionOutputDeltaNotification)
+	if !ok || notifications[1].Method != NotificationCommandExecutionOutputDelta || delta.ItemID != "call-unified" || delta.Delta != "hello" {
+		t.Fatalf("delta notification = %#v", notifications[1])
+	}
+	interaction, ok := notifications[2].Params.(*TerminalInteractionNotification)
+	if !ok || notifications[2].Method != NotificationTerminalInteraction || interaction.ItemID != "call-unified" || interaction.ProcessID != "42" || interaction.Stdin != "quit\n" {
+		t.Fatalf("interaction notification = %#v", notifications[2])
+	}
+	completed, ok := notifications[3].Params.(*ItemCompletedNotification)
+	if !ok || notifications[3].Method != NotificationItemCompleted {
+		t.Fatalf("completed notification = %#v", notifications[3])
+	}
+	if completed.Item["id"] != "call-unified" || completed.Item["status"] != string(CommandExecutionFailed) || completed.Item["exitCode"] != float64(7) || completed.Item["aggregatedOutput"] != "hello" {
+		t.Fatalf("completed item = %#v", completed.Item)
+	}
+	analytics := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, "turn-unified").EventParams
+	if analytics.ItemID != "call-unified" || analytics.ToolName != "unified_exec" || analytics.CommandExecutionSource != "unified_exec_startup" || analytics.ExitCode == nil || *analytics.ExitCode != 7 {
+		t.Fatalf("unified exec analytics = %#v", analytics)
+	}
+	if analytics.StartedAtMS != uint64(startedAt.UnixMilli()) || analytics.CompletedAtMS != uint64(startedAt.Add(1500*time.Millisecond).UnixMilli()) || analytics.ExecutionDurationMS == nil || *analytics.ExecutionDurationMS != 1500 {
+		t.Fatalf("unified exec analytics timing = %#v", analytics)
+	}
+
+	if shouldNotifyRuntimeItemCompleted(ThreadItem{Type: "tool_output", Data: map[string]any{"unified_exec_evented": true}}) {
+		t.Fatal("evented unified exec output should not emit a duplicate completed notification")
+	}
+
+	if _, err := store.AppendItem("thread-unified", session.Item{
+		ID:       "transport-output",
+		Type:     "tool_output",
+		Text:     "model transport",
+		Data:     map[string]any{"command": "printf hello"},
+		Metadata: map[string]any{"turnId": "turn-unified", "hiddenFromThread": true},
+	}); err != nil {
+		t.Fatalf("append hidden transport: %v", err)
+	}
+	record, err := store.Load("thread-unified")
+	if err != nil {
+		t.Fatalf("load thread: %v", err)
+	}
+	items, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: "thread-unified"})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	if len(items.Data) != 1 || threadItemWireType(&items.Data[0]) != "commandExecution" || items.Data[0].ID != "call-unified" {
+		t.Fatalf("visible persisted items = %#v", items.Data)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecBackgroundTerminalHelper(t *testing.T) {
+	if os.Getenv("CODEX_GO_UNIFIED_EXEC_BACKGROUND_HELPER") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
+
+func TestRuntimeRouterBackgroundTerminalsIncludeThreadScopedUnifiedExecLikeRust(t *testing.T) {
+	manager := tool.NewUnifiedExecManagerWithOptions(2, 5_000)
+	defer manager.Close()
+	result, err := manager.Exec(context.Background(), &tool.ShellRequest{
+		Command:             []string{os.Args[0], "-test.run=^TestRuntimeRouterUnifiedExecBackgroundTerminalHelper$"},
+		HookCommand:         "background helper",
+		CWD:                 t.TempDir(),
+		Env:                 map[string]string{"CODEX_GO_UNIFIED_EXEC_BACKGROUND_HELPER": "1"},
+		YieldTimeMS:         250,
+		TimeoutMS:           15_000,
+		UnifiedExecThreadID: "thread-background",
+		UnifiedExecTurnID:   "turn-background",
+	}, "call-background")
+	if err != nil || result.ProcessID == nil {
+		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+
+	extras := NewThreadExtraService()
+	extras.SetBackgroundTerminals("thread-background", []BackgroundTerminal{{
+		ItemID: "user-shell", ProcessID: "900", Command: "user shell", CWD: t.TempDir(),
+	}})
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras, UnifiedExec: manager})
+	defer router.Close()
+
+	listed, err := router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-background"})
+	if err != nil {
+		t.Fatalf("listBackgroundTerminals() error = %v", err)
+	}
+	if len(listed.Data) != 2 || listed.Data[0].ProcessID != strconv.Itoa(*result.ProcessID) || listed.Data[0].ItemID != "call-background" || listed.Data[0].Command != "background helper" || listed.Data[1].ProcessID != "900" {
+		t.Fatalf("background terminals = %#v", listed.Data)
+	}
+	other, err := router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-other"})
+	if err != nil || len(other.Data) != 0 {
+		t.Fatalf("other thread terminals = %#v, %v", other, err)
+	}
+
+	terminated, err := router.terminateBackgroundTerminal(&BackgroundTerminalsTerminateParams{
+		ThreadID: "thread-background", ProcessID: strconv.Itoa(*result.ProcessID),
+	})
+	if err != nil || !terminated.Terminated {
+		t.Fatalf("terminateBackgroundTerminal() = %#v, %v", terminated, err)
+	}
+	if _, err := router.cleanBackgroundTerminals(&BackgroundTerminalsCleanParams{ThreadID: "thread-background"}); err != nil {
+		t.Fatalf("cleanBackgroundTerminals() error = %v", err)
+	}
+	listed, err = router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-background"})
+	if err != nil || len(listed.Data) != 0 {
+		t.Fatalf("terminals after clean = %#v, %v", listed, err)
+	}
+}
+
+type appServerExecServerURLWriter struct {
+	once sync.Once
+	url  chan string
+}
+
+func (w *appServerExecServerURLWriter) Write(data []byte) (int, error) {
+	w.once.Do(func() { w.url <- strings.TrimSpace(string(data)) })
+	return len(data), nil
+}
+
+func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	urlCh := make(chan string, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &appServerExecServerURLWriter{url: urlCh})
+	}()
+	var execServerURL string
+	select {
+	case execServerURL = <-urlCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exec-server URL was not reported")
+	}
+	defer func() {
+		cancelServer()
+		select {
+		case err := <-serverDone:
+			if err != nil {
+				t.Errorf("exec-server shutdown error = %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("exec-server did not stop")
+		}
+	}()
+
+	home := t.TempDir()
+	configBody := "sandbox_mode = \"workspace-write\"\n" +
+		"[features]\nunified_exec = true\n" +
+		"[network_proxy]\n" +
+		"enabled = true\n" +
+		"proxy_url = \"http://127.0.0.1:0\"\n" +
+		"enable_socks5 = false\n" +
+		"mode = \"full\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cwd := t.TempDir()
+	shellInfo := EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}
+	if runtime.GOOS == "windows" {
+		shellInfo = EnvironmentShellInfo{Name: "powershell", Path: "powershell"}
+	}
+	environments := NewEnvironmentManager(shellInfo, cwd)
+	for _, id := range []string{"remote-primary", "remote-secondary"} {
+		if _, err := environments.Add(&EnvironmentAddParams{EnvironmentID: id, ExecServerURL: execServerURL}); err != nil {
+			t.Fatalf("add environment %s: %v", id, err)
+		}
+		if err := environments.SetInfo(id, shellInfo, cwd); err != nil {
+			t.Fatalf("set environment info %s: %v", id, err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:                     config.NewConfigService(home),
+		Environment:                environments,
+		ManagedNetworkRequirements: &config.NetworkRequirements{Enabled: boolPtr(true)},
+	})
+	defer router.Close()
+	params := &turn.TurnStartParams{
+		ThreadID:       "thread-remote-environment",
+		ApprovalPolicy: sandbox.ApprovalNever,
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+		Environments: []map[string]any{
+			{"environmentId": "remote-primary", "cwd": cwd},
+			{"environmentId": "remote-secondary", "cwd": cwd},
+		},
+	}
+	toolRouter, err := router.toolRouterForTurn(cwd, params, "turn-remote-environment")
+	if err != nil {
+		t.Fatalf("toolRouterForTurn() error = %v", err)
+	}
+	visibleSpecs := toolRouter.ModelVisibleSpecs()
+	var execSpec *tool.Spec
+	for i := range visibleSpecs {
+		if visibleSpecs[i].Name.Key() == tool.DefaultExecCommandToolName {
+			execSpec = &visibleSpecs[i]
+			break
+		}
+	}
+	if execSpec == nil {
+		t.Fatalf("exec spec = %#v", execSpec)
+	}
+	properties, ok := execSpec.InputSchema["properties"].(map[string]any)
+	if !ok || properties["environment_id"] == nil {
+		t.Fatalf("exec spec = %#v", execSpec)
+	}
+	proxyCommand := `printf '%s' "$HTTP_PROXY"`
+	if runtime.GOOS == "windows" {
+		proxyCommand = `Write-Output $env:HTTP_PROXY`
+	}
+	arguments, err := json.Marshal(map[string]any{"cmd": proxyCommand, "environment_id": "remote-secondary", "yield_time_ms": 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := toolRouter.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "call-remote-environment",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)},
+	})
+	if err != nil {
+		t.Fatalf("remote exec dispatch error = %v", err)
+	}
+	if output == nil || output.Data["exit_code"] != 0 {
+		t.Fatalf("remote exec output = %#v", output)
+	}
+	router.managedNetworksMu.Lock()
+	managed := router.managedNetworks[params.ThreadID]
+	router.managedNetworksMu.Unlock()
+	if managed == nil {
+		t.Fatal("thread managed network was not started")
+	}
+	secondaryEnv, _, err := managed.PrepareForEnvironment("remote-secondary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondaryProxy := secondaryEnv["HTTP_PROXY"]
+	if secondaryProxy == "" || secondaryProxy == managed.EnvSnapshot()["HTTP_PROXY"] || !strings.Contains(output.Body, secondaryProxy) {
+		t.Fatalf("remote output did not use isolated secondary proxy %q; root=%q output=%q", secondaryProxy, managed.EnvSnapshot()["HTTP_PROXY"], output.Body)
+	}
+	primaryEnv, _, err := managed.PrepareForEnvironment("remote-primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primaryEnv["HTTP_PROXY"] == secondaryProxy {
+		t.Fatalf("primary and secondary environments share proxy %q", secondaryProxy)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEnvironmentUsesRemoteInfoShellLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	urlCh := make(chan string, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &appServerExecServerURLWriter{url: urlCh})
+	}()
+	serverURL := <-urlCh
+	defer func() {
+		cancelServer()
+		<-serverDone
+	}()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "fake", Path: "fake-shell"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "remote-info", ExecServerURL: serverURL}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	defer router.Close()
+	environments := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{Environments: []map[string]any{{
+		"environmentId": "remote-info",
+		"cwd":           t.TempDir(),
+	}}})
+	if len(environments) != 1 || environments[0].Shell == nil || environments[0].Shell.Path == "fake-shell" {
+		t.Fatalf("environments = %#v", environments)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEnvironmentInfoFailureDoesNotUseDefaultShellLikeRust(t *testing.T) {
+	timeoutMS := uint64(50)
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "fake", Path: "fake-shell"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID:    "remote-failed-info",
+		ExecServerURL:    "ws://127.0.0.1:1",
+		ConnectTimeoutMS: &timeoutMS,
+	}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	defer router.Close()
+	environments := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{Environments: []map[string]any{{
+		"environmentId": "remote-failed-info",
+		"cwd":           t.TempDir(),
+	}}})
+	if len(environments) != 1 || environments[0].Shell != nil {
+		t.Fatalf("environments = %#v", environments)
+	}
+}
+
 func runtimeRouterToolSearchSpecsForTest(t *testing.T, router *tool.Router, query string) map[string]tool.Spec {
 	t.Helper()
 	output, err := router.Dispatch(context.Background(), &tool.Invocation{
@@ -9454,6 +10319,7 @@ func TestRuntimeRouterTurnStartUsesProjectConfigFromThreadCWD(t *testing.T) {
 	if !ok || lastUsage["totalTokens"] == nil {
 		t.Fatalf("last_token_usage = %#v", record.Metadata.Extra["last_token_usage"])
 	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterThreadStartServiceTierFiltersByModelCatalog(t *testing.T) {
@@ -10232,6 +11098,8 @@ func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *tes
 	if secondRequest.Model != modelID || secondRequest.ReasoningEffort != effort {
 		t.Fatalf("second agent request = %#v", secondRequest)
 	}
+	secondTurnID := secondTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
@@ -10330,6 +11198,7 @@ func TestRuntimeRouterThreadStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
 
 func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -10338,6 +11207,7 @@ func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       personalityModelServiceForRuntimeTest(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		Model: "personality-model",
@@ -10358,6 +11228,7 @@ func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 	if !strings.Contains(request.Instructions, "Base friendly personality") || !strings.Contains(request.Instructions, "<personality_spec>") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T) {
@@ -10471,6 +11342,7 @@ func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -10480,6 +11352,7 @@ func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       personalityModelServiceForRuntimeTest(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
@@ -10500,6 +11373,7 @@ func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
 	if strings.Contains(request.Instructions, "<personality_spec>") {
 		t.Fatalf("config personality should be baked, not emitted as update: %q", request.Instructions)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust(t *testing.T) {
@@ -10555,6 +11429,7 @@ func TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust(t *testing.T) 
 
 func TestRuntimeRouterThreadStartEmptyInstructionOverrideSuppressesModelInstructions(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	empty := ""
 	router := NewRuntimeRouter(RuntimeServices{
@@ -10564,6 +11439,7 @@ func TestRuntimeRouterThreadStartEmptyInstructionOverrideSuppressesModelInstruct
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       personalityModelServiceForRuntimeTest(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		Model:                 "personality-model",
@@ -10585,6 +11461,7 @@ func TestRuntimeRouterThreadStartEmptyInstructionOverrideSuppressesModelInstruct
 	if request.Instructions != "" {
 		t.Fatalf("instructions = %q, want empty", request.Instructions)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartNullServiceTierClearsConfigDefault(t *testing.T) {
@@ -10629,6 +11506,7 @@ func TestRuntimeRouterTurnStartNullServiceTierClearsConfigDefault(t *testing.T) 
 	if request.Model != modelID || request.ServiceTier != "" {
 		t.Fatalf("agent request = %#v", request)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartSendsServiceTierIDToModelRequestLikeRust(t *testing.T) {
@@ -10832,6 +11710,7 @@ tool_suggest = true
 		t.Fatalf("write config: %v", err)
 	}
 	store := session.NewStore(home)
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	plugins := plugin.NewPluginService()
 	router := NewRuntimeRouter(RuntimeServices{
@@ -10844,6 +11723,7 @@ tool_suggest = true
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       model.NewModelService(nil),
 	})
+	router.SetNotificationSink(sink)
 	plan := "pro"
 	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
 		Type:             "chatgptAuthTokens",
@@ -10879,6 +11759,7 @@ tool_suggest = true
 	if !strings.Contains(string(toolsJSON), "request_plugin_install") || strings.Contains(string(toolsJSON), "list_available_plugins_to_install") {
 		t.Fatalf("recommendation tools mismatch: %s", toolsJSON)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 	mu.Lock()
 	defer mu.Unlock()
 	if requests != 1 || gotAuthorization != "Bearer access-token" || gotAccountID != "workspace-1" {
@@ -10888,6 +11769,7 @@ tool_suggest = true
 
 func TestRuntimeRouterTurnStartDoesNotRecommendConnectorOnlyCandidates(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	plugins := plugin.NewPluginService()
 	plugins.AddPlugin(plugin.PluginDetail{
@@ -10908,6 +11790,7 @@ func TestRuntimeRouterTurnStartDoesNotRecommendConnectorOnlyCandidates(t *testin
 		Plugins:      plugins,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{Prompt: "hello connector"}))
 	if threadStart.Error != nil {
@@ -10936,6 +11819,7 @@ func TestRuntimeRouterTurnStartDoesNotRecommendConnectorOnlyCandidates(t *testin
 	if strings.Contains(string(toolsJSON), "request_plugin_install") {
 		t.Fatalf("request_plugin_install should not be registered for connector-only recommendations: %s", toolsJSON)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
@@ -10965,6 +11849,18 @@ func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pluginSkill, SkillFilename), []byte("---\nname: review\ndescription: Review with plugin context\n---\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(plugin skill) error = %v", err)
 	}
+	disabledPluginSkill := filepath.Join(pluginRoot, "skills", "archive")
+	if err := os.MkdirAll(disabledPluginSkill, 0o755); err != nil {
+		t.Fatalf("MkdirAll(disabled plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(disabledPluginSkill, SkillFilename), []byte("---\nname: archive\ndescription: Archive with plugin context\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(disabled plugin skill) error = %v", err)
+	}
+	configHome := t.TempDir()
+	configService := config.NewConfigService(configHome)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Name: "docs:archive", Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig(disabled plugin skill) error = %v", err)
+	}
 	plugins := plugin.NewPluginService()
 	plugins.AddPlugin(plugin.PluginDetail{
 		MarketplaceRoot: pluginRoot,
@@ -10984,7 +11880,10 @@ func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
 		Agent:        agent,
-		Skills:       NewSkillsService([]string{skillsRoot}),
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Roots:  []string{skillsRoot},
+			Config: configService,
+		}),
 		Plugins:      plugins,
 		ThreadStatus: NewThreadStatusManager(),
 	})
@@ -11011,7 +11910,7 @@ func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	for _, want := range []string{"## Skills", "build-stuff", "Build code quickly", "Docs:review", "Review with plugin context"} {
+	for _, want := range []string{"## Skills", "build-stuff", "Build code quickly", "docs:review", "Review with plugin context"} {
 		if !strings.Contains(request.Instructions, want) {
 			t.Fatalf("instructions missing %q:\n%s", want, request.Instructions)
 		}
@@ -11019,13 +11918,95 @@ func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
 	if strings.Contains(request.Instructions, "hidden-skill") {
 		t.Fatalf("instructions included disabled implicit skill:\n%s", request.Instructions)
 	}
-	for _, want := range []string{"<skill>", "<name>build-stuff</name>", filepath.Join(visibleSkill, SkillFilename)} {
+	if strings.Contains(request.Instructions, "docs:archive") || strings.Contains(request.Instructions, "Archive with plugin context") {
+		t.Fatalf("instructions included plugin skill disabled by name:\n%s", request.Instructions)
+	}
+	for _, want := range []string{"<skill>", "<name>build-stuff</name>", filepath.ToSlash(filepath.Join(visibleSkill, SkillFilename))} {
 		if !agentRequestInputItemsContain(request, want) {
 			t.Fatalf("input items missing explicit skill fragment %q: %#v", want, request.InputItems)
 		}
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSkillsConfigUsesSessionFlagsNotMergedProjectConfigLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "config-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: config-skill\ndescription: config skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	mergedProjectConfig := &config.Config{Values: map[string]any{
+		"skills": map[string]any{"config": []any{
+			map[string]any{"name": "config-skill", "enabled": false},
+		}},
+	}}
+	instructions, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-project-rule", "turn-project-rule", mergedProjectConfig, &turn.TurnStartParams{}, "")
+	if err != nil {
+		t.Fatalf("project instructions error = %v", err)
+	}
+	if !strings.Contains(instructions, "config-skill") {
+		t.Fatalf("merged project skills.config disabled a skill unlike Rust:\n%s", instructions)
+	}
+
+	sessionParams := &turn.TurnStartParams{Config: map[string]any{
+		"skills.config": []any{
+			map[string]any{"name": "config-skill", "enabled": false},
+		},
+	}}
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-session-rule", "turn-session-rule", mergedProjectConfig, sessionParams, "")
+	if err != nil {
+		t.Fatalf("session instructions error = %v", err)
+	}
+	if strings.Contains(instructions, "config-skill") || len(items) != 0 {
+		t.Fatalf("session skills.config did not disable skill: instructions=%q items=%#v", instructions, items)
+	}
+}
+
+func TestRuntimeRouterPromptHiddenSkillCanStillBeInvokedLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "hidden-skill")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: hidden-skill\ndescription: Hidden from automatic discovery\n---\n# Hidden\nUse this when explicitly selected.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("policy:\n  allow_implicit_invocation: false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-hidden-explicit", "turn-hidden-explicit", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{
+		CWD: t.TempDir(),
+		Input: []turn.TurnUserInput{{
+			Type: "skill",
+			Name: "hidden-skill",
+			Path: skillPath,
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContextForTurn() error = %v", err)
+	}
+	if strings.Contains(instructions, "hidden-skill") {
+		t.Fatalf("prompt-hidden skill leaked into catalog:\n%s", instructions)
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(items); err != nil {
+		t.Fatalf("Encode(items) error = %v", err)
+	}
+	for _, want := range []string{"<name>hidden-skill</name>", "Use this when explicitly selected."} {
+		if !strings.Contains(encoded.String(), want) {
+			t.Fatalf("explicit hidden skill items missing %q: %s", want, encoded.String())
+		}
+	}
 }
 
 func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *testing.T) {
@@ -11067,7 +12048,7 @@ func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *tes
 	if firstRequest.Prompt != "$imagegen" {
 		t.Fatalf("first prompt = %q, want $imagegen", firstRequest.Prompt)
 	}
-	for _, want := range []string{"<skill>", "<name>imagegen</name>", skillPath, "Use hosted image generation before shell fallbacks."} {
+	for _, want := range []string{"<skill>", "<name>imagegen</name>", filepath.ToSlash(skillPath), "Use hosted image generation before shell fallbacks."} {
 		if !agentRequestInputItemsContain(firstRequest, want) {
 			t.Fatalf("first request missing skill fragment %q: %#v", want, firstRequest.InputItems)
 		}
@@ -11326,7 +12307,7 @@ func TestRuntimeRouterSkillsContextIncludesCWDRepoSkills(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterSkillsContextWarnsForMissingMCPDependencies(t *testing.T) {
+func TestRuntimeRouterSkillsContextDoesNotWarnForUnselectedMCPDependenciesLikeRust(t *testing.T) {
 	skillsRoot := t.TempDir()
 	skillDir := filepath.Join(skillsRoot, "calendar-skill")
 	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
@@ -11352,8 +12333,8 @@ dependencies:
 		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
 	}
 	warnings := warningNotificationsForTest(sink)
-	if len(warnings) != 1 || warnings[0].ThreadID == nil || *warnings[0].ThreadID != "thread-skills" || !strings.Contains(warnings[0].Message, "calendar") {
-		t.Fatalf("warnings = %+v", warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("unselected dependency warnings = %+v, want none", warnings)
 	}
 
 	configuredSink := NewNotificationBuffer()
@@ -11435,14 +12416,22 @@ func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
 	if err := os.WriteFile(skillPath, []byte("---\nname: build-skill\ndescription: Build helper\n---\nUse this build helper.\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(skill) error = %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(scripts) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "scripts", "build.py"), []byte("print('build')\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(script) error = %v", err)
+	}
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
+	analytics := newRecordingTurnEventSink()
 	agent := newImplicitSkillRuntimeAgent()
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
 		Agent:        agent,
 		Skills:       NewSkillsService([]string{skillsRoot}),
+		Analytics:    analytics,
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
@@ -11453,9 +12442,10 @@ func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		CWD:      skillDir,
-		Prompt:   "run build",
+		ThreadID:   threadID,
+		CWD:        skillDir,
+		Prompt:     "run build",
+		Originator: "codex-test",
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
@@ -11464,14 +12454,715 @@ func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 
 	second := waitForImplicitSkillAgentRequest(t, agent, 2)
-	for _, want := range []string{"<skill>", "<name>build-skill</name>", skillPath, "Use this build helper."} {
-		if !agentRequestInputItemsContain(second, want) {
-			t.Fatalf("second request missing implicit skill fragment %q: %#v", want, second.InputItems)
+	if agentRequestInputItemsContain(second, "<name>build-skill</name>") {
+		t.Fatalf("implicit skill instructions were injected unlike Rust: %#v", second.InputItems)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.EventType != telemetry.SkillInvocationEventType || event.SkillName != "build-skill" || stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeImplicit || stringPtrValue(event.EventParams.ThreadID) != threadID || stringPtrValue(event.EventParams.TurnID) != turnID || stringPtrValue(event.EventParams.ProductClientID) != "codex-test" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for implicit skill invocation analytics")
+	}
+}
+
+func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
+	skillDir := t.TempDir()
+	disabled := false
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	provider := router.implicitSkillInvocationEventProvider("thread-hidden", "turn-hidden", "model-hidden", &turn.TurnStartParams{CWD: skillDir}, []promptctx.InstructionsSkillMetadata{{
+		Name:                    "disabled-skill",
+		Path:                    filepath.Join(skillDir, SkillFilename),
+		AllowImplicitInvocation: &disabled,
+	}})
+	items := provider(context.Background(), &tool.Invocation{
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"cmd":"python3 scripts/run.py"}`,
+		},
+	}, nil)
+	if len(items) != 0 {
+		t.Fatalf("implicit skill produced model items: %#v", items)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.SkillName != "disabled-skill" || stringPtrValue(event.EventParams.SkillScope) != "user" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hidden skill invocation analytics")
+	}
+}
+
+func TestPromptSkillMetadataMapsHostDisplayPathLikeRust(t *testing.T) {
+	metadata := promptSkillMetadataFromEntries([]SkillsListEntry{{
+		Name:        "host-skill",
+		Path:        `C:\skills\host-skill\SKILL.md`,
+		Scope:       "user",
+		Description: "host",
+		Enabled:     true,
+	}})
+	if len(metadata) != 1 || metadata[0].LocatorKind != "file" || metadata[0].LocatorPath != "C:/skills/host-skill/SKILL.md" {
+		t.Fatalf("host metadata = %#v", metadata)
+	}
+}
+
+func TestInstructionsWithSkillsContextEmitsHostCatalogWarningsLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	invalidDir := filepath.Join(skillsRoot, "invalid-skill")
+	if err := os.MkdirAll(invalidDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	invalidPath := filepath.Join(invalidDir, SkillFilename)
+	if err := os.WriteFile(invalidPath, []byte("missing frontmatter"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	router.SetNotificationSink(sink)
+	if _, _, _, err := router.instructionsWithSkillsContext("thread-host-warning", nil, &turn.TurnStartParams{CWD: t.TempDir()}, ""); err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Message, "Failed to load skill at "+invalidPath+": ") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := &RuntimeRouter{}
+	router.SetNotificationSink(sink)
+	missingPath := filepath.Join(t.TempDir(), "missing", SkillFilename)
+	items := router.explicitSkillInputItems("thread-host-read", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "missing-skill", Path: missingPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name: "missing-skill",
+		Path: missingPath,
+	}})
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none", items)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Message, "Failed to load skill `missing-skill`: failed to read host skill resource "+missingPath+": ") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing.T) {
+	skillDir := t.TempDir()
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: tracked-skill\ndescription: tracked\n---\nbody\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	items := router.explicitSkillInputItemsForTurn("thread-explicit", "turn-explicit", "model-explicit", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "tracked-skill", Path: skillPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:        "tracked-skill",
+		Path:        skillPath,
+		LocatorPath: filepath.ToSlash(skillPath),
+		LocatorKind: "file",
+		Scope:       "user",
+	}})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one skill fragment", items)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.SkillName != "tracked-skill" || event.SkillID == "" || stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeExplicit || stringPtrValue(event.EventParams.TurnID) != "turn-explicit" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for explicit skill invocation analytics")
+	}
+}
+
+func TestSkillMCPDependencyPromptOnlyForSelectedSkillAndDedupesLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "dependency-skill")
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	requestCount := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		requestCount++
+		params, ok := request.Params.(*ToolRequestUserInputParams)
+		if !ok || params == nil || len(params.Questions) != 1 {
+			t.Errorf("request params = %#v", request.Params)
+			return
+		}
+		question := params.Questions[0]
+		if question.ID != skillMCPDependencyPromptID || question.Header != "Install MCP servers?" || !strings.Contains(question.Question, "docs") || len(question.Options) != 2 || question.Options[0].Label != "Install" || question.Options[1].Label != "Continue anyway" {
+			t.Errorf("question = %#v", question)
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Continue anyway"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	baseParams := &turn.TurnStartParams{CWD: t.TempDir(), Originator: "codex_cli_rs"}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-unmentioned", cfg, baseParams, ""); err != nil {
+		t.Fatalf("unmentioned instructions error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("unmentioned skill prompted %d times", requestCount)
+	}
+	selectedParams := baseParams
+	selectedParams.Input = []turn.TurnUserInput{{Type: "skill", Name: "dependency-skill", Path: skillPath}}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-selected", cfg, selectedParams, ""); err != nil {
+		t.Fatalf("selected instructions error = %v", err)
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-selected-2", cfg, selectedParams, ""); err != nil {
+		t.Fatalf("repeat instructions error = %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("dependency prompt count = %d, want 1", requestCount)
+	}
+}
+
+func TestSkillMCPDependencyInstallPersistsGlobalConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "install-skill")
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+		MCP:    mcp.NewMCPService(nil),
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Install"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	params := &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input:      []turn.TurnUserInput{{Type: "skill", Name: "install-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-install", "turn-install", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	read, err := configService.Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Config.Read() error = %v", err)
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValues(read.Config, home)
+	registration, ok := runtimeConfig.Servers["docs"]
+	if !ok || registration.Config.URL != "https://docs.example.test/mcp" || !registration.Config.Enabled || registration.Config.Required {
+		t.Fatalf("installed MCP config = %#v, ok=%v", registration, ok)
+	}
+}
+
+func TestSkillMCPDependencyInstallDiscoversScopesRetriesAndCompletesOAuthLikeRust(t *testing.T) {
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server/mcp", "/.well-known/oauth-authorization-server":
+			writeJSON(t, w, map[string]any{
+				"issuer":                 issuer.URL,
+				"authorization_endpoint": issuer.URL + "/authorize",
+				"token_endpoint":         issuer.URL + "/token",
+				"registration_endpoint":  issuer.URL + "/register",
+				"scopes_supported":       []string{"read", "write"},
+			})
+		case "/register":
+			writeJSON(t, w, map[string]any{"client_id": "dynamic-client", "token_endpoint_auth_method": "none"})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("ParseForm() error = %v", err)
+			}
+			if r.Form.Get("code") != "oauth-code" || r.Form.Get("client_id") != "dynamic-client" {
+				t.Errorf("token form = %#v", r.Form)
+			}
+			writeJSON(t, w, map[string]any{"access_token": "skill-access", "refresh_token": "skill-refresh", "token_type": "Bearer", "expires_in": 3600})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+
+	home := t.TempDir()
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyURLForTest(t, skillsRoot, "oauth-skill", issuer.URL+"/mcp")
+	configService := config.NewConfigService(home)
+	service := mcp.NewMCPService(&mcp.RuntimeConfig{CodexHome: home})
+	var openedScopes []string
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+		MCP:    service,
+		BrowserOpen: func(target string) error {
+			authorizationURL, err := url.Parse(target)
+			if err != nil {
+				return err
+			}
+			query := authorizationURL.Query()
+			openedScopes = append(openedScopes, query.Get("scope"))
+			callbackURL, err := url.Parse(query.Get("redirect_uri"))
+			if err != nil {
+				return err
+			}
+			callbackQuery := callbackURL.Query()
+			callbackQuery.Set("state", query.Get("state"))
+			if len(openedScopes) == 1 {
+				callbackQuery.Set("error", "invalid_scope")
+				callbackQuery.Set("error_description", "scope rejected")
+			} else {
+				callbackQuery.Set("code", "oauth-code")
+			}
+			callbackURL.RawQuery = callbackQuery.Encode()
+			response, err := http.Get(callbackURL.String())
+			if err != nil {
+				return err
+			}
+			return response.Body.Close()
+		},
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Install"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	params := &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input:      []turn.TurnUserInput{{Type: "skill", Name: "oauth-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-oauth-install", "turn-oauth-install", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	if !reflect.DeepEqual(openedScopes, []string{"read write", ""}) {
+		t.Fatalf("opened OAuth scopes = %#v, want discovered scopes then empty retry", openedScopes)
+	}
+	tokens, err := mcp.NewOAuthStore(home).Load("docs", issuer.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("OAuthStore.Load() error = %v", err)
+	}
+	if tokens == nil || tokens.AccessToken != "skill-access" || len(tokens.Scopes) != 0 {
+		t.Fatalf("stored OAuth tokens = %#v", tokens)
+	}
+}
+
+func TestRuntimeRouterOrchestratorSkillCatalogAndExplicitReadLikeRust(t *testing.T) {
+	const skillPackage = "skill://drive/docs"
+	const mainResource = skillPackage + "/SKILL.md"
+	var methodsMu sync.Mutex
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		methodsMu.Lock()
+		methods = append(methods, request.Method)
+		methodsMu.Unlock()
+		switch request.Method {
+		case "initialize":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"resources": map[string]any{}},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"resources": []map[string]any{{
+					"uri":         skillPackage,
+					"name":        "docs",
+					"description": "Search shared docs.",
+					"mimeType":    "mcp/skill",
+					"_meta": map[string]any{
+						"plugin_name": "Drive",
+						"skill_name":  "doc-search",
+					},
+				}},
+			})
+		case "resources/templates/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resourceTemplates": []any{}})
+		case "resources/read":
+			var params struct {
+				URI string `json:"uri"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				t.Fatalf("resources/read params error = %v", err)
+			}
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"contents": []map[string]string{{"uri": params.URI, "text": "# Docs\nUse the shared documentation index."}},
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	mcpService := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+		mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+	}})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		MCP:          mcpService,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstCatalog, firstWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	secondCatalog, secondWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	if len(firstCatalog) != 1 || len(secondCatalog) != 1 || len(firstWarnings) != 0 || len(secondWarnings) != 0 {
+		t.Fatalf("cached orchestrator catalogs = %#v/%#v warnings=%#v/%#v", firstCatalog, secondCatalog, firstWarnings, secondWarnings)
+	}
+	methodsMu.Lock()
+	if countString(methods, "resources/list") != 1 {
+		t.Fatalf("catalog discovery methods = %#v, want one resources/list", methods)
+	}
+	methodsMu.Unlock()
+	mcpService.Refresh()
+	refreshedCatalog, refreshedWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	if len(refreshedCatalog) != 1 || len(refreshedWarnings) != 0 {
+		t.Fatalf("refreshed orchestrator catalog = %#v warnings=%#v", refreshedCatalog, refreshedWarnings)
+	}
+	methodsMu.Lock()
+	if countString(methods, "resources/list") != 2 {
+		t.Fatalf("refreshed catalog methods = %#v, want rediscovery", methods)
+	}
+	methodsMu.Unlock()
+	for index := 0; index < 2; index++ {
+		started := router.Handle(requestWithParams(t, IntID(int64(2+index)), MethodTurnStart, turn.TurnStartParams{
+			ThreadID: threadID,
+			Prompt:   "use shared docs",
+			Input: []turn.TurnUserInput{{
+				Type: "skill",
+				Name: "Drive:doc-search",
+				Path: mainResource,
+			}},
+		}))
+		if started.Error != nil {
+			t.Fatalf("turn %d start error: %+v", index, started.Error)
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		for _, want := range []string{"Drive:doc-search", "(orchestrator resource: " + skillPackage + ")"} {
+			if !strings.Contains(request.Instructions, want) {
+				t.Fatalf("turn %d instructions missing %q:\n%s", index, want, request.Instructions)
+			}
+		}
+		for _, want := range []string{"<skill>", "<name>Drive:doc-search</name>", "<path>" + skillPackage + "</path>", "Use the shared documentation index."} {
+			if !agentRequestInputItemsContain(request, want) {
+				t.Fatalf("turn %d input items missing %q: %#v", index, want, request.InputItems)
+			}
+		}
+		waitForTurnCompletedStatus(t, sink, started.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	}
+	methodsMu.Lock()
+	defer methodsMu.Unlock()
+	if countString(methods, "resources/read") != 1 {
+		t.Fatalf("MCP methods = %#v, want cached orchestrator resource", methods)
+	}
+}
+
+func TestRuntimeRouterOrchestratorSkillsConfigDisablesCatalogAndToolsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[orchestrator.skills]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	var methodsMu sync.Mutex
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		methodsMu.Lock()
+		methods = append(methods, payload.Method)
+		methodsMu.Unlock()
+		switch payload.Method {
+		case "initialize":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"resources": map[string]any{}},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{
+				"resources": []map[string]any{
+					{
+						"uri":         "skill://hidden/package",
+						"name":        "hidden",
+						"description": "Must stay hidden",
+						"mimeType":    "mcp/skill",
+					},
+				},
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+	configService := config.NewConfigService(home)
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Config:       configService,
+		Skills:       NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService}),
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect tools"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "skill://hidden/package") || strings.Contains(request.Instructions, "Must stay hidden") {
+		t.Fatalf("disabled orchestrator skill leaked into instructions:\n%s", request.Instructions)
+	}
+	for _, rawTool := range request.Tools {
+		toolMap, ok := rawTool.(map[string]any)
+		if ok && toolMap["type"] == "namespace" && toolMap["name"] == "skills" {
+			t.Fatalf("skills namespace registered while orchestrator.skills is disabled: %#v", request.Tools)
 		}
 	}
-	if !sinkHasMethod(sink, NotificationWarning) {
-		t.Fatalf("implicit skill warning notification missing: %+v", sink.List())
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	methodsMu.Lock()
+	defer methodsMu.Unlock()
+	if countString(methods, "resources/read") != 0 {
+		t.Fatalf("disabled orchestrator skill resource was read: %#v", methods)
 	}
+}
+
+func TestRuntimeRouterOrchestratorSkillCatalogCachesFailureLikeRust(t *testing.T) {
+	var requestMu sync.Mutex
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		requestMu.Lock()
+		requestCount++
+		requestMu.Unlock()
+		writeRuntimeRouterMCPError(t, w, request.ID, -32000, "temporary orchestrator failure", nil)
+	}))
+	defer server.Close()
+	router := NewRuntimeRouter(RuntimeServices{
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+	})
+	first, firstWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	requestMu.Lock()
+	firstRequestCount := requestCount
+	requestMu.Unlock()
+	second, secondWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	requestMu.Lock()
+	secondRequestCount := requestCount
+	requestMu.Unlock()
+	if len(first) != 0 || len(second) != 0 {
+		t.Fatalf("failure catalogs = %#v/%#v", first, second)
+	}
+	if len(firstWarnings) != 1 || !strings.Contains(firstWarnings[0], "orchestrator skills unavailable: failed to list orchestrator skill resources") {
+		t.Fatalf("first warnings = %#v", firstWarnings)
+	}
+	if len(secondWarnings) != 0 {
+		t.Fatalf("second warnings = %#v, want cached warning suppressed", secondWarnings)
+	}
+	if firstRequestCount == 0 || secondRequestCount != firstRequestCount {
+		t.Fatalf("request counts = %d then %d, want cached failure", firstRequestCount, secondRequestCount)
+	}
+}
+
+func TestRuntimeRouterCustomSkillProviderCatalogReadAndWarningLikeRust(t *testing.T) {
+	kind := skillprovider.CustomSourceKind("private")
+	authority := skillprovider.Authority{Kind: kind, ID: "tenant-1"}
+	visible := skillprovider.CatalogEntry{
+		PackageID:     "private/visible",
+		Authority:     authority,
+		Name:          "private-search",
+		Description:   "Search private data.",
+		MainResource:  "private/visible/SKILL.md",
+		DisplayPath:   "private://tenant-1/visible",
+		Enabled:       true,
+		PromptVisible: true,
+	}
+	hidden := skillprovider.CatalogEntry{
+		PackageID:    "private/hidden",
+		Authority:    authority,
+		Name:         "private-hidden",
+		Description:  "Hidden private workflow.",
+		MainResource: "private/hidden/SKILL.md",
+		DisplayPath:  "private://tenant-1/hidden",
+		Enabled:      true,
+		Dependencies: []skillprovider.ToolDependency{{
+			Type:      "mcp",
+			Value:     "private-docs",
+			Transport: "streamable_http",
+			URL:       "https://private.example.test/mcp",
+		}},
+	}
+	var listedTurnID string
+	var readRequest skillprovider.ReadRequest
+	registry := skillprovider.NewRegistry(skillprovider.Source{
+		Kind:  kind,
+		Label: "private",
+		Provider: skillprovider.ProviderFuncs{
+			ListFunc: func(_ context.Context, query skillprovider.ListQuery) (skillprovider.Catalog, error) {
+				listedTurnID = query.TurnID
+				return skillprovider.Catalog{Entries: []skillprovider.CatalogEntry{visible, hidden}, Warnings: []string{"private provider warning"}}, nil
+			},
+			ReadFunc: func(_ context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
+				readRequest = request
+				return skillprovider.ReadResult{Resource: request.Resource, Contents: "# Private\nUse the hidden private workflow."}, nil
+			},
+		},
+	})
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService(nil), CustomSkills: registry})
+	router.SetNotificationSink(sink)
+	dependencyPrompts := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		dependencyPrompts++
+		params := request.Params.(*ToolRequestUserInputParams)
+		if len(params.Questions) != 1 || !strings.Contains(params.Questions[0].Question, "private-docs") {
+			t.Errorf("custom dependency prompt = %#v", params)
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Continue anyway"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-custom", "turn-custom", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input: []turn.TurnUserInput{{
+			Type: "skill",
+			Name: hidden.Name,
+			Path: hidden.MainResource,
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContextForTurn() error = %v", err)
+	}
+	if listedTurnID != "turn-custom" {
+		t.Fatalf("custom list turn id = %q", listedTurnID)
+	}
+	if !strings.Contains(instructions, "private-search: Search private data. (custom resource: private://tenant-1/visible)") || strings.Contains(instructions, "private-hidden") {
+		t.Fatalf("custom catalog instructions:\n%s", instructions)
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(items); err != nil {
+		t.Fatalf("Encode(items) error = %v", err)
+	}
+	if !strings.Contains(encoded.String(), "<name>private-hidden</name>") || !strings.Contains(encoded.String(), "Use the hidden private workflow.") {
+		t.Fatalf("custom explicit items = %s", encoded.String())
+	}
+	if readRequest.Authority != authority || readRequest.PackageID != hidden.PackageID || readRequest.Resource != hidden.MainResource {
+		t.Fatalf("custom read request = %#v", readRequest)
+	}
+	if dependencyPrompts != 1 {
+		t.Fatalf("custom dependency prompts = %d, want 1", dependencyPrompts)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || warnings[0].Message != "private provider warning" {
+		t.Fatalf("custom warnings = %#v", warnings)
+	}
+}
+
+func countString(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
+func writeSkillWithMCPDependencyForTest(t *testing.T, root string, name string) string {
+	return writeSkillWithMCPDependencyURLForTest(t, root, name, "https://docs.example.test/mcp")
+}
+
+func writeSkillWithMCPDependencyURLForTest(t *testing.T, root string, name string, serverURL string) string {
+	t.Helper()
+	skillDir := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: "+name+"\ndescription: dependency test\n---\nbody\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	metadata := "dependencies:\n  tools:\n    - type: mcp\n      value: docs\n      transport: streamable_http\n      url: " + serverURL + "\n"
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte(metadata), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	return skillPath
 }
 
 func TestRuntimeRouterTurnStartUsesSelectedCapabilitySkillRoots(t *testing.T) {
@@ -11523,6 +13214,239 @@ func TestRuntimeRouterTurnStartUsesSelectedCapabilitySkillRoots(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "lint-fix")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: lint-fix\ndescription: Fix lint errors.\n---\n\nROOT_QUALIFIED_EXECUTOR_SKILL\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	normalizedSkillPath := strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
+	rootALocator := "skill://root-a/" + normalizedSkillPath
+	rootBLocator := "skill://root-b/" + normalizedSkillPath
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{
+			{ID: "root-a", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+			{ID: "root-b", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+		},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use [$lint-fix](" + rootBLocator + ")",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, locator := range []string{rootALocator, rootBLocator} {
+		if !strings.Contains(request.Instructions, "(environment resource: "+locator+")") {
+			t.Fatalf("instructions missing selected-root locator %q:\n%s", locator, request.Instructions)
+		}
+	}
+	if !agentRequestInputItemsContain(request, rootBLocator) || !agentRequestInputItemsContain(request, "ROOT_QUALIFIED_EXECUTOR_SKILL") {
+		t.Fatalf("explicit root-b skill fragment missing: %#v", request.InputItems)
+	}
+	if agentRequestInputItemsContain(request, rootALocator) {
+		t.Fatalf("explicit root-b selection also injected root-a: %#v", request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSelectedExecutorCatalogReusesThreadCacheLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "stable-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: stable-skill\ndescription: Original executor description.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "stable-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect skills"}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn error: %+v", firstTurn.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(firstRequest.Instructions, "Original executor description.") {
+		t.Fatalf("first instructions missing original executor skill:\n%s", firstRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	if err := os.WriteFile(skillPath, []byte("---\nname: stable-skill\ndescription: Mutated executor description.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(mutated skill) error = %v", err)
+	}
+	newSkillDir := filepath.Join(capabilityRoot, "new-skill")
+	if err := os.MkdirAll(newSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(new skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(newSkillDir, SkillFilename), []byte("---\nname: new-skill\ndescription: Added after cache.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(new skill) error = %v", err)
+	}
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect skills again"}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn error: %+v", secondTurn.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(secondRequest.Instructions, "Original executor description.") || strings.Contains(secondRequest.Instructions, "Mutated executor description.") || strings.Contains(secondRequest.Instructions, "new-skill") {
+		t.Fatalf("selected executor catalog did not reuse its thread cache:\n%s", secondRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterExecutorCatalogUsesExtensionByteBudgetWithoutCoreWarningLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	for index := 0; index < 10; index++ {
+		skillDir := filepath.Join(capabilityRoot, fmt.Sprintf("executor-%02d", index))
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(skill) error = %v", err)
+		}
+		contents := fmt.Sprintf("---\nname: executor-%02d\ndescription: %s\n---\n", index, strings.Repeat("x", 1024))
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(skill) error = %v", err)
+		}
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "executor-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect executor catalog",
+		Config:   map[string]any{"model_context_window": 1},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "additional skills omitted from this bounded skills list") {
+		t.Fatalf("executor bounded omission line missing:\n%s", request.Instructions)
+	}
+	for _, warning := range warningNotificationsForTest(sink) {
+		if strings.Contains(warning.Message, "Exceeded skills context budget") {
+			t.Fatalf("executor catalog emitted core budget warning: %+v", warning)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplicitExecutorSkillLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: deploy\ndescription: Hidden executor catalog entry.\n---\n\nEXPLICIT_EXECUTOR_SKILL_BODY\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	locator := "skill://deploy-root/" + strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Config:       configService,
+		Skills:       NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "deploy-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use [$deploy](" + locator + ")",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "## Skills") || strings.Contains(request.Instructions, "Hidden executor catalog entry.") || strings.Contains(request.Instructions, locator) {
+		t.Fatalf("skills catalog was visible while include_instructions=false:\n%s", request.Instructions)
+	}
+	for _, want := range []string{"<name>deploy</name>", locator, "EXPLICIT_EXECUTOR_SKILL_BODY"} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("explicit executor skill missing %q: %#v", want, request.InputItems)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartSkipsUnavailableSelectedEnvironmentSkillRootsLikeRust(t *testing.T) {
@@ -11840,6 +13764,7 @@ func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.
 
 func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -11847,6 +13772,7 @@ func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD: t.TempDir(),
@@ -11879,10 +13805,12 @@ func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 	if !found {
 		t.Fatalf("dynamic namespace missing from tools: %#v", request.Tools)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartRestoresSessionHistory(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	now := fixedTime()
 	if err := store.Save(&session.Record{
 		ID:        "thread-history",
@@ -11908,6 +13836,7 @@ func TestRuntimeRouterTurnStartRestoresSessionHistory(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: "thread-history",
@@ -11927,10 +13856,12 @@ func TestRuntimeRouterTurnStartRestoresSessionHistory(t *testing.T) {
 	if !strings.Contains(string(data), "older user message") || !strings.Contains(string(data), "older assistant message") {
 		t.Fatalf("input items json = %s", data)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartRepairsRolloutOnlyThread(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:     store.Root(),
 		SessionID:     "session-rollout-runtime",
@@ -11964,6 +13895,7 @@ func TestRuntimeRouterTurnStartRepairsRolloutOnlyThread(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: "thread-rollout-runtime",
@@ -11987,6 +13919,7 @@ func TestRuntimeRouterTurnStartRepairsRolloutOnlyThread(t *testing.T) {
 	if len(record.Items) < 3 {
 		t.Fatalf("record items = %#v", record.Items)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
@@ -12021,6 +13954,7 @@ func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
 
 func TestRuntimeRouterTurnStartInjectsAdditionalContext(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -12028,6 +13962,7 @@ func TestRuntimeRouterTurnStartInjectsAdditionalContext(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    t.TempDir(),
@@ -12056,6 +13991,7 @@ func TestRuntimeRouterTurnStartInjectsAdditionalContext(t *testing.T) {
 	if !strings.Contains(inputText, "untrusted context") || !strings.Contains(inputText, "<additional_context>") {
 		t.Fatalf("input items = %#v", request.InputItems)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterSessionStartHookInjectsAdditionalContextOnce(t *testing.T) {
@@ -12109,6 +14045,7 @@ func TestRuntimeRouterSessionStartHookInjectsAdditionalContextOnce(t *testing.T)
 	if !strings.Contains(firstRequest.Instructions, "clear hook context") {
 		t.Fatalf("first request instructions = %q", firstRequest.Instructions)
 	}
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
 	record, err = store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		t.Fatalf("Read consumed record error = %v", err)
@@ -12116,7 +14053,6 @@ func TestRuntimeRouterSessionStartHookInjectsAdditionalContextOnce(t *testing.T)
 	if got := stringFromMap(record.Metadata.Extra, pendingSessionStartSourceExtraKey); got != "" {
 		t.Fatalf("pending session start source after first turn = %q", got)
 	}
-	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
 	hookCompletedCount := func() int {
 		count := 0
 		for _, notification := range sink.List() {
@@ -13049,6 +14985,7 @@ func TestCompactTokenStatusFromMetadata(t *testing.T) {
 
 func TestRuntimeRouterTurnStartPreservesThreadOriginator(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	now := fixedTime()
 	if err := store.Create(&session.Record{
 		ID:        "thread-originator",
@@ -13071,6 +15008,7 @@ func TestRuntimeRouterTurnStartPreservesThreadOriginator(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: "thread-originator",
@@ -13083,6 +15021,7 @@ func TestRuntimeRouterTurnStartPreservesThreadOriginator(t *testing.T) {
 	if request.Originator != "codex_vscode" {
 		t.Fatalf("originator = %q", request.Originator)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartEmitsCodexTurnAnalyticsLikeRust(t *testing.T) {
@@ -15342,6 +17281,7 @@ enabled = true
 
 func TestRuntimeRouterThreadStartUsesConnectionClientInfoOriginator(t *testing.T) {
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -15349,6 +17289,7 @@ func TestRuntimeRouterThreadStartUsesConnectionClientInfoOriginator(t *testing.T
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	router.SetNotificationSink(sink)
 
 	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
 		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
@@ -15376,6 +17317,7 @@ func TestRuntimeRouterThreadStartUsesConnectionClientInfoOriginator(t *testing.T
 	if request.Originator != "codex_vscode" {
 		t.Fatalf("originator = %q", request.Originator)
 	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterThreadGoalPersistsInThreadStoreAndNotifies(t *testing.T) {
@@ -19022,6 +20964,7 @@ type recordingTurnEventSink struct {
 	collabToolCall    chan telemetry.CodexCollabAgentToolCallEventRequest
 	webSearch         chan telemetry.CodexWebSearchEventRequest
 	imageGeneration   chan telemetry.CodexImageGenerationEventRequest
+	skillInvocation   chan telemetry.SkillInvocationEventRequest
 }
 
 type standaloneWebSearchRuntimeAgent struct {
@@ -19098,6 +21041,7 @@ func newRecordingTurnEventSink() *recordingTurnEventSink {
 		collabToolCall:    make(chan telemetry.CodexCollabAgentToolCallEventRequest, 8),
 		webSearch:         make(chan telemetry.CodexWebSearchEventRequest, 8),
 		imageGeneration:   make(chan telemetry.CodexImageGenerationEventRequest, 8),
+		skillInvocation:   make(chan telemetry.SkillInvocationEventRequest, 8),
 	}
 }
 
@@ -19106,6 +21050,13 @@ func (s *recordingTurnEventSink) TrackCodexTurnEvent(ctx context.Context, event 
 		return
 	}
 	s.events <- event
+}
+
+func (s *recordingTurnEventSink) TrackSkillInvocationEvent(ctx context.Context, event telemetry.SkillInvocationEventRequest) {
+	if s == nil {
+		return
+	}
+	s.skillInvocation <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexThreadInitializedEvent(ctx context.Context, event telemetry.CodexThreadInitializedEventRequest) {
@@ -19520,7 +21471,7 @@ func (a *implicitSkillRuntimeAgent) Run(ctx context.Context, request *model.Agen
 				Type:      "function_call",
 				Name:      tool.DefaultExecCommandToolName,
 				CallID:    "shell-call-1",
-				Arguments: `{"cmd":"echo build-skill"}`,
+				Arguments: `{"cmd":"python3 scripts/build.py"}`,
 			}},
 		}, nil
 	}

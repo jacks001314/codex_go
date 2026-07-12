@@ -42,6 +42,19 @@ func TestRenderAvailableSkillsOrdersAndFilters(t *testing.T) {
 	}
 }
 
+func TestRenderAvailableSkillsCustomResourceLocatorLikeRust(t *testing.T) {
+	available := RenderAvailableSkills([]InstructionsSkillMetadata{{
+		Name:        "private-search",
+		Scope:       "custom",
+		Description: "Search a private authority.",
+		LocatorKind: "custom resource",
+		LocatorPath: "private://catalog/search/SKILL.md",
+	}}, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 2000})
+	if available == nil || !strings.Contains(available.Body, "- private-search: Search a private authority. (custom resource: private://catalog/search/SKILL.md)") {
+		t.Fatalf("custom resource catalog = %#v", available)
+	}
+}
+
 func TestRenderAvailableSkillsTruncatesDescriptionsBeforeOmitting(t *testing.T) {
 	skills := []InstructionsSkillMetadata{
 		{Name: "alpha", Scope: "repo", Description: "abcdef", Path: "/tmp/alpha/SKILL.md"},
@@ -276,5 +289,43 @@ func TestDefaultSkillMetadataBudget(t *testing.T) {
 	}
 	if got := DefaultSkillMetadataBudget(0); got.Kind != SkillMetadataBudgetCharacters || got.Limit != DefaultSkillMetadataCharBudget {
 		t.Fatalf("DefaultSkillMetadataBudget(0) = %#v", got)
+	}
+}
+
+func TestRenderExtensionAvailableSkillsMatchesRustBoundedCatalog(t *testing.T) {
+	longDescription := strings.Repeat("x", 1025)
+	skills := []InstructionsSkillMetadata{
+		{Name: "second", Description: "Second", Path: "skill://root/second/SKILL.md", LocatorKind: "environment resource"},
+		{Name: "first", Description: longDescription, Path: "skill://root/first/SKILL.md", LocatorKind: "environment resource"},
+	}
+	available := RenderExtensionAvailableSkills(skills, false)
+	if available == nil || len(available.SkillLines) != 2 {
+		t.Fatalf("extension available skills = %#v", available)
+	}
+	if !strings.HasPrefix(available.SkillLines[0], "- second: Second ") {
+		t.Fatalf("extension catalog order changed: %#v", available.SkillLines)
+	}
+	wantTruncated := strings.Repeat("x", 1021) + "..."
+	if !strings.Contains(available.SkillLines[1], wantTruncated) || strings.Contains(available.SkillLines[1], longDescription) {
+		t.Fatalf("extension description truncation = %q", available.SkillLines[1])
+	}
+}
+
+func TestRenderExtensionAvailableSkillsReportsFixedByteOmissionsInBodyLikeRust(t *testing.T) {
+	skills := make([]InstructionsSkillMetadata, 0, 10)
+	for index := 0; index < 10; index++ {
+		skills = append(skills, InstructionsSkillMetadata{
+			Name:        fmt.Sprintf("skill-%02d", index),
+			Description: strings.Repeat("x", 1024),
+			Path:        fmt.Sprintf("skill://root/skill-%02d/SKILL.md", index),
+			LocatorKind: "environment resource",
+		})
+	}
+	available := RenderExtensionAvailableSkills(skills, false)
+	if available == nil || available.Report == nil || available.Report.OmittedCount == 0 {
+		t.Fatalf("extension omission report = %#v", available)
+	}
+	if available.WarningMessage != nil || !strings.Contains(available.Body, "additional skills omitted from this bounded skills list") {
+		t.Fatalf("extension bounded catalog body = %q warning=%v", available.Body, available.WarningMessage)
 	}
 }

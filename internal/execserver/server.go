@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,32 +20,38 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/internal/sandbox"
 	"codex_go/internal/shell"
 	"codex_go/internal/utils"
+	"github.com/google/uuid"
 )
 
 const (
-	MethodInitialize        = "initialize"
-	MethodInitialized       = "initialized"
-	MethodEnvironmentInfo   = "environment/info"
-	MethodProcessStart      = "process/start"
-	MethodProcessRead       = "process/read"
-	MethodProcessWrite      = "process/write"
-	MethodProcessTerminate  = "process/terminate"
-	MethodProcessSignal     = "process/signal"
-	MethodFSReadFile        = "fs/readFile"
-	MethodFSOpen            = "fs/open"
-	MethodFSReadBlock       = "fs/readBlock"
-	MethodFSClose           = "fs/close"
-	MethodFSWriteFile       = "fs/writeFile"
-	MethodFSCreateDirectory = "fs/createDirectory"
-	MethodFSGetMetadata     = "fs/getMetadata"
-	MethodFSCanonicalize    = "fs/canonicalize"
-	MethodFSReadDirectory   = "fs/readDirectory"
-	MethodFSWalk            = "fs/walk"
-	MethodFSRemove          = "fs/remove"
-	MethodFSCopy            = "fs/copy"
-	MethodHTTPRequest       = "http/request"
+	MethodInitialize           = "initialize"
+	MethodInitialized          = "initialized"
+	MethodEnvironmentInfo      = "environment/info"
+	MethodProcessStart         = "process/start"
+	MethodProcessRead          = "process/read"
+	MethodProcessWrite         = "process/write"
+	MethodProcessTerminate     = "process/terminate"
+	MethodProcessSignal        = "process/signal"
+	MethodProcessOutput        = "process/output"
+	MethodProcessExited        = "process/exited"
+	MethodProcessClosed        = "process/closed"
+	MethodFSReadFile           = "fs/readFile"
+	MethodFSOpen               = "fs/open"
+	MethodFSReadBlock          = "fs/readBlock"
+	MethodFSClose              = "fs/close"
+	MethodFSWriteFile          = "fs/writeFile"
+	MethodFSCreateDirectory    = "fs/createDirectory"
+	MethodFSGetMetadata        = "fs/getMetadata"
+	MethodFSCanonicalize       = "fs/canonicalize"
+	MethodFSReadDirectory      = "fs/readDirectory"
+	MethodFSWalk               = "fs/walk"
+	MethodFSRemove             = "fs/remove"
+	MethodFSCopy               = "fs/copy"
+	MethodHTTPRequest          = "http/request"
+	MethodHTTPRequestBodyDelta = "http/request/bodyDelta"
 )
 
 const (
@@ -53,8 +60,15 @@ const (
 	maxWalkEntries                = 50000
 	maxWalkResponseBytes          = 4 * 1024 * 1024
 	walkResponseItemOverhead      = 64
-	retainedOutputBytesPerProcess = 10 * 1024 * 1024
+	retainedOutputBytesPerProcess = 1024 * 1024
+	retainedWriteIDsPerProcess    = 4096
+	maxOpenFileReads              = 128
+	maxFileReadHandleIDBytes      = 32
+	fileReadChunkSize             = 1024 * 1024
+	maxReadFileBytes              = 512 * 1024 * 1024
 )
+
+var execServerExitedProcessRetention = 30 * time.Second
 
 type RequestID struct {
 	value any
@@ -63,8 +77,7 @@ type RequestID struct {
 func (id *RequestID) UnmarshalJSON(data []byte) error {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		id.value = nil
-		return nil
+		return errors.New("request id must be a string or integer")
 	}
 	if data[0] == '"' {
 		var value string
@@ -80,7 +93,11 @@ func (id *RequestID) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&value); err != nil {
 		return err
 	}
-	id.value = value
+	integer, err := value.Int64()
+	if err != nil {
+		return errors.New("request id must be a string or integer")
+	}
+	id.value = integer
 	return nil
 }
 
@@ -141,16 +158,31 @@ func (e *requestFailure) Error() string {
 
 type Server struct {
 	mu        sync.Mutex
-	sessionID string
 	processes map[string]*processState
 	handles   map[string]*os.File
+
+	registryMu         sync.Mutex
+	sessions           map[string]*serverSessionEntry
+	detachedSessionTTL time.Duration
+}
+
+type serverSessionEntry struct {
+	id                   string
+	server               *Server
+	connectionID         string
+	detachedConnectionID string
+	detachedExpiresAt    time.Time
 }
 
 type processState struct {
 	id              string
 	cmd             *exec.Cmd
 	stdin           io.WriteCloser
+	starting        bool
+	terminateFn     func() error
+	signalFn        func() error
 	pipeStdin       bool
+	tty             bool
 	mu              sync.Mutex
 	cond            *sync.Cond
 	chunks          []outputChunk
@@ -164,12 +196,45 @@ type processState struct {
 	closedSequenced bool
 	openStreams     int
 	seenWriteIDs    map[string]bool
+	seenWriteOrder  []string
+	notify          processNotifier
+	onClosed        func()
+	retentionOnce   sync.Once
+}
+
+type processNotifier func(method string, params any)
+
+type startedExecServerSandboxProcess struct {
+	stdin     io.WriteCloser
+	readers   []io.ReadCloser
+	wait      func() (int, error)
+	terminate func() error
+	close     func() error
 }
 
 type outputChunk struct {
 	Seq    uint64 `json:"seq"`
 	Stream string `json:"stream"`
 	Chunk  string `json:"chunk"`
+}
+
+type ProcessOutputNotification struct {
+	ProcessID string `json:"processId"`
+	Seq       uint64 `json:"seq"`
+	Stream    string `json:"stream"`
+	Chunk     string `json:"chunk"`
+}
+
+type ProcessExitedNotification struct {
+	ProcessID     string `json:"processId"`
+	Seq           uint64 `json:"seq"`
+	ExitCode      int    `json:"exitCode"`
+	SandboxDenied *bool  `json:"sandboxDenied,omitempty"`
+}
+
+type ProcessClosedNotification struct {
+	ProcessID string `json:"processId"`
+	Seq       uint64 `json:"seq"`
 }
 
 type InitializeParams struct {
@@ -192,17 +257,31 @@ type ShellInfo struct {
 }
 
 type ExecParams struct {
-	ProcessID             string            `json:"processId"`
-	Argv                  []string          `json:"argv"`
-	CWD                   string            `json:"cwd"`
-	EnvPolicy             *ExecEnvPolicy    `json:"envPolicy,omitempty"`
-	Env                   map[string]string `json:"env"`
-	TTY                   bool              `json:"tty"`
-	PipeStdin             bool              `json:"pipeStdin"`
-	Arg0                  *string           `json:"arg0"`
-	Sandbox               json.RawMessage   `json:"sandbox,omitempty"`
-	EnforceManagedNetwork bool              `json:"enforceManagedNetwork,omitempty"`
-	ManagedNetwork        json.RawMessage   `json:"managedNetwork,omitempty"`
+	ProcessID             string                        `json:"processId"`
+	Argv                  []string                      `json:"argv"`
+	CWD                   string                        `json:"cwd"`
+	EnvPolicy             *ExecEnvPolicy                `json:"envPolicy,omitempty"`
+	Env                   map[string]string             `json:"env"`
+	TTY                   bool                          `json:"tty"`
+	PipeStdin             bool                          `json:"pipeStdin"`
+	Arg0                  *string                       `json:"arg0"`
+	Sandbox               json.RawMessage               `json:"sandbox,omitempty"`
+	EnforceManagedNetwork bool                          `json:"enforceManagedNetwork,omitempty"`
+	ManagedNetwork        *ManagedNetworkSandboxContext `json:"managedNetwork,omitempty"`
+}
+
+type ManagedNetworkSandboxContext struct {
+	LoopbackPorts     []uint16 `json:"loopbackPorts"`
+	AllowLocalBinding bool     `json:"allowLocalBinding"`
+}
+
+type FileSystemSandboxContext struct {
+	Permissions                  json.RawMessage `json:"permissions"`
+	CWD                          string          `json:"cwd,omitempty"`
+	WorkspaceRoots               []string        `json:"workspaceRoots,omitempty"`
+	WindowsSandboxLevel          string          `json:"windowsSandboxLevel"`
+	WindowsSandboxPrivateDesktop bool            `json:"windowsSandboxPrivateDesktop,omitempty"`
+	UseLegacyLandlock            bool            `json:"useLegacyLandlock,omitempty"`
 }
 
 type ExecEnvPolicy struct {
@@ -260,7 +339,8 @@ type SignalParams struct {
 type SignalResponse struct{}
 
 type FSReadFileParams struct {
-	Path string `json:"path"`
+	Path    string                    `json:"path"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSReadFileResponse struct {
@@ -268,8 +348,9 @@ type FSReadFileResponse struct {
 }
 
 type FSOpenParams struct {
-	HandleID string `json:"handleId"`
-	Path     string `json:"path"`
+	HandleID string                    `json:"handleId"`
+	Path     string                    `json:"path"`
+	Sandbox  *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSOpenResponse struct {
@@ -278,7 +359,7 @@ type FSOpenResponse struct {
 
 type FSReadBlockParams struct {
 	HandleID string `json:"handleId"`
-	Offset   int64  `json:"offset"`
+	Offset   uint64 `json:"offset"`
 	Len      int    `json:"len"`
 }
 
@@ -294,21 +375,24 @@ type FSCloseParams struct {
 type FSCloseResponse struct{}
 
 type FSWriteFileParams struct {
-	Path       string `json:"path"`
-	DataBase64 string `json:"dataBase64"`
+	Path       string                    `json:"path"`
+	DataBase64 string                    `json:"dataBase64"`
+	Sandbox    *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSWriteFileResponse struct{}
 
 type FSCreateDirectoryParams struct {
-	Path      string `json:"path"`
-	Recursive *bool  `json:"recursive,omitempty"`
+	Path      string                    `json:"path"`
+	Recursive *bool                     `json:"recursive,omitempty"`
+	Sandbox   *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSCreateDirectoryResponse struct{}
 
 type FSGetMetadataParams struct {
-	Path string `json:"path"`
+	Path    string                    `json:"path"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSGetMetadataResponse struct {
@@ -321,7 +405,8 @@ type FSGetMetadataResponse struct {
 }
 
 type FSCanonicalizeParams struct {
-	Path string `json:"path"`
+	Path    string                    `json:"path"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSCanonicalizeResponse struct {
@@ -329,7 +414,8 @@ type FSCanonicalizeResponse struct {
 }
 
 type FSReadDirectoryParams struct {
-	Path string `json:"path"`
+	Path    string                    `json:"path"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSReadDirectoryEntry struct {
@@ -343,8 +429,9 @@ type FSReadDirectoryResponse struct {
 }
 
 type FSWalkParams struct {
-	Path    string        `json:"path"`
-	Options FSWalkOptions `json:"options"`
+	Path    string                    `json:"path"`
+	Options FSWalkOptions             `json:"options"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSWalkOptions struct {
@@ -371,17 +458,19 @@ type FSWalkResponse struct {
 }
 
 type FSRemoveParams struct {
-	Path      string `json:"path"`
-	Recursive *bool  `json:"recursive,omitempty"`
-	Force     *bool  `json:"force,omitempty"`
+	Path      string                    `json:"path"`
+	Recursive *bool                     `json:"recursive,omitempty"`
+	Force     *bool                     `json:"force,omitempty"`
+	Sandbox   *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSRemoveResponse struct{}
 
 type FSCopyParams struct {
-	SourcePath      string `json:"sourcePath"`
-	DestinationPath string `json:"destinationPath"`
-	Recursive       bool   `json:"recursive,omitempty"`
+	SourcePath      string                    `json:"sourcePath"`
+	DestinationPath string                    `json:"destinationPath"`
+	Recursive       bool                      `json:"recursive"`
+	Sandbox         *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type FSCopyResponse struct{}
@@ -408,49 +497,462 @@ type HTTPRequestResponse struct {
 	BodyBase64 string       `json:"bodyBase64"`
 }
 
+type HTTPRequestBodyDeltaNotification struct {
+	RequestID   string  `json:"requestId"`
+	Seq         uint64  `json:"seq"`
+	DeltaBase64 string  `json:"deltaBase64"`
+	Done        bool    `json:"done"`
+	Error       *string `json:"error"`
+}
+
+type afterResponseActions struct {
+	mu      sync.Mutex
+	actions []func()
+}
+
+type afterResponseContextKey struct{}
+
+type httpBodyStreamRegistry struct {
+	mu     sync.Mutex
+	active map[string]bool
+}
+
+type httpBodyStreamRegistryContextKey struct{}
+
+type connectionProtocolState struct {
+	mu                  sync.Mutex
+	initializeRequested bool
+	initialized         bool
+	connectionID        string
+	session             *serverSessionEntry
+	detached            chan struct{}
+	detachOnce          sync.Once
+}
+
+type connectionProtocolStateContextKey struct{}
+
+func withConnectionProtocolState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, connectionProtocolStateContextKey{}, &connectionProtocolState{
+		connectionID: uuid.NewString(),
+		detached:     make(chan struct{}),
+	})
+}
+
+func protocolStateFromContext(ctx context.Context) *connectionProtocolState {
+	if ctx == nil {
+		return nil
+	}
+	state, _ := ctx.Value(connectionProtocolStateContextKey{}).(*connectionProtocolState)
+	return state
+}
+
+func requireInitializedFor(ctx context.Context, family string) error {
+	state := protocolStateFromContext(ctx)
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.initializeRequested {
+		return requestError(-32600, fmt.Sprintf("client must call initialize before using %s methods", family))
+	}
+	if !state.initialized {
+		return requestError(-32600, fmt.Sprintf("client must send initialized before using %s methods", family))
+	}
+	return nil
+}
+
+func withHTTPBodyStreamRegistry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, httpBodyStreamRegistryContextKey{}, &httpBodyStreamRegistry{active: map[string]bool{}})
+}
+
+func reserveHTTPBodyStream(ctx context.Context, requestID string) (func(), error) {
+	registry, _ := ctx.Value(httpBodyStreamRegistryContextKey{}).(*httpBodyStreamRegistry)
+	if registry == nil {
+		return nil, requestError(-32603, "http/request streaming requires a notification transport")
+	}
+	registry.mu.Lock()
+	if registry.active[requestID] {
+		registry.mu.Unlock()
+		return nil, requestError(-32600, fmt.Sprintf("http response stream already registered for request %s", requestID))
+	}
+	registry.active[requestID] = true
+	registry.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			registry.mu.Lock()
+			delete(registry.active, requestID)
+			registry.mu.Unlock()
+		})
+	}, nil
+}
+
+func withAfterResponseActions(ctx context.Context) (context.Context, *afterResponseActions) {
+	actions := &afterResponseActions{}
+	return context.WithValue(ctx, afterResponseContextKey{}, actions), actions
+}
+
+func registerAfterResponseAction(ctx context.Context, action func()) bool {
+	if ctx == nil || action == nil {
+		return false
+	}
+	actions, _ := ctx.Value(afterResponseContextKey{}).(*afterResponseActions)
+	if actions == nil {
+		return false
+	}
+	actions.mu.Lock()
+	actions.actions = append(actions.actions, action)
+	actions.mu.Unlock()
+	return true
+}
+
+func (a *afterResponseActions) run() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	actions := append([]func(){}, a.actions...)
+	a.actions = nil
+	a.mu.Unlock()
+	for _, action := range actions {
+		action()
+	}
+}
+
 func NewServer() *Server {
 	return &Server{
-		sessionID: "exec-session-" + time.Now().UTC().Format("20060102T150405.000000000"),
+		processes:          map[string]*processState{},
+		handles:            map[string]*os.File{},
+		sessions:           map[string]*serverSessionEntry{},
+		detachedSessionTTL: 30 * time.Second,
+	}
+}
+
+func newSessionServer() *Server {
+	return &Server{
 		processes: map[string]*processState{},
 		handles:   map[string]*os.File{},
 	}
 }
 
+func (s *Server) serverForConnection(ctx context.Context) *Server {
+	state := protocolStateFromContext(ctx)
+	if state == nil {
+		return s
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.session == nil || state.session.server == nil {
+		return s
+	}
+	return state.session.server
+}
+
+func (s *Server) attachSession(ctx context.Context, resumeSessionID *string) (*serverSessionEntry, error) {
+	state := protocolStateFromContext(ctx)
+	if state == nil {
+		return nil, nil
+	}
+	state.mu.Lock()
+	connectionID := state.connectionID
+	state.mu.Unlock()
+	if connectionID == "" {
+		connectionID = uuid.NewString()
+	}
+
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	now := time.Now()
+	if resumeSessionID != nil && *resumeSessionID != "" {
+		sessionID := *resumeSessionID
+		entry := s.sessions[sessionID]
+		if entry == nil || (!entry.detachedExpiresAt.IsZero() && !now.Before(entry.detachedExpiresAt)) {
+			if entry != nil {
+				delete(s.sessions, sessionID)
+				go entry.server.shutdown()
+			}
+			return nil, requestError(-32600, fmt.Sprintf("unknown session id %s", sessionID))
+		}
+		if entry.connectionID != "" {
+			return nil, requestError(-32010, fmt.Sprintf("session %s is already attached to another connection", sessionID))
+		}
+		entry.connectionID = connectionID
+		entry.detachedConnectionID = ""
+		entry.detachedExpiresAt = time.Time{}
+		entry.server.setProcessNotifier(processNotifierFromContext(ctx))
+		state.mu.Lock()
+		state.session = entry
+		state.mu.Unlock()
+		return entry, nil
+	}
+
+	sessionID := uuid.NewString()
+	entry := &serverSessionEntry{
+		id:           sessionID,
+		server:       newSessionServer(),
+		connectionID: connectionID,
+	}
+	s.sessions[sessionID] = entry
+	state.mu.Lock()
+	state.session = entry
+	state.mu.Unlock()
+	return entry, nil
+}
+
+func (s *Server) detachConnection(ctx context.Context) {
+	state := protocolStateFromContext(ctx)
+	if state == nil {
+		return
+	}
+	state.detachOnce.Do(func() {
+		close(state.detached)
+	})
+	state.mu.Lock()
+	entry := state.session
+	connectionID := state.connectionID
+	state.session = nil
+	state.mu.Unlock()
+	if entry == nil {
+		return
+	}
+
+	s.registryMu.Lock()
+	if s.sessions[entry.id] != entry || entry.connectionID != connectionID {
+		s.registryMu.Unlock()
+		return
+	}
+	entry.connectionID = ""
+	entry.detachedConnectionID = connectionID
+	entry.detachedExpiresAt = time.Now().Add(s.detachedSessionTTL)
+	entry.server.setProcessNotifier(nil)
+	ttl := s.detachedSessionTTL
+	s.registryMu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(ttl)
+		defer timer.Stop()
+		<-timer.C
+		s.expireDetachedSession(entry.id, connectionID)
+	}()
+}
+
+func (s *Server) expireDetachedSession(sessionID string, connectionID string) {
+	s.registryMu.Lock()
+	entry := s.sessions[sessionID]
+	if entry == nil || entry.connectionID != "" || entry.detachedConnectionID != connectionID || time.Now().Before(entry.detachedExpiresAt) {
+		s.registryMu.Unlock()
+		return
+	}
+	delete(s.sessions, sessionID)
+	s.registryMu.Unlock()
+	entry.server.shutdown()
+}
+
+func (s *Server) setProcessNotifier(notify processNotifier) {
+	s.mu.Lock()
+	processes := make([]*processState, 0, len(s.processes))
+	for _, process := range s.processes {
+		processes = append(processes, process)
+	}
+	s.mu.Unlock()
+	for _, process := range processes {
+		process.mu.Lock()
+		process.notify = notify
+		process.mu.Unlock()
+	}
+}
+
+func (s *Server) shutdown() {
+	s.mu.Lock()
+	processes := make([]*processState, 0, len(s.processes))
+	for _, process := range s.processes {
+		processes = append(processes, process)
+	}
+	handles := make([]*os.File, 0, len(s.handles))
+	for _, handle := range s.handles {
+		handles = append(handles, handle)
+	}
+	s.processes = map[string]*processState{}
+	s.handles = map[string]*os.File{}
+	s.mu.Unlock()
+	for _, process := range processes {
+		process.mu.Lock()
+		terminate := process.terminateFn
+		if terminate == nil && process.cmd != nil && process.cmd.Process != nil {
+			terminate = process.cmd.Process.Kill
+		}
+		process.notify = nil
+		process.mu.Unlock()
+		if terminate != nil {
+			_ = terminate()
+		}
+	}
+	for _, handle := range handles {
+		_ = handle.Close()
+	}
+}
+
+func (s *Server) shutdownSessions() {
+	s.registryMu.Lock()
+	sessions := s.sessions
+	s.sessions = map[string]*serverSessionEntry{}
+	s.registryMu.Unlock()
+	for _, entry := range sessions {
+		entry.server.shutdown()
+	}
+}
+
 func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	return s.serveStream(ctx, stdin, stdout, true, false)
+}
+
+func (s *Server) serveConnectionStream(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	return s.serveStream(ctx, stdin, stdout, false, true)
+}
+
+func (s *Server) serveStream(ctx context.Context, stdin io.Reader, stdout io.Writer, shutdownSessions bool, concurrentRequests bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if shutdownSessions {
+		defer s.shutdownSessions()
+	}
 	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024+4)
 	encoder := json.NewEncoder(stdout)
+	var requests sync.WaitGroup
+	var writeMu sync.Mutex
+	var notifyErr error
+	notifyActive := true
+	defer func() {
+		writeMu.Lock()
+		notifyActive = false
+		writeMu.Unlock()
+	}()
+	notifyCtx := withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(ctx, processNotifierContextKey{}, processNotifier(func(method string, params any) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if notifyActive && notifyErr == nil {
+			notifyErr = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+		}
+	}))))
+	detached := false
+	detach := func() {
+		if !detached {
+			detached = true
+			s.detachConnection(notifyCtx)
+		}
+	}
+	defer detach()
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
 		}
-		out, ok := s.handleLine(ctx, line)
-		if !ok {
+		requestData := append([]byte(nil), line...)
+		if clientMessageClosesConnection(notifyCtx, requestData) {
+			break
+		}
+		hasID, idErr := lineHasTopLevelID(requestData)
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(requestData, &envelope)
+		if idErr != nil || !hasID || envelope.Method == MethodInitialize || !concurrentRequests {
+			out, ok := s.handleLineWithLabel(notifyCtx, requestData, "exec-server stdio")
+			if !ok {
+				continue
+			}
+			writeMu.Lock()
+			err := encoder.Encode(out)
+			writeMu.Unlock()
+			if err != nil {
+				detach()
+				requests.Wait()
+				return err
+			}
 			continue
 		}
-		if err := encoder.Encode(out); err != nil {
-			return err
-		}
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			requestCtx, afterResponse := withAfterResponseActions(notifyCtx)
+			out, ok := s.handleLineWithLabel(requestCtx, requestData, "exec-server stdio")
+			if !ok {
+				return
+			}
+			writeMu.Lock()
+			err := encoder.Encode(out)
+			writeMu.Unlock()
+			afterResponse.run()
+			if err != nil {
+				writeMu.Lock()
+				if notifyErr == nil {
+					notifyErr = err
+				}
+				writeMu.Unlock()
+			}
+		}()
 	}
-	return scanner.Err()
+	detach()
+	requests.Wait()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return notifyErr
+}
+
+func clientMessageClosesConnection(ctx context.Context, line []byte) bool {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return false
+	}
+	methodJSON, hasMethod := envelope["method"]
+	_, hasID := envelope["id"]
+	if hasMethod {
+		var method string
+		if err := json.Unmarshal(methodJSON, &method); err != nil || hasID {
+			return false
+		}
+		if method != MethodInitialized {
+			return true
+		}
+		state := protocolStateFromContext(ctx)
+		if state == nil {
+			return true
+		}
+		state.mu.Lock()
+		initializedAllowed := state.initializeRequested && state.session != nil
+		state.mu.Unlock()
+		return !initializedAllowed
+	}
+	if !hasID {
+		return false
+	}
+	_, hasResult := envelope["result"]
+	_, hasError := envelope["error"]
+	return hasResult || hasError
 }
 
 func (s *Server) handleLine(ctx context.Context, line []byte) (any, bool) {
+	return s.handleLineWithLabel(ctx, line, "exec-server stdio")
+}
+
+func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectionLabel string) (any, bool) {
 	hasID, err := lineHasTopLevelID(line)
 	if err != nil {
-		return errorResponse(RequestID{}, -32600, "invalid request: "+err.Error()), true
+		return malformedRPCResponse(connectionLabel, err), true
 	}
 	if hasID {
 		var req request
 		if err := json.Unmarshal(line, &req); err != nil {
-			return errorResponse(RequestID{}, -32600, "invalid request: "+err.Error()), true
+			return malformedRPCResponse(connectionLabel, err), true
 		}
-		if req.ID.IsZero() {
-			return errorResponse(req.ID, -32600, "id is required"), true
+		if req.Method == "" {
+			return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC request is missing method")), true
 		}
 		result, err := s.handleRequest(ctx, &req)
 		if err != nil {
@@ -460,10 +962,30 @@ func (s *Server) handleLine(ctx context.Context, line []byte) (any, bool) {
 	}
 	var note notification
 	if err := json.Unmarshal(line, &note); err != nil {
-		return errorResponse(RequestID{}, -32600, "invalid notification: "+err.Error()), true
+		return malformedRPCResponse(connectionLabel, err), true
 	}
-	_ = note
+	if note.Method == "" {
+		return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC notification is missing method")), true
+	}
+	if note.Method == MethodInitialized {
+		state := protocolStateFromContext(ctx)
+		if state != nil {
+			state.mu.Lock()
+			if state.initializeRequested {
+				state.initialized = true
+			}
+			state.mu.Unlock()
+		}
+	}
 	return nil, false
+}
+
+func malformedRPCResponse(connectionLabel string, err error) response {
+	messageKind := "JSON-RPC"
+	if connectionLabel == "exec-server websocket" {
+		messageKind = "websocket JSON-RPC"
+	}
+	return errorResponse(RequestID{value: -1}, -32600, fmt.Sprintf("failed to parse %s message from %s: %v", messageKind, connectionLabel, err))
 }
 
 func lineHasTopLevelID(line []byte) (bool, error) {
@@ -476,18 +998,39 @@ func lineHasTopLevelID(line []byte) (bool, error) {
 }
 
 func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
+	if family := execServerMethodFamily(req.Method); family != "" {
+		if err := requireInitializedFor(ctx, family); err != nil {
+			return nil, err
+		}
+	}
 	switch req.Method {
 	case MethodInitialize:
 		var params InitializeParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		if params.ResumeSessionID != nil && *params.ResumeSessionID != "" {
-			s.mu.Lock()
-			s.sessionID = *params.ResumeSessionID
-			s.mu.Unlock()
+		if state := protocolStateFromContext(ctx); state != nil {
+			state.mu.Lock()
+			if state.initializeRequested {
+				state.mu.Unlock()
+				return nil, requestError(-32600, "initialize may only be sent once per connection")
+			}
+			state.initializeRequested = true
+			state.mu.Unlock()
 		}
-		return InitializeResponse{SessionID: s.sessionID}, nil
+		entry, err := s.attachSession(ctx, params.ResumeSessionID)
+		if err != nil {
+			if state := protocolStateFromContext(ctx); state != nil {
+				state.mu.Lock()
+				state.initializeRequested = false
+				state.mu.Unlock()
+			}
+			return nil, err
+		}
+		if entry == nil {
+			return InitializeResponse{SessionID: uuid.NewString()}, nil
+		}
+		return InitializeResponse{SessionID: entry.id}, nil
 	case MethodEnvironmentInfo:
 		return localEnvironmentInfo(), nil
 	case MethodProcessStart:
@@ -495,103 +1038,151 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.startProcess(ctx, &params)
+		if err := validateWirePathURI(params.CWD); err != nil {
+			return nil, requestError(-32602, "invalid params: cwd must be an absolute file URI: "+err.Error())
+		}
+		return s.serverForConnection(ctx).startProcess(ctx, &params)
 	case MethodProcessRead:
 		var params ReadParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.readProcess(&params)
+		return s.serverForConnection(ctx).readProcessForConnection(ctx, &params)
 	case MethodProcessWrite:
 		var params WriteParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.writeProcess(&params)
+		return s.serverForConnection(ctx).writeProcess(&params)
 	case MethodProcessSignal:
 		var params SignalParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.signalProcess(&params)
+		return s.serverForConnection(ctx).signalProcess(&params)
 	case MethodProcessTerminate:
 		var params TerminateParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.terminateProcess(&params)
+		return s.serverForConnection(ctx).terminateProcess(&params)
 	case MethodFSReadFile:
 		var params FSReadFileParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return readFile(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := readFile(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSOpen:
 		var params FSOpenParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.openFile(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := s.serverForConnection(ctx).openFile(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSReadBlock:
 		var params FSReadBlockParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.readBlock(&params)
+		result, err := s.serverForConnection(ctx).readBlock(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSClose:
 		var params FSCloseParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return s.closeFile(&params)
+		result, err := s.serverForConnection(ctx).closeFile(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSWriteFile:
 		var params FSWriteFileParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return writeFile(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := writeFile(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSCreateDirectory:
 		var params FSCreateDirectoryParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return createDirectory(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := createDirectory(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSGetMetadata:
 		var params FSGetMetadataParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return getMetadata(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := getMetadata(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSCanonicalize:
 		var params FSCanonicalizeParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return canonicalize(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := canonicalize(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSReadDirectory:
 		var params FSReadDirectoryParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return readDirectory(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := readDirectory(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSWalk:
 		var params FSWalkParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return walkPath(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := walkPath(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSRemove:
 		var params FSRemoveParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return removePath(&params)
+		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
+			return nil, err
+		}
+		result, err := removePath(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSCopy:
 		var params FSCopyParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return copyPath(&params)
+		if err := validateFSWirePath("sourcePath", params.SourcePath, params.Sandbox); err != nil {
+			return nil, err
+		}
+		if err := validateWirePathURI(params.DestinationPath); err != nil {
+			return nil, requestError(-32602, "invalid params: destinationPath must be an absolute file URI: "+err.Error())
+		}
+		result, err := copyPath(&params)
+		return result, mapFSRequestError(err)
 	case MethodHTTPRequest:
 		var params HTTPRequestParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -599,7 +1190,23 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		}
 		return doHTTPRequest(ctx, &params)
 	default:
-		return nil, requestError(-32601, fmt.Sprintf("unknown exec-server method %s", req.Method))
+		return nil, requestError(-32601, fmt.Sprintf("exec-server stub does not implement `%s` yet", req.Method))
+	}
+}
+
+func execServerMethodFamily(method string) string {
+	switch method {
+	case MethodEnvironmentInfo:
+		return "environment info"
+	case MethodProcessStart, MethodProcessRead, MethodProcessWrite, MethodProcessTerminate, MethodProcessSignal:
+		return "exec"
+	case MethodHTTPRequest:
+		return "http"
+	case MethodFSReadFile, MethodFSOpen, MethodFSReadBlock, MethodFSClose, MethodFSWriteFile, MethodFSCreateDirectory,
+		MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
+		return "filesystem"
+	default:
+		return ""
 	}
 }
 
@@ -607,35 +1214,155 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	if params == nil {
 		return nil, errors.New("process/start params are required")
 	}
-	if strings.TrimSpace(params.ProcessID) == "" {
-		return nil, errors.New("processId is required")
+	if len(params.Argv) == 0 {
+		return nil, requestError(-32602, "argv must not be empty")
 	}
-	if len(params.Argv) == 0 || strings.TrimSpace(params.Argv[0]) == "" {
-		return nil, errors.New("argv is required")
+	if params.EnvPolicy != nil {
+		switch params.EnvPolicy.Inherit {
+		case "all", "core", "none":
+		default:
+			return nil, requestError(-32602, fmt.Sprintf("invalid envPolicy.inherit %q", params.EnvPolicy.Inherit))
+		}
 	}
 	if hasJSONValue(params.Sandbox) {
-		return nil, requestError(-32600, "process/start sandbox is not supported by this exec-server backend")
-	}
-	if params.EnforceManagedNetwork || hasJSONValue(params.ManagedNetwork) {
-		return nil, requestError(-32600, "process/start managed network is not supported by this exec-server backend")
-	}
-	cwd := strings.TrimSpace(params.CWD)
-	if strings.HasPrefix(cwd, "file://") {
-		uri, err := utils.Parse(cwd)
+		state, err := s.reserveProcessState(ctx, params)
 		if err != nil {
 			return nil, err
 		}
-		cwd = uri.NativePathString()
+		started, supported, startErr := startExecServerSandboxProcess(params)
+		if startErr != nil {
+			s.releaseStartingProcess(params.ProcessID, state)
+			return nil, startErr
+		}
+		if supported {
+			if ctx.Err() != nil {
+				s.releaseStartingProcess(params.ProcessID, state)
+			}
+			if !s.activateProcessState(params.ProcessID, state, nil, started.stdin, params.PipeStdin || params.TTY, params.TTY, len(started.readers)) {
+				if started.terminate != nil {
+					_ = started.terminate()
+				}
+				if started.close != nil {
+					_ = started.close()
+				}
+				return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
+			}
+			state.mu.Lock()
+			state.terminateFn = started.terminate
+			if params.TTY && started.stdin != nil {
+				state.signalFn = func() error {
+					_, err := started.stdin.Write([]byte{3})
+					return err
+				}
+			}
+			state.mu.Unlock()
+			var readers sync.WaitGroup
+			for index, reader := range started.readers {
+				if reader == nil {
+					state.finishStream()
+					continue
+				}
+				stream := "pty"
+				if !params.TTY {
+					stream = "stdout"
+					if index > 0 {
+						stream = "stderr"
+					}
+				}
+				readers.Add(1)
+				go func(stream string, reader io.ReadCloser) {
+					defer readers.Done()
+					defer reader.Close()
+					state.capture(stream, reader)
+				}(stream, reader)
+			}
+			go func() {
+				code, waitErr := started.wait()
+				readers.Wait()
+				if started.close != nil {
+					if closeErr := started.close(); waitErr == nil && closeErr != nil {
+						waitErr = closeErr
+					}
+				}
+				state.finishWithCode(waitErr, &code)
+			}()
+			return &ExecResponse{ProcessID: params.ProcessID}, nil
+		}
+		s.releaseStartingProcess(params.ProcessID, state)
 	}
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	command, cwd, err := prepareExecProcess(params)
+	if err != nil {
+		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, params.Argv[0], params.Argv[1:]...)
+	cmd := exec.Command(command[0], command[1:]...)
 	if params.Arg0 != nil {
 		cmd.Args[0] = *params.Arg0
 	}
 	cmd.Dir = cwd
 	cmd.Env = envPairs(childEnv(params))
+	if params.TTY {
+		state, err := s.reserveProcessState(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		startedTTY, supported, startErr := startExecServerTTY(cmd)
+		if startErr != nil {
+			s.releaseStartingProcess(params.ProcessID, state)
+			return nil, startErr
+		}
+		if supported {
+			if ctx.Err() != nil {
+				s.releaseStartingProcess(params.ProcessID, state)
+			}
+			if !s.activateProcessState(params.ProcessID, state, cmd, startedTTY.stdin, params.PipeStdin || params.TTY, params.TTY, 1) {
+				if startedTTY.kill != nil {
+					_ = startedTTY.kill()
+				}
+				if startedTTY.wait != nil {
+					_, _ = startedTTY.wait()
+				}
+				if startedTTY.closePTY != nil {
+					_ = startedTTY.closePTY()
+				}
+				_ = startedTTY.reader.Close()
+				if startedTTY.cleanup != nil {
+					_ = startedTTY.cleanup()
+				}
+				return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
+			}
+			state.mu.Lock()
+			state.terminateFn = startedTTY.kill
+			state.signalFn = func() error {
+				_, err := startedTTY.stdin.Write([]byte{3})
+				return err
+			}
+			state.mu.Unlock()
+			captureDone := make(chan struct{})
+			go func() {
+				defer close(captureDone)
+				state.capture("pty", startedTTY.reader)
+				_ = startedTTY.reader.Close()
+			}()
+			go func() {
+				code, waitErr := startedTTY.wait()
+				if startedTTY.closePTY != nil {
+					_ = startedTTY.closePTY()
+				}
+				select {
+				case <-captureDone:
+				case <-time.After(2 * time.Second):
+					_ = startedTTY.reader.Close()
+					<-captureDone
+				}
+				if startedTTY.cleanup != nil {
+					_ = startedTTY.cleanup()
+				}
+				state.finishWithCode(waitErr, &code)
+			}()
+			return &ExecResponse{ProcessID: params.ProcessID}, nil
+		}
+		s.releaseStartingProcess(params.ProcessID, state)
+	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -645,60 +1372,304 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		return nil, err
 	}
 	var stdin io.WriteCloser
-	if params.PipeStdin {
+	if params.PipeStdin || params.TTY {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
 			return nil, err
 		}
 	}
-	state := &processState{
-		id:           params.ProcessID,
-		cmd:          cmd,
-		stdin:        stdin,
-		pipeStdin:    params.PipeStdin,
-		nextSeq:      1,
-		openStreams:  2,
-		seenWriteIDs: map[string]bool{},
-	}
-	state.cond = sync.NewCond(&state.mu)
-	s.mu.Lock()
-	if existing := s.processes[params.ProcessID]; existing != nil {
-		existing.mu.Lock()
-		closed := existing.closed
-		existing.mu.Unlock()
-		if !closed {
-			s.mu.Unlock()
-			return nil, fmt.Errorf("process %s already exists", params.ProcessID)
+	state, err := s.reserveProcessState(ctx, params)
+	if err != nil {
+		if stdin != nil {
+			_ = stdin.Close()
 		}
+		return nil, err
 	}
-	s.processes[params.ProcessID] = state
-	s.mu.Unlock()
+	if ctx.Err() != nil {
+		s.releaseStartingProcess(params.ProcessID, state)
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		_ = stdoutPipe.Close()
+		_ = stderrPipe.Close()
+		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
+	}
 	if err := cmd.Start(); err != nil {
-		state.failStart(err)
-	} else {
-		go state.capture("stdout", stdoutPipe)
-		go state.capture("stderr", stderrPipe)
-		go func() {
-			err := cmd.Wait()
-			state.finish(err)
-		}()
+		s.releaseStartingProcess(params.ProcessID, state)
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		return nil, err
 	}
+	if ctx.Err() != nil {
+		s.releaseStartingProcess(params.ProcessID, state)
+	}
+	if !s.activateProcessState(params.ProcessID, state, cmd, stdin, params.PipeStdin || params.TTY, params.TTY, 2) {
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		_ = stdoutPipe.Close()
+		_ = stderrPipe.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
+	}
+	stdoutStream := "stdout"
+	stderrStream := "stderr"
+	if params.TTY {
+		stdoutStream = "pty"
+		stderrStream = "pty"
+	}
+	go state.capture(stdoutStream, stdoutPipe)
+	go state.capture(stderrStream, stderrPipe)
+	go func() {
+		err := cmd.Wait()
+		state.finish(err)
+	}()
 	return &ExecResponse{ProcessID: params.ProcessID}, nil
 }
 
+func (s *Server) reserveProcessState(ctx context.Context, params *ExecParams) (*processState, error) {
+	state := &processState{
+		id:           params.ProcessID,
+		starting:     true,
+		nextSeq:      1,
+		seenWriteIDs: map[string]bool{},
+		notify:       processNotifierFromContext(ctx),
+	}
+	state.onClosed = func() {
+		timer := time.NewTimer(execServerExitedProcessRetention)
+		defer timer.Stop()
+		<-timer.C
+		s.mu.Lock()
+		if s.processes[params.ProcessID] == state {
+			delete(s.processes, params.ProcessID)
+		}
+		s.mu.Unlock()
+	}
+	state.cond = sync.NewCond(&state.mu)
+	s.mu.Lock()
+	if s.processes[params.ProcessID] != nil {
+		s.mu.Unlock()
+		return nil, requestError(-32600, fmt.Sprintf("process %s already exists", params.ProcessID))
+	}
+	s.processes[params.ProcessID] = state
+	s.mu.Unlock()
+	return state, nil
+}
+
+func (s *Server) activateProcessState(processID string, state *processState, cmd *exec.Cmd, stdin io.WriteCloser, pipeStdin bool, tty bool, openStreams int) bool {
+	s.mu.Lock()
+	if s.processes[processID] != state {
+		s.mu.Unlock()
+		return false
+	}
+	state.mu.Lock()
+	state.cmd = cmd
+	state.stdin = stdin
+	state.pipeStdin = pipeStdin
+	state.tty = tty
+	state.openStreams = openStreams
+	state.starting = false
+	state.cond.Broadcast()
+	state.mu.Unlock()
+	s.mu.Unlock()
+	return true
+}
+
+func (s *Server) releaseStartingProcess(processID string, state *processState) {
+	s.mu.Lock()
+	if s.processes[processID] == state {
+		delete(s.processes, processID)
+	}
+	s.mu.Unlock()
+}
+
+func prepareExecProcess(params *ExecParams) ([]string, string, error) {
+	command := append([]string(nil), params.Argv...)
+	cwd, err := nativeExecServerPath(params.CWD, "cwd")
+	if err != nil {
+		return nil, "", err
+	}
+	if cwd == "" {
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if !hasJSONValue(params.Sandbox) {
+		return command, cwd, nil
+	}
+	if params.EnforceManagedNetwork && params.ManagedNetwork == nil {
+		return nil, "", requestError(-32602, "managed network enforcement requires managedNetwork context")
+	}
+	if runtime.GOOS == "windows" {
+		return nil, "", requestError(-32602, "sandboxed remote process launch is not supported on Windows")
+	}
+	var sandboxContext FileSystemSandboxContext
+	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
+		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
+	}
+	if !hasJSONValue(sandboxContext.Permissions) {
+		return nil, "", requestError(-32602, "invalid sandbox context: permissions are required")
+	}
+	sandboxCWD := cwd
+	if strings.TrimSpace(sandboxContext.CWD) != "" {
+		sandboxCWD, err = nativeExecServerPath(sandboxContext.CWD, "sandbox cwd")
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	profileJSON, err := nativePermissionProfileJSON(sandboxContext.Permissions)
+	if err != nil {
+		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox permission path URI: %v", err))
+	}
+	profile, err := sandbox.ParseRuntimePermissionProfileJSON(profileJSON)
+	if err != nil {
+		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
+	}
+	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
+		ResolvedPermissionProfile:     profile,
+		ResolvedPermissionProfileID:   "exec-server",
+		ResolvedPermissionProfileJSON: profileJSON,
+		CWD:                           cwd,
+		UseLegacyLandlock:             sandboxContext.UseLegacyLandlock,
+		AllowNetworkForProxy:          params.EnforceManagedNetwork,
+		Command:                       command,
+	})
+	if err != nil {
+		return nil, "", requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", err))
+	}
+	if err := plan.UnsupportedError(); err != nil {
+		return nil, "", requestError(-32602, "sandbox intent cannot be enforced on this executor")
+	}
+	if profile.Disabled {
+		return nil, "", requestError(-32602, "sandbox intent cannot be enforced on this executor")
+	}
+	plan.CWD = cwd
+	_ = sandboxCWD
+	if runtime.GOOS == "linux" && sandboxCWD != cwd {
+		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSON(
+			command,
+			cwd,
+			profileJSON,
+			sandboxCWD,
+			sandboxContext.UseLegacyLandlock,
+			params.EnforceManagedNetwork,
+		)
+		if wrapErr != nil {
+			return nil, "", requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", wrapErr))
+		}
+		plan.Command = wrapped
+	}
+	return plan.Command, plan.CWD, nil
+}
+
+func nativeExecServerPath(raw string, label string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if len(raw) < len("file:") || !strings.EqualFold(raw[:len("file:")], "file:") {
+		return raw, nil
+	}
+	uri, err := utils.Parse(raw)
+	if err != nil {
+		return "", requestError(-32602, fmt.Sprintf("%s URI `%s` is not valid on this exec-server host: %v", label, raw, err))
+	}
+	native, err := uri.HostNativePath()
+	if err != nil {
+		return "", requestError(-32602, fmt.Sprintf("%s URI `%s` is not valid on this exec-server host: %v", label, raw, err))
+	}
+	return native, nil
+}
+
+func nativePermissionProfileJSON(raw json.RawMessage) (string, error) {
+	var profile any
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		return "", err
+	}
+	if err := rewritePermissionProfilePaths(profile, func(path string) (string, error) {
+		if len(path) < len("file:") || !strings.EqualFold(path[:len("file:")], "file:") {
+			return path, nil
+		}
+		uri, err := utils.Parse(path)
+		if err != nil {
+			return "", err
+		}
+		return uri.HostNativePath()
+	}); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(profile)
+	return string(encoded), err
+}
+
+func rewritePermissionProfilePaths(value any, rewrite func(string) (string, error)) error {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	fileSystem, _ := object["file_system"].(map[string]any)
+	entries, _ := fileSystem["entries"].([]any)
+	for _, entryValue := range entries {
+		entry, _ := entryValue.(map[string]any)
+		pathObject, _ := entry["path"].(map[string]any)
+		if pathObject["type"] != "path" {
+			continue
+		}
+		path, _ := pathObject["path"].(string)
+		if path == "" {
+			continue
+		}
+		rewritten, err := rewrite(path)
+		if err != nil {
+			return err
+		}
+		pathObject["path"] = rewritten
+	}
+	return nil
+}
+
 func (s *Server) readProcess(params *ReadParams) (*ReadResponse, error) {
+	return s.readProcessForConnection(context.Background(), params)
+}
+
+func (s *Server) readProcessForConnection(ctx context.Context, params *ReadParams) (*ReadResponse, error) {
+	if params.MaxBytes != nil && *params.MaxBytes < 0 {
+		return nil, requestError(-32602, "maxBytes must not be negative")
+	}
 	state := s.lookup(params.ProcessID)
 	if state == nil {
-		return nil, fmt.Errorf("unknown process %s", params.ProcessID)
+		return nil, requestError(-32600, fmt.Sprintf("unknown process id %s", params.ProcessID))
+	}
+	state.mu.Lock()
+	starting := state.starting
+	state.mu.Unlock()
+	if starting {
+		return nil, requestError(-32600, fmt.Sprintf("process id %s is starting", params.ProcessID))
 	}
 	after := uint64(0)
 	if params.AfterSeq != nil {
 		after = *params.AfterSeq
 	}
-	return state.read(after, params.MaxBytes, params.WaitMS), nil
+	var detached <-chan struct{}
+	if protocol := protocolStateFromContext(ctx); protocol != nil {
+		detached = protocol.detached
+	}
+	response, attached := state.read(after, params.MaxBytes, params.WaitMS, detached)
+	if !attached {
+		return nil, requestError(-32600, "session has been resumed by another connection")
+	}
+	return response, nil
 }
 
 func (s *Server) writeProcess(params *WriteParams) (*WriteResponse, error) {
+	if params.WriteID == "" {
+		return nil, requestError(-32602, "writeId must not be empty")
+	}
+	if _, err := base64.StdEncoding.DecodeString(params.Chunk); err != nil {
+		return nil, requestError(-32602, "invalid base64 process input: "+err.Error())
+	}
 	state := s.lookup(params.ProcessID)
 	if state == nil {
 		return &WriteResponse{Status: "unknownProcess"}, nil
@@ -707,14 +1678,28 @@ func (s *Server) writeProcess(params *WriteParams) (*WriteResponse, error) {
 }
 
 func (s *Server) terminateProcess(params *TerminateParams) (*TerminateResponse, error) {
-	state := s.lookup(params.ProcessID)
+	s.mu.Lock()
+	state := s.processes[params.ProcessID]
 	if state == nil {
+		s.mu.Unlock()
 		return &TerminateResponse{Running: false}, nil
 	}
+	state.mu.Lock()
+	starting := state.starting
+	state.mu.Unlock()
+	if starting {
+		delete(s.processes, params.ProcessID)
+		s.mu.Unlock()
+		return &TerminateResponse{Running: true}, nil
+	}
+	s.mu.Unlock()
 	return state.terminate(), nil
 }
 
 func (s *Server) signalProcess(params *SignalParams) (*SignalResponse, error) {
+	if params.Signal != "interrupt" {
+		return nil, requestError(-32602, fmt.Sprintf("unsupported process signal %s", params.Signal))
+	}
 	state := s.lookup(params.ProcessID)
 	if state == nil {
 		return &SignalResponse{}, nil
@@ -729,32 +1714,69 @@ func (s *Server) lookup(processID string) *processState {
 }
 
 func readFile(params *FSReadFileParams) (*FSReadFileResponse, error) {
+	var sandboxed FSReadFileResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSReadFile, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	file, err := openRegularFileForRead(path)
 	if err != nil {
 		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxReadFileBytes {
+		return nil, requestError(-32600, fmt.Sprintf("file is too large to read: limit is %d bytes", maxReadFileBytes))
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxReadFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxReadFileBytes {
+		return nil, requestError(-32600, fmt.Sprintf("file is too large to read: limit is %d bytes", maxReadFileBytes))
 	}
 	return &FSReadFileResponse{DataBase64: base64.StdEncoding.EncodeToString(data)}, nil
 }
 
 func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
-	if params == nil || strings.TrimSpace(params.HandleID) == "" {
-		return nil, errors.New("handleId is required")
+	if params == nil {
+		return nil, errors.New("fs/open params are required")
+	}
+	if err := validateFileReadHandleID(params.HandleID); err != nil {
+		return nil, err
+	}
+	if required, _, _, _, _, err := prepareFSSandbox(params.Sandbox); err != nil {
+		return nil, err
+	} else if required {
+		return nil, requestError(-32600, "streaming file reads do not support platform sandboxing")
 	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.Open(path)
+	file, err := openRegularFileForRead(path)
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	if old := s.handles[params.HandleID]; old != nil {
-		_ = old.Close()
+	if s.handles[params.HandleID] != nil {
+		s.mu.Unlock()
+		_ = file.Close()
+		return nil, requestError(-32600, fmt.Sprintf("file read handle `%s` already exists", params.HandleID))
+	}
+	if len(s.handles) >= maxOpenFileReads {
+		s.mu.Unlock()
+		_ = file.Close()
+		return nil, requestError(-32600, fmt.Sprintf("at most %d file reads may be open per connection", maxOpenFileReads))
 	}
 	s.handles[params.HandleID] = file
 	s.mu.Unlock()
@@ -762,36 +1784,54 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 }
 
 func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, error) {
-	if params == nil || strings.TrimSpace(params.HandleID) == "" {
-		return nil, errors.New("handleId is required")
+	if params == nil {
+		return nil, errors.New("fs/readBlock params are required")
 	}
-	if params.Offset < 0 {
-		return nil, errors.New("offset must be non-negative")
+	if err := validateFileReadHandleID(params.HandleID); err != nil {
+		return nil, err
 	}
-	if params.Len < 0 {
-		return nil, errors.New("len must be non-negative")
+	if params.Len < 1 || params.Len > fileReadChunkSize {
+		return nil, requestError(-32600, fmt.Sprintf("file read block length must be between 1 and %d", fileReadChunkSize))
+	}
+	if params.Offset > uint64(^uint64(0)>>1) {
+		return nil, requestError(-32600, "file read offset overflowed")
 	}
 	s.mu.Lock()
 	file := s.handles[params.HandleID]
 	s.mu.Unlock()
 	if file == nil {
-		return nil, fmt.Errorf("unknown file handle %s", params.HandleID)
+		return nil, requestError(-32004, fmt.Sprintf("unknown file read handle `%s`", params.HandleID))
 	}
 	buffer := make([]byte, params.Len)
-	n, err := file.ReadAt(buffer, params.Offset)
-	eof := errors.Is(err, io.EOF)
-	if err != nil && !eof {
-		return nil, err
+	bytesRead := 0
+	for bytesRead < params.Len {
+		readOffset := params.Offset + uint64(bytesRead)
+		if readOffset > uint64(^uint64(0)>>1) {
+			s.closeHandleAfterReadError(params.HandleID, file)
+			return nil, requestError(-32600, "file read offset overflowed")
+		}
+		n, err := file.ReadAt(buffer[bytesRead:], int64(readOffset))
+		bytesRead += n
+		if errors.Is(err, io.EOF) || n == 0 {
+			break
+		}
+		if err != nil {
+			s.closeHandleAfterReadError(params.HandleID, file)
+			return nil, err
+		}
 	}
 	return &FSReadBlockResponse{
-		Chunk: base64.StdEncoding.EncodeToString(buffer[:n]),
-		EOF:   eof,
+		Chunk: base64.StdEncoding.EncodeToString(buffer[:bytesRead]),
+		EOF:   bytesRead < params.Len,
 	}, nil
 }
 
 func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
-	if params == nil || strings.TrimSpace(params.HandleID) == "" {
-		return nil, errors.New("handleId is required")
+	if params == nil {
+		return nil, errors.New("fs/close params are required")
+	}
+	if err := validateFileReadHandleID(params.HandleID); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	file := s.handles[params.HandleID]
@@ -805,7 +1845,30 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
 	return &FSCloseResponse{}, nil
 }
 
+func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
+	s.mu.Lock()
+	if s.handles[handleID] == file {
+		delete(s.handles, handleID)
+	}
+	s.mu.Unlock()
+	_ = file.Close()
+}
+
+func validateFileReadHandleID(handleID string) error {
+	if len(handleID) > maxFileReadHandleIDBytes {
+		return requestError(-32600, fmt.Sprintf("file read handle ID must not exceed %d bytes", maxFileReadHandleIDBytes))
+	}
+	return nil
+}
+
 func writeFile(params *FSWriteFileParams) (*FSWriteFileResponse, error) {
+	var sandboxed FSWriteFileResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSWriteFile, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
@@ -814,13 +1877,20 @@ func writeFile(params *FSWriteFileParams) (*FSWriteFileResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fs/writeFile requires valid base64 dataBase64: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o666); err != nil {
 		return nil, err
 	}
 	return &FSWriteFileResponse{}, nil
 }
 
 func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryResponse, error) {
+	var sandboxed FSCreateDirectoryResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCreateDirectory, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
@@ -830,9 +1900,9 @@ func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryRespons
 		recursive = *params.Recursive
 	}
 	if recursive {
-		err = os.MkdirAll(path, 0o755)
+		err = os.MkdirAll(path, 0o777)
 	} else {
-		err = os.Mkdir(path, 0o755)
+		err = os.Mkdir(path, 0o777)
 	}
 	if err != nil {
 		return nil, err
@@ -841,6 +1911,13 @@ func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryRespons
 }
 
 func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
+	var sandboxed FSGetMetadataResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSGetMetadata, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
@@ -864,14 +1941,18 @@ func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
 }
 
 func canonicalize(params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error) {
+	var sandboxed FSCanonicalizeResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCanonicalize, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
 	}
 	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolved, err = filepath.Abs(path)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -883,6 +1964,13 @@ func canonicalize(params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error)
 }
 
 func readDirectory(params *FSReadDirectoryParams) (*FSReadDirectoryResponse, error) {
+	var sandboxed FSReadDirectoryResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSReadDirectory, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
@@ -907,6 +1995,13 @@ func readDirectory(params *FSReadDirectoryParams) (*FSReadDirectoryResponse, err
 }
 
 func removePath(params *FSRemoveParams) (*FSRemoveResponse, error) {
+	var sandboxed FSRemoveResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSRemove, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
@@ -931,6 +2026,13 @@ func removePath(params *FSRemoveParams) (*FSRemoveResponse, error) {
 }
 
 func copyPath(params *FSCopyParams) (*FSCopyResponse, error) {
+	var sandboxed FSCopyResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCopy, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	source, err := resolvePath(params.SourcePath)
 	if err != nil {
 		return nil, err
@@ -975,18 +2077,18 @@ func copyPath(params *FSCopyParams) (*FSCopyResponse, error) {
 }
 
 func walkPath(params *FSWalkParams) (*FSWalkResponse, error) {
+	var sandboxed FSWalkResponse
+	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSWalk, params, &sandboxed); ran {
+		if err != nil {
+			return nil, err
+		}
+		return &sandboxed, nil
+	}
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
 	}
 	options := params.Options
-	if options.MaxDepth == 0 && options.MaxDirectories == 0 && options.MaxEntries == 0 {
-		options = FSWalkOptions{
-			MaxDepth:       maxWalkDepth,
-			MaxDirectories: maxWalkDirectories,
-			MaxEntries:     maxWalkEntries,
-		}
-	}
 	if options.MaxDirectories <= 0 || options.MaxEntries <= 0 {
 		return nil, errors.New("filesystem walk limits must be greater than zero")
 	}
@@ -1010,13 +2112,14 @@ func walkPath(params *FSWalkParams) (*FSWalkResponse, error) {
 	}
 	identity := path
 	if options.FollowDirectorySymlinks {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
-			identity = resolved
+		identity, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, err
 		}
 	}
 	walker.seen[filepath.Clean(identity)] = true
 	walker.directoryCount = 1
-	walker.walkDirectory(path, 0)
+	walker.walk(path)
 	entries := walker.entries
 	if entries == nil {
 		entries = []FSWalkEntry{}
@@ -1036,49 +2139,82 @@ func doHTTPRequest(ctx context.Context, params *HTTPRequestParams) (*HTTPRequest
 	if params == nil {
 		return nil, errors.New("http/request params are required")
 	}
-	method := strings.TrimSpace(params.Method)
-	if method == "" {
-		method = http.MethodGet
+	method := params.Method
+	if method == "" || !validHTTPHeaderName(method) {
+		return nil, requestError(-32602, fmt.Sprintf("http/request method is invalid: %q is not a valid HTTP method", method))
 	}
+	if params.RedirectPolicy != "" && params.RedirectPolicy != "follow" && params.RedirectPolicy != "stop" {
+		return nil, requestError(-32602, fmt.Sprintf("invalid http/request redirectPolicy %q", params.RedirectPolicy))
+	}
+	var releaseBodyStream func()
 	if params.StreamResponse {
-		return nil, requestError(-32600, "http/request streamResponse is not supported by this exec-server backend")
+		var err error
+		releaseBodyStream, err = reserveHTTPBodyStream(ctx, params.RequestID)
+		if err != nil {
+			return nil, err
+		}
 	}
+	parsedURL, err := url.Parse(params.URL)
+	if err != nil {
+		return nil, requestError(-32602, "http/request url is invalid: "+err.Error())
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, requestError(-32602, fmt.Sprintf("http/request only supports http and https URLs, got %s", parsedURL.Scheme))
+	}
+	if parsedURL.Host == "" {
+		return nil, requestError(-32602, "http/request url is invalid: missing host")
+	}
+	releaseOnError := true
+	defer func() {
+		if releaseOnError && releaseBodyStream != nil {
+			releaseBodyStream()
+		}
+	}()
 	var body io.Reader
 	if params.BodyBase64 != nil {
 		data, err := base64.StdEncoding.DecodeString(*params.BodyBase64)
 		if err != nil {
-			return nil, err
+			return nil, requestError(-32602, "invalid params: invalid bodyBase64: "+err.Error())
 		}
 		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, params.URL, body)
+	requestCtx := ctx
+	var cancel context.CancelFunc
+	cancelOnReturn := false
+	if params.TimeoutMS != nil {
+		requestCtx, cancel = context.WithTimeout(ctx, time.Duration(*params.TimeoutMS)*time.Millisecond)
+		cancelOnReturn = true
+	}
+	defer func() {
+		if cancelOnReturn && cancel != nil {
+			cancel()
+		}
+	}()
+	req, err := http.NewRequestWithContext(requestCtx, method, params.URL, body)
+	if err != nil {
+		return nil, requestError(-32602, "http/request method or url is invalid: "+err.Error())
+	}
+	for _, header := range params.Headers {
+		if !validHTTPHeaderName(header.Name) {
+			return nil, requestError(-32602, "http/request header name is invalid")
+		}
+		if !validHTTPHeaderValue(header.Value) {
+			return nil, requestError(-32602, fmt.Sprintf("http/request header value is invalid for %s", header.Name))
+		}
+		req.Header.Add(header.Name, header.Value)
+	}
+	client, err := newExecServerHTTPClient()
 	if err != nil {
 		return nil, err
 	}
-	for _, header := range params.Headers {
-		name := strings.TrimSpace(header.Name)
-		if !validHTTPHeaderName(name) || !validHTTPHeaderValue(header.Value) {
-			continue
-		}
-		req.Header.Add(name, header.Value)
-	}
-	client := &http.Client{}
-	if params.TimeoutMS != nil && *params.TimeoutMS > 0 {
-		client.Timeout = time.Duration(*params.TimeoutMS) * time.Millisecond
-	}
-	if strings.EqualFold(params.RedirectPolicy, "stop") {
+	if params.RedirectPolicy == "stop" {
 		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+		return nil, requestError(-32603, "http/request failed: "+err.Error())
 	}
 	headers := make([]HTTPHeader, 0, len(resp.Header))
 	for name, values := range resp.Header {
@@ -1097,11 +2233,68 @@ func doHTTPRequest(ctx context.Context, params *HTTPRequestParams) (*HTTPRequest
 		}
 		return headers[i].Value < headers[j].Value
 	})
-	return &HTTPRequestResponse{
+	response := &HTTPRequestResponse{
 		Status:     resp.StatusCode,
 		Headers:    headers,
-		BodyBase64: base64.StdEncoding.EncodeToString(data),
-	}, nil
+		BodyBase64: "",
+	}
+	if params.StreamResponse {
+		notify := processNotifierFromContext(ctx)
+		if notify == nil || !registerAfterResponseAction(ctx, func() {
+			go streamHTTPResponseBody(params.RequestID, resp.Body, notify, releaseBodyStream, cancel)
+		}) {
+			_ = resp.Body.Close()
+			return nil, requestError(-32603, "http/request streaming requires a notification transport")
+		}
+		releaseOnError = false
+		cancelOnReturn = false
+		return response, nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, requestError(-32603, "failed to read http/request response body: "+err.Error())
+	}
+	response.BodyBase64 = base64.StdEncoding.EncodeToString(data)
+	return response, nil
+}
+
+func streamHTTPResponseBody(requestID string, body io.ReadCloser, notify processNotifier, release func(), cancel context.CancelFunc) {
+	if cancel != nil {
+		defer cancel()
+	}
+	if release != nil {
+		defer release()
+	}
+	defer body.Close()
+	buffer := make([]byte, 32*1024)
+	seq := uint64(1)
+	for {
+		n, err := body.Read(buffer)
+		if n > 0 {
+			notify(MethodHTTPRequestBodyDelta, HTTPRequestBodyDeltaNotification{
+				RequestID:   requestID,
+				Seq:         seq,
+				DeltaBase64: base64.StdEncoding.EncodeToString(buffer[:n]),
+			})
+			seq++
+		}
+		if err != nil {
+			var streamErr *string
+			if !errors.Is(err, io.EOF) {
+				message := err.Error()
+				streamErr = &message
+			}
+			notify(MethodHTTPRequestBodyDelta, HTTPRequestBodyDeltaNotification{
+				RequestID:   requestID,
+				Seq:         seq,
+				DeltaBase64: "",
+				Done:        true,
+				Error:       streamErr,
+			})
+			return
+		}
+	}
 }
 
 func validHTTPHeaderName(name string) bool {
@@ -1136,21 +2329,6 @@ func validHTTPHeaderValue(value string) bool {
 	return true
 }
 
-func (p *processState) failStart(startErr error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.failure = startErr.Error()
-	p.nextSeq++
-	p.exitSequenced = true
-	p.closedSequenced = true
-	code := -1
-	p.exitCode = &code
-	p.exited = true
-	p.closed = true
-	p.openStreams = 0
-	p.cond.Broadcast()
-}
-
 func (p *processState) capture(stream string, reader io.Reader) {
 	buffer := make([]byte, 32*1024)
 	for {
@@ -1158,8 +2336,12 @@ func (p *processState) capture(stream string, reader io.Reader) {
 		if n > 0 {
 			data := append([]byte(nil), buffer[:n]...)
 			p.mu.Lock()
-			p.appendLocked(stream, data)
+			chunk := p.appendLocked(stream, data)
+			notify := p.notify
 			p.mu.Unlock()
+			if notify != nil {
+				notify(MethodProcessOutput, ProcessOutputNotification{ProcessID: p.id, Seq: chunk.Seq, Stream: chunk.Stream, Chunk: chunk.Chunk})
+			}
 		}
 		if err != nil {
 			p.finishStream()
@@ -1169,54 +2351,96 @@ func (p *processState) capture(stream string, reader io.Reader) {
 }
 
 func (p *processState) finish(waitErr error) {
+	p.finishWithCode(waitErr, nil)
+}
+
+func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if waitErr != nil {
+	var exitErr *exec.ExitError
+	if waitErr != nil && !errors.As(waitErr, &exitErr) {
 		p.failure = waitErr.Error()
 	}
-	if p.cmd != nil && p.cmd.ProcessState != nil {
+	if explicitCode != nil {
+		code := *explicitCode
+		p.exitCode = &code
+	} else if p.cmd != nil && p.cmd.ProcessState != nil {
 		code := p.cmd.ProcessState.ExitCode()
 		p.exitCode = &code
 	}
 	p.exited = true
+	var exited *ProcessExitedNotification
 	if !p.exitSequenced {
+		seq := p.nextSeq
 		p.nextSeq++
 		p.exitSequenced = true
+		code := -1
+		if p.exitCode != nil {
+			code = *p.exitCode
+		}
+		denied := false
+		exited = &ProcessExitedNotification{ProcessID: p.id, Seq: seq, ExitCode: code, SandboxDenied: &denied}
 	}
+	var closed *ProcessClosedNotification
 	if p.openStreams == 0 {
 		p.closed = true
 		if !p.closedSequenced {
+			seq := p.nextSeq
 			p.nextSeq++
 			p.closedSequenced = true
+			closed = &ProcessClosedNotification{ProcessID: p.id, Seq: seq}
 		}
 	}
 	p.cond.Broadcast()
+	notify := p.notify
+	p.mu.Unlock()
+	if notify != nil {
+		if exited != nil {
+			notify(MethodProcessExited, *exited)
+		}
+		if closed != nil {
+			notify(MethodProcessClosed, *closed)
+		}
+	}
+	if closed != nil {
+		p.scheduleRetention()
+	}
 }
 
 func (p *processState) finishStream() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.openStreams > 0 {
 		p.openStreams--
 	}
+	var closed *ProcessClosedNotification
 	if p.exited && p.openStreams == 0 {
 		p.closed = true
 		if !p.closedSequenced {
+			seq := p.nextSeq
 			p.nextSeq++
 			p.closedSequenced = true
+			closed = &ProcessClosedNotification{ProcessID: p.id, Seq: seq}
 		}
 	}
 	p.cond.Broadcast()
+	notify := p.notify
+	p.mu.Unlock()
+	if notify != nil && closed != nil {
+		notify(MethodProcessClosed, *closed)
+	}
+	if closed != nil {
+		p.scheduleRetention()
+	}
 }
 
-func (p *processState) appendLocked(stream string, data []byte) {
+func (p *processState) appendLocked(stream string, data []byte) outputChunk {
 	seq := p.nextSeq
 	p.nextSeq++
-	p.chunks = append(p.chunks, outputChunk{
+	chunk := outputChunk{
 		Seq:    seq,
 		Stream: stream,
 		Chunk:  base64.StdEncoding.EncodeToString(data),
-	})
+	}
+	p.chunks = append(p.chunks, chunk)
 	p.retainedBytes += len(data)
 	for p.retainedBytes > retainedOutputBytesPerProcess && len(p.chunks) > 0 {
 		decoded, _ := base64.StdEncoding.DecodeString(p.chunks[0].Chunk)
@@ -1224,9 +2448,10 @@ func (p *processState) appendLocked(stream string, data []byte) {
 		p.chunks = p.chunks[1:]
 	}
 	p.cond.Broadcast()
+	return chunk
 }
 
-func (p *processState) read(after uint64, maxBytes *int, waitMS *uint64) *ReadResponse {
+func (p *processState) read(after uint64, maxBytes *int, waitMS *uint64, detached <-chan struct{}) (*ReadResponse, bool) {
 	deadline := time.Time{}
 	if waitMS != nil && *waitMS > 0 {
 		deadline = time.Now().Add(time.Duration(*waitMS) * time.Millisecond)
@@ -1234,10 +2459,13 @@ func (p *processState) read(after uint64, maxBytes *int, waitMS *uint64) *ReadRe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for {
+		if channelClosed(detached) {
+			return nil, false
+		}
 		response := p.readLocked(after, maxBytes)
 		hasTerminalEvent := response.Exited && after < response.NextSeq-1
 		if len(response.Chunks) > 0 || response.Closed || response.Failure != nil || hasTerminalEvent || waitMS == nil || *waitMS == 0 || !time.Now().Before(deadline) {
-			return response
+			return response, true
 		}
 		remaining := time.Until(deadline)
 		timer := time.AfterFunc(remaining, func() {
@@ -1245,32 +2473,54 @@ func (p *processState) read(after uint64, maxBytes *int, waitMS *uint64) *ReadRe
 			p.cond.Broadcast()
 			p.mu.Unlock()
 		})
+		waitDone := make(chan struct{})
+		if detached != nil {
+			go func() {
+				select {
+				case <-detached:
+					p.mu.Lock()
+					p.cond.Broadcast()
+					p.mu.Unlock()
+				case <-waitDone:
+				}
+			}()
+		}
 		p.cond.Wait()
+		close(waitDone)
 		timer.Stop()
+	}
+}
+
+func channelClosed(ch <-chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
 func (p *processState) readLocked(after uint64, maxBytes *int) *ReadResponse {
 	chunks := []outputChunk{}
-	remaining := -1
-	if maxBytes != nil && *maxBytes >= 0 {
-		remaining = *maxBytes
-	}
+	totalBytes := 0
 	for _, chunk := range p.chunks {
 		if chunk.Seq <= after {
 			continue
 		}
-		if remaining == 0 {
-			break
-		}
-		if remaining > 0 {
-			decoded, _ := base64.StdEncoding.DecodeString(chunk.Chunk)
-			if len(decoded) > remaining {
+		decoded, _ := base64.StdEncoding.DecodeString(chunk.Chunk)
+		if maxBytes != nil {
+			if len(chunks) > 0 && totalBytes+len(decoded) > *maxBytes {
 				break
 			}
-			remaining -= len(decoded)
 		}
 		chunks = append(chunks, chunk)
+		totalBytes += len(decoded)
+		if maxBytes != nil && totalBytes >= *maxBytes {
+			break
+		}
 	}
 	nextSeq := p.nextSeq
 	if maxBytes != nil && len(chunks) > 0 {
@@ -1294,8 +2544,11 @@ func (p *processState) readLocked(after uint64, maxBytes *int) *ReadResponse {
 func (p *processState) write(params *WriteParams) (*WriteResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if strings.TrimSpace(params.WriteID) == "" {
+	if params.WriteID == "" {
 		return nil, errors.New("writeId must not be empty")
+	}
+	if p.starting {
+		return &WriteResponse{Status: "starting"}, nil
 	}
 	if p.exited {
 		return &WriteResponse{Status: "stdinClosed"}, nil
@@ -1314,16 +2567,34 @@ func (p *processState) write(params *WriteParams) (*WriteResponse, error) {
 		return &WriteResponse{Status: "stdinClosed"}, nil
 	}
 	p.seenWriteIDs[params.WriteID] = true
+	p.seenWriteOrder = append(p.seenWriteOrder, params.WriteID)
+	for len(p.seenWriteOrder) > retainedWriteIDsPerProcess {
+		evicted := p.seenWriteOrder[0]
+		p.seenWriteOrder = p.seenWriteOrder[1:]
+		delete(p.seenWriteIDs, evicted)
+	}
 	return &WriteResponse{Status: "accepted"}, nil
+}
+
+func (p *processState) scheduleRetention() {
+	if p == nil || p.onClosed == nil {
+		return
+	}
+	p.retentionOnce.Do(func() { go p.onClosed() })
 }
 
 func (p *processState) terminate() *TerminateResponse {
 	p.mu.Lock()
 	cmd := p.cmd
-	running := !p.exited && cmd != nil && cmd.Process != nil
+	terminateFn := p.terminateFn
+	running := !p.exited && (terminateFn != nil || (cmd != nil && cmd.Process != nil))
 	p.mu.Unlock()
 	if running {
-		_ = cmd.Process.Kill()
+		if terminateFn != nil {
+			_ = terminateFn()
+		} else {
+			_ = cmd.Process.Kill()
+		}
 	}
 	return &TerminateResponse{Running: running}
 }
@@ -1331,13 +2602,20 @@ func (p *processState) terminate() *TerminateResponse {
 func (p *processState) signal(params *SignalParams) (*SignalResponse, error) {
 	p.mu.Lock()
 	cmd := p.cmd
-	running := !p.exited && cmd != nil && cmd.Process != nil
+	signalFn := p.signalFn
+	running := !p.exited && (signalFn != nil || (cmd != nil && cmd.Process != nil))
 	p.mu.Unlock()
 	if !running {
 		return &SignalResponse{}, nil
 	}
 	if params != nil && params.Signal != "" && !strings.EqualFold(params.Signal, "interrupt") {
 		return nil, fmt.Errorf("unsupported process signal %s", params.Signal)
+	}
+	if signalFn != nil {
+		if err := signalFn(); err != nil {
+			return nil, fmt.Errorf("failed to signal process: %w", err)
+		}
+		return &SignalResponse{}, nil
 	}
 	if runtime.GOOS == "windows" {
 		return nil, errors.New("process interrupt is not supported by this process backend")
@@ -1428,8 +2706,8 @@ func childEnv(params *ExecParams) map[string]string {
 func populateEnv(policy *ExecEnvPolicy, environ []string) map[string]string {
 	env := map[string]string{}
 	inherit := "all"
-	if policy != nil && strings.TrimSpace(policy.Inherit) != "" {
-		inherit = strings.ToLower(strings.TrimSpace(policy.Inherit))
+	if policy != nil {
+		inherit = policy.Inherit
 	}
 	switch inherit {
 	case "none":
@@ -1544,16 +2822,18 @@ func wildcardMatch(pattern string, value string) bool {
 }
 
 func resolvePath(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("path is required")
 	}
-	if strings.HasPrefix(raw, "file://") {
+	if len(raw) >= len("file:") && strings.EqualFold(raw[:len("file:")], "file:") {
 		uri, err := utils.Parse(raw)
 		if err != nil {
 			return "", err
 		}
-		raw = uri.NativePathString()
+		raw, err = uri.HostNativePath()
+		if err != nil {
+			return "", err
+		}
 	}
 	if filepath.IsAbs(raw) {
 		return raw, nil
@@ -1561,15 +2841,127 @@ func resolvePath(raw string) (string, error) {
 	return filepath.Abs(raw)
 }
 
+func validateWirePathURI(raw string) error {
+	if raw == "" {
+		return errors.New("path is required")
+	}
+	_, err := utils.Parse(raw)
+	return err
+}
+
+func validateFSWirePath(field string, raw string, sandboxContext *FileSystemSandboxContext) error {
+	if err := validateWirePathURI(raw); err != nil {
+		return requestError(-32602, "invalid params: "+field+" must be an absolute file URI: "+err.Error())
+	}
+	if sandboxContext == nil {
+		return nil
+	}
+	if sandboxContext.CWD != "" {
+		if err := validateWirePathURI(sandboxContext.CWD); err != nil {
+			return requestError(-32602, "invalid params: sandbox.cwd must be an absolute file URI: "+err.Error())
+		}
+	}
+	for index, root := range sandboxContext.WorkspaceRoots {
+		if err := validateWirePathURI(root); err != nil {
+			return requestError(-32602, fmt.Sprintf("invalid params: sandbox.workspaceRoots[%d] must be an absolute file URI: %v", index, err))
+		}
+	}
+	return nil
+}
+
+func normalizeExecCWDForWire(raw string) (string, error) {
+	if raw == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		raw = cwd
+	}
+	if len(raw) >= len("file:") && strings.EqualFold(raw[:len("file:")], "file:") {
+		uri, err := utils.Parse(raw)
+		if err != nil {
+			return "", err
+		}
+		return uri.String(), nil
+	}
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("cwd must be absolute: %s", raw)
+	}
+	uri, err := utils.FromHostNativePath(raw)
+	if err != nil {
+		return "", err
+	}
+	return uri.String(), nil
+}
+
+func normalizeFSPathForWire(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("path is required")
+	}
+	if len(raw) >= len("file:") && strings.EqualFold(raw[:len("file:")], "file:") {
+		uri, err := utils.Parse(raw)
+		if err != nil {
+			return "", err
+		}
+		return uri.String(), nil
+	}
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("path must be absolute: %s", raw)
+	}
+	uri, err := utils.FromHostNativePath(raw)
+	if err != nil {
+		return "", err
+	}
+	return uri.String(), nil
+}
+
+func normalizeFSSandboxForWire(sandboxContext *FileSystemSandboxContext) (*FileSystemSandboxContext, error) {
+	if sandboxContext == nil {
+		return nil, nil
+	}
+	normalized := *sandboxContext
+	normalized.Permissions = append(json.RawMessage(nil), sandboxContext.Permissions...)
+	if normalized.CWD != "" {
+		cwd, err := normalizeFSPathForWire(normalized.CWD)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox cwd: %w", err)
+		}
+		normalized.CWD = cwd
+	}
+	normalized.WorkspaceRoots = make([]string, len(sandboxContext.WorkspaceRoots))
+	for index, root := range sandboxContext.WorkspaceRoots {
+		normalizedRoot, err := normalizeFSPathForWire(root)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox workspace root %d: %w", index, err)
+		}
+		normalized.WorkspaceRoots[index] = normalizedRoot
+	}
+	return &normalized, nil
+}
+
 func copyFile(source string, destination string, mode os.FileMode) error {
-	data, err := os.ReadFile(source)
+	sourceFile, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	defer sourceFile.Close()
+	if err := os.MkdirAll(filepath.Dir(destination), 0o777); err != nil {
 		return err
 	}
-	return os.WriteFile(destination, data, mode.Perm())
+	destinationFile, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(destinationFile, sourceFile)
+	chmodErr := destinationFile.Chmod(mode.Perm())
+	closeErr := destinationFile.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if chmodErr != nil {
+		return chmodErr
+	}
+	return closeErr
 }
 
 func copyDirectory(source string, destination string) error {
@@ -1583,7 +2975,7 @@ func copyDirectory(source string, destination string) error {
 		}
 		target := filepath.Join(destination, rel)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, 0o777)
 		}
 		info, err := os.Lstat(path)
 		if err != nil {
@@ -1604,7 +2996,7 @@ func copySymlink(source string, destination string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o777); err != nil {
 		return err
 	}
 	return os.Symlink(target, destination)
@@ -1666,58 +3058,72 @@ type walkState struct {
 	responseBytes  int
 }
 
-func (w *walkState) walkDirectory(directory string, depth int) {
-	if w.truncated {
-		return
+func (w *walkState) walk(root string) {
+	type queuedDirectory struct {
+		path  string
+		depth int
 	}
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		w.pushError(directory, err)
-		return
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
-	for _, entry := range entries {
-		if w.entryCount == w.options.MaxEntries {
-			w.truncated = true
-			return
-		}
-		w.entryCount++
-		path := filepath.Join(directory, entry.Name())
-		info, statErr := os.Stat(path)
-		linkInfo, linkErr := os.Lstat(path)
-		if statErr != nil {
-			w.pushError(path, statErr)
+	queue := []queuedDirectory{{path: root}}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		entries, err := os.ReadDir(current.path)
+		if err != nil {
+			if !w.pushError(current.path, err) {
+				return
+			}
 			continue
 		}
-		if linkErr != nil {
-			w.pushError(path, linkErr)
-			continue
-		}
-		if linkInfo.Mode()&os.ModeSymlink != 0 && (!w.options.FollowDirectorySymlinks || !info.IsDir()) {
-			continue
-		}
-		kind := ""
-		if info.IsDir() {
-			kind = "directory"
-		} else if info.Mode().IsRegular() {
-			kind = "file"
-		} else {
-			continue
-		}
-		uri := pathToURI(path)
-		if !w.reserve(len(uri)) {
-			return
-		}
-		w.entries = append(w.entries, FSWalkEntry{Path: uri, Kind: kind})
-		if kind == "directory" && depth < w.options.MaxDepth {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+		for _, entry := range entries {
+			if w.entryCount == w.options.MaxEntries {
+				w.truncated = true
+				return
+			}
+			w.entryCount++
+			path := filepath.Join(current.path, entry.Name())
+			info, statErr := os.Stat(path)
+			linkInfo, linkErr := os.Lstat(path)
+			if statErr != nil {
+				if !w.pushError(path, statErr) {
+					return
+				}
+				continue
+			}
+			if linkErr != nil {
+				if !w.pushError(path, linkErr) {
+					return
+				}
+				continue
+			}
+			if linkInfo.Mode()&os.ModeSymlink != 0 && (!w.options.FollowDirectorySymlinks || !info.IsDir()) {
+				continue
+			}
+			kind := ""
+			if info.IsDir() {
+				kind = "directory"
+			} else if info.Mode().IsRegular() {
+				kind = "file"
+			} else {
+				continue
+			}
+			uri := pathToURI(path)
+			if !w.reserve(len(uri)) {
+				return
+			}
+			w.entries = append(w.entries, FSWalkEntry{Path: uri, Kind: kind})
+			if kind != "directory" || current.depth >= w.options.MaxDepth {
+				continue
+			}
 			identity := path
 			if w.options.FollowDirectorySymlinks {
-				if resolved, err := filepath.EvalSymlinks(path); err == nil {
-					identity = resolved
-				} else {
-					w.pushError(path, err)
+				identity, err = filepath.EvalSymlinks(path)
+				if err != nil {
+					if !w.pushError(path, err) {
+						return
+					}
 					continue
 				}
 			}
@@ -1731,18 +3137,19 @@ func (w *walkState) walkDirectory(directory string, depth int) {
 				continue
 			}
 			w.directoryCount++
-			w.walkDirectory(path, depth+1)
+			queue = append(queue, queuedDirectory{path: path, depth: current.depth + 1})
 		}
 	}
 }
 
-func (w *walkState) pushError(path string, err error) {
+func (w *walkState) pushError(path string, err error) bool {
 	message := err.Error()
 	uri := pathToURI(path)
 	if !w.reserve(len(uri) + len(message)) {
-		return
+		return false
 	}
 	w.errors = append(w.errors, FSWalkError{Path: uri, Message: message})
+	return true
 }
 
 func (w *walkState) reserve(contentBytes int) bool {

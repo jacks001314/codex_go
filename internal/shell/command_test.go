@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -96,5 +97,64 @@ func TestParseCommandUnknown(t *testing.T) {
 	parsed := ParseCommand([]string{"git", "status"})
 	if len(parsed) != 1 || parsed[0].Kind != "unknown" {
 		t.Fatalf("ParseCommand() = %+v", parsed)
+	}
+}
+
+func TestSplitCommandLineMatchesRustShlexFallback(t *testing.T) {
+	got := SplitCommandLine(`python3 -u "scripts/fetch comments.py"`)
+	want := []string{"python3", "-u", "scripts/fetch comments.py"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SplitCommandLine() = %#v, want %#v", got, want)
+	}
+	got = SplitCommandLine(`cat "unterminated`)
+	want = []string{"cat", `"unterminated`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SplitCommandLine(malformed) = %#v, want %#v", got, want)
+	}
+}
+
+func TestReadPathsMatchesRustImplicitSkillFixtures(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{command: `cat /tmp/skill-test/SKILL.md | head`, want: "/tmp/skill-test/SKILL.md"},
+		{command: `bash -lc "cat SKILL.md"`, want: "SKILL.md"},
+		{command: `bat --theme TwoDark SKILL.md`, want: "SKILL.md"},
+		{command: `batcat SKILL.md`, want: "SKILL.md"},
+		{command: `less -p TODO SKILL.md`, want: "SKILL.md"},
+		{command: `more SKILL.md`, want: "SKILL.md"},
+		{command: `head -n 50 SKILL.md`, want: "SKILL.md"},
+		{command: `head -n50 SKILL.md`, want: "SKILL.md"},
+		{command: `tail -n +10 SKILL.md`, want: "SKILL.md"},
+		{command: `tail -n+10 SKILL.md`, want: "SKILL.md"},
+		{command: `awk '{print $1}' SKILL.md`, want: "SKILL.md"},
+		{command: `nl -ba SKILL.md`, want: "SKILL.md"},
+		{command: `sed -n '12,20p' SKILL.md`, want: "SKILL.md"},
+		{command: `cat -- -SKILL.md`, want: "-SKILL.md"},
+		{command: `cd dir1 dir2 && cat SKILL.md`, want: filepath.Join("dir2", "SKILL.md")},
+		{command: `cd -- -weird && cat SKILL.md`, want: filepath.Join("-weird", "SKILL.md")},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			got := ReadPaths(SplitCommandLine(test.command))
+			if !reflect.DeepEqual(got, []string{test.want}) {
+				t.Fatalf("ReadPaths() = %#v, want %#v", got, []string{test.want})
+			}
+		})
+	}
+
+	for _, command := range []string{
+		`cat first.md second.md`,
+		`head -n 40`,
+		`tail -c 30 SKILL.md`,
+		`awk '{print $1}'`,
+		`sed -n +10p SKILL.md`,
+	} {
+		t.Run("reject "+command, func(t *testing.T) {
+			if got := ReadPaths(SplitCommandLine(command)); len(got) != 0 {
+				t.Fatalf("ReadPaths() = %#v, want none", got)
+			}
+		})
 	}
 }

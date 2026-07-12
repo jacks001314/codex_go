@@ -11,6 +11,7 @@ import (
 
 	"codex_go/internal/config"
 	"codex_go/internal/install"
+	"codex_go/internal/systemskills"
 )
 
 func TestListSkillsAndConfig(t *testing.T) {
@@ -52,8 +53,8 @@ func TestListSkillsAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List(after config) error = %v", err)
 	}
-	if len(response.Skills) != 0 {
-		t.Fatalf("response = %#v", response)
+	if len(response.Skills) != 1 || response.Skills[0].Enabled {
+		t.Fatalf("response = %#v, want retained disabled skill like Rust", response)
 	}
 	if _, err := service.WriteConfig(&SkillsConfigWriteParams{}); !errors.Is(err, ErrInvalidSkillsRequest) {
 		t.Fatalf("WriteConfig(empty) error = %v, want ErrInvalidSkillsRequest", err)
@@ -97,6 +98,9 @@ func TestListSkillsSkipsInvalidSkillAndReportsErrorLikeRust(t *testing.T) {
 	}
 	if len(response.Data) != 1 || len(response.Data[0].Errors) != 2 {
 		t.Fatalf("data errors = %#v, want invalid skill errors", response.Data)
+	}
+	if len(response.Errors) != 2 {
+		t.Fatalf("internal catalog errors = %#v, want invalid skill errors", response.Errors)
 	}
 	errorsByPath := map[string]string{}
 	for _, skillErr := range response.Data[0].Errors {
@@ -232,8 +236,8 @@ func TestSkillsServiceLoadsPersistentConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(response.Skills) != 0 {
-		t.Fatalf("skills = %#v, want disabled by persistent config", response.Skills)
+	if len(response.Skills) != 1 || response.Skills[0].Enabled {
+		t.Fatalf("skills = %#v, want retained disabled skill like Rust", response.Skills)
 	}
 }
 
@@ -248,7 +252,6 @@ func TestSkillsServiceIncludesBundledSystemSkillsRoot(t *testing.T) {
 		t.Fatalf("WriteFile(system skill) error = %v", err)
 	}
 	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{
-		CodexHome:           t.TempDir(),
 		InstallContext:      &install.InstallContext{PackageLayout: &install.CodexPackageLayout{ResourcesDir: &resourcesDir}},
 		IncludeDefaultRoots: true,
 	})
@@ -258,6 +261,108 @@ func TestSkillsServiceIncludesBundledSystemSkillsRoot(t *testing.T) {
 	}
 	if len(response.Skills) != 1 || response.Skills[0].Name != "sys-skill" || response.Skills[0].Scope != "system" {
 		t.Fatalf("skills = %#v, want bundled system skill", response.Skills)
+	}
+}
+
+func TestSkillsServiceLoadsUserAndAdminRootsFromConfigLayersLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	customUserFolder := t.TempDir()
+	customUserConfig := filepath.Join(customUserFolder, "config.toml")
+	if err := os.WriteFile(customUserConfig, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(user config) error = %v", err)
+	}
+	adminFolder := t.TempDir()
+	adminConfig := filepath.Join(adminFolder, "config.toml")
+	writeLayerSkill := func(folder string, name string) {
+		t.Helper()
+		dir := filepath.Join(folder, "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, SkillFilename), []byte("---\nname: "+name+"\ndescription: "+name+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	writeLayerSkill(customUserFolder, "custom-user-skill")
+	writeLayerSkill(adminFolder, "admin-skill")
+	configService := config.NewConfigService(codexHome)
+	configService.SetUserConfigPath(customUserConfig)
+	configService.SetManagedLayers([]config.Layer{{
+		Name:   config.LayerSource{Type: config.LayerSourceSystem, File: adminConfig},
+		Config: map[string]any{},
+	}})
+
+	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		CodexHome:           codexHome,
+		HomeDir:             t.TempDir(),
+		Config:              configService,
+		IncludeDefaultRoots: true,
+	}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	byName := map[string]SkillsListEntry{}
+	for _, skill := range response.Skills {
+		byName[skill.Name] = skill
+	}
+	if byName["custom-user-skill"].Scope != "user" || byName["admin-skill"].Scope != "admin" {
+		t.Fatalf("layer skills = %#v, want user and admin scopes", byName)
+	}
+}
+
+func TestSkillsServiceInstallsEmbeddedSystemSkillsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		CodexHome:           home,
+		HomeDir:             t.TempDir(),
+		IncludeDefaultRoots: true,
+	})
+	response, err := service.List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	names := map[string]bool{}
+	for _, skill := range response.Skills {
+		if skill.Scope == "system" {
+			names[skill.Name] = true
+		}
+	}
+	for _, want := range []string{"skill-installer", "skill-creator", "plugin-creator", "imagegen", "openai-docs"} {
+		if !names[want] {
+			t.Fatalf("embedded system skills = %#v, missing %q", names, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills", ".system", "skill-creator", "scripts", "init_skill.py")); err != nil {
+		t.Fatalf("embedded nested script missing: %v", err)
+	}
+}
+
+func TestSkillsServiceDisabledBundledSkillsRemovesCacheLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := systemskills.Install(home); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	configService := config.NewConfigService(home)
+	if _, err := configService.WriteValue(&config.ConfigValueWriteParams{KeyPath: "skills.bundled.enabled", Value: false, MergeStrategy: config.MergeReplace}); err != nil {
+		t.Fatalf("WriteValue() error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		CodexHome:           home,
+		HomeDir:             t.TempDir(),
+		Config:              configService,
+		IncludeDefaultRoots: true,
+	})
+	response, err := service.List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, skill := range response.Skills {
+		if skill.Scope == "system" {
+			t.Fatalf("disabled bundled skill remained: %#v", skill)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills", ".system")); !os.IsNotExist(err) {
+		t.Fatalf("disabled bundled cache stat err=%v", err)
 	}
 }
 
@@ -296,8 +401,8 @@ func TestWriteConfigPersistsAndRemovesSkillOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List(after disable) error = %v", err)
 	}
-	if len(response.Skills) != 0 {
-		t.Fatalf("skills = %#v, want disabled", response.Skills)
+	if len(response.Skills) != 1 || response.Skills[0].Enabled {
+		t.Fatalf("skills = %#v, want retained disabled skill", response.Skills)
 	}
 
 	if _, err := service.WriteConfig(&SkillsConfigWriteParams{Path: skillPath, Enabled: true}); err != nil {
@@ -360,6 +465,179 @@ func TestSkillsListIncludesCWDCodeXSkillsRootLikeRust(t *testing.T) {
 	skill := response.Data[0].Skills[0]
 	if skill.Name != "repo-skill" || skill.Scope != "repo" || skill.Description != "from repo root" {
 		t.Fatalf("skill = %#v", skill)
+	}
+}
+
+func TestSkillsListDoesNotScanArbitraryCWDSubdirectoriesLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	skillDir := filepath.Join(cwd, "packages", "accidental-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: accidental-skill\ndescription: should not load\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Skills) != 0 {
+		t.Fatalf("response = %#v, want arbitrary cwd skill ignored", response)
+	}
+}
+
+func TestSkillsListBoundsAgentsRootsAtProjectRootLikeRust(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "project")
+	cwd := filepath.Join(project, "packages", "app")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cwd) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	writeSkill := func(root string, name string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, SkillFilename), []byte("---\nname: "+name+"\ndescription: "+name+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	writeSkill(filepath.Join(project, ".agents", "skills"), "project-agent")
+	writeSkill(filepath.Join(project, "packages", ".agents", "skills"), "nested-agent")
+	writeSkill(filepath.Join(parent, ".agents", "skills"), "outside-agent")
+
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	names := map[string]bool{}
+	for _, skill := range response.Data[0].Skills {
+		names[skill.Name] = true
+	}
+	if !names["project-agent"] || !names["nested-agent"] || names["outside-agent"] {
+		t.Fatalf("agents skills = %#v, want project+nested without outside", names)
+	}
+}
+
+func TestSkillsListDeduplicatesByPathPreferringRepoRootLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	skillsRoot := filepath.Join(cwd, ".codex", "skills")
+	skillDir := filepath.Join(skillsRoot, "shared-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: shared-skill\ndescription: shared\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: skillsRoot, Scope: "user"}},
+	}).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 || response.Skills[0].Scope != "repo" {
+		t.Fatalf("skills = %#v, want one repo-preferred canonical path", response.Skills)
+	}
+}
+
+func TestSkillsListKeepsDuplicateNamesAndSortsByScopeLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	writeNamedSkill := func(root string, dir string, description string) {
+		t.Helper()
+		skillDir := filepath.Join(root, dir)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: duplicate\ndescription: "+description+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", dir, err)
+		}
+	}
+	userRoot := t.TempDir()
+	writeNamedSkill(userRoot, "user-copy", "user")
+	writeNamedSkill(filepath.Join(cwd, ".codex", "skills"), "repo-copy", "repo")
+
+	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: userRoot, Scope: "user"}},
+	}).List(&SkillsListParams{CWDs: []string{cwd}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 2 || response.Skills[0].Scope != "repo" || response.Skills[1].Scope != "user" {
+		t.Fatalf("skills = %#v, want duplicate names ordered repo then user", response.Skills)
+	}
+}
+
+func TestSkillsListSharedAgentsRootAppliesToEachRequestedCWDLikeRust(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	firstCWD := filepath.Join(project, "first")
+	secondCWD := filepath.Join(project, "second")
+	if err := os.MkdirAll(firstCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll(first cwd) error = %v", err)
+	}
+	if err := os.MkdirAll(secondCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll(second cwd) error = %v", err)
+	}
+	skillDir := filepath.Join(project, ".agents", "skills", "shared-agent")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: shared-agent\ndescription: shared\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{firstCWD, secondCWD}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 2 || len(response.Data[0].Skills) != 1 || len(response.Data[1].Skills) != 1 {
+		t.Fatalf("response = %#v, want shared ancestor skill for both cwds", response)
+	}
+}
+
+func TestSkillsListLoadsRepoSkillsWhenCWDIsFileLikeRust(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	cwdFile := filepath.Join(project, "src", "main.go")
+	if err := os.MkdirAll(filepath.Dir(cwdFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll(src) error = %v", err)
+	}
+	if err := os.WriteFile(cwdFile, []byte("package main\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cwd file) error = %v", err)
+	}
+	skillDir := filepath.Join(project, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: repo\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	response, err := NewSkillsService(nil).List(&SkillsListParams{CWDs: []string{cwdFile}, ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Skills) != 1 || response.Data[0].Skills[0].Name != "repo-skill" {
+		t.Fatalf("response = %#v, want repo skill for file cwd", response)
 	}
 }
 
@@ -439,6 +717,62 @@ func TestSkillsListUsesCachedResultUntilForceReloadLikeRust(t *testing.T) {
 	}
 }
 
+func TestSkillsServiceTurnConfigOverridesPersistentRulesAndCacheLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: github:yeet\ndescription: Demo\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	home := t.TempDir()
+	configService := config.NewConfigService(home)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Path: skillPath, Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig() error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{Roots: []string{root}, Config: configService})
+	disabled, err := service.List(&SkillsListParams{})
+	if err != nil || len(disabled.Skills) != 1 || disabled.Skills[0].Enabled {
+		t.Fatalf("persistent disabled skills = %#v err=%v", disabled, err)
+	}
+	sessionRules := skillConfigEntriesFromValues(map[string]any{"skills": map[string]any{"config": []any{
+		map[string]any{"name": "github:yeet", "enabled": true},
+	}}})
+	reenabled, err := service.List(&SkillsListParams{Config: sessionRules})
+	if err != nil || len(reenabled.Skills) != 1 || reenabled.Skills[0].Name != "github:yeet" {
+		t.Fatalf("session re-enabled skills = %#v err=%v", reenabled, err)
+	}
+	disabledAgain, err := service.List(&SkillsListParams{})
+	if err != nil || len(disabledAgain.Skills) != 1 || disabledAgain.Skills[0].Enabled {
+		t.Fatalf("persistent cache after session override = %#v err=%v", disabledAgain, err)
+	}
+}
+
+func TestSkillsServiceAppliesNameConfigToPluginEntriesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	configService := config.NewConfigService(home)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Name: "Sample:sample-search", Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig() error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService})
+	pluginPath := filepath.Join(t.TempDir(), "sample-search", SkillFilename)
+	entries, err := service.applyConfigEntries([]SkillsListEntry{{
+		Name:     "Sample:sample-search",
+		Path:     pluginPath,
+		Scope:    "plugin",
+		Enabled:  true,
+		PluginID: "sample@test",
+	}}, nil)
+	if err != nil {
+		t.Fatalf("applyConfigEntries() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Enabled {
+		t.Fatalf("plugin entries = %#v, want retained disabled plugin skill", entries)
+	}
+}
+
 func TestListSkillsParsesFrontmatterAndMetadata(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "skill-c")
@@ -481,7 +815,6 @@ policy:
   allow_implicit_invocation: false
   products:
     - CODEX
-    - ignored-product
 `), 0o600); err != nil {
 		t.Fatalf("WriteFile(metadata) error = %v", err)
 	}
@@ -576,6 +909,67 @@ policy:
 	}
 }
 
+func TestListSkillsPreservesEmptyPolicyLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "empty-policy")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(metadata) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: empty-policy\ndescription: empty policy\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("policy: {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 || response.Skills[0].Policy == nil || response.Skills[0].Policy.AllowImplicitInvocation != nil || len(response.Skills[0].Policy.Products) != 0 {
+		t.Fatalf("skill = %#v, want preserved empty policy", response.Skills)
+	}
+}
+
+func TestListSkillsInvalidProductIgnoresWholeMetadataFileLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "invalid-product")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: invalid-product\ndescription: demo\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	metadata := "interface:\n  display_name: Ignored\ndependencies:\n  tools:\n    - type: mcp\n      value: docs\npolicy:\n  products: [codex, unknown]\n"
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte(metadata), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	response, err := NewSkillsService([]string{root}).List(&SkillsListParams{})
+	if err != nil || len(response.Skills) != 1 {
+		t.Fatalf("List() response=%#v err=%v", response, err)
+	}
+	skill := response.Skills[0]
+	if skill.Interface != nil || skill.Dependencies != nil || skill.Policy != nil {
+		t.Fatalf("invalid product metadata was partially retained: %#v", skill)
+	}
+}
+
+func TestRemoteSkillInvalidProductIgnoresWholeMetadataFileLikeRust(t *testing.T) {
+	entry, warning, ok := remoteSkillEntryFromContents(
+		"remote-env",
+		"/skills/demo/SKILL.md",
+		"---\nname: demo\ndescription: demo\n---\n",
+		"interface:\n  display_name: Ignored\npolicy:\n  products: [Codex]\n",
+		"",
+	)
+	if !ok || warning != "" {
+		t.Fatalf("remoteSkillEntryFromContents() entry=%#v warning=%q ok=%v", entry, warning, ok)
+	}
+	if entry.Interface != nil || entry.Dependencies != nil || entry.Policy != nil {
+		t.Fatalf("invalid remote product metadata was partially retained: %#v", entry)
+	}
+}
+
 func TestListSkillsIgnoresGoOnlyMetadataAliasesLikeRust(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "skill-alias")
@@ -630,8 +1024,64 @@ policy:
 	if skill.Dependencies != nil {
 		t.Fatalf("Go-only dependency aliases should be ignored like Rust: %#v", skill.Dependencies)
 	}
-	if skill.Policy != nil {
-		t.Fatalf("Go-only policy aliases should be ignored like Rust: %#v", skill.Policy)
+	if skill.Policy == nil || skill.Policy.AllowImplicitInvocation != nil || len(skill.Policy.Products) != 0 {
+		t.Fatalf("unknown policy fields should leave a present empty policy like Rust: %#v", skill.Policy)
+	}
+}
+
+func TestDiscoverPluginSkillAllowsSharedPluginAssetsLikeRust(t *testing.T) {
+	pluginRoot := filepath.Join(t.TempDir(), "plugin")
+	skillDir := filepath.Join(pluginRoot, "skills", "send-message")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "assets"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(assets) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: send-message\ndescription: send messages\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("interface:\n  icon_small: ../../assets/logo.svg\n  icon_large: ../../assets/logo.svg\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	entries, skillErrors, err := discover(SkillsRoot{
+		Path:       filepath.Join(pluginRoot, "skills"),
+		Scope:      "plugin",
+		PluginID:   "plugin@test",
+		PluginRoot: pluginRoot,
+	})
+	if err != nil || len(skillErrors) != 0 || len(entries) != 1 {
+		t.Fatalf("discover() entries=%#v errors=%#v err=%v", entries, skillErrors, err)
+	}
+	want := filepath.Join(pluginRoot, "assets", "logo.svg")
+	if entries[0].Interface == nil || entries[0].Interface.IconSmall == nil || entries[0].Interface.IconLarge == nil || *entries[0].Interface.IconSmall != want || *entries[0].Interface.IconLarge != want {
+		t.Fatalf("interface = %#v, want shared asset %q", entries[0].Interface, want)
+	}
+}
+
+func TestDiscoverPluginSkillRejectsSharedAssetEscapeLikeRust(t *testing.T) {
+	pluginRoot := filepath.Join(t.TempDir(), "plugin")
+	skillDir := filepath.Join(pluginRoot, "skills", "send-message")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: send-message\ndescription: send messages\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("interface:\n  icon_small: ../../other/logo.svg\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	entries, skillErrors, err := discover(SkillsRoot{
+		Path:       filepath.Join(pluginRoot, "skills"),
+		Scope:      "plugin",
+		PluginID:   "plugin@test",
+		PluginRoot: pluginRoot,
+	})
+	if err != nil || len(skillErrors) != 0 || len(entries) != 1 {
+		t.Fatalf("discover() entries=%#v errors=%#v err=%v", entries, skillErrors, err)
+	}
+	if entries[0].Interface != nil {
+		t.Fatalf("interface = %#v, want nil for escaped shared asset", entries[0].Interface)
 	}
 }
 
@@ -669,7 +1119,7 @@ func TestListSkillsFiltersPolicyProductsLikeRust(t *testing.T) {
 	}
 }
 
-func TestRemoteSkillMetadataAssetsUseEnvironmentLocator(t *testing.T) {
+func TestRemoteSkillMetadataIgnoresInterfaceLikeRust(t *testing.T) {
 	entry, warning, ok := remoteSkillEntryFromContents("remote-env", "file:///remote/skills/demo/SKILL.md", `---
 name: demo
 description: Remote demo
@@ -682,14 +1132,8 @@ interface:
 	if !ok {
 		t.Fatalf("remoteSkillEntryFromContents() ok = false, warning = %q", warning)
 	}
-	if entry.Interface == nil || entry.Interface.IconSmall == nil || entry.Interface.IconLarge == nil {
-		t.Fatalf("remote interface = %#v", entry.Interface)
-	}
-	if *entry.Interface.IconSmall != "environment://remote-env/remote/skills/demo/assets/icon.png" {
-		t.Fatalf("icon small = %q", *entry.Interface.IconSmall)
-	}
-	if *entry.Interface.IconLarge != "environment://remote-env/remote/skills/demo/assets/large.png" {
-		t.Fatalf("icon large = %q", *entry.Interface.IconLarge)
+	if entry.Interface != nil {
+		t.Fatalf("remote environment interface = %#v, want nil", entry.Interface)
 	}
 }
 
@@ -817,7 +1261,7 @@ func TestRemoteSkillSourcePathEscapesLocalPaths(t *testing.T) {
 	}
 }
 
-func TestSkillsListEntryMarshalIncludesPluginID(t *testing.T) {
+func TestSkillsListEntryMarshalOmitsInternalPluginIDLikeRust(t *testing.T) {
 	payload, err := json.Marshal(&SkillsListEntry{
 		Name:        "review",
 		Description: "Review with plugin context",
@@ -833,7 +1277,7 @@ func TestSkillsListEntryMarshalIncludesPluginID(t *testing.T) {
 	if err := json.Unmarshal(payload, &values); err != nil {
 		t.Fatalf("Unmarshal skill entry error = %v", err)
 	}
-	if values["pluginId"] != "docs@market" {
-		t.Fatalf("pluginId missing from payload: %s", payload)
+	if _, ok := values["pluginId"]; ok {
+		t.Fatalf("pluginId is not part of Rust SkillMetadata: %s", payload)
 	}
 }

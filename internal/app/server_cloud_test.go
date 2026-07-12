@@ -756,21 +756,6 @@ func TestExecServerRemoteValidationLikeRust(t *testing.T) {
 			return
 		}
 		defer conn.Close(websocket.StatusNormalClosure, "")
-		rpcCtx, rpcCancel := context.WithTimeout(r.Context(), time.Second)
-		defer rpcCancel()
-		if writeErr := conn.Write(rpcCtx, websocket.MessageText, []byte(`{"id":1,"method":"initialize","params":{"clientName":"app-remote-test"}}`)); writeErr != nil {
-			rpcDone <- writeErr
-			return
-		}
-		_, data, readErr := conn.Read(rpcCtx)
-		if readErr != nil {
-			rpcDone <- readErr
-			return
-		}
-		if !bytes.Contains(data, []byte(`"id":1`)) || !bytes.Contains(data, []byte(`"sessionId"`)) {
-			rpcDone <- fmt.Errorf("initialize response = %s", data)
-			return
-		}
 		rpcDone <- nil
 	}))
 	defer rendezvous.Close()

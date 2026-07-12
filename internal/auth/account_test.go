@@ -389,6 +389,33 @@ func TestChatGPTAuthTokensLoginUsesExternalMode(t *testing.T) {
 	}
 }
 
+func TestAccountManagerAuthSnapshotTracksExternalTokensAndClonesLikeRust(t *testing.T) {
+	manager := NewAccountManager()
+	plan := "pro"
+	if _, err := manager.Login(&LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      "access-token",
+		ChatGPTAccountID: "account-123",
+		ChatGPTPlanType:  &plan,
+	}); err != nil {
+		t.Fatalf("Login(chatgptAuthTokens) error = %v", err)
+	}
+
+	snapshot := manager.AuthSnapshot()
+	if snapshot == nil || snapshot.Mode() != "chatgptAuthTokens" || snapshot.Tokens["access_token"] != "access-token" || snapshot.Tokens["account_id"] != "account-123" {
+		t.Fatalf("auth snapshot = %#v", snapshot)
+	}
+	snapshot.Tokens["access_token"] = "mutated"
+	if got := manager.AuthSnapshot(); got == nil || got.Tokens["access_token"] != "access-token" {
+		t.Fatalf("stored auth snapshot was mutated through clone: %#v", got)
+	}
+
+	manager.Logout()
+	if got := manager.AuthSnapshot(); got != nil {
+		t.Fatalf("auth snapshot after logout = %#v, want nil", got)
+	}
+}
+
 func TestApplyAuthSnapshotUsesRustWireAuthMode(t *testing.T) {
 	manager := NewAccountManager()
 	manager.ApplyAuthSnapshot(&AuthDotJSON{AuthMode: "apikey", OpenAIAPIKey: "sk-rust"})

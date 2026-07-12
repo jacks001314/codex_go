@@ -3,9 +3,6 @@ package execserver
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,8 +61,8 @@ type registryErrorBody struct {
 }
 
 type registryError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    *string `json:"code"`
+	Message *string `json:"message"`
 }
 
 func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) error {
@@ -93,14 +90,15 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 		cfg.MaxBackoff = defaultRemoteMaxBackoff
 	}
 
-	key, err := generateRemotePublicKey()
+	identity, err := generateRemoteNoiseIdentity()
 	if err != nil {
 		return fmt.Errorf("failed to generate Noise relay identity: %w", err)
 	}
+	defer identity.Destroy()
 
 	server := NewServer()
 	backoff := cfg.Backoff
-	registration, err := registerRemoteEnvironment(ctx, cfg, key)
+	registration, err := registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
 	if err != nil {
 		return err
 	}
@@ -111,7 +109,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 		conn, response, err := cfg.Dial(ctx, registration.URL, &websocket.DialOptions{})
 		if err == nil {
 			backoff = cfg.Backoff
-			serveErr := server.serveWebSocketConnection(ctx, conn)
+			serveErr := server.serveNoiseRelayConnection(ctx, conn, cfg, registration, identity)
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -120,7 +118,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 			}
 		}
 		if response != nil && response.StatusCode >= 400 && response.StatusCode < 500 {
-			registration, err = registerRemoteEnvironment(ctx, cfg, key)
+			registration, err = registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
 			if err != nil {
 				return err
 			}
@@ -172,9 +170,6 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 	if decoded.SecurityProfile != RemoteSecurityProfile {
 		return nil, fmt.Errorf("exec-server protocol error: environment registry returned unsupported security profile `%s`", decoded.SecurityProfile)
 	}
-	if strings.TrimSpace(decoded.URL) == "" || strings.TrimSpace(decoded.ExecutorRegistrationID) == "" {
-		return nil, errors.New("exec-server protocol error: environment registry returned incomplete Noise registration data")
-	}
 	return &decoded, nil
 }
 
@@ -187,35 +182,37 @@ func remoteRegistryStatusError(response *http.Response) error {
 	}
 	code, message := registryHTTPErrorMessage(body)
 	codeSuffix := ""
-	if code != "" {
-		codeSuffix = ", " + code
+	if code != nil {
+		codeSuffix = ", " + *code
 	}
 	return fmt.Errorf("environment registry request failed (%s%s): %s", status, codeSuffix, message)
 }
 
-func registryHTTPErrorMessage(body string) (string, string) {
+func registryHTTPErrorMessage(body string) (*string, string) {
 	var decoded registryErrorBody
 	if err := json.Unmarshal([]byte(body), &decoded); err == nil && decoded.Error != nil {
-		message := strings.TrimSpace(decoded.Error.Message)
-		if message == "" {
+		message := ""
+		if decoded.Error.Message != nil {
+			message = *decoded.Error.Message
+		} else {
 			message = previewErrorBody(body)
+			if message == "" {
+				message = "empty error body"
+			}
 		}
-		if message == "" {
-			message = "empty error body"
-		}
-		return strings.TrimSpace(decoded.Error.Code), message
+		return decoded.Error.Code, message
 	}
 	message := previewErrorBody(body)
 	if message == "" {
 		message = "empty or malformed error body"
 	}
-	return "", message
+	return nil, message
 }
 
 func registryErrorMessage(body string) string {
 	var decoded registryErrorBody
-	if err := json.Unmarshal([]byte(body), &decoded); err == nil && decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
-		return strings.TrimSpace(decoded.Error.Message)
+	if err := json.Unmarshal([]byte(body), &decoded); err == nil && decoded.Error != nil && decoded.Error.Message != nil {
+		return *decoded.Error.Message
 	}
 	if preview := previewErrorBody(body); preview != "" {
 		return preview
@@ -225,8 +222,9 @@ func registryErrorMessage(body string) string {
 
 func previewErrorBody(body string) string {
 	trimmed := strings.TrimSpace(body)
-	if len(trimmed) > errorBodyPreviewMaxBytes {
-		trimmed = trimmed[:errorBodyPreviewMaxBytes]
+	runes := []rune(trimmed)
+	if len(runes) > errorBodyPreviewMaxBytes {
+		trimmed = string(runes[:errorBodyPreviewMaxBytes])
 	}
 	return trimmed
 }
@@ -236,19 +234,12 @@ func remoteEndpointURL(baseURL string, path string) string {
 }
 
 func generateRemotePublicKey() (RemotePublicKey, error) {
-	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	identity, err := generateRemoteNoiseIdentity()
 	if err != nil {
 		return RemotePublicKey{}, err
 	}
-	mlkemPublicKey := make([]byte, mlkem768PublicKeyBytes)
-	if _, err := rand.Read(mlkemPublicKey); err != nil {
-		return RemotePublicKey{}, err
-	}
-	return RemotePublicKey{
-		Suite:             noiseChannelSuite,
-		X25519PublicKey:   base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes()),
-		MLKEM768PublicKey: base64.StdEncoding.EncodeToString(mlkemPublicKey),
-	}, nil
+	defer identity.Destroy()
+	return identity.PublicKey(), nil
 }
 
 func remoteHTTPClient() *http.Client {

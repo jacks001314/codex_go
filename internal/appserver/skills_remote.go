@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	execserverclient "codex_go/internal/execserver"
+
 	"github.com/coder/websocket"
 	"gopkg.in/yaml.v3"
 )
@@ -49,6 +51,56 @@ type remoteFSGetMetadataResponse struct {
 	IsFile bool `json:"isFile"`
 }
 
+type remoteEnvironmentFSCaller interface {
+	Call(context.Context, int, string, any) (json.RawMessage, error)
+}
+
+type websocketRemoteEnvironmentFSCaller struct {
+	conn *websocket.Conn
+}
+
+func (c websocketRemoteEnvironmentFSCaller) Call(ctx context.Context, id int, method string, params any) (json.RawMessage, error) {
+	return callRemoteEnvironmentFS(ctx, c.conn, id, method, params)
+}
+
+type clientRemoteEnvironmentFSCaller struct {
+	client *execserverclient.Client
+}
+
+func (c clientRemoteEnvironmentFSCaller) Call(ctx context.Context, _ int, method string, params any) (json.RawMessage, error) {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	var response any
+	switch method {
+	case execserverclient.MethodFSWalk:
+		var request execserverclient.FSWalkParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.client.FSWalk(ctx, &request)
+	case execserverclient.MethodFSReadFile:
+		var request execserverclient.FSReadFileParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.client.FSReadFile(ctx, &request)
+	case execserverclient.MethodFSGetMetadata:
+		var request execserverclient.FSGetMetadataParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.client.FSGetMetadata(ctx, &request)
+	default:
+		return nil, fmt.Errorf("unsupported remote filesystem method %s", method)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
+}
+
 func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRecord, rootPath string) ([]SkillsListEntry, []string, error) {
 	if record == nil {
 		return nil, nil, nil
@@ -59,31 +111,42 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 	}
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
-	if err != nil {
-		return nil, nil, err
+	var caller remoteEnvironmentFSCaller
+	if record.NoiseProvider != nil {
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		if err != nil {
+			return nil, nil, err
+		}
+		defer client.Close()
+		caller = clientRemoteEnvironmentFSCaller{client: client}
+	} else {
+		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      1,
+			Method:  "initialize",
+			Params: map[string]any{
+				"clientName": "codex-go",
+			},
+		}); err != nil {
+			return nil, nil, err
+		}
+		if _, err := readExecServerResponse(ctx, conn, 1); err != nil {
+			return nil, nil, err
+		}
+		if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
+			JSONRPC: "2.0",
+			Method:  "initialized",
+		}); err != nil {
+			return nil, nil, err
+		}
+		caller = websocketRemoteEnvironmentFSCaller{conn: conn}
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-		Params: map[string]any{
-			"clientName": "codex-go",
-		},
-	}); err != nil {
-		return nil, nil, err
-	}
-	if _, err := readExecServerResponse(ctx, conn, 1); err != nil {
-		return nil, nil, err
-	}
-	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "initialized",
-	}); err != nil {
-		return nil, nil, err
-	}
-	walkRaw, err := callRemoteEnvironmentFS(ctx, conn, 2, "fs/walk", map[string]any{
+	walkRaw, err := caller.Call(ctx, 2, "fs/walk", map[string]any{
 		"path": rootPath,
 		"options": map[string]any{
 			"maxDepth":                remoteSkillWalkMaxDepth,
@@ -110,21 +173,21 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 		}
 	}
 	nextID := 3
-	pluginNamespaces := remotePluginNamespacesFromInventory(ctx, conn, &nextID, remoteFiles)
-	pluginNamespaces = remotePluginNamespacesFromRootAncestors(ctx, conn, &nextID, rootPath, pluginNamespaces)
+	pluginNamespaces := remotePluginNamespacesFromInventory(ctx, caller, &nextID, remoteFiles)
+	pluginNamespaces = remotePluginNamespacesFromRootAncestors(ctx, caller, &nextID, rootPath, pluginNamespaces)
 	entries := make([]SkillsListEntry, 0)
 	for _, entry := range walk.Entries {
 		if entry.Kind != "file" || remotePathBase(entry.Path) != SkillFilename {
 			continue
 		}
-		contents, err := readRemoteEnvironmentText(ctx, conn, &nextID, entry.Path)
+		contents, err := readRemoteEnvironmentText(ctx, caller, &nextID, entry.Path)
 		if err != nil {
 			return nil, warnings, err
 		}
 		metadataPath := remoteSkillMetadataPath(entry.Path)
 		metadataContents := ""
 		if remoteFiles[remoteNormalizePathKey(metadataPath)] {
-			metadataContents, _ = readRemoteEnvironmentText(ctx, conn, &nextID, metadataPath)
+			metadataContents, _ = readRemoteEnvironmentText(ctx, caller, &nextID, metadataPath)
 		}
 		pluginNamespace := remotePluginNamespaceForSkill(entry.Path, pluginNamespaces)
 		if skillEntry, warning, ok := remoteSkillEntryFromContents(record.EnvironmentID, entry.Path, contents, metadataContents, pluginNamespace); ok {
@@ -169,7 +232,7 @@ type remotePluginManifestName struct {
 	Name string `json:"name"`
 }
 
-func remotePluginNamespacesFromInventory(ctx context.Context, conn *websocket.Conn, nextID *int, remoteFiles map[string]bool) map[string]string {
+func remotePluginNamespacesFromInventory(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, remoteFiles map[string]bool) map[string]string {
 	if len(remoteFiles) == 0 {
 		return nil
 	}
@@ -195,7 +258,7 @@ func remotePluginNamespacesFromInventory(ctx context.Context, conn *websocket.Co
 	sort.Strings(roots)
 	namespaces := make(map[string]string, len(roots))
 	for _, root := range roots {
-		contents, err := readRemoteEnvironmentText(ctx, conn, nextID, candidates[root].path)
+		contents, err := readRemoteEnvironmentText(ctx, caller, nextID, candidates[root].path)
 		if err != nil {
 			continue
 		}
@@ -217,11 +280,11 @@ func remotePluginNamespacesFromInventory(ctx context.Context, conn *websocket.Co
 	return namespaces
 }
 
-func remotePluginNamespacesFromRootAncestors(ctx context.Context, conn *websocket.Conn, nextID *int, rootPath string, existing map[string]string) map[string]string {
+func remotePluginNamespacesFromRootAncestors(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, rootPath string, existing map[string]string) map[string]string {
 	current := remoteNormalizePathKey(rootPath)
 	for i := 0; current != "" && i < 64; i++ {
 		if _, ok := existing[current]; !ok {
-			if namespace, ok := remotePluginNamespaceForRoot(ctx, conn, nextID, current); ok {
+			if namespace, ok := remotePluginNamespaceForRoot(ctx, caller, nextID, current); ok {
 				if existing == nil {
 					existing = map[string]string{}
 				}
@@ -237,14 +300,14 @@ func remotePluginNamespacesFromRootAncestors(ctx context.Context, conn *websocke
 	return existing
 }
 
-func remotePluginNamespaceForRoot(ctx context.Context, conn *websocket.Conn, nextID *int, pluginRoot string) (string, bool) {
+func remotePluginNamespaceForRoot(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, pluginRoot string) (string, bool) {
 	for _, relativePath := range remoteDiscoverablePluginManifestPaths {
 		manifestPath := remoteJoin(pluginRoot, relativePath)
-		metadata, err := getRemoteEnvironmentMetadata(ctx, conn, nextID, manifestPath)
+		metadata, err := getRemoteEnvironmentMetadata(ctx, caller, nextID, manifestPath)
 		if err != nil || metadata == nil || !metadata.IsFile {
 			continue
 		}
-		contents, err := readRemoteEnvironmentText(ctx, conn, nextID, manifestPath)
+		contents, err := readRemoteEnvironmentText(ctx, caller, nextID, manifestPath)
 		if err != nil {
 			return "", false
 		}
@@ -332,13 +395,13 @@ func callRemoteEnvironmentFS(ctx context.Context, conn *websocket.Conn, id int, 
 	return readExecServerResponse(ctx, conn, id)
 }
 
-func readRemoteEnvironmentText(ctx context.Context, conn *websocket.Conn, nextID *int, path string) (string, error) {
+func readRemoteEnvironmentText(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, path string) (string, error) {
 	if nextID == nil {
 		return "", fmt.Errorf("remote fs request id is nil")
 	}
 	id := *nextID
 	*nextID = *nextID + 1
-	raw, err := callRemoteEnvironmentFS(ctx, conn, id, "fs/readFile", map[string]any{"path": path})
+	raw, err := caller.Call(ctx, id, "fs/readFile", map[string]any{"path": path})
 	if err != nil {
 		return "", err
 	}
@@ -353,13 +416,13 @@ func readRemoteEnvironmentText(ctx context.Context, conn *websocket.Conn, nextID
 	return string(data), nil
 }
 
-func getRemoteEnvironmentMetadata(ctx context.Context, conn *websocket.Conn, nextID *int, path string) (*remoteFSGetMetadataResponse, error) {
+func getRemoteEnvironmentMetadata(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, path string) (*remoteFSGetMetadataResponse, error) {
 	if nextID == nil {
 		return nil, fmt.Errorf("remote fs request id is nil")
 	}
 	id := *nextID
 	*nextID = *nextID + 1
-	raw, err := callRemoteEnvironmentFS(ctx, conn, id, "fs/getMetadata", map[string]any{"path": path})
+	raw, err := caller.Call(ctx, id, "fs/getMetadata", map[string]any{"path": path})
 	if err != nil {
 		return nil, err
 	}
@@ -394,52 +457,12 @@ func remoteSkillEntryFromContents(environmentID string, skillPath string, conten
 	}
 	if strings.TrimSpace(metadataContents) != "" {
 		var parsed skillMetadataFile
-		if err := yaml.Unmarshal([]byte(metadataContents), &parsed); err == nil {
-			entry.Interface = resolveRemoteSkillInterface(parsed.Interface, environmentID, remoteSkillDir(skillPath))
+		if err := yaml.Unmarshal([]byte(metadataContents), &parsed); err == nil && skillMetadataProductsValid(parsed.Policy) {
 			entry.Dependencies = resolveSkillDependencies(parsed.Dependencies)
 			entry.Policy = resolveSkillPolicy(parsed.Policy)
 		}
 	}
 	return entry, "", true
-}
-
-func resolveRemoteSkillInterface(metadata *skillMetadataInterface, environmentID string, skillDir string) *SkillInterface {
-	if metadata == nil {
-		return nil
-	}
-	value := &SkillInterface{
-		DisplayName:      resolveSkillString(metadata.displayName(), skillMaxNameLen),
-		ShortDescription: resolveSkillString(metadata.shortDescription(), skillMaxDescriptionLen),
-		IconSmall:        resolveRemoteSkillAssetPath(environmentID, skillDir, metadata.iconSmall()),
-		IconLarge:        resolveRemoteSkillAssetPath(environmentID, skillDir, metadata.iconLarge()),
-		BrandColor:       resolveSkillColor(metadata.brandColor()),
-		DefaultPrompt:    optionalSkillString(metadata.defaultPrompt(), skillMaxDescriptionLen),
-	}
-	if value.DisplayName == "" && value.ShortDescription == "" && value.IconSmall == nil && value.IconLarge == nil && value.BrandColor == nil && value.DefaultPrompt == nil {
-		return nil
-	}
-	return value
-}
-
-func resolveRemoteSkillAssetPath(environmentID string, skillDir string, value string) *string {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, ":") {
-		return nil
-	}
-	cleaned := pathpkg.Clean(strings.ReplaceAll(value, "\\", "/"))
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return nil
-	}
-	parts := strings.Split(cleaned, "/")
-	if len(parts) == 0 || parts[0] != "assets" {
-		return nil
-	}
-	joined := remoteJoin(skillDir, parts...)
-	if strings.TrimSpace(joined) == "" {
-		return nil
-	}
-	locator := remoteSkillSourcePath(environmentID, joined)
-	return &locator
 }
 
 func remoteSkillMetadataPath(skillPath string) string {

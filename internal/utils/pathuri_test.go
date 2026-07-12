@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -141,9 +142,23 @@ func TestJSONAndNativeHostPath(t *testing.T) {
 }
 
 func TestRejectsUnsupportedMetadata(t *testing.T) {
-	for _, raw := range []string{"https://example.com/file", "file:///tmp/file?version=1", "file:///tmp/file#L1", "file:///tmp/%00"} {
+	for _, raw := range []string{"https://example.com/file", "file://server:42/share", "file:///tmp/file?version=1", "file:///tmp/file#L1", "file:///tmp/%00"} {
 		if _, err := Parse(raw); err == nil {
 			t.Fatalf("expected parse error for %s", raw)
 		}
+	}
+}
+
+func TestHostNativePathRejectsForeignConvention(t *testing.T) {
+	raw := "file:///usr/local/file.txt"
+	if runtime.GOOS != "windows" {
+		raw = "file:///C:/Users/Alice/file.txt"
+	}
+	uri, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := uri.HostNativePath(); err == nil {
+		t.Fatalf("HostNativePath(%q) error = nil", raw)
 	}
 }

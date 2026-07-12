@@ -2,10 +2,15 @@ package tool
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync/atomic"
 
+	"codex_go/internal/network"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/utils"
 )
@@ -16,19 +21,33 @@ const (
 )
 
 type ShellExecutorOptions struct {
-	Runner     ShellRunner
-	Shell      *Shell
-	Validation ShellValidationOptions
-	ToolName   ToolName
-	Approval   ShellApprovalFunc
+	Runner                  ShellRunner
+	Shell                   *Shell
+	Validation              ShellValidationOptions
+	ToolName                ToolName
+	Approval                ShellApprovalFunc
+	MaxOutputTokens         *int
+	UnifiedExec             *UnifiedExecManager
+	UnifiedExecEvents       UnifiedExecEventSink
+	UnifiedExecThreadID     string
+	UnifiedExecTurnID       string
+	UnifiedExecEnvironments []UnifiedExecEnvironment
+	ManagedNetworkResolver  ManagedNetworkResolver
 }
 
 type ShellExecutor struct {
-	runner     ShellRunner
-	shell      *Shell
-	validation ShellValidationOptions
-	toolName   ToolName
-	approval   ShellApprovalFunc
+	runner                  ShellRunner
+	shell                   *Shell
+	validation              ShellValidationOptions
+	toolName                ToolName
+	approval                ShellApprovalFunc
+	maxOutputTokens         *int
+	unifiedExec             *UnifiedExecManager
+	unifiedExecEvents       UnifiedExecEventSink
+	unifiedExecThreadID     string
+	unifiedExecTurnID       string
+	unifiedExecEnvironments []UnifiedExecEnvironment
+	managedNetworkResolver  ManagedNetworkResolver
 }
 
 type ShellApprovalDecision struct {
@@ -42,6 +61,8 @@ type ShellApprovalRequest struct {
 }
 
 type ShellApprovalFunc func(context.Context, *ShellApprovalRequest) (ShellApprovalDecision, error)
+
+type ManagedNetworkResolver func(environmentID string) (map[string]string, *network.ProxyManagedNetworkSandboxContext, error)
 
 func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor := &ShellExecutor{
@@ -67,6 +88,13 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 		executor.toolName = options.ToolName
 	}
 	executor.approval = options.Approval
+	executor.maxOutputTokens = cloneNonNegativeInt(options.MaxOutputTokens)
+	executor.unifiedExec = options.UnifiedExec
+	executor.unifiedExecEvents = options.UnifiedExecEvents
+	executor.unifiedExecThreadID = options.UnifiedExecThreadID
+	executor.unifiedExecTurnID = options.UnifiedExecTurnID
+	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
+	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	return executor
 }
 
@@ -80,6 +108,9 @@ func RegisterShellHandler(registry *Registry, options *ShellExecutorOptions) err
 func (e *ShellExecutor) Spec() Spec {
 	if e == nil || e.toolName.Key() == "" {
 		return Spec{Name: PlainName(DefaultExecCommandToolName)}
+	}
+	if e.unifiedExec != nil {
+		return e.unifiedExecSpec()
 	}
 	return Spec{
 		Name:        e.toolName,
@@ -125,16 +156,182 @@ func (e *ShellExecutor) Spec() Spec {
 	}
 }
 
+func (e *ShellExecutor) unifiedExecSpec() Spec {
+	properties := map[string]any{
+		"cmd": map[string]any{
+			"type":        "string",
+			"description": "Shell command to execute.",
+		},
+		"workdir": map[string]any{
+			"type":        "string",
+			"description": "Working directory for the command. Defaults to the turn cwd.",
+		},
+		"tty": map[string]any{
+			"type":        "boolean",
+			"description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
+		},
+		"yield_time_ms": map[string]any{
+			"type":        "number",
+			"description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.",
+		},
+		"max_output_tokens": map[string]any{
+			"type":        "number",
+			"description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+		},
+		"shell": map[string]any{
+			"type":        "string",
+			"description": "Shell binary to launch. Defaults to the user's default shell.",
+		},
+	}
+	if e.validation.AllowLoginShell {
+		properties["login"] = map[string]any{
+			"type":        "boolean",
+			"description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
+		}
+	}
+	if len(e.unifiedExecEnvironments) > 1 {
+		properties["environment_id"] = map[string]any{
+			"type":        "string",
+			"description": "Environment id from <environment_context>. Omit to use the primary environment.",
+		}
+	}
+	for key, schema := range unifiedExecApprovalProperties(e.validation.AdditionalPermissionsAllowed) {
+		properties[key] = schema
+	}
+	description := "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+	if runtime.GOOS == "windows" {
+		description += "\n\n" + unifiedExecWindowsShellGuidance
+	}
+	return Spec{
+		Name:        e.toolName,
+		Description: description,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"required":             []string{"cmd"},
+			"additionalProperties": false,
+			"properties":           properties,
+		},
+		OutputSchema: unifiedExecOutputSchema(),
+		Parallel:     true,
+	}
+}
+
+func unifiedExecApprovalProperties(additionalPermissions bool) map[string]any {
+	values := []any{string(sandbox.SandboxPermissionsUseDefault)}
+	description := "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution."
+	if additionalPermissions {
+		values = append(values, string(sandbox.SandboxPermissionsWithAdditionalPermissions))
+		description = "Per-command sandbox override. Defaults to `use_default`; use `with_additional_permissions` with `additional_permissions`, or `require_escalated` for unsandboxed execution."
+	}
+	values = append(values, string(sandbox.SandboxPermissionsRequireEscalated))
+	properties := map[string]any{
+		"sandbox_permissions": map[string]any{
+			"type":        "string",
+			"enum":        values,
+			"description": description,
+		},
+		"justification": map[string]any{
+			"type":        "string",
+			"description": "User-facing approval question for `require_escalated`; omit otherwise.",
+		},
+		"prefix_rule": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": `Reusable approval prefix for ` + "`cmd`" + `, only with ` + "`sandbox_permissions: \"require_escalated\"`" + `; for example ["git", "pull"].`,
+		},
+	}
+	if additionalPermissions {
+		properties["additional_permissions"] = unifiedExecAdditionalPermissionsSchema()
+	}
+	return properties
+}
+
+func unifiedExecAdditionalPermissionsSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"description":          `Sandboxed filesystem or network access for this command; only with ` + "`sandbox_permissions: \"with_additional_permissions\"`" + `.`,
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"network": map[string]any{
+				"type":                 "object",
+				"description":          "Network access request.",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"enabled": map[string]any{"type": "boolean", "description": "True requests network access; false or omitted requests none."},
+				},
+			},
+			"file_system": map[string]any{
+				"type":                 "object",
+				"description":          "Filesystem access request.",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"read":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Absolute paths to grant read access; omit when none are needed."},
+					"write": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Absolute paths to grant write access; omit when none are needed."},
+				},
+			},
+		},
+	}
+}
+
+const unifiedExecWindowsShellGuidance = "Windows safety rules:\n" +
+	"- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.\n" +
+	"- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.\n" +
+	"- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."
+
 func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	args, err := decodeExecCommandInvocation(invocation)
 	if err != nil {
 		return nil, err
 	}
+	args.MaxOutputTokens = clampShellMaxOutputTokens(args.MaxOutputTokens, e.maxOutputTokens)
 	validation := e.validationOptions()
+	sessionShell := e.sessionShell()
+	environment, err := e.resolveUnifiedExecEnvironment(args.EnvironmentID)
+	if err != nil {
+		return nil, RespondToModel(err.Error())
+	}
+	if environment != nil {
+		environmentCWD := environment.CWD
+		remoteEnvironment := environment.ExecServerURL != "" || environment.NoiseProvider != nil
+		if remoteEnvironment {
+			environmentCWD, err = resolveRemoteUnifiedExecCWD(environment.CWD, firstNonEmptyString(args.CWD, args.Workdir))
+			if err != nil {
+				return nil, RespondToModel(err.Error())
+			}
+			args.CWD = ""
+			args.Workdir = ""
+		}
+		validation.CWD = environmentCWD
+		if environment.Shell != nil {
+			sessionShell = environment.Shell
+		}
+		if remoteEnvironment && strings.TrimSpace(args.Shell) != "" {
+			if environment.Shell == nil {
+				return nil, RespondToModel(fmt.Sprintf("environment `%s` does not report a shell", environment.ID))
+			}
+			if DetectShellType(args.Shell) != environment.Shell.Type {
+				return nil, RespondToModel(fmt.Sprintf("environment `%s` only supports `%s`", environment.ID, environment.Shell.Type))
+			}
+			args.Shell = ""
+		}
+	}
+	if e.managedNetworkResolver != nil {
+		environmentID := "local"
+		if environment != nil && strings.TrimSpace(environment.ID) != "" {
+			environmentID = environment.ID
+		}
+		env, managedNetwork, resolveErr := e.managedNetworkResolver(environmentID)
+		if resolveErr != nil {
+			return nil, RespondToModel(fmt.Sprintf("failed to prepare network proxy for environment `%s`: %v", environmentID, resolveErr))
+		}
+		validation.Env = env
+		validation.EnforceManagedNetwork = true
+		validation.ManagedNetwork = managedNetwork
+	}
 	if invocationPermissionPreapproved(invocation) {
 		validation.PermissionsPreapproved = true
 	}
-	req, err := BuildShellRequest(args, e.sessionShell(), validation)
+	req, err := BuildShellRequest(args, sessionShell, validation)
 	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
@@ -162,7 +359,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 				}, nil
 			}
 			validation.PermissionsPreapproved = true
-			req, err = BuildShellRequest(args, e.sessionShell(), validation)
+			req, err = BuildShellRequest(args, sessionShell, validation)
 			if err != nil {
 				return nil, RespondToModel(err.Error())
 			}
@@ -177,17 +374,181 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			}, nil
 		}
 	}
-	result, err := e.shellRunner().Run(ctx, req)
+	if environment != nil {
+		req.UnifiedExecEnvironmentID = environment.ID
+		req.UnifiedExecRemoteURL = environment.ExecServerURL
+		req.UnifiedExecNoiseProvider = environment.NoiseProvider
+	}
+	var result *ShellResult
+	if e.shouldUseUnifiedExec(req) {
+		req, err = prepareUnifiedExecShellRequest(req)
+		if err != nil {
+			return nil, err
+		}
+		req.UnifiedExecEventSink = e.unifiedExecEvents
+		req.UnifiedExecThreadID = e.unifiedExecThreadID
+		req.UnifiedExecTurnID = e.unifiedExecTurnID
+		result, err = e.unifiedExec.Exec(ctx, req, invocation.CallID)
+	} else {
+		result, err = e.shellRunner().Run(ctx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
-	body := ShellResultModelText(result, req.MaxOutputTokens)
+	if result.EventCallID == "" {
+		result.EventCallID = invocation.CallID
+	}
+	if result.HookCommand == "" {
+		result.HookCommand = req.HookCommand
+	}
+	result.UnifiedExecEvented = result.UnifiedExecEvented || req.UnifiedExecEventSink != nil
+	if result.ChunkID == "" {
+		result.ChunkID = generateShellChunkID()
+	}
+	if result.MaxOutputTokensUsed == nil {
+		result.MaxOutputTokensUsed = cloneNonNegativeInt(req.MaxOutputTokens)
+	}
+	body := shellResultModelTextWithMetadata(result, result.MaxOutputTokensUsed, result.ChunkID)
 	return &Output{
 		Success:    true,
 		Body:       body,
-		Data:       shellResultData(result, req.MaxOutputTokens),
+		Data:       shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
 		LogPreview: shellLogPreview(body),
 	}, nil
+}
+
+func (e *ShellExecutor) resolveUnifiedExecEnvironment(requested string) (*UnifiedExecEnvironment, error) {
+	if e == nil || len(e.unifiedExecEnvironments) == 0 {
+		if requested != "" {
+			return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+		}
+		return nil, nil
+	}
+	if requested == "" {
+		requested = e.unifiedExecEnvironments[0].ID
+	}
+	for i := range e.unifiedExecEnvironments {
+		if e.unifiedExecEnvironments[i].ID == requested {
+			environment := e.unifiedExecEnvironments[i]
+			return &environment, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+}
+
+func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExecEnvironment {
+	out := make([]UnifiedExecEnvironment, len(values))
+	for i := range values {
+		out[i] = values[i]
+		if values[i].Shell != nil {
+			shell := *values[i].Shell
+			out[i].Shell = &shell
+		}
+	}
+	return out
+}
+
+func resolveRemoteUnifiedExecCWD(base string, workdir string) (string, error) {
+	base = strings.TrimSpace(base)
+	basePath := utils.NewLegacyAppPathString(base)
+	convention, ok := basePath.InferAbsolutePathConvention()
+	if !ok {
+		return "", fmt.Errorf("path `%s` does not use absolute POSIX or Windows path syntax", base)
+	}
+	if workdir == "" {
+		return utils.LexicalClean(base, convention), nil
+	}
+	overridePath := utils.NewLegacyAppPathString(workdir)
+	if overrideConvention, absolute := overridePath.InferAbsolutePathConvention(); absolute {
+		if overrideConvention != convention {
+			return "", fmt.Errorf("path `%s` does not use the selected environment's %s path convention", workdir, convention)
+		}
+		return utils.LexicalClean(workdir, convention), nil
+	}
+	directoryBase := base
+	if convention == utils.ConventionWindows {
+		if !strings.HasSuffix(directoryBase, `\`) && !strings.HasSuffix(directoryBase, "/") {
+			directoryBase += `\`
+		}
+	} else if !strings.HasSuffix(directoryBase, "/") {
+		directoryBase += "/"
+	}
+	baseURI, err := utils.FromAbsoluteNativePath(directoryBase, convention)
+	if err != nil {
+		return "", err
+	}
+	joined, err := baseURI.Join(workdir)
+	if err != nil {
+		return "", err
+	}
+	rendered, err := utils.LegacyAppPathStringFromURI(joined, convention)
+	if err != nil {
+		return "", err
+	}
+	return rendered.Value, nil
+}
+
+func (e *ShellExecutor) shouldUseUnifiedExec(req *ShellRequest) bool {
+	if e == nil || e.unifiedExec == nil || req == nil {
+		return false
+	}
+	if strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil {
+		return true
+	}
+	if runtime.GOOS == "windows" && req.PermissionProfile != nil && !req.PermissionProfile.Disabled {
+		return true
+	}
+	return req.PermissionProfile == nil || req.PermissionProfile.Disabled || runtime.GOOS == "linux"
+}
+
+func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
+	if req == nil || strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
+		return req, nil
+	}
+	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
+		ResolvedPermissionProfile:     req.PermissionProfile,
+		ResolvedPermissionProfileID:   req.PermissionProfileID,
+		ResolvedPermissionProfileJSON: req.PermissionProfileJSON,
+		CWD:                           req.CWD,
+		Command:                       append([]string(nil), req.Command...),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := plan.UnsupportedError(); err != nil {
+		return nil, err
+	}
+	prepared := *req
+	prepared.Command = append([]string(nil), plan.Command...)
+	prepared.CWD = plan.CWD
+	prepared.Env = cloneEnv(req.Env)
+	if prepared.Env == nil {
+		prepared.Env = map[string]string{}
+	}
+	if profileID := strings.TrimSpace(plan.PermissionProfileID); profileID != "" {
+		prepared.Env["CODEX_PERMISSION_PROFILE"] = profileID
+	}
+	return &prepared, nil
+}
+
+func clampShellMaxOutputTokens(requested *int, policy *int) *int {
+	requested = cloneNonNegativeInt(requested)
+	policy = cloneNonNegativeInt(policy)
+	if policy == nil {
+		return requested
+	}
+	if requested == nil || *requested > *policy {
+		return policy
+	}
+	return requested
+}
+
+func cloneNonNegativeInt(value *int) *int {
+	if value == nil || *value < 0 {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePayload, bool) {
@@ -209,6 +570,9 @@ func (e *ShellExecutor) PostToolUsePayload(invocation *Invocation, output *Outpu
 	if output == nil {
 		return nil, false
 	}
+	if output.Data != nil && output.Data["process_id"] != nil {
+		return nil, false
+	}
 	response, ok := output.Data["hook_response"].(string)
 	if !ok {
 		response = output.Body
@@ -216,9 +580,13 @@ func (e *ShellExecutor) PostToolUsePayload(invocation *Invocation, output *Outpu
 	if strings.TrimSpace(response) == "" && output.Data == nil {
 		return nil, false
 	}
+	toolUseID := firstNonEmptyString(output.CallID, invocation.CallID)
+	if eventCallID, ok := output.Data["event_call_id"].(string); ok && eventCallID != "" {
+		toolUseID = eventCallID
+	}
 	return &PostToolUsePayload{
 		ToolName:     bashHookToolName(),
-		ToolUseID:    firstNonEmptyString(output.CallID, invocation.CallID),
+		ToolUseID:    toolUseID,
 		ToolInput:    shellHookInput(args),
 		ToolResponse: response,
 	}, true
@@ -249,18 +617,28 @@ func (e *ShellExecutor) WithUpdatedHookInput(invocation *Invocation, updatedInpu
 }
 
 func ShellResultModelText(result *ShellResult, maxOutputTokens *int) string {
+	return shellResultModelTextWithMetadata(result, maxOutputTokens, "")
+}
+
+func shellResultModelTextWithMetadata(result *ShellResult, maxOutputTokens *int, chunkID string) string {
 	if result == nil {
 		return ""
 	}
 	hookResponse := ShellResultHookResponse(result, maxOutputTokens)
-	sections := []string{
-		fmt.Sprintf("Wall time: %.4f seconds", result.Duration.Seconds()),
+	sections := []string{}
+	if chunkID != "" {
+		sections = append(sections, "Chunk ID: "+chunkID)
 	}
+	sections = append(sections, fmt.Sprintf("Wall time: %.4f seconds", result.Duration.Seconds()))
 	if result.TimedOut {
 		sections = append(sections, "Process timed out")
-	} else {
+	} else if result.ProcessID == nil || result.HasExitCode {
 		sections = append(sections, fmt.Sprintf("Process exited with code %d", result.ExitCode))
 	}
+	if result.ProcessID != nil {
+		sections = append(sections, fmt.Sprintf("Process running with session ID %d", *result.ProcessID))
+	}
+	sections = append(sections, fmt.Sprintf("Original token count: %d", utils.ApproxTokenCount(shellOutputText(result))))
 	sections = append(sections, "Output:", hookResponse)
 	return strings.Join(sections, "\n")
 }
@@ -349,7 +727,7 @@ func shellHookInput(args *ExecCommandArgs) map[string]any {
 	return input
 }
 
-func shellResultData(result *ShellResult, maxOutputTokens *int) map[string]any {
+func shellResultData(result *ShellResult, maxOutputTokens *int, chunkID string) map[string]any {
 	if result == nil {
 		return map[string]any{}
 	}
@@ -360,17 +738,54 @@ func shellResultData(result *ShellResult, maxOutputTokens *int) map[string]any {
 	stdout := truncateShellText(result.Stdout, maxTokens)
 	stderr := truncateShellText(result.Stderr, maxTokens)
 	hookResponse := shellResultHookResponse(result, maxOutputTokens)
-	return map[string]any{
+	data := map[string]any{
+		"chunk_id":                chunkID,
+		"wall_time_seconds":       result.Duration.Seconds(),
+		"original_token_count":    utils.ApproxTokenCount(shellOutputText(result)),
+		"output":                  hookResponse.Text,
 		"stdout":                  result.Stdout,
 		"stderr":                  result.Stderr,
 		"stdout_truncated":        stdout.Truncated,
 		"stderr_truncated":        stderr.Truncated,
-		"exit_code":               result.ExitCode,
 		"duration_ms":             result.Duration.Milliseconds(),
 		"timed_out":               result.TimedOut,
 		"hook_response":           hookResponse.Text,
 		"hook_response_truncated": hookResponse.Truncated,
 	}
+	if result.ProcessID != nil {
+		data["process_id"] = *result.ProcessID
+		data["session_id"] = *result.ProcessID
+	} else {
+		data["exit_code"] = result.ExitCode
+	}
+	if result.EventCallID != "" {
+		data["event_call_id"] = result.EventCallID
+	}
+	if result.HookCommand != "" {
+		data["hook_command"] = result.HookCommand
+	}
+	if result.UnifiedExecEvented {
+		data["unified_exec_evented"] = true
+		data["source"] = "unifiedExecStartup"
+		if result.ProcessID != nil {
+			data["status"] = "inProgress"
+		} else if result.ExitCode == 0 {
+			data["status"] = "completed"
+		} else {
+			data["status"] = "failed"
+		}
+	}
+	return data
+}
+
+var shellChunkIDFallback atomic.Uint32
+
+func generateShellChunkID() string {
+	buffer := make([]byte, 3)
+	if _, err := rand.Read(buffer); err == nil {
+		return hex.EncodeToString(buffer)
+	}
+	return fmt.Sprintf("%06x", shellChunkIDFallback.Add(1)&0x00ff_ffff)
 }
 
 func shellApprovalRequiredMessage(req *ShellRequest) string {

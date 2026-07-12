@@ -545,6 +545,7 @@ type MCPService struct {
 	roots         MCPRootsProvider
 	oauthComplete MCPOAuthLoginCompletionHandler
 	openAIForm    bool
+	generation    uint64
 }
 
 type cachedMCPHTTPClient struct {
@@ -558,7 +559,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil)}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1}
 	if runtime != nil {
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStore(runtime.CodexHome)
@@ -616,6 +617,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.stdioClients = map[string]*cachedMCPStdioClient{}
 	s.oauthLogins = map[string]*OAuthLoginServer{}
 	s.oauth = refreshed.oauth
+	s.generation++
 	if s.resourceCache == nil {
 		s.resourceCache = NewMCPResourceCache(nil)
 	}
@@ -664,6 +666,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		s.mu.Unlock()
 		return
 	}
+	s.generation++
 	if s.configs == nil {
 		s.configs = map[string]ServerConfig{}
 	}
@@ -782,6 +785,7 @@ func (s *MCPService) SetOpenAIFormElicitationEnabled(enabled bool) {
 		return
 	}
 	s.openAIForm = enabled
+	s.generation++
 	oldHTTPClients := s.httpClientsForCloseLocked()
 	oldStdioClients := s.stdioClientsForCloseLocked()
 	s.httpClients = map[string]*cachedMCPHTTPClient{}
@@ -1080,11 +1084,23 @@ func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, res
 
 func (s *MCPService) Refresh() *MCPServerRefreshResponse {
 	if s != nil {
+		s.mu.Lock()
+		s.generation++
+		s.mu.Unlock()
 		s.clearResourceCache()
 		s.clearHTTPClients()
 		s.clearStdioClients()
 	}
 	return &MCPServerRefreshResponse{}
+}
+
+func (s *MCPService) Generation() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation
 }
 
 func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {

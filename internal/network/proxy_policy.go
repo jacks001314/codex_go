@@ -1,8 +1,12 @@
 package network
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"strings"
+
+	"github.com/gobwas/glob"
 )
 
 const (
@@ -96,6 +100,55 @@ type ProxyDomainPattern struct {
 	Domain string
 }
 
+type ProxyDomainMatcher struct {
+	patterns []glob.Glob
+}
+
+func CompileProxyDomainMatcher(patterns []string, rejectGlobalWildcard bool) (*ProxyDomainMatcher, error) {
+	matcher := &ProxyDomainMatcher{}
+	seen := map[string]bool{}
+	for _, pattern := range patterns {
+		normalized := normalizeProxyConstraintPattern(pattern)
+		parsed := ParseProxyDomainPattern(normalized)
+		if rejectGlobalWildcard && parsed.Domain == "*" {
+			return nil, fmt.Errorf("unsupported global wildcard domain pattern %q; use exact hosts or scoped wildcards like *.example.com or **.example.com", strings.TrimSpace(pattern))
+		}
+		candidates := []string{parsed.Domain}
+		switch parsed.Kind {
+		case ProxyPatternSubdomainsOnly:
+			candidates = []string{"?*." + parsed.Domain}
+		case ProxyPatternApexAndSubdomains:
+			candidates = []string{parsed.Domain, "?*." + parsed.Domain}
+		}
+		for _, candidate := range candidates {
+			candidate = strings.ToLower(candidate)
+			if seen[candidate] {
+				continue
+			}
+			compiled, err := glob.Compile(candidate)
+			if err != nil {
+				return nil, fmt.Errorf("invalid glob pattern %q: %w", candidate, err)
+			}
+			seen[candidate] = true
+			matcher.patterns = append(matcher.patterns, compiled)
+		}
+	}
+	return matcher, nil
+}
+
+func (m *ProxyDomainMatcher) Match(host string) bool {
+	if m == nil {
+		return false
+	}
+	host = strings.ToLower(NormalizeProxyHost(host))
+	for _, pattern := range m.patterns {
+		if pattern.Match(host) {
+			return true
+		}
+	}
+	return false
+}
+
 func ParseProxyDomainPattern(input string) ProxyDomainPattern {
 	input = strings.TrimSpace(input)
 	switch {
@@ -161,6 +214,75 @@ type ProxyDecision struct {
 	Source   ProxyDecisionSource
 	Decision ProxyPolicyDecision
 }
+
+type ProxyPolicyRequest struct {
+	Protocol      ProxyProtocol
+	Host          string
+	Port          uint16
+	EnvironmentID string
+	ClientAddr    string
+	Method        string
+}
+
+type ProxyPolicyDecider interface {
+	Decide(context.Context, ProxyPolicyRequest) ProxyDecision
+}
+
+type ProxyPolicyDeciderFunc func(context.Context, ProxyPolicyRequest) ProxyDecision
+
+func (f ProxyPolicyDeciderFunc) Decide(ctx context.Context, request ProxyPolicyRequest) ProxyDecision {
+	return f(ctx, request)
+}
+
+type ProxyPolicyAuditEvent struct {
+	Request        ProxyPolicyRequest
+	Decision       string
+	Source         ProxyDecisionSource
+	Reason         string
+	PolicyOverride bool
+	Metadata       ProxyAuditMetadata
+}
+
+type ProxyPolicyAuditSink func(ProxyPolicyAuditEvent)
+
+type ProxyBlockedRequest struct {
+	Host      string              `json:"host"`
+	Reason    string              `json:"reason"`
+	Client    string              `json:"client,omitempty"`
+	Method    string              `json:"method,omitempty"`
+	Mode      *ProxyMode          `json:"mode,omitempty"`
+	Protocol  string              `json:"protocol"`
+	Decision  string              `json:"decision,omitempty"`
+	Source    ProxyDecisionSource `json:"source,omitempty"`
+	Port      *uint16             `json:"port,omitempty"`
+	Timestamp int64               `json:"timestamp"`
+}
+
+type ProxyBlockedRequestObserver interface {
+	OnBlockedRequest(context.Context, ProxyBlockedRequest)
+}
+
+type ProxyBlockedRequestObserverFunc func(context.Context, ProxyBlockedRequest)
+
+func (f ProxyBlockedRequestObserverFunc) OnBlockedRequest(ctx context.Context, request ProxyBlockedRequest) {
+	if f != nil {
+		f(ctx, request)
+	}
+}
+
+type ProxyAuditMetadata struct {
+	ConversationID string
+	AppVersion     string
+	UserAccountID  string
+	AuthMode       string
+	Originator     string
+	UserEmail      string
+	TerminalType   string
+	Model          string
+	Slug           string
+}
+
+type ProxyAuditMetadataProvider func(ProxyPolicyRequest) ProxyAuditMetadata
 
 func AllowProxyDecision() ProxyDecision {
 	return ProxyDecision{Allow: true}

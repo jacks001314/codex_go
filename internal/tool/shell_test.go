@@ -3,11 +3,32 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"codex_go/internal/network"
 	"codex_go/internal/sandbox"
 )
+
+func TestBuildShellRequestCarriesManagedNetworkContextLikeRust(t *testing.T) {
+	managed := &network.ProxyManagedNetworkSandboxContext{LoopbackPorts: []uint16{43123, 48081}, AllowLocalBinding: true}
+	req, err := BuildShellRequest(&ExecCommandArgs{Cmd: "echo ok"}, &Shell{Type: ShellBash, Path: "/bin/sh"}, ShellValidationOptions{
+		CWD:                   t.TempDir(),
+		EnforceManagedNetwork: true,
+		ManagedNetwork:        managed,
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest() error = %v", err)
+	}
+	if !req.EnforceManagedNetwork || req.ManagedNetwork == nil || !reflect.DeepEqual(req.ManagedNetwork.LoopbackPorts, managed.LoopbackPorts) || !req.ManagedNetwork.AllowLocalBinding {
+		t.Fatalf("managed network request = %#v", req.ManagedNetwork)
+	}
+	req.ManagedNetwork.LoopbackPorts[0] = 1
+	if managed.LoopbackPorts[0] != 43123 {
+		t.Fatal("BuildShellRequest() did not clone managed network ports")
+	}
+}
 
 func TestShellDeriveExecArgs(t *testing.T) {
 	bash := &Shell{Type: ShellBash, Path: "/bin/bash"}
@@ -326,6 +347,23 @@ func TestBuildShellRequestRequireEscalatedPreapprovalUsesFullAccessProfile(t *te
 	}
 	if req.PermissionProfile == nil || !req.PermissionProfile.Disabled || req.PermissionProfileID != sandbox.BuiltInPermissionProfileDangerFullAccess {
 		t.Fatalf("PermissionProfile = %#v id %q, want full access", req.PermissionProfile, req.PermissionProfileID)
+	}
+}
+
+func TestBuildShellRequestCarriesWindowsSandboxRuntimeOptions(t *testing.T) {
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	req, err := BuildShellRequest(&ExecCommandArgs{Cmd: "echo ok"}, &Shell{Type: ShellBash, Path: "/bin/sh"}, ShellValidationOptions{
+		CWD:                          t.TempDir(),
+		PermissionProfileID:          sandbox.BuiltInPermissionProfileWorkspace,
+		PermissionProfile:            &profile,
+		WindowsSandboxLevel:          sandbox.WindowsSandboxElevated,
+		WindowsSandboxPrivateDesktop: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest() error = %v", err)
+	}
+	if req.WindowsSandboxLevel != sandbox.WindowsSandboxElevated || !req.WindowsSandboxPrivateDesktop {
+		t.Fatalf("Windows sandbox options = %q/%t", req.WindowsSandboxLevel, req.WindowsSandboxPrivateDesktop)
 	}
 }
 

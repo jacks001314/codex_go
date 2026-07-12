@@ -176,13 +176,15 @@ func responsesToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 			},
 		}, true
 	}
-	return map[string]any{
+	result := map[string]any{
 		"type":        "function",
 		"name":        name,
 		"description": spec.Description,
 		"strict":      false,
 		"parameters":  responsesInputSchema(spec.InputSchema),
-	}, true
+	}
+	addResponsesOutputSchema(result, spec.OutputSchema)
+	return result, true
 }
 
 func responsesLoadableToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
@@ -193,7 +195,9 @@ func responsesLoadableToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 	if name == "" || name == tool.ToolSearchName {
 		return nil, false
 	}
-	return responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema), true
+	result := responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema)
+	addResponsesOutputSchema(result, spec.OutputSchema)
+	return result, true
 }
 
 func isResponsesNamespaceTool(spec *tool.Spec) bool {
@@ -216,12 +220,14 @@ func isResponsesNamespaceTool(spec *tool.Spec) bool {
 }
 
 func responsesNamespacedFunctionTool(spec *tool.Spec) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"type":        "function",
 		"name":        strings.TrimSpace(spec.Name.Name),
 		"description": spec.Description,
 		"parameters":  responsesInputSchema(spec.InputSchema),
 	}
+	addResponsesOutputSchema(result, spec.OutputSchema)
+	return result
 }
 
 func responsesLoadableNamespacedFunctionTool(spec *tool.Spec) map[string]any {
@@ -232,7 +238,16 @@ func responsesLoadableNamespacedFunctionTool(spec *tool.Spec) map[string]any {
 	if name == "" || name == tool.ToolSearchName {
 		return nil
 	}
-	return responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema)
+	result := responsesLoadableFunctionTool(name, spec.Description, spec.InputSchema)
+	addResponsesOutputSchema(result, spec.OutputSchema)
+	return result
+}
+
+func addResponsesOutputSchema(target map[string]any, schema map[string]any) {
+	if target == nil || len(schema) == 0 {
+		return
+	}
+	target["output_schema"] = cloneMapAny(schema)
 }
 
 func responsesLoadableFunctionTool(name string, description string, schema map[string]any) map[string]any {

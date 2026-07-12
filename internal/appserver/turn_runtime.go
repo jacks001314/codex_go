@@ -2,15 +2,18 @@ package appserver
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,9 +39,11 @@ import (
 	"codex_go/internal/runtimeutil"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+	"codex_go/internal/skillprovider"
 	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
+	"codex_go/internal/utils"
 )
 
 type activeRuntimeTurn struct {
@@ -902,7 +907,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		AttestationProvider:  runConfig.AttestationProvider,
 		OutputSchema:         params.OutputSchema,
 		PostToolInputItems:   runConfig.PostToolInputItems,
-		OnToolStarted:        r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
+		OnToolStarted:        r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -920,7 +925,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		return
 	}
 	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+	r.unifiedExecPersistMu.Lock()
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
+		r.unifiedExecPersistMu.Unlock()
 		return
 	}
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
@@ -936,6 +943,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
+			r.unifiedExecPersistMu.Unlock()
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
 				ConnectionID: connectionID,
 				Params:       params,
@@ -947,9 +955,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
 	}
+	r.unifiedExecPersistMu.Unlock()
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {
-		if sessionItemIsHiddenContextInstruction(&item) {
+		if sessionItemIsHiddenThreadItem(&item) {
 			continue
 		}
 		if item.Type == "tool_output" {
@@ -1057,7 +1066,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		AttestationProvider:          runConfig.AttestationProvider,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		DisableHostedImageGeneration: true,
-		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
+		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -1075,7 +1084,9 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		return
 	}
 	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+	r.unifiedExecPersistMu.Lock()
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
+		r.unifiedExecPersistMu.Unlock()
 		return
 	}
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
@@ -1090,6 +1101,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	items = append(items, reviewRuntimeSessionItems(turnID, output, result, completedAt)...)
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
+			r.unifiedExecPersistMu.Unlock()
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
 				ConnectionID: connectionID,
 				Params:       params,
@@ -1101,6 +1113,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		}
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
 	}
+	r.unifiedExecPersistMu.Unlock()
 	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = r.modelContextWindowForModel(runConfig.Model)
@@ -1252,6 +1265,9 @@ func (r *RuntimeRouter) notifyReviewRuntimeItems(threadID string, turnID string,
 }
 
 func shouldNotifyRuntimeItemCompleted(item ThreadItem) bool {
+	if evented, _ := item.Data["unified_exec_evented"].(bool); evented {
+		return false
+	}
 	switch threadItemWireType(&item) {
 	case "commandExecution":
 		return threadItemCommandStatus(&item) != CommandExecutionInProgress
@@ -1288,12 +1304,18 @@ func (r *RuntimeRouter) notifyTurnPlanUpdates(threadID string, turnID string, re
 	}
 }
 
-func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID string, cwd string) turn.ToolStartedCallback {
+func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID string, cwd string, unifiedExecEnabled bool) turn.ToolStartedCallback {
 	return func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time) {
 		if r == nil || invocation == nil {
 			return
 		}
+		if r.networkApproval != nil {
+			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
+		}
 		if item, ok := commandExecutionStartedThreadItem(invocation, turnID, cwd, startedAt); ok {
+			if unifiedExecEnabled {
+				return
+			}
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item:        threadItemPayload(item),
 				ThreadID:    threadID,
@@ -1355,6 +1377,171 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 			TurnID:      turnID,
 			StartedAtMS: startedAt.UTC().UnixMilli(),
 		})
+	}
+}
+
+func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID string) tool.UnifiedExecEventSink {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if r == nil || threadID == "" || turnID == "" {
+		return nil
+	}
+	return func(event tool.UnifiedExecEvent) {
+		callID := strings.TrimSpace(event.CallID)
+		if callID == "" {
+			return
+		}
+		processID := strconv.Itoa(event.ProcessID)
+		switch event.Kind {
+		case tool.UnifiedExecEventBegin:
+			if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.RunConfig != nil {
+				r.rememberUnifiedExecAnalytics(threadID, turnID, callID, active.ConnectionID, active.RunConfig)
+			}
+			startedAt := event.StartedAt
+			if startedAt.IsZero() {
+				startedAt = time.Now()
+			}
+			item := unifiedExecThreadItem(event, CommandExecutionInProgress)
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				Item:        threadItemPayload(item),
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+		case tool.UnifiedExecEventOutputDelta:
+			if event.Output == "" {
+				return
+			}
+			r.notify(NotificationCommandExecutionOutputDelta, &CommandExecutionOutputDeltaNotification{
+				ThreadID: threadID,
+				TurnID:   turnID,
+				ItemID:   callID,
+				Delta:    event.Output,
+			})
+		case tool.UnifiedExecEventTerminalInteraction:
+			r.notify(NotificationTerminalInteraction, &TerminalInteractionNotification{
+				ThreadID:  threadID,
+				TurnID:    turnID,
+				ItemID:    callID,
+				ProcessID: processID,
+				Stdin:     event.Input,
+			})
+		case tool.UnifiedExecEventEnd:
+			status := CommandExecutionCompleted
+			if event.ExitCode != 0 {
+				status = CommandExecutionFailed
+			}
+			item := unifiedExecThreadItem(event, status)
+			r.persistUnifiedExecEnd(threadID, turnID, item, event)
+			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+				ThreadID:      threadID,
+				TurnID:        turnID,
+				Item:          threadItemPayload(item),
+				CompletedAtMS: time.Now().UTC().UnixMilli(),
+			})
+			if analytics, ok := r.takeUnifiedExecAnalytics(threadID, turnID, callID); ok {
+				r.emitCommandExecutionAnalyticsEvent(context.Background(), analytics.ConnectionID, threadID, turnID, &item, analytics.RunConfig)
+			}
+		}
+	}
+}
+
+func unifiedExecAnalyticsKey(threadID string, turnID string, callID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) + "\x00" + strings.TrimSpace(callID)
+}
+
+func (r *RuntimeRouter) rememberUnifiedExecAnalytics(threadID string, turnID string, callID string, connectionID string, runConfig *appTurnRunConfig) {
+	if r == nil || runConfig == nil {
+		return
+	}
+	r.unifiedExecAnalyticsMu.Lock()
+	defer r.unifiedExecAnalyticsMu.Unlock()
+	if r.unifiedExecAnalytics == nil {
+		r.unifiedExecAnalytics = map[string]unifiedExecAnalyticsContext{}
+	}
+	r.unifiedExecAnalytics[unifiedExecAnalyticsKey(threadID, turnID, callID)] = unifiedExecAnalyticsContext{
+		ConnectionID: normalizeConnectionID(connectionID),
+		RunConfig:    runConfig,
+	}
+}
+
+func (r *RuntimeRouter) takeUnifiedExecAnalytics(threadID string, turnID string, callID string) (unifiedExecAnalyticsContext, bool) {
+	if r == nil {
+		return unifiedExecAnalyticsContext{}, false
+	}
+	r.unifiedExecAnalyticsMu.Lock()
+	defer r.unifiedExecAnalyticsMu.Unlock()
+	key := unifiedExecAnalyticsKey(threadID, turnID, callID)
+	analytics, ok := r.unifiedExecAnalytics[key]
+	delete(r.unifiedExecAnalytics, key)
+	return analytics, ok
+}
+
+func (r *RuntimeRouter) persistUnifiedExecEnd(threadID string, turnID string, item ThreadItem, event tool.UnifiedExecEvent) {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		return
+	}
+	r.unifiedExecPersistMu.Lock()
+	defer r.unifiedExecPersistMu.Unlock()
+	createdAt := time.Time{}
+	if !event.StartedAt.IsZero() {
+		createdAt = event.StartedAt.Add(event.Duration).UTC()
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	stored := session.Item{
+		ID:        item.ID,
+		Type:      "commandExecution",
+		CallID:    item.ID,
+		Text:      event.Output,
+		CreatedAt: createdAt,
+		Data:      cloneAnyMap(item.Data),
+		Metadata:  appTurnMetadata(turnID, map[string]any{"source": string(CommandExecutionSourceUnifiedExecStartup)}),
+	}
+	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), stored); err != nil {
+		return
+	}
+	_ = r.appendRuntimeRollout(threadID, []session.Item{stored}, createdAt)
+}
+
+func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionStatus) ThreadItem {
+	command := strings.TrimSpace(event.HookCommand)
+	if command == "" {
+		command = strings.Join(event.Command, " ")
+	}
+	data := map[string]any{
+		"command":        command,
+		"cwd":            event.CWD,
+		"processId":      strconv.Itoa(event.ProcessID),
+		"process_id":     event.ProcessID,
+		"source":         string(CommandExecutionSourceUnifiedExecStartup),
+		"status":         string(status),
+		"commandActions": []map[string]any{{"type": "unknown", "command": command}},
+	}
+	if !event.StartedAt.IsZero() {
+		data["startedAtMs"] = event.StartedAt.UTC().UnixMilli()
+		data["started_at_ms"] = event.StartedAt.UTC().UnixMilli()
+	}
+	if status != CommandExecutionInProgress {
+		completedAt := event.StartedAt.Add(event.Duration)
+		if completedAt.IsZero() {
+			completedAt = time.Now()
+		}
+		data["completedAtMs"] = completedAt.UTC().UnixMilli()
+		data["completed_at_ms"] = completedAt.UTC().UnixMilli()
+		data["aggregatedOutput"] = event.Output
+		data["exitCode"] = event.ExitCode
+		data["exit_code"] = event.ExitCode
+		data["durationMs"] = event.Duration.Milliseconds()
+		data["duration_ms"] = event.Duration.Milliseconds()
+	}
+	return ThreadItem{
+		ID:        event.CallID,
+		Type:      "commandExecution",
+		TurnID:    "",
+		CreatedAt: event.StartedAt.UTC().UnixMilli(),
+		Data:      data,
 	}
 }
 
@@ -1648,12 +1835,16 @@ func (r *RuntimeRouter) consumeCompletedRuntimeTurn(threadID string, turnID stri
 		return false
 	}
 	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
 	active := r.active[threadID]
 	if active == nil || active.TurnID != turnID {
+		r.turnsMu.Unlock()
 		return false
 	}
 	delete(r.active, threadID)
+	r.turnsMu.Unlock()
+	if r.networkApproval != nil {
+		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
+	}
 	return true
 }
 
@@ -1673,6 +1864,9 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	if active.Cancel != nil {
 		active.Cancel()
 	}
+	if r.networkApproval != nil {
+		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
+	}
 	return active, true
 }
 
@@ -1681,13 +1875,17 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 		return
 	}
 	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
 	active := r.active[threadID]
 	if active == nil || active.TurnID != turnID {
+		r.turnsMu.Unlock()
 		return
 	}
 	delete(r.active, threadID)
 	delete(r.diffs, activeTurnDiffKey(threadID, turnID))
+	r.turnsMu.Unlock()
+	if r.networkApproval != nil {
+		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
+	}
 }
 
 func (r *RuntimeRouter) ensureActiveDiffTrackerLocked(threadID string, turnID string) *runtimeutil.DiffTracker {
@@ -2819,6 +3017,20 @@ func sessionItemIsHiddenContextInstruction(item *session.Item) bool {
 	return sessionItemIsImageGenerationInstructions(item) || sessionItemIsSkillInstructions(item)
 }
 
+func sessionItemIsHiddenThreadItem(item *session.Item) bool {
+	if sessionItemIsHiddenContextInstruction(item) {
+		return true
+	}
+	if item == nil {
+		return false
+	}
+	if hidden, _ := item.Data["hiddenFromThread"].(bool); hidden {
+		return true
+	}
+	hidden, _ := item.Metadata["hiddenFromThread"].(bool)
+	return hidden
+}
+
 func runtimeUserPromptSessionItem(turnID string, params *turn.TurnStartParams, createdAt time.Time) (session.Item, bool) {
 	prompt := promptFromTurnStart(params)
 	content := sessionContentFromTurnStart(params)
@@ -3723,6 +3935,9 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 	metadata["toolName"] = execution.Invocation.ToolName.Key()
 	metadata["payloadKind"] = string(execution.Invocation.Payload.Kind)
 	metadata["source"] = execution.Invocation.Source
+	if unifiedExecExecutionEvented(execution) {
+		metadata["hiddenFromThread"] = true
+	}
 	return session.Item{
 		ID:        "tool-call-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      appToolSessionItemType(execution.Invocation.Payload.Kind),
@@ -3750,6 +3965,9 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	if strings.TrimSpace(execution.Output.Error) != "" {
 		outputMetadata["error"] = execution.Output.Error
 	}
+	if unifiedExecExecutionEvented(execution) {
+		outputMetadata["hiddenFromThread"] = true
+	}
 	return session.Item{
 		ID:        "tool-output-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      "tool_output",
@@ -3760,6 +3978,14 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 		CreatedAt: outputCreatedAt,
 		Metadata:  outputMetadata,
 	}, true
+}
+
+func unifiedExecExecutionEvented(execution *turn.ToolExecutionResult) bool {
+	if execution == nil || execution.Output == nil || execution.Output.Data == nil {
+		return false
+	}
+	evented, _ := execution.Output.Data["unified_exec_evented"].(bool)
+	return evented
 }
 
 func appToolExecutionCallID(execution *turn.ToolExecutionResult, createdAt time.Time) string {
@@ -3862,6 +4088,7 @@ type appTurnRunConfig struct {
 	ServiceTier          string
 	Store                bool
 	AttestationProvider  codexapi.AttestationProvider
+	UnifiedExecEnabled   bool
 }
 
 type responsesMetadataLineage struct {
@@ -3914,7 +4141,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
 	var postToolInputItems turn.ToolPostExecutionInputItems
-	instructions, skillInputItems, postToolInputItems, err = r.instructionsWithSkillsContext(threadID, cfg, params, instructions)
+	instructions, skillInputItems, postToolInputItems, err = r.instructionsWithSkillsContextForTurn(ctx, threadID, turnID, cfg, params, instructions)
 	if err != nil {
 		return nil, err
 	}
@@ -3936,6 +4163,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return append([]session.Item(nil), extraSessionItems...)
 	}
 	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, currentTimeState, postToolInputItems, appendExtraSessionItems)
+	postToolInputItems = r.networkApprovalPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
@@ -3959,6 +4187,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	lineage := r.responsesMetadataLineage(threadID)
 	threadSnapshot := r.analyticsThreadSnapshot(threadID)
+	unifiedExecEnabled := features.Enabled(cfg.FeatureSettings(), "unified_exec")
+	if permissionProfile != nil && permissionProfile.Profile != nil && !permissionProfile.Profile.Disabled && runtime.GOOS != "linux" {
+		unifiedExecEnabled = false
+	}
 	return &appTurnRunConfig{
 		Model:                modelProviderConfig.Model,
 		ProviderID:           modelProviderConfig.ProviderID,
@@ -3995,6 +4227,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ServiceTier:          serviceTier,
 		Store:                modelProviderConfig.Store,
 		AttestationProvider:  r.appServerAttestationProvider(),
+		UnifiedExecEnabled:   unifiedExecEnabled,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:     installationID,
 			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
@@ -4401,6 +4634,7 @@ func (r *RuntimeRouter) activeRuntimeTurnStateSnapshot(threadID string, turnID s
 		StartedAtMS:  active.StartedAtMS,
 		Params:       cloneTurnStartParams(active.Params),
 		ConnectionID: active.ConnectionID,
+		RunConfig:    active.RunConfig,
 	}
 }
 
@@ -5049,10 +5283,19 @@ func pluginAppInfosForRuntime(appsByID map[string]apps.AppEntry) []plugin.AppInf
 }
 
 func (r *RuntimeRouter) instructionsWithSkillsContext(threadID string, cfg *config.Config, params *turn.TurnStartParams, instructions string) (string, []any, turn.ToolPostExecutionInputItems, error) {
+	return r.instructionsWithSkillsContextForTurn(context.Background(), threadID, "", cfg, params, instructions)
+}
+
+func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context, threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, instructions string) (string, []any, turn.ToolPostExecutionInputItems, error) {
 	if r == nil || r.services.Skills == nil {
 		return strings.TrimSpace(instructions), nil, nil, nil
 	}
 	listParams := &SkillsListParams{}
+	if params != nil {
+		sessionConfig := &config.Config{Values: map[string]any{}}
+		applyRuntimeConfigOverrides(sessionConfig, turnConfigOverrides(params))
+		listParams.Config = skillConfigEntriesFromValues(sessionConfig.Values)
+	}
 	if cwd := turnCWD(params); cwd != "" {
 		listParams.CWDs = []string{cwd}
 	}
@@ -5060,13 +5303,31 @@ func (r *RuntimeRouter) instructionsWithSkillsContext(threadID string, cfg *conf
 	if err != nil {
 		return "", nil, nil, err
 	}
+	for _, skillErr := range response.Errors {
+		r.notify(NotificationWarning, &WarningNotification{
+			ThreadID: stringPtrIfNotEmpty(threadID),
+			Message:  fmt.Sprintf("Failed to load skill at %s: %s", skillErr.Path, skillErr.Message),
+		})
+	}
 	skillEntries := cloneSkills(response.Skills)
-	pluginSkillEntries, err := r.pluginSkillEntriesForRuntime()
+	pluginSkillEntries := []SkillsListEntry(nil)
+	if (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) && (cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")) {
+		pluginSkillEntries, err = r.pluginSkillEntriesForRuntime()
+		if err != nil {
+			return "", nil, nil, err
+		}
+	}
+	pluginSkillEntries, err = r.services.Skills.applyConfigEntries(pluginSkillEntries, listParams.Config)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	skillEntries = append(skillEntries, pluginSkillEntries...)
+	hostSkillEntries := cloneSkills(skillEntries)
 	selectedCapabilitySkillEntries, selectedCapabilitySkillWarnings, err := r.selectedCapabilitySkillEntriesForRuntime(threadID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	selectedCapabilitySkillEntries, err = r.services.Skills.applyConfigEntries(selectedCapabilitySkillEntries, listParams.Config)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -5080,27 +5341,67 @@ func (r *RuntimeRouter) instructionsWithSkillsContext(threadID string, cfg *conf
 			Message:  strings.TrimSpace(message),
 		})
 	}
-	r.notifyMissingSkillMCPDependencies(threadID, cfg, skillEntries)
-	skillMetadata := promptSkillMetadataFromEntries(skillEntries)
-	postToolInputItems := r.implicitSkillInputItemProvider(threadID, params, skillMetadata)
-	available := promptctx.RenderAvailableSkillsWithOptions(
-		skillMetadata,
-		promptctx.AvailableSkillsRenderOptions{
-			Budget:                   promptctx.DefaultSkillMetadataBudget(r.skillContextWindowForTurn(cfg, params)),
-			IncludeUsageInstructions: r.includeSkillsUsageInstructionsForTurn(cfg, params),
-		},
-	)
-	if available != nil && available.WarningMessage != nil && strings.TrimSpace(*available.WarningMessage) != "" {
+	hostSkillMetadata := promptSkillMetadataFromEntries(hostSkillEntries)
+	selectedCapabilitySkillMetadata := promptSkillMetadataFromEntries(selectedCapabilitySkillEntries)
+	skillMetadata := append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...)
+	orchestratorMetadata := []promptctx.InstructionsSkillMetadata(nil)
+	if cfg == nil || cfg.OrchestratorSkillsEnabled() {
+		var orchestratorWarnings []string
+		orchestratorMetadata, orchestratorWarnings = r.orchestratorSkillMetadataForRuntime(threadID)
+		skillMetadata = append(skillMetadata, orchestratorMetadata...)
+		for _, message := range orchestratorWarnings {
+			r.notify(NotificationWarning, &WarningNotification{
+				ThreadID: stringPtrIfNotEmpty(threadID),
+				Message:  message,
+			})
+		}
+	}
+	customMetadata, customWarnings := r.customSkillMetadataForRuntime(ctx, turnID)
+	skillMetadata = append(skillMetadata, customMetadata...)
+	for _, message := range customWarnings {
 		r.notify(NotificationWarning, &WarningNotification{
 			ThreadID: stringPtrIfNotEmpty(threadID),
-			Message:  strings.TrimSpace(*available.WarningMessage),
+			Message:  message,
 		})
 	}
-	skillInputItems := r.explicitSkillInputItems(threadID, params, skillMetadata)
-	if available == nil || strings.TrimSpace(available.Body) == "" {
+	r.maybePromptAndInstallSkillMCPDependencies(ctx, threadID, turnID, cfg, params, skillEntries, skillMetadata)
+	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
+	postToolInputItems := r.implicitSkillInvocationEventProvider(threadID, turnID, modelID, params, skillMetadata)
+	if cfg != nil && !cfg.IncludeSkillInstructions() {
+		skillInputItems := r.explicitSkillInputItemsForTurn(threadID, turnID, modelID, params, skillMetadata)
 		return strings.TrimSpace(instructions), skillInputItems, postToolInputItems, nil
 	}
-	return strings.Join(nonEmpty([]string{strings.TrimSpace(available.Body), strings.TrimSpace(instructions)}), "\n\n"), skillInputItems, postToolInputItems, nil
+	includeUsageInstructions := r.includeSkillsUsageInstructionsForTurn(cfg, params)
+	hostAvailable := promptctx.RenderAvailableSkillsWithOptions(
+		hostSkillMetadata,
+		promptctx.AvailableSkillsRenderOptions{
+			Budget:                   promptctx.DefaultSkillMetadataBudget(r.skillContextWindowForTurn(cfg, params)),
+			IncludeUsageInstructions: includeUsageInstructions,
+		},
+	)
+	if hostAvailable != nil && hostAvailable.WarningMessage != nil && strings.TrimSpace(*hostAvailable.WarningMessage) != "" {
+		r.notify(NotificationWarning, &WarningNotification{
+			ThreadID: stringPtrIfNotEmpty(threadID),
+			Message:  strings.TrimSpace(*hostAvailable.WarningMessage),
+		})
+	}
+	extensionAvailable := []*promptctx.AvailableSkills{
+		promptctx.RenderExtensionAvailableSkills(orchestratorMetadata, includeUsageInstructions),
+		promptctx.RenderExtensionAvailableSkills(selectedCapabilitySkillMetadata, includeUsageInstructions),
+		promptctx.RenderExtensionAvailableSkills(customMetadata, includeUsageInstructions),
+	}
+	skillInputItems := r.explicitSkillInputItemsForTurn(threadID, turnID, modelID, params, skillMetadata)
+	rendered := make([]string, 0, 5)
+	if hostAvailable != nil {
+		rendered = append(rendered, hostAvailable.Body)
+	}
+	for _, available := range extensionAvailable {
+		if available != nil {
+			rendered = append(rendered, available.Body)
+		}
+	}
+	rendered = append(rendered, instructions)
+	return strings.Join(nonEmpty(rendered), "\n\n"), skillInputItems, postToolInputItems, nil
 }
 
 func nonEmpty(values []string) []string {
@@ -5115,23 +5416,30 @@ func nonEmpty(values []string) []string {
 }
 
 func (r *RuntimeRouter) pluginSkillEntriesForRuntime() ([]SkillsListEntry, error) {
+	entries, _, err := r.pluginSkillEntriesAndErrorsForRuntime()
+	return entries, err
+}
+
+func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime() ([]SkillsListEntry, []SkillErrorInfo, error) {
 	if r == nil || r.services.Plugins == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	roots := r.services.Plugins.EnabledSkillRoots()
 	entries := make([]SkillsListEntry, 0)
+	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
-		discovered, _, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID})
+		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, PluginRoot: filepath.Dir(root.Root)})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		errors = append(errors, discoveredErrors...)
 		for _, entry := range discovered {
 			prefixed := cloneSkill(entry)
-			prefixPluginSkillNames(&prefixed, root.PluginDisplayName)
+			prefixPluginSkillNames(&prefixed, root.PluginNamespace)
 			entries = append(entries, prefixed)
 		}
 	}
-	return entries, nil
+	return entries, errors, nil
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string) ([]SkillsListEntry, []string, error) {
@@ -5142,7 +5450,6 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 	if err != nil || record == nil {
 		return nil, nil, err
 	}
-	roots := make([]SkillsRoot, 0, len(record.Metadata.SelectedCapabilityRoots))
 	entries := make([]SkillsListEntry, 0)
 	warnings := make([]string, 0)
 	for _, raw := range record.Metadata.SelectedCapabilityRoots {
@@ -5154,13 +5461,17 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 			continue
 		}
 		if environmentRecord, ok := r.selectedCapabilityEnvironmentRecord(&selected.Location); ok {
-			discovered, discoveredWarnings, err := discoverRemoteEnvironmentSkills(context.Background(), environmentRecord, selected.Location.Path)
-			if err != nil {
-				return nil, warnings, err
-			}
-			applyExecutorSkillDisplayPaths(discovered, selected.ID)
-			entries = append(entries, discovered...)
-			warnings = append(warnings, discoveredWarnings...)
+			cached := r.selectedCapabilitySkillCatalog(threadID, string(raw))
+			cached.once.Do(func() {
+				cached.entries, cached.warnings, cached.err = discoverRemoteEnvironmentSkills(context.Background(), environmentRecord, selected.Location.Path)
+				if cached.err != nil {
+					cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
+					cached.err = nil
+				}
+				applyExecutorSkillDisplayPaths(cached.entries, selected.ID)
+			})
+			entries = append(entries, cloneSkills(cached.entries)...)
+			warnings = append(warnings, cached.warnings...)
 			continue
 		}
 		if r.selectedCapabilityEnvironmentRequired(&selected.Location) {
@@ -5170,17 +5481,39 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
-		roots = append(roots, SkillsRoot{Path: path, Scope: "user"})
-	}
-	roots = dedupeSkillsRoots(roots)
-	for _, root := range roots {
-		discovered, _, err := discover(root)
-		if err != nil {
-			return nil, warnings, err
-		}
-		entries = append(entries, discovered...)
+		cached := r.selectedCapabilitySkillCatalog(threadID, string(raw))
+		cached.once.Do(func() {
+			var discoveredErrors []SkillErrorInfo
+			cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"})
+			if cached.err != nil {
+				cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
+				cached.err = nil
+			}
+			applyExecutorSkillDisplayPaths(cached.entries, selected.ID)
+			for _, skillErr := range discoveredErrors {
+				cached.warnings = append(cached.warnings, fmt.Sprintf("Failed to load environment skill at %s: %s", skillErr.Path, skillErr.Message))
+			}
+		})
+		entries = append(entries, cloneSkills(cached.entries)...)
+		warnings = append(warnings, cached.warnings...)
 	}
 	return entries, warnings, nil
+}
+
+func (r *RuntimeRouter) selectedCapabilitySkillCatalog(threadID string, rootKey string) *runtimeSelectedSkillCatalog {
+	r.selectedSkillMu.Lock()
+	defer r.selectedSkillMu.Unlock()
+	byRoot := r.selectedSkills[threadID]
+	if byRoot == nil {
+		byRoot = map[string]*runtimeSelectedSkillCatalog{}
+		r.selectedSkills[threadID] = byRoot
+	}
+	if cached := byRoot[rootKey]; cached != nil {
+		return cached
+	}
+	cached := &runtimeSelectedSkillCatalog{}
+	byRoot[rootKey] = cached
+	return cached
 }
 
 func (r *RuntimeRouter) selectedCapabilityEnvironmentRecord(location *CapabilityRootLocation) (*EnvironmentRecord, bool) {
@@ -5234,7 +5567,11 @@ func executorSkillDisplayPath(selectedRootID string, sourcePath string) string {
 		return ""
 	}
 	path := sourcePath
-	if parsed, err := url.Parse(sourcePath); err == nil && parsed.Scheme != "" {
+	if strings.Contains(sourcePath, "://") {
+		parsed, err := url.Parse(sourcePath)
+		if err != nil || parsed.Scheme == "" {
+			return ""
+		}
 		path = parsed.Path
 		if path == "" {
 			path = "/" + strings.TrimPrefix(parsed.Opaque, "/")
@@ -5283,11 +5620,15 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 				value := *entry.Policy.AllowImplicitInvocation
 				allowImplicit = &value
 			}
+			displayPath := entry.DisplayPath
+			if strings.TrimSpace(displayPath) == "" && !strings.EqualFold(strings.TrimSpace(entry.Scope), "environment") {
+				displayPath = strings.ReplaceAll(entry.Path, "\\", "/")
+			}
 			out = append(out, promptctx.InstructionsSkillMetadata{
 				Name:                    entry.Name,
 				Scope:                   entry.Scope,
 				Path:                    entry.Path,
-				LocatorPath:             entry.DisplayPath,
+				LocatorPath:             displayPath,
 				LocatorKind:             promptSkillLocatorKind(entry),
 				Root:                    entry.Root,
 				Description:             description,
@@ -5310,25 +5651,196 @@ func promptSkillLocatorKind(entry SkillsListEntry) string {
 	}
 }
 
-func (r *RuntimeRouter) notifyMissingSkillMCPDependencies(threadID string, cfg *config.Config, entries []SkillsListEntry) {
-	if r == nil {
+func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]promptctx.InstructionsSkillMetadata, []string) {
+	if r == nil || r.services.MCP == nil {
+		return nil, nil
+	}
+	cacheKey, cache := r.orchestratorSkillCacheForRuntime(threadID)
+	cache.once.Do(func() {
+		cache.catalog, cache.err = turn.LoadOrchestratorSkillCatalog(r.services.MCP, strings.TrimSpace(threadID))
+	})
+	metadata := make([]promptctx.InstructionsSkillMetadata, 0, len(cache.catalog.Skills))
+	for _, skill := range cache.catalog.Skills {
+		metadata = append(metadata, promptctx.InstructionsSkillMetadata{
+			Name:          skill.Name,
+			Scope:         "orchestrator",
+			Path:          skill.MainResource,
+			LocatorPath:   skill.Package,
+			LocatorKind:   "orchestrator resource",
+			Description:   skill.Description,
+			AuthorityKind: "orchestrator",
+			AuthorityID:   mcp.RuntimeCodexAppsMCPServerName,
+			PackageID:     skill.Package,
+			ResourceID:    skill.MainResource,
+		})
+	}
+	warnings := append([]string(nil), cache.catalog.Warnings...)
+	if cache.err != nil {
+		warnings = append(warnings, "orchestrator skills unavailable: "+cache.err.Error())
+	}
+	if len(warnings) == 0 {
+		return metadata, nil
+	}
+	r.orchestratorSkillMu.Lock()
+	if r.orchestratorWarned[cacheKey] {
+		warnings = nil
+	} else {
+		r.orchestratorWarned[cacheKey] = true
+	}
+	r.orchestratorSkillMu.Unlock()
+	return metadata, warnings
+}
+
+func (r *RuntimeRouter) orchestratorSkillCacheForRuntime(threadID string) (string, *runtimeOrchestratorSkillCatalog) {
+	cacheKey := fmt.Sprintf("%s\x00%d", strings.TrimSpace(threadID), r.services.MCP.Generation())
+	r.orchestratorSkillMu.Lock()
+	defer r.orchestratorSkillMu.Unlock()
+	if r.orchestratorSkills == nil {
+		r.orchestratorSkills = map[string]*runtimeOrchestratorSkillCatalog{}
+	}
+	if r.orchestratorWarned == nil {
+		r.orchestratorWarned = map[string]bool{}
+	}
+	cache := r.orchestratorSkills[cacheKey]
+	if cache == nil {
+		cache = &runtimeOrchestratorSkillCatalog{resources: map[string]string{}}
+		r.orchestratorSkills[cacheKey] = cache
+	}
+	return cacheKey, cache
+}
+
+func (r *RuntimeRouter) readOrchestratorSkillResourceForRuntime(threadID string, skill promptctx.InstructionsSkillMetadata) (string, error) {
+	if r == nil || r.services.MCP == nil {
+		return "", errors.New("session MCP resource client is not configured")
+	}
+	_, cache := r.orchestratorSkillCacheForRuntime(threadID)
+	key := skill.PackageID + "\x00" + skill.ResourceID
+	cache.resourceMu.Lock()
+	if contents, ok := cache.resources[key]; ok {
+		cache.resourceMu.Unlock()
+		return contents, nil
+	}
+	cache.resourceMu.Unlock()
+	contents, err := turn.ReadOrchestratorSkillResource(r.services.MCP, threadID, skill.PackageID, skill.ResourceID)
+	if err != nil {
+		return "", err
+	}
+	cache.resourceMu.Lock()
+	defer cache.resourceMu.Unlock()
+	if cached, ok := cache.resources[key]; ok {
+		return cached, nil
+	}
+	if len(cache.resources) < 100 && cache.resourceBytes+len(contents) <= 8*1024*1024 {
+		cache.resources[key] = contents
+		cache.resourceBytes += len(contents)
+	}
+	return contents, nil
+}
+
+func (r *RuntimeRouter) customSkillMetadataForRuntime(ctx context.Context, turnID string) ([]promptctx.InstructionsSkillMetadata, []string) {
+	if r == nil || r.services.CustomSkills == nil {
+		return nil, nil
+	}
+	catalog := r.services.CustomSkills.ListCustom(ctx, skillprovider.ListQuery{TurnID: turnID})
+	metadata := make([]promptctx.InstructionsSkillMetadata, 0, len(catalog.Entries))
+	for _, entry := range catalog.Entries {
+		if !entry.Enabled || strings.TrimSpace(entry.Name) == "" || strings.TrimSpace(entry.MainResource) == "" {
+			continue
+		}
+		var allowImplicit *bool
+		if !entry.PromptVisible {
+			value := false
+			allowImplicit = &value
+		}
+		metadata = append(metadata, promptctx.InstructionsSkillMetadata{
+			Name:                    entry.Name,
+			Scope:                   "custom",
+			Path:                    entry.MainResource,
+			LocatorPath:             firstNonEmpty(entry.DisplayPath, entry.MainResource),
+			LocatorKind:             "custom resource",
+			Description:             firstNonEmpty(entry.ShortDescription, entry.Description),
+			AllowImplicitInvocation: allowImplicit,
+			AuthorityKind:           string(entry.Authority.Kind),
+			AuthorityID:             entry.Authority.ID,
+			PackageID:               entry.PackageID,
+			ResourceID:              entry.MainResource,
+			Dependencies:            promptDependenciesFromCustomSkill(entry.Dependencies),
+		})
+	}
+	return metadata, append([]string(nil), catalog.Warnings...)
+}
+
+func promptDependenciesFromCustomSkill(dependencies []skillprovider.ToolDependency) []promptctx.InstructionsSkillDependency {
+	out := make([]promptctx.InstructionsSkillDependency, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		out = append(out, promptctx.InstructionsSkillDependency{
+			Type:      dependency.Type,
+			Value:     dependency.Value,
+			Transport: dependency.Transport,
+			Command:   dependency.Command,
+			URL:       dependency.URL,
+		})
+	}
+	return out
+}
+
+const skillMCPDependencyPromptID = "skill_mcp_dependency_install"
+
+func (r *RuntimeRouter) maybePromptAndInstallSkillMCPDependencies(ctx context.Context, threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, entries []SkillsListEntry, skills []promptctx.InstructionsSkillMetadata) {
+	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "skill_mcp_dependency_install") || !skillMCPFirstPartyOriginator(turnOriginator(params)) {
 		return
 	}
-	skills := runtimeSkillMetadataFromEntries(entries)
-	if len(skills) == 0 {
+	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
+		Inputs: skillMentionInputsFromTurn(params),
+		Skills: skills,
+	})
+	selectedRuntimeSkills := runtimeSkillMetadataFromSelectedEntries(entries, selected)
+	if len(selectedRuntimeSkills) == 0 {
 		return
 	}
-	missing := mcp.CollectMissingRuntimeDependencies(skills, r.runtimeMCPServerConfigsForSkills(cfg))
+	missing := mcp.CollectMissingRuntimeDependencies(selectedRuntimeSkills, r.runtimeMCPServerConfigsForSkills(cfg))
+	missing = r.unpromptedSkillMCPDependencies(threadID, missing)
 	if len(missing) == 0 {
 		return
 	}
-	r.notify(NotificationWarning, &WarningNotification{
-		ThreadID: stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
-		Message:  "Some enabled skills require MCP servers that are not configured: " + mcp.FormatMissingRuntimeDependencies(missing) + ".",
-	})
+	install := skillMCPDependencyPromptAutoApproved(cfg, params)
+	if !install {
+		question := ToolRequestUserInputQuestion{
+			ID:       skillMCPDependencyPromptID,
+			Header:   "Install MCP servers?",
+			Question: "The following MCP servers are required by the selected skills but are not installed yet: " + mcp.FormatMissingRuntimeDependencies(missing) + ". Install them now?",
+			Options: []ToolRequestUserInputOption{
+				{Label: "Install", Description: "Install and enable the missing MCP servers in your global config."},
+				{Label: "Continue anyway", Description: "Skip installation for now and do not show again for these MCP servers in this session."},
+			},
+		}
+		var response ToolRequestUserInputResponse
+		err := r.requireServerRequests().Request(ctx, ServerRequestToolUserInput, &ToolRequestUserInputParams{
+			ThreadID:  threadID,
+			TurnID:    turnID,
+			ItemID:    "mcp-deps-" + turnID,
+			Questions: []ToolRequestUserInputQuestion{question},
+		}, &response)
+		if err == nil {
+			for _, answer := range response.Answers[skillMCPDependencyPromptID].Answers {
+				if answer == "Install" {
+					install = true
+					break
+				}
+			}
+		}
+	}
+	r.recordSkillMCPDependenciesPrompted(threadID, missing)
+	if install {
+		r.installSkillMCPDependencies(ctx, cfg, missing)
+	}
 }
 
-func runtimeSkillMetadataFromEntries(entries []SkillsListEntry) []mcp.RuntimeSkillMetadata {
+func runtimeSkillMetadataFromSelectedEntries(entries []SkillsListEntry, selected []promptctx.InstructionsSkillMetadata) []mcp.RuntimeSkillMetadata {
+	selectedPaths := make(map[string]bool, len(selected))
+	for _, skill := range selected {
+		selectedPaths[skill.Path] = true
+	}
 	out := make([]mcp.RuntimeSkillMetadata, 0, len(entries))
 	var walk func([]SkillsListEntry)
 	walk = func(values []SkillsListEntry) {
@@ -5337,7 +5849,7 @@ func runtimeSkillMetadataFromEntries(entries []SkillsListEntry) []mcp.RuntimeSki
 				walk(entry.Skills)
 				continue
 			}
-			if !entry.Enabled || strings.TrimSpace(entry.Name) == "" || entry.Dependencies == nil {
+			if !entry.Enabled || !selectedPaths[entry.Path] || strings.TrimSpace(entry.Name) == "" || entry.Dependencies == nil {
 				continue
 			}
 			dependencies := runtimeDependenciesFromSkillDependencies(entry.Dependencies)
@@ -5351,7 +5863,140 @@ func runtimeSkillMetadataFromEntries(entries []SkillsListEntry) []mcp.RuntimeSki
 		}
 	}
 	walk(entries)
+	for _, skill := range selected {
+		if len(skill.Dependencies) == 0 {
+			continue
+		}
+		dependencies := make([]mcp.RuntimeDependency, 0, len(skill.Dependencies))
+		for _, dependency := range skill.Dependencies {
+			dependencies = append(dependencies, mcp.RuntimeDependency{
+				Type:      dependency.Type,
+				Value:     dependency.Value,
+				Transport: dependency.Transport,
+				Command:   dependency.Command,
+				URL:       dependency.URL,
+			})
+		}
+		out = append(out, mcp.RuntimeSkillMetadata{Name: skill.Name, Dependencies: dependencies})
+	}
 	return out
+}
+
+func turnOriginator(params *turn.TurnStartParams) string {
+	if params == nil {
+		return ""
+	}
+	return params.Originator
+}
+
+func skillMCPFirstPartyOriginator(originator string) bool {
+	return originator == "codex_cli_rs" || originator == "codex-tui" || originator == "codex_vscode" || strings.HasPrefix(originator, "Codex ")
+}
+
+func skillMCPDependencyPromptAutoApproved(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if turnApprovalPolicyForTurn(cfg, params) != sandbox.ApprovalNever {
+		return false
+	}
+	cwd := turnCWD(params)
+	profile, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil || profile == nil || profile.Profile == nil {
+		return false
+	}
+	return profile.Profile.Disabled || profile.Profile.SandboxPolicy != nil && profile.Profile.SandboxPolicy.HasFullDiskWriteAccess()
+}
+
+func (r *RuntimeRouter) unpromptedSkillMCPDependencies(threadID string, missing map[string]mcp.RuntimeServerConfig) map[string]mcp.RuntimeServerConfig {
+	if len(missing) == 0 {
+		return nil
+	}
+	r.skillMCPPromptMu.Lock()
+	defer r.skillMCPPromptMu.Unlock()
+	out := make(map[string]mcp.RuntimeServerConfig, len(missing))
+	for name, server := range missing {
+		key := threadID + "\x00" + mcp.CanonicalRuntimeServerKey(name, server)
+		if _, prompted := r.skillMCPPrompted[key]; !prompted {
+			out[name] = server
+		}
+	}
+	return out
+}
+
+func (r *RuntimeRouter) recordSkillMCPDependenciesPrompted(threadID string, missing map[string]mcp.RuntimeServerConfig) {
+	r.skillMCPPromptMu.Lock()
+	defer r.skillMCPPromptMu.Unlock()
+	if r.skillMCPPrompted == nil {
+		r.skillMCPPrompted = map[string]struct{}{}
+	}
+	for name, server := range missing {
+		key := threadID + "\x00" + mcp.CanonicalRuntimeServerKey(name, server)
+		r.skillMCPPrompted[key] = struct{}{}
+	}
+}
+
+func (r *RuntimeRouter) installSkillMCPDependencies(ctx context.Context, cfg *config.Config, missing map[string]mcp.RuntimeServerConfig) {
+	if r == nil || r.services.Config == nil || len(missing) == 0 {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil {
+		return
+	}
+	servers := map[string]any{}
+	if existing, ok := read.Config["mcp_servers"].(map[string]any); ok {
+		servers = cloneAnyMapAppserver(existing)
+	}
+	added := make(map[string]mcp.RuntimeServerConfig, len(missing))
+	for name, server := range missing {
+		if _, exists := servers[name]; exists {
+			continue
+		}
+		value := map[string]any{"enabled": true}
+		if server.Transport == "stdio" {
+			value["command"] = server.Command
+		} else {
+			value["url"] = server.URL
+		}
+		servers[name] = value
+		added[name] = server
+	}
+	if len(added) == 0 {
+		return
+	}
+	if _, err := r.services.Config.WriteValue(&config.ConfigValueWriteParams{KeyPath: "mcp_servers", Value: servers, MergeStrategy: config.MergeReplace}); err != nil {
+		return
+	}
+	if cfg.Values == nil {
+		cfg.Values = map[string]any{}
+	}
+	cfg.Values["mcp_servers"] = servers
+	if r.services.MCP != nil {
+		codexHome := r.services.Config.CodexHome()
+		for name, server := range added {
+			r.services.MCP.SetServerConfig(name, &mcp.ServerConfig{Command: server.Command, URL: server.URL, Enabled: true, Required: false, CodexHome: codexHome})
+		}
+		openBrowser := r.services.BrowserOpen
+		if openBrowser == nil {
+			openBrowser = auth.OpenBrowser
+		}
+		for name := range added {
+			supported, err := r.services.MCP.LoginOAuthDependency(ctx, &mcp.OAuthDependencyLoginOptions{
+				Name: name,
+				OpenBrowser: func(target string) error {
+					err := openBrowser(target)
+					if err != nil {
+						slog.Warn("failed to open browser for MCP skill dependency OAuth login", "server", name, "url", target, "error", err)
+					}
+					return err
+				},
+			})
+			if err != nil {
+				slog.Warn("failed to login to MCP dependency", "server", name, "error", err)
+			} else if supported {
+				slog.Debug("completed OAuth login for MCP skill dependency", "server", name)
+			}
+		}
+		r.services.MCP.Refresh()
+	}
 }
 
 func runtimeDependenciesFromSkillDependencies(dependencies *SkillDependencies) []mcp.RuntimeDependency {
@@ -5410,7 +6055,7 @@ type implicitShellSkillArgs struct {
 	Workdir string `json:"workdir,omitempty"`
 }
 
-func (r *RuntimeRouter) implicitSkillInputItemProvider(threadID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) turn.ToolPostExecutionInputItems {
+func (r *RuntimeRouter) implicitSkillInvocationEventProvider(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) turn.ToolPostExecutionInputItems {
 	if len(skills) == 0 {
 		return nil
 	}
@@ -5421,12 +6066,16 @@ func (r *RuntimeRouter) implicitSkillInputItemProvider(threadID string, params *
 	if baseCWD == "" && r != nil {
 		baseCWD = strings.TrimSpace(r.services.DefaultCWD)
 	}
+	productClientID := ""
+	if params != nil {
+		productClientID = params.Originator
+	}
 	seen := map[string]bool{}
 	for _, skill := range promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params),
 		Skills: skills,
 	}) {
-		if key := implicitSkillSeenKey(skill); key != "" {
+		if key := implicitSkillInvocationSeenKey(skill); key != "" {
 			seen[key] = true
 		}
 	}
@@ -5436,7 +6085,7 @@ func (r *RuntimeRouter) implicitSkillInputItemProvider(threadID string, params *
 		if skill == nil {
 			return nil
 		}
-		key := implicitSkillSeenKey(*skill)
+		key := implicitSkillInvocationSeenKey(*skill)
 		if key == "" {
 			return nil
 		}
@@ -5447,26 +6096,8 @@ func (r *RuntimeRouter) implicitSkillInputItemProvider(threadID string, params *
 		}
 		seen[key] = true
 		mu.Unlock()
-		item, truncated := skillInstructionsInputItem(*skill)
-		if item == nil {
-			mu.Lock()
-			delete(seen, key)
-			mu.Unlock()
-			return nil
-		}
-		if r != nil {
-			r.notify(NotificationWarning, &WarningNotification{
-				ThreadID: stringPtrIfNotEmpty(threadID),
-				Message:  fmt.Sprintf("Implicitly invoked skill %q from shell command.", skill.Name),
-			})
-		}
-		if truncated && r != nil {
-			r.notify(NotificationWarning, &WarningNotification{
-				ThreadID: stringPtrIfNotEmpty(threadID),
-				Message:  promptctx.SkillMainPromptTruncatedWarning(skill.Name),
-			})
-		}
-		return []any{item}
+		r.trackSkillInvocationEvent(ctx, threadID, turnID, modelID, productClientID, *skill, telemetry.SkillInvocationTypeImplicit)
+		return nil
 	}
 }
 
@@ -5519,18 +6150,96 @@ func implicitSkillWorkdir(base string, override string) string {
 	return filepath.Clean(raw)
 }
 
-func implicitSkillSeenKey(skill promptctx.InstructionsSkillMetadata) string {
-	if path := strings.TrimSpace(skill.Path); path != "" {
-		return strings.ToLower(filepath.Clean(path))
-	}
-	name := strings.TrimSpace(skill.Name)
-	if name == "" {
+func implicitSkillInvocationSeenKey(skill promptctx.InstructionsSkillMetadata) string {
+	if skill.Path == "" || skill.Name == "" {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(skill.Scope) + "\x00" + name)
+	return skillInvocationScope(skill.Scope) + ":" + skill.Path + ":" + skill.Name
+}
+
+func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID string, turnID string, modelID string, productClientID string, skill promptctx.InstructionsSkillMetadata, invokeType string) {
+	if r == nil || r.services.Analytics == nil {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.SkillInvocationEventSink)
+	if !ok {
+		return
+	}
+	repoRoot, repoURL := skillInvocationRepo(skill.Path)
+	scope := skillInvocationScope(skill.Scope)
+	sink.TrackSkillInvocationEvent(ctx, telemetry.SkillInvocationEventRequest{
+		EventType: telemetry.SkillInvocationEventType,
+		SkillID:   skillInvocationID(repoURL, repoRoot, skill.Path, skill.Name),
+		SkillName: skill.Name,
+		EventParams: telemetry.SkillInvocationEventParams{
+			ProductClientID: stringPtrIfNotEmpty(productClientID),
+			SkillScope:      stringPtrIfNotEmpty(scope),
+			PluginID:        stringPtrIfNotEmpty(skill.PluginID),
+			RepoURL:         stringPtrIfNotEmpty(repoURL),
+			ThreadID:        stringPtrIfNotEmpty(threadID),
+			TurnID:          stringPtrIfNotEmpty(turnID),
+			InvokeType:      stringPtrIfNotEmpty(invokeType),
+			ModelSlug:       stringPtrIfNotEmpty(modelID),
+		},
+	})
+}
+
+func skillInvocationScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "repo":
+		return "repo"
+	case "system":
+		return "system"
+	case "admin":
+		return "admin"
+	default:
+		return "user"
+	}
+}
+
+func skillInvocationRepo(skillPath string) (string, string) {
+	current := filepath.Dir(skillPath)
+	for current != "" {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			if info, ok := utils.CollectGitInfoFromDir(current); ok {
+				return current, info.RepositoryURL
+			}
+			return current, ""
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "", ""
+}
+
+func skillInvocationID(repoURL string, repoRoot string, skillPath string, skillName string) string {
+	resolvedPath := skillPath
+	if canonical, err := filepath.EvalSymlinks(skillPath); err == nil {
+		resolvedPath = canonical
+	}
+	prefix := "personal"
+	if repoURL != "" {
+		prefix = "repo_" + repoURL
+		if canonicalRoot, err := filepath.EvalSymlinks(repoRoot); err == nil {
+			repoRoot = canonicalRoot
+		}
+		if relative, err := filepath.Rel(repoRoot, resolvedPath); err == nil {
+			resolvedPath = relative
+		}
+	}
+	rawID := prefix + "_" + strings.ReplaceAll(resolvedPath, "\\", "/") + "_" + skillName
+	digest := sha1.Sum([]byte(rawID))
+	return fmt.Sprintf("%x", digest)
 }
 
 func (r *RuntimeRouter) explicitSkillInputItems(threadID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) []any {
+	return r.explicitSkillInputItemsForTurn(threadID, "", "", params, skills)
+}
+
+func (r *RuntimeRouter) explicitSkillInputItemsForTurn(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) []any {
 	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params),
 		Skills: skills,
@@ -5540,8 +6249,25 @@ func (r *RuntimeRouter) explicitSkillInputItems(threadID string, params *turn.Tu
 	}
 	items := make([]any, 0, len(selected))
 	for _, skill := range selected {
-		if item, truncated := skillInstructionsInputItem(skill); item != nil {
+		item, truncated, err := r.skillInstructionsInputItem(threadID, skill)
+		if err != nil {
+			if r != nil {
+				r.notify(NotificationWarning, &WarningNotification{
+					ThreadID: stringPtrIfNotEmpty(threadID),
+					Message:  fmt.Sprintf("Failed to load skill `%s`: %s", skill.Name, err),
+				})
+			}
+			continue
+		}
+		if item != nil {
 			items = append(items, item)
+			if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "file") || strings.TrimSpace(skill.LocatorKind) == "" {
+				productClientID := ""
+				if params != nil {
+					productClientID = params.Originator
+				}
+				r.trackSkillInvocationEvent(context.Background(), threadID, turnID, modelID, productClientID, skill, telemetry.SkillInvocationTypeExplicit)
+			}
 			if truncated && r != nil {
 				r.notify(NotificationWarning, &WarningNotification{
 					ThreadID: stringPtrIfNotEmpty(threadID),
@@ -5553,19 +6279,46 @@ func (r *RuntimeRouter) explicitSkillInputItems(threadID string, params *turn.Tu
 	return items
 }
 
-func skillInstructionsInputItem(skill promptctx.InstructionsSkillMetadata) (any, bool) {
+func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill promptctx.InstructionsSkillMetadata) (any, bool, error) {
 	contents := skill.Contents
 	if strings.TrimSpace(contents) == "" {
-		data, err := os.ReadFile(skill.Path)
-		if err != nil || strings.TrimSpace(string(data)) == "" {
-			return nil, false
+		if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), "orchestrator") {
+			if r == nil || r.services.MCP == nil {
+				return nil, false, errors.New("session MCP resource client is not configured")
+			}
+			read, err := r.readOrchestratorSkillResourceForRuntime(threadID, skill)
+			if err != nil {
+				return nil, false, err
+			}
+			contents = read
+		} else if strings.TrimSpace(skill.AuthorityKind) != "" {
+			if r == nil || r.services.CustomSkills == nil {
+				return nil, false, fmt.Errorf("%s skill provider is not configured", skill.AuthorityKind)
+			}
+			result, err := r.services.CustomSkills.Read(context.Background(), skillprovider.ReadRequest{
+				Authority: skillprovider.Authority{Kind: skillprovider.SourceKind(skill.AuthorityKind), ID: skill.AuthorityID},
+				PackageID: skill.PackageID,
+				Resource:  skill.ResourceID,
+			})
+			if err != nil {
+				return nil, false, err
+			}
+			contents = result.Contents
+		} else {
+			data, err := os.ReadFile(skill.Path)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to read host skill resource %s: %w", skill.Path, err)
+			}
+			contents = string(data)
 		}
-		contents = string(data)
+		if strings.TrimSpace(contents) == "" {
+			return nil, false, nil
+		}
 	}
 	renderPath := firstNonEmpty(skill.LocatorPath, skill.Path)
 	name, renderPath, contents, truncated := promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
 	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
-	return renderedFragmentInputItem(rendered), truncated
+	return renderedFragmentInputItem(rendered), truncated, nil
 }
 
 func skillMentionInputsFromTurn(params *turn.TurnStartParams) []promptctx.SkillMentionInput {

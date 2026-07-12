@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,15 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 	var values map[string]any
 	if err := toml.Unmarshal(data, &values); err != nil {
 		return nil, err
+	}
+	if raw, ok := values["experimental_network"]; ok {
+		networkValues, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid type for experimental_network: expected table")
+		}
+		if err := validateNetworkRequirementsTOML(networkValues); err != nil {
+			return nil, err
+		}
 	}
 	return ConfigRequirementsFromMap(values), nil
 }
@@ -89,7 +99,7 @@ func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
 		residency := ResidencyRequirement(value)
 		out.EnforceResidency = &residency
 	}
-	if nested, ok := mapAnyKey(values, "network", "experimental_network", "experimentalNetwork"); ok {
+	if nested, ok := mapAnyKey(values, "experimental_network"); ok {
 		out.Network = networkRequirementsFromMap(nested)
 	}
 	if nested, ok := mapAnyKey(values, "models"); ok {
@@ -171,7 +181,132 @@ func networkRequirementsFromMap(values map[string]any) *NetworkRequirements {
 	if value, ok := boolAnyKey(values, "allow_local_binding", "allowLocalBinding"); ok {
 		out.AllowLocalBinding = &value
 	}
+	normalizeLegacyNetworkRequirements(&out)
 	return &out
+}
+
+func validateNetworkRequirementsTOML(values map[string]any) error {
+	if _, hasDomains := values["domains"]; hasDomains {
+		if _, hasAllowed := values["allowed_domains"]; hasAllowed {
+			return fmt.Errorf("`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`")
+		}
+		if _, hasDenied := values["denied_domains"]; hasDenied {
+			return fmt.Errorf("`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`")
+		}
+	}
+	if _, hasUnixSockets := values["unix_sockets"]; hasUnixSockets {
+		if _, hasLegacy := values["allow_unix_sockets"]; hasLegacy {
+			return fmt.Errorf("`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`")
+		}
+	}
+
+	for _, key := range []string{
+		"enabled",
+		"allow_upstream_proxy",
+		"dangerously_allow_non_loopback_proxy",
+		"dangerously_allow_all_unix_sockets",
+		"managed_allowed_domains_only",
+		"allow_local_binding",
+	} {
+		if raw, ok := values[key]; ok {
+			if _, ok := raw.(bool); !ok {
+				return fmt.Errorf("invalid type for experimental_network.%s: expected boolean", key)
+			}
+		}
+	}
+	for _, key := range []string{"http_port", "socks_port"} {
+		if raw, ok := values[key]; ok {
+			if _, ok := strictTOMLUint16(raw); !ok {
+				return fmt.Errorf("invalid value for experimental_network.%s: expected an integer from 0 through 65535", key)
+			}
+		}
+	}
+	for _, key := range []string{"allowed_domains", "denied_domains", "allow_unix_sockets"} {
+		if raw, ok := values[key]; ok {
+			if !strictTOMLStringList(raw) {
+				return fmt.Errorf("invalid type for experimental_network.%s: expected an array of strings", key)
+			}
+		}
+	}
+	for _, key := range []string{"domains", "unix_sockets"} {
+		if raw, ok := values[key]; ok {
+			if err := validateNetworkPermissionTable(key, raw); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateNetworkPermissionTable(key string, raw any) error {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid type for experimental_network.%s: expected table", key)
+	}
+	for pattern, rawPermission := range values {
+		permission, ok := rawPermission.(string)
+		if !ok || (permission != string(NetworkAllow) && permission != string(NetworkDeny)) {
+			return fmt.Errorf("invalid value for experimental_network.%s.%s: expected `allow` or `deny`", key, pattern)
+		}
+	}
+	return nil
+}
+
+func strictTOMLUint16(value any) (uint16, bool) {
+	switch value := value.(type) {
+	case int64:
+		if value >= 0 && value <= 65535 {
+			return uint16(value), true
+		}
+	case uint64:
+		if value <= 65535 {
+			return uint16(value), true
+		}
+	}
+	return 0, false
+}
+
+func strictTOMLStringList(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		if _, ok := item.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeLegacyNetworkRequirements(out *NetworkRequirements) {
+	if out == nil {
+		return
+	}
+	if out.Domains == nil && (out.AllowedDomains != nil || out.DeniedDomains != nil) {
+		entries := make(map[string]NetworkPermission, len(out.AllowedDomains)+len(out.DeniedDomains))
+		for _, pattern := range out.AllowedDomains {
+			entries[pattern] = NetworkAllow
+		}
+		for _, pattern := range out.DeniedDomains {
+			entries[pattern] = NetworkDeny
+		}
+		if len(entries) > 0 {
+			out.Domains = entries
+		}
+	}
+	out.AllowedDomains = nil
+	out.DeniedDomains = nil
+	if out.UnixSockets == nil && out.AllowUnixSockets != nil {
+		entries := make(map[string]NetworkPermission, len(out.AllowUnixSockets))
+		for _, path := range out.AllowUnixSockets {
+			entries[path] = NetworkAllow
+		}
+		if len(entries) > 0 {
+			out.UnixSockets = entries
+		}
+	}
+	out.AllowUnixSockets = nil
 }
 
 func modelsRequirementsFromMap(values map[string]any) *ModelsRequirements {

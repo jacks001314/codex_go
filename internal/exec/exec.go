@@ -61,6 +61,7 @@ type Runner struct {
 	CodexHome       string
 	Agent           model.AgentRunner
 	ToolRouter      *tool.Router
+	UnifiedExec     *tool.UnifiedExecManager
 	Hooks           tool.HookRunner
 	ShellApproval   tool.ShellApprovalFunc
 	UserInput       tool.UserInputResponder
@@ -79,6 +80,7 @@ func NewRunner(codexHome string) *Runner {
 		CodexHome:       codexHome,
 		UseResponsesAPI: true,
 		Now:             time.Now,
+		UnifiedExec:     tool.NewUnifiedExecManager(),
 	}
 }
 
@@ -262,6 +264,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ImageGeneration:              imageGenerationOptions,
 		HostedTools:                  hostedTools,
 		DisableHostedImageGeneration: req.Exec.Subcommand == "review",
+		ToolOutputTokenLimit:         cfg.ToolOutputTokenLimit(),
+		UnifiedExecEnabled:           features.Enabled(cfg.FeatureSettings(), "unified_exec"),
 	})
 	if err != nil {
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
@@ -351,6 +355,8 @@ type agentRunConfig struct {
 	ImageGeneration              *turn.ImageGenerationOptions
 	HostedTools                  []any
 	DisableHostedImageGeneration bool
+	ToolOutputTokenLimit         *int
+	UnifiedExecEnabled           bool
 }
 
 type execStreamEventCollector struct {
@@ -582,8 +588,15 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		return r.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(requestCWD(req))
+	options.UnifiedExec = r.UnifiedExec
+	if run != nil {
+		options.EnableUnifiedExec = run.UnifiedExecEnabled
+	}
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval
+		if run != nil {
+			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit
+		}
 	}
 	options.UserInputResponder = r.UserInput
 	if options.Shell != nil && run != nil && run.PermissionProfile != nil {
@@ -1833,6 +1846,9 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		item := mcpToolCallProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
 	}
+	if isWriteStdinExecution(execution) {
+		return nil
+	}
 	if isCommandExecution(execution) {
 		item := commandExecutionProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
@@ -1868,7 +1884,18 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	if isMCPExecution(execution) {
 		return protocol.ItemCompleted(mcpToolCallProtocolItem(execution, mcpToolCallStatusFromOutput(execution.Output))), true
 	}
+	if isWriteStdinExecution(execution) {
+		if _, running := intFromAny(execution.Output.Data["process_id"]); running {
+			return protocol.ThreadEvent{}, false
+		}
+		if _, exited := intFromAny(execution.Output.Data["exit_code"]); exited {
+			return protocol.ItemCompleted(commandExecutionProtocolItemFromOutput(execution.Output, "completed")), true
+		}
+	}
 	if isCommandExecution(execution) {
+		if _, running := intFromAny(execution.Output.Data["process_id"]); running {
+			return protocol.ThreadEvent{}, false
+		}
 		return protocol.ItemCompleted(commandExecutionProtocolItem(execution, commandExecutionStatusFromOutput(execution.Output))), true
 	}
 	callID := execution.Invocation.CallID
@@ -1905,8 +1932,15 @@ func isCommandExecution(execution *turn.ToolExecutionResult) bool {
 	if execution.Invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
 		return false
 	}
-	_, ok := intFromAny(execution.Output.Data["exit_code"])
+	if _, ok := intFromAny(execution.Output.Data["exit_code"]); ok {
+		return true
+	}
+	_, ok := intFromAny(execution.Output.Data["process_id"])
 	return ok
+}
+
+func isWriteStdinExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Key() == tool.DefaultWriteStdinToolName
 }
 
 func commandExecutionProtocolItem(execution *turn.ToolExecutionResult, status string) protocol.ThreadItem {
@@ -1933,6 +1967,20 @@ func commandExecutionProtocolItem(execution *turn.ToolExecutionResult, status st
 		exitCode,
 		status,
 	)
+}
+
+func commandExecutionProtocolItemFromOutput(output *tool.Output, status string) protocol.ThreadItem {
+	if output == nil {
+		return protocol.ThreadItem{}
+	}
+	callID, _ := output.Data["event_call_id"].(string)
+	command, _ := output.Data["hook_command"].(string)
+	aggregated, _ := output.Data["hook_response"].(string)
+	var exitCode *int
+	if code, ok := intFromAny(output.Data["exit_code"]); ok {
+		exitCode = &code
+	}
+	return protocol.CommandExecutionItem(firstNonEmpty(callID, output.CallID, "command-execution"), command, aggregated, exitCode, status)
 }
 
 func commandFromShellInvocation(invocation *tool.Invocation) string {

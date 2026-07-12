@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,42 @@ func TestOAuthStoreSaveLoadStatusAndDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".credentials.json")); !os.IsNotExist(err) {
 		t.Fatalf(".credentials.json should be removed, err = %v", err)
+	}
+}
+
+func TestResolveOAuthScopesAndRetryMatchRust(t *testing.T) {
+	tests := []struct {
+		name               string
+		explicit           []string
+		explicitConfigured bool
+		configured         []string
+		configuredPresent  bool
+		discovered         []string
+		want               ResolvedOAuthScopes
+	}{
+		{name: "explicit", explicit: []string{"explicit"}, explicitConfigured: true, configured: []string{"configured"}, configuredPresent: true, discovered: []string{"discovered"}, want: ResolvedOAuthScopes{Scopes: []string{"explicit"}, Source: OAuthScopesExplicit}},
+		{name: "configured", configured: []string{"configured"}, configuredPresent: true, discovered: []string{"discovered"}, want: ResolvedOAuthScopes{Scopes: []string{"configured"}, Source: OAuthScopesConfigured}},
+		{name: "configured empty", configured: []string{}, configuredPresent: true, discovered: []string{"discovered"}, want: ResolvedOAuthScopes{Scopes: []string{}, Source: OAuthScopesConfigured}},
+		{name: "discovered", discovered: []string{"read", " read ", "write"}, want: ResolvedOAuthScopes{Scopes: []string{"read", "write"}, Source: OAuthScopesDiscovered}},
+		{name: "empty", want: ResolvedOAuthScopes{Scopes: []string{}, Source: OAuthScopesEmpty}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveOAuthScopes(tc.explicit, tc.explicitConfigured, tc.configured, tc.configuredPresent, tc.discovered)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ResolveOAuthScopes() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+	providerError := &OAuthProviderError{Code: "invalid_scope", Description: "scope rejected"}
+	if !ShouldRetryOAuthWithoutScopes(ResolvedOAuthScopes{Scopes: []string{"read"}, Source: OAuthScopesDiscovered}, providerError) {
+		t.Fatal("discovered provider error should retry without scopes")
+	}
+	if ShouldRetryOAuthWithoutScopes(ResolvedOAuthScopes{Scopes: []string{"read"}, Source: OAuthScopesConfigured}, providerError) {
+		t.Fatal("configured provider error should not retry without scopes")
+	}
+	if ShouldRetryOAuthWithoutScopes(ResolvedOAuthScopes{Scopes: []string{"read"}, Source: OAuthScopesDiscovered}, errors.New("callback timeout")) {
+		t.Fatal("non-provider error should not retry without scopes")
 	}
 }
 

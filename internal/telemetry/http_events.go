@@ -194,6 +194,10 @@ func (c *AnalyticsEventsClient) TrackCodexImageGenerationEvent(ctx context.Conte
 	c.trackEvent(event)
 }
 
+func (c *AnalyticsEventsClient) TrackSkillInvocationEvent(ctx context.Context, event SkillInvocationEventRequest) {
+	c.trackEvent(event)
+}
+
 func (c *AnalyticsEventsClient) trackEvent(event any) {
 	if c == nil {
 		return
@@ -454,6 +458,15 @@ func (e *HTTPAnalyticsExporter) TrackCodexWebSearchEvent(ctx context.Context, ev
 }
 
 func (e *HTTPAnalyticsExporter) TrackCodexImageGenerationEvent(ctx context.Context, event CodexImageGenerationEventRequest) {
+	if e == nil {
+		return
+	}
+	if err := e.SendTrackEvents(ctx, []any{event}); err != nil {
+		slog.Warn("failed to send analytics events request", "error", err)
+	}
+}
+
+func (e *HTTPAnalyticsExporter) TrackSkillInvocationEvent(ctx context.Context, event SkillInvocationEventRequest) {
 	if e == nil {
 		return
 	}

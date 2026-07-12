@@ -94,6 +94,56 @@ use_legacy_landlock = true
 	}
 }
 
+func TestIncludeSkillInstructionsUsesRustDefaultAndSkillsConfig(t *testing.T) {
+	if !(&Config{Values: map[string]any{}}).IncludeSkillInstructions() {
+		t.Fatal("IncludeSkillInstructions() default = false, want true")
+	}
+	disabled := &Config{Values: map[string]any{"skills": map[string]any{"include_instructions": false}}}
+	if disabled.IncludeSkillInstructions() {
+		t.Fatal("IncludeSkillInstructions() = true, want false")
+	}
+	invalid := &Config{Values: map[string]any{"skills": map[string]any{"include_instructions": "false"}}}
+	if !invalid.IncludeSkillInstructions() {
+		t.Fatal("IncludeSkillInstructions() invalid value should use true default")
+	}
+}
+
+func TestOrchestratorSkillsEnabledUsesRustDefaultAndNestedConfig(t *testing.T) {
+	if !(&Config{Values: map[string]any{}}).OrchestratorSkillsEnabled() {
+		t.Fatal("OrchestratorSkillsEnabled() default = false, want true")
+	}
+	disabled := &Config{Values: map[string]any{"orchestrator": map[string]any{"skills": map[string]any{"enabled": false}}}}
+	if disabled.OrchestratorSkillsEnabled() {
+		t.Fatal("OrchestratorSkillsEnabled() = true, want false")
+	}
+}
+
+func TestToolOutputTokenLimitMatchesRustOptionalUsize(t *testing.T) {
+	if got := (&Config{Values: map[string]any{}}).ToolOutputTokenLimit(); got != nil {
+		t.Fatalf("ToolOutputTokenLimit() = %v, want nil", *got)
+	}
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "zero", value: int64(0), want: 0},
+		{name: "positive", value: int64(50), want: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&Config{Values: map[string]any{"tool_output_token_limit": tc.value}}).ToolOutputTokenLimit()
+			if got == nil || *got != tc.want {
+				t.Fatalf("ToolOutputTokenLimit() = %v, want %d", got, tc.want)
+			}
+		})
+	}
+	for _, value := range []any{int64(-1), "50", 1.5} {
+		if got := (&Config{Values: map[string]any{"tool_output_token_limit": value}}).ToolOutputTokenLimit(); got != nil {
+			t.Fatalf("ToolOutputTokenLimit(%#v) = %d, want nil", value, *got)
+		}
+	}
+}
+
 func TestLoadEffectiveWithOptionsIncludesManagedConfigLayer(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(ConfigPath(dir), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {

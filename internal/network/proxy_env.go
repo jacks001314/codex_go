@@ -1,9 +1,12 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
+	"sync"
 )
 
 var ProxyURLEnvKeys = []string{
@@ -73,8 +76,185 @@ type ProxyManagedNetworkSandboxContext struct {
 }
 
 type PreparedProxyManagedNetwork struct {
+	mu             sync.RWMutex
 	Env            map[string]string
 	SandboxContext ProxyManagedNetworkSandboxContext
+	server         *ProxyServer
+	baseEnv        map[string]string
+	config         ProxyConfig
+	httpAddr       net.TCPAddr
+	socksAddr      net.TCPAddr
+	socksEnabled   bool
+	environmentsMu sync.Mutex
+	environments   map[string]*PreparedProxyManagedNetwork
+	closed         bool
+}
+
+func (p *PreparedProxyManagedNetwork) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.environmentsMu.Lock()
+	p.closed = true
+	environments := make([]*PreparedProxyManagedNetwork, 0, len(p.environments))
+	for _, prepared := range p.environments {
+		environments = append(environments, prepared)
+	}
+	p.environments = nil
+	p.environmentsMu.Unlock()
+	var closeErr error
+	for _, prepared := range environments {
+		if err := prepared.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	if p.server != nil {
+		if err := p.server.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (p *PreparedProxyManagedNetwork) ReloadConfig(config ProxyConfig) error {
+	if p == nil || p.server == nil {
+		return fmt.Errorf("managed network proxy is unavailable")
+	}
+	if err := p.server.ReloadConfig(config); err != nil {
+		return err
+	}
+	prepared := PrepareProxyManagedNetwork(p.baseEnv, p.httpAddr, p.socksAddr, p.socksEnabled, config.Network.AllowLocalBinding)
+	p.server.mitm.ApplyChildEnv(prepared.Env)
+	p.server.runtimePolicy().broker.VirtualizeChildEnv(prepared.Env)
+	p.mu.Lock()
+	p.Env = prepared.Env
+	p.SandboxContext = prepared.SandboxContext
+	p.config = config
+	p.mu.Unlock()
+	p.environmentsMu.Lock()
+	defer p.environmentsMu.Unlock()
+	if p.closed {
+		return fmt.Errorf("managed network proxy is closed")
+	}
+	for environmentID, environment := range p.environments {
+		environmentConfig := config
+		environmentConfig.EnvironmentID = environmentID
+		if err := environment.ReloadConfig(environmentConfig); err != nil {
+			return fmt.Errorf("reload managed network for environment %q: %w", environmentID, err)
+		}
+	}
+	return nil
+}
+
+func (p *PreparedProxyManagedNetwork) PrepareForEnvironment(environmentID string) (map[string]string, ProxyManagedNetworkSandboxContext, error) {
+	if p == nil || p.server == nil {
+		return nil, ProxyManagedNetworkSandboxContext{}, fmt.Errorf("managed network proxy is unavailable")
+	}
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		environmentID = "local"
+	}
+	p.environmentsMu.Lock()
+	defer p.environmentsMu.Unlock()
+	if p.closed {
+		return nil, ProxyManagedNetworkSandboxContext{}, fmt.Errorf("managed network proxy is closed")
+	}
+	if prepared := p.environments[environmentID]; prepared != nil {
+		return prepared.EnvSnapshot(), prepared.SandboxContextSnapshot(), nil
+	}
+	p.mu.RLock()
+	config := p.config
+	baseEnv := cloneProxyEnv(p.baseEnv)
+	p.mu.RUnlock()
+	config.EnvironmentID = environmentID
+	prepared, err := StartProxyManagedNetwork(context.Background(), config, baseEnv)
+	if err != nil {
+		return nil, ProxyManagedNetworkSandboxContext{}, err
+	}
+	if p.environments == nil {
+		p.environments = map[string]*PreparedProxyManagedNetwork{}
+	}
+	p.environments[environmentID] = prepared
+	return prepared.EnvSnapshot(), prepared.SandboxContextSnapshot(), nil
+}
+
+func (p *PreparedProxyManagedNetwork) EnvSnapshot() map[string]string {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make(map[string]string, len(p.Env))
+	for key, value := range p.Env {
+		out[key] = value
+	}
+	return out
+}
+
+func (p *PreparedProxyManagedNetwork) SandboxContextSnapshot() ProxyManagedNetworkSandboxContext {
+	if p == nil {
+		return ProxyManagedNetworkSandboxContext{}
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return ProxyManagedNetworkSandboxContext{
+		LoopbackPorts:     append([]uint16(nil), p.SandboxContext.LoopbackPorts...),
+		AllowLocalBinding: p.SandboxContext.AllowLocalBinding,
+	}
+}
+
+func (p *PreparedProxyManagedNetwork) BlockedSnapshot() []ProxyBlockedRequest {
+	if p == nil || p.server == nil {
+		return nil
+	}
+	blocked := p.server.BlockedSnapshot()
+	for _, environment := range p.environmentSnapshot() {
+		blocked = append(blocked, environment.BlockedSnapshot()...)
+	}
+	sort.SliceStable(blocked, func(i, j int) bool { return blocked[i].Timestamp < blocked[j].Timestamp })
+	if len(blocked) > maxProxyBlockedEvents {
+		blocked = blocked[len(blocked)-maxProxyBlockedEvents:]
+	}
+	return blocked
+}
+
+func (p *PreparedProxyManagedNetwork) DrainBlocked() []ProxyBlockedRequest {
+	if p == nil || p.server == nil {
+		return nil
+	}
+	blocked := p.server.DrainBlocked()
+	for _, environment := range p.environmentSnapshot() {
+		blocked = append(blocked, environment.DrainBlocked()...)
+	}
+	sort.SliceStable(blocked, func(i, j int) bool { return blocked[i].Timestamp < blocked[j].Timestamp })
+	if len(blocked) > maxProxyBlockedEvents {
+		blocked = blocked[len(blocked)-maxProxyBlockedEvents:]
+	}
+	return blocked
+}
+
+func (p *PreparedProxyManagedNetwork) BlockedTotal() uint64 {
+	if p == nil || p.server == nil {
+		return 0
+	}
+	total := p.server.BlockedTotal()
+	for _, environment := range p.environmentSnapshot() {
+		total += environment.BlockedTotal()
+	}
+	return total
+}
+
+func (p *PreparedProxyManagedNetwork) environmentSnapshot() []*PreparedProxyManagedNetwork {
+	if p == nil {
+		return nil
+	}
+	p.environmentsMu.Lock()
+	defer p.environmentsMu.Unlock()
+	out := make([]*PreparedProxyManagedNetwork, 0, len(p.environments))
+	for _, prepared := range p.environments {
+		out = append(out, prepared)
+	}
+	return out
 }
 
 func PrepareProxyManagedNetwork(baseEnv map[string]string, httpAddr net.TCPAddr, socksAddr net.TCPAddr, socksEnabled bool, allowLocalBinding bool) PreparedProxyManagedNetwork {

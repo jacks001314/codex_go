@@ -49,6 +49,9 @@ func Parse(raw string) (*PathURI, error) {
 	if parsed.User != nil {
 		return nil, &ParseError{Reason: "credentials are not allowed in path URIs"}
 	}
+	if parsed.Port() != "" {
+		return nil, &ParseError{Reason: "ports are not allowed in path URIs"}
+	}
 	if parsed.RawQuery != "" {
 		return nil, &ParseError{Reason: "query parameters are not allowed in path URIs"}
 	}
@@ -173,6 +176,21 @@ func (u *PathURI) NativePathString() string {
 		return u.String()
 	}
 	return rendered.Value
+}
+
+func (u *PathURI) HostNativePath() (string, error) {
+	convention := ConventionPosix
+	if runtime.GOOS == "windows" {
+		convention = ConventionWindows
+	}
+	rendered, err := LegacyAppPathStringFromURI(u, convention)
+	if err != nil {
+		return "", &ParseError{Reason: "path URI is not valid on this host", Path: u.String()}
+	}
+	if !filepath.IsAbs(rendered.Value) {
+		return "", &ParseError{Reason: "path is not absolute", Path: rendered.Value}
+	}
+	return rendered.Value, nil
 }
 
 func (u *PathURI) Parent() (*PathURI, bool) {

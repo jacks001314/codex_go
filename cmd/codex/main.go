@@ -9,6 +9,7 @@ import (
 	"codex_go/internal/applypatch"
 	"codex_go/internal/auth"
 	"codex_go/internal/cli"
+	"codex_go/internal/execserver"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/sandbox/windowssandbox"
 	commandrunner "codex_go/internal/sandbox/windowssandbox/bin/command_runner"
@@ -45,6 +46,9 @@ func main() {
 			args = os.Args[2:]
 		}
 		os.Exit(commandrunner.Run(args, os.Stdin, os.Stdout, os.Stderr))
+	}
+	if argv1 == execserver.FSHelperArg1 {
+		os.Exit(execserver.RunFSHelper(os.Stdin, os.Stdout, os.Stderr))
 	}
 	exe, _ := os.Executable()
 	var aliases *cli.DispatchAliasGuard

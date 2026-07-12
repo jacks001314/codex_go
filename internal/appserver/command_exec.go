@@ -44,6 +44,7 @@ type managedCommandExec struct {
 	cancel              context.CancelFunc
 	stdin               io.WriteCloser
 	pty                 *ptyHandle
+	outputActivity      chan struct{}
 	outputDone          chan struct{}
 	done                chan struct{}
 	response            chan commandExecResult
@@ -480,6 +481,7 @@ func (s *CommandExecService) executePTYWithConnection(execCtx context.Context, c
 		cancel()
 		return nil, fmt.Errorf("failed to start command/exec: %w", err)
 	}
+	active.outputActivity = make(chan struct{}, 1)
 	active.outputDone = make(chan struct{})
 	s.mu.Lock()
 	active.process = process
@@ -487,7 +489,7 @@ func (s *CommandExecService) executePTYWithConnection(execCtx context.Context, c
 	active.pty = ptySession
 	s.mu.Unlock()
 
-	go readPTYOutput(ptySession, stdout, active.outputDone, func(data []byte) {
+	go readPTYOutput(ptySession, stdout, active.outputActivity, active.outputDone, func(data []byte) {
 		if len(data) == 0 || notify == nil {
 			return
 		}
@@ -560,12 +562,14 @@ func (s *CommandExecService) waitCommandExec(ctx context.Context, connectionID s
 		err = cmd.Wait()
 	}
 	exitCode, waitErr := commandExecExitCode(ctx, err)
-	if active != nil && active.cancel != nil {
-		active.cancel()
-	}
 	if active != nil && active.pty != nil {
+		waitForPTYOutputAfterExit(active.outputActivity, active.outputDone)
 		_ = active.pty.ClosePTY()
 		waitForPTYOutputDone(active.pty, active.outputDone)
+		_ = active.pty.Cleanup()
+	}
+	if active != nil && active.cancel != nil {
+		active.cancel()
 	}
 	if active != nil && active.response != nil {
 		active.response <- commandExecResult{exitCode: exitCode, err: waitErr}

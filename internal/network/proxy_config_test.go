@@ -3,7 +3,10 @@ package network
 import (
 	"net"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestSettingsDefaultsAndDomainPrecedence(t *testing.T) {
@@ -136,6 +139,250 @@ func TestProxyConfigFromConfigValuesRejectsInvalidRuntime(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ProxyConfigFromConfigValues returned nil error")
+	}
+}
+
+func TestProxyConfigFromConfigValuesParsesMITMHooksLikeRust(t *testing.T) {
+	config, err := ProxyConfigFromConfigValues(map[string]any{
+		"network_proxy": map[string]any{
+			"mitm": true,
+			"mitm_hooks": []any{map[string]any{
+				"host": "api.github.com",
+				"match": map[string]any{
+					"methods":       []any{"POST"},
+					"path_prefixes": []any{"/repos/"},
+					"query":         map[string]any{"state": []any{"open"}},
+					"headers":       map[string]any{"X-Mode": []any{"write"}},
+				},
+				"actions": map[string]any{
+					"strip_request_headers": []any{"Authorization"},
+					"inject_request_headers": []any{map[string]any{
+						"name":           "Authorization",
+						"secret_env_var": "GH_TOKEN",
+						"prefix":         "Bearer ",
+					}},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Network.MITMHooks) != 1 {
+		t.Fatalf("MITM hooks = %#v", config.Network.MITMHooks)
+	}
+	hook := config.Network.MITMHooks[0]
+	if hook.Host != "api.github.com" || !reflect.DeepEqual(hook.Match.Methods, []string{"POST"}) || !reflect.DeepEqual(hook.Match.Query["state"], []string{"open"}) {
+		t.Fatalf("MITM hook = %#v", hook)
+	}
+	if len(hook.Actions.InjectRequestHeaders) != 1 || hook.Actions.InjectRequestHeaders[0].SecretEnvVar == nil || *hook.Actions.InjectRequestHeaders[0].SecretEnvVar != "GH_TOKEN" {
+		t.Fatalf("MITM hook actions = %#v", hook.Actions)
+	}
+}
+
+func TestProxyConfigFromTOMLValuesParsesMITMHooksLikeRust(t *testing.T) {
+	var values map[string]any
+	err := toml.Unmarshal([]byte(`
+[network_proxy]
+mitm = true
+
+[[network_proxy.mitm_hooks]]
+host = "api.github.com"
+
+[network_proxy.mitm_hooks.match]
+methods = ["POST"]
+path_prefixes = ["/repos/"]
+
+[network_proxy.mitm_hooks.actions]
+strip_request_headers = ["Authorization"]
+
+[[network_proxy.mitm_hooks.actions.inject_request_headers]]
+name = "Authorization"
+secret_env_var = "GH_TOKEN"
+prefix = "Bearer "
+`), &values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := ProxyConfigFromConfigValues(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Network.MITMHooks) != 1 || config.Network.MITMHooks[0].Host != "api.github.com" {
+		t.Fatalf("MITM hooks = %#v", config.Network.MITMHooks)
+	}
+}
+
+func TestProxyConfigFromPermissionProfileNetworkInheritanceLikeRust(t *testing.T) {
+	config, err := ProxyConfigFromConfigValues(map[string]any{
+		"default_permissions": "child",
+		"permissions": map[string]any{
+			"parent": map[string]any{
+				"network": map[string]any{
+					"enabled": true,
+					"mode":    "limited",
+					"domains": map[string]any{
+						"API.Example.com": "allow",
+						"blocked.test":    "deny",
+					},
+					"unix_sockets": map[string]any{"/tmp/parent.sock": "allow"},
+				},
+			},
+			"child": map[string]any{
+				"extends": "parent",
+				"network": map[string]any{
+					"mode":                "full",
+					"allow_local_binding": true,
+					"domains": map[string]any{
+						"api.example.com": "deny",
+						"child.test":      "allow",
+					},
+					"unix_sockets": map[string]any{"/tmp/child.sock": "allow"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Network
+	if !settings.Enabled || settings.Mode != ProxyModeFull || !settings.AllowLocalBinding {
+		t.Fatalf("settings = %#v", settings)
+	}
+	if got := settings.AllowedDomains(); !reflect.DeepEqual(got, []string{"child.test"}) {
+		t.Fatalf("allowed domains = %#v", got)
+	}
+	if got := settings.DeniedDomains(); !reflect.DeepEqual(got, []string{"blocked.test", "api.example.com"}) {
+		t.Fatalf("denied domains = %#v", got)
+	}
+	if got := settings.AllowUnixSockets(); !reflect.DeepEqual(got, []string{"/tmp/child.sock", "/tmp/parent.sock"}) {
+		t.Fatalf("unix sockets = %#v", got)
+	}
+}
+
+func TestProxyConfigFromPermissionProfileExtendingBuiltinWorkspaceLikeRust(t *testing.T) {
+	var values map[string]any
+	if err := toml.Unmarshal([]byte(`
+default_permissions = "dev"
+
+[permissions.dev]
+extends = ":workspace"
+
+[permissions.dev.network]
+enabled = true
+proxy_url = "http://127.0.0.1:0"
+enable_socks5 = false
+allowed_domains = ["api.openai.com"]
+`), &values); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ProxyConfigFromConfigValues(values)
+	if err != nil {
+		t.Fatalf("ProxyConfigFromConfigValues() error = %v", err)
+	}
+	if config == nil || !config.Network.Enabled || !reflect.DeepEqual(config.Network.AllowedDomains(), []string{"api.openai.com"}) {
+		t.Fatalf("proxy config = %#v", config)
+	}
+}
+
+func TestProxyConfigPermissionProfileInheritanceCyclePreservesRustPathOrder(t *testing.T) {
+	_, err := ProxyConfigFromConfigValues(map[string]any{
+		"default_permissions": "alpha",
+		"permissions": map[string]any{
+			"alpha": map[string]any{"extends": "beta", "network": map[string]any{"enabled": true}},
+			"beta":  map[string]any{"extends": "gamma"},
+			"gamma": map[string]any{"extends": "alpha"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "alpha -> beta -> gamma -> alpha") {
+		t.Fatalf("cycle error = %v", err)
+	}
+}
+
+func TestProxyConfigRejectsUnknownBuiltinDefaultPermissionLikeRust(t *testing.T) {
+	_, err := ProxyConfigFromConfigValues(map[string]any{"default_permissions": ":unknown"})
+	if err == nil || err.Error() != "default_permissions refers to unknown built-in profile `:unknown`" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProxyConfigFromPermissionProfileNamedMITMActionsLikeRust(t *testing.T) {
+	var values map[string]any
+	err := toml.Unmarshal([]byte(`
+default_permissions = "child"
+
+[permissions.parent]
+
+[permissions.parent.network.mitm.actions.auth]
+strip_request_headers = ["Authorization"]
+
+[[permissions.parent.network.mitm.actions.auth.inject_request_headers]]
+name = "Authorization"
+secret_env_var = "GH_TOKEN"
+prefix = "Bearer "
+
+[permissions.child]
+extends = "parent"
+
+[permissions.child.network]
+enabled = true
+mode = "full"
+
+[permissions.child.network.domains]
+"api.github.com" = "allow"
+
+[permissions.child.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/"]
+action = ["auth"]
+`), &values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := ProxyConfigFromConfigValues(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Network.Enabled || !config.Network.MITM || len(config.Network.MITMHooks) != 1 {
+		t.Fatalf("network config = %#v", config.Network)
+	}
+	hook := config.Network.MITMHooks[0]
+	if hook.Host != "api.github.com" || !reflect.DeepEqual(hook.Match.Methods, []string{"POST"}) || len(hook.Actions.InjectRequestHeaders) != 1 || hook.Actions.InjectRequestHeaders[0].SecretEnvVar == nil || *hook.Actions.InjectRequestHeaders[0].SecretEnvVar != "GH_TOKEN" {
+		t.Fatalf("named MITM hook = %#v", hook)
+	}
+}
+
+func TestProxyConfigPermissionProfileMITMRejectsUndefinedActionLikeRust(t *testing.T) {
+	_, err := ProxyConfigFromConfigValues(map[string]any{
+		"default_permissions": "dev",
+		"permissions": map[string]any{
+			"dev": map[string]any{
+				"network": map[string]any{
+					"mitm": map[string]any{
+						"hooks": map[string]any{
+							"write": map[string]any{
+								"host":          "api.example.test",
+								"methods":       []any{"POST"},
+								"path_prefixes": []any{"/"},
+								"action":        []any{"missing"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "references undefined action `missing`") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProxyConfigRejectsCredentialBrokerWithoutMITMLikeRust(t *testing.T) {
+	settings := DefaultProxySettings()
+	settings.CredentialBroker = true
+	if _, err := ResolveProxyRuntime(ProxyConfig{Network: settings}); err == nil || !strings.Contains(err.Error(), "network.credential_broker requires network.mitm = true") {
+		t.Fatalf("ResolveProxyRuntime error = %v", err)
 	}
 }
 

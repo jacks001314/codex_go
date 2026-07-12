@@ -16,6 +16,7 @@ func TestResponsesToolsFromSpecsSerializesFunctionSearchAndFreeform(t *testing.T
 				"type":       "object",
 				"properties": map[string]any{"text": map[string]any{"type": "string"}},
 			},
+			OutputSchema: map[string]any{"type": "object", "required": []string{"output"}},
 		},
 		{
 			Name:        tool.PlainName(tool.ToolSearchName),
@@ -54,6 +55,9 @@ func TestResponsesToolsFromSpecsSerializesFunctionSearchAndFreeform(t *testing.T
 	}
 	if tools[0]["type"] != "function" || tools[0]["name"] != "echo" || tools[0]["strict"] != false {
 		t.Fatalf("function tool = %#v", tools[0])
+	}
+	if outputSchema, ok := tools[0]["output_schema"].(map[string]any); !ok || outputSchema["type"] != "object" {
+		t.Fatalf("function output schema = %#v", tools[0]["output_schema"])
 	}
 	if tools[1]["type"] != "tool_search" || tools[1]["execution"] != "client" {
 		t.Fatalf("tool_search = %#v", tools[1])

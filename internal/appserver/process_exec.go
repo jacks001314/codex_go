@@ -21,19 +21,20 @@ type ProcessService struct {
 }
 
 type managedProcess struct {
-	connectionID string
-	handle       string
-	cmd          *osexec.Cmd
-	process      *ptyProcess
-	cancel       context.CancelFunc
-	stdin        io.WriteCloser
-	pty          *ptyHandle
-	stdout       *commandExecOutputBuffer
-	stderr       *commandExecOutputBuffer
-	streamOutput bool
-	outputDone   chan struct{}
-	done         chan struct{}
-	exitCode     int32
+	connectionID   string
+	handle         string
+	cmd            *osexec.Cmd
+	process        *ptyProcess
+	cancel         context.CancelFunc
+	stdin          io.WriteCloser
+	pty            *ptyHandle
+	stdout         *commandExecOutputBuffer
+	stderr         *commandExecOutputBuffer
+	streamOutput   bool
+	outputActivity chan struct{}
+	outputDone     chan struct{}
+	done           chan struct{}
+	exitCode       int32
 }
 
 type ProcessSpawnOptions struct {
@@ -288,8 +289,13 @@ func (s *ProcessService) waitProcess(ctx context.Context, process *managedProces
 	}
 	process.exitCode, _ = commandExecExitCode(ctx, err)
 	if process.pty != nil {
+		waitForPTYOutputAfterExit(process.outputActivity, process.outputDone)
 		_ = process.pty.ClosePTY()
 		waitForPTYOutputDone(process.pty, process.outputDone)
+		_ = process.pty.Cleanup()
+	}
+	if process.cancel != nil {
+		process.cancel()
 	}
 	s.removeProcess(process.connectionID, process.handle)
 	close(process.done)
@@ -336,15 +342,16 @@ func (s *ProcessService) spawnPTY(ctx context.Context, cancel context.CancelFunc
 func (s *ProcessService) spawnPTYWithConnection(ctx context.Context, cancel context.CancelFunc, connectionID string, cmd *osexec.Cmd, params *ProcessSpawnParams, stdout *commandExecOutputBuffer, stderr *commandExecOutputBuffer, notify func(NotificationMethod, any)) (*ProcessSpawnResponse, error) {
 	key := processKey(connectionID, params.ProcessHandle)
 	process := &managedProcess{
-		connectionID: key.connectionID,
-		handle:       params.ProcessHandle,
-		cmd:          cmd,
-		cancel:       cancel,
-		stdout:       stdout,
-		stderr:       stderr,
-		streamOutput: true,
-		outputDone:   make(chan struct{}),
-		done:         make(chan struct{}),
+		connectionID:   key.connectionID,
+		handle:         params.ProcessHandle,
+		cmd:            cmd,
+		cancel:         cancel,
+		stdout:         stdout,
+		stderr:         stderr,
+		streamOutput:   true,
+		outputActivity: make(chan struct{}, 1),
+		outputDone:     make(chan struct{}),
+		done:           make(chan struct{}),
 	}
 
 	s.mu.Lock()
@@ -371,7 +378,7 @@ func (s *ProcessService) spawnPTYWithConnection(ctx context.Context, cancel cont
 	process.pty = ptySession
 	s.mu.Unlock()
 
-	go readPTYOutput(ptySession, stdout, process.outputDone, func(data []byte) {
+	go readPTYOutput(ptySession, stdout, process.outputActivity, process.outputDone, func(data []byte) {
 		if len(data) == 0 || notify == nil {
 			return
 		}

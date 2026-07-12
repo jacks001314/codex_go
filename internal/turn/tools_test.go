@@ -214,6 +214,19 @@ func TestSkillsToolsListAndReadOrchestratorResourcesLikeRust(t *testing.T) {
 	if !containsString(methods, "resources/list") || !containsString(methods, "resources/read") {
 		t.Fatalf("methods = %#v", methods)
 	}
+	resourceLists := 0
+	resourceReads := 0
+	for _, method := range methods {
+		if method == "resources/list" {
+			resourceLists++
+		}
+		if method == "resources/read" {
+			resourceReads++
+		}
+	}
+	if resourceLists != 1 || resourceReads != 1 {
+		t.Fatalf("methods = %#v, want shared list/read catalog cache", methods)
+	}
 }
 
 func TestSkillsToolsRejectUnsupportedAuthorityLikeRust(t *testing.T) {
@@ -237,6 +250,14 @@ func TestSkillsToolsRejectUnsupportedAuthorityLikeRust(t *testing.T) {
 	var callErr *tool.FunctionCallError
 	if !errors.As(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), "expected `orchestrator`") {
 		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestSkillsListTruncatesCatalogDescriptionLikeRust(t *testing.T) {
+	description := strings.Repeat("x", maxCatalogSkillDescriptionChars+1)
+	got := truncateCatalogSkillDescription(description)
+	if got != strings.Repeat("x", maxCatalogSkillDescriptionChars-len(skillDescriptionTruncatedSuffix))+skillDescriptionTruncatedSuffix {
+		t.Fatalf("truncated description len=%d value suffix=%q", len(got), got[len(got)-3:])
 	}
 }
 
@@ -276,6 +297,32 @@ func TestBuildToolRegistryClockToolsFollowOptions(t *testing.T) {
 	}
 	if _, ok := registry.Lookup(tool.NamespacedName("clock", "sleep")); !ok {
 		t.Fatal("clock.sleep missing")
+	}
+}
+
+func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableUnifiedExec = false
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(disabled) error = %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.DefaultWriteStdinToolName)); ok {
+		t.Fatal("write_stdin registered while unified_exec disabled")
+	}
+
+	options = DefaultToolRegistryOptions(t.TempDir())
+	options.EnableUnifiedExec = true
+	registry, err = BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(enabled) error = %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.DefaultWriteStdinToolName)); !ok {
+		t.Fatal("write_stdin missing while unified_exec enabled")
+	}
+	execSpec, ok := registry.Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+	if !ok || !strings.Contains(execSpec.Description, "session ID") {
+		t.Fatalf("exec_command spec = %#v", execSpec)
 	}
 }
 

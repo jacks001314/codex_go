@@ -11,6 +11,93 @@ type ElevatedSandboxProfileCaptureRequest struct {
 	Capture CaptureRequest
 }
 
+func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*elevated.RunnerTransport, error) {
+	if capture == nil {
+		return nil, ErrInvalidRequest
+	}
+	if err := capture.Validate(); err != nil {
+		return nil, err
+	}
+	profile, err := ResolveCapturePermissionProfile(capture)
+	if err != nil {
+		return nil, err
+	}
+	permissions, err := ResolvePermissions(profile, capture.WorkspaceRoots)
+	if err != nil {
+		return nil, err
+	}
+	envMap := cloneEnv(capture.Env)
+	if envMap == nil {
+		envMap = map[string]string{}
+	}
+	context, err := PrepareElevatedSpawnContextForPermissions(
+		permissions,
+		capture.CodexHome,
+		capture.CWD,
+		envMap,
+		capture.Command,
+		capture.ReadRootsOverride,
+		capture.ReadRootsIncludePlatformDefaults,
+		capture.WriteRootsOverride,
+		capture.WriteRootsOverrideSet,
+		capture.DenyReadPaths,
+		capture.DenyWritePaths,
+		capture.ProxyEnforced,
+		effectiveProxySettingsMode(capture.ProxySettingsMode),
+	)
+	if err != nil {
+		return nil, err
+	}
+	var timeout *uint64
+	if capture.TimeoutMS != nil {
+		value := uint64(*capture.TimeoutMS)
+		timeout = &value
+	}
+	spawnRequest := elevated.SpawnRequest{
+		Command:           cloneStrings(capture.Command),
+		CWD:               capture.CWD,
+		Env:               envMap,
+		PermissionProfile: profile,
+		WorkspaceRoots:    cloneStrings(capture.WorkspaceRoots),
+		CodexHome:         context.SandboxBase,
+		RealCodexHome:     capture.CodexHome,
+		CapSIDs:           cloneStrings(context.CapSIDs),
+		TimeoutMS:         timeout,
+		TTY:               capture.TTY,
+		StdinOpen:         capture.StdinOpen,
+		UsePrivateDesktop: capture.UsePrivateDesktop,
+	}
+	creds := toElevatedRunnerCreds(context.SandboxCreds)
+	return elevated.RetryRunnerSpawnOnce(
+		creds,
+		capture.Command,
+		func(creds elevated.SandboxCredentials) (*elevated.RunnerTransport, error) {
+			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", spawnRequest)
+		},
+		func() (elevated.SandboxCredentials, error) {
+			refreshed, err := RefreshLogonSandboxCredsForPermissions(
+				permissions,
+				capture.CWD,
+				envMap,
+				capture.CodexHome,
+				capture.ReadRootsOverride,
+				capture.ReadRootsOverrideSet,
+				capture.ReadRootsIncludePlatformDefaults,
+				capture.WriteRootsOverride,
+				capture.WriteRootsOverrideSet,
+				capture.DenyReadPaths,
+				capture.DenyWritePaths,
+				capture.ProxyEnforced,
+				effectiveProxySettingsMode(capture.ProxySettingsMode),
+			)
+			if err != nil {
+				return elevated.SandboxCredentials{}, err
+			}
+			return toElevatedRunnerCreds(refreshed), nil
+		},
+	)
+}
+
 func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxProfileCaptureRequest) (*CaptureResult, error) {
 	if req == nil {
 		return nil, ErrInvalidRequest

@@ -732,6 +732,7 @@ type AccountManager struct {
 	sessions            []Session
 	activeSessionID     *string
 	now                 func() time.Time
+	authSnapshot        *AuthDotJSON
 }
 
 func NewAccountManager() *AccountManager {
@@ -783,6 +784,16 @@ func (m *AccountManager) SetAccount(account *Account, authMode string) {
 	m.account = cloneAccount(account)
 	m.authMode = stringPtrIfNotEmpty(authMode)
 	m.requiresOpenAIAuth = account == nil
+	m.authSnapshot = nil
+}
+
+func (m *AccountManager) AuthSnapshot() *AuthDotJSON {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return cloneAuthDotJSON(m.authSnapshot)
 }
 
 func (m *AccountManager) GetAccount(params *GetAccountParams) *GetAccountResponse {
@@ -817,6 +828,7 @@ func (m *AccountManager) Login(params *LoginAccountParams) (*LoginAccountRespons
 		mode := wireAuthModeFromMode("api-key")
 		m.authMode = &mode
 		m.requiresOpenAIAuth = false
+		m.authSnapshot = nil
 		return &LoginAccountResponse{Type: AccountAPIKey}, nil
 	case AccountChatGPT:
 		m.loginSeq++
@@ -857,6 +869,7 @@ func (m *AccountManager) Login(params *LoginAccountParams) (*LoginAccountRespons
 		mode := "chatgptAuthTokens"
 		m.authMode = &mode
 		m.requiresOpenAIAuth = true
+		m.authSnapshot = cloneAuthDotJSON(&snapshot)
 		return &LoginAccountResponse{Type: "chatgptAuthTokens"}, nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported login type %q", ErrInvalidAccountRequest, params.Type)
@@ -876,6 +889,7 @@ func (m *AccountManager) ApplyAuthSnapshot(snapshot *AuthDotJSON) {
 		m.authMode = nil
 	}
 	m.requiresOpenAIAuth = account == nil || (snapshot != nil && snapshot.Mode() != "api-key")
+	m.authSnapshot = cloneAuthDotJSON(snapshot)
 }
 
 func (m *AccountManager) CancelActiveLogins() {
@@ -928,6 +942,7 @@ func (m *AccountManager) Logout() *LogoutAccountResponse {
 	m.account = nil
 	m.authMode = nil
 	m.requiresOpenAIAuth = true
+	m.authSnapshot = nil
 	return &LogoutAccountResponse{}
 }
 

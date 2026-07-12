@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/internal/execserver"
+
 	"github.com/coder/websocket"
 )
 
@@ -65,6 +67,29 @@ func TestManagerValidation(t *testing.T) {
 	}
 	if err := manager.SetInfo("env", EnvironmentShellInfo{Name: "", Path: "/bin/sh"}, ""); !errors.Is(err, ErrInvalidEnvironmentRequest) {
 		t.Fatalf("SetInfo(bad shell) error = %v, want ErrInvalidEnvironmentRequest", err)
+	}
+}
+
+func TestEnvironmentManagerAddsNoiseEnvironmentWithoutURL(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "/workspace")
+	provider := execserver.NoiseRendezvousConnectProviderFunc(func(context.Context, execserver.RemotePublicKey) (*execserver.NoiseRendezvousConnectBundle, error) {
+		return nil, errors.New("registry unavailable")
+	})
+	if err := manager.AddNoise("remote", provider); err != nil {
+		t.Fatalf("AddNoise() error = %v", err)
+	}
+	record, ok := manager.Record("remote")
+	if !ok || record == nil || record.ExecServerURL != "" || record.NoiseProvider == nil {
+		t.Fatalf("noise environment record = %#v, %v", record, ok)
+	}
+	if _, err := manager.InfoContext(context.Background(), &EnvironmentInfoParams{EnvironmentID: "remote"}); err == nil || !strings.Contains(err.Error(), "registry unavailable") {
+		t.Fatalf("InfoContext() error = %v", err)
+	}
+	if err := manager.AddNoise("", provider); !errors.Is(err, ErrInvalidEnvironmentRequest) {
+		t.Fatalf("AddNoise(empty) error = %v", err)
+	}
+	if err := manager.AddNoise("remote", nil); !errors.Is(err, ErrInvalidEnvironmentRequest) {
+		t.Fatalf("AddNoise(nil provider) error = %v", err)
 	}
 }
 

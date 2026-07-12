@@ -125,6 +125,7 @@ func TestRuntimeRouterTurnStartSendsAppServerAttestationHeader(t *testing.T) {
 	defer server.Close()
 
 	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
@@ -134,6 +135,7 @@ func TestRuntimeRouterTurnStartSendsAppServerAttestationHeader(t *testing.T) {
 			IncludeAttestation: true,
 		}),
 	})
+	router.SetNotificationSink(sink)
 	connectionID := "conn-attest"
 	initializeAttestationTestConnection(t, router, connectionID, true)
 	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
@@ -169,6 +171,7 @@ func TestRuntimeRouterTurnStartSendsAppServerAttestationHeader(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for responses request")
 	}
+	waitForNotificationMethod(t, sink, NotificationTurnCompleted)
 }
 
 func initializeAttestationTestConnection(t *testing.T, router *RuntimeRouter, connectionID string, requestAttestation bool) {

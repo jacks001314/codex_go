@@ -4,11 +4,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"time"
 )
 
 var ErrPTYUnsupported = errors.New("pty is not supported on this platform")
+
+var ptyPostExitOutputWait = func() time.Duration {
+	if runtime.GOOS == "windows" {
+		// ConPTY can deliver the final output after the process handle is
+		// signaled. Match Rust's bounded IO drain window before closing it.
+		return 2 * time.Second
+	}
+	return 50 * time.Millisecond
+}()
+
+var ptyOutputDrainTimeout = func() time.Duration {
+	if runtime.GOOS == "windows" {
+		return 2 * time.Second
+	}
+	return 500 * time.Millisecond
+}()
 
 type ptyProcess struct {
 	wait func() error
@@ -36,6 +53,7 @@ type ptyHandle struct {
 	closeInput  func() error
 	closePTY    func() error
 	closeReader func() error
+	cleanup     func() error
 	resize      func(*TerminalSize) error
 
 	closeInputOnce  sync.Once
@@ -44,6 +62,8 @@ type ptyHandle struct {
 	closePTYErr     error
 	closeReaderOnce sync.Once
 	closeReaderErr  error
+	cleanupOnce     sync.Once
+	cleanupErr      error
 }
 
 func (h *ptyHandle) Write(p []byte) (int, error) {
@@ -109,6 +129,18 @@ func (h *ptyHandle) CloseReader() error {
 	return h.closeReaderErr
 }
 
+func (h *ptyHandle) Cleanup() error {
+	if h == nil {
+		return nil
+	}
+	h.cleanupOnce.Do(func() {
+		if h.cleanup != nil {
+			h.cleanupErr = h.cleanup()
+		}
+	})
+	return h.cleanupErr
+}
+
 func (h *ptyHandle) Resize(size *TerminalSize) error {
 	if h == nil || h.resize == nil {
 		return fmt.Errorf("%w: pty resize is unavailable", ErrInvalidRequest)
@@ -116,7 +148,7 @@ func (h *ptyHandle) Resize(size *TerminalSize) error {
 	return h.resize(size)
 }
 
-func readPTYOutput(handle *ptyHandle, output *commandExecOutputBuffer, done chan<- struct{}, notify func([]byte)) {
+func readPTYOutput(handle *ptyHandle, output *commandExecOutputBuffer, activity chan<- struct{}, done chan<- struct{}, notify func([]byte)) {
 	if done != nil {
 		defer close(done)
 	}
@@ -127,6 +159,12 @@ func readPTYOutput(handle *ptyHandle, output *commandExecOutputBuffer, done chan
 	for {
 		n, err := handle.reader.Read(buffer)
 		if n > 0 {
+			if activity != nil {
+				select {
+				case activity <- struct{}{}:
+				default:
+				}
+			}
 			chunk := buffer[:n]
 			if output != nil {
 				before := output.Len()
@@ -143,13 +181,26 @@ func readPTYOutput(handle *ptyHandle, output *commandExecOutputBuffer, done chan
 	}
 }
 
+func waitForPTYOutputAfterExit(activity <-chan struct{}, done <-chan struct{}) {
+	if activity == nil && done == nil {
+		return
+	}
+	timer := time.NewTimer(ptyPostExitOutputWait)
+	defer timer.Stop()
+	select {
+	case <-activity:
+	case <-done:
+	case <-timer.C:
+	}
+}
+
 func waitForPTYOutputDone(handle *ptyHandle, done <-chan struct{}) {
 	if done == nil {
 		return
 	}
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(ptyOutputDrainTimeout):
 		if handle != nil {
 			_ = handle.CloseReader()
 		}
@@ -165,8 +216,18 @@ func monitorPTYContext(ctxDone <-chan struct{}, processDone <-chan struct{}, pro
 		return
 	}
 	select {
+	case <-processDone:
+		return
+	default:
+	}
+	select {
 	case <-ctxDone:
-		_ = process.Kill()
+		select {
+		case <-processDone:
+			return
+		default:
+			_ = process.Kill()
+		}
 	case <-processDone:
 	}
 }

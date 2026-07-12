@@ -4,16 +4,20 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gofrs/flock"
 )
 
 const (
-	ProxyManagedMITMCADir               = "network-proxy"
+	ProxyManagedMITMCADir               = "proxy"
 	ProxyManagedMITMCACertPrefix        = "ca"
 	ProxyManagedMITMCATrustBundlePrefix = "ca-bundle"
 	ProxySSLCertDirEnvKey               = "SSL_CERT_DIR"
+	proxyManagedMITMCAArtifactLock      = ".artifacts.lock"
 )
 
 var ProxyCustomCAEnvKeys = []string{
@@ -56,6 +60,12 @@ func ProxyStartupCAFileEnvValues(env map[string]string) map[string]string {
 
 func BuildProxyManagedCATrustBundle(managedCACertPath string, startupEnvValues map[string]string, startupCertDir string) (string, error) {
 	var builder strings.Builder
+	if platformRoots, err := loadProxyPlatformRootBundle(); err == nil && platformRoots != "" {
+		builder.WriteString(platformRoots)
+		if !strings.HasSuffix(platformRoots, "\n") {
+			builder.WriteByte('\n')
+		}
+	}
 	appended := map[string]bool{}
 	for _, key := range ProxyCustomCAEnvKeys {
 		path := startupEnvValues[key]
@@ -68,18 +78,20 @@ func BuildProxyManagedCATrustBundle(managedCACertPath string, startupEnvValues m
 		}
 	}
 	if startupCertDir != "" {
-		entries, err := os.ReadDir(startupCertDir)
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
+		for _, directory := range filepath.SplitList(startupCertDir) {
+			entries, err := os.ReadDir(directory)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					path := filepath.Join(directory, entry.Name())
+					if appended[path] {
+						continue
+					}
+					appended[path] = true
+					_ = appendPEMFile(&builder, path)
 				}
-				path := filepath.Join(startupCertDir, entry.Name())
-				if appended[path] {
-					continue
-				}
-				appended[path] = true
-				_ = appendPEMFile(&builder, path)
 			}
 		}
 	}
@@ -100,6 +112,91 @@ func PersistProxyManagedCATrustBundle(managedCACertPath string, trustBundle stri
 		return "", err
 	}
 	return path, nil
+}
+
+func lockProxyManagedCAArtifact(path string) (*flock.Flock, error) {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing to use symlink lock file %s", path)
+	}
+	lock := flock.New(path)
+	if err := lock.Lock(); err != nil {
+		return nil, err
+	}
+	return lock, nil
+}
+
+func proxyManagedCACertificateLockPath(certificatePath string) string {
+	return filepath.Join(filepath.Dir(certificatePath), "."+filepath.Base(certificatePath)+".lock")
+}
+
+func pruneProxyManagedCAArtifacts(proxyDir string, activeCertificatePath string) {
+	for _, certificatePath := range generatedProxyManagedCAArtifactPaths(proxyDir, ProxyManagedMITMCACertPrefix) {
+		if filepath.Clean(certificatePath) == filepath.Clean(activeCertificatePath) {
+			continue
+		}
+		lockPath := proxyManagedCACertificateLockPath(certificatePath)
+		if info, err := os.Lstat(lockPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		lease := flock.New(lockPath)
+		locked, err := lease.TryLock()
+		if err != nil || !locked {
+			continue
+		}
+		removed := os.Remove(certificatePath) == nil || !fileExists(certificatePath)
+		_ = lease.Unlock()
+		if removed {
+			_ = os.Remove(lockPath)
+		}
+	}
+
+	remaining := make([][]byte, 0)
+	for _, certificatePath := range generatedProxyManagedCAArtifactPaths(proxyDir, ProxyManagedMITMCACertPrefix) {
+		if certificate, err := os.ReadFile(certificatePath); err == nil && len(certificate) > 0 {
+			remaining = append(remaining, certificate)
+		}
+	}
+	for _, bundlePath := range generatedProxyManagedCAArtifactPaths(proxyDir, ProxyManagedMITMCATrustBundlePrefix) {
+		contents, err := os.ReadFile(bundlePath)
+		if err != nil {
+			continue
+		}
+		keep := false
+		for _, certificate := range remaining {
+			if bytesContains(contents, certificate) {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			if err := os.Remove(bundlePath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to prune stale managed MITM CA trust bundle", "path", bundlePath, "error", err)
+			}
+		}
+	}
+}
+
+func generatedProxyManagedCAArtifactPaths(proxyDir string, prefix string) []string {
+	entries, err := os.ReadDir(proxyDir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(proxyDir, entry.Name())
+		if isGeneratedManagedCAArtifactPath(path, proxyDir, prefix) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func IsProxyManagedMITMCATrustBundlePath(path string, proxyDir string) bool {
@@ -215,10 +312,29 @@ func writeAtomicCreateNewOrReuse(path string, contents []byte, mode os.FileMode)
 		_ = temp.Close()
 		return err
 	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempName, path)
+	if err := os.Link(tempName, path); err == nil {
+		return os.Remove(tempName)
+	}
+	if existing, err := os.ReadFile(path); err == nil {
+		if string(existing) == string(contents) {
+			return nil
+		}
+		return fmt.Errorf("refusing to overwrite existing managed CA artifact %s", path)
+	}
+	if err := os.Rename(tempName, path); err != nil {
+		if existing, readErr := os.ReadFile(path); readErr == nil && string(existing) == string(contents) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func isHexString(value string) bool {

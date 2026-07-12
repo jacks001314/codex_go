@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	execserverclient "codex_go/internal/execserver"
+
 	"github.com/coder/websocket"
 )
 
@@ -80,6 +82,7 @@ func (s *EnvironmentShellInfo) Validate() error {
 type EnvironmentRecord struct {
 	EnvironmentID    string
 	ExecServerURL    string
+	NoiseProvider    execserverclient.NoiseRendezvousConnectProvider
 	ConnectTimeoutMS *uint64
 	Shell            EnvironmentShellInfo
 	CWD              *string
@@ -116,6 +119,25 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 	}
 	m.records[record.EnvironmentID] = record
 	return &EnvironmentAddResponse{}, nil
+}
+
+func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) error {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
+	}
+	if provider == nil {
+		return fmt.Errorf("%w: Noise rendezvous provider is required", ErrInvalidEnvironmentRequest)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records[environmentID] = EnvironmentRecord{
+		EnvironmentID: environmentID,
+		NoiseProvider: provider,
+		Shell:         m.defaultShell,
+		CWD:           cloneString(m.defaultCWD),
+	}
+	return nil
 }
 
 func (m *EnvironmentManager) SetInfo(environmentID string, shell EnvironmentShellInfo, cwd string) error {
@@ -271,6 +293,25 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
 	defer cancel()
+	if record.NoiseProvider != nil {
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+		info, err := client.EnvironmentInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+		response := &EnvironmentInfoResponse{
+			Shell: EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
+			CWD:   cloneString(info.CWD),
+		}
+		if err := response.Shell.Validate(); err != nil {
+			return nil, err
+		}
+		return response, nil
+	}
 	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
 	if err != nil {
 		return nil, err

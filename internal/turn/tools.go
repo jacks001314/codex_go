@@ -5,6 +5,7 @@ import (
 
 	"codex_go/internal/agent"
 	"codex_go/internal/compact"
+	featureflags "codex_go/internal/features"
 	"codex_go/internal/mcp"
 	"codex_go/internal/plugin"
 	"codex_go/internal/sandbox"
@@ -19,13 +20,15 @@ type ToolRegistryOptions struct {
 	DynamicToolCaller              DynamicToolCaller
 	ClockProvider                  tool.ClockProvider
 
-	Shell      *tool.ShellExecutorOptions
-	ApplyPatch *tool.ApplyPatchExecutorOptions
+	Shell       *tool.ShellExecutorOptions
+	ApplyPatch  *tool.ApplyPatchExecutorOptions
+	UnifiedExec *tool.UnifiedExecManager
 
-	MCPService    *mcp.MCPService
-	MCPTools      []mcp.RuntimeToolInfo
-	MCPConnectors []mcp.RuntimeConnector
-	MCPExposure   tool.Exposure
+	MCPService                *mcp.MCPService
+	MCPTools                  []mcp.RuntimeToolInfo
+	MCPConnectors             []mcp.RuntimeConnector
+	MCPExposure               tool.Exposure
+	OrchestratorSkillsEnabled *bool
 
 	AgentController agent.ToolController
 	AgentExposure   tool.Exposure
@@ -39,6 +42,7 @@ type ToolRegistryOptions struct {
 
 	EnableCore            bool
 	EnableShell           bool
+	EnableUnifiedExec     bool
 	EnableApplyPatch      bool
 	EnableMCP             bool
 	EnableAgents          bool
@@ -59,15 +63,17 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 				CWD:                          cwd,
 			},
 		},
-		ApplyPatch:       &tool.ApplyPatchExecutorOptions{CWD: cwd},
-		AgentController:  agent.NewMemoryToolController(),
-		AgentExposure:    tool.ExposureDiscoverable,
-		EnableCore:       true,
-		EnableShell:      true,
-		EnableApplyPatch: true,
-		EnableMCP:        true,
-		EnableAgents:     true,
-		EnableToolSearch: true,
+		ApplyPatch:        &tool.ApplyPatchExecutorOptions{CWD: cwd},
+		UnifiedExec:       tool.NewUnifiedExecManager(),
+		AgentController:   agent.NewMemoryToolController(),
+		AgentExposure:     tool.ExposureDiscoverable,
+		EnableCore:        true,
+		EnableShell:       true,
+		EnableUnifiedExec: featureflags.Enabled(nil, "unified_exec"),
+		EnableApplyPatch:  true,
+		EnableMCP:         true,
+		EnableAgents:      true,
+		EnableToolSearch:  true,
 	}
 }
 
@@ -91,8 +97,25 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.EnableShell {
+		if options.Shell != nil {
+			options.Shell.UnifiedExecThreadID = options.ThreadID
+			options.Shell.UnifiedExecTurnID = options.TurnID
+			options.Shell.UnifiedExec = nil
+			if options.EnableUnifiedExec {
+				options.Shell.UnifiedExec = options.UnifiedExec
+			}
+		}
 		if err := tool.RegisterShellHandler(registry, options.Shell); err != nil {
 			return nil, err
+		}
+		maxOutputTokens := (*int)(nil)
+		if options.Shell != nil {
+			maxOutputTokens = options.Shell.MaxOutputTokens
+		}
+		if options.EnableUnifiedExec {
+			if err := tool.RegisterWriteStdinHandler(registry, options.UnifiedExec, maxOutputTokens); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if options.EnableApplyPatch {

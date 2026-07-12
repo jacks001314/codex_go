@@ -469,9 +469,9 @@ func (s *PluginSkill) MarshalJSON() ([]byte, error) {
 }
 
 type EnabledSkillRoot struct {
-	PluginID          string
-	PluginDisplayName string
-	Root              string
+	PluginID        string
+	PluginNamespace string
+	Root            string
 }
 
 type SkillInterface struct {
@@ -1689,6 +1689,23 @@ func (s *PluginService) AddPlugin(detail PluginDetail) {
 	s.plugins[summary.ID] = cloneDetail(detail)
 }
 
+func (s *PluginService) ReplaceInstalledRemotePlugins(marketplaceName string, details []PluginDetail) {
+	if s == nil {
+		return
+	}
+	marketplaceName = strings.TrimSpace(marketplaceName)
+	s.mu.Lock()
+	for id, detail := range s.plugins {
+		if detail.Summary.MarketplaceName == marketplaceName && strings.TrimSpace(detail.Summary.RemotePluginID) != "" {
+			delete(s.plugins, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, detail := range details {
+		s.AddPlugin(detail)
+	}
+}
+
 func (s *PluginService) List(params *PluginListParams) *PluginListResponse {
 	if params == nil {
 		params = &PluginListParams{}
@@ -2292,9 +2309,9 @@ func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 			continue
 		}
 		roots = append(roots, EnabledSkillRoot{
-			PluginID:          detail.Summary.ID,
-			PluginDisplayName: firstNonEmpty(detail.Summary.DisplayName, detail.Summary.Name, detail.Summary.ID),
-			Root:              filepath.Join(pluginRoot, "skills"),
+			PluginID:        detail.Summary.ID,
+			PluginNamespace: firstNonEmpty(detail.Summary.Name, detail.Summary.ID),
+			Root:            filepath.Join(pluginRoot, "skills"),
 		})
 	}
 	sort.SliceStable(roots, func(i int, j int) bool {

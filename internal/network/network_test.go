@@ -19,12 +19,12 @@ func TestNewSpecAppliesRequirements(t *testing.T) {
 		AllowUpstreamProxy: &allowProxy,
 		AllowedDomains:     []string{"Managed.Example.com."},
 		DeniedDomains:      []string{"blocked.example.com"},
-	}, PermissionDisabled)
+	}, PermissionManaged)
 	if err != nil {
 		t.Fatalf("NewSpec() error = %v", err)
 	}
 	config := spec.Config()
-	if config.ProxyURL != "http://127.0.0.1:4000" || config.SocksURL != "http://127.0.0.1:5000" || !config.EnableSocks5 {
+	if config.ProxyURL != "http://127.0.0.1:4000" || config.SocksURL != "http://127.0.0.1:5000" || config.EnableSocks5 {
 		t.Fatalf("proxy config = %#v", config)
 	}
 	if config.Domains["managed.example.com"] != DomainAllow || config.Domains["user.example.com"] != DomainAllow {

@@ -163,7 +163,7 @@ func TestCollectMissingDependencies(t *testing.T) {
 		"shell":    {Transport: "stdio", Command: "tool-server", Enabled: false},
 	}
 	missing := CollectMissingRuntimeDependencies(skills, installed)
-	if len(missing) != 1 || missing["shell"].Command != "tool-server" || !missing["shell"].Required {
+	if len(missing) != 1 || missing["shell"].Command != "tool-server" || missing["shell"].Required {
 		t.Fatalf("unexpected missing dependencies: %#v", missing)
 	}
 	if FormatMissingRuntimeDependencies(missing) != "shell" {
@@ -185,7 +185,7 @@ func TestCollectMissingDependenciesNormalizesTransportAliases(t *testing.T) {
 	if len(missing) != 1 {
 		t.Fatalf("missing dependencies = %#v", missing)
 	}
-	if got := missing["docs"]; got.Transport != "streamable_http" || got.URL != "https://docs.example.test/mcp" || !got.Required {
+	if got := missing["docs"]; got.Transport != "streamable_http" || got.URL != "https://docs.example.test/mcp" || got.Required {
 		t.Fatalf("docs dependency = %#v", got)
 	}
 	if FormatMissingRuntimeDependencies(missing) != "docs" {

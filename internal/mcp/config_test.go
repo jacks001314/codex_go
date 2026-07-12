@@ -55,7 +55,12 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 				"bearer_token_env_var": "MCP_TOKEN",
 				"oauth_client_id":      "client-1",
 				"oauth_resource":       "https://mcp.example.test",
+				"scopes":               []any{"read", " write ", "read"},
 				"enabled":              false,
+			},
+			"empty-scopes": map[string]any{
+				"url":    "https://empty.example.test",
+				"scopes": []any{},
 			},
 			"nested-oauth": map[string]any{
 				"url": "https://nested.example.test",
@@ -76,8 +81,12 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 		t.Fatalf("docs config = %#v", docs)
 	}
 	remote := runtime.Servers["remote"].Config
-	if remote.URL != "https://mcp.example.test" || remote.BearerTokenEnvVar != "MCP_TOKEN" || remote.OAuthClientID != "client-1" || remote.Enabled {
+	if remote.URL != "https://mcp.example.test" || remote.BearerTokenEnvVar != "MCP_TOKEN" || remote.OAuthClientID != "client-1" || remote.Enabled || !remote.ScopesConfigured || !reflect.DeepEqual(remote.Scopes, []string{"read", "write", "read"}) {
 		t.Fatalf("remote config = %#v", remote)
+	}
+	emptyScopes := runtime.Servers["empty-scopes"].Config
+	if !emptyScopes.ScopesConfigured || len(emptyScopes.Scopes) != 0 {
+		t.Fatalf("empty scopes config = %#v", emptyScopes)
 	}
 	nested := runtime.Servers["nested-oauth"].Config
 	if nested.URL != "https://nested.example.test" || nested.OAuthClientID != "client-nested" {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/internal/execserver"
+	"codex_go/internal/network"
 	"codex_go/internal/sandbox"
 )
 
@@ -34,6 +36,7 @@ type Shell struct {
 
 type ExecCommandArgs struct {
 	Cmd                   string                               `json:"cmd"`
+	EnvironmentID         string                               `json:"environment_id,omitempty"`
 	CWD                   string                               `json:"cwd,omitempty"`
 	Workdir               string                               `json:"workdir,omitempty"`
 	Env                   map[string]string                    `json:"env,omitempty"`
@@ -50,24 +53,42 @@ type ExecCommandArgs struct {
 }
 
 type ShellRequest struct {
-	Command               []string
-	HookCommand           string
-	CWD                   string
-	TimeoutMS             uint64
-	YieldTimeMS           uint64
-	MaxOutputTokens       *int
-	Env                   map[string]string
-	TTY                   bool
-	SandboxPermissions    sandbox.SandboxPermissions
-	AdditionalPermissions *sandbox.AdditionalPermissionProfile
-	SandboxProfile        *ShellSandboxProfile
-	PermissionProfileID   string
-	PermissionProfile     *sandbox.PermissionProfile
-	PermissionProfileJSON string
-	ApprovalRequired      bool
-	ApprovalReason        string
-	Justification         string
-	PrefixRule            []string
+	Command                      []string
+	HookCommand                  string
+	CWD                          string
+	TimeoutMS                    uint64
+	YieldTimeMS                  uint64
+	MaxOutputTokens              *int
+	Env                          map[string]string
+	TTY                          bool
+	SandboxPermissions           sandbox.SandboxPermissions
+	AdditionalPermissions        *sandbox.AdditionalPermissionProfile
+	SandboxProfile               *ShellSandboxProfile
+	PermissionProfileID          string
+	PermissionProfile            *sandbox.PermissionProfile
+	PermissionProfileJSON        string
+	WindowsSandboxLevel          sandbox.WindowsSandboxLevel
+	WindowsSandboxPrivateDesktop bool
+	ApprovalRequired             bool
+	ApprovalReason               string
+	Justification                string
+	PrefixRule                   []string
+	UnifiedExecEventSink         UnifiedExecEventSink
+	UnifiedExecThreadID          string
+	UnifiedExecTurnID            string
+	UnifiedExecRemoteURL         string
+	UnifiedExecNoiseProvider     execserver.NoiseRendezvousConnectProvider
+	UnifiedExecEnvironmentID     string
+	EnforceManagedNetwork        bool
+	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+}
+
+type UnifiedExecEnvironment struct {
+	ID            string
+	CWD           string
+	Shell         *Shell
+	ExecServerURL string
+	NoiseProvider execserver.NoiseRendezvousConnectProvider
 }
 
 type ShellSandboxProfile struct {
@@ -78,11 +99,18 @@ type ShellSandboxProfile struct {
 }
 
 type ShellResult struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-	Duration time.Duration
-	TimedOut bool
+	ExitCode            int
+	HasExitCode         bool
+	ProcessID           *int
+	Stdout              string
+	Stderr              string
+	Duration            time.Duration
+	TimedOut            bool
+	ChunkID             string
+	EventCallID         string
+	HookCommand         string
+	MaxOutputTokensUsed *int
+	UnifiedExecEvented  bool
 }
 
 type ShellValidationOptions struct {
@@ -97,6 +125,10 @@ type ShellValidationOptions struct {
 	DefaultTimeoutMS             uint64
 	PermissionProfileID          string
 	PermissionProfile            *sandbox.PermissionProfile
+	WindowsSandboxLevel          sandbox.WindowsSandboxLevel
+	WindowsSandboxPrivateDesktop bool
+	EnforceManagedNetwork        bool
+	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
 }
 
 type ResolvedCommand struct {
@@ -279,24 +311,38 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		timeoutMS = args.TimeoutMS
 	}
 	return &ShellRequest{
-		Command:               resolved.Command,
-		HookCommand:           args.Cmd,
-		CWD:                   cwd,
-		TimeoutMS:             timeoutMS,
-		YieldTimeMS:           yieldTimeMS,
-		MaxOutputTokens:       args.MaxOutputTokens,
-		Env:                   mergeEnv(opts.Env, args.Env),
-		TTY:                   args.TTY,
-		SandboxPermissions:    sandboxPermissions,
-		AdditionalPermissions: additionalPermissions,
-		SandboxProfile:        sandboxProfile,
-		PermissionProfileID:   permissionProfileID,
-		PermissionProfile:     permissionProfile,
-		ApprovalRequired:      approvalRequired,
-		ApprovalReason:        approvalReason,
-		Justification:         args.Justification,
-		PrefixRule:            cloneStrings(args.PrefixRule),
+		Command:                      resolved.Command,
+		HookCommand:                  args.Cmd,
+		CWD:                          cwd,
+		TimeoutMS:                    timeoutMS,
+		YieldTimeMS:                  yieldTimeMS,
+		MaxOutputTokens:              args.MaxOutputTokens,
+		Env:                          mergeEnv(opts.Env, args.Env),
+		TTY:                          args.TTY,
+		SandboxPermissions:           sandboxPermissions,
+		AdditionalPermissions:        additionalPermissions,
+		SandboxProfile:               sandboxProfile,
+		PermissionProfileID:          permissionProfileID,
+		PermissionProfile:            permissionProfile,
+		WindowsSandboxLevel:          opts.WindowsSandboxLevel,
+		WindowsSandboxPrivateDesktop: opts.WindowsSandboxPrivateDesktop,
+		EnforceManagedNetwork:        opts.EnforceManagedNetwork,
+		ManagedNetwork:               cloneManagedNetworkSandboxContext(opts.ManagedNetwork),
+		ApprovalRequired:             approvalRequired,
+		ApprovalReason:               approvalReason,
+		Justification:                args.Justification,
+		PrefixRule:                   cloneStrings(args.PrefixRule),
 	}, nil
+}
+
+func cloneManagedNetworkSandboxContext(value *network.ProxyManagedNetworkSandboxContext) *network.ProxyManagedNetworkSandboxContext {
+	if value == nil {
+		return nil
+	}
+	return &network.ProxyManagedNetworkSandboxContext{
+		LoopbackPorts:     append([]uint16(nil), value.LoopbackPorts...),
+		AllowLocalBinding: value.AllowLocalBinding,
+	}
 }
 
 func effectiveShellPermissionProfile(profileID string, profile *sandbox.PermissionProfile, permissions sandbox.SandboxPermissions, additional *sandbox.AdditionalPermissionProfile, preapproved bool) (string, *sandbox.PermissionProfile) {

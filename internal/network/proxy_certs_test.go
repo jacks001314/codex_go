@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -124,5 +125,69 @@ func TestGeneratedManagedCAArtifactPathRejectsBadHash(t *testing.T) {
 	}
 	if !IsProxyGeneratedManagedCAArtifactPath(good, dir, ProxyManagedMITMCATrustBundlePrefix) {
 		t.Fatalf("good hash should be accepted")
+	}
+}
+
+func TestProxyManagedCAIsProcessLocalAndPrunesInactiveArtifactsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	directory := filepath.Join(home, ProxyManagedMITMCADir)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleCertificate, err := persistProxyManagedCACertificateInDirectory(directory, []byte("stale certificate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleBundle, err := PersistProxyManagedCATrustBundle(staleCertificate, "bundle with stale certificate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := loadOrCreateProxyManagedCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := loadOrCreateProxyManagedCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseProxyManagedCA(first)
+	defer releaseProxyManagedCA(second)
+	if first != second || first.certificatePath == "" {
+		t.Fatalf("managed CAs = %p/%p path=%q", first, second, first.certificatePath)
+	}
+	if _, err := os.Stat(staleCertificate); !os.IsNotExist(err) {
+		t.Fatalf("stale certificate still exists: %v", err)
+	}
+	if _, err := os.Stat(staleBundle); !os.IsNotExist(err) {
+		t.Fatalf("stale trust bundle still exists: %v", err)
+	}
+	if _, err := os.Stat(first.certificatePath); err != nil {
+		t.Fatalf("active certificate missing: %v", err)
+	}
+}
+
+func TestWriteAtomicCreateNewOrReuseHandlesConcurrentIdenticalWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.pem")
+	contents := []byte("same contents")
+	var wg sync.WaitGroup
+	errors := make(chan error, 8)
+	for index := 0; index < 8; index++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errors <- writeAtomicCreateNewOrReuse(path, contents, 0o600)
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent writer error = %v", err)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(contents) {
+		t.Fatalf("artifact = %q, err = %v", got, err)
 	}
 }
