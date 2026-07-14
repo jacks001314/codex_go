@@ -35,6 +35,7 @@ const (
 	minTranscriptHeight   = 3
 	maxBottomLines        = 6
 	footerHelpText        = "Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands"
+	mcpStartupFinishLag   = 4 * time.Second
 )
 
 // SubmitFunc lets the runtime layer attach prompt execution without coupling
@@ -169,6 +170,10 @@ type MCPStartupInventoryMsg struct {
 }
 
 type MCPStartupFinishAfterLagMsg struct{}
+
+type mcpStartupFinishAfterLagMsg struct {
+	Generation uint64
+}
 
 type ThreadEventMsg struct {
 	Event protocol.ThreadEvent
@@ -437,6 +442,8 @@ type Model struct {
 	mcpStartup                       chatwidget.McpStartupRoundState
 	mcpStartupHeader                 string
 	mcpStartupActive                 bool
+	mcpStartupGeneration             uint64
+	mcpStartupFinishPending          bool
 	initialMessages                  <-chan bubbletea.Msg
 	notice                           string
 	bottom                           []string
@@ -536,6 +543,7 @@ type Model struct {
 	queued                           []queuedSubmission
 	editorActive                     bool
 	toolCalls                        map[string]*toolCallDisplayState
+	mcpToolCalls                     map[string]*mcpToolCallDisplayState
 	startedThreadIDs                 map[string]bool
 	completedThreadIDs               map[string]bool
 	taskStartedAt                    time.Time
@@ -553,6 +561,12 @@ type toolCallDisplayState struct {
 	StartedAt    time.Time
 	Completed    bool
 	PlanUpdate   bool
+}
+
+type mcpToolCallDisplayState struct {
+	ID           string
+	Invocation   historycell.McpInvocation
+	MessageIndex int
 }
 
 func NewModel(state *codextui.State, options Options) *Model {
@@ -644,6 +658,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		chatGPTPlanType:                strings.TrimSpace(options.ChatGPTPlanType),
 		availableRateLimitResetCredits: cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
 		toolCalls:                      map[string]*toolCallDisplayState{},
+		mcpToolCalls:                   map[string]*mcpToolCallDisplayState{},
 		startedThreadIDs:               map[string]bool{},
 		completedThreadIDs:             map[string]bool{},
 		now:                            time.Now,
@@ -747,7 +762,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.mcpServers = cloneMcpServerStatuses(msg.Servers)
 		return m, nil
 	case MCPStartupFinishAfterLagMsg:
-		return m, m.finishMCPStartupAfterLag()
+		return m, m.finishMCPStartupAfterLag(0)
+	case mcpStartupFinishAfterLagMsg:
+		return m, m.finishMCPStartupAfterLag(msg.Generation)
 	case ExternalEditorFinishedMsg:
 		m.applyExternalEditorFinished(msg)
 		return m, nil
@@ -1267,7 +1284,7 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	if status.Kind == chatwidget.McpStartupFailed && status.Error == "" {
 		status.Error = "MCP client for `" + message.Name + "` failed to start"
 	}
-	result := m.mcpStartup.Update(message.Name, status, true)
+	result := m.mcpStartup.Update(message.Name, status, false)
 	for _, warning := range result.Warnings {
 		m.applyHistoryCell(historycell.NewWarningEvent(warning))
 		m.notice = warning
@@ -1275,20 +1292,34 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
+		m.mcpStartupFinishPending = false
 	} else if result.Active {
 		m.mcpStartupActive = true
-		m.mcpStartupHeader = result.Header
+		if strings.TrimSpace(result.Header) != "" {
+			m.mcpStartupHeader = result.Header
+		}
 	}
 	m.syncTaskRunningTimer()
 	m.refreshTranscript()
 	if result.Finished {
 		return m.submitNextQueued()
 	}
+	if result.Settled && !m.mcpStartupFinishPending {
+		m.mcpStartupGeneration++
+		generation := m.mcpStartupGeneration
+		m.mcpStartupFinishPending = true
+		return bubbletea.Tick(mcpStartupFinishLag, func(time.Time) bubbletea.Msg {
+			return mcpStartupFinishAfterLagMsg{Generation: generation}
+		})
+	}
 	return nil
 }
 
-func (m *Model) finishMCPStartupAfterLag() bubbletea.Cmd {
+func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
 	if m == nil {
+		return nil
+	}
+	if generation != 0 && (!m.mcpStartupFinishPending || generation != m.mcpStartupGeneration) {
 		return nil
 	}
 	result := m.mcpStartup.FinishAfterLag()
@@ -1299,6 +1330,7 @@ func (m *Model) finishMCPStartupAfterLag() bubbletea.Cmd {
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
+		m.mcpStartupFinishPending = false
 	}
 	m.syncTaskRunningTimer()
 	m.refreshTranscript()
@@ -1597,6 +1629,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 	switch item.Type {
 	case "command_execution":
 		m.renderCommandExecutionItem(item)
+	case "mcp_tool_call":
+		m.renderMCPToolCallItem(item, false)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
 	case "agent_message":
@@ -1615,6 +1649,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		m.mergeAssistantFinal(item.Text)
 	case "command_execution":
 		m.renderCommandExecutionItem(item)
+	case "mcp_tool_call":
+		m.renderMCPToolCallItem(item, true)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
 	case "tool_output":
@@ -1805,6 +1841,121 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	if state.Completed {
 		m.needsFinalMessageSeparator = true
 	}
+}
+
+func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool) {
+	if m == nil || item == nil {
+		return
+	}
+	id := firstNonEmpty(strings.TrimSpace(item.ID), strings.TrimSpace(item.CallID))
+	if id == "" {
+		return
+	}
+	if m.mcpToolCalls == nil {
+		m.mcpToolCalls = map[string]*mcpToolCallDisplayState{}
+	}
+	state := m.mcpToolCalls[id]
+	if state == nil {
+		state = &mcpToolCallDisplayState{ID: id, MessageIndex: -1}
+		m.mcpToolCalls[id] = state
+	}
+	if server := strings.TrimSpace(item.Server); server != "" {
+		state.Invocation.Server = server
+	}
+	if toolName := strings.TrimSpace(item.Tool); toolName != "" {
+		state.Invocation.Tool = toolName
+	}
+	if item.Arguments != nil {
+		state.Invocation.Arguments = compactMCPArguments(*item.Arguments)
+	}
+
+	var cell historycell.McpToolCallCell
+	if completed || !mcpToolCallInProgress(item.Status) {
+		cell = historycell.NewMcpToolCall(id, state.Invocation, mcpToolResultFromProtocolItem(item))
+		m.needsFinalMessageSeparator = true
+	} else {
+		cell = historycell.NewActiveMcpToolCall(id, state.Invocation)
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
+}
+
+func mcpToolCallInProgress(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status == "" || status == "in_progress" || status == "inprogress" || status == "running"
+}
+
+func compactMCPArguments(arguments any) string {
+	if arguments == nil {
+		return ""
+	}
+	if raw, ok := arguments.(string); ok {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return ""
+		}
+		var decoded any
+		if json.Unmarshal([]byte(raw), &decoded) == nil {
+			arguments = decoded
+		} else {
+			return raw
+		}
+	}
+	data, err := json.Marshal(arguments)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprint(arguments))
+	}
+	return string(data)
+}
+
+func mcpToolResultFromProtocolItem(item *protocol.ThreadItem) historycell.McpToolResult {
+	if item == nil {
+		return historycell.McpToolResult{Error: "MCP tool call completed without a result", IsError: true}
+	}
+	if item.CallError != nil && strings.TrimSpace(item.CallError.Message) != "" {
+		return historycell.McpToolResult{Error: strings.TrimSpace(item.CallError.Message), IsError: true}
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Status), "failed") {
+		return historycell.McpToolResult{Error: "MCP tool call failed", IsError: true}
+	}
+	if item.Result == nil {
+		return historycell.McpToolResult{}
+	}
+	content := make([]string, 0, len(item.Result.Content))
+	for _, block := range item.Result.Content {
+		if text := mcpContentBlockText(block); text != "" {
+			content = append(content, text)
+		}
+	}
+	return historycell.McpToolResult{Content: content}
+}
+
+func mcpContentBlockText(block any) string {
+	switch value := block.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case map[string]any:
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value["type"]))) {
+		case "text":
+			return strings.TrimSpace(fmt.Sprint(value["text"]))
+		case "image", "image_url":
+			return "<image content>"
+		case "audio":
+			return "<audio content>"
+		case "resource_link", "resourcelink":
+			return "link: " + strings.TrimSpace(fmt.Sprint(value["uri"]))
+		}
+	}
+	data, err := json.Marshal(block)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprint(block))
+	}
+	return string(data)
 }
 
 func commandExecutionInProgress(status string) bool {

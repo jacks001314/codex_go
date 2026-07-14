@@ -1,7 +1,6 @@
 package appserver
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -514,19 +513,16 @@ func gitRemoteCandidates(cwd string, remote string, upstream string) []string {
 func gitOutput(cwd string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
+	stdout, stderr, err := runCommandCaptured(cmd)
+	if err != nil {
+		message := strings.TrimSpace(stderr)
 		if message == "" {
-			message = strings.TrimSpace(stdout.String())
+			message = strings.TrimSpace(stdout)
 		}
 		if message == "" {
 			message = err.Error()
 		}
 		return "", fmt.Errorf("git %s failed: %s", strings.Join(args, " "), message)
 	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	return strings.TrimRight(stdout, "\n"), nil
 }

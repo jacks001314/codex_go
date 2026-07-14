@@ -7,6 +7,8 @@ import (
 	"codex_go/internal/model"
 	"codex_go/internal/network"
 	"codex_go/internal/turn"
+	"context"
+	"time"
 )
 
 func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID string) model.AgentRunner {
@@ -27,7 +29,7 @@ func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID str
 
 func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.AgentRunner {
 	if r == nil {
-		return model.NewLocalAgentRunner()
+		return &model.UnavailableAgentRunner{}
 	}
 	if r.services.Agent != nil {
 		return r.services.Agent
@@ -35,10 +37,33 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 	agent, err := r.responsesAgentForTurn(params)
 	if err == nil && agent != nil {
 		r.services.Agent = agent
+		r.ensureGuardianReviewer(agent)
 		return agent
 	}
-	r.services.Agent = model.NewLocalAgentRunner()
+	r.services.Agent = &model.UnavailableAgentRunner{Err: err}
 	return r.services.Agent
+}
+
+func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
+	if r == nil {
+		return nil
+	}
+	if r.services.GuardianReviewer != nil {
+		return r.services.GuardianReviewer
+	}
+	reviewer := newModelGuardianReviewer(agent)
+	if modelReviewer, ok := reviewer.(*modelGuardianReviewer); ok {
+		modelReviewer.notify = r.notifyGuardianReviewEvent
+		modelReviewer.interrupt = r.interruptTurnForGuardianCircuitBreaker
+		modelReviewer.transcript = r.guardianReviewTranscript
+		r.services.GuardianReviewer = reviewer
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			_ = modelReviewer.Prewarm(ctx)
+		}()
+	}
+	return reviewer
 }
 
 func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*model.ResponsesAgentRunner, error) {

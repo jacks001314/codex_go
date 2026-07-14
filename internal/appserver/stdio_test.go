@@ -11,7 +11,22 @@ import (
 
 	"codex_go/internal/remotecontrol"
 	"codex_go/internal/session"
+	"codex_go/internal/turn"
 )
+
+func stdioTestRequestWithParams(t *testing.T, id RequestID, method Method, params any) *Request {
+	t.Helper()
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal params error = %v", err)
+	}
+	return &Request{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  method,
+		Params:  data,
+	}
+}
 
 func TestStdioServerHandlesJSONRPCLine(t *testing.T) {
 	store := session.NewStore(t.TempDir())
@@ -206,6 +221,69 @@ func TestStdioServerHandlesConcurrentCommandExecWrite(t *testing.T) {
 	}
 	if !containsCommandExecFinalResponse(lines, 1) {
 		t.Fatalf("final command response missing in %#v", lines)
+	}
+}
+
+func TestStdioServerHandlesConcurrentTurnStarts(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewDefaultRuntimeRouter(store, t.TempDir())
+	server := NewStdioServer(router)
+	firstThread := router.Handle(stdioTestRequestWithParams(t, IntID(100), MethodThreadStart, ThreadStartParams{Ephemeral: true}))
+	if firstThread.Error != nil {
+		t.Fatalf("first thread/start error: %+v", firstThread.Error)
+	}
+	secondThread := router.Handle(stdioTestRequestWithParams(t, IntID(101), MethodThreadStart, ThreadStartParams{Ephemeral: true}))
+	if secondThread.Error != nil {
+		t.Fatalf("second thread/start error: %+v", secondThread.Error)
+	}
+	firstThreadResult := firstThread.Result.(*ThreadStartResponse)
+	secondThreadResult := secondThread.Result.(*ThreadStartResponse)
+	firstThreadID := firstThreadResult.Thread.ID
+	secondThreadID := secondThreadResult.Thread.ID
+	input := strings.Join([]string{
+		mustJSONLine(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  MethodInitialize,
+			"params": map[string]any{
+				"clientInfo": map[string]any{"name": "test", "version": "1"},
+			},
+		}),
+		mustJSONLine(t, map[string]any{
+			"jsonrpc": "2.0",
+			"method":  ClientNotificationInitialized,
+			"params":  map[string]any{},
+		}),
+		mustJSONLine(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      6,
+			"method":  MethodTurnStart,
+			"params": turn.TurnStartParams{
+				ThreadID: firstThreadID,
+				Prompt:   "hello from first thread",
+			},
+		}),
+		mustJSONLine(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      7,
+			"method":  MethodTurnStart,
+			"params": turn.TurnStartParams{
+				ThreadID: secondThreadID,
+				Prompt:   "hello from second thread",
+			},
+		}),
+		"",
+	}, "\n")
+
+	var out strings.Builder
+	if err := server.Serve(strings.NewReader(input), &out); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	lines := nonEmptyJSONLines(out.String())
+	for _, id := range []float64{1, 6, 7} {
+		if !containsJSONRPCID(lines, id) {
+			t.Fatalf("response id %v missing from %#v", id, lines)
+		}
 	}
 }
 

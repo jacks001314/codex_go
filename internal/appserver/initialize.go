@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 )
 
 const (
 	defaultInitializeOriginator = "codex_cli_rs"
 	originatorOverrideEnv       = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
-	appServerUserAgentVersion   = "0.0.0"
+	defaultCodexVersion         = "0.0.0"
 )
 
 type ClientInfo struct {
@@ -77,8 +78,33 @@ func ParseAppServerVersionFromUserAgent(userAgent string) (string, error) {
 
 func InitializeUserAgent(info ClientInfo) string {
 	originator := initializeOriginator(info)
-	candidate := fmt.Sprintf("%s/%s (%s; %s) go", originator, appServerUserAgentVersion, runtime.GOOS, runtime.GOARCH)
-	return sanitizeHeaderValue(candidate, fmt.Sprintf("%s/%s", defaultInitializeOriginator, appServerUserAgentVersion))
+	version := appServerVersion()
+	suffix := initializeUserAgentSuffix(info)
+	candidate := fmt.Sprintf("%s/%s (%s; %s) go%s", originator, version, runtime.GOOS, runtime.GOARCH, suffix)
+	return sanitizeHeaderValue(candidate, fmt.Sprintf("%s/%s", defaultInitializeOriginator, version))
+}
+
+func appServerVersion() string {
+	if value := strings.TrimSpace(os.Getenv("CODEX_GO_VERSION")); value != "" {
+		return value
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return defaultCodexVersion
+}
+
+func initializeUserAgentSuffix(info ClientInfo) string {
+	name := strings.TrimSpace(info.Name)
+	version := strings.TrimSpace(info.Version)
+	switch name {
+	case "codex_app_server_daemon", "codex-backend":
+		return ""
+	}
+	if name == "" || version == "" || !validHTTPHeaderValue(name) || !validHTTPHeaderValue(version) {
+		return ""
+	}
+	return fmt.Sprintf(" (%s; %s)", name, version)
 }
 
 func initializeOriginator(info ClientInfo) string {

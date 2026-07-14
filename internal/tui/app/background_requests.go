@@ -173,6 +173,7 @@ func MarketplaceAddSourceForRequest(cwd string, source string) string {
 	if !isRelativeMarketplaceAddSource(baseSource) {
 		return source
 	}
+	baseSource = filepath.FromSlash(strings.ReplaceAll(baseSource, `\`, `/`))
 	resolved := filepath.Clean(filepath.Join(cwd, baseSource))
 	if suffix != "" {
 		resolved += suffix

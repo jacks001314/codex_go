@@ -55,6 +55,55 @@ type UnifiedExecManager struct {
 	maxProcesses            int
 	maxEmptyPollYieldTimeMS uint64
 	processes               map[int]*unifiedExecProcess
+	pausedThreads           map[string]chan struct{}
+}
+
+func (m *UnifiedExecManager) SetThreadElicitationPaused(threadID string, paused bool) {
+	if m == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pausedThreads == nil {
+		m.pausedThreads = map[string]chan struct{}{}
+	}
+	gate := m.pausedThreads[threadID]
+	if paused {
+		if gate == nil {
+			m.pausedThreads[threadID] = make(chan struct{})
+		}
+		return
+	}
+	if gate != nil {
+		close(gate)
+		delete(m.pausedThreads, threadID)
+	}
+}
+
+func (m *UnifiedExecManager) ThreadElicitationPaused(threadID string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pausedThreads[strings.TrimSpace(threadID)] != nil
+}
+
+func (m *UnifiedExecManager) waitForThreadElicitation(ctx context.Context, threadID string) error {
+	for {
+		m.mu.Lock()
+		gate := m.pausedThreads[strings.TrimSpace(threadID)]
+		m.mu.Unlock()
+		if gate == nil {
+			return nil
+		}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 type UnifiedExecEventKind string
@@ -740,6 +789,9 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 	case <-process.done:
 	case <-timer.C:
 	case <-ctx.Done():
+	}
+	if err := m.waitForThreadElicitation(ctx, process.threadID); err != nil {
+		return nil, err
 	}
 	output, exited, exitCode, waitErr, timedOut := process.snapshotAndDrain()
 	result := &ShellResult{

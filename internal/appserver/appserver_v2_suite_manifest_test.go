@@ -146,6 +146,29 @@ func TestRustAppServerV2SuiteManifestCoversRustModules(t *testing.T) {
 	}
 }
 
+func TestRustAppServerV2ManifestOwnerCoverage(t *testing.T) {
+	manifest := rustAppServerV2SuiteManifest()
+	if len(manifest) == 0 {
+		t.Fatal("Rust app-server v2 suite manifest is empty")
+	}
+	owners := map[string]int{}
+	for _, entry := range manifest {
+		owners[entry.Owner]++
+	}
+	for _, owner := range []string{
+		"internal/appserver",
+		"internal/turn, internal/appserver",
+		"internal/session, internal/appserver",
+		"internal/plugin",
+		"internal/mcp",
+		"internal/model",
+	} {
+		if owners[owner] == 0 {
+			t.Fatalf("Rust app-server v2 suite manifest lacks owner grouping %q", owner)
+		}
+	}
+}
+
 func rustAppServerV2SuiteRoot(t *testing.T) string {
 	t.Helper()
 	candidates := []string{}

@@ -634,19 +634,21 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 	if err != nil || loaded == nil {
 		return nil, nil, nil
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValues(loaded.Values, codexHome)
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	var runtimeAuth *mcp.RuntimeAuth
+	if resolved, resolveErr := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve(); resolveErr == nil && resolved != nil {
+		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolved.Auth)
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuth(loaded.Values, codexHome, runtimeAuth)
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
 		return nil, nil, nil
 	}
 	service := mcp.NewMCPService(runtimeConfig)
-	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{})
-	if err != nil || response == nil {
-		return service, nil, nil
-	}
-	statuses := interactiveHistoryMCPStatuses(response.Data)
-	expectedServers := make([]string, 0, len(response.Data))
-	for i := range response.Data {
-		if name := mcp.RuntimeServerNameFromStatus(&response.Data[i]); name != "" {
+	configuredStatuses := service.ConfiguredStatuses()
+	statuses := interactiveHistoryMCPStatuses(configuredStatuses)
+	expectedServers := make([]string, 0, len(configuredStatuses))
+	for i := range configuredStatuses {
+		if name := mcp.RuntimeServerNameFromStatus(&configuredStatuses[i]); name != "" {
 			expectedServers = append(expectedServers, name)
 		}
 	}

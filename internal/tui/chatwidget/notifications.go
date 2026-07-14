@@ -3,6 +3,8 @@ package chatwidget
 import (
 	"path/filepath"
 	"strings"
+
+	"codex_go/internal/utils"
 )
 
 const AgentNotificationPreviewRunes = 200
@@ -183,9 +185,12 @@ func displayPathFor(path string, cwd string) string {
 		return "file"
 	}
 	if cwd != "" {
+		if rel, ok := utils.CrossPlatformRelative(cwd, path); ok && rel != "." {
+			return rel
+		}
 		if rel, err := filepath.Rel(cwd, path); err == nil && !strings.HasPrefix(rel, "..") && rel != "." {
 			return filepath.ToSlash(rel)
 		}
 	}
-	return filepath.ToSlash(filepath.Base(path))
+	return utils.CrossPlatformBase(path)
 }

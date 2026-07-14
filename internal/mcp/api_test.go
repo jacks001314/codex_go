@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestListStatusAndToolCall(t *testing.T) {
@@ -152,6 +154,76 @@ func TestListStatusCheckedObserverReportsStartupLifecycle(t *testing.T) {
 	if updates[1].status != MCPServerFailed || updates[1].err == nil {
 		t.Fatalf("terminal update = %#v, want failed with error", updates[1])
 	}
+}
+
+type mcpStartupTestUpdate struct {
+	name   string
+	status MCPServerStartupState
+}
+
+func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
+	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
+		runMCPHelperServer()
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"slow": {
+			Config: ServerConfig{
+				Command:        executable,
+				Args:           []string{"-test.run=TestListStatusCheckedInitializesServersConcurrently", "--"},
+				Env:            map[string]string{"MCP_CONCURRENT_FAST_HELPER": "1", "MCP_CONCURRENT_SLOW_HELPER": "1"},
+				Enabled:        true,
+				StartupTimeout: 100 * time.Millisecond,
+			},
+		},
+		"fast": {
+			Config: ServerConfig{
+				Command: executable,
+				Args:    []string{"-test.run=TestListStatusCheckedInitializesServersConcurrently", "--"},
+				Env:     map[string]string{"MCP_CONCURRENT_FAST_HELPER": "1"},
+				Enabled: true,
+			},
+		},
+	}})
+	defer service.Close()
+
+	var updates []mcpStartupTestUpdate
+	response, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{
+		Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull},
+	}, func(name string, status MCPServerStartupState, startupErr error) {
+		updates = append(updates, mcpStartupTestUpdate{name: name, status: status})
+	})
+	if err != nil || response == nil {
+		t.Fatalf("ListStatusCheckedWithObserver response=%#v err=%v", response, err)
+	}
+	if !mcpUpdateBefore(updates, mcpStartupTestUpdate{name: "fast", status: MCPServerReady}, mcpStartupTestUpdate{name: "slow", status: MCPServerFailed}) {
+		t.Fatalf("updates = %#v, want fast ready before slow failed", updates)
+	}
+	states := map[string]MCPServerStartupState{}
+	for _, status := range response.Data {
+		states[status.effectiveName()] = status.State
+	}
+	if !reflect.DeepEqual(states, map[string]MCPServerStartupState{"fast": MCPServerReady, "slow": MCPServerFailed}) {
+		t.Fatalf("states = %#v", states)
+	}
+}
+
+func mcpUpdateBefore(updates []mcpStartupTestUpdate, before mcpStartupTestUpdate, after mcpStartupTestUpdate) bool {
+	beforeIndex := -1
+	afterIndex := -1
+	for i, update := range updates {
+		if update == before && beforeIndex < 0 {
+			beforeIndex = i
+		}
+		if update == after && afterIndex < 0 {
+			afterIndex = i
+		}
+	}
+	return beforeIndex >= 0 && afterIndex >= 0 && beforeIndex < afterIndex
 }
 
 func TestMCPServerStatusResourceWireShapeMatchesRustV2(t *testing.T) {
@@ -633,6 +705,10 @@ func helperMCPServerCommand(t *testing.T) (string, []string) {
 }
 
 func runMCPHelperServer() {
+	if os.Getenv("MCP_CONCURRENT_SLOW_HELPER") == "1" {
+		time.Sleep(time.Second)
+		return
+	}
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		data, err := readMCPFrame(reader)

@@ -1201,6 +1201,46 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	}
 }
 
+func TestModelRendersMCPToolLifecycleLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	arguments := map[string]any{"label": "A"}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.MCPToolCallItem(
+		"call-mcp",
+		"geogebra",
+		"geogebra_create_point",
+		arguments,
+		nil,
+		nil,
+		"in_progress",
+	))})
+	view := model.View()
+	if !strings.Contains(view, `Calling geogebra.geogebra_create_point({"label":"A"})`) {
+		t.Fatalf("MCP start should use the Rust calling cell:\n%s", view)
+	}
+	if strings.Contains(view, "Running geogebra_create_point") {
+		t.Fatalf("MCP start leaked a generic exec cell:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.MCPToolCallItem(
+		"call-mcp",
+		"geogebra",
+		"geogebra_create_point",
+		arguments,
+		&protocol.MCPToolResult{Content: []any{map[string]any{"type": "text", "text": "Point A created"}}},
+		nil,
+		"completed",
+	))})
+	view = model.View()
+	if !strings.Contains(view, `Called geogebra.geogebra_create_point({"label":"A"})`) || !strings.Contains(view, "Point A created") {
+		t.Fatalf("MCP completion should update the Rust calling cell:\n%s", view)
+	}
+	if strings.Contains(view, "Calling geogebra.geogebra_create_point") || countRole(state.Messages, codextui.RoleHistory) != 1 {
+		t.Fatalf("MCP completion left a duplicate or stale cell: messages=%#v\n%s", state.Messages, view)
+	}
+}
+
 func TestModelRendersMCPStartupProgressLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{
@@ -1223,9 +1263,16 @@ func TestModelRendersMCPStartupProgressLikeRust(t *testing.T) {
 		t.Fatalf("MCP progress header missing:\n%s", view)
 	}
 
-	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	if !model.mcpStartupActive || !strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
+		t.Fatalf("settled MCP startup should stay visible during lag:\n%s", model.View())
+	}
+	if cmd == nil {
+		t.Fatal("completed MCP startup should schedule finish lag")
+	}
+	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
 	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
-		t.Fatalf("completed MCP startup should clear its status header:\n%s", model.View())
+		t.Fatalf("completed MCP startup should clear after lag:\n%s", model.View())
 	}
 }
 
@@ -1246,7 +1293,17 @@ func TestModelQueuesInputUntilMCPStartupFinishes(t *testing.T) {
 		t.Fatalf("input should remain queued during MCP startup: submitted=%#v queued=%#v", submitted, model.QueuedRequests())
 	}
 
-	model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	if len(submitted) != 0 {
+		t.Fatalf("queued input should wait for MCP startup lag: %#v", submitted)
+	}
+	if cmd == nil {
+		t.Fatal("ready update should schedule MCP startup finish lag")
+	}
+	if model.mcpStartupGeneration == 0 || !model.mcpStartupFinishPending {
+		t.Fatalf("finish lag not pending: generation=%d pending=%v", model.mcpStartupGeneration, model.mcpStartupFinishPending)
+	}
+	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
 	if !reflect.DeepEqual(submitted, []string{"queued during startup"}) {
 		t.Fatalf("queued input was not released after MCP startup: %#v", submitted)
 	}
@@ -1258,13 +1315,24 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
-	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
 
 	view := utils.StripANSI(model.View())
-	for _, want := range []string{"alpha handshake failed", "MCP startup incomplete (failed: alpha)"} {
+	if strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
+		t.Fatalf("final MCP startup warning should wait for lag:\n%s", view)
+	}
+	for _, want := range []string{"alpha handshake failed", "Starting MCP servers"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("MCP startup warning missing %q:\n%s", want, view)
 		}
+	}
+	if cmd == nil {
+		t.Fatal("settled MCP startup should schedule finish lag")
+	}
+	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
+		t.Fatalf("final MCP startup warning missing after lag:\n%s", view)
 	}
 }
 
@@ -2743,6 +2811,48 @@ func TestModelSlashCommands(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "No messages yet.") {
 		t.Fatalf("View() missing empty transcript:\n%s", model.View())
+	}
+}
+
+func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-visible")
+	state.AddMessage(codextui.RoleAssistant, "last response")
+	model := NewModel(state, Options{Width: 100, Height: 30})
+
+	skip := map[string]bool{
+		"exit": true,
+	}
+	for _, frame := range codextui.SlashCommandFrames() {
+		if slashPopupHiddenCommand(frame.Name) || skip[frame.Name] {
+			continue
+		}
+		t.Run(frame.Name, func(t *testing.T) {
+			beforeView := utils.StripANSI(model.View())
+			beforeNotice := model.notice
+			beforeModal := model.modal
+			beforeSubmitted := len(model.SubmittedRequests())
+			beforeMessages := len(model.State.Messages)
+
+			invocation, ok := codextui.ParseCommand("/" + frame.Name)
+			if !ok {
+				t.Fatalf("ParseCommand failed for /%s", frame.Name)
+			}
+			_ = model.applyCommand(invocation)
+
+			afterView := utils.StripANSI(model.View())
+			changed := afterView != beforeView ||
+				model.notice != beforeNotice ||
+				model.modal != beforeModal ||
+				len(model.SubmittedRequests()) != beforeSubmitted ||
+				len(model.State.Messages) != beforeMessages
+			if !changed {
+				t.Fatalf("/%s produced no visible result", frame.Name)
+			}
+			if strings.Contains(afterView, "Unknown command") {
+				t.Fatalf("/%s rendered unknown command:\n%s", frame.Name, afterView)
+			}
+		})
 	}
 }
 

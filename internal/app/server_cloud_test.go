@@ -26,8 +26,7 @@ func TestMCPServerInitialize(t *testing.T) {
 	if err := Run(context.Background(), []string{"mcp-server"}, strings.NewReader(input), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("mcp-server returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Content-Length:") ||
-		!strings.Contains(stdout.String(), `"id":1`) ||
+	if !strings.Contains(stdout.String(), `"id":1`) ||
 		!strings.Contains(stdout.String(), `"name":"codex-mcp-server"`) ||
 		!strings.Contains(stdout.String(), `"listChanged":true`) {
 		t.Fatalf("stdout = %q", stdout.String())

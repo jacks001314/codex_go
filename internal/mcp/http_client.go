@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http/httpguts"
 	"golang.org/x/oauth2"
 )
 
@@ -265,10 +266,22 @@ func newMCPHTTPClient(config *ServerConfig) *httpClient {
 func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *httpClient {
 	return &httpClient{
 		config:     config,
-		client:     &http.Client{Timeout: 15 * time.Second},
+		client:     &http.Client{Timeout: mcpClientTimeout(config)},
 		openAIForm: openAIForm,
 		retrySleep: time.Sleep,
 	}
+}
+
+func mcpClientTimeout(config *ServerConfig) time.Duration {
+	if config != nil {
+		if config.ToolTimeout > 0 {
+			return config.ToolTimeout
+		}
+		if config.StartupTimeout > 0 {
+			return config.StartupTimeout
+		}
+	}
+	return 15 * time.Second
 }
 
 func (c *httpClient) Close() error {
@@ -298,11 +311,17 @@ func (c *httpClient) deleteSession(sessionID string) error {
 	if err != nil {
 		return err
 	}
+	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set(mcpHTTPProtocolVersionHeader, defaultMCPProtocol)
 	request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
 	if token := c.bearerToken(); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	if c.config.ApplyHTTPRequest != nil && strings.TrimSpace(c.config.BearerTokenEnvVar) == "" {
+		if err := c.config.ApplyHTTPRequest(request, nil); err != nil {
+			return err
+		}
 	}
 	response, err := c.client.Do(request)
 	if err != nil {
@@ -542,6 +561,7 @@ func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID strin
 	if err != nil {
 		return nil, err
 	}
+	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	request.Header.Set(mcpHTTPProtocolVersionHeader, defaultMCPProtocol)
@@ -551,7 +571,32 @@ func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID strin
 	if token := strings.TrimSpace(bearerToken); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	if c.config != nil && c.config.ApplyHTTPRequest != nil && strings.TrimSpace(c.config.BearerTokenEnvVar) == "" {
+		if err := c.config.ApplyHTTPRequest(request, data); err != nil {
+			return nil, err
+		}
+	}
 	return c.client.Do(request)
+}
+
+func (c *httpClient) applyConfiguredHTTPHeaders(request *http.Request) {
+	if c == nil || c.config == nil || request == nil {
+		return
+	}
+	for name, value := range c.config.HTTPHeaders {
+		if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
+			continue
+		}
+		request.Header.Set(name, value)
+	}
+	for name, envVar := range c.config.EnvHTTPHeaders {
+		if !httpguts.ValidHeaderFieldName(name) || strings.TrimSpace(envVar) == "" {
+			continue
+		}
+		if value := os.Getenv(strings.TrimSpace(envVar)); strings.TrimSpace(value) != "" && httpguts.ValidHeaderFieldValue(value) {
+			request.Header.Set(name, value)
+		}
+	}
 }
 
 func readMCPHTTPRPCResponse(response *http.Response, id int64) (*httpRPCResponse, error) {
@@ -703,6 +748,9 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 	name := strings.TrimSpace(c.config.BearerTokenEnvVar)
 	if name != "" {
 		return strings.TrimSpace(os.Getenv(name)), false
+	}
+	if c.config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(c.config) {
+		return "", false
 	}
 	codexHome := strings.TrimSpace(c.config.CodexHome)
 	if codexHome == "" {

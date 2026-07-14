@@ -16,23 +16,25 @@ const (
 )
 
 type ToolExecutorOptions struct {
-	Service    *MCPService
-	ServerName string
-	ToolInfo   *MCPToolInfo
-	ToolName   tool.ToolName
-	Parallel   bool
-	ThreadID   string
-	TurnID     string
+	Service     *MCPService
+	ServerName  string
+	ToolInfo    *MCPToolInfo
+	ToolName    tool.ToolName
+	Parallel    bool
+	ThreadID    string
+	TurnID      string
+	RequestMeta map[string]any
 }
 
 type ToolExecutor struct {
-	service    *MCPService
-	serverName string
-	toolInfo   MCPToolInfo
-	toolName   tool.ToolName
-	parallel   bool
-	threadID   string
-	turnID     string
+	service     *MCPService
+	serverName  string
+	toolInfo    MCPToolInfo
+	toolName    tool.ToolName
+	parallel    bool
+	threadID    string
+	turnID      string
+	requestMeta map[string]any
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -55,6 +57,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.parallel = options.Parallel || mcpToolReadOnlyHint(executor.toolInfo.Annotations)
 	executor.threadID = strings.TrimSpace(options.ThreadID)
 	executor.turnID = strings.TrimSpace(options.TurnID)
+	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	return executor
 }
 
@@ -66,13 +69,14 @@ func RegisterToolExecutor(registry *tool.Registry, options *ToolExecutorOptions)
 }
 
 func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools []RuntimeToolInfo) error {
+	tools = NormalizeRuntimeToolsForModel(tools)
 	for i := range tools {
 		info := runtimeToolInfoToMCPToolInfo(&tools[i])
 		if err := RegisterToolExecutor(registry, &ToolExecutorOptions{
 			Service:    service,
 			ServerName: tools[i].ServerName,
 			ToolInfo:   info,
-			ToolName:   tool.NamespacedName(tools[i].ServerName, tools[i].Tool.Name),
+			ToolName:   tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
 		}); err != nil {
 			return err
 		}
@@ -97,6 +101,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		return nil, tool.RespondToModel("mcp handler received unsupported payload")
 	}
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
+	meta := e.requestMetaForCall(invocation.CallID)
 	response, err := e.mcpService().CallTool(&MCPToolCallParams{
 		ServerName: e.resolvedServerName(),
 		ToolName:   e.resolvedRemoteToolName(),
@@ -104,17 +109,49 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		ThreadID:   e.threadID,
 		TurnID:     e.turnID,
 		ItemID:     invocation.CallID,
+		Meta:       meta,
 	})
 	if err != nil {
 		return nil, err
 	}
 	body := MCPToolResponseText(response)
+	data := mcpToolResponseData(response)
+	data["server"] = e.resolvedServerName()
+	data["tool"] = e.resolvedRemoteToolName()
 	return &tool.Output{
 		Success:    !mcpToolCallIsError(response),
 		Body:       body,
-		Data:       mcpToolResponseData(response),
+		Data:       data,
 		LogPreview: mcpLogPreview(body),
 	}, nil
+}
+
+func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
+	if e == nil {
+		return nil
+	}
+	requestMeta := cloneAnyMap(e.requestMeta)
+	if requestMeta == nil {
+		requestMeta = map[string]any{}
+	}
+	if e.threadID != "" {
+		requestMeta["thread_id"] = e.threadID
+	}
+	if IsCodexAppsMCPServerName(e.resolvedServerName()) {
+		appsMeta, _ := requestMeta["_codex_apps"].(map[string]any)
+		appsMeta = cloneAnyMap(appsMeta)
+		if appsMeta == nil {
+			appsMeta = map[string]any{}
+		}
+		if len(callID) > 0 && strings.TrimSpace(callID[0]) != "" {
+			appsMeta["call_id"] = strings.TrimSpace(callID[0])
+		}
+		requestMeta["_codex_apps"] = appsMeta
+	}
+	if len(requestMeta) == 0 {
+		return nil
+	}
+	return requestMeta
 }
 
 func (e *ToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.PreToolUsePayload, bool) {

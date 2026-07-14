@@ -37,12 +37,37 @@ func TestMCPToolExecutorRunsCall(t *testing.T) {
 	if output.Data["hook_response"] == nil {
 		t.Fatalf("Data = %#v", output.Data)
 	}
+	if output.Data["server"] != "memory" || output.Data["tool"] != "create_entities" {
+		t.Fatalf("raw MCP identity = %#v", output.Data)
+	}
 	spec := executor.Spec()
 	if spec.Name.Key() != "memory.create_entities" || spec.Description != "Create memory entities" || spec.InputSchema["type"] != "object" {
 		t.Fatalf("Spec = %#v", spec)
 	}
 	if spec.Search == nil || spec.Search.Source == nil || spec.Search.Source.Name != "memory" || !strings.Contains(spec.Search.Text, "create_entities") {
 		t.Fatalf("Search = %#v", spec.Search)
+	}
+}
+
+func TestMCPToolExecutorRequestMetaIncludesThreadIDLikeRust(t *testing.T) {
+	static := map[string]any{"plugin_id": "sample@test"}
+	executor := NewToolExecutor(&ToolExecutorOptions{ThreadID: "thread-live", RequestMeta: static})
+	meta, ok := executor.requestMetaForCall().(map[string]any)
+	if !ok || meta["thread_id"] != "thread-live" || meta["plugin_id"] != "sample@test" {
+		t.Fatalf("request meta = %#v", meta)
+	}
+	meta["plugin_id"] = "changed"
+	if static["plugin_id"] != "sample@test" {
+		t.Fatalf("input request meta was mutated: %#v", static)
+	}
+}
+
+func TestCodexAppsMCPToolRequestMetaIncludesCallIDLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{ServerName: RuntimeCodexAppsMCPServerName, ThreadID: "thread-live", RequestMeta: map[string]any{"_codex_apps": map[string]any{"connector_id": "calendar"}}})
+	meta := executor.requestMetaForCall("call-123").(map[string]any)
+	apps, ok := meta["_codex_apps"].(map[string]any)
+	if !ok || apps["call_id"] != "call-123" || apps["connector_id"] != "calendar" || meta["thread_id"] != "thread-live" {
+		t.Fatalf("request meta = %#v", meta)
 	}
 }
 
@@ -137,7 +162,7 @@ func TestMCPRegisterToolExecutors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterToolExecutors() error = %v", err)
 	}
-	if _, ok := registry.Lookup(tool.NamespacedName("server", "read")); !ok {
+	if _, ok := registry.Lookup(tool.NamespacedName("mcp__server", "read")); !ok {
 		t.Fatal("MCP tool not registered")
 	}
 

@@ -724,7 +724,6 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 	for _, want := range []string{
 		"Codex TUI commands:",
 		"Codex TUI keymap:",
-		"Open External Editor | ctrl-g",
 		"Model: gpt-test",
 		"Approval: never",
 		"Sandbox: :workspace",
@@ -746,6 +745,24 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 	text := string(data)
 	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "memories = true") {
 		t.Fatalf("config missing settings writes:\n%s", text)
+	}
+}
+
+func TestRootHelpAndVersionMatchSystemShape(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("--help returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Codex CLI") || !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "apply") {
+		t.Fatalf("--help output = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"--version"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("--version returned error: %v", err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(stdout.String()), "codex-cli ") {
+		t.Fatalf("--version output = %q", stdout.String())
 	}
 }
 
@@ -1388,6 +1405,47 @@ command = "codex-go-missing-mcp-test"
 	}
 	if len(runner.MCPTools) != 0 {
 		t.Fatalf("runner MCP tools = %#v, want none for missing helper", runner.MCPTools)
+	}
+}
+
+func TestInteractiveMCPRuntimeDoesNotStartConfiguredServersBeforeTUI(t *testing.T) {
+	if os.Getenv("INTERACTIVE_MCP_STARTUP_BLOCK_HELPER") == "1" {
+		time.Sleep(2 * time.Second)
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	body := fmt.Sprintf(`
+[features]
+apps = false
+
+[mcp_servers.slow]
+command = %q
+args = ["-test.run=TestInteractiveMCPRuntimeDoesNotStartConfiguredServersBeforeTUI", "--"]
+env = { INTERACTIVE_MCP_STARTUP_BLOCK_HELPER = "1" }
+`, executable)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	start := time.Now()
+	service, statuses, expectedServers := interactiveMCPRuntime(&cli.RootOptions{})
+	if service == nil {
+		t.Fatal("interactiveMCPRuntime returned nil service")
+	}
+	defer service.Close()
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("interactiveMCPRuntime took %s, want no startup probe before TUI", elapsed)
+	}
+	if len(statuses) != 1 || statuses[0].Name != "slow" {
+		t.Fatalf("statuses = %#v, want configured slow server", statuses)
+	}
+	if !reflect.DeepEqual(expectedServers, []string{"slow"}) {
+		t.Fatalf("expected servers = %#v, want slow", expectedServers)
 	}
 }
 

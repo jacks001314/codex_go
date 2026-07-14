@@ -19,7 +19,7 @@ const (
 	defaultMCPServerName    = "codex-mcp-server"
 	defaultMCPServerTitle   = "Codex"
 	defaultMCPServerVersion = "go-port"
-	defaultMCPProtocol      = "2025-03-26"
+	defaultMCPProtocol      = "2025-06-18"
 )
 
 type StdioServerOptions struct {
@@ -57,6 +57,16 @@ type CodexToolResult struct {
 type CodexToolRunner interface {
 	RunCodexTool(ctx context.Context, params *CodexToolCall) (*CodexToolResult, error)
 	ReplyCodexTool(ctx context.Context, params *CodexToolReplyCall) (*CodexToolResult, error)
+}
+
+type unavailableCodexToolRunner struct{}
+
+func (unavailableCodexToolRunner) RunCodexTool(context.Context, *CodexToolCall) (*CodexToolResult, error) {
+	return nil, errors.New("codex MCP tool runner is not configured")
+}
+
+func (unavailableCodexToolRunner) ReplyCodexTool(context.Context, *CodexToolReplyCall) (*CodexToolResult, error) {
+	return nil, errors.New("codex MCP tool runner is not configured")
 }
 
 type MemoryCodexToolRunner struct {
@@ -213,7 +223,7 @@ func newStdioMCPServer(options *StdioServerOptions) *stdioMCPServer {
 		runner:    options.Runner,
 	}
 	if server.runner == nil {
-		server.runner = NewMemoryCodexToolRunner()
+		server.runner = unavailableCodexToolRunner{}
 	}
 	return server
 }

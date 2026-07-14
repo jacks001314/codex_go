@@ -48,7 +48,7 @@ func FeedbackDoctorReportFromExecutable(ctx context.Context, options *FeedbackDo
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, executable, "doctor", "--json").CombinedOutput()
+	output, err := runCommandCombinedOutput(exec.CommandContext(ctx, executable, "doctor", "--json"))
 	if err != nil && len(output) == 0 {
 		return nil, err
 	}

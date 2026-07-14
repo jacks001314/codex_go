@@ -216,6 +216,9 @@ func isResponsesNamespaceTool(spec *tool.Spec) bool {
 	if spec.Name.Namespace == "clock" {
 		return true
 	}
+	if strings.HasPrefix(spec.Name.Namespace, "mcp__") {
+		return true
+	}
 	return spec.Search != nil && spec.Search.Source != nil && spec.Search.Source.Name == "Dynamic tools"
 }
 

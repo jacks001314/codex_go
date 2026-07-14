@@ -167,9 +167,7 @@ func readPTYOutput(handle *ptyHandle, output *commandExecOutputBuffer, activity 
 			}
 			chunk := buffer[:n]
 			if output != nil {
-				before := output.Len()
-				_, _ = output.Write(chunk)
-				chunk = output.BytesFrom(before)
+				_, chunk, _, _ = output.WriteAndAccepted(chunk)
 			}
 			if len(chunk) > 0 && notify != nil {
 				notify(chunk)

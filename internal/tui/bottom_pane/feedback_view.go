@@ -1,11 +1,11 @@
 package bottompane
 
 import (
-	"path/filepath"
 	"strings"
 
 	"codex_go/internal/appserver"
 	"codex_go/internal/tui"
+	"codex_go/internal/utils"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/feedback_view.rs.
@@ -345,9 +345,5 @@ func baseName(path string) string {
 	if path == "" {
 		return ""
 	}
-	name := filepath.Base(path)
-	if name == "." || name == string(filepath.Separator) {
-		return ""
-	}
-	return name
+	return utils.CrossPlatformBase(path)
 }

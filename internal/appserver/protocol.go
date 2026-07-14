@@ -906,7 +906,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			DurationMS        *int64  `json:"durationMs"`
 		}{
 			Type:              "mcpToolCall",
-			ID:                i.ID,
+			ID:                threadItemExternalID(i),
 			Server:            threadItemMCPServer(i),
 			Tool:              threadItemMCPTool(i),
 			Status:            threadItemMCPStatus(i),

@@ -2491,6 +2491,12 @@ func remoteAnySlice(value any) []any {
 	switch typed := value.(type) {
 	case []any:
 		return append([]any(nil), typed...)
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
 	default:
 		return nil
 	}
@@ -2962,18 +2968,21 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		item.CallID = id
 		return item
 	case "mcpToolCall":
-		toolName := remotePayloadString(payload, "tool")
-		if server := remotePayloadString(payload, "server"); server != "" {
-			toolName = server + "." + toolName
+		status := remotePayloadString(payload, "status")
+		if !completed || status == "inProgress" {
+			status = "in_progress"
+		} else if status == "" {
+			status = "completed"
 		}
-		if completed {
-			output := remotePayloadJSON(payload["result"])
-			if output == "" {
-				output = remotePayloadJSON(payload["error"])
-			}
-			return protocol.ToolOutputItem(id, toolName, output, remotePayloadString(payload, "status") != "failed")
-		}
-		return protocol.ToolCallItem(id, toolName, remotePayloadJSON(payload["arguments"]))
+		return protocol.MCPToolCallItem(
+			id,
+			remotePayloadString(payload, "server"),
+			remotePayloadString(payload, "tool"),
+			payload["arguments"],
+			remoteMCPToolResult(payload["result"]),
+			remoteMCPToolError(payload["error"]),
+			status,
+		)
 	default:
 		itemType := strings.TrimSpace(wireType)
 		if itemType == "" {
@@ -3067,6 +3076,47 @@ func remotePayloadJSON(value any) string {
 		return fmt.Sprint(value)
 	}
 	return string(data)
+}
+
+func remoteMCPToolResult(value any) *protocol.MCPToolResult {
+	values, ok := value.(map[string]any)
+	if !ok || values == nil {
+		return nil
+	}
+	result := &protocol.MCPToolResult{
+		Content: remoteAnySlice(values["content"]),
+	}
+	if result.Content == nil {
+		result.Content = []any{}
+	}
+	result.Meta = values["_meta"]
+	if result.Meta == nil {
+		result.Meta = values["meta"]
+	}
+	result.StructuredContent = values["structuredContent"]
+	if result.StructuredContent == nil {
+		result.StructuredContent = values["structured_content"]
+	}
+	return result
+}
+
+func remoteMCPToolError(value any) *protocol.MCPToolError {
+	if value == nil {
+		return nil
+	}
+	if text, ok := value.(string); ok {
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		return &protocol.MCPToolError{Message: strings.TrimSpace(text)}
+	}
+	if values, ok := value.(map[string]any); ok {
+		message := remoteFirstPayloadString(values, "message", "error", "text")
+		if message != "" {
+			return &protocol.MCPToolError{Message: message}
+		}
+	}
+	return &protocol.MCPToolError{Message: remotePayloadJSON(value)}
 }
 
 func remoteRequestIDString(raw json.RawMessage) (string, error) {

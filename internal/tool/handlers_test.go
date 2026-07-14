@@ -173,6 +173,43 @@ func TestRegisterCoreHandlers(t *testing.T) {
 	}
 }
 
+func TestRustCoreToolSurfaceParity(t *testing.T) {
+	registry := NewRegistry()
+	if err := RegisterCoreHandlers(registry, nil, nil, nil); err != nil {
+		t.Fatalf("RegisterCoreHandlers() error = %v", err)
+	}
+	for _, name := range []string{"update_plan", "request_user_input"} {
+		if _, ok := registry.Lookup(PlainName(name)); !ok {
+			t.Fatalf("missing Rust tool %q in registry", name)
+		}
+	}
+	execSpec := NewShellExecutor(&ShellExecutorOptions{
+		UnifiedExec:         NewUnifiedExecManager(),
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "primary"}},
+	}).Spec()
+	if execSpec.Name.Key() != "exec_command" {
+		t.Fatalf("exec_command spec = %#v", execSpec)
+	}
+	if execSpec.OutputSchema == nil || execSpec.OutputSchema["additionalProperties"] != false {
+		t.Fatalf("exec_command output schema = %#v", execSpec.OutputSchema)
+	}
+	writeSpec := NewWriteStdinExecutor(nil, nil).Spec()
+	if writeSpec.Name.Key() != "write_stdin" {
+		t.Fatalf("write_stdin spec = %#v", writeSpec)
+	}
+	if writeSpec.OutputSchema == nil || writeSpec.OutputSchema["additionalProperties"] != false {
+		t.Fatalf("write_stdin output schema = %#v", writeSpec.OutputSchema)
+	}
+	planSpec := NewPlanHandler(NewPlanStore()).Spec()
+	if planSpec.Name.Key() != "update_plan" || planSpec.Description == "" {
+		t.Fatalf("update_plan spec = %#v", planSpec)
+	}
+	userInputSpec := NewRequestUserInputHandler(nil).Spec()
+	if !strings.Contains(userInputSpec.Description, "This tool is only available in Plan mode.") {
+		t.Fatalf("request_user_input spec = %#v", userInputSpec)
+	}
+}
+
 type fakeClockProvider struct {
 	now      time.Time
 	threadID string

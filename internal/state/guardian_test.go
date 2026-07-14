@@ -136,6 +136,27 @@ func TestReviewStore(t *testing.T) {
 	}
 }
 
+func TestReviewStoreTimeoutAndAbort(t *testing.T) {
+	store := NewReviewStore()
+	store.SetClock(fixedGuardianTime)
+	timed, err := store.Start("turn-a", "item-a", Action{Type: "mcp_tool_call", Server: "mcp", ToolName: "search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timed, err = store.Timeout(timed.ID)
+	if err != nil || timed.Status != StatusTimedOut || timed.Rationale != GuardianTimeoutMessage() {
+		t.Fatalf("timed=%#v err=%v", timed, err)
+	}
+	aborted, err := store.Start("turn-a", "item-b", Action{Type: "mcp_tool_call", Server: "mcp", ToolName: "write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aborted, err = store.Abort(aborted.ID, "stopped")
+	if err != nil || aborted.Status != StatusAborted || aborted.Rationale != "stopped" {
+		t.Fatalf("aborted=%#v err=%v", aborted, err)
+	}
+}
+
 func TestNotifications(t *testing.T) {
 	event, err := NewInProgressEvent("review-a", "turn-a", "item-a", Action{Type: "apply_patch", CWD: "/repo", Files: []string{"/repo/a.txt"}}, fixedGuardianTime())
 	if err != nil {

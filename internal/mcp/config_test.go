@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagerRuntimeConfigAppliesBuiltInsAndOverlays(t *testing.T) {
@@ -13,6 +15,7 @@ func TestManagerRuntimeConfigAppliesBuiltInsAndOverlays(t *testing.T) {
 	runtime := manager.RuntimeConfig(RuntimeConfig{
 		AppsEnabled:    true,
 		ChatGPTBaseURL: "https://chatgpt.test",
+		Auth:           &RuntimeAuth{UsesCodexBackend: true, HTTPHeaders: map[string]string{"Authorization": "Bearer test"}},
 		Servers: map[string]ServerRegistration{
 			"configured": {Config: ServerConfig{Command: "configured", Enabled: true}},
 		},
@@ -29,8 +32,9 @@ func TestManagerRuntimeConfigAppliesBuiltInsAndOverlays(t *testing.T) {
 	if runtime.Servers["extension"].ContributorID != "ext" {
 		t.Fatalf("extension registration = %#v", runtime.Servers["extension"])
 	}
-	if runtime.Servers[CodexAppsServerName].Config.Env["CHATGPT_BASE_URL"] != "https://chatgpt.test" {
-		t.Fatalf("codex apps server env = %#v", runtime.Servers[CodexAppsServerName].Config.Env)
+	apps := runtime.Servers[CodexAppsServerName].Config
+	if apps.URL != "https://chatgpt.test/api/codex/apps" || apps.Command != "" || apps.HTTPHeaders["Authorization"] != "Bearer test" {
+		t.Fatalf("codex apps server = %#v", apps)
 	}
 }
 
@@ -48,7 +52,9 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 				"env": map[string]any{
 					"DOCS_TOKEN": "secret",
 				},
-				"required": true,
+				"required":            true,
+				"startup_timeout_sec": 1.5,
+				"tool_timeout_ms":     float64(2500),
 			},
 			"remote": map[string]any{
 				"url":                  "https://mcp.example.test",
@@ -77,7 +83,7 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 		t.Fatalf("runtime config = %#v", runtime)
 	}
 	docs := runtime.Servers["docs"].Config
-	if docs.Command != "mcp-docs" || len(docs.Args) != 2 || docs.Env["DOCS_TOKEN"] != "secret" || !docs.Required || !docs.Enabled {
+	if docs.Command != "mcp-docs" || len(docs.Args) != 2 || docs.Env["DOCS_TOKEN"] != "secret" || !docs.Required || !docs.Enabled || docs.StartupTimeout != 1500*time.Millisecond || docs.ToolTimeout != 2500*time.Millisecond {
 		t.Fatalf("docs config = %#v", docs)
 	}
 	remote := runtime.Servers["remote"].Config
@@ -135,8 +141,50 @@ func TestRuntimeConfigFromValuesDefaultsAppsEnabled(t *testing.T) {
 	if !runtime.AppsEnabled {
 		t.Fatalf("AppsEnabled = false, want true")
 	}
-	if _, ok := runtime.Servers[CodexAppsServerName]; !ok {
-		t.Fatalf("codex apps server missing from runtime config")
+	if _, ok := runtime.Servers[CodexAppsServerName]; ok {
+		t.Fatalf("codex apps server present without Codex backend auth")
+	}
+}
+
+func TestRuntimeConfigFromValuesMaterializesAuthenticatedCodexAppsLikeRust(t *testing.T) {
+	t.Setenv(codexConnectorsTokenEnvVar, "")
+	runtime := RuntimeConfigFromValuesWithAuth(map[string]any{
+		"chatgpt_base_url":     "https://chatgpt.com",
+		"apps_mcp_product_sku": "team",
+	}, "", &RuntimeAuth{UsesCodexBackend: true, HTTPHeaders: map[string]string{
+		"Authorization":      "Bearer chatgpt-token",
+		"ChatGPT-Account-ID": "account-1",
+	}})
+	apps, ok := runtime.Servers[CodexAppsServerName]
+	if !ok {
+		t.Fatal("authenticated codex apps server missing")
+	}
+	if apps.Config.Command != "" || apps.Config.URL != "https://chatgpt.com/backend-api/wham/apps" {
+		t.Fatalf("codex apps transport = %#v", apps.Config)
+	}
+	if apps.Config.HTTPHeaders["Authorization"] != "Bearer chatgpt-token" || apps.Config.HTTPHeaders["ChatGPT-Account-ID"] != "account-1" || apps.Config.HTTPHeaders["X-OpenAI-Product-Sku"] != "team" {
+		t.Fatalf("codex apps headers = %#v", apps.Config.HTTPHeaders)
+	}
+}
+
+func TestCodexAppsServerConfigUsesConnectorsTokenOverrideLikeRust(t *testing.T) {
+	t.Setenv(codexConnectorsTokenEnvVar, "override-token")
+	config := CodexAppsServerConfig("https://chat.openai.com/", "", &RuntimeAuth{UsesCodexBackend: true, ApplyHTTPRequest: func(*http.Request, []byte) error { return nil }})
+	if config.URL != "https://chat.openai.com/backend-api/wham/apps" || config.BearerTokenEnvVar != codexConnectorsTokenEnvVar || config.ApplyHTTPRequest != nil {
+		t.Fatalf("codex apps override config = %#v", config)
+	}
+}
+
+func TestRuntimeAuthUsesCodexBackendMatchesRustModes(t *testing.T) {
+	for _, mode := range []string{"chatgpt", "chatgptAuthTokens", "agent-identity", "personal-access-token"} {
+		if !RuntimeAuthUsesCodexBackend(mode) {
+			t.Fatalf("mode %q should use Codex backend", mode)
+		}
+	}
+	for _, mode := range []string{"api-key", "bedrock-api-key", "unknown", ""} {
+		if RuntimeAuthUsesCodexBackend(mode) {
+			t.Fatalf("mode %q should not use Codex backend", mode)
+		}
 	}
 }
 

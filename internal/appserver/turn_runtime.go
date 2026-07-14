@@ -328,6 +328,9 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	case model.ResponsesStreamEventOutputAdded:
 		state.rememberOutputItem(event)
 		state.rememberTool(event)
+		if streamAgentItemLooksLikeMCP(event.Item) || streamAgentItemIsToolSearch(event.Item) {
+			return
+		}
 		item := threadItemFromStreamAgentItem(event.Item, turnID, event.ResponseID, time.Now().UTC())
 		if item.ID == "" {
 			return
@@ -1268,11 +1271,16 @@ func shouldNotifyRuntimeItemCompleted(item ThreadItem) bool {
 	if evented, _ := item.Data["unified_exec_evented"].(bool); evented {
 		return false
 	}
+	if item.Type == "tool_search_call" || item.Type == "tool_search_output" {
+		return false
+	}
 	switch threadItemWireType(&item) {
 	case "commandExecution":
 		return threadItemCommandStatus(&item) != CommandExecutionInProgress
 	case "fileChange":
 		return threadItemFileChangeStatus(&item) != PatchApplyInProgress
+	case "mcpToolCall":
+		return threadItemMCPStatus(&item) != "inProgress"
 	default:
 		return true
 	}
@@ -1354,6 +1362,15 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 					"type":   "imageGeneration",
 					"status": "in_progress",
 				},
+				ThreadID:    threadID,
+				TurnID:      turnID,
+				StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if item, ok := mcpToolCallStartedThreadItem(invocation, turnID, startedAt); ok {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item:        threadItemPayload(item),
 				ThreadID:    threadID,
 				TurnID:      turnID,
 				StartedAtMS: startedAt.UTC().UnixMilli(),
@@ -3923,6 +3940,12 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 	callID := appToolExecutionCallID(execution, createdAt)
 	callData := appToolInvocationData(execution.Invocation)
 	if appToolOutputIsMCP(execution.Output) {
+		if server := stringFromMap(execution.Output.Data, "server"); server != "" {
+			callData["server"] = server
+		}
+		if toolName := stringFromMap(execution.Output.Data, "tool"); toolName != "" {
+			callData["tool"] = toolName
+		}
 		markMCPToolData(callData, execution.Invocation.ToolName)
 	}
 	if appToolOutputIsDynamic(execution.Output) {
@@ -6025,7 +6048,11 @@ func (r *RuntimeRouter) runtimeMCPServerConfigsForSkills(cfg *config.Config) map
 	if r != nil && r.services.Config != nil {
 		codexHome = r.services.Config.CodexHome()
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValues(values, codexHome)
+	var runtimeAuth *mcp.RuntimeAuth
+	if r != nil {
+		runtimeAuth = mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuth(values, codexHome, runtimeAuth)
 	out := make(map[string]mcp.RuntimeServerConfig, len(runtimeConfig.Servers))
 	for name, registration := range runtimeConfig.Servers {
 		config := registration.Config
@@ -6872,6 +6899,37 @@ func threadItemFromStreamAgentItem(item *model.AgentItem, turnID string, respons
 	return threadItem
 }
 
+func streamAgentItemLooksLikeMCP(item *model.AgentItem) bool {
+	if item == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(item.Namespace), mcp.LegacyMCPToolNamePrefix) ||
+		strings.HasPrefix(strings.TrimSpace(item.Name), mcp.LegacyMCPToolNamePrefix)
+}
+
+func streamAgentItemIsToolSearch(item *model.AgentItem) bool {
+	return item != nil && strings.TrimSpace(item.Type) == "tool_search_call"
+}
+
+func mcpToolCallStartedThreadItem(invocation *tool.Invocation, turnID string, startedAt time.Time) (ThreadItem, bool) {
+	if invocation == nil || !strings.HasPrefix(strings.TrimSpace(invocation.ToolName.Namespace), mcp.LegacyMCPToolNamePrefix) {
+		return ThreadItem{}, false
+	}
+	data := appToolInvocationData(invocation)
+	markMCPToolData(data, invocation.ToolName)
+	data["status"] = "inProgress"
+	data = appTimingMetadata(appTurnMetadata(turnID, data), startedAt, time.Time{})
+	return ThreadItem{
+		ID:        firstNonEmpty(strings.TrimSpace(invocation.CallID), "mcp-tool-call-"+safeIdentifier(turnID)),
+		Type:      "mcpToolCall",
+		Name:      invocation.ToolName.Key(),
+		CallID:    strings.TrimSpace(invocation.CallID),
+		TurnID:    turnID,
+		CreatedAt: startedAt.UTC().UnixMilli(),
+		Data:      data,
+	}, true
+}
+
 func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	if params == nil {
 		return nil
@@ -7055,10 +7113,10 @@ func markMCPToolData(data map[string]any, name tool.ToolName) {
 	if data == nil {
 		return
 	}
-	if strings.TrimSpace(name.Namespace) != "" {
-		data["server"] = name.Namespace
+	if strings.TrimSpace(stringFromMap(data, "server")) == "" && strings.TrimSpace(name.Namespace) != "" {
+		data["server"] = strings.TrimPrefix(name.Namespace, mcp.LegacyMCPToolNamePrefix)
 	}
-	if strings.TrimSpace(name.Name) != "" {
+	if strings.TrimSpace(stringFromMap(data, "tool")) == "" && strings.TrimSpace(name.Name) != "" {
 		data["tool"] = name.Name
 	}
 	data["mcpToolCall"] = true

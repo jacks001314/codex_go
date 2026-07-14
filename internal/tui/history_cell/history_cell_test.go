@@ -361,6 +361,9 @@ func TestMCPHistoryCells(t *testing.T) {
 	if got := strings.Join(active.DisplayLines(80), "\n"); !strings.Contains(got, `Calling docs.lookup({"q":"rust"})`) {
 		t.Fatalf("active mcp display:\n%s", got)
 	}
+	if got := active.DisplayLines(22); len(got) < 2 || got[0] != "\u2022 Calling" || !strings.HasPrefix(got[1], "  \u2514 docs.lookup(") {
+		t.Fatalf("narrow active MCP call should use Rust's tree layout: %#v", got)
+	}
 
 	completed := NewMcpToolCall("call-1", McpInvocation{Server: "docs", Tool: "lookup"}, McpToolResult{Content: []string{"first line\nsecond line"}})
 	if got := strings.Join(completed.DisplayLines(80), "\n"); !strings.Contains(got, "Called docs.lookup()") || !strings.Contains(got, "└ first line") {
@@ -418,6 +421,25 @@ func TestMCPHistoryCells(t *testing.T) {
 	}
 	if !strings.Contains(orderedDisplay, "Resource templates: z-template (docs://z/{id}), a-template (docs://a/{id})") {
 		t.Fatalf("resource templates should preserve app-server order like Rust:\n%s", orderedDisplay)
+	}
+
+	wrapped := NewMCPToolsOutputFromStatuses([]McpServerStatus{{
+		Name:  "many-tools",
+		Auth:  "Unsupported",
+		Tools: []string{"gamma_tool", "alpha_tool", "beta_tool"},
+	}}, false)
+	wrappedLines := wrapped.DisplayLines(34)
+	foundContinuation := false
+	for _, line := range wrappedLines {
+		if len([]rune(line)) > 34 {
+			t.Fatalf("inventory line exceeds width 34: %q", line)
+		}
+		if strings.HasPrefix(line, strings.Repeat(" ", len([]rune("    \u2022 Tools: ")))) && strings.Contains(line, "beta_tool") {
+			foundContinuation = true
+		}
+	}
+	if !foundContinuation {
+		t.Fatalf("many tools should wrap with an aligned continuation:\n%s", strings.Join(wrappedLines, "\n"))
 	}
 }
 

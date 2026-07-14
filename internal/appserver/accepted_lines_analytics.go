@@ -93,7 +93,7 @@ func acceptedLineGitRemoteURLForCWD(ctx context.Context, cwd string) string {
 	defer cancel()
 	cmd := exec.CommandContext(timeoutCtx, "git", "remote", "-v")
 	cmd.Dir = cwd
-	output, err := cmd.Output()
+	output, err := runCommandOutput(cmd)
 	if err != nil {
 		return ""
 	}

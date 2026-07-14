@@ -65,6 +65,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runOpts *RunOptions) error {
+	if handled, err := runRootMeta(args, stdout); handled || err != nil {
+		return err
+	}
 	parsed, err := cli.Parse(args)
 	if err != nil {
 		return err
@@ -171,6 +174,64 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	default:
 		return notImplemented(string(parsed.Command))
 	}
+}
+
+func runRootMeta(args []string, stdout io.Writer) (bool, error) {
+	if len(args) != 1 {
+		return false, nil
+	}
+	switch args[0] {
+	case "-h", "--help", "help":
+		_, err := fmt.Fprint(stdout, rootHelpText())
+		return true, err
+	case "-V", "--version":
+		_, err := fmt.Fprintf(stdout, "codex-cli %s\n", doctor.Version())
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+func rootHelpText() string {
+	return strings.Join([]string{
+		"Codex CLI",
+		"",
+		"If no subcommand is specified, options will be forwarded to the interactive CLI.",
+		"",
+		"Usage: codex [OPTIONS] [PROMPT]",
+		"       codex [OPTIONS] <COMMAND> [ARGS]",
+		"",
+		"Commands:",
+		"  exec            Run Codex non-interactively [aliases: e]",
+		"  review          Run a code review non-interactively",
+		"  login           Manage login",
+		"  logout          Remove stored authentication credentials",
+		"  mcp             Manage external MCP servers for Codex",
+		"  plugin          Manage Codex plugins",
+		"  mcp-server      Start Codex as an MCP server (stdio)",
+		"  app-server      [experimental] Run the app server or related tooling",
+		"  remote-control  [experimental] Manage the app-server daemon with remote control enabled",
+		"  app             Launch the Codex desktop app (opens the app installer if missing)",
+		"  completion      Generate shell completion scripts",
+		"  update          Update Codex to the latest version",
+		"  doctor          Diagnose local Codex installation, config, auth, and runtime health",
+		"  sandbox         Run commands within a Codex-provided sandbox",
+		"  debug           Debugging tools",
+		"  apply           Apply the latest diff produced by Codex agent as a `git apply` to your local working tree [aliases: a]",
+		"  resume          Resume a previous interactive session (picker by default; use --last to continue the most recent)",
+		"  archive         Archive a saved session by id or session name",
+		"  delete          Permanently delete a saved session by id or session name",
+		"  unarchive       Unarchive a saved session by id or session name",
+		"  fork            Fork a previous interactive session (picker by default; use --last to fork the most recent)",
+		"  cloud           [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally",
+		"  exec-server     [EXPERIMENTAL] Run the standalone exec-server service",
+		"  features        Inspect feature flags",
+		"  help            Print this message or the help of the given subcommand(s)",
+		"",
+		"Options:",
+		"  -h, --help      Print help (see a summary with '-h')",
+		"  -V, --version   Print version",
+	}, "\n") + "\n"
 }
 
 func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cli.DispatchPaths, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -389,11 +450,17 @@ func loadSandboxRunConfigForRun(opts *cli.SandboxOptions) (*sandboxRunConfig, er
 	if opts == nil {
 		opts = &cli.SandboxOptions{}
 	}
-	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
+	codexHome := auth.DefaultCodexHome()
+	managedConfigPath := ""
+	if opts.IncludeManagedConfig {
+		managedConfigPath = filepath.Join(codexHome, "managed_config.toml")
+	}
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		Profile:              opts.ConfigProfile,
 		CWD:                  opts.CWD,
 		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
 		IncludeManagedConfig: opts.IncludeManagedConfig,
+		ManagedConfigPath:    managedConfigPath,
 	})
 	if err != nil {
 		return nil, err

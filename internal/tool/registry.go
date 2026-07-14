@@ -280,11 +280,14 @@ func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {
 }
 
 func (r *Router) resolveResponseToolName(name ToolName) ToolName {
-	if name.Namespace != "" || r == nil || r.registry == nil {
+	if r == nil || r.registry == nil {
 		return name
 	}
 	if _, ok := r.registry.Lookup(name); ok {
 		return name
+	}
+	if resolved, ok := r.registry.resolveCompatibleToolName(name); ok {
+		return resolved
 	}
 	key := strings.TrimSpace(name.Name)
 	if key == "" {
@@ -296,6 +299,43 @@ func (r *Router) resolveResponseToolName(name ToolName) ToolName {
 		}
 	}
 	return name
+}
+
+func (r *Registry) resolveCompatibleToolName(name ToolName) (ToolName, bool) {
+	if r == nil {
+		return ToolName{}, false
+	}
+	namespace := strings.TrimSpace(name.Namespace)
+	toolName := strings.TrimSpace(name.Name)
+	if toolName == "" {
+		return ToolName{}, false
+	}
+	var match ToolName
+	matches := 0
+	for _, spec := range r.NamesAsSpecs() {
+		candidate := spec.Name
+		candidateNamespace := strings.TrimSpace(candidate.Namespace)
+		candidateName := strings.TrimSpace(candidate.Name)
+		compatible := false
+		switch {
+		case namespace != "":
+			compatible = candidateName == toolName &&
+				(candidateNamespace == namespace || strings.TrimPrefix(candidateNamespace, "mcp__") == namespace)
+		case candidate.Key() == toolName:
+			compatible = true
+		case candidateName == toolName:
+			compatible = true
+		}
+		if !compatible {
+			continue
+		}
+		match = candidate
+		matches++
+		if matches > 1 {
+			return ToolName{}, false
+		}
+	}
+	return match, matches == 1
 }
 
 func (r *Router) Dispatch(ctx context.Context, invocation *Invocation) (*Output, error) {

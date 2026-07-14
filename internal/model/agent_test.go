@@ -35,6 +35,13 @@ func TestLocalAgentRunnerProducesMessageAndUsage(t *testing.T) {
 	}
 }
 
+func TestUnavailableAgentRunnerNeverReturnsLocalStubSuccess(t *testing.T) {
+	response, err := (&UnavailableAgentRunner{}).Run(context.Background(), &AgentRequest{Prompt: "hello"})
+	if err == nil || response != nil || strings.Contains(err.Error(), "Go Codex exec stub received") {
+		t.Fatalf("Run() response = %#v, error = %v", response, err)
+	}
+}
+
 func TestLocalAgentRunnerRejectsEmptyPrompt(t *testing.T) {
 	_, err := NewLocalAgentRunner().Run(context.Background(), &AgentRequest{Prompt: " \n\t"})
 	if err == nil || !strings.Contains(err.Error(), "prompt is required") {

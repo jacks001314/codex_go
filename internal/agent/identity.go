@@ -21,6 +21,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/nacl/box"
 )
 
 const (
@@ -426,10 +430,47 @@ func taskIDFromRegisterTaskResponse(key *IdentityKey, response *registerTaskResp
 		return strings.TrimSpace(*response.TaskIDCamel), nil
 	}
 	if response.EncryptedTaskID != nil || response.EncryptedTaskIDCamel != nil {
-		return "", fmt.Errorf("encrypted agent task id responses are not supported")
+		encrypted := response.EncryptedTaskID
+		if encrypted == nil {
+			encrypted = response.EncryptedTaskIDCamel
+		}
+		return DecryptTaskIDResponse(key, *encrypted)
 	}
-	_ = key
 	return "", fmt.Errorf("agent task registration response omitted task id")
+}
+
+func DecryptTaskIDResponse(key *IdentityKey, encryptedTaskID string) (string, error) {
+	if key == nil {
+		return "", fmt.Errorf("agent identity key is nil")
+	}
+	privateKey, err := privateKeyFromPKCS8Base64(key.PrivateKeyPKCS8Base64)
+	if err != nil {
+		return "", err
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(encryptedTaskID)
+	if err != nil {
+		return "", fmt.Errorf("encrypted task id is not valid base64: %w", err)
+	}
+	digest := sha512.Sum512(privateKey.Seed())
+	var secretKey [32]byte
+	copy(secretKey[:], digest[:32])
+	secretKey[0] &= 248
+	secretKey[31] &= 127
+	secretKey[31] |= 64
+	publicBytes, err := curve25519.X25519(secretKey[:], curve25519.Basepoint)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive agent identity encryption key: %w", err)
+	}
+	var publicKey [32]byte
+	copy(publicKey[:], publicBytes)
+	plaintext, ok := box.OpenAnonymous(nil, ciphertext, &publicKey, &secretKey)
+	if !ok {
+		return "", fmt.Errorf("failed to decrypt encrypted task id")
+	}
+	if !utf8.Valid(plaintext) {
+		return "", fmt.Errorf("decrypted task id is not valid UTF-8")
+	}
+	return string(plaintext), nil
 }
 
 func splitJWT(jwt string) ([3]string, error) {

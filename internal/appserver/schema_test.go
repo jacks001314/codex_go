@@ -110,6 +110,31 @@ func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
 	requireProtocolSchemaTypesHaveRustFixtures(t, root, stable.Notifications)
 }
 
+func TestRustProtocolMethodSurfaceIsCoveredByGoSchemas(t *testing.T) {
+	root := rustAppServerProtocolRustRoot(t)
+	rustMethods := rustMethodsFromCommon(t, filepath.Join(root, "app-server-protocol", "src", "protocol", "common.rs"))
+	stable := BuildProtocolSchema(false, false)
+	experimental := BuildProtocolSchema(true, false)
+
+	covered := make(map[string]bool)
+	for _, method := range append(append(append([]ProtocolMethod{}, stable.ClientRequests...), experimental.ClientRequests...), append(append([]ProtocolMethod{}, stable.ServerRequests...), experimental.ServerRequests...)...) {
+		covered[method.Method] = true
+	}
+	for _, method := range append(append([]ProtocolMethod{}, stable.Notifications...), experimental.Notifications...) {
+		covered[method.Method] = true
+	}
+
+	var missing []string
+	for _, method := range rustMethods {
+		if !covered[method] {
+			missing = append(missing, method)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("Go protocol schemas do not cover Rust methods: %v", missing)
+	}
+}
+
 func TestBuildTypeScriptProtocolSchemaMatchesRustFixtures(t *testing.T) {
 	root := rustAppServerProtocolTypeScriptRoot(t)
 	stable := BuildTypeScriptProtocolSchema(false, false)
@@ -121,6 +146,23 @@ func TestBuildTypeScriptProtocolSchemaMatchesRustFixtures(t *testing.T) {
 	requireProtocolMethod(t, stable.ClientRequests, string(MethodGetConversationSummary), false)
 	requireProtocolMethod(t, stable.ClientRequests, string(MethodGitDiffToRemote), false)
 	requireProtocolMethod(t, stable.Notifications, string(NotificationRawResponseItemCompleted), false)
+}
+
+func TestRustAppServerProtocolSchemaTreeIsCoveredByGoGenerators(t *testing.T) {
+	jsonRoot := rustAppServerProtocolSchemaRoot(t)
+	tsRoot := filepath.Dir(jsonRoot)
+	jsonFiles := rustSchemaFixtureNames(t, jsonRoot)
+	tsFiles := rustSchemaFixtureNames(t, tsRoot)
+
+	stable := BuildProtocolSchema(false, false)
+	tsStable := BuildTypeScriptProtocolSchema(false, false)
+
+	if missing := missingSchemaFixtureCoverage(jsonFiles, stable); len(missing) > 0 {
+		t.Fatalf("Go JSON schema generators do not cover Rust json fixture tree: %v", missing)
+	}
+	if missing := missingSchemaFixtureCoverage(tsFiles, tsStable); len(missing) > 0 {
+		t.Fatalf("Go TypeScript schema generators do not cover Rust typescript fixture tree: %v", missing)
+	}
 }
 
 func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
@@ -583,6 +625,47 @@ func rustAppServerProtocolTypeScriptRoot(t *testing.T) string {
 	return ""
 }
 
+func rustAppServerProtocolRustRoot(t *testing.T) string {
+	t.Helper()
+	candidates := []string{}
+	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
+		candidates = append(candidates, env)
+	}
+	candidates = append(candidates,
+		filepath.Join("..", "..", "codex-main", "codex-rs"),
+		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
+	)
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(abs, "Cargo.toml")); err == nil {
+			return abs
+		}
+	}
+	t.Skip("Rust root not found; set CODEX_RUST_ROOT")
+	return ""
+}
+
+func rustMethodsFromCommon(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	re := regexp.MustCompile(`Method[A-Za-z0-9_]+\s+Method\s+=\s+"([^"]+)"`)
+	matches := re.FindAllStringSubmatch(string(data), -1)
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 2 {
+			values = append(values, match[1])
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
 type rustProtocolUnionSchema struct {
 	OneOf []rustProtocolVariant `json:"oneOf"`
 }
@@ -717,6 +800,51 @@ func requireProtocolSchemaTypesHaveRustFixtures(t *testing.T, root string, metho
 func rustSchemaFixtureExists(root string, typeName string) bool {
 	_, ok := rustSchemaFixturePath(root, typeName)
 	return ok
+}
+
+func rustSchemaFixtureNames(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", root, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".ts") {
+			names = append(names, strings.TrimSuffix(strings.TrimSuffix(name, ".json"), ".ts"))
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func missingSchemaFixtureCoverage(expected []string, schema *ProtocolSchema) []string {
+	covered := map[string]bool{}
+	for _, method := range append(append([]ProtocolMethod{}, schema.Methods...), append(append([]ProtocolMethod{}, schema.ServerRequests...), schema.Notifications...)...) {
+		if method.Params != "" {
+			covered[method.Params] = true
+		}
+		if method.Result != "" {
+			covered[method.Result] = true
+		}
+	}
+	for _, typ := range schema.Types {
+		covered[typ.Name] = true
+	}
+	missing := []string{}
+	for _, name := range expected {
+		if strings.HasSuffix(name, ".schemas") || strings.HasSuffix(name, "Request") || strings.HasSuffix(name, "Response") || strings.HasSuffix(name, "Notification") || name == "RequestId" || name == "JSONRPCMessage" || name == "JSONRPCError" || name == "JSONRPCErrorError" || name == "ClientRequest" || name == "ClientNotification" || name == "ServerRequest" || name == "ServerNotification" {
+			continue
+		}
+		if !covered[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func rustSchemaFixturePath(root string, typeName string) (string, bool) {

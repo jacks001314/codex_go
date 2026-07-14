@@ -32,3 +32,36 @@ func TestRemoteProtocolCommandExecutionPreservesLifecycle(t *testing.T) {
 		t.Fatalf("completed output = %#v", completed)
 	}
 }
+
+func TestRemoteProtocolMCPToolCallPreservesLifecycle(t *testing.T) {
+	arguments := map[string]any{"label": "A"}
+	started := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id":        "call-mcp",
+		"type":      "mcpToolCall",
+		"server":    "geogebra",
+		"tool":      "geogebra_create_point",
+		"status":    "inProgress",
+		"arguments": arguments,
+	}, false)
+	if started.Type != "mcp_tool_call" || started.Server != "geogebra" || started.Tool != "geogebra_create_point" || started.Status != "in_progress" {
+		t.Fatalf("started MCP item = %#v", started)
+	}
+	if started.Arguments == nil {
+		t.Fatalf("started MCP arguments missing: %#v", started)
+	}
+
+	completed := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id":        "call-mcp",
+		"type":      "mcpToolCall",
+		"server":    "geogebra",
+		"tool":      "geogebra_create_point",
+		"status":    "completed",
+		"arguments": arguments,
+		"result": map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": "Point A created"}},
+		},
+	}, true)
+	if completed.Type != "mcp_tool_call" || completed.Result == nil || len(completed.Result.Content) != 1 || completed.CallError != nil {
+		t.Fatalf("completed MCP item = %#v", completed)
+	}
+}

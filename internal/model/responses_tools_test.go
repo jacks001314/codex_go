@@ -68,7 +68,7 @@ func TestResponsesToolsFromSpecsSerializesFunctionSearchAndFreeform(t *testing.T
 	}
 }
 
-func TestResponsesToolNamesUseCodeModeNamespaceSeparatorForPlainNamespacedSpecs(t *testing.T) {
+func TestResponsesMCPToolsUseNamespaceLikeRust(t *testing.T) {
 	got := ResponsesToolsFromSpecs([]tool.Spec{{
 		Name: tool.NamespacedName("mcp__memory", "create_entities"),
 	}})
@@ -76,8 +76,12 @@ func TestResponsesToolNamesUseCodeModeNamespaceSeparatorForPlainNamespacedSpecs(
 		t.Fatalf("tools = %#v", got)
 	}
 	item, ok := got[0].(map[string]any)
-	if !ok || item["name"] != "mcp__memory__create_entities" {
+	if !ok || item["type"] != "namespace" || item["name"] != "mcp__memory" {
 		t.Fatalf("tool = %#v", got[0])
+	}
+	children, ok := item["tools"].([]map[string]any)
+	if !ok || len(children) != 1 || children[0]["name"] != "create_entities" {
+		t.Fatalf("namespace children = %#v", item["tools"])
 	}
 }
 

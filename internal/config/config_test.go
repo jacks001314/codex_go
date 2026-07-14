@@ -299,6 +299,24 @@ func TestLoadEffectiveStrictConfigRejectsUnknownOverride(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveStrictConfigRejectsUnknownNestedFieldsLikeRust(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{name: "feature", body: "[features]\ndoes_not_exist = true\n", want: "unknown configuration field `features.does_not_exist`"},
+		{name: "mcp", body: "[mcp_servers.local]\ncommand = \"demo\"\nunknown_key = true\n", want: "unknown configuration field `mcp_servers.local.unknown_key`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(ConfigPath(dir), []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadWithOptionsAppliesProfileConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	body := `

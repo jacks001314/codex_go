@@ -56,6 +56,7 @@ type RuntimeServices struct {
 	Feedback                     *FeedbackSnapshot
 	Config                       *config.ConfigService
 	Account                      *auth.AccountManager
+	AccountOAuthOptions          *auth.OAuthOptions
 	Hooks                        *HookRegistry
 	HooksDiscovery               *HookDiscoveryService
 	HookRunner                   *HookRunner
@@ -71,6 +72,7 @@ type RuntimeServices struct {
 	SteerMailbox                 *turn.SteerMailbox
 	ThreadStatus                 *ThreadStatusManager
 	Agent                        model.AgentRunner
+	GuardianReviewer             GuardianReviewer
 	CompactRunner                compact.RemoteRunner
 	ToolRouter                   *tool.Router
 	TurnRuntime                  *turn.Runtime
@@ -139,6 +141,8 @@ type RuntimeRouter struct {
 	mcpOpenAIForm          map[string]bool
 	authRevisionMu         sync.Mutex
 	authRevision           uint64
+	loginRuntimeMu         sync.Mutex
+	loginRuntimeCancels    map[string]context.CancelFunc
 	approvalSessionsMu     sync.RWMutex
 	commandApprovals       map[string]struct{}
 	fileApprovals          map[string]struct{}
@@ -487,7 +491,6 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		Apps:         apps.NewAppService(nil),
 		Turns:        turn.NewTurnService(),
 		ThreadStatus: NewThreadStatusManager(),
-		Agent:        model.NewLocalAgentRunner(),
 		Reviews:      review.NewService(),
 		Misc:         NewMiscService(),
 		CommandExec:  NewCommandExecService(),
@@ -503,11 +506,11 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	router := NewRuntimeRouter(services)
 	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
-	router.configureMCPFromConfig()
 	router.configureManagedNetworkFromConfig()
 	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
+	router.configureMCPFromConfig()
 	return router
 }
 
@@ -781,6 +784,10 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 func (r *RuntimeRouter) Close() error {
 	if r == nil {
 		return nil
+	}
+	r.cancelAllAccountLoginRuntimes()
+	if r.services.Account != nil {
+		r.services.Account.CancelActiveLogins()
 	}
 	var closeErr error
 	if closer, ok := r.services.Analytics.(interface{ Close() error }); ok && closer != nil {
@@ -1284,6 +1291,24 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		if request.Method == MethodThreadCompactStart {
 			return r.handleThreadCompactStartRuntime(request)
 		}
+		if request.Method == MethodThreadApproveGuardianDeniedAction {
+			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
+				return nil, err
+			}
+			return r.handleThreadApproveGuardianDeniedActionRuntime(request)
+		}
+		if request.Method == MethodThreadInjectItems {
+			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
+				return nil, err
+			}
+			return r.handleThreadInjectItemsRuntime(request)
+		}
+		if request.Method == MethodThreadIncrementElicitation || request.Method == MethodThreadIncrementElicitationLegacy || request.Method == MethodThreadDecrementElicitation || request.Method == MethodThreadDecrementElicitationLegacy {
+			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
+				return nil, err
+			}
+			return r.handleThreadElicitationCountRuntime(request)
+		}
 		if request.Method == MethodThreadRead {
 			return r.handleThreadReadRuntime(request)
 		}
@@ -1582,9 +1607,6 @@ func (r *RuntimeRouter) handleThreadTurnsListRuntime(request *Request) (*TurnsPa
 	if err != nil {
 		return nil, threadTurnsListReadError(params.ThreadID, err)
 	}
-	if paginatedRolloutHistory(record) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
-	}
 	if unmaterializedThread(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/turns/list is unavailable before first user message", record.ID))
 	}
@@ -1610,9 +1632,6 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 	if err != nil {
 		return nil, threadItemsListReadError(params.ThreadID, err)
 	}
-	if paginatedRolloutHistory(record) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
-	}
 	if unmaterializedThread(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
@@ -1632,6 +1651,9 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 	}
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 		return nil, err
+	}
+	if r.activeRuntimeTurnSnapshot(params.ThreadID) != nil {
+		return nil, jsonRPCInvalidRequest("Cannot rollback while a turn is in progress.")
 	}
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
@@ -2113,7 +2135,7 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 	if err := threadStartHistoryModeError(&params); err != nil {
 		return nil, true, err
 	}
-	threadID := session.ThreadID("thread-" + safeIdentifier(request.ID.String()))
+	threadID := newThreadID()
 	if _, ok := r.ephemeralThreadRecord(threadID, false); ok {
 		return nil, true, fmt.Errorf("%w: thread %s already exists", session.ErrConflict, threadID)
 	}
@@ -2249,9 +2271,6 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	}
 	if unmaterializedThread(sourceRecord) {
 		return nil, true, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
-	}
-	if paginatedRolloutHistory(sourceRecord) {
-		return nil, true, methodNotFound("paginated_threads is not supported yet")
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
@@ -3077,9 +3096,6 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	}
 	if sourceRecord != nil && sourceRecord.Archived {
 		return nil, true, threadResumeArchivedError(sourceRecord.ID)
-	}
-	if paginatedRolloutHistory(sourceRecord) {
-		return nil, true, methodNotFound("paginated_threads is not supported yet")
 	}
 	annotateActiveForkSourceSnapshot(sourceRecord, active, now)
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
@@ -5080,9 +5096,6 @@ func (r *RuntimeRouter) threadRecord(threadID session.ThreadID, includeArchived 
 	if repairErr != nil {
 		return nil, repairErr
 	}
-	if includeHistory && paginatedRolloutHistory(record) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
-	}
 	if err := r.services.ThreadRouter.store.Save(record); err != nil {
 		return nil, err
 	}
@@ -5663,7 +5676,11 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 	if err != nil || read == nil {
 		return
 	}
-	r.requireMCP().ApplyRuntimeConfig(mcp.RuntimeConfigFromValues(read.Config, r.services.Config.CodexHome()))
+	var runtimeAuth *mcp.RuntimeAuth
+	if resolved, resolveErr := r.resolveAuthWithLoginRestrictions(r.services.Config.CodexHome()); resolveErr == nil && resolved != nil {
+		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolved.Auth)
+	}
+	r.requireMCP().ApplyRuntimeConfig(mcp.RuntimeConfigFromValuesWithAuth(read.Config, r.services.Config.CodexHome(), runtimeAuth))
 }
 
 func (r *RuntimeRouter) handleMCPServerStatusList(request *Request) (*mcp.MCPListServerStatusResponse, error) {
@@ -6036,11 +6053,18 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		return nil, err
 	}
 	if params.Type == "chatgptAuthTokens" {
+		r.cancelAllAccountLoginRuntimes()
 		r.requireAccount().CancelActiveLogins()
 	}
 	response, err := r.requireAccount().Login(&params)
 	if err != nil {
 		return nil, err
+	}
+	if response != nil && response.LoginID != "" {
+		if err := r.startAccountLoginRuntime(&params, response); err != nil {
+			_, _ = r.requireAccount().CancelLogin(&auth.CancelLoginAccountParams{LoginID: response.LoginID})
+			return nil, err
+		}
 	}
 	r.applyChatGPTLoginConfig(params, response)
 	if snapshot := authSnapshotFromLoginParams(&params); snapshot != nil {
@@ -6050,6 +6074,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 			}
 		}
 		r.requireAccount().ApplyAuthSnapshot(snapshot)
+		r.configureMCPFromConfig()
 		r.clearRecommendedPluginsCache()
 		r.noteAuthChanged()
 	}
@@ -6175,10 +6200,135 @@ func (r *RuntimeRouter) handleCancelLoginAccount(request *Request) (*auth.Cancel
 		return nil, err
 	}
 	if response != nil && response.Status == auth.CancelLoginCanceled {
+		r.cancelAccountLoginRuntime(params.LoginID)
 		message := "login canceled"
 		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &params.LoginID, Success: false, Error: &message})
 	}
 	return response, nil
+}
+
+func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
+	if r != nil && r.services.AccountOAuthOptions != nil {
+		copy := *r.services.AccountOAuthOptions
+		return &copy
+	}
+	options := &auth.OAuthOptions{CodexHome: r.codexHomeForRollout(), StoreOptions: r.authStoreOptions()}
+	if r.services.HTTPClient != nil {
+		if client, ok := r.services.HTTPClient.(*http.Client); ok {
+			options.HTTPClient = client
+		}
+	}
+	if r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			cfg := &config.Config{Values: read.Config}
+			options.ForcedWorkspaces = cfg.ForcedChatGPTWorkspaceIDs()
+		}
+	}
+	return options
+}
+
+func (r *RuntimeRouter) startAccountLoginRuntime(params *auth.LoginAccountParams, response *auth.LoginAccountResponse) error {
+	if r == nil || params == nil || response == nil || strings.TrimSpace(response.LoginID) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	loginID := strings.TrimSpace(response.LoginID)
+	options := r.accountOAuthOptions()
+	var done <-chan error
+	switch params.Type {
+	case auth.AccountChatGPT:
+		server, err := auth.StartBrowserLogin(ctx, options)
+		if err != nil {
+			cancel()
+			return err
+		}
+		response.AuthURL = server.AuthURL
+		done = server.Done
+	case "chatgptDeviceCode":
+		code, err := auth.RequestDeviceCode(ctx, options)
+		if err != nil {
+			cancel()
+			return err
+		}
+		response.VerificationURL = code.VerificationURL
+		response.UserCode = code.UserCode
+		result := make(chan error, 1)
+		done = result
+		go func() { result <- auth.CompleteDeviceCodeLogin(ctx, options, code) }()
+	default:
+		cancel()
+		return nil
+	}
+	r.loginRuntimeMu.Lock()
+	if r.loginRuntimeCancels == nil {
+		r.loginRuntimeCancels = map[string]context.CancelFunc{}
+	}
+	r.loginRuntimeCancels[loginID] = cancel
+	r.loginRuntimeMu.Unlock()
+	go r.awaitAccountLoginRuntime(loginID, done)
+	return nil
+}
+
+func (r *RuntimeRouter) awaitAccountLoginRuntime(loginID string, done <-chan error) {
+	err := <-done
+	r.loginRuntimeMu.Lock()
+	_, owned := r.loginRuntimeCancels[loginID]
+	delete(r.loginRuntimeCancels, loginID)
+	r.loginRuntimeMu.Unlock()
+	if !owned {
+		return
+	}
+	if err != nil {
+		message := err.Error()
+		r.requireAccount().CompleteLogin(loginID, nil, message)
+		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &loginID, Success: false, Error: &message})
+		return
+	}
+	resolved, resolveErr := r.authStore(r.codexHomeForRollout()).Resolve()
+	if resolveErr != nil || resolved == nil {
+		message := "login completed but persisted auth could not be loaded"
+		if resolveErr != nil {
+			message = resolveErr.Error()
+		}
+		r.requireAccount().CompleteLogin(loginID, nil, message)
+		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &loginID, Success: false, Error: &message})
+		return
+	}
+	r.requireAccount().ApplyAuthSnapshot(&resolved.Auth)
+	r.configureMCPFromConfig()
+	r.requireAccount().CompleteLogin(loginID, auth.AccountFromAuth(&resolved.Auth), "")
+	r.noteAuthChanged()
+	r.clearRecommendedPluginsCache()
+	r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &loginID, Success: true})
+	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+}
+
+func (r *RuntimeRouter) cancelAccountLoginRuntime(loginID string) {
+	r.loginRuntimeMu.Lock()
+	cancel := r.loginRuntimeCancels[strings.TrimSpace(loginID)]
+	delete(r.loginRuntimeCancels, strings.TrimSpace(loginID))
+	r.loginRuntimeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *RuntimeRouter) cancelAllAccountLoginRuntimes() {
+	if r == nil {
+		return
+	}
+	r.loginRuntimeMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(r.loginRuntimeCancels))
+	for loginID, cancel := range r.loginRuntimeCancels {
+		if cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+		delete(r.loginRuntimeCancels, loginID)
+	}
+	r.loginRuntimeMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (r *RuntimeRouter) handleAccountSessionsAdd(request *Request) (*auth.AccountSessionsResponse, error) {
@@ -6232,6 +6382,7 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 			return nil, err
 		}
 	}
+	r.cancelAllAccountLoginRuntimes()
 	r.requireAccount().CancelActiveLogins()
 	response := r.requireAccount().Logout()
 	if codexHome := r.codexHomeForRollout(); codexHome != "" {
@@ -6241,6 +6392,7 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	}
 	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
+	r.configureMCPFromConfig()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -7234,7 +7386,11 @@ func (r *RuntimeRouter) requireMCP() *mcp.MCPService {
 	if r.services.MCP == nil {
 		r.services.MCP = mcp.NewMCPService(nil)
 	}
-	r.services.MCP.SetElicitationHandler(&appserverMCPElicitationHandler{broker: r.requireServerRequests()})
+	reviewer := r.services.GuardianReviewer
+	if reviewer == nil && r.services.Agent != nil {
+		reviewer = r.ensureGuardianReviewer(r.services.Agent)
+	}
+	r.services.MCP.SetElicitationHandler(&appserverMCPElicitationHandler{broker: r.requireServerRequests(), reviewer: reviewer})
 	r.services.MCP.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
 	r.services.MCP.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
 		return r.mcpRootsForThread(threadID)
@@ -7260,13 +7416,14 @@ func (r *RuntimeRouter) mcpRootsForThread(threadID string) []mcp.MCPRoot {
 }
 
 func (r *RuntimeRouter) mcpRootPathsForThread(threadID string) []string {
+	selected := r.selectedCapabilityMCPRootPaths(threadID)
 	if params := r.activeTurnParams(threadID); params != nil {
 		paths := normalizedMCPRootPaths(r, params.RuntimeWorkspaceRoots)
 		if len(paths) == 0 {
 			paths = normalizedMCPRootPaths(r, []string{params.CWD})
 		}
 		if len(paths) > 0 {
-			return paths
+			return mergeMCPRootPaths(paths, selected)
 		}
 	}
 	threadID = strings.TrimSpace(threadID)
@@ -7277,14 +7434,58 @@ func (r *RuntimeRouter) mcpRootPathsForThread(threadID string) []string {
 				paths = normalizedMCPRootPaths(r, []string{record.Metadata.CWD})
 			}
 			if len(paths) > 0 {
-				return paths
+				return mergeMCPRootPaths(paths, selected)
 			}
 		}
 	}
 	if r != nil {
-		return normalizedMCPRootPaths(r, []string{r.services.DefaultCWD})
+		return mergeMCPRootPaths(normalizedMCPRootPaths(r, []string{r.services.DefaultCWD}), selected)
 	}
-	return nil
+	return selected
+}
+
+func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(record.Metadata.SelectedCapabilityRoots))
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if json.Unmarshal(raw, &selected) != nil || selected.Location.Type != CapabilityRootLocationEnvironment {
+			continue
+		}
+		environmentID := strings.TrimSpace(selected.Location.EnvironmentID)
+		if environmentID != "" && environmentID != "local" {
+			// Remote environment paths are not native paths for the primary MCP client,
+			// regardless of whether the environment is currently connected.
+			continue
+		}
+		if path := capabilityRootLocalPath(selected.Location.Path); strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+	}
+	return normalizedMCPRootPaths(r, paths)
+}
+
+func mergeMCPRootPaths(groups ...[]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, group := range groups {
+		for _, path := range group {
+			key := strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
+			if key == "" || key == "." || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func (r *RuntimeRouter) activeTurnParams(threadID string) *turn.TurnStartParams {
@@ -7404,7 +7605,7 @@ func (r *RuntimeRouter) requireSteerMailbox() *turn.SteerMailbox {
 
 func (r *RuntimeRouter) requireAgent() model.AgentRunner {
 	if r.services.Agent == nil {
-		r.services.Agent = model.NewLocalAgentRunner()
+		r.services.Agent = &model.UnavailableAgentRunner{}
 	}
 	return r.services.Agent
 }
@@ -8269,6 +8470,7 @@ func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.
 		}
 	}
 	r.requireAccount().ApplyAuthSnapshot(&snapshot)
+	r.configureMCPFromConfig()
 	r.noteAuthChanged()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return &model.ExternalAuthRefreshResponse{

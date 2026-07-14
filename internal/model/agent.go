@@ -261,6 +261,18 @@ type AgentRunner interface {
 	Run(ctx context.Context, request *AgentRequest) (*AgentResponse, error)
 }
 
+type UnavailableAgentRunner struct{ Err error }
+
+func (r *UnavailableAgentRunner) Run(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if r != nil && r.Err != nil {
+		return nil, r.Err
+	}
+	return nil, errors.New("model-backed agent is unavailable")
+}
+
 type LocalAgentRunner struct{}
 
 func NewLocalAgentRunner() *LocalAgentRunner {

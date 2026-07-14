@@ -2,6 +2,7 @@ package windowssandbox
 
 import (
 	"fmt"
+	"runtime"
 
 	coresandbox "codex_go/internal/sandbox"
 )
@@ -16,6 +17,9 @@ type LegacyPreflightRequest struct {
 }
 
 func RunWindowsSandboxCapture(req *CaptureRequest) (*CaptureResult, error) {
+	if runtime.GOOS != "windows" {
+		return nil, ErrWindowsOnly
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -23,6 +27,9 @@ func RunWindowsSandboxCapture(req *CaptureRequest) (*CaptureResult, error) {
 }
 
 func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*CaptureResult, error) {
+	if runtime.GOOS != "windows" {
+		return nil, ErrWindowsOnly
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

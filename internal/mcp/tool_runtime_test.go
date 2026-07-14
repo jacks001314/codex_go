@@ -2,6 +2,64 @@ package mcp
 
 import "testing"
 
+func TestNormalizeRuntimeToolsForModelMatchesRustNames(t *testing.T) {
+	tools := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{
+		{ServerName: "geogebra", Tool: RuntimeTool{Name: "geogebra_create_circle"}},
+		{ServerName: "music-studio", Tool: RuntimeTool{Name: "get-strudel-guide"}},
+	})
+	if len(tools) != 2 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	if tools[0].ServerName != "geogebra" || tools[0].Tool.Name != "geogebra_create_circle" ||
+		tools[0].CallableNamespace != "mcp__geogebra" || tools[0].CallableName != "geogebra_create_circle" {
+		t.Fatalf("geogebra tool = %#v", tools[0])
+	}
+	if tools[1].ServerName != "music-studio" || tools[1].Tool.Name != "get-strudel-guide" ||
+		tools[1].CallableNamespace != "mcp__music_studio" || tools[1].CallableName != "get_strudel_guide" {
+		t.Fatalf("music tool = %#v", tools[1])
+	}
+
+	again := NormalizeRuntimeToolsForModel(tools)
+	if len(again) != len(tools) || again[0].CallableNamespace != tools[0].CallableNamespace || again[0].CallableName != tools[0].CallableName {
+		t.Fatalf("normalization is not idempotent: first=%#v second=%#v", tools, again)
+	}
+}
+
+func TestNormalizeRuntimeToolsForModelDisambiguatesCollisions(t *testing.T) {
+	tools := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{
+		{ServerName: "basic-server", Tool: RuntimeTool{Name: "lookup"}},
+		{ServerName: "basic_server", Tool: RuntimeTool{Name: "lookup"}},
+		{ServerName: "same", Tool: RuntimeTool{Name: "tool-name"}},
+		{ServerName: "same", Tool: RuntimeTool{Name: "tool_name"}},
+	})
+	if len(tools) != 4 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	seen := map[string]bool{}
+	for _, info := range tools {
+		key := info.CallableNamespace + "__" + info.CallableName
+		if seen[key] {
+			t.Fatalf("duplicate callable name %q in %#v", key, tools)
+		}
+		seen[key] = true
+		if len(key) > runtimeMCPToolNameMaxLength {
+			t.Fatalf("callable name too long: %q", key)
+		}
+	}
+	if tools[0].CallableNamespace == tools[1].CallableNamespace {
+		t.Fatalf("sanitized namespace collision was not resolved: %#v", tools[:2])
+	}
+	if tools[2].CallableName == tools[3].CallableName {
+		t.Fatalf("sanitized tool collision was not resolved: %#v", tools[2:])
+	}
+	again := NormalizeRuntimeToolsForModel(tools)
+	for i := range tools {
+		if again[i].CallableNamespace != tools[i].CallableNamespace || again[i].CallableName != tools[i].CallableName {
+			t.Fatalf("collision normalization changed at %d: first=%#v second=%#v", i, tools[i], again[i])
+		}
+	}
+}
+
 func TestBuildExposureDefersToolsWhenSearchEnabled(t *testing.T) {
 	visible := true
 	hidden := false
@@ -91,7 +149,7 @@ func TestRuntimeToolsFromStatusesMatchesRustMCPInventory(t *testing.T) {
 		t.Fatalf("tools = %#v, want docs search and drive search only", tools)
 	}
 	docs := tools[0]
-	if docs.ServerName != "docs" || docs.Tool.Name != "search" || docs.Tool.Title != "Search" || docs.Tool.Description != "Search docs" {
+	if docs.ServerName != "docs" || docs.CallableNamespace != "mcp__docs" || docs.CallableName != "search" || docs.Tool.Name != "search" || docs.Tool.Title != "Search" || docs.Tool.Description != "Search docs" {
 		t.Fatalf("docs tool = %#v", docs)
 	}
 	if docs.Tool.InputSchema["type"] != "object" {

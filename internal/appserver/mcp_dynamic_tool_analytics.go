@@ -41,12 +41,13 @@ func (r *RuntimeRouter) emitMCPToolCallAnalyticsEvent(ctx context.Context, conne
 	if completedAtMS == 0 && item.CreatedAt > 0 {
 		completedAtMS = uint64(item.CreatedAt)
 	}
-	reviewSummary := r.toolItemReviewSummary(threadID, turnID, item.ID)
+	itemID := threadItemExternalID(item)
+	reviewSummary := r.toolItemReviewSummary(threadID, turnID, itemID)
 	event := telemetry.NewCodexMCPToolCallEvent(telemetry.CodexMCPToolCallEventParams{
 		CodexToolItemEventBase: telemetry.CodexToolItemEventBase{
 			ThreadID:                       threadID,
 			TurnID:                         turnID,
-			ItemID:                         item.ID,
+			ItemID:                         itemID,
 			AppServerClient:                client,
 			Runtime:                        telemetry.CurrentRuntimeMetadata(),
 			ThreadSource:                   stringPtrIfNotEmpty(lineage.ThreadSource),

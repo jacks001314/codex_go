@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"codex_go/internal/utils"
 )
 
 const (
@@ -38,7 +40,7 @@ type DispatchAliasGuard struct {
 }
 
 func DispatchKind(argv0 string, argv1 string) string {
-	name := filepath.Base(argv0)
+	name := utils.CrossPlatformBase(argv0)
 	name = dispatchBaseName(name)
 	switch name {
 	case DispatchApplyPatchArg0, DispatchMisspelledApplyPatchArg0:

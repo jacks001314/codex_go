@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"codex_go/internal/auth"
 	"codex_go/internal/codexapi"
@@ -167,6 +170,319 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	}
 	if response.ReasoningIncluded == nil || !*response.ReasoningIncluded {
 		t.Fatalf("reasoning included = %#v", response.ReasoningIncluded)
+	}
+}
+
+func TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse(t *testing.T) {
+	var received map[string]any
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		authorization = request.Header.Get("Authorization")
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, data, err := conn.Read(request.Context())
+		if err != nil {
+			t.Errorf("Read() error = %v", err)
+			return
+		}
+		if err := json.Unmarshal(data, &received); err != nil {
+			t.Errorf("Unmarshal() error = %v", err)
+			return
+		}
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"warm-1"}}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"warm-1"}}`))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL, Headers: http.Header{"x-provider-test": []string{"present"}}},
+		Auth:     &AuthHeaders{Headers: http.Header{"Authorization": []string{"Bearer secret"}}}, SupportsWebsockets: true, WebsocketConnectTimeout: time.Second,
+	})
+	response, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test", ThreadID: "guardian-thread", ClientMetadata: map[string]string{"x-openai-subagent": "guardian"}})
+	if err != nil {
+		t.Fatalf("Prewarm() error = %v", err)
+	}
+	if response == nil || response.ResponseID != "warm-1" {
+		t.Fatalf("response = %#v", response)
+	}
+	if received["type"] != "response.create" || received["generate"] != false || received["model"] != "gpt-test" {
+		t.Fatalf("payload = %#v", received)
+	}
+	metadata, ok := received["client_metadata"].(map[string]any)
+	if !ok || metadata["x-openai-subagent"] != "guardian" {
+		t.Fatalf("metadata = %#v", received["client_metadata"])
+	}
+	if authorization != "Bearer secret" {
+		t.Fatalf("authorization = %q", authorization)
+	}
+}
+
+func TestResponsesAgentRunnerPrewarmNoopsWithoutWebSocketSupport(t *testing.T) {
+	runner := NewResponsesAgentRunner(nil)
+	response, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test"})
+	if err != nil || response != nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+}
+
+func TestResponsesAgentRunnerRunWebSocketUsesPreviousResponseID(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, data, _ := conn.Read(request.Context())
+		_ = json.Unmarshal(data, &received)
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"{\"outcome\":"}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"\"allow\"}"}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"review-1"}}`))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "review", PreviousResponseID: "warm-1"})
+	if err != nil || response == nil || response.ResponseID != "review-1" || response.Message != `{"outcome":"allow"}` {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if received["previous_response_id"] != "warm-1" {
+		t.Fatalf("payload=%#v", received)
+	}
+	if _, ok := received["generate"]; ok {
+		t.Fatalf("normal request should omit generate: %#v", received)
+	}
+}
+
+func TestResponsesAgentRunnerRunWebSocketParsesFullResponsesEventModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		events := []string{
+			`{"type":"response.created","response":{"id":"resp-ws-full","model":"gpt-test"}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"call-item","call_id":"call-1","delta":"{\"path\":"}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"call-item","call_id":"call-1","delta":"\"plan.md\"}"}`,
+			`{"type":"response.output_item.done","item":{"id":"call-item","type":"function_call","name":"read_file","call_id":"call-1","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-ws-full","model":"gpt-test","output":[],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+		}
+		for _, event := range events {
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+		}
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "read plan"})
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if response.ResponseID != "resp-ws-full" || response.Usage.InputTokens != 11 || response.Usage.OutputTokens != 7 || response.Usage.TotalTokens != 18 {
+		t.Fatalf("response=%#v", response)
+	}
+	if len(response.Items) != 1 || response.Items[0].Type != "function_call" || response.Items[0].Name != "read_file" || response.Items[0].Arguments != `{"path":"plan.md"}` {
+		t.Fatalf("items=%#v", response.Items)
+	}
+}
+
+func TestResponsesAgentRunnerRunWebSocketReusesConnectionWithinTurn(t *testing.T) {
+	connections := 0
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connections++
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for i := 1; i <= 2; i++ {
+			if _, _, err := conn.Read(request.Context()); err != nil {
+				return
+			}
+			requests++
+			response := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-%d","output":[{"id":"msg-%d","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok-%d"}]}]}}`, i, i, i)
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(response))
+		}
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	for i := 1; i <= 2; i++ {
+		response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1"})
+		if err != nil || response == nil || response.Message != fmt.Sprintf("ok-%d", i) {
+			t.Fatalf("request %d response=%#v err=%v", i, response, err)
+		}
+	}
+	if connections != 1 || requests != 2 {
+		t.Fatalf("connections=%d requests=%d", connections, requests)
+	}
+}
+
+func TestResponsesAgentRunnerRunWebSocketIsolatesTurns(t *testing.T) {
+	connections := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connections++
+		connectionID := connections
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		response := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-%d","output":[{"id":"msg-%d","type":"message","role":"assistant","content":[{"type":"output_text","text":"connection-%d"}]}]}}`, connectionID, connectionID, connectionID)
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(response))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	for i, turnID := range []string{"turn-1", "turn-2"} {
+		response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: turnID})
+		if err != nil || response == nil || response.Message != fmt.Sprintf("connection-%d", i+1) {
+			t.Fatalf("turn %s response=%#v err=%v", turnID, response, err)
+		}
+	}
+	if connections != 2 {
+		t.Fatalf("connections=%d", connections)
+	}
+}
+
+func TestResponsesAgentRunnerRunWebSocketReconnectsClosedReusedConnection(t *testing.T) {
+	connections := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connections++
+		connectionID := connections
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		_, _, _ = conn.Read(request.Context())
+		response := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-%d","output":[{"id":"msg-%d","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok-%d"}]}]}}`, connectionID, connectionID, connectionID)
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(response))
+		_ = conn.Close(websocket.StatusNormalClosure, "rotate")
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	for i := 1; i <= 2; i++ {
+		response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1"})
+		if err != nil || response == nil || response.Message != fmt.Sprintf("ok-%d", i) {
+			t.Fatalf("request %d response=%#v err=%v", i, response, err)
+		}
+	}
+	if connections != 2 {
+		t.Fatalf("connections=%d", connections)
+	}
+}
+
+func TestResponsesAgentRunnerWebSocketRetryExhaustionPermanentlyFallsBackToHTTP(t *testing.T) {
+	websocketConnections := 0
+	httpRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			websocketConnections++
+			conn, err := websocket.Accept(w, request, nil)
+			if err != nil {
+				t.Errorf("Accept() error = %v", err)
+				return
+			}
+			_, _, _ = conn.Read(request.Context())
+			_ = conn.Close(websocket.StatusInternalError, "failed")
+			return
+		}
+		httpRequests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"http-%d","output_text":"fallback-%d","output":[]}`, httpRequests, httpRequests)))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	for i := 1; i <= 2; i++ {
+		response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: fmt.Sprintf("turn-%d", i)})
+		if err != nil || response == nil || response.Message != fmt.Sprintf("fallback-%d", i) {
+			t.Fatalf("request %d response=%#v err=%v", i, response, err)
+		}
+	}
+	prewarm, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test", ClientMetadata: map[string]string{"x-openai-subagent": "guardian"}})
+	if err != nil || prewarm != nil {
+		t.Fatalf("prewarm=%#v err=%v", prewarm, err)
+	}
+	if websocketConnections != 2 || httpRequests != 2 {
+		t.Fatalf("websocketConnections=%d httpRequests=%d", websocketConnections, httpRequests)
+	}
+}
+
+func TestResponsesAgentRunnerWebSocket426FallbackMatchesRust(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "upgrade required", http.StatusUpgradeRequired)
+			return
+		}
+		posts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"http-fallback","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	prewarm, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test"})
+	if err != nil || prewarm != nil || posts != 0 {
+		t.Fatalf("prewarm=%#v posts=%d err=%v", prewarm, posts, err)
+	}
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello"})
+	if err != nil || response == nil || response.ResponseID != "http-fallback" || posts != 1 {
+		t.Fatalf("response=%#v posts=%d err=%v", response, posts, err)
+	}
+}
+
+func TestResponsesAgentRunnerWebSocketRefreshesAuthOnceAfter401(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		attempts++
+		if attempts == 1 {
+			if got := request.Header.Get("Authorization"); got != "Bearer old-token" {
+				t.Fatalf("first auth = %q", got)
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer new-token" {
+			t.Fatalf("second auth = %q", got)
+		}
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp-refreshed","output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`))
+	}))
+	defer server.Close()
+	plan := "pro"
+	snapshot := auth.FromChatGPTAuthTokens("old-token", "account-old", &plan)
+	headers := BearerAuthHeaders("old-token", "account-old", false)
+	refreshCalls := 0
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		SupportsWebsockets: true,
+		Auth:               &headers,
+		AuthSnapshot:       &snapshot,
+		ExternalAuthRefresh: func(ctx context.Context, request *ExternalAuthRefreshRequest) (*ExternalAuthRefreshResponse, error) {
+			refreshCalls++
+			return &ExternalAuthRefreshResponse{AccessToken: "new-token", ChatGPTAccountID: "account-new", ChatGPTPlanType: &plan}, nil
+		},
+	})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello"})
+	if err != nil || response == nil || response.ResponseID != "resp-refreshed" || response.Message != "ok" {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if attempts != 2 || refreshCalls != 1 {
+		t.Fatalf("attempts=%d refreshCalls=%d", attempts, refreshCalls)
 	}
 }
 
@@ -653,6 +969,24 @@ func TestParseResponsesStreamDeduplicatesCompletedAssistantMessageWithStableID(t
 	item := response.Items[0]
 	if item.ID != "msg_123" || item.Type != "agent_message" || item.Text != "done" {
 		t.Fatalf("deduped item = %#v", item)
+	}
+}
+
+func TestParseResponsesStreamMergesToolCallsByCallIDAndPreservesNamespace(t *testing.T) {
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-mcp"}}`,
+		`{"type":"response.output_item.done","item":{"id":"fc-complete","type":"function_call","call_id":"call-mcp","namespace":"mcp__geogebra","name":"geogebra_create_circle","arguments":"{\"radius\":3}"}}`,
+		`{"type":"response.completed","response":{"id":"resp-mcp","output":[{"id":"fc-summary","type":"function_call","call_id":"call-mcp","name":"geogebra_create_circle","arguments":"{\"radius\":3}"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil)
+	if err != nil {
+		t.Fatalf("parseResponsesStream error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.ID != "fc-complete" || item.CallID != "call-mcp" || item.Namespace != "mcp__geogebra" || item.Name != "geogebra_create_circle" {
+		t.Fatalf("merged item = %#v", item)
 	}
 }
 
@@ -1768,8 +2102,15 @@ func TestResponsesAgentRunnerStreamsResponseFailed(t *testing.T) {
 		Stream:   true,
 	})
 	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
-	if err == nil || !strings.Contains(err.Error(), "too much context") {
+	if err == nil || !strings.Contains(err.Error(), "context window exceeded") {
 		t.Fatalf("Run error = %v", err)
+	}
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Run error type = %T, want APIError", err)
+	}
+	if apiErr.Kind != codexapi.ErrorContextWindowExceeded || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("APIError = %#v, want context window exceeded bad request", apiErr)
 	}
 }
 

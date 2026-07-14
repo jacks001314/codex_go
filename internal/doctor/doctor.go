@@ -223,7 +223,7 @@ func Version() string {
 	if value := strings.TrimSpace(os.Getenv("CODEX_GO_VERSION")); value != "" {
 		return value
 	}
-	return "0.0.0-go"
+	return "0.0.0"
 }
 
 func NewCheck(id string, category string, status CheckStatus, summary string) *DoctorCheck {

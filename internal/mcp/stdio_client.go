@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +31,7 @@ type stdioClient struct {
 	cmd          *exec.Cmd
 	stdin        io.WriteCloser
 	reader       *bufio.Reader
-	stderr       bytes.Buffer
+	stderr       *stdioOutputBuffer
 	nextID       int64
 	started      bool
 	initialized  bool
@@ -39,6 +41,31 @@ type stdioClient struct {
 	pending      map[int64]*stdioPendingCall
 	pendingOrder []int64
 	openAIForm   bool
+}
+
+// os/exec copies a child's output from background goroutines. Keep each
+// process's buffer independent and safe to inspect while those copies finish.
+type stdioOutputBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *stdioOutputBuffer) Write(p []byte) (int, error) {
+	if b == nil {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+
+func (b *stdioOutputBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
 }
 
 type stdioPendingCall struct {
@@ -258,7 +285,7 @@ func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method stri
 	if strings.TrimSpace(c.config.Command) == "" {
 		return errors.New("stdio MCP command is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.callTimeout())
 	defer cancel()
 	if options != nil {
 		ctx = contextWithMCPClientContextAndRoots(ctx, options.ThreadID, options.TurnID, options.ItemID, options.Roots)
@@ -266,9 +293,10 @@ func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method stri
 	if err := c.ensureInitialized(ctx, options); err != nil {
 		return err
 	}
+	stderr := c.currentStderr()
 	response, err := c.doRequest(ctx, options, method, params)
 	if err != nil {
-		decorated := decorateMCPStdioError(err, &c.stderr)
+		decorated := decorateMCPStdioError(err, stderr)
 		if isMCPRemoteError(err) {
 			return decorated
 		}
@@ -284,6 +312,7 @@ func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method stri
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
+	cmd := c.currentCommand()
 	id := c.nextRequestID()
 	pending := &stdioPendingCall{
 		ID:      id,
@@ -300,7 +329,7 @@ func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, 
 		"params":  params,
 	}); err != nil {
 		c.unregisterPending(id)
-		c.failTransport(err)
+		c.failTransportFor(cmd, err)
 		return nil, err
 	}
 	select {
@@ -314,7 +343,7 @@ func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, 
 		return result.Response, nil
 	case <-ctx.Done():
 		c.unregisterPending(id)
-		c.failTransport(ctx.Err())
+		c.failTransportFor(cmd, ctx.Err())
 		return nil, ctx.Err()
 	}
 }
@@ -363,7 +392,11 @@ func (c *stdioClient) ensureInitialized(ctx context.Context, options *stdioCallO
 }
 
 func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCallOptions) error {
-	cmd := exec.Command(c.config.Command, c.config.Args...)
+	command := resolveMCPStdioCommand(c.config.Command, c.config.Env)
+	cmd := newMCPStdioCommand(command, c.config.Args...)
+	if cwd := strings.TrimSpace(c.config.CWD); cwd != "" {
+		cmd.Dir = cwd
+	}
 	cmd.Env = append(os.Environ(), envPairs(c.config.Env)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -373,9 +406,9 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	if err != nil {
 		return err
 	}
+	stderr := &stdioOutputBuffer{}
+	cmd.Stderr = stderr
 	c.mu.Lock()
-	c.stderr = bytes.Buffer{}
-	cmd.Stderr = &c.stderr
 	if err := cmd.Start(); err != nil {
 		c.mu.Unlock()
 		return err
@@ -383,22 +416,23 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	c.cmd = cmd
 	c.stdin = stdin
 	c.reader = bufio.NewReader(stdout)
+	c.stderr = stderr
 	c.started = true
 	c.initialized = false
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
 	c.mu.Unlock()
-	go c.readLoop(stdout)
+	go c.readLoop(cmd, stdout)
 
 	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParams(c.openAIForm))
 	if err != nil {
-		c.Close()
-		return err
+		_ = c.Close()
+		return decorateMCPStdioError(err, stderr)
 	}
 	if response != nil && response.Error != nil {
 		err := newMCPRemoteError("initialize", response.Error)
-		c.Close()
-		return err
+		_ = c.Close()
+		return decorateMCPStdioError(err, stderr)
 	}
 	if err := c.writeFrame(map[string]any{
 		"jsonrpc": "2.0",
@@ -406,7 +440,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		"params":  map[string]any{},
 	}); err != nil {
 		c.Close()
-		return decorateMCPStdioError(err, &c.stderr)
+		return decorateMCPStdioError(err, stderr)
 	}
 	c.mu.Lock()
 	c.initialized = true
@@ -414,16 +448,89 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	return nil
 }
 
-func (c *stdioClient) readLoop(reader io.Reader) {
+func resolveMCPStdioCommand(command string, env map[string]string) string {
+	command = strings.TrimSpace(command)
+	if runtime.GOOS != "windows" || command == "" || hasPathSeparator(command) || filepath.Ext(command) != "" {
+		return command
+	}
+	pathValue := ""
+	if env != nil {
+		pathValue = firstNonEmptyMCP(env["PATH"], env["Path"], env["path"])
+	}
+	if pathValue == "" {
+		pathValue = os.Getenv("PATH")
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		for _, ext := range []string{".exe", ".cmd", ".bat", ".com"} {
+			candidate := filepath.Join(dir, command+ext)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
+		}
+	}
+	return command
+}
+
+func hasPathSeparator(value string) bool {
+	return strings.ContainsAny(value, `/\`)
+}
+
+func (c *stdioClient) callTimeout() time.Duration {
+	if c != nil && c.config != nil {
+		if c.config.ToolTimeout > 0 {
+			return c.config.ToolTimeout
+		}
+		if c.config.StartupTimeout > 0 {
+			return c.config.StartupTimeout
+		}
+	}
+	return 15 * time.Second
+}
+
+func (c *stdioClient) currentStderr() *stdioOutputBuffer {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stderr
+}
+
+func (c *stdioClient) currentCommand() *exec.Cmd {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmd
+}
+
+func (c *stdioClient) isCurrentCommand(cmd *exec.Cmd) bool {
+	if c == nil || cmd == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmd == cmd
+}
+
+func (c *stdioClient) readLoop(cmd *exec.Cmd, reader io.Reader) {
 	buffered := bufio.NewReader(reader)
 	for {
 		data, err := readMCPFrame(buffered)
 		if err != nil {
-			c.failTransport(err)
+			c.failTransportFor(cmd, err)
+			return
+		}
+		if !c.isCurrentCommand(cmd) {
 			return
 		}
 		if err := c.handleReadFrame(data); err != nil {
-			c.failTransport(err)
+			c.failTransportFor(cmd, err)
 			return
 		}
 	}
@@ -474,21 +581,22 @@ func (c *stdioClient) Close() error {
 
 func (c *stdioClient) closeLocked() error {
 	pending := c.pendingCallsLocked()
+	stderr := c.stderr
 	var waitErr error
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
-		waitErr = c.cmd.Wait()
+		waitErr = waitMCPStdioCommand(c.cmd)
 	}
-	if waitErr != nil && c.stderr.Len() > 0 {
-		waitErr = fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(c.stderr.String()))
+	if message := strings.TrimSpace(stderr.String()); waitErr != nil && message != "" {
+		waitErr = fmt.Errorf("%w: %s", waitErr, message)
 	}
 	c.cmd = nil
 	c.stdin = nil
 	c.reader = nil
-	c.stderr = bytes.Buffer{}
+	c.stderr = nil
 	c.started = false
 	c.initialized = false
 	c.initializing = false
@@ -576,11 +684,15 @@ func (c *stdioClient) pendingCallsLocked() []*stdioPendingCall {
 	return calls
 }
 
-func (c *stdioClient) failTransport(err error) {
+func (c *stdioClient) failTransportFor(owner *exec.Cmd, err error) {
 	if err == nil {
 		err = io.ErrUnexpectedEOF
 	}
 	c.mu.Lock()
+	if owner != nil && c.cmd != owner {
+		c.mu.Unlock()
+		return
+	}
 	pending := c.pendingCallsLocked()
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
@@ -602,10 +714,26 @@ func (c *stdioClient) failTransport(err error) {
 	}
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = waitMCPStdioCommand(cmd)
 	}
 	for _, call := range pending {
 		call.Result <- stdioCallResult{Error: err}
+	}
+}
+
+func waitMCPStdioCommand(cmd *exec.Cmd) error {
+	if cmd == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		return context.DeadlineExceeded
 	}
 }
 
@@ -675,10 +803,10 @@ func writeMCPFrame(writer io.Writer, value any) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
-		return err
-	}
-	_, err = writer.Write(data)
+	// MCP stdio transports use one JSON-RPC message per line. Accepting the
+	// legacy Content-Length form on reads is useful for older local servers, but
+	// emitting it prevents standards-compliant SDKs from seeing initialize.
+	_, err = writer.Write(append(data, '\n'))
 	return err
 }
 
@@ -748,30 +876,38 @@ func mcpClientRequestResult(ctx context.Context, serverName string, elicitation 
 
 func readMCPFrame(reader *bufio.Reader) ([]byte, error) {
 	contentLength := -1
+	line, err := reader.ReadString('\n')
+	if err != nil && !(errors.Is(err, io.EOF) && len(line) > 0) {
+		return nil, err
+	}
+	line = strings.TrimRight(line, "\r\n")
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return []byte(trimmed), nil
+	}
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			break
 		}
 		key, value, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(key), "content-length") {
-			continue
+		if ok && strings.EqualFold(strings.TrimSpace(key), "content-length") {
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				return nil, err
+			}
+			contentLength = parsed
 		}
-		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		line, err = reader.ReadString('\n')
 		if err != nil {
 			return nil, err
 		}
-		contentLength = parsed
+		line = strings.TrimRight(line, "\r\n")
 	}
 	if contentLength < 0 {
 		return nil, errors.New("MCP response missing Content-Length")
 	}
 	data := make([]byte, contentLength)
-	_, err := io.ReadFull(reader, data)
+	_, err = io.ReadFull(reader, data)
 	return data, err
 }
 
@@ -786,7 +922,7 @@ func envPairs(values map[string]string) []string {
 	return out
 }
 
-func decorateMCPStdioError(err error, stderr *bytes.Buffer) error {
+func decorateMCPStdioError(err error, stderr *stdioOutputBuffer) error {
 	if stderr == nil || strings.TrimSpace(stderr.String()) == "" {
 		return err
 	}

@@ -156,15 +156,13 @@ func (w *processOutputNotifier) Write(p []byte) (int, error) {
 	if w == nil || w.writer == nil {
 		return len(p), nil
 	}
-	before := w.writer.Len()
-	n, err := w.writer.Write(p)
-	accepted := w.writer.BytesFrom(before)
+	n, accepted, capReached, err := w.writer.WriteAndAccepted(p)
 	if len(accepted) > 0 && w.notify != nil {
 		w.notify(NotificationProcessOutputDelta, &ProcessOutputDeltaNotification{
 			ProcessHandle: w.handle,
 			Stream:        w.stream,
 			DeltaBase64:   base64.StdEncoding.EncodeToString(accepted),
-			CapReached:    w.writer.CapReached(),
+			CapReached:    capReached,
 		})
 	}
 	return n, err

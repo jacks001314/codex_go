@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,9 +45,12 @@ import (
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
 	"codex_go/internal/skillprovider"
+	"codex_go/internal/state"
 	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
+
+	"github.com/google/uuid"
 )
 
 func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
@@ -305,23 +309,27 @@ func TestRuntimeRouterThreadListAndSearchOverlayRuntimeStatus(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterThreadStartRejectsPaginatedHistoryMode(t *testing.T) {
+func TestRuntimeRouterThreadStartAcceptsPaginatedHistoryMode(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
 	persistent := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:         t.TempDir(),
 		HistoryMode: ThreadHistoryPaginated,
 	}))
-	if persistent.Error == nil || persistent.Error.Code != -32601 || persistent.Error.Message != "paginated_threads is not supported yet" {
-		t.Fatalf("persistent start error = %+v", persistent.Error)
+	if persistent.Error != nil || persistent.Result.(*ThreadStartResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("persistent start = %+v", persistent)
 	}
 	ephemeral := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
 		CWD:         t.TempDir(),
 		HistoryMode: ThreadHistoryPaginated,
 		Ephemeral:   true,
 	}))
-	if ephemeral.Error == nil || ephemeral.Error.Code != -32601 || ephemeral.Error.Message != "paginated_threads is not supported yet" {
-		t.Fatalf("ephemeral start error = %+v", ephemeral.Error)
+	if ephemeral.Error != nil || ephemeral.Result.(*ThreadStartResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("ephemeral start = %+v", ephemeral)
+	}
+	ephemeralID := ephemeral.Result.(*ThreadStartResponse).Thread.ID
+	if _, err := uuid.Parse(ephemeralID); err != nil {
+		t.Fatalf("ephemeral thread id = %q, want UUID: %v", ephemeralID, err)
 	}
 }
 
@@ -348,6 +356,45 @@ func TestRuntimeRouterThreadResumeRejectsUnmaterializedThread(t *testing.T) {
 	resumeMetadataOnly := router.Handle(requestWithParams(t, IntID(3), MethodThreadResume, ThreadResumeParams{ThreadID: thread.ID, ExcludeTurns: true}))
 	if resumeMetadataOnly.Error == nil || resumeMetadataOnly.Error.Code != -32600 || !strings.Contains(resumeMetadataOnly.Error.Message, "no rollout found for thread id") {
 		t.Fatalf("resume excludeTurns error = %+v", resumeMetadataOnly.Error)
+	}
+}
+
+func TestRuntimeRouterThreadSetNameMaterializesStartRolloutPathForFork(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	now := fixedTime()
+	threadRouter.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, ThreadStatus: NewThreadStatusManager()})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if thread.Path == nil || strings.TrimSpace(*thread.Path) == "" {
+		t.Fatalf("thread/start path = %+v", thread.Path)
+	}
+	startPath := *thread.Path
+
+	now = now.Add(5 * time.Minute)
+	named := router.Handle(requestWithParams(t, IntID(2), MethodThreadNameSet, ThreadSetNameParams{
+		ThreadID: thread.ID,
+		Name:     "SDK lifecycle example",
+	}))
+	if named.Error != nil {
+		t.Fatalf("thread/name/set error: %+v", named.Error)
+	}
+	if _, err := os.Stat(startPath); err != nil {
+		t.Fatalf("stat start rollout path %s: %v", startPath, err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{ThreadID: thread.ID}))
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if forked.ForkedFromID == nil || *forked.ForkedFromID != thread.ID {
+		t.Fatalf("fork lineage = %+v, want source %s", forked, thread.ID)
 	}
 }
 
@@ -1592,10 +1639,10 @@ func TestRuntimeRouterThreadLoadedListUsesRuntimeLoadedStatus(t *testing.T) {
 		t.Fatalf("second page = %+v, expected second id %s with no next cursor", secondPage, expected[1])
 	}
 
-	missingCursor := expected[0] + "z"
+	missingCursor := "ffffffff-ffff-ffff-ffff-ffffffffffff"
 	insertPage := listLoaded(t, 7, ThreadLoadedListParams{Cursor: &missingCursor, Limit: &one})
-	if len(insertPage.Data) != 1 || insertPage.Data[0] != expected[1] {
-		t.Fatalf("insert cursor page = %+v, expected %s", insertPage, expected[1])
+	if len(insertPage.Data) != 0 || insertPage.NextCursor != nil {
+		t.Fatalf("missing cursor page = %+v, expected empty page after max UUID cursor", insertPage)
 	}
 
 	badCursor := "not-a-cursor"
@@ -2535,11 +2582,13 @@ func TestRuntimeRouterInitializeUserAgentOriginator(t *testing.T) {
 		clientName  string
 		envOverride *string
 		wantPrefix  string
+		wantSuffix  bool
 	}{
 		{
 			name:       "client name originator",
 			clientName: "codex_vscode",
 			wantPrefix: "codex_vscode/",
+			wantSuffix: true,
 		},
 		{
 			name:       "probe keeps default",
@@ -2556,6 +2605,7 @@ func TestRuntimeRouterInitializeUserAgentOriginator(t *testing.T) {
 			clientName:  "codex_vscode",
 			envOverride: stringPtr("codex_originator_via_env_var"),
 			wantPrefix:  "codex_originator_via_env_var/",
+			wantSuffix:  true,
 		},
 	}
 	for _, tc := range cases {
@@ -2574,6 +2624,12 @@ func TestRuntimeRouterInitializeUserAgentOriginator(t *testing.T) {
 			}
 			if _, err := ParseAppServerVersionFromUserAgent(result.UserAgent); err != nil {
 				t.Fatalf("ParseAppServerVersionFromUserAgent(%q) error = %v", result.UserAgent, err)
+			}
+			if version, err := ParseAppServerVersionFromUserAgent(result.UserAgent); err != nil || version != "0.0.0" {
+				t.Fatalf("parsed app-server version = %q, %v", version, err)
+			}
+			if tc.wantSuffix && !strings.Contains(result.UserAgent, fmt.Sprintf("(%s; 0.1.0)", tc.clientName)) {
+				t.Fatalf("user agent = %q, want client suffix", result.UserAgent)
 			}
 		})
 	}
@@ -6159,6 +6215,123 @@ func TestAppserverMCPElicitationHandlerRequestsServer(t *testing.T) {
 	}
 }
 
+func TestAppserverMCPElicitationHandlerUsesRustFallbackActions(t *testing.T) {
+	t.Run("cancelled", func(t *testing.T) {
+		broker := NewServerRequestBroker()
+		broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {}))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		response, err := (&appserverMCPElicitationHandler{broker: broker}).HandleMCPElicitation(ctx, &mcp.MCPElicitationRequest{ServerName: "docs"})
+		if err != nil || response == nil || response.Action != mcp.MCPElicitationActionCancel || response.Meta != nil {
+			t.Fatalf("response = %#v, error = %v", response, err)
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		broker := NewServerRequestBroker()
+		broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+			_, _ = broker.Resolve(ErrorResponse(request.ID, -32603, "bad response", nil))
+		}))
+		response, err := (&appserverMCPElicitationHandler{broker: broker}).HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{ServerName: "docs"})
+		if err != nil {
+			t.Fatalf("HandleMCPElicitation() error = %v", err)
+		}
+		if response == nil || response.Action != mcp.MCPElicitationActionDecline || response.Meta != nil {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+}
+
+func TestGuardianMCPElicitationValidationMatchesRust(t *testing.T) {
+	base := func() *mcp.MCPElicitationRequest {
+		return &mcp.MCPElicitationRequest{Method: "elicitation/create", RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}}, Meta: map[string]any{"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call", "tool_name": "access_browser_origin", "tool_params": map[string]any{"origin": "https://example.com"}}}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*mcp.MCPElicitationRequest)
+		want   string
+	}{
+		{name: "url", mutate: func(r *mcp.MCPElicitationRequest) { r.URL = "https://example.com" }, want: "only supports form"},
+		{name: "approval kind", mutate: func(r *mcp.MCPElicitationRequest) { r.Meta.(map[string]any)["codex_approval_kind"] = "tool_suggestion" }, want: "mcp_tool_call approval kind"},
+		{name: "schema", mutate: func(r *mcp.MCPElicitationRequest) {
+			r.RequestedSchema = map[string]any{"properties": map[string]any{"confirmed": map[string]any{"type": "boolean"}}}
+		}, want: "empty form schemas"},
+		{name: "tool name", mutate: func(r *mcp.MCPElicitationRequest) { delete(r.Meta.(map[string]any), "tool_name") }, want: "non-empty tool_name"},
+		{name: "tool params", mutate: func(r *mcp.MCPElicitationRequest) { r.Meta.(map[string]any)["tool_params"] = "bad" }, want: "must be an object"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := base()
+			tc.mutate(r)
+			if got := validateGuardianMCPElicitation(r); !strings.Contains(got, tc.want) {
+				t.Fatalf("validation = %q", got)
+			}
+		})
+	}
+	withoutOptIn := base()
+	delete(withoutOptIn.Meta.(map[string]any), "codex_request_type")
+	if guardianMCPApprovalRequested(withoutOptIn) {
+		t.Fatal("request without codex_request_type should not opt in")
+	}
+}
+
+func TestGuardianMCPElicitationInvalidShapeAutoDeclines(t *testing.T) {
+	request := &mcp.MCPElicitationRequest{Method: "elicitation/create", Meta: map[string]any{"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call"}}
+	response, err := (&appserverMCPElicitationHandler{}).HandleMCPElicitation(context.Background(), request)
+	if err != nil || response.Action != mcp.MCPElicitationActionDecline {
+		t.Fatalf("response = %#v, error = %v", response, err)
+	}
+	meta, ok := response.Meta.(map[string]any)
+	if !ok || meta["approvals_reviewer"] != "auto_review" {
+		t.Fatalf("meta = %#v", response.Meta)
+	}
+}
+
+type guardianReviewerFunc func(context.Context, string, string, string, state.Action) (state.ReviewDecision, string, error)
+
+func (f guardianReviewerFunc) Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+	return f(ctx, threadID, turnID, targetItemID, action)
+}
+
+func TestGuardianMCPElicitationUsesDedicatedReviewer(t *testing.T) {
+	request := &mcp.MCPElicitationRequest{
+		ServerName: "codex_apps", ThreadID: "thread-1", TurnID: "turn-1", ElicitationID: "call-1", Method: "elicitation/create",
+		RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Meta: map[string]any{
+			"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call",
+			"tool_name": "calendar_create", "tool_params": map[string]any{"title": "Lunch"}, "connector_id": "calendar", "connector_name": "Calendar", "tool_title": "Create event",
+		},
+	}
+	for _, tc := range []struct {
+		name     string
+		decision state.ReviewDecision
+		want     mcp.MCPElicitationAction
+	}{
+		{name: "approved", decision: state.DecisionApproved, want: mcp.MCPElicitationActionAccept},
+		{name: "denied", decision: state.DecisionDenied, want: mcp.MCPElicitationActionDecline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reviewer := guardianReviewerFunc(func(_ context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+				arguments, _ := action.Extra["arguments"].(map[string]any)
+				if threadID != "thread-1" || turnID != "turn-1" || targetItemID != "call-1" || action.Server != "codex_apps" || action.ToolName != "calendar_create" || arguments["title"] != "Lunch" || action.ConnectorID != "calendar" || action.ConnectorName != "Calendar" || action.ToolTitle != "Create event" {
+					t.Fatalf("context=%s/%s/%s action=%#v", threadID, turnID, targetItemID, action)
+				}
+				return tc.decision, "reviewed", nil
+			})
+			response, err := (&appserverMCPElicitationHandler{reviewer: reviewer}).HandleMCPElicitation(context.Background(), request)
+			if err != nil || response.Action != tc.want {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+			meta, ok := response.Meta.(map[string]any)
+			if !ok || meta["approvals_reviewer"] != "auto_review" {
+				t.Fatalf("meta=%#v", response.Meta)
+			}
+			if tc.want == mcp.MCPElicitationActionDecline && meta["reason"] != "reviewed" {
+				t.Fatalf("meta=%#v", meta)
+			}
+		})
+	}
+}
+
 func TestAppserverMCPElicitationParamsURLModeAndIDFallback(t *testing.T) {
 	params := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
 		ServerName: "codex_apps",
@@ -7744,16 +7917,16 @@ func TestRuntimeRouterToolRouterForTurnExposesMCPStatusTools(t *testing.T) {
 	if !visible[tool.ToolSearchName] {
 		t.Fatalf("model-visible specs = %#v, missing tool_search", visible)
 	}
-	for _, name := range []string{"drive.read", "codex_apps.create_event"} {
+	for _, name := range []string{"mcp__drive.read", "mcp__codex_apps__calendar.create_event"} {
 		if visible[name] {
 			t.Fatalf("model-visible specs = %#v, %s should be deferred", visible, name)
 		}
 	}
 
 	driveSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "drive files")
-	driveRead, ok := driveSpecs["drive.read"]
+	driveRead, ok := driveSpecs["mcp__drive.read"]
 	if !ok {
-		t.Fatalf("drive search specs = %#v, missing drive.read", sortedToolSpecKeysForTest(driveSpecs))
+		t.Fatalf("drive search specs = %#v, missing mcp__drive.read", sortedToolSpecKeysForTest(driveSpecs))
 	}
 	if !driveRead.Parallel {
 		t.Fatalf("drive.read Parallel = false, want readOnlyHint to carry through")
@@ -7766,20 +7939,20 @@ func TestRuntimeRouterToolRouterForTurnExposesMCPStatusTools(t *testing.T) {
 	}
 
 	calendarSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "calendar event")
-	calendarCreate, ok := calendarSpecs["codex_apps.create_event"]
+	calendarCreate, ok := calendarSpecs["mcp__codex_apps__calendar.create_event"]
 	if !ok {
-		t.Fatalf("calendar search specs = %#v, missing codex_apps.create_event", sortedToolSpecKeysForTest(calendarSpecs))
+		t.Fatalf("calendar search specs = %#v, missing mcp__codex_apps__calendar.create_event", sortedToolSpecKeysForTest(calendarSpecs))
 	}
 	if !strings.Contains(calendarCreate.Description, "Calendar Plugin") {
 		t.Fatalf("calendar description = %q, missing plugin provenance", calendarCreate.Description)
 	}
-	for _, name := range []string{"codex_apps.send_mail", "codex_apps.synthetic_link"} {
+	for _, name := range []string{"mcp__codex_apps__mail.send_mail", "mcp__codex_apps__mail.synthetic_link"} {
 		if _, ok := calendarSpecs[name]; ok {
 			t.Fatalf("calendar search specs = %#v, should not include %s", sortedToolSpecKeysForTest(calendarSpecs), name)
 		}
 	}
 	mailSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "mail")
-	if _, ok := mailSpecs["codex_apps.send_mail"]; ok {
+	if _, ok := mailSpecs["mcp__codex_apps__mail.send_mail"]; ok {
 		t.Fatalf("mail search specs = %#v, disabled connector should not be exposed", sortedToolSpecKeysForTest(mailSpecs))
 	}
 }
@@ -7918,6 +8091,37 @@ func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	}
 	if len(items.Data) != 1 || threadItemWireType(&items.Data[0]) != "commandExecution" || items.Data[0].ID != "call-unified" {
 		t.Fatalf("visible persisted items = %#v", items.Data)
+	}
+}
+
+func TestRuntimeRouterMCPToolStartedMapsToRustV2Notification(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	startedAt := time.Now().UTC()
+
+	notify := router.runtimeToolStartedNotifier("thread-mcp", "turn-mcp", t.TempDir(), false)
+	notify(context.Background(), &tool.Invocation{
+		CallID:   "call-mcp",
+		ToolName: tool.NamespacedName("mcp__geogebra", "geogebra_create_point"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"label":"A"}`},
+	}, startedAt)
+
+	notifications := sink.List()
+	if len(notifications) != 1 || notifications[0].Method != NotificationItemStarted {
+		t.Fatalf("MCP start notifications = %#v", notifications)
+	}
+	started, ok := notifications[0].Params.(*ItemStartedNotification)
+	if !ok {
+		t.Fatalf("MCP start notification = %#v", notifications[0])
+	}
+	if started.Item["id"] != "call-mcp" || started.Item["type"] != "mcpToolCall" || started.Item["server"] != "geogebra" || started.Item["tool"] != "geogebra_create_point" || started.Item["status"] != "inProgress" {
+		t.Fatalf("MCP start item = %#v", started.Item)
+	}
+	arguments, ok := started.Item["arguments"].(map[string]any)
+	if !ok || arguments["label"] != "A" {
+		t.Fatalf("MCP start arguments = %#v", started.Item["arguments"])
 	}
 }
 
@@ -13216,6 +13420,29 @@ func TestRuntimeRouterTurnStartUsesSelectedCapabilitySkillRoots(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterMCPRootsIncludeLocalSelectedCapabilityRoots(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	capabilityRoot := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), DefaultCWD: workspaceRoot})
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: workspaceRoot,
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{
+			{ID: "local-cap", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+			{ID: "duplicate", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: workspaceRoot}},
+			{ID: "remote-cap", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "remote-missing", Path: "/remote/skills"}},
+		},
+	}))
+	if started.Error != nil {
+		t.Fatalf("thread start error: %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	paths := router.mcpRootPathsForThread(threadID)
+	if len(paths) != 2 || !slices.Contains(paths, workspaceRoot) || !slices.Contains(paths, capabilityRoot) {
+		t.Fatalf("MCP roots = %#v", paths)
+	}
+}
+
 func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLikeRust(t *testing.T) {
 	capabilityRoot := t.TempDir()
 	skillDir := filepath.Join(capabilityRoot, "lint-fix")
@@ -16317,7 +16544,7 @@ func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 		t.Fatalf("turn/start error: %+v", response.Error)
 	}
 	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
-	mcpItemID := "tool-output-" + safeIdentifier(turnID) + "-mcp-analytics"
+	mcpItemID := "mcp-analytics"
 	completed := waitForItemCompleted(t, sink, mcpItemID)
 	if completed.Item["type"] != "mcpToolCall" || completed.Item["server"] != "sdk" || completed.Item["tool"] != "echo" {
 		t.Fatalf("completed MCP item = %#v", completed.Item)
@@ -19503,6 +19730,10 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 	var recordedAuth string
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		recordedAuth = r.Header.Get("Authorization")
 		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
 			t.Fatalf("Decode request body error = %v", err)
@@ -19517,7 +19748,7 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 		)))
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-app\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n"
+	configBody := "model = \"gpt-app\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("Write config error = %v", err)
 	}
@@ -19529,6 +19760,7 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 		ThreadStatus: NewThreadStatusManager(),
 		HTTPClient:   server.Client(),
 	})
+	router.configureMCPFromConfig()
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -19679,7 +19911,7 @@ func TestRuntimeRouterAPIKeyOpenAIProviderIncludesHostedImageGeneration(t *testi
 		)))
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\nenable_request_compression = false\n"
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\napps = false\nenable_request_compression = false\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("Write config error = %v", err)
 	}
@@ -19728,6 +19960,10 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenEx
 	}
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
 			t.Fatalf("Decode request body error = %v", err)
 		}
@@ -19741,7 +19977,7 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenEx
 		)))
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\nimagegenext = true\n"
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\nimagegenext = true\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("Write config error = %v", err)
 	}
@@ -19753,6 +19989,7 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenEx
 		ThreadStatus: NewThreadStatusManager(),
 		HTTPClient:   server.Client(),
 	})
+	router.configureMCPFromConfig()
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -19791,6 +20028,10 @@ func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
 		t.Fatalf("Save auth error = %v", err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("Decode request body error = %v", err)
@@ -19803,7 +20044,7 @@ func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
 		)))
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\n"
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("Write config error = %v", err)
 	}
@@ -19815,6 +20056,7 @@ func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
 		ThreadStatus: NewThreadStatusManager(),
 		HTTPClient:   server.Client(),
 	})
+	router.configureMCPFromConfig()
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{

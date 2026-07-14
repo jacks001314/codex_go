@@ -59,16 +59,29 @@ func (c McpToolCallCell) DisplayLines(width int) []string {
 	if c.Result != nil {
 		header = "Called"
 	}
-	line := "\u2022 " + header + " " + formatMcpInvocation(c.Invocation)
-	lines := tui.AdaptiveWrapLine(line, tui.WrapOptions{
-		Width:            width,
-		SubsequentIndent: "  ",
-		BreakWords:       true,
-	})
+	headerLine := "\u2022 " + header
+	invocation := formatMcpInvocation(c.Invocation)
+	inlineInvocation := tui.DisplayWidth(headerLine+" "+invocation) <= width
+	lines := []string{}
+	if inlineInvocation {
+		lines = append(lines, headerLine+" "+invocation)
+	} else {
+		lines = append(lines, headerLine)
+		lines = append(lines, tui.AdaptiveWrapLine(invocation, tui.WrapOptions{
+			Width:            width,
+			InitialIndent:    "  \u2514 ",
+			SubsequentIndent: "    ",
+			BreakWords:       true,
+		})...)
+	}
+	detailPrefix := "  \u2514 "
+	if !inlineInvocation {
+		detailPrefix = "    "
+	}
 	for _, detail := range c.detailLines(width) {
 		lines = append(lines, tui.AdaptiveWrapLine(detail, tui.WrapOptions{
 			Width:            width,
-			InitialIndent:    "  \u2514 ",
+			InitialIndent:    detailPrefix,
 			SubsequentIndent: "    ",
 			BreakWords:       true,
 		})...)
@@ -139,7 +152,24 @@ type McpResourceTemplate struct {
 	URITemplate string
 }
 
-func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) PlainHistoryCell {
+type McpToolsOutputCell struct {
+	Lines []string
+}
+
+func (c McpToolsOutputCell) DisplayLines(width int) []string {
+	width = max(width, 1)
+	out := make([]string, 0, len(c.Lines))
+	for _, line := range c.Lines {
+		out = append(out, wrapMcpInventoryLine(line, width)...)
+	}
+	return out
+}
+
+func (c McpToolsOutputCell) RawLines() []string {
+	return plainLines(c.Lines)
+}
+
+func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpToolsOutputCell {
 	lines := []string{"/mcp", "", "\U0001f50c  MCP Tools", ""}
 	statuses = append([]McpServerStatus(nil), statuses...)
 	sort.Slice(statuses, func(i, j int) bool {
@@ -171,7 +201,7 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) Plai
 		}
 		lines = append(lines, "")
 	}
-	return NewPlainHistoryCell(lines)
+	return McpToolsOutputCell{Lines: lines}
 }
 
 func NewMcpInventoryLoading() PlainHistoryCell {
@@ -211,6 +241,25 @@ func formatMcpResourceTemplates(templates []McpResourceTemplate) string {
 		parts = append(parts, label)
 	}
 	return strings.Join(parts, ", ")
+}
+
+func wrapMcpInventoryLine(line string, width int) []string {
+	for _, prefix := range []string{
+		"    \u2022 Tools: ",
+		"    \u2022 Resources: ",
+		"    \u2022 Resource templates: ",
+	} {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		return tui.AdaptiveWrapLine(strings.TrimPrefix(line, prefix), tui.WrapOptions{
+			Width:            width,
+			InitialIndent:    prefix,
+			SubsequentIndent: strings.Repeat(" ", len([]rune(prefix))),
+			BreakWords:       true,
+		})
+	}
+	return []string{line}
 }
 
 func truncateToolResultLines(text string, width int) []string {

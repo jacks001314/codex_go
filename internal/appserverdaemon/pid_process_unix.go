@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -91,6 +92,11 @@ func forceTerminatePIDProcess(pid uint32, processGroup bool) error {
 }
 
 func pidProcessExists(pid uint32) bool {
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		if fields := strings.Fields(string(data)); len(fields) > 2 && fields[2] == "Z" {
+			return false
+		}
+	}
 	err := syscall.Kill(int(pid), 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }

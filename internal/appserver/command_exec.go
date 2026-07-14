@@ -157,6 +157,7 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 	if params.TTY {
 		return s.executePTYWithConnection(execCtx, cancel, connectionID, params, cmd, stdout, stderr, notify)
 	}
+	prepareCommandExecProcess(cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if params.StreamStdoutStderr {
@@ -343,6 +344,7 @@ func (s *CommandExecService) TerminateWithConnection(connectionID string, params
 	if active.cancel != nil {
 		active.cancel()
 	}
+	terminateCommandExecProcess(active)
 	return &CommandExecTerminateResponse{}, nil
 }
 
@@ -598,6 +600,7 @@ func (s *CommandExecService) ConnectionClosed(connectionID string) {
 		if active.cancel != nil {
 			active.cancel()
 		}
+		terminateCommandExecProcess(active)
 	}
 }
 
@@ -762,15 +765,13 @@ func (w *commandExecOutputNotifier) Write(p []byte) (int, error) {
 	if w == nil || w.writer == nil {
 		return len(p), nil
 	}
-	before := w.writer.Len()
-	n, err := w.writer.Write(p)
-	accepted := w.writer.BytesFrom(before)
+	n, accepted, capReached, err := w.writer.WriteAndAccepted(p)
 	if len(accepted) > 0 && w.notify != nil {
 		w.notify(NotificationCommandExecOutputDelta, &CommandExecOutputDeltaNotification{
 			ProcessID:   w.processID,
 			Stream:      w.stream,
 			DeltaBase64: base64.StdEncoding.EncodeToString(accepted),
-			CapReached:  w.writer.CapReached(),
+			CapReached:  capReached,
 		})
 	}
 	return n, err
@@ -858,6 +859,7 @@ func commandExecEnvKey(key string) string {
 
 type commandExecOutputBuffer struct {
 	limit      *int
+	mu         sync.Mutex
 	data       bytes.Buffer
 	capReached bool
 }
@@ -867,17 +869,29 @@ func newCommandExecOutputBuffer(limit *int) *commandExecOutputBuffer {
 }
 
 func (b *commandExecOutputBuffer) Write(p []byte) (int, error) {
+	n, _, _, err := b.WriteAndAccepted(p)
+	return n, err
+}
+
+func (b *commandExecOutputBuffer) WriteAndAccepted(p []byte) (int, []byte, bool, error) {
+	if b == nil {
+		return len(p), nil, false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	before := b.data.Len()
 	originalLen := len(p)
 	if b.limit == nil {
 		_, _ = b.data.Write(p)
-		return originalLen, nil
+		return originalLen, append([]byte(nil), b.data.Bytes()[before:]...), b.capReached, nil
 	}
 	remaining := *b.limit - b.data.Len()
 	if remaining <= 0 {
 		if originalLen > 0 {
 			b.capReached = true
 		}
-		return originalLen, nil
+		return originalLen, nil, b.capReached, nil
 	}
 	if len(p) > remaining {
 		b.capReached = true
@@ -886,13 +900,15 @@ func (b *commandExecOutputBuffer) Write(p []byte) (int, error) {
 	if len(p) > 0 {
 		_, _ = b.data.Write(p)
 	}
-	return originalLen, nil
+	return originalLen, append([]byte(nil), b.data.Bytes()[before:]...), b.capReached, nil
 }
 
 func (b *commandExecOutputBuffer) String() string {
 	if b == nil {
 		return ""
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.data.String()
 }
 
@@ -900,11 +916,18 @@ func (b *commandExecOutputBuffer) Len() int {
 	if b == nil {
 		return 0
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.data.Len()
 }
 
 func (b *commandExecOutputBuffer) BytesFrom(offset int) []byte {
-	if b == nil || offset >= b.data.Len() {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if offset >= b.data.Len() {
 		return nil
 	}
 	if offset < 0 {
@@ -917,7 +940,12 @@ func (b *commandExecOutputBuffer) BytesFrom(offset int) []byte {
 }
 
 func (b *commandExecOutputBuffer) CapReached() bool {
-	return b != nil && b.capReached
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.capReached
 }
 
 var _ io.Writer = (*commandExecOutputBuffer)(nil)

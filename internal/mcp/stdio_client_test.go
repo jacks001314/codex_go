@@ -6,13 +6,65 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 )
+
+type testWriteCloser struct {
+	bytes.Buffer
+}
+
+func (w *testWriteCloser) Close() error {
+	return nil
+}
+
+func TestWriteMCPFrameUsesNewlineDelimitedJSON(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeMCPFrame(&output, map[string]any{"jsonrpc": "2.0", "id": 1}); err != nil {
+		t.Fatalf("writeMCPFrame() error = %v", err)
+	}
+	got := output.String()
+	if strings.Contains(strings.ToLower(got), "content-length") {
+		t.Fatalf("writeMCPFrame() emitted legacy headers: %q", got)
+	}
+	if !strings.HasSuffix(got, "\n") || strings.Count(got, "\n") != 1 {
+		t.Fatalf("writeMCPFrame() = %q, want one newline-delimited JSON message", got)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &decoded); err != nil {
+		t.Fatalf("writeMCPFrame() emitted invalid JSON: %v", err)
+	}
+}
+
+func TestReadMCPFrameSupportsNewlineDelimitedJSON(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1}\r\n"))
+	data, err := readMCPFrame(reader)
+	if err != nil {
+		t.Fatalf("readMCPFrame() error = %v", err)
+	}
+	if got, want := string(data), "{\"jsonrpc\":\"2.0\",\"id\":1}"; got != want {
+		t.Fatalf("readMCPFrame() = %q, want %q", got, want)
+	}
+}
+
+func TestReadMCPFrameSupportsLegacyContentLength(t *testing.T) {
+	payload := "{\"jsonrpc\":\"2.0\",\"id\":1}"
+	input := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(payload)) + "\r\n\r\n" + payload
+	data, err := readMCPFrame(bufio.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("readMCPFrame() error = %v", err)
+	}
+	if got := string(data); got != payload {
+		t.Fatalf("readMCPFrame() = %q, want %q", got, payload)
+	}
+}
 
 func TestMCPClientInitializeParamsUseCurrentProtocol(t *testing.T) {
 	params := mcpClientInitializeParams(false)
@@ -373,6 +425,138 @@ func TestStdioClientMultiplexesConcurrentToolCalls(t *testing.T) {
 		if len(results[i].Content) != 1 || results[i].Content[0].Text != want {
 			t.Fatalf("result[%d] = %#v, want %q", i, results[i], want)
 		}
+	}
+}
+
+func TestStdioOutputBufferSupportsConcurrentCaptureAndInspection(t *testing.T) {
+	buffer := &stdioOutputBuffer{}
+	const writes = 500
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < writes; i++ {
+			if _, err := buffer.Write([]byte("stderr\n")); err != nil {
+				t.Errorf("Write() error = %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < writes; i++ {
+			_ = buffer.String()
+		}
+	}()
+	wg.Wait()
+
+	if got, want := len(buffer.String()), writes*len("stderr\n"); got != want {
+		t.Fatalf("captured stderr length = %d, want %d", got, want)
+	}
+}
+
+func TestStdioClientStderrCaptureIsScopedToProcess(t *testing.T) {
+	client := &stdioClient{}
+	first := &stdioOutputBuffer{}
+	client.stderr = first
+
+	if _, err := first.Write([]byte("first process")); err != nil {
+		t.Fatalf("first Write() error = %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if client.currentStderr() != nil {
+		t.Fatal("current stderr was not cleared")
+	}
+	second := &stdioOutputBuffer{}
+	client.stderr = second
+	if _, err := first.Write([]byte(" still draining")); err != nil {
+		t.Fatalf("draining Write() error = %v", err)
+	}
+	if _, err := second.Write([]byte("second process")); err != nil {
+		t.Fatalf("second Write() error = %v", err)
+	}
+
+	if got := first.String(); got != "first process still draining" {
+		t.Fatalf("first stderr = %q", got)
+	}
+	if got := client.currentStderr().String(); got != "second process" {
+		t.Fatalf("current stderr = %q", got)
+	}
+}
+
+func TestStdioClientIgnoresFailureFromSupersededProcess(t *testing.T) {
+	oldCommand := &exec.Cmd{}
+	currentCommand := &exec.Cmd{}
+	stdin := &testWriteCloser{}
+	client := &stdioClient{
+		cmd:         currentCommand,
+		stdin:       stdin,
+		started:     true,
+		initialized: true,
+		pending:     map[int64]*stdioPendingCall{},
+	}
+
+	client.failTransportFor(oldCommand, io.ErrUnexpectedEOF)
+
+	if client.currentCommand() != currentCommand {
+		t.Fatal("superseded process failure cleared the current command")
+	}
+	if client.stdin != stdin || !client.started || !client.initialized {
+		t.Fatal("superseded process failure changed the current transport state")
+	}
+}
+
+func TestStdioClientIgnoresFrameFromSupersededProcess(t *testing.T) {
+	oldCommand := &exec.Cmd{}
+	currentCommand := &exec.Cmd{}
+	pending := &stdioPendingCall{ID: 7, Result: make(chan stdioCallResult, 1)}
+	client := &stdioClient{
+		cmd:          currentCommand,
+		pending:      map[int64]*stdioPendingCall{7: pending},
+		pendingOrder: []int64{7},
+	}
+	var input bytes.Buffer
+	if err := writeMCPFrame(&input, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      7,
+		"result":  map[string]any{"from": "old process"},
+	}); err != nil {
+		t.Fatalf("writeMCPFrame() error = %v", err)
+	}
+
+	client.readLoop(oldCommand, &input)
+
+	select {
+	case result := <-pending.Result:
+		t.Fatalf("superseded process delivered response: %#v", result)
+	default:
+	}
+	if client.pending[7] != pending {
+		t.Fatal("superseded process removed the current pending request")
+	}
+}
+
+func TestResolveMCPStdioCommandWindowsPrefersCmdOverShellShims(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows command resolution")
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"npx", "npx.ps1", "npx.cmd"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+
+	got := resolveMCPStdioCommand("npx", map[string]string{"PATH": dir})
+	want := filepath.Join(dir, "npx.cmd")
+	if !strings.EqualFold(got, want) {
+		t.Fatalf("resolveMCPStdioCommand() = %q, want %q", got, want)
+	}
+	if got := resolveMCPStdioCommand(filepath.Join(dir, "npx"), map[string]string{"PATH": dir}); got != filepath.Join(dir, "npx") {
+		t.Fatalf("path command was rewritten to %q", got)
 	}
 }
 

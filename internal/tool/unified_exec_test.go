@@ -137,6 +137,38 @@ func TestUnifiedExecManagerReusesTTYSessionViaWriteStdinLikeRust(t *testing.T) {
 	}
 }
 
+func TestUnifiedExecManagerPausesCollectionForOutOfBandElicitation(t *testing.T) {
+	manager := NewUnifiedExecManager()
+	defer manager.Close()
+	manager.SetThreadElicitationPaused("thread-1", true)
+	type result struct {
+		value *ShellResult
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := manager.Exec(context.Background(), &ShellRequest{
+			Command: unifiedExecHelperCommand("immediate"), CWD: t.TempDir(), YieldTimeMS: 1000,
+			UnifiedExecThreadID: "thread-1", UnifiedExecTurnID: "turn-1",
+		}, "paused-call")
+		done <- result{value: value, err: err}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("collect returned while paused: %#v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	manager.SetThreadElicitationPaused("thread-1", false)
+	select {
+	case got := <-done:
+		if got.err != nil || got.value == nil || !got.value.HasExitCode || got.value.ExitCode != 7 {
+			t.Fatalf("result=%#v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("collect did not resume")
+	}
+}
+
 func TestUnifiedExecLifecycleEventsMatchRust(t *testing.T) {
 	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
 	defer manager.Close()

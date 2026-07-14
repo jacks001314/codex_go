@@ -403,6 +403,26 @@ func (s *ReviewStore) Complete(id string, assessment Assessment) (*Event, error)
 	return cloneEvent(completed), nil
 }
 
+func (s *ReviewStore) Timeout(id string) (*Event, error) {
+	return s.finish(id, func(event *Event, now time.Time) *Event { return event.Timeout(now) })
+}
+
+func (s *ReviewStore) Abort(id string, reason string) (*Event, error) {
+	return s.finish(id, func(event *Event, now time.Time) *Event { return event.Aborted(now, reason) })
+}
+
+func (s *ReviewStore) finish(id string, transition func(*Event, time.Time) *Event) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	event := s.events[id]
+	if event == nil {
+		return nil, fmt.Errorf("%w: review not found", ErrInvalidGuardianRequest)
+	}
+	completed := transition(event, s.now())
+	s.events[id] = completed
+	return cloneEvent(completed), nil
+}
+
 func (s *ReviewStore) Get(id string) (*Event, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

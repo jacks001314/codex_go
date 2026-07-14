@@ -12,6 +12,37 @@ import (
 
 const FileScheme = "file"
 
+func CrossPlatformBase(value string) string {
+	value = strings.TrimRight(value, `/\`)
+	if value == "" {
+		return ""
+	}
+	if index := strings.LastIndexAny(value, `/\`); index >= 0 {
+		return value[index+1:]
+	}
+	return value
+}
+
+func CrossPlatformSlash(value string) string {
+	return path.Clean(strings.ReplaceAll(value, `\`, `/`))
+}
+
+func CrossPlatformRelative(root string, value string) (string, bool) {
+	root = CrossPlatformSlash(root)
+	value = CrossPlatformSlash(value)
+	if root == "." || value == "." {
+		return "", false
+	}
+	if strings.EqualFold(root, value) {
+		return ".", true
+	}
+	prefix := strings.TrimSuffix(root, "/") + "/"
+	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)], prefix) {
+		return "", false
+	}
+	return value[len(prefix):], true
+}
+
 type PathConvention string
 
 const (
@@ -182,6 +213,10 @@ func (u *PathURI) HostNativePath() (string, error) {
 	convention := ConventionPosix
 	if runtime.GOOS == "windows" {
 		convention = ConventionWindows
+	}
+	inferred, ok := u.InferConvention()
+	if !ok || inferred != convention {
+		return "", &ParseError{Reason: "path URI uses a foreign path convention", Path: u.String()}
 	}
 	rendered, err := LegacyAppPathStringFromURI(u, convention)
 	if err != nil {

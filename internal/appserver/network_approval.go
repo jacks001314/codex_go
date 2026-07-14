@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -690,10 +689,7 @@ func (r *RuntimeRouter) clientInfoForConnection(connectionID string) ClientInfo 
 }
 
 func appServerBuildVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "0.0.0"
+	return appServerVersion()
 }
 
 func emitNetworkProxyAuditEvent(event network.ProxyPolicyAuditEvent) {

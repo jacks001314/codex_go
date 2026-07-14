@@ -205,7 +205,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink}
-	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg)
+	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var imageGenerationOptions *turn.ImageGenerationOptions
 	var hostedTools []any
 	if req.Exec.Subcommand != "review" {
@@ -373,10 +373,18 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		if event.Item == nil || event.Item.Type == "" || event.Item.Type == "agent_message" || event.Item.Type == "reasoning" {
 			return
 		}
+		if event.Item.Type == "tool_search_call" {
+			return
+		}
 		// Rust creates command cells from the execution lifecycle, after the
 		// complete command is known. The model's output-added event can carry
 		// empty arguments and must not create a generic exec_command cell.
 		if event.Item.Name == tool.DefaultExecCommandToolName {
+			return
+		}
+		// MCP calls get their canonical lifecycle item from ToolStarted, once
+		// routing has resolved the raw server and tool names.
+		if streamAgentItemLooksLikeMCP(event.Item) {
 			return
 		}
 		item := protocolItemFromStreamAgentItem(event.Item)
@@ -391,7 +399,14 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 }
 
 func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *tool.Invocation, _ time.Time) {
-	if c == nil || invocation == nil || invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
+	if c == nil || invocation == nil {
+		return
+	}
+	if invocationLooksLikeMCP(invocation) {
+		c.emit(protocol.ItemStarted(mcpToolCallProtocolItem(&turn.ToolExecutionResult{Invocation: invocation}, "in_progress")))
+		return
+	}
+	if invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
 		return
 	}
 	command := commandFromShellInvocation(invocation)
@@ -631,14 +646,18 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	return turn.BuildToolRouter(options)
 }
 
-func (r *Runner) configuredMCPRuntimeForConfig(cfg *config.Config) (*mcp.MCPService, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+func (r *Runner) configuredMCPRuntimeForConfig(cfg *config.Config, resolvedAuth ...*auth.ResolvedAuth) (*mcp.MCPService, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
 	if r == nil || cfg == nil {
 		return nil, nil, nil
 	}
 	if r.MCPService != nil || len(r.MCPTools) > 0 || len(r.MCPConnectors) > 0 {
 		return r.MCPService, append([]mcp.RuntimeToolInfo(nil), r.MCPTools...), append([]mcp.RuntimeConnector(nil), r.MCPConnectors...)
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValues(cfg.Values, r.CodexHome)
+	var runtimeAuth *mcp.RuntimeAuth
+	if len(resolvedAuth) > 0 && resolvedAuth[0] != nil {
+		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolvedAuth[0].Auth)
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuth(cfg.Values, r.CodexHome, runtimeAuth)
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
 		return nil, nil, nil
 	}
@@ -1629,6 +1648,21 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 	}
 }
 
+func streamAgentItemLooksLikeMCP(item *model.AgentItem) bool {
+	if item == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(item.Namespace), mcp.LegacyMCPToolNamePrefix) ||
+		strings.HasPrefix(strings.TrimSpace(item.Name), mcp.LegacyMCPToolNamePrefix)
+}
+
+func invocationLooksLikeMCP(invocation *tool.Invocation) bool {
+	return invocation != nil && strings.HasPrefix(
+		strings.TrimSpace(invocation.ToolName.Namespace),
+		mcp.LegacyMCPToolNamePrefix,
+	)
+}
+
 func protocolWebSearchItemFromAgentItem(item *model.AgentItem) protocol.ThreadItem {
 	if item == nil {
 		return protocol.ThreadItem{}
@@ -1846,6 +1880,9 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		item := mcpToolCallProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
 	}
+	if execution.Invocation.Payload.Kind == tool.PayloadToolSearch {
+		return nil
+	}
 	if isWriteStdinExecution(execution) {
 		return nil
 	}
@@ -1872,6 +1909,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	if isPlanUpdateExecution(execution) {
 		items := todoItemsFromPlanUpdateOutput(execution.Output)
 		return protocol.ItemCompleted(protocol.TodoListItem("todo-list-"+safeSessionItemID(execution.Invocation.CallID), items)), true
+	}
+	if execution.Invocation.Payload.Kind == tool.PayloadToolSearch {
+		return protocol.ThreadEvent{}, false
 	}
 	if isFileChangeExecution(execution) {
 		changes := fileChangesFromToolOutput(execution.Output)
@@ -2421,9 +2461,10 @@ func isMCPExecution(execution *turn.ToolExecutionResult) bool {
 	if isCollabExecution(execution) {
 		return false
 	}
-	if execution.Invocation != nil &&
-		strings.TrimSpace(execution.Invocation.ToolName.Namespace) != "" &&
-		strings.TrimSpace(execution.Invocation.ToolName.Namespace) != "agent" {
+	if execution.Invocation != nil && strings.HasPrefix(
+		strings.TrimSpace(execution.Invocation.ToolName.Namespace),
+		mcp.LegacyMCPToolNamePrefix,
+	) {
 		return true
 	}
 	if execution.Output != nil {
@@ -2438,13 +2479,17 @@ func mcpToolCallProtocolItem(execution *turn.ToolExecutionResult, status string)
 		return protocol.ThreadItem{}
 	}
 	invocation := execution.Invocation
-	server := strings.TrimSpace(invocation.ToolName.Namespace)
-	toolName := strings.TrimSpace(invocation.ToolName.Name)
-	if server == "" && execution.Output != nil {
+	server := ""
+	toolName := ""
+	if execution.Output != nil {
 		server = execStringFromAny(execution.Output.Data["server"])
-	}
-	if toolName == "" && execution.Output != nil {
 		toolName = execStringFromAny(execution.Output.Data["tool"])
+	}
+	if server == "" {
+		server = strings.TrimPrefix(strings.TrimSpace(invocation.ToolName.Namespace), mcp.LegacyMCPToolNamePrefix)
+	}
+	if toolName == "" {
+		toolName = strings.TrimSpace(invocation.ToolName.Name)
 	}
 	var result *protocol.MCPToolResult
 	var callErr *protocol.MCPToolError

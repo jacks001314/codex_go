@@ -38,6 +38,7 @@ type McpStartupUpdateResult struct {
 	Header    string
 	Warnings  []string
 	Finished  bool
+	Settled   bool
 	Failed    []string
 	Cancelled []string
 	Active    bool
@@ -116,9 +117,11 @@ func (s *McpStartupRoundState) Update(server string, status McpStartupStatus, co
 		return finish
 	}
 	header := s.Header()
+	settled := s.isSettled()
 	return McpStartupUpdateResult{
 		Header:   header,
 		Warnings: warnings,
+		Settled:  settled,
 		Active:   len(s.Status) > 0,
 	}
 }

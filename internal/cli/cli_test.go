@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -96,6 +99,144 @@ func TestRustSubcommandAliasParity(t *testing.T) {
 				t.Fatalf("Parse(%v).Command = %q, want %q", tt.args, parsed.Command, tt.want)
 			}
 		})
+	}
+}
+
+func TestRustSubcommandSurfaceDerivedFromSource(t *testing.T) {
+	root := rustCLIWorkspaceRoot(t)
+	rustPath := filepath.Join(root, "cli", "src", "main.rs")
+	commandNames := rustEnumVariants(t, rustPath, "enum Subcommand")
+	aliases := rustCliSubcommandAliases(t, rustPath)
+
+	for _, name := range commandNames {
+		if name == "App" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+			continue
+		}
+		if _, ok := knownCommands[normalizeRustCommandName(name)]; !ok {
+			t.Fatalf("knownCommands is missing Rust subcommand %q derived from %s", name, rustPath)
+		}
+	}
+
+	for _, alias := range aliases {
+		if _, ok := knownCommands[alias]; !ok {
+			t.Fatalf("knownCommands is missing Rust alias %q derived from %s", alias, rustPath)
+		}
+	}
+}
+
+func rustCLIWorkspaceRoot(t *testing.T) string {
+	t.Helper()
+	candidates := []string{}
+	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
+		candidates = append(candidates, env)
+	}
+	candidates = append(candidates,
+		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
+		filepath.Join("..", "..", "codex-main", "codex-rs"),
+	)
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(abs, "Cargo.toml")); err == nil {
+			return abs
+		}
+	}
+	t.Skip("Rust root not found; set CODEX_RUST_ROOT")
+	return ""
+}
+
+func rustCliSubcommandAliases(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	re := regexp.MustCompile(`(?m)#\[clap\((?:visible_alias|alias) = "([^"]+)"\)\]`)
+	matches := re.FindAllStringSubmatch(string(data), -1)
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 2 {
+			out = append(out, match[1])
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func rustEnumVariants(t *testing.T, path string, enumHeader string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	source := string(data)
+	start := strings.Index(source, enumHeader)
+	if start < 0 {
+		t.Fatalf("%s not found in %s", enumHeader, path)
+	}
+	open := strings.Index(source[start:], "{")
+	if open < 0 {
+		t.Fatalf("%s has no body in %s", enumHeader, path)
+	}
+	block := source[start+open:]
+	depth := 0
+	end := -1
+	for i := 0; i < len(block); i++ {
+		switch block[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+				i = len(block)
+			}
+		}
+	}
+	if end < 0 {
+		t.Fatalf("%s body was not closed in %s", enumHeader, path)
+	}
+	block = block[:end+1]
+	re := regexp.MustCompile(`(?m)^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\(|,|\{)`)
+	matches := re.FindAllStringSubmatch(block, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no enum variants found in %s for %s", path, enumHeader)
+	}
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, match[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeRustCommandName(name string) string {
+	switch name {
+	case "Mcp":
+		return "mcp"
+	case "AppServer":
+		return "app-server"
+	case "RemoteControl":
+		return "remote-control"
+	case "McpServer":
+		return "mcp-server"
+	case "ExecServer":
+		return "exec-server"
+	case "ResponsesApiProxy":
+		return "responses-api-proxy"
+	case "Execpolicy":
+		return "execpolicy"
+	case "Cloud":
+		return "cloud"
+	case "StdioToUds":
+		return "stdio-to-uds"
+	default:
+		if name == strings.ToUpper(name[:1])+name[1:] {
+			return strings.ToLower(name[:1]) + name[1:]
+		}
+		return strings.ToLower(name)
 	}
 }
 

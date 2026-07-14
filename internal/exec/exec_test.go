@@ -1877,14 +1877,20 @@ func TestToolRouterUsesConfiguredMCPRuntimeLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toolRouterForRequest returned error: %v", err)
 	}
-	output, err := router.Dispatch(context.Background(), &tool.Invocation{
-		CallID:   "call-mcp",
-		ToolName: tool.NamespacedName("docs", "search"),
-		Payload: tool.Payload{
-			Kind:      tool.PayloadFunction,
-			Arguments: `{"q":"rust parity"}`,
-		},
+	invocation, ok, err := router.BuildToolCall(tool.ResponseItem{
+		Type:      "function_call",
+		Namespace: "mcp__docs",
+		Name:      "search",
+		CallID:    "call-mcp",
+		Arguments: `{"q":"rust parity"}`,
 	})
+	if err != nil {
+		t.Fatalf("BuildToolCall MCP tool returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("BuildToolCall MCP tool returned ok=false")
+	}
+	output, err := router.Dispatch(context.Background(), invocation)
 	if err != nil {
 		t.Fatalf("Dispatch MCP tool returned error: %v", err)
 	}
@@ -3131,6 +3137,60 @@ func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T)
 	}
 	if events[0].Item.Type != "command_execution" || events[0].Item.ID != "call-1" || events[0].Item.Command != "date" {
 		t.Fatalf("command start item = %#v", events[0].Item)
+	}
+}
+
+func TestExecStreamEventCollectorDefersMCPUntilToolStarted(t *testing.T) {
+	collector := &execStreamEventCollector{}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{
+			ID:        "call-mcp",
+			Type:      "function_call",
+			Name:      "geogebra_create_point",
+			Namespace: "mcp__geogebra",
+			CallID:    "call-mcp",
+			Arguments: `{"label":"A"}`,
+		},
+	})
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("model output-added should not create a generic MCP exec cell: %#v", events)
+	}
+
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "call-mcp",
+		ToolName: tool.NamespacedName("mcp__geogebra", "geogebra_create_point"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"label":"A"}`},
+	}, time.Now())
+	events := collector.Events()
+	if len(events) != 1 || events[0].Item == nil || events[0].Item.Type != "mcp_tool_call" {
+		t.Fatalf("MCP start event = %#v", events)
+	}
+	if events[0].Item.ID != "call-mcp" || events[0].Item.Server != "geogebra" || events[0].Item.Tool != "geogebra_create_point" {
+		t.Fatalf("MCP start item = %#v", events[0].Item)
+	}
+}
+
+func TestEventsFromToolExecutionHideToolSearchLikeRust(t *testing.T) {
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "search-tools",
+			ToolName: tool.PlainName(tool.ToolSearchName),
+			Payload:  tool.Payload{Kind: tool.PayloadToolSearch, Search: map[string]any{"query": "geogebra"}},
+		},
+		Output: &tool.Output{CallID: "search-tools", ToolName: tool.PlainName(tool.ToolSearchName), Success: true},
+	}
+	if events := eventsFromToolExecution(execution); len(events) != 0 {
+		t.Fatalf("tool_search should stay out of the Rust-style transcript: %#v", events)
+	}
+
+	collector := &execStreamEventCollector{}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{ID: "search-tools", Type: "tool_search_call", CallID: "search-tools"},
+	})
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("streamed tool_search should stay hidden: %#v", events)
 	}
 }
 

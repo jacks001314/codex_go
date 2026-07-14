@@ -31,6 +31,11 @@ func EnsureCodexAppRuntimePathsReadable(sandboxGroupSID string, refreshErrors *[
 		req := windowssandbox.ACLRequest{Path: runtimePath, SID: sandboxGroupSID, Mask: RuntimeReadExecuteMask}
 		hasAccess, err := windowssandbox.PathMaskAllows(req, true)
 		if err != nil {
+			if windowssandbox.IsUnsupported(err) {
+				appendRefreshError(refreshErrors, fmt.Sprintf("runtime ACL setup unsupported off Windows: %v", err))
+				logLine(log, fmt.Sprintf("runtime ACL setup unsupported off Windows: %v; continuing", err))
+				return nil
+			}
 			appendRefreshError(refreshErrors, fmt.Sprintf("runtime read/execute mask check failed on %s for sandbox_group: %v", runtimePath, err))
 			logLine(log, fmt.Sprintf("runtime read/execute mask check failed on %s for sandbox_group: %v; continuing", runtimePath, err))
 			hasAccess = false

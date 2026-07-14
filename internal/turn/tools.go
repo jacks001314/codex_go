@@ -2,6 +2,7 @@ package turn
 
 import (
 	"fmt"
+	"strings"
 
 	"codex_go/internal/agent"
 	"codex_go/internal/compact"
@@ -39,6 +40,7 @@ type ToolRegistryOptions struct {
 	PluginInstallAppServerClientName   string
 	WebSearch                          *WebSearchOptions
 	ImageGeneration                    *ImageGenerationOptions
+	ViewImage                          *tool.ViewImageOptions
 
 	EnableCore            bool
 	EnableShell           bool
@@ -127,6 +129,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if err := registerMCPTools(registry, options); err != nil {
 			return nil, err
 		}
+		if !options.EnableToolSearch {
+			if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := registerSkillsTools(registry, options); err != nil {
 		return nil, err
@@ -153,6 +160,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.ImageGeneration != nil {
 		if err := registry.Register(NewImageGenerationHandler(options.ImageGeneration)); err != nil {
+			return nil, err
+		}
+	}
+	if options.ViewImage != nil {
+		if err := registry.Register(tool.NewViewImageHandler(*options.ViewImage)); err != nil {
 			return nil, err
 		}
 	}
@@ -197,6 +209,7 @@ func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) err
 }
 
 func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, tools []mcp.RuntimeToolInfo, exposure tool.Exposure) error {
+	tools = mcp.NormalizeRuntimeToolsForModel(tools)
 	for i := range tools {
 		info := tools[i]
 		executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
@@ -209,11 +222,13 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 				InputSchema: info.Tool.InputSchema,
 				Annotations: info.Tool.Annotations,
 			},
-			ToolName: tool.NamespacedName(info.ServerName, info.Tool.Name),
-			ThreadID: options.ThreadID,
-			TurnID:   options.TurnID,
+			ToolName:    tool.NamespacedName(info.CallableNamespace, info.CallableName),
+			ThreadID:    options.ThreadID,
+			TurnID:      options.TurnID,
+			RequestMeta: mcpRuntimeToolRequestMeta(&info),
 		})
 		spec := executor.Spec()
+		spec.NamespaceDescription = strings.TrimSpace(info.NamespaceDescription)
 		if exposure != "" && exposure != tool.ExposureModelVisible {
 			spec.Exposure = exposure
 		}
@@ -222,6 +237,17 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 		}
 	}
 	return nil
+}
+
+func mcpRuntimeToolRequestMeta(info *mcp.RuntimeToolInfo) map[string]any {
+	if info == nil || !mcp.IsCodexAppsMCPServerName(info.ServerName) {
+		return nil
+	}
+	apps := map[string]any{}
+	if connectorID := strings.TrimSpace(info.ConnectorID); connectorID != "" {
+		apps["connector_id"] = connectorID
+	}
+	return map[string]any{"_codex_apps": apps}
 }
 
 type specOverrideExecutor struct {

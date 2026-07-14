@@ -17,6 +17,8 @@ import (
 	"codex_go/internal/rollout"
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
+
+	"github.com/google/uuid"
 )
 
 type Router struct {
@@ -527,11 +529,8 @@ func threadStartHistoryModeError(params *ThreadStartParams) error {
 		return nil
 	}
 	historyMode := strings.TrimSpace(string(params.HistoryMode))
-	if historyMode == "" || historyMode == string(ThreadHistoryLegacy) {
+	if historyMode == "" || strings.EqualFold(historyMode, string(ThreadHistoryLegacy)) || strings.EqualFold(historyMode, string(ThreadHistoryPaginated)) {
 		return nil
-	}
-	if strings.EqualFold(historyMode, string(ThreadHistoryPaginated)) {
-		return methodNotFound("paginated_threads is not supported yet")
 	}
 	return jsonRPCInvalidRequest(fmt.Sprintf("unsupported historyMode %q", params.HistoryMode))
 }
@@ -679,7 +678,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
 		return nil, err
 	}
-	threadID := session.ThreadID("thread-" + safeIdentifier(request.ID.String()))
+	threadID := newThreadID()
 	now := r.now().UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -754,6 +753,10 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
 	}, nil
+}
+
+func newThreadID() session.ThreadID {
+	return session.ThreadID(uuid.NewString())
 }
 
 func effectiveThreadStartCWD(params *ThreadStartParams, fallback string) string {
@@ -833,9 +836,6 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		}
 	}
 	if includeTurns {
-		if paginatedRolloutHistory(record) {
-			return nil, methodNotFound("paginated_threads is not supported yet")
-		}
 		r.attachRolloutTurnSnapshots(record)
 	}
 	path := r.threadRolloutPath(record)
@@ -865,9 +865,6 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		response.Thread.Turns = RedactThreadResumePayloads(response.Thread.Turns)
 	}
 	if params.InitialTurnsPage != nil {
-		if paginatedRolloutHistory(record) {
-			return nil, methodNotFound("paginated_threads is not supported yet")
-		}
 		pageRecord := record
 		if !includeTurns {
 			if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
@@ -1251,9 +1248,6 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 		if unmaterializedThread(record) {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; includeTurns is unavailable before first user message", record.ID))
 		}
-		if paginatedRolloutHistory(record) {
-			return nil, methodNotFound("paginated_threads is not supported yet")
-		}
 		r.attachRolloutTurnSnapshots(record)
 	}
 	path := r.threadRolloutPath(record)
@@ -1307,9 +1301,6 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	}
 	if unmaterializedThread(sourceRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
-	}
-	if paginatedRolloutHistory(sourceRecord) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
 	record, err := r.store.ForkRecord(sourceRecord, session.ForkOptions{
@@ -1769,6 +1760,11 @@ func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, 
 	if err := r.markExplicitThreadName(record); err != nil {
 		return nil, err
 	}
+	if unmaterializedThread(record) {
+		if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
+			return nil, err
+		}
+	}
 	return &ThreadSetNameResponse{}, nil
 }
 
@@ -2042,9 +2038,6 @@ func (r *Router) handleThreadItemsList(request *Request) (*ThreadItemsListRespon
 			return nil, threadItemsListReadError(params.ThreadID, err)
 		}
 	}
-	if paginatedRolloutHistory(record) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
-	}
 	if unmaterializedThread(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
@@ -2065,9 +2058,6 @@ func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {
 		if err != nil {
 			return nil, threadTurnsListReadError(params.ThreadID, err)
 		}
-	}
-	if paginatedRolloutHistory(record) {
-		return nil, methodNotFound("paginated_threads is not supported yet")
 	}
 	if unmaterializedThread(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/turns/list is unavailable before first user message", record.ID))

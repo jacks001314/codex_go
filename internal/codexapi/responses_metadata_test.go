@@ -49,3 +49,22 @@ func TestFilterExtraMetadataAndSubagentHeader(t *testing.T) {
 		t.Fatalf("subagent headers wrong")
 	}
 }
+
+func TestRustResponsesMetadataSubagentHeaderParity(t *testing.T) {
+	cases := []struct {
+		sessionSource string
+		want          string
+	}{
+		{sessionSource: "review", want: "review"},
+		{sessionSource: "compact", want: "compact"},
+		{sessionSource: "memory_consolidation", want: "memory_consolidation"},
+		{sessionSource: "thread_spawn", want: "collab_spawn"},
+		{sessionSource: "subagent:custom-task", want: "custom-task"},
+		{sessionSource: "unknown", want: ""},
+	}
+	for _, tt := range cases {
+		if got := SubagentHeaderValue(tt.sessionSource); got != tt.want {
+			t.Fatalf("SubagentHeaderValue(%q) = %q, want %q", tt.sessionSource, got, tt.want)
+		}
+	}
+}

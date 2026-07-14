@@ -1,11 +1,11 @@
 package chatwidget
 
 import (
-	"path/filepath"
 	"sort"
 	"strings"
 
 	pluginapi "codex_go/internal/plugin"
+	"codex_go/internal/utils"
 )
 
 const (
@@ -211,7 +211,7 @@ func IsPersonalMarketplacePath(path string) bool {
 	if path == "" {
 		return false
 	}
-	cleaned := filepath.ToSlash(filepath.Clean(path))
+	cleaned := utils.CrossPlatformSlash(path)
 	return cleaned == PersonalMarketplaceRelPath || strings.HasSuffix(cleaned, "/"+PersonalMarketplaceRelPath)
 }
 
@@ -248,13 +248,13 @@ func MarketplaceTabIDMatchingSavedID(savedTabID string, marketplaces []pluginapi
 	if root == savedTabID || strings.TrimSpace(root) == "" {
 		return "", false
 	}
-	root = filepath.Clean(root)
+	root = utils.CrossPlatformSlash(root)
 	for _, marketplace := range marketplaces {
 		if marketplace.Path == nil {
 			continue
 		}
-		path := filepath.Clean(*marketplace.Path)
-		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+		path := utils.CrossPlatformSlash(*marketplace.Path)
+		if path == root || strings.HasPrefix(path, root+"/") {
 			return MarketplaceTabID(marketplace), true
 		}
 	}

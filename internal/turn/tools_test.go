@@ -79,13 +79,33 @@ func TestBuildToolRegistryIncludesCoreAndRuntimeTools(t *testing.T) {
 		tool.PlainName("update_plan"),
 		tool.PlainName(tool.DefaultExecCommandToolName),
 		tool.PlainName(tool.DefaultApplyPatchToolName),
-		tool.NamespacedName("calendar", "create_event"),
+		tool.NamespacedName("mcp__calendar", "create_event"),
 		tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolSpawn)),
 		tool.PlainName(tool.ToolSearchName),
 	} {
 		if _, ok := registry.Lookup(name); !ok {
 			t.Fatalf("missing tool %s", name.Key())
 		}
+	}
+}
+
+func TestBuildToolRegistryViewImageFollowsModelCapabilityOption(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(default) error = %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.ViewImageToolName)); ok {
+		t.Fatal("view_image should not be exposed without image model capability")
+	}
+
+	options.ViewImage = &tool.ViewImageOptions{CWD: options.Shell.Validation.CWD, CanRequestOriginalDetail: true}
+	registry, err = BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(view_image) error = %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.ViewImageToolName)); !ok {
+		t.Fatal("view_image not registered when explicitly enabled")
 	}
 }
 
@@ -355,6 +375,63 @@ func TestBuildToolRegistryToolSearchFindsDeferredTools(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryMCPToolSearchDispatchesUniqueBareName(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.MCPService = mcp.NewMCPService(nil)
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName: "geogebra",
+		Tool: mcp.RuntimeTool{
+			Name:        "geogebra_create_circle",
+			Description: "Create a GeoGebra circle",
+			InputSchema: map[string]any{"type": "object"},
+		},
+	}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	searchOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "search",
+		ToolName: tool.PlainName(tool.ToolSearchName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"query":"geogebra circle"}`},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch(tool_search) error = %v", err)
+	}
+	var searchResult tool.ToolSearchResult
+	if err := json.Unmarshal([]byte(searchOutput.Body), &searchResult); err != nil {
+		t.Fatalf("Unmarshal(tool_search) error = %v", err)
+	}
+	if len(searchResult.Tools) != 1 || searchResult.Tools[0].Name.Key() != "mcp__geogebra.geogebra_create_circle" {
+		t.Fatalf("tool_search result = %#v", searchResult.Tools)
+	}
+
+	invocation, ok, err := router.BuildToolCall(tool.ResponseItem{
+		Type:      "function_call",
+		Name:      "geogebra_create_circle",
+		CallID:    "call-circle",
+		Arguments: `{"radius":3}`,
+	})
+	if err != nil || !ok {
+		t.Fatalf("BuildToolCall() ok=%v err=%v", ok, err)
+	}
+	if invocation.ToolName.Key() != "mcp__geogebra.geogebra_create_circle" {
+		t.Fatalf("resolved tool = %s", invocation.ToolName.Key())
+	}
+	output, err := router.Dispatch(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Dispatch(MCP) error = %v", err)
+	}
+	if !output.Success || output.Data["server"] != "geogebra" || output.Data["tool"] != "geogebra_create_circle" {
+		t.Fatalf("MCP output = %#v", output)
+	}
+}
+
 func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false
@@ -376,12 +453,12 @@ func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	if _, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName)); ok {
 		t.Fatal("tool_search should not be registered when disabled")
 	}
-	if _, ok := registry.Lookup(tool.NamespacedName("drive", "create_doc")); !ok {
+	if _, ok := registry.Lookup(tool.NamespacedName("mcp__drive", "create_doc")); !ok {
 		t.Fatal("mcp tool missing")
 	}
 	visible := specKeySet(registry.ModelVisibleSpecs())
-	if !visible["drive.create_doc"] {
-		t.Fatalf("model-visible specs = %#v, want drive.create_doc", visible)
+	if !visible["mcp__drive.create_doc"] {
+		t.Fatalf("model-visible specs = %#v, want mcp__drive.create_doc", visible)
 	}
 	if discoverable := registry.DiscoverableSpecs(); len(discoverable) != 0 {
 		t.Fatalf("discoverable specs = %#v, want none when tool_search is disabled", specKeySet(discoverable))
@@ -411,16 +488,16 @@ func TestBuildToolRegistryMCPExposureFiltersHiddenAndDisabledConnectors(t *testi
 		t.Fatalf("BuildToolRegistry() error = %v", err)
 	}
 	visibleSpecs := specKeySet(registry.ModelVisibleSpecs())
-	if !visibleSpecs[tool.ToolSearchName] || visibleSpecs["drive.read"] || visibleSpecs["codex_apps.create_event"] {
+	if !visibleSpecs[tool.ToolSearchName] || visibleSpecs["mcp__drive.read"] || visibleSpecs["mcp__codex_apps__calendar.create_event"] {
 		t.Fatalf("model-visible specs = %#v, want only tool_search from MCP surface", visibleSpecs)
 	}
 	discoverable := specKeySet(registry.DiscoverableSpecs())
-	for _, want := range []string{"drive.read", "codex_apps.create_event"} {
+	for _, want := range []string{"mcp__drive.read", "mcp__codex_apps__calendar.create_event"} {
 		if !discoverable[want] {
 			t.Fatalf("discoverable specs = %#v, missing %s", discoverable, want)
 		}
 	}
-	for _, unwanted := range []string{"drive.secret", "codex_apps.send_mail"} {
+	for _, unwanted := range []string{"mcp__drive.secret", "mcp__codex_apps__mail.send_mail"} {
 		if discoverable[unwanted] {
 			t.Fatalf("discoverable specs = %#v, should not include %s", discoverable, unwanted)
 		}
@@ -441,7 +518,7 @@ func TestBuildToolRegistryMCPWrapperKeepsHookInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildToolRegistry() error = %v", err)
 	}
-	executor, ok := registry.Lookup(tool.NamespacedName("memory", "create_entities"))
+	executor, ok := registry.Lookup(tool.NamespacedName("mcp__memory", "create_entities"))
 	if !ok {
 		t.Fatal("mcp tool missing")
 	}
@@ -450,7 +527,7 @@ func TestBuildToolRegistryMCPWrapperKeepsHookInterfaces(t *testing.T) {
 		t.Fatalf("wrapped MCP executor lost PreToolUsePayloadProvider")
 	}
 	payload, ok := provider.PreToolUsePayload(&tool.Invocation{
-		ToolName: tool.NamespacedName("memory", "create_entities"),
+		ToolName: tool.NamespacedName("mcp__memory", "create_entities"),
 		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"name":"Ada"}`},
 	})
 	if !ok || payload.ToolName == nil || payload.ToolName.Name != "mcp__memory__create_entities" {
@@ -617,6 +694,38 @@ func TestDynamicToolRemoteImageOutputBecomesModelVisibleError(t *testing.T) {
 	if !strings.Contains(inputItemTextForDynamicToolTest(items), remoteImageURLError) ||
 		!strings.Contains(inputItemTextForDynamicToolTest(modelItems), remoteImageURLError) {
 		t.Fatalf("content items = %#v model = %#v", items, modelItems)
+	}
+}
+
+func TestDynamicToolClientErrorUsesRustFallbackResponse(t *testing.T) {
+	caller := &fakeDynamicToolCaller{err: errors.New("client disconnected")}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.DynamicToolCaller = caller
+	options.DynamicTools = []DynamicToolSpec{{Type: "function", Function: &DynamicToolFunctionSpec{
+		Name: "demo_tool", InputSchema: map[string]any{"type": "object"},
+	}}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	executor, ok := registry.Lookup(tool.PlainName("demo_tool"))
+	if !ok {
+		t.Fatal("dynamic tool missing")
+	}
+	output, err := executor.Execute(context.Background(), &tool.Invocation{
+		CallID: "dyn-fallback", ToolName: tool.PlainName("demo_tool"),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output.Success || output.Body != "dynamic tool request failed" || output.Error != output.Body {
+		t.Fatalf("output = %#v", output)
 	}
 }
 

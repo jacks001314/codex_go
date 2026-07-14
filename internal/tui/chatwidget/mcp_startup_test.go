@@ -31,6 +31,23 @@ func TestMcpStartupFinishAfterLagWithoutActiveStatusDoesNotEnterIgnoreModeMatchR
 	}
 }
 
+func TestMcpStartupSettledCanWaitForLagMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState([]string{"alpha", "beta"})
+	state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting}, false)
+	state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}, false)
+	state.Update("alpha", McpStartupStatus{Kind: McpStartupFailed, Error: "alpha failed"}, false)
+
+	settled := state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, false)
+	if !settled.Settled || settled.Finished || len(settled.Warnings) != 0 {
+		t.Fatalf("settled before lag = %#v", settled)
+	}
+
+	finished := state.FinishAfterLag()
+	if !finished.Finished || !reflect.DeepEqual(finished.Failed, []string{"alpha"}) {
+		t.Fatalf("finished after lag = %#v", finished)
+	}
+}
+
 func TestMcpStartupIgnoreModeRequiresExpectedServersMatchRust(t *testing.T) {
 	state := McpStartupRoundState{
 		IgnoreUpdatesUntilNextStart: true,

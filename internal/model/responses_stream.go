@@ -793,7 +793,7 @@ func (a *responsesStreamAccumulator) recordAgentItem(item *AgentItem) {
 	if key != "" {
 		for i := range a.items {
 			if agentItemRecordKey(&a.items[i]) == key {
-				a.items[i] = *item
+				a.items[i] = mergeStreamAgentItem(a.items[i], *item)
 				a.rebuildMessages()
 				return
 			}
@@ -834,7 +834,58 @@ func agentItemRecordKey(item *AgentItem) string {
 	if item == nil {
 		return ""
 	}
+	if isToolAgentItemType(item.Type) && strings.TrimSpace(item.CallID) != "" {
+		return "call:" + strings.TrimSpace(item.CallID)
+	}
 	return firstNonEmptyResponseValue(item.ID, item.CallID)
+}
+
+func isToolAgentItemType(itemType string) bool {
+	switch itemType {
+	case "function_call", "custom_tool_call", "tool_search_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeStreamAgentItem(existing AgentItem, incoming AgentItem) AgentItem {
+	merged := incoming
+	if existing.ID != "" {
+		merged.ID = existing.ID
+	}
+	if merged.CallID == "" {
+		merged.CallID = existing.CallID
+	}
+	if existing.Namespace != "" && merged.Namespace == "" {
+		merged.Namespace = existing.Namespace
+		merged.Name = existing.Name
+	}
+	if merged.Name == "" {
+		merged.Name = existing.Name
+	}
+	if merged.Arguments == "" {
+		merged.Arguments = existing.Arguments
+	}
+	if merged.Input == "" {
+		merged.Input = existing.Input
+	}
+	if merged.Text == "" {
+		merged.Text = existing.Text
+	}
+	if merged.Status == "" {
+		merged.Status = existing.Status
+	}
+	if merged.Execution == "" {
+		merged.Execution = existing.Execution
+	}
+	if len(merged.Search) == 0 && len(existing.Search) > 0 {
+		merged.Search = cloneResponseSearch(existing.Search)
+	}
+	if len(merged.Data) == 0 && len(existing.Data) > 0 {
+		merged.Data = cloneMapAny(existing.Data)
+	}
+	return merged
 }
 
 func isGeneratedAgentMessageID(value string) bool {
@@ -1446,10 +1497,29 @@ func responseFailedError(data []byte) error {
 	if errBody == nil {
 		errBody = payload.Response.Error
 	}
+	if responseErrorCode(errBody) == "context_length_exceeded" {
+		return &codexapi.APIError{
+			Kind:    codexapi.ErrorContextWindowExceeded,
+			Status:  http.StatusBadRequest,
+			Message: strings.TrimSpace(errBody.Message),
+		}
+	}
 	if errBody != nil && strings.TrimSpace(errBody.Message) != "" {
 		return fmt.Errorf("%w: %s", errResponsesStreamFailed, strings.TrimSpace(errBody.Message))
 	}
 	return errResponsesStreamFailed
+}
+
+func responseErrorCode(errBody *responsesAgentAPIErrorBody) string {
+	if errBody == nil || errBody.Code == nil {
+		return ""
+	}
+	switch code := errBody.Code.(type) {
+	case string:
+		return strings.TrimSpace(code)
+	default:
+		return strings.TrimSpace(fmt.Sprint(code))
+	}
 }
 
 func jsonStringField(data []byte, key string) string {

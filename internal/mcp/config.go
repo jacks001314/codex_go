@@ -3,37 +3,44 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
 	CodexAppsServerName                = "codex_apps"
+	codexConnectorsTokenEnvVar         = "CODEX_CONNECTORS_TOKEN"
 	legacyCodexAppsRegistrationID      = "legacy_codex_apps"
 	consequentialTemplateSchemaVersion = 4
 	connectorNameTemplateVar           = "{connector_name}"
 )
 
 type ServerConfig struct {
-	Command           string            `json:"command,omitempty"`
-	Args              []string          `json:"args,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	EnvVars           []EnvVar          `json:"env_vars,omitempty"`
-	CWD               string            `json:"cwd,omitempty"`
-	URL               string            `json:"url,omitempty"`
-	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"`
-	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`
-	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
-	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
-	OAuthResource     string            `json:"oauth_resource,omitempty"`
-	Scopes            []string          `json:"scopes,omitempty"`
-	ScopesConfigured  bool              `json:"-"`
-	OAuthServerName   string            `json:"-"`
-	CodexHome         string            `json:"-"`
-	Enabled           bool              `json:"enabled"`
-	DisabledReason    string            `json:"disabled_reason,omitempty"`
-	Required          bool              `json:"required,omitempty"`
-	EnvironmentID     string            `json:"environment_id,omitempty"`
+	Command           string                            `json:"command,omitempty"`
+	Args              []string                          `json:"args,omitempty"`
+	Env               map[string]string                 `json:"env,omitempty"`
+	EnvVars           []EnvVar                          `json:"env_vars,omitempty"`
+	CWD               string                            `json:"cwd,omitempty"`
+	URL               string                            `json:"url,omitempty"`
+	BearerTokenEnvVar string                            `json:"bearer_token_env_var,omitempty"`
+	HTTPHeaders       map[string]string                 `json:"http_headers,omitempty"`
+	EnvHTTPHeaders    map[string]string                 `json:"env_http_headers,omitempty"`
+	OAuthClientID     string                            `json:"oauth_client_id,omitempty"`
+	OAuthResource     string                            `json:"oauth_resource,omitempty"`
+	Scopes            []string                          `json:"scopes,omitempty"`
+	ScopesConfigured  bool                              `json:"-"`
+	OAuthServerName   string                            `json:"-"`
+	CodexHome         string                            `json:"-"`
+	Enabled           bool                              `json:"enabled"`
+	DisabledReason    string                            `json:"disabled_reason,omitempty"`
+	Required          bool                              `json:"required,omitempty"`
+	EnvironmentID     string                            `json:"environment_id,omitempty"`
+	StartupTimeout    time.Duration                     `json:"-"`
+	ToolTimeout       time.Duration                     `json:"-"`
+	ApplyHTTPRequest  func(*http.Request, []byte) error `json:"-"`
 }
 
 type EnvVar struct {
@@ -60,9 +67,20 @@ type RuntimeConfig struct {
 	ConnectorIDs         []string
 	AvailableEnvironment []string
 	CodexHome            string
+	Auth                 *RuntimeAuth
+}
+
+type RuntimeAuth struct {
+	UsesCodexBackend bool
+	HTTPHeaders      map[string]string
+	ApplyHTTPRequest func(*http.Request, []byte) error
 }
 
 func RuntimeConfigFromValues(values map[string]any, codexHome string) *RuntimeConfig {
+	return RuntimeConfigFromValuesWithAuth(values, codexHome, nil)
+}
+
+func RuntimeConfigFromValuesWithAuth(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth) *RuntimeConfig {
 	out := &RuntimeConfig{
 		Servers:              map[string]ServerRegistration{},
 		AppsEnabled:          appsEnabledFromRuntimeConfigValues(values),
@@ -71,6 +89,7 @@ func RuntimeConfigFromValues(values map[string]any, codexHome string) *RuntimeCo
 		CodexHome:            strings.TrimSpace(codexHome),
 		AvailableEnvironment: runtimeConfigStringSliceAny(values, "available_environment", "availableEnvironment"),
 		ConnectorIDs:         runtimeConfigStringSliceAny(values, "connector_ids", "connectorIds"),
+		Auth:                 cloneRuntimeAuth(runtimeAuth),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
@@ -117,10 +136,10 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 		registration.Name = name
 		servers[name] = cloneRegistration(&registration)
 	}
-	if base.AppsEnabled {
+	if base.AppsEnabled && base.Auth != nil && base.Auth.UsesCodexBackend {
 		servers[CodexAppsServerName] = ServerRegistration{
 			Name:          CodexAppsServerName,
-			Config:        CodexAppsServerConfig(base.ChatGPTBaseURL, base.AppsMCPProductSKU),
+			Config:        CodexAppsServerConfig(base.ChatGPTBaseURL, base.AppsMCPProductSKU, base.Auth),
 			Source:        "compatibility",
 			ContributorID: legacyCodexAppsRegistrationID,
 		}
@@ -178,6 +197,8 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	}
 	server.DisabledReason = runtimeConfigStringAny(values, "disabled_reason", "disabledReason")
 	server.EnvironmentID = runtimeConfigStringAny(values, "environment_id", "environmentId")
+	server.StartupTimeout = runtimeConfigDurationAny(values, "startup_timeout_sec", "startupTimeoutSec", "startup_timeout_ms", "startupTimeoutMs")
+	server.ToolTimeout = runtimeConfigDurationAny(values, "tool_timeout_sec", "toolTimeoutSec", "tool_timeout_ms", "toolTimeoutMs")
 	if url := runtimeConfigString(values, "url"); url != "" {
 		server.URL = url
 		server.BearerTokenEnvVar = runtimeConfigStringAny(values, "bearer_token_env_var", "bearerTokenEnvVar")
@@ -236,6 +257,54 @@ func runtimeConfigStringSliceAny(values map[string]any, keys ...string) []string
 		}
 	}
 	return nil
+}
+
+func runtimeConfigDurationAny(values map[string]any, keys ...string) time.Duration {
+	for _, key := range keys {
+		duration := runtimeConfigDuration(values, key)
+		if duration > 0 {
+			return duration
+		}
+	}
+	return 0
+}
+
+func runtimeConfigDuration(values map[string]any, key string) time.Duration {
+	if values == nil {
+		return 0
+	}
+	value, ok := values[key]
+	if !ok || value == nil {
+		return 0
+	}
+	var seconds float64
+	switch typed := value.(type) {
+	case float64:
+		seconds = typed
+	case float32:
+		seconds = float64(typed)
+	case int:
+		seconds = float64(typed)
+	case int64:
+		seconds = float64(typed)
+	case uint64:
+		seconds = float64(typed)
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0
+		}
+		seconds = parsed
+	default:
+		return 0
+	}
+	if seconds <= 0 {
+		return 0
+	}
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(key)), "_ms") || strings.HasSuffix(strings.ToLower(strings.TrimSpace(key)), "ms") {
+		return time.Duration(seconds * float64(time.Millisecond))
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func runtimeConfigOptionalStringSlice(values map[string]any, key string) ([]string, bool) {
@@ -393,18 +462,86 @@ func (m *Manager) EffectiveServers(config *RuntimeConfig, authenticated bool) ma
 	return servers
 }
 
-func CodexAppsServerConfig(baseURL string, productSKU string) ServerConfig {
-	env := map[string]string{}
-	if baseURL != "" {
-		env["CHATGPT_BASE_URL"] = baseURL
+func CodexAppsServerConfig(baseURL string, productSKU string, runtimeAuth *RuntimeAuth) ServerConfig {
+	headers := cloneStringMap(runtimeAuthHeaders(runtimeAuth))
+	if strings.TrimSpace(productSKU) != "" {
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		headers["X-OpenAI-Product-Sku"] = strings.TrimSpace(productSKU)
 	}
-	if productSKU != "" {
-		env["APPS_MCP_PRODUCT_SKU"] = productSKU
+	config := ServerConfig{
+		URL:              codexAppsMCPURL(baseURL),
+		HTTPHeaders:      headers,
+		Enabled:          true,
+		StartupTimeout:   30 * time.Second,
+		ApplyHTTPRequest: runtimeAuthRequestApplier(runtimeAuth),
 	}
-	return ServerConfig{
-		Command: "codex-apps-mcp",
-		Env:     env,
-		Enabled: true,
+	if strings.TrimSpace(os.Getenv(codexConnectorsTokenEnvVar)) != "" {
+		config.BearerTokenEnvVar = codexConnectorsTokenEnvVar
+		config.ApplyHTTPRequest = nil
+	}
+	return config
+}
+
+func codexAppsMCPURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://chatgpt.com/backend-api"
+	}
+	if (strings.HasPrefix(baseURL, "https://chatgpt.com") || strings.HasPrefix(baseURL, "https://chat.openai.com")) && !strings.Contains(baseURL, "/backend-api") {
+		baseURL += "/backend-api"
+	}
+	switch {
+	case strings.Contains(baseURL, "/backend-api"):
+		return baseURL + "/wham/apps"
+	case strings.Contains(baseURL, "/api/codex"):
+		return baseURL + "/apps"
+	default:
+		return baseURL + "/api/codex/apps"
+	}
+}
+
+func cloneRuntimeAuth(runtimeAuth *RuntimeAuth) *RuntimeAuth {
+	if runtimeAuth == nil {
+		return nil
+	}
+	cloned := *runtimeAuth
+	cloned.HTTPHeaders = cloneStringMap(runtimeAuth.HTTPHeaders)
+	return &cloned
+}
+
+func runtimeAuthHeaders(runtimeAuth *RuntimeAuth) map[string]string {
+	if runtimeAuth == nil {
+		return nil
+	}
+	return runtimeAuth.HTTPHeaders
+}
+
+func runtimeAuthRequestApplier(runtimeAuth *RuntimeAuth) func(*http.Request, []byte) error {
+	if runtimeAuth == nil {
+		return nil
+	}
+	return runtimeAuth.ApplyHTTPRequest
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func RuntimeAuthUsesCodexBackend(mode string) bool {
+	switch strings.TrimSpace(mode) {
+	case "chatgpt", "chatgptAuthTokens", "agent-identity", "personal-access-token":
+		return true
+	default:
+		return false
 	}
 }
 

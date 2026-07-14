@@ -1,10 +1,10 @@
 package bottompane
 
 import (
-	"path/filepath"
 	"strings"
 
 	"codex_go/internal/tui"
+	"codex_go/internal/utils"
 )
 
 // Rust parity: codex-rs/tui/src/bottom_pane/chat_composer*.rs.
@@ -29,7 +29,7 @@ func (a ComposerAttachment) Label() string {
 		return a.DisplayName
 	}
 	if a.Path != "" {
-		return filepath.Base(a.Path)
+		return utils.CrossPlatformBase(a.Path)
 	}
 	if a.URL != "" {
 		return a.URL

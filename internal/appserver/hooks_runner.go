@@ -1,7 +1,6 @@
 package appserver
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -126,19 +125,15 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	cmd.Dir = cwd
 	cmd.Env = hookCommandEnv(os.Environ(), metadata.Env)
 	cmd.Stdin = strings.NewReader(inputJSON)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	stdout, stderr, err := runCommandCaptured(cmd)
 	completed := r.now()
 	result := &hookCommandRunResult{
 		StartedAt:   startedAt,
 		CompletedAt: completed.UTC().UnixMilli(),
 		DurationMS:  completed.Sub(started).Milliseconds(),
-		Stdout:      stdout.String(),
-		Stderr:      stderr.String(),
+		Stdout:      stdout,
+		Stderr:      stderr,
 	}
 	if err == nil {
 		code := int32(0)

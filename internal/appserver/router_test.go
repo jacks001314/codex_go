@@ -16,6 +16,8 @@ import (
 	"codex_go/internal/model"
 	"codex_go/internal/rollout"
 	"codex_go/internal/session"
+
+	"github.com/google/uuid"
 )
 
 func TestRouterStartReadListAndItems(t *testing.T) {
@@ -37,7 +39,10 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected start result type: %T", startResponse.Result)
 	}
-	if start.Thread.ID != "thread-1" || start.Thread.CWD != "D:/repo" {
+	if _, err := uuid.Parse(start.Thread.ID); err != nil {
+		t.Fatalf("started thread id = %q, want UUID: %v", start.Thread.ID, err)
+	}
+	if start.Thread.CWD != "D:/repo" {
 		t.Fatalf("unexpected started thread: %+v", start.Thread)
 	}
 	if start.Thread.Status.Type != "idle" {
@@ -69,7 +74,7 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 	}
 
 	readRequest := requestWithParams(t, StringID("read"), MethodThreadRead, ThreadReadParams{
-		ThreadID:     "thread-1",
+		ThreadID:     start.Thread.ID,
 		IncludeTurns: true,
 	})
 	readResponse := router.Handle(readRequest)
@@ -90,12 +95,12 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 		t.Fatalf("list error: %+v", listResponse.Error)
 	}
 	list := listResponse.Result.(*ThreadListResponse)
-	if len(list.Data) != 1 || list.Data[0].ID != "thread-1" {
+	if len(list.Data) != 1 || list.Data[0].ID != start.Thread.ID {
 		t.Fatalf("unexpected list: %+v", list.Data)
 	}
 
 	itemsRequest := requestWithParams(t, IntID(3), MethodThreadItemsList, ThreadItemsListParams{
-		ThreadID: "thread-1",
+		ThreadID: start.Thread.ID,
 	})
 	itemsResponse := router.Handle(itemsRequest)
 	if itemsResponse.Error != nil {
@@ -105,7 +110,7 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 	if len(items.Data) != 1 || items.Data[0].ID != "item-1" || items.Data[0].Text != "hello" {
 		t.Fatalf("items response = %+v", items)
 	}
-	rolloutPath, err := rollout.FindThreadPath(store.Root(), "thread-1", false)
+	rolloutPath, err := rollout.FindThreadPath(store.Root(), start.Thread.ID, false)
 	if err != nil {
 		t.Fatalf("rollout path error: %v", err)
 	}
@@ -598,14 +603,24 @@ func TestRouterApproveGuardianDeniedActionRequiresEvent(t *testing.T) {
 	}
 }
 
-func TestRouterThreadStartRejectsPaginatedHistoryMode(t *testing.T) {
+func TestRouterThreadStartPersistsPaginatedHistoryMode(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:         "D:/repo",
 		HistoryMode: ThreadHistoryPaginated,
 	}))
-	assertPaginatedUnsupported(t, response)
+	if response.Error != nil {
+		t.Fatalf("paginated start error = %+v", response.Error)
+	}
+	thread := response.Result.(*ThreadStartResponse).Thread
+	if thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("history mode = %q", thread.HistoryMode)
+	}
+	record, err := store.Load(session.ThreadID(thread.ID))
+	if err != nil || record.Metadata.HistoryMode != string(ThreadHistoryPaginated) {
+		t.Fatalf("stored history mode = %q, error = %v", record.Metadata.HistoryMode, err)
+	}
 
 	unknown := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
 		CWD:         "D:/repo",
@@ -711,6 +726,43 @@ func TestRouterStartWithoutPromptReturnsUnmaterializedPath(t *testing.T) {
 	}
 }
 
+func TestRouterThreadSetNameMaterializesEmptyThreadForFork(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	router.SetClock(func() time.Time { return fixedTime() })
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: "D:/repo",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	named := router.Handle(requestWithParams(t, IntID(2), MethodThreadNameSet, ThreadSetNameParams{
+		ThreadID: threadID,
+		Name:     "SDK lifecycle example",
+	}))
+	if named.Error != nil {
+		t.Fatalf("thread/name/set error: %+v", named.Error)
+	}
+	if _, err := rollout.FindThreadPath(store.Root(), threadID, false); err != nil {
+		t.Fatalf("named thread rollout path error: %v", err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{ThreadID: threadID}))
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if forked.ForkedFromID == nil || *forked.ForkedFromID != threadID {
+		t.Fatalf("fork lineage = %+v, want source %s", forked, threadID)
+	}
+	if forked.Name == nil || *forked.Name != "SDK lifecycle example" {
+		t.Fatalf("fork name = %+v", forked.Name)
+	}
+}
+
 func TestRouterThreadStartPersistsDynamicTools(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
@@ -734,7 +786,8 @@ func TestRouterThreadStartPersistsDynamicTools(t *testing.T) {
 	if start.Error != nil {
 		t.Fatalf("start error: %+v", start.Error)
 	}
-	record, err := store.Read("thread-1", true, false)
+	startedThread := start.Result.(*ThreadStartResponse).Thread
+	record, err := store.Read(session.ThreadID(startedThread.ID), true, false)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -745,7 +798,7 @@ func TestRouterThreadStartPersistsDynamicTools(t *testing.T) {
 	if len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 {
 		t.Fatalf("metadata dynamic/capability roots = %#v", record.Metadata)
 	}
-	rolloutPath, err := rollout.FindThreadPath(store.Root(), "thread-1", false)
+	rolloutPath, err := rollout.FindThreadPath(store.Root(), startedThread.ID, false)
 	if err != nil {
 		t.Fatalf("rollout path error: %v", err)
 	}
@@ -809,7 +862,8 @@ func TestRouterThreadStartNormalizesLegacyDynamicTools(t *testing.T) {
 	if start.Error != nil {
 		t.Fatalf("start error: %+v", start.Error)
 	}
-	record, err := store.Read("thread-1", true, false)
+	startedThread := start.Result.(*ThreadStartResponse).Thread
+	record, err := store.Read(session.ThreadID(startedThread.ID), true, false)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -2429,7 +2483,7 @@ func TestRouterThreadReadAndListPreservePathlessStoreMetadata(t *testing.T) {
 	}
 }
 
-func TestRouterPaginatedRolloutRejectsLegacyHistoryPaths(t *testing.T) {
+func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
@@ -2460,27 +2514,43 @@ func TestRouterPaginatedRolloutRejectsLegacyHistoryPaths(t *testing.T) {
 	}
 
 	readTurns := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: "thread-paginated", IncludeTurns: true}))
-	assertPaginatedUnsupported(t, readTurns)
+	if readTurns.Error != nil {
+		t.Fatalf("read turns error = %+v", readTurns.Error)
+	}
 	itemsList := router.Handle(requestWithParams(t, IntID(21), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-paginated"}))
-	assertPaginatedUnsupported(t, itemsList)
+	if itemsList.Error != nil || len(itemsList.Result.(*ThreadItemsListResponse).Data) != 1 {
+		t.Fatalf("items list = %+v", itemsList)
+	}
 	turnsList := router.Handle(requestWithParams(t, IntID(3), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-paginated"}))
-	assertPaginatedUnsupported(t, turnsList)
+	if turnsList.Error != nil {
+		t.Fatalf("turns list = %+v", turnsList)
+	}
 	resume := router.Handle(requestWithParams(t, IntID(4), MethodThreadResume, ThreadResumeParams{ThreadID: "thread-paginated"}))
-	assertPaginatedUnsupported(t, resume)
+	if resume.Error != nil || resume.Result.(*ThreadResumeResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("resume = %+v", resume)
+	}
 	fork := router.Handle(requestWithParams(t, IntID(5), MethodThreadFork, ThreadForkParams{ThreadID: "thread-paginated"}))
-	assertPaginatedUnsupported(t, fork)
+	if fork.Error != nil || fork.Result.(*ThreadForkResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("fork = %+v", fork)
+	}
 	path := recorder.Path()
 	forkPath := router.Handle(requestWithParams(t, IntID(6), MethodThreadFork, ThreadForkParams{Path: &path}))
-	assertPaginatedUnsupported(t, forkPath)
+	if forkPath.Error != nil || forkPath.Result.(*ThreadForkResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("path fork = %+v", forkPath)
+	}
 
 	runtimeRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: router, ThreadStatus: NewThreadStatusManager()})
 	runtimeTurnsList := runtimeRouter.Handle(requestWithParams(t, IntID(7), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-paginated"}))
-	assertPaginatedUnsupported(t, runtimeTurnsList)
+	if runtimeTurnsList.Error != nil {
+		t.Fatalf("runtime turns list = %+v", runtimeTurnsList)
+	}
 	runtimeFork := runtimeRouter.Handle(requestWithParams(t, IntID(8), MethodThreadFork, ThreadForkParams{
 		ThreadID:  "thread-paginated",
 		Ephemeral: true,
 	}))
-	assertPaginatedUnsupported(t, runtimeFork)
+	if runtimeFork.Error != nil || runtimeFork.Result.(*ThreadForkResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("runtime fork = %+v", runtimeFork)
+	}
 }
 
 func TestRouterResumeEmptyPathUsesThreadID(t *testing.T) {
@@ -3411,13 +3481,6 @@ func requestWithParams(t *testing.T, id RequestID, method Method, params any) *R
 		t.Fatalf("marshal params: %v", err)
 	}
 	return &Request{JSONRPC: "2.0", ID: id, Method: method, Params: data}
-}
-
-func assertPaginatedUnsupported(t *testing.T, response *Response) {
-	t.Helper()
-	if response == nil || response.Error == nil || response.Error.Code != -32601 || response.Error.Message != "paginated_threads is not supported yet" {
-		t.Fatalf("response error = %+v", response)
-	}
 }
 
 func assertPermissionsSandboxConflict(t *testing.T, response *Response) {

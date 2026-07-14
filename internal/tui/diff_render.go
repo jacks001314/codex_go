@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"codex_go/internal/utils"
 )
 
 // Rust parity: codex-rs/tui/src/diff_render.rs.
@@ -257,6 +259,9 @@ func renderDiffPath(row DiffRow, cwd string) string {
 }
 
 func DisplayDiffPath(path string, cwd string) string {
+	if relative, ok := utils.CrossPlatformRelative(cwd, path); ok {
+		return relative
+	}
 	if cwd == "" || path == "" {
 		return filepath.Clean(path)
 	}

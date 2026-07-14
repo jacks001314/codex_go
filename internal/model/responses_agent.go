@@ -18,6 +18,7 @@ import (
 	"codex_go/internal/auth"
 	"codex_go/internal/codexapi"
 
+	"github.com/coder/websocket"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -49,6 +50,8 @@ type ResponsesAgentOptions struct {
 	EnableRequestCompression   bool
 	IncludeAttestation         bool
 	AttestationProvider        codexapi.AttestationProvider
+	SupportsWebsockets         bool
+	WebsocketConnectTimeout    time.Duration
 }
 
 type ResponsesAgentRunner struct {
@@ -71,8 +74,11 @@ type ResponsesAgentRunner struct {
 	EnableRequestCompression   bool
 	IncludeAttestation         bool
 	AttestationProvider        codexapi.AttestationProvider
+	SupportsWebsockets         bool
+	WebsocketConnectTimeout    time.Duration
 	providerAuthFetchedAt      time.Time
 	turnState                  *responsesTurnStateCache
+	websocketSessions          *responsesWebsocketSessionCache
 	agentIdentityTried         bool
 	agentIdentityBypass        bool
 }
@@ -81,6 +87,17 @@ type responsesTurnStateCache struct {
 	mu     sync.Mutex
 	turnID string
 	value  string
+}
+
+type responsesWebsocketSessionCache struct {
+	mu       sync.Mutex
+	sessions map[string]*responsesWebsocketSession
+	disabled bool
+}
+
+type responsesWebsocketSession struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
 }
 
 type AgentIdentityOptions struct {
@@ -283,9 +300,375 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		EnableRequestCompression:   options.EnableRequestCompression,
 		IncludeAttestation:         options.IncludeAttestation,
 		AttestationProvider:        options.AttestationProvider,
+		SupportsWebsockets:         options.SupportsWebsockets,
+		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
+		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
 	}
+}
+
+func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *responsesWebsocketSession {
+	key := responsesWebsocketSessionKey(request)
+	r.websocketSessions.mu.Lock()
+	defer r.websocketSessions.mu.Unlock()
+	session := r.websocketSessions.sessions[key]
+	if session == nil {
+		session = &responsesWebsocketSession{}
+		r.websocketSessions.sessions[key] = session
+	}
+	return session
+}
+
+func (r *ResponsesAgentRunner) websocketsDisabled() bool {
+	if r == nil || r.websocketSessions == nil {
+		return false
+	}
+	r.websocketSessions.mu.Lock()
+	defer r.websocketSessions.mu.Unlock()
+	return r.websocketSessions.disabled
+}
+
+func (r *ResponsesAgentRunner) disableWebsockets() {
+	if r == nil || r.websocketSessions == nil {
+		return
+	}
+	r.websocketSessions.mu.Lock()
+	r.websocketSessions.disabled = true
+	r.websocketSessions.sessions = map[string]*responsesWebsocketSession{}
+	r.websocketSessions.mu.Unlock()
+}
+
+func responsesWebsocketSessionKey(request *AgentRequest) string {
+	if request == nil {
+		return "default"
+	}
+	if threadID := strings.TrimSpace(request.ThreadID); threadID != "" {
+		return "thread:" + threadID + ":turn:" + strings.TrimSpace(request.TurnID)
+	}
+	if subagent := strings.TrimSpace(request.ClientMetadata["x-openai-subagent"]); subagent != "" {
+		return "subagent:" + subagent
+	}
+	if request.TaskKind != "" {
+		return "task:" + string(request.TaskKind)
+	}
+	return "default"
+}
+
+func closeResponsesWebsocketSession(session *responsesWebsocketSession, reason string) {
+	if session == nil || session.conn == nil {
+		return
+	}
+	_ = session.conn.Close(websocket.StatusNormalClosure, reason)
+	session.conn = nil
+}
+
+func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
+		return nil, nil
+	}
+	if request == nil {
+		return nil, ErrInvalidAgentRequest
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	session := r.websocketSession(request)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.conn != nil {
+		return nil, nil
+	}
+	modelID := strings.TrimSpace(request.Model)
+	if modelID == "" {
+		modelID = "gpt-5.5"
+	}
+	apiRequest := &responsesAgentRequest{
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItems(request), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
+	}
+	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
+	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := websocketURLFromHTTP(httpRequest.URL)
+	if err != nil {
+		return nil, err
+	}
+	timeout := r.WebsocketConnectTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+	if err != nil {
+		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
+			r.disableWebsockets()
+			return nil, nil
+		}
+		if response != nil {
+			return nil, fmt.Errorf("responses websocket handshake failed: HTTP %d: %w", response.StatusCode, err)
+		}
+		return nil, err
+	}
+	session.conn = conn
+	payload := map[string]any{
+		"type": "response.create", "model": apiRequest.Model, "input": apiRequest.Input, "tool_choice": apiRequest.ToolChoice,
+		"parallel_tool_calls": apiRequest.ParallelToolCalls, "store": apiRequest.Store, "stream": true, "include": []string{}, "generate": false,
+	}
+	if apiRequest.Instructions != "" {
+		payload["instructions"] = apiRequest.Instructions
+	}
+	if len(apiRequest.ClientMetadata) > 0 {
+		payload["client_metadata"] = apiRequest.ClientMetadata
+	}
+	if len(apiRequest.Tools) > 0 {
+		payload["tools"] = apiRequest.Tools
+	}
+	if apiRequest.Reasoning != nil {
+		payload["reasoning"] = apiRequest.Reasoning
+		payload["include"] = apiRequest.Include
+	}
+	if apiRequest.Text != nil {
+		payload["text"] = apiRequest.Text
+	}
+	if apiRequest.ServiceTier != "" {
+		payload["service_tier"] = apiRequest.ServiceTier
+	}
+	if apiRequest.PromptCacheKey != "" {
+		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
+	}
+	if err := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload)); err != nil {
+		closeResponsesWebsocketSession(session, "prewarm write failed")
+		return nil, err
+	}
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			closeResponsesWebsocketSession(session, "prewarm read failed")
+			return nil, fmt.Errorf("responses websocket closed before response.completed: %w", err)
+		}
+		var event map[string]any
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, fmt.Errorf("failed to decode responses websocket event: %w", err)
+		}
+		switch strings.TrimSpace(responseToolString(event["type"])) {
+		case "response.completed":
+			responseID := responseIDFromWebsocketEvent(event)
+			return &AgentResponse{ResponseID: responseID, ProviderID: r.ProviderID}, nil
+		case "response.failed", "error":
+			closeResponsesWebsocketSession(session, "prewarm failed")
+			return nil, fmt.Errorf("responses websocket prewarm failed: %s", strings.TrimSpace(responseToolString(event["error"])))
+		}
+	}
+}
+
+func (r *ResponsesAgentRunner) RunWebSocket(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+	return r.runWebSocket(ctx, request, false, false)
+}
+
+func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, authRetried, transportRetried bool) (*AgentResponse, error) {
+	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
+		return r.Run(ctx, request)
+	}
+	if request == nil {
+		return nil, ErrInvalidAgentRequest
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	session := r.websocketSession(request)
+	session.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			session.mu.Unlock()
+		}
+	}()
+	modelID := strings.TrimSpace(request.Model)
+	if modelID == "" {
+		modelID = "gpt-5.5"
+	}
+	modelInfo := r.modelInfoForRequest(modelID)
+	apiRequest := &responsesAgentRequest{
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItems(request), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
+		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
+		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
+	}
+	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
+	if apiRequest.Reasoning != nil {
+		apiRequest.Include = []string{"reasoning.encrypted_content"}
+	}
+	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := websocketURLFromHTTP(httpRequest.URL)
+	if err != nil {
+		return nil, err
+	}
+	timeout := r.WebsocketConnectTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	conn := session.conn
+	if conn == nil {
+		connectCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		var response *http.Response
+		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+		if err != nil {
+			if response != nil && response.StatusCode == http.StatusUpgradeRequired {
+				r.disableWebsockets()
+				return r.Run(ctx, request)
+			}
+			if response != nil && response.StatusCode == http.StatusUnauthorized && !authRetried {
+				if refreshErr := r.refreshAuthAfterUnauthorized(ctx); refreshErr == nil {
+					session.mu.Unlock()
+					locked = false
+					return r.runWebSocket(ctx, request, true, transportRetried)
+				}
+			}
+			if response != nil {
+				return nil, fmt.Errorf("responses websocket handshake failed: HTTP %d: %w", response.StatusCode, err)
+			}
+			return nil, err
+		}
+		session.conn = conn
+	}
+	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil)
+	if err := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload)); err != nil {
+		closeResponsesWebsocketSession(session, "response write failed")
+		if !transportRetried {
+			session.mu.Unlock()
+			locked = false
+			return r.runWebSocket(ctx, request, authRetried, true)
+		}
+		r.disableWebsockets()
+		return r.Run(ctx, request)
+	}
+	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
+	accumulator := &responsesStreamAccumulator{}
+	var outputText strings.Builder
+	receivedEvent := false
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			closeResponsesWebsocketSession(session, "response read failed")
+			if !receivedEvent && !transportRetried {
+				session.mu.Unlock()
+				locked = false
+				return r.runWebSocket(ctx, request, authRetried, true)
+			}
+			if !receivedEvent {
+				r.disableWebsockets()
+				return r.Run(ctx, request)
+			}
+			return nil, fmt.Errorf("responses websocket closed before response.completed: %w", err)
+		}
+		receivedEvent = true
+		var event map[string]any
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, fmt.Errorf("failed to decode responses websocket event: %w", err)
+		}
+		rawType := strings.TrimSpace(responseToolString(event["type"]))
+		switch rawType {
+		case "response.output_text.delta":
+			outputText.WriteString(responseToolString(event["delta"]))
+		case "response.output_text.done":
+			if outputText.Len() == 0 {
+				outputText.WriteString(responseToolString(event["text"]))
+			}
+		case "error":
+			closeResponsesWebsocketSession(session, "response failed")
+			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
+		}
+		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, handler)
+		if err != nil {
+			return nil, err
+		}
+		if !completed {
+			continue
+		}
+		if len(accumulator.items) == 0 && strings.TrimSpace(outputText.String()) != "" {
+			accumulator.recordAgentItem(&AgentItem{Type: "agent_message", Text: outputText.String()})
+		}
+		return accumulator.agentResponse(request, r.ProviderID)
+	}
+}
+
+func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousResponseID string, generate *bool) map[string]any {
+	payload := map[string]any{
+		"type": "response.create", "model": apiRequest.Model, "input": apiRequest.Input, "tool_choice": apiRequest.ToolChoice,
+		"parallel_tool_calls": apiRequest.ParallelToolCalls, "store": apiRequest.Store, "stream": true, "include": apiRequest.Include,
+	}
+	if strings.TrimSpace(previousResponseID) != "" {
+		payload["previous_response_id"] = strings.TrimSpace(previousResponseID)
+	}
+	if generate != nil {
+		payload["generate"] = *generate
+	}
+	if apiRequest.Instructions != "" {
+		payload["instructions"] = apiRequest.Instructions
+	}
+	if len(apiRequest.ClientMetadata) > 0 {
+		payload["client_metadata"] = apiRequest.ClientMetadata
+	}
+	if len(apiRequest.Tools) > 0 {
+		payload["tools"] = apiRequest.Tools
+	}
+	if apiRequest.Reasoning != nil {
+		payload["reasoning"] = apiRequest.Reasoning
+	}
+	if apiRequest.Text != nil {
+		payload["text"] = apiRequest.Text
+	}
+	if apiRequest.ServiceTier != "" {
+		payload["service_tier"] = apiRequest.ServiceTier
+	}
+	if apiRequest.PromptCacheKey != "" {
+		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
+	}
+	return payload
+}
+
+func websocketEventError(event map[string]any) string {
+	if value, ok := event["error"].(map[string]any); ok {
+		return firstAgentItemValue(responseToolString(value["message"]), responseToolString(value["code"]), "unknown error")
+	}
+	return firstAgentItemValue(responseToolString(event["message"]), "unknown error")
+}
+
+func websocketURLFromHTTP(value *url.URL) (string, error) {
+	if value == nil {
+		return "", errors.New("responses websocket URL is nil")
+	}
+	copy := *value
+	switch copy.Scheme {
+	case "http":
+		copy.Scheme = "ws"
+	case "https":
+		copy.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return "", fmt.Errorf("unsupported responses websocket scheme %q", copy.Scheme)
+	}
+	return copy.String(), nil
+}
+
+func responseIDFromWebsocketEvent(event map[string]any) string {
+	if response, ok := event["response"].(map[string]any); ok {
+		return strings.TrimSpace(responseToolString(response["id"]))
+	}
+	return strings.TrimSpace(responseToolString(event["response_id"]))
+}
+
+func mustJSONBytes(value any) []byte {
+	data, _ := json.Marshal(value)
+	return data
 }
 
 func NewResponsesAgentRunnerFromRuntimeProvider(providerID string, runtimeProvider RuntimeProvider, httpClient HTTPDoer) (*ResponsesAgentRunner, error) {
@@ -315,6 +698,11 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		AuthSnapshot:               snapshot,
 		ModelsManager:              runtimeProvider.ModelsManager(nil),
 		IncludeAttestation:         runtimeProvider.SupportsAttestation(),
+		SupportsWebsockets:         runtimeProvider.Info().SupportsWebsockets,
+		WebsocketConnectTimeout: func() time.Duration {
+			info := runtimeProvider.Info()
+			return (&info).EffectiveWebsocketConnectTimeout()
+		}(),
 	}), nil
 }
 

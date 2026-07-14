@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/nacl/box"
 )
 
 func TestEnvironmentFromChatGPTBaseURL(t *testing.T) {
@@ -259,6 +263,50 @@ func TestRetryableRegistrationError(t *testing.T) {
 	if IsRetryableRegistrationError(&RegistrationHTTPError{StatusCode: http.StatusForbidden}) {
 		t.Fatalf("403 should not be retryable")
 	}
+}
+
+func TestDecryptTaskIDResponse(t *testing.T) {
+	key, _ := testIdentityKey(t)
+	encrypted := encryptTaskIDForIdentityTest(t, key, []byte("task-encrypted"))
+	decrypted, err := DecryptTaskIDResponse(key, encrypted)
+	if err != nil || decrypted != "task-encrypted" {
+		t.Fatalf("decrypted=%q err=%v", decrypted, err)
+	}
+	resolved, err := taskIDFromRegisterTaskResponse(key, &registerTaskResponse{EncryptedTaskIDCamel: &encrypted})
+	if err != nil || resolved != "task-encrypted" {
+		t.Fatalf("resolved=%q err=%v", resolved, err)
+	}
+	if _, err := DecryptTaskIDResponse(key, "not-base64"); err == nil || !strings.Contains(err.Error(), "not valid base64") {
+		t.Fatalf("base64 error = %v", err)
+	}
+	invalid := base64.StdEncoding.EncodeToString([]byte("not a sealed box"))
+	if _, err := DecryptTaskIDResponse(key, invalid); err == nil || !strings.Contains(err.Error(), "failed to decrypt") {
+		t.Fatalf("decrypt error = %v", err)
+	}
+}
+
+func encryptTaskIDForIdentityTest(t *testing.T, key *IdentityKey, plaintext []byte) string {
+	t.Helper()
+	privateKey, err := privateKeyFromPKCS8Base64(key.PrivateKeyPKCS8Base64)
+	if err != nil {
+		t.Fatalf("privateKeyFromPKCS8Base64() error = %v", err)
+	}
+	digest := sha512.Sum512(privateKey.Seed())
+	secret := append([]byte(nil), digest[:32]...)
+	secret[0] &= 248
+	secret[31] &= 127
+	secret[31] |= 64
+	publicBytes, err := curve25519.X25519(secret, curve25519.Basepoint)
+	if err != nil {
+		t.Fatalf("X25519() error = %v", err)
+	}
+	var publicKey [32]byte
+	copy(publicKey[:], publicBytes)
+	ciphertext, err := box.SealAnonymous(nil, plaintext, &publicKey, rand.Reader)
+	if err != nil {
+		t.Fatalf("SealAnonymous() error = %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(ciphertext)
 }
 
 func testIdentityKey(t *testing.T) (*IdentityKey, ed25519.PublicKey) {

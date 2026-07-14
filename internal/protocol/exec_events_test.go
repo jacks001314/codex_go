@@ -3,6 +3,9 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -256,6 +259,139 @@ func TestRustExecJSONLEventTypeSurfaceParity(t *testing.T) {
 			t.Fatalf("Marshal(%q) error = %v", events[i].Type, err)
 		}
 	}
+}
+
+func TestRustExecJSONLEventTypesDerivedFromSource(t *testing.T) {
+	rustPath := rustExecEventsSourcePath(t)
+	rustEventTypes := rustSerdeRenameValues(t, rustPath, "pub enum ThreadEvent")
+	goEventTypes := map[string]ThreadEvent{
+		"thread.started": ThreadStarted("thread-1"),
+		"turn.started":   TurnStarted(),
+		"turn.completed": TurnCompleted(Usage{}),
+		"turn.failed":    TurnFailed("failed"),
+		"item.started":   ItemStarted(TodoListItem("todo-1", nil)),
+		"item.updated":   ItemUpdated(TodoListItem("todo-1", nil)),
+		"item.completed": ItemCompleted(AgentMessageItem("msg-1", "done")),
+		"error":          ErrorEvent("boom"),
+	}
+	for _, rustType := range rustEventTypes {
+		event, ok := goEventTypes[rustType]
+		if !ok {
+			t.Fatalf("Go exec JSONL surface missing Rust ThreadEvent type %q derived from %s", rustType, rustPath)
+		}
+		if event.Type != rustType {
+			t.Fatalf("Go event constructor for %q produced type %q", rustType, event.Type)
+		}
+	}
+}
+
+func TestRustExecThreadItemDetailsDerivedFromSource(t *testing.T) {
+	rustPath := rustExecEventsSourcePath(t)
+	rustItems := rustEnumVariantNames(t, rustPath, "pub enum ThreadItemDetails")
+	goItems := map[string]ThreadItem{
+		"AgentMessage":      AgentMessageItem("agent-1", "done"),
+		"Reasoning":         {ID: "reasoning-1", Type: "reasoning", Text: "thinking"},
+		"CommandExecution":  CommandExecutionItem("cmd-1", "ls", "", nil, "in_progress"),
+		"FileChange":        FileChangeItem("patch-1", []FileChange{{Path: "a.txt", Kind: "update"}}, "completed"),
+		"McpToolCall":       MCPToolCallItem("mcp-1", "docs", "search", nil, nil, nil, "in_progress"),
+		"CollabToolCall":    CollabToolCallItem("collab-1", "spawn_agent", "thread-1", nil, nil, nil, "in_progress"),
+		"WebSearch":         WebSearchItem("search-1", "codex", map[string]any{"type": "search", "query": "codex"}),
+		"TodoList":          TodoListItem("todo-1", []TodoItem{{Text: "write", Completed: false}}),
+		"Error":             ErrorItem("error-1", "failed"),
+	}
+	for _, rustVariant := range rustItems {
+		item, ok := goItems[rustVariant]
+		if !ok {
+			t.Fatalf("Go exec ThreadItem surface missing Rust variant %q derived from %s", rustVariant, rustPath)
+		}
+		if _, err := json.Marshal(ItemCompleted(item)); err != nil {
+			t.Fatalf("Marshal Go item for Rust variant %q error = %v", rustVariant, err)
+		}
+	}
+}
+
+func rustExecEventsSourcePath(t *testing.T) string {
+	t.Helper()
+	candidates := []string{}
+	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
+		candidates = append(candidates, filepath.Join(env, "exec", "src", "exec_events.rs"))
+	}
+	candidates = append(candidates,
+		filepath.Join("..", "..", "..", "codex-main", "codex-rs", "exec", "src", "exec_events.rs"),
+		filepath.Join("..", "codex-main", "codex-rs", "exec", "src", "exec_events.rs"),
+	)
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+	}
+	t.Skip("Rust exec_events.rs not found; set CODEX_RUST_ROOT")
+	return ""
+}
+
+func rustSerdeRenameValues(t *testing.T, path string, enumHeader string) []string {
+	t.Helper()
+	block := rustEnumBlock(t, path, enumHeader)
+	matches := regexp.MustCompile(`#\[serde\(rename = "([^"]+)"\)\]`).FindAllStringSubmatch(block, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no serde rename values found in %s for %s", path, enumHeader)
+	}
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, match[1])
+	}
+	return values
+}
+
+func rustEnumVariantNames(t *testing.T, path string, enumHeader string) []string {
+	t.Helper()
+	block := rustEnumBlock(t, path, enumHeader)
+	re := regexp.MustCompile(`(?m)^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\(|,|\{)`)
+	matches := re.FindAllStringSubmatch(block, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no enum variants found in %s for %s", path, enumHeader)
+	}
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, match[1])
+	}
+	return values
+}
+
+func rustEnumBlock(t *testing.T, path string, enumHeader string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	source := string(data)
+	start := strings.Index(source, enumHeader)
+	if start < 0 {
+		t.Fatalf("%s not found in %s", enumHeader, path)
+	}
+	open := strings.Index(source[start:], "{")
+	if open < 0 {
+		t.Fatalf("%s has no body in %s", enumHeader, path)
+	}
+	pos := start + open
+	depth := 0
+	for i := pos; i < len(source); i++ {
+		switch source[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return source[pos : i+1]
+			}
+		}
+	}
+	t.Fatalf("%s body was not closed in %s", enumHeader, path)
+	return ""
 }
 
 func TestItemUpdatedJSONShape(t *testing.T) {

@@ -84,6 +84,42 @@ func TestRouterBuildToolCallResolvesResponsesAPIName(t *testing.T) {
 	}
 }
 
+func TestRouterBuildToolCallResolvesUniqueBareNamespacedTool(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("mcp__geogebra", "geogebra_create_circle")}, noopExecutor)); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	router := NewRouter(registry)
+	for _, item := range []ResponseItem{
+		{Type: "function_call", Name: "geogebra_create_circle", CallID: "bare"},
+		{Type: "function_call", Namespace: "geogebra", Name: "geogebra_create_circle", CallID: "legacy-namespace"},
+	} {
+		invocation, ok, err := router.BuildToolCall(item)
+		if err != nil || !ok {
+			t.Fatalf("BuildToolCall(%#v) ok=%v err=%v", item, ok, err)
+		}
+		if invocation.ToolName.Key() != "mcp__geogebra.geogebra_create_circle" {
+			t.Fatalf("tool name = %s", invocation.ToolName.Key())
+		}
+	}
+}
+
+func TestRouterBuildToolCallDoesNotGuessAmbiguousBareTool(t *testing.T) {
+	registry := NewRegistry()
+	for _, namespace := range []string{"mcp__one", "mcp__two"} {
+		if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName(namespace, "lookup")}, noopExecutor)); err != nil {
+			t.Fatalf("register %s: %v", namespace, err)
+		}
+	}
+	invocation, ok, err := NewRouter(registry).BuildToolCall(ResponseItem{Type: "function_call", Name: "lookup", CallID: "ambiguous"})
+	if err != nil || !ok {
+		t.Fatalf("BuildToolCall() ok=%v err=%v", ok, err)
+	}
+	if invocation.ToolName.Key() != "lookup" {
+		t.Fatalf("ambiguous tool resolved to %s", invocation.ToolName.Key())
+	}
+}
+
 func TestRouterDispatch(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("echo")}, func(ctx context.Context, invocation *Invocation) (*Output, error) {

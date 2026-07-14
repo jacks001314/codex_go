@@ -116,6 +116,146 @@ func TestHTTPMCPToolListCallAndResource(t *testing.T) {
 	}
 }
 
+func TestHTTPMCPAppliesStaticAndEnvironmentHeaders(t *testing.T) {
+	t.Setenv("MCP_HEADER_TOKEN", "from-env")
+	var gotStatic, gotEnv, gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotStatic = r.Header.Get("X-Test-Static")
+		gotEnv = r.Header.Get("X-Test-Env")
+		gotAuthorization = r.Header.Get("Authorization")
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "header-session")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": defaultMCPProtocol, "capabilities": map[string]any{}, "serverInfo": map[string]string{"name": "header-test", "version": "1"}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"headers": {Config: ServerConfig{URL: server.URL, Enabled: true, HTTPHeaders: map[string]string{"X-Test-Static": "static", "Authorization": "Bearer configured"}, EnvHTTPHeaders: map[string]string{"X-Test-Env": "MCP_HEADER_TOKEN"}}},
+	}})
+	defer service.Close()
+	if _, err := service.ListStatusChecked(&MCPListServerStatusParams{}); err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if gotStatic != "static" || gotEnv != "from-env" || gotAuthorization != "Bearer configured" {
+		t.Fatalf("headers static=%q env=%q authorization=%q", gotStatic, gotEnv, gotAuthorization)
+	}
+}
+
+func TestHTTPMCPRuntimeHeadersOverrideConfiguredAuthorization(t *testing.T) {
+	var gotAuthorization, gotProtocol string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		gotProtocol = r.Header.Get(mcpHTTPProtocolVersionHeader)
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": defaultMCPProtocol, "capabilities": map[string]any{}, "serverInfo": map[string]string{"name": "override-test", "version": "1"}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"headers": {Config: ServerConfig{
+			URL: server.URL, Enabled: true,
+			HTTPHeaders: map[string]string{"Authorization": "Bearer configured", mcpHTTPProtocolVersionHeader: "invalid"},
+			ApplyHTTPRequest: func(request *http.Request, _ []byte) error {
+				request.Header.Set("Authorization", "Bearer runtime")
+				return nil
+			},
+		}},
+	}})
+	defer service.Close()
+	if _, err := service.ListStatusChecked(&MCPListServerStatusParams{}); err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if gotAuthorization != "Bearer runtime" || gotProtocol != defaultMCPProtocol {
+		t.Fatalf("authorization=%q protocol=%q", gotAuthorization, gotProtocol)
+	}
+}
+
+func TestHTTPMCPIgnoresInvalidConfiguredHeadersLikeRust(t *testing.T) {
+	t.Setenv("MCP_INVALID_HEADER_VALUE", "bad\nvalue")
+	var gotValid, gotInvalidName, gotInvalidValue string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotValid = r.Header.Get("X-Test-Valid")
+		gotInvalidName = r.Header.Get("Bad Header")
+		gotInvalidValue = r.Header.Get("X-Test-Invalid-Value")
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": defaultMCPProtocol, "capabilities": map[string]any{}, "serverInfo": map[string]string{"name": "invalid-header-test", "version": "1"}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"headers": {Config: ServerConfig{
+			URL: server.URL, Enabled: true,
+			HTTPHeaders:    map[string]string{"X-Test-Valid": "yes", "Bad Header": "ignored"},
+			EnvHTTPHeaders: map[string]string{"X-Test-Invalid-Value": "MCP_INVALID_HEADER_VALUE"},
+		}},
+	}})
+	defer service.Close()
+	if _, err := service.ListStatusChecked(&MCPListServerStatusParams{}); err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if gotValid != "yes" || gotInvalidName != "" || gotInvalidValue != "" {
+		t.Fatalf("headers valid=%q invalid-name=%q invalid-value=%q", gotValid, gotInvalidName, gotInvalidValue)
+	}
+}
+
+func TestHTTPMCPConfiguredAuthorizationSkipsStoredOAuthLikeRust(t *testing.T) {
+	client := newMCPHTTPClient(&ServerConfig{
+		URL:             "https://mcp.example.test",
+		CodexHome:       t.TempDir(),
+		OAuthServerName: "headers",
+		HTTPHeaders:     map[string]string{"Authorization": "Bearer configured"},
+	})
+	if token, oauth := client.authorizationBearerToken(false); token != "" || oauth {
+		t.Fatalf("authorizationBearerToken() = %q, %t, want configured header to bypass OAuth", token, oauth)
+	}
+}
+
 func TestHTTPMCPInventoryFollowsPagination(t *testing.T) {
 	var toolsCursors []string
 	var resourceCursors []string

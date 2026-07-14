@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -801,6 +802,30 @@ func (s *MCPService) ListStatus(params *MCPListServerStatusParams) *MCPListServe
 	return response
 }
 
+func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	statuses := make([]MCPServerStatus, 0, len(s.servers))
+	configs := make(map[string]ServerConfig, len(s.configs))
+	for name, config := range s.configs {
+		configs[name] = cloneServerConfig(&config)
+	}
+	for _, status := range s.servers {
+		cloned := cloneMCPServerStatus(status)
+		if config, ok := configs[cloned.effectiveName()]; ok {
+			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
+		}
+		statuses = append(statuses, cloned)
+	}
+	s.mu.Unlock()
+	sort.SliceStable(statuses, func(i int, j int) bool {
+		return statuses[i].effectiveName() < statuses[j].effectiveName()
+	})
+	return statuses
+}
+
 func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPListServerStatusResponse, error) {
 	return s.ListStatusCheckedWithObserver(params, nil)
 }
@@ -839,42 +864,7 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 	if params != nil && params.ThreadID != nil {
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
-	for i := range servers {
-		config, ok := configs[servers[i].effectiveName()]
-		if !ok || !detail.includesTools() {
-			continue
-		}
-		name := servers[i].effectiveName()
-		if dynamicConfigs[servers[i].effectiveName()] && (params == nil || params.Detail == nil) {
-			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
-			continue
-		}
-		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
-		inventory, err := s.listInventoryForConfig(name, &config, threadID)
-		if err == nil {
-			servers[i].Tools = inventory.Tools
-			if detail.includesInventory() {
-				servers[i].Resources = inventory.Resources
-				servers[i].ResourceTemplates = inventory.ResourceTemplates
-			}
-			servers[i].State = MCPServerReady
-			servers[i].Error = nil
-		} else if isRunnableMCPConfig(&config) {
-			message := err.Error()
-			servers[i].State = MCPServerFailed
-			servers[i].Error = &message
-			servers[i].Tools = nil
-			servers[i].Resources = nil
-			servers[i].ResourceTemplates = nil
-		}
-		servers[i].AuthStatus = s.authStatusForConfig(servers[i].effectiveName(), &config)
-		s.recordInventoryStatus(servers[i].effectiveName(), servers[i], detail.includesTools(), detail.includesInventory())
-		if err != nil && servers[i].State == MCPServerFailed {
-			notifyMCPStartupObserver(observer, name, MCPServerFailed, err)
-		} else {
-			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
-		}
-	}
+	servers = s.populateStatusInventories(params, detail, observer, servers, configs, dynamicConfigs, threadID)
 	sort.SliceStable(servers, func(i int, j int) bool {
 		return servers[i].effectiveName() < servers[j].effectiveName()
 	})
@@ -883,6 +873,71 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		return nil, err
 	}
 	return &MCPListServerStatusResponse{Data: page, NextCursor: nextCursor, Servers: page}, nil
+}
+
+type mcpInventoryStatusResult struct {
+	Index  int
+	Status MCPServerStatus
+	Err    error
+}
+
+func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams, detail *MCPServerStatusDetail, observer MCPStartupObserver, servers []MCPServerStatus, configs map[string]ServerConfig, dynamicConfigs map[string]bool, threadID string) []MCPServerStatus {
+	if !detail.includesTools() {
+		return servers
+	}
+	resultCh := make(chan mcpInventoryStatusResult, len(servers))
+	pending := 0
+	for i := range servers {
+		name := servers[i].effectiveName()
+		config, ok := configs[name]
+		if !ok {
+			continue
+		}
+		if dynamicConfigs[name] && (params == nil || params.Detail == nil) {
+			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
+			continue
+		}
+		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
+		pending++
+		go func(index int, serverName string, serverConfig ServerConfig, status MCPServerStatus) {
+			resultCh <- s.inventoryStatusForConfig(index, serverName, &serverConfig, status, detail.includesInventory(), threadID)
+		}(i, name, config, cloneMCPServerStatus(servers[i]))
+	}
+	for pending > 0 {
+		result := <-resultCh
+		pending--
+		servers[result.Index] = result.Status
+		name := result.Status.effectiveName()
+		if result.Err != nil && result.Status.State == MCPServerFailed {
+			notifyMCPStartupObserver(observer, name, MCPServerFailed, result.Err)
+		} else {
+			notifyMCPStartupObserver(observer, name, result.Status.State, nil)
+		}
+	}
+	return servers
+}
+
+func (s *MCPService) inventoryStatusForConfig(index int, name string, config *ServerConfig, status MCPServerStatus, includeInventory bool, threadID string) mcpInventoryStatusResult {
+	inventory, err := s.listInventoryForConfig(name, config, threadID)
+	if err == nil {
+		status.Tools = inventory.Tools
+		if includeInventory {
+			status.Resources = inventory.Resources
+			status.ResourceTemplates = inventory.ResourceTemplates
+		}
+		status.State = MCPServerReady
+		status.Error = nil
+	} else if isRunnableMCPConfig(config) {
+		message := err.Error()
+		status.State = MCPServerFailed
+		status.Error = &message
+		status.Tools = nil
+		status.Resources = nil
+		status.ResourceTemplates = nil
+	}
+	status.AuthStatus = s.authStatusForConfig(status.effectiveName(), config)
+	s.recordInventoryStatus(status.effectiveName(), status, true, includeInventory)
+	return mcpInventoryStatusResult{Index: index, Status: status, Err: err}
 }
 
 func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status MCPServerStartupState, err error) {
@@ -1268,11 +1323,13 @@ func mcpHTTPClientCacheKey(config *ServerConfig, openAIForm bool) string {
 		return fmt.Sprintf("openaiForm=%t", openAIForm)
 	}
 	cloned := cloneServerConfig(config)
+	applyHTTPRequest := cloned.ApplyHTTPRequest != nil
+	cloned.ApplyHTTPRequest = nil
 	data, err := json.Marshal(cloned)
 	if err != nil {
-		return fmt.Sprintf("%#v|openaiForm=%t", cloned, openAIForm)
+		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t", cloned, openAIForm, applyHTTPRequest)
 	}
-	return fmt.Sprintf("%s|openaiForm=%t", data, openAIForm)
+	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t", data, openAIForm, applyHTTPRequest)
 }
 
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {
@@ -1389,6 +1446,9 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
 		return MCPAuthBearerToken
 	}
+	if config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(config) {
+		return MCPAuthBearerToken
+	}
 	store := s.oauth
 	if store == nil && strings.TrimSpace(config.CodexHome) != "" {
 		store = NewOAuthStore(config.CodexHome)
@@ -1408,6 +1468,23 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 		return MCPAuthUnsupported
 	}
 	return status
+}
+
+func configuredAuthorizationHeader(config *ServerConfig) bool {
+	if config == nil {
+		return false
+	}
+	for name, value := range config.HTTPHeaders {
+		if strings.EqualFold(strings.TrimSpace(name), "Authorization") && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	for name, envVar := range config.EnvHTTPHeaders {
+		if strings.EqualFold(strings.TrimSpace(name), "Authorization") && strings.TrimSpace(os.Getenv(strings.TrimSpace(envVar))) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MCPService) readCachedResource(key *MCPResourceCacheKey) (*MCPResourceReadResponse, bool) {
