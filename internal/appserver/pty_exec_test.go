@@ -205,10 +205,7 @@ func waitForActiveCommandExecPTYOrResult(t *testing.T, service *CommandExecServi
 		}
 		active, err := service.activeCommandExecForConnection(defaultRequestConnectionID, processID)
 		if err == nil {
-			service.mu.Lock()
-			ptySession := active.pty
-			service.mu.Unlock()
-			if ptySession != nil {
+			if active.ptySession() != nil {
 				return
 			}
 		}

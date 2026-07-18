@@ -19,6 +19,76 @@ type AppListParams struct {
 	ForceRefetch bool    `json:"forceRefetch,omitempty"`
 }
 
+type AppsReadParams struct {
+	AppIDs       []string `json:"appIds"`
+	IncludeTools bool     `json:"includeTools,omitempty"`
+}
+
+type AppToolSummary struct {
+	Name        string  `json:"name"`
+	Title       *string `json:"title"`
+	Description string  `json:"description"`
+}
+
+type ConnectorMetadata struct {
+	ID             string           `json:"id"`
+	Name           string           `json:"name"`
+	Description    *string          `json:"description"`
+	IconURL        *string          `json:"iconUrl"`
+	ToolSummaries  []AppToolSummary `json:"toolSummaries"`
+	ToolsRequested bool             `json:"-"`
+}
+
+func (m *ConnectorMetadata) MarshalJSON() ([]byte, error) {
+	var tools []AppToolSummary
+	if m.ToolsRequested {
+		tools = append([]AppToolSummary(nil), m.ToolSummaries...)
+	}
+	return json.Marshal(struct {
+		ID            string           `json:"id"`
+		Name          string           `json:"name"`
+		Description   *string          `json:"description"`
+		IconURL       *string          `json:"iconUrl"`
+		ToolSummaries []AppToolSummary `json:"toolSummaries"`
+	}{
+		ID: m.ID, Name: m.Name, Description: cloneStringPtr(m.Description), IconURL: cloneStringPtr(m.IconURL), ToolSummaries: tools,
+	})
+}
+
+type AppsReadResponse struct {
+	Apps          []ConnectorMetadata `json:"apps"`
+	MissingAppIDs []string            `json:"missingAppIds"`
+}
+
+func (r *AppsReadResponse) MarshalJSON() ([]byte, error) {
+	apps := append([]ConnectorMetadata(nil), r.Apps...)
+	missing := append([]string(nil), r.MissingAppIDs...)
+	if apps == nil {
+		apps = []ConnectorMetadata{}
+	}
+	if missing == nil {
+		missing = []string{}
+	}
+	return json.Marshal(struct {
+		Apps          []ConnectorMetadata `json:"apps"`
+		MissingAppIDs []string            `json:"missingAppIds"`
+	}{Apps: apps, MissingAppIDs: missing})
+}
+
+type AppMetadataReadParams struct {
+	AppIDs       []string
+	IncludeTools bool
+}
+
+type AppMetadataReadResponse struct {
+	Apps          []ConnectorMetadata
+	MissingAppIDs []string
+}
+
+type AppMetadataProvider interface {
+	ReadAppMetadata(params *AppMetadataReadParams) (*AppMetadataReadResponse, error)
+}
+
 type AppDirectoryListParams struct {
 	ThreadID     string
 	ForceRefetch bool
@@ -274,6 +344,8 @@ type AppService struct {
 	directoryAllLoaded     bool
 	accessibleCaches       map[string]appAccessibleCacheEntry
 	lastAccessibleCacheKey string
+	metadataProvider       AppMetadataProvider
+	metadataCache          map[string]ConnectorMetadata
 }
 
 type appAccessibleCacheEntry struct {
@@ -365,6 +437,105 @@ func (s *AppService) ClearCache() {
 	s.directoryAllLoaded = false
 	s.accessibleCaches = nil
 	s.lastAccessibleCacheKey = ""
+	s.metadataCache = nil
+}
+
+func (s *AppService) SetMetadataProvider(provider AppMetadataProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metadataProvider = provider
+}
+
+func (s *AppService) Read(params *AppsReadParams) (*AppsReadResponse, error) {
+	if params == nil {
+		params = &AppsReadParams{}
+	}
+	if len(params.AppIDs) > 100 {
+		return nil, fmt.Errorf("%w: app/read accepts at most 100 appIds", ErrInvalidAppRequest)
+	}
+	ids := dedupeAppIDs(params.AppIDs)
+	s.mu.Lock()
+	provider := s.metadataProvider
+	cached := make(map[string]ConnectorMetadata, len(s.metadataCache))
+	for id, metadata := range s.metadataCache {
+		cached[id] = cloneConnectorMetadata(metadata)
+	}
+	for _, app := range append(cloneApps(s.apps), s.directoryCache...) {
+		if _, ok := cached[app.ID]; ok || strings.TrimSpace(app.ID) == "" {
+			continue
+		}
+		cached[app.ID] = ConnectorMetadata{
+			ID:          app.ID,
+			Name:        app.Name,
+			Description: cloneStringPtr(app.Description),
+			IconURL:     cloneStringPtr(app.LogoURL),
+		}
+	}
+	s.mu.Unlock()
+
+	missing := make([]string, 0, len(ids))
+	needFetch := make([]string, 0, len(ids))
+	for _, id := range ids {
+		metadata, ok := cached[id]
+		if !ok || params.IncludeTools && !metadata.ToolsRequested && provider != nil {
+			needFetch = append(needFetch, id)
+		}
+	}
+	if len(needFetch) > 0 && provider != nil {
+		response, err := provider.ReadAppMetadata(&AppMetadataReadParams{AppIDs: needFetch, IncludeTools: params.IncludeTools})
+		if err != nil {
+			return nil, err
+		}
+		if response != nil {
+			for _, metadata := range response.Apps {
+				metadata.ToolsRequested = params.IncludeTools
+				cached[metadata.ID] = cloneConnectorMetadata(metadata)
+			}
+		}
+		s.mu.Lock()
+		if s.metadataCache == nil {
+			s.metadataCache = map[string]ConnectorMetadata{}
+		}
+		for id, metadata := range cached {
+			s.metadataCache[id] = cloneConnectorMetadata(metadata)
+		}
+		s.mu.Unlock()
+	}
+
+	apps := make([]ConnectorMetadata, 0, len(ids))
+	for _, id := range ids {
+		metadata, ok := cached[id]
+		if !ok {
+			missing = append(missing, id)
+			continue
+		}
+		metadata.ToolsRequested = params.IncludeTools
+		apps = append(apps, cloneConnectorMetadata(metadata))
+	}
+	return &AppsReadResponse{Apps: apps, MissingAppIDs: missing}, nil
+}
+
+func dedupeAppIDs(ids []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func cloneConnectorMetadata(metadata ConnectorMetadata) ConnectorMetadata {
+	metadata.Description = cloneStringPtr(metadata.Description)
+	metadata.IconURL = cloneStringPtr(metadata.IconURL)
+	metadata.ToolSummaries = append([]AppToolSummary(nil), metadata.ToolSummaries...)
+	for i := range metadata.ToolSummaries {
+		metadata.ToolSummaries[i].Title = cloneStringPtr(metadata.ToolSummaries[i].Title)
+	}
+	return metadata
 }
 
 func (s *AppService) List(params *AppListParams) (*AppListResponse, error) {

@@ -201,14 +201,26 @@ func TestMergeConfiguredProvidersAppliesAmazonBedrockAWSOverride(t *testing.T) {
 	}
 }
 
-func TestMergeConfiguredProvidersRejectsAmazonBedrockNonAWSOverride(t *testing.T) {
-	_, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{
+func TestMergeConfiguredProvidersAppliesAmazonBedrockBaseURLOverride(t *testing.T) {
+	merged, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{
 		AmazonBedrockProviderID: {
 			BaseURL: "https://example.com/v1",
 		},
 	})
-	if err == nil {
-		t.Fatal("MergeConfiguredProviders returned nil error, want failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged[AmazonBedrockProviderID].BaseURL != "https://example.com/v1" {
+		t.Fatalf("provider = %+v", merged[AmazonBedrockProviderID])
+	}
+}
+
+func TestMergeConfiguredProvidersRejectsAmazonBedrockUnsupportedOverride(t *testing.T) {
+	_, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{
+		AmazonBedrockProviderID: {Name: "Custom Bedrock"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

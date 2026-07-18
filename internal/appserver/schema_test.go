@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/internal/apps"
 	"codex_go/internal/mcp"
 	sandboxpkg "codex_go/internal/sandbox"
 )
@@ -56,6 +57,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolMethod(t, stable.Notifications, string(NotificationServerRequestResolved), false)
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodCommandExec), "CommandExecParams", "CommandExecResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodAppList), "AppsListParams", "AppsListResponse")
+	requireProtocolSignature(t, stable.ClientRequests, string(MethodAppRead), "AppsReadParams", "AppsReadResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConsumeAccountRateLimitResetCredit), "ConsumeAccountRateLimitResetCreditParams", "ConsumeAccountRateLimitResetCreditResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodGetWorkspaceMessages), "", "GetWorkspaceMessagesResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConfigRequirementsRead), "", "ConfigRequirementsReadResponse")
@@ -146,6 +148,8 @@ func TestBuildTypeScriptProtocolSchemaMatchesRustFixtures(t *testing.T) {
 	requireProtocolMethod(t, stable.ClientRequests, string(MethodGetConversationSummary), false)
 	requireProtocolMethod(t, stable.ClientRequests, string(MethodGitDiffToRemote), false)
 	requireProtocolMethod(t, stable.Notifications, string(NotificationRawResponseItemCompleted), false)
+	requireProtocolSignature(t, stable.Notifications, string(NotificationRawResponseItemCompleted), "RawResponseItemCompletedNotification", "")
+	requireProtocolSignature(t, BuildTypeScriptProtocolSchema(false, false).Notifications, string(NotificationRawResponseCompleted), "RawResponseCompletedNotification", "")
 }
 
 func TestRustAppServerProtocolSchemaTreeIsCoveredByGoGenerators(t *testing.T) {
@@ -204,6 +208,11 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadGoalClearedNotification", &GoalClearedNotification{ThreadID: "thread-schema"}},
 		{"ThreadSettingsUpdatedNotification", &SettingsUpdatedNotification{ThreadID: "thread-schema", ThreadSettings: Settings{CWD: "D:/workspace", SandboxPolicy: "read-only", ActivePermissionProfile: &permissionProfile, Model: "gpt-5", ModelProvider: "openai"}}},
 		{"ThreadTokenUsageUpdatedNotification", &ThreadTokenUsageUpdatedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", TokenUsage: TokenUsage{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 5, ReasoningOutputTokens: 1, ModelContextWindow: &contextWindow}}},
+		{"AppsReadParams", &apps.AppsReadParams{AppIDs: []string{"calendar"}, IncludeTools: true}},
+		{"AppsReadResponse", &apps.AppsReadResponse{Apps: []apps.ConnectorMetadata{{ID: "calendar", Name: "Calendar", ToolSummaries: []apps.AppToolSummary{{Name: "search", Description: "Search events"}}, ToolsRequested: true}}, MissingAppIDs: []string{"missing"}}},
+		{"EnvironmentStatusParams", &EnvironmentStatusParams{EnvironmentID: "environment-schema"}},
+		{"EnvironmentStatusResponse", &EnvironmentStatusResponse{Status: EnvironmentStatusDisconnected, Error: stringPtr("connection closed")}},
+		{"RawResponseCompletedNotification", &RawResponseCompletedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", ResponseID: "resp-schema", Usage: &TokenUsageBreakdown{TotalTokens: 15, InputTokens: 10, CachedInputTokens: 2, CacheWriteInputTokens: 3, OutputTokens: 5, ReasoningOutputTokens: 1}}},
 		{"TurnStartedNotification", &TurnStartedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusInProgress)}},
 		{"TurnCompletedNotification", &TurnCompletedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusCompleted)}},
 		{"TurnCompletedNotification", &TurnCompletedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurnWithAllThreadItems()}},

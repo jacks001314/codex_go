@@ -287,7 +287,9 @@ func TestNewRunnerFailsBeforeRequestWhenOpenAIAuthMissing(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	_, err := NewRunner(home).Run(Request{
+	runner := NewRunner(home)
+	runner.MCPService = mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}})
+	_, err := runner.Run(Request{
 		Exec: cli.ExecOptions{
 			Prompt:    "hello",
 			JSON:      true,
@@ -632,7 +634,7 @@ func TestRunPersistsAdditionalSkillInputItemsForHistory(t *testing.T) {
 	}
 }
 
-func TestRunExposesHostedImageGenerationByDefaultLikeRust(t *testing.T) {
+func TestRunExposesStandaloneImageGenerationByDefaultLikeRust(t *testing.T) {
 	t.Setenv(auth.OpenAIAPIKeyEnv, "")
 	t.Setenv(auth.CodexAPIKeyEnv, "")
 	t.Setenv(auth.CodexAccessTokenEnv, "")
@@ -648,6 +650,7 @@ model = "gpt-5.5"
 	agent := &recordingAgent{message: "ok"}
 	runner := NewRunner(home)
 	runner.Agent = agent
+	runner.MCPService = mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}})
 
 	var stdout, stderr bytes.Buffer
 	_, err := runner.Run(Request{
@@ -662,15 +665,15 @@ model = "gpt-5.5"
 	if agent.request == nil {
 		t.Fatal("agent request is nil")
 	}
-	if agentRequestToolsContainNamespaceFunction(agent.request, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
-		t.Fatalf("default exec runtime should leave image generation hosted, got standalone namespace: %#v", agent.request.Tools)
+	if !agentRequestToolsContainNamespaceFunction(agent.request, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("default exec runtime should expose standalone image generation namespace like Rust: %#v", agent.request.Tools)
 	}
-	if !agentRequestToolsContainType(agent.request, "image_generation") {
-		t.Fatalf("default exec runtime should expose hosted image_generation like Rust: %#v", agent.request.Tools)
+	if agentRequestToolsContainType(agent.request, "image_generation") {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", agent.request.Tools)
 	}
 }
 
-func TestRunResponsesRequestIncludesHostedImageGenerationLikeRust(t *testing.T) {
+func TestRunResponsesRequestIncludesStandaloneImageGenerationByDefaultLikeRust(t *testing.T) {
 	t.Setenv(auth.OpenAIAPIKeyEnv, "")
 	t.Setenv(auth.CodexAPIKeyEnv, "")
 	t.Setenv(auth.CodexAccessTokenEnv, "")
@@ -700,7 +703,9 @@ func TestRunResponsesRequestIncludesHostedImageGenerationLikeRust(t *testing.T) 
 	}
 
 	var stdout, stderr bytes.Buffer
-	_, err := NewRunner(home).Run(Request{
+	runner := NewRunner(home)
+	runner.MCPService = mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}})
+	_, err := runner.Run(Request{
 		Exec: cli.ExecOptions{
 			Prompt:    "draw a square",
 			JSON:      true,
@@ -714,11 +719,11 @@ func TestRunResponsesRequestIncludesHostedImageGenerationLikeRust(t *testing.T) 
 	if !ok {
 		t.Fatalf("tools = %#v, body = %#v", recordedBody["tools"], recordedBody)
 	}
-	if !responseToolsContainTypeForExecTest(tools, "image_generation") {
-		t.Fatalf("tools missing hosted image_generation: %#v", tools)
+	if !responseToolsContainNamespaceFunctionForExecTest(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", tools)
 	}
-	if responseToolsContainNamespaceFunctionForExecTest(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
-		t.Fatalf("default non-lite request should use hosted image_generation, not standalone namespace: %#v", tools)
+	if responseToolsContainTypeForExecTest(tools, "image_generation") {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", tools)
 	}
 }
 
@@ -743,13 +748,15 @@ func TestRunResponsesReviewRequestDisablesImageGenerationToolsLikeRust(t *testin
 		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-review-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-5.5\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\nimagegenext = true\n"
+	configBody := "model = \"gpt-5.5\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\nenable_request_compression = false\nimage_generation = true\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 
 	var stdout, stderr bytes.Buffer
-	_, err := NewRunner(home).Run(Request{
+	runner := NewRunner(home)
+	runner.MCPService = mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}})
+	_, err := runner.Run(Request{
 		Exec: cli.ExecOptions{
 			Subcommand: "review",
 			Review:     cli.ReviewOptions{Prompt: "check image tools"},
@@ -816,7 +823,7 @@ func TestRunResponsesRequestIncludesHostedImageGenerationForOpenAIAPIKeyProvider
 	}
 }
 
-func TestRunExposesStandaloneImageGenerationWhenImagegenExtEnabledLikeRust(t *testing.T) {
+func TestRunExposesStandaloneImageGenerationWhenImageGenerationEnabledLikeRust(t *testing.T) {
 	t.Setenv(auth.OpenAIAPIKeyEnv, "")
 	t.Setenv(auth.CodexAPIKeyEnv, "")
 	t.Setenv(auth.CodexAccessTokenEnv, "")
@@ -828,13 +835,14 @@ func TestRunExposesStandaloneImageGenerationWhenImagegenExtEnabledLikeRust(t *te
 model = "gpt-5.5"
 
 [features]
-imagegenext = true
+image_generation = true
 `), 0o600); err != nil {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 	agent := &recordingAgent{message: "ok"}
 	runner := NewRunner(home)
 	runner.Agent = agent
+	runner.MCPService = mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}})
 
 	var stdout, stderr bytes.Buffer
 	_, err := runner.Run(Request{

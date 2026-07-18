@@ -640,8 +640,8 @@ func TestExecServerConfigOutput(t *testing.T) {
 func TestExecServerWebSocketListenStartsServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout lockedAppTestBuffer
+	var stderr lockedAppTestBuffer
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- Run(ctx, []string{
@@ -825,7 +825,24 @@ func TestExecServerRemoteValidationLikeRust(t *testing.T) {
 	}
 }
 
-func waitForAppExecServerListenURL(t *testing.T, stdout *bytes.Buffer, errCh <-chan error) string {
+type lockedAppTestBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *lockedAppTestBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+
+func (b *lockedAppTestBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}
+
+func waitForAppExecServerListenURL(t *testing.T, stdout *lockedAppTestBuffer, errCh <-chan error) string {
 	t.Helper()
 	deadline := time.After(time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)

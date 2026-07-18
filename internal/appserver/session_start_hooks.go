@@ -100,7 +100,7 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 	if err != nil || !ok {
 		return err
 	}
-	if r.services.HookRunner == nil {
+	if !r.hookRunnerConfigured() {
 		return nil
 	}
 	cwd := firstNonEmpty(params.CWD, record.Metadata.CWD, r.services.DefaultCWD, ".")

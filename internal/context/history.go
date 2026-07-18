@@ -15,6 +15,7 @@ type HistoryItem = eventmap.ResponseItem
 type TokenUsage struct {
 	InputTokens           int64 `json:"input_tokens"`
 	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 	TotalTokens           int64 `json:"total_tokens"`
@@ -151,6 +152,7 @@ func (m *HistoryManager) UpdateTokenInfo(usage TokenUsage, contextWindow *int64)
 	m.tokenInfo.LastTokenUsage = usage
 	m.tokenInfo.TotalTokenUsage.InputTokens += usage.InputTokens
 	m.tokenInfo.TotalTokenUsage.CachedInputTokens += usage.CachedInputTokens
+	m.tokenInfo.TotalTokenUsage.CacheWriteInputTokens += usage.CacheWriteInputTokens
 	m.tokenInfo.TotalTokenUsage.OutputTokens += usage.OutputTokens
 	m.tokenInfo.TotalTokenUsage.ReasoningOutputTokens += usage.ReasoningOutputTokens
 	m.tokenInfo.TotalTokenUsage.TotalTokens += usage.TotalTokens

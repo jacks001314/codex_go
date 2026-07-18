@@ -23,6 +23,19 @@ func TestRoleResolverResolvePrefersUserRoles(t *testing.T) {
 	}
 }
 
+func TestRoleResolverResolveDeepClonesNicknameCandidates(t *testing.T) {
+	resolver := NewRoleResolver(map[string]RoleConfig{"worker": {Description: "Work.", NicknameCandidates: []string{"Atlas"}}})
+	role, ok := resolver.Resolve(nil, "worker")
+	if !ok {
+		t.Fatal("worker role not found")
+	}
+	role.NicknameCandidates[0] = "Changed"
+	again, _ := resolver.Resolve(nil, "worker")
+	if again.NicknameCandidates[0] != "Atlas" {
+		t.Fatalf("nickname mutated resolver state: %+v", again)
+	}
+}
+
 func TestRoleResolverApplyPreservesProviderAndTierUnlessSet(t *testing.T) {
 	resolver := NewRoleResolver(map[string]RoleConfig{
 		"locked-model": {

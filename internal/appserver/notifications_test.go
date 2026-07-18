@@ -16,6 +16,7 @@ func TestTokenUsageNotificationMarshalComputesTotal(t *testing.T) {
 		TokenUsage: TokenUsage{
 			InputTokens:           10,
 			CachedInputTokens:     2,
+			CacheWriteInputTokens: 3,
 			OutputTokens:          5,
 			ReasoningOutputTokens: 1,
 			ModelContextWindow:    &contextWindow,
@@ -39,7 +40,7 @@ func TestTokenUsageNotificationMarshalComputesTotal(t *testing.T) {
 	if payload.TokenUsage.Total.TotalTokens != 15 || payload.TokenUsage.Last.TotalTokens != 15 {
 		t.Fatalf("payload = %+v", payload.TokenUsage)
 	}
-	if payload.TokenUsage.Total.CachedInputTokens != 2 || payload.TokenUsage.Total.ReasoningOutputTokens != 1 {
+	if payload.TokenUsage.Total.CachedInputTokens != 2 || payload.TokenUsage.Total.CacheWriteInputTokens != 3 || payload.TokenUsage.Total.ReasoningOutputTokens != 1 {
 		t.Fatalf("payload = %+v", payload.TokenUsage)
 	}
 	if payload.TokenUsage.ModelContextWindow == nil || *payload.TokenUsage.ModelContextWindow != contextWindow {
@@ -57,6 +58,19 @@ func TestTokenUsageNotificationMarshalComputesTotal(t *testing.T) {
 		if _, ok := usage[legacy]; ok {
 			t.Fatalf("legacy flat token usage field %q should not be emitted: %s", legacy, data)
 		}
+	}
+}
+
+func TestRawResponseCompletedNotificationIncludesCacheWriteTokens(t *testing.T) {
+	data, err := json.Marshal(&RawResponseCompletedNotification{
+		ThreadID: "thread-1", TurnID: "turn-1", ResponseID: "resp-1",
+		Usage: &TokenUsageBreakdown{TotalTokens: 10, InputTokens: 7, CachedInputTokens: 2, CacheWriteInputTokens: 3, OutputTokens: 3},
+	})
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"cacheWriteInputTokens":3`) || !strings.Contains(string(data), `"responseId":"resp-1"`) {
+		t.Fatalf("data = %s", data)
 	}
 }
 

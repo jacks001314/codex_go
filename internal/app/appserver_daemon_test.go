@@ -292,7 +292,7 @@ func runAppServerUntilCanceled(args []string) error {
 	go func() {
 		done <- Run(ctx, args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	}()
-	timer := time.NewTimer(25 * time.Millisecond)
+	timer := time.NewTimer(250 * time.Millisecond)
 	defer timer.Stop()
 	select {
 	case err := <-done:

@@ -39,6 +39,7 @@ import (
 	"codex_go/internal/sandbox"
 	"codex_go/internal/session"
 	"codex_go/internal/skillprovider"
+	"codex_go/internal/state"
 	"codex_go/internal/telemetry"
 	"codex_go/internal/tool"
 	"codex_go/internal/turn"
@@ -85,6 +86,7 @@ type RuntimeServices struct {
 	HTTPClient                   model.HTTPDoer
 	SpawnGraph                   agent.Store
 	Analytics                    telemetry.TurnEventSink
+	SkillShadowMetrics           SkillShadowMetricSink
 	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
 	BrowserOpen                  func(string) error
 	CustomSkills                 *skillprovider.Registry
@@ -96,6 +98,12 @@ type RuntimeServices struct {
 	WorkspaceCodexPluginsEnabled *bool
 
 	RemoteControlDisabledByRequirements bool
+}
+
+type SkillShadowMetricSink interface {
+	Counter(name string, inc int, tags map[string]string)
+	Histogram(name string, value int, tags map[string]string)
+	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
 type RemoteControlStartupMode string
@@ -123,6 +131,7 @@ type RuntimeRouterOptions struct {
 
 type RuntimeRouter struct {
 	services               RuntimeServices
+	servicesMu             sync.Mutex
 	mu                     sync.RWMutex
 	sink                   NotificationSink
 	requests               ServerRequestSink
@@ -163,6 +172,7 @@ type RuntimeRouter struct {
 	managedNetworksMu      sync.Mutex
 	managedNetworks        map[string]*network.PreparedProxyManagedNetwork
 	managedNetworkInputs   map[string]managedNetworkReloadInput
+	agentRegistry          *agent.Registry
 }
 
 type unifiedExecAnalyticsContext struct {
@@ -211,6 +221,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		unifiedExecAnalytics: map[string]unifiedExecAnalyticsContext{},
 		managedNetworks:      map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs: map[string]managedNetworkReloadInput{},
+		agentRegistry:        agent.NewRegistry(),
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
@@ -483,20 +494,21 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 			CodexHome:           codexHome,
 			IncludeDefaultRoots: true,
 		}),
-		Plugins:      pluginService,
-		Models:       model.NewModelService(nil),
-		Permissions:  sandbox.NewPermissionProfileService(nil),
-		MCP:          mcp.NewMCPService(nil),
-		Features:     features.NewFeatureService(nil),
-		Apps:         apps.NewAppService(nil),
-		Turns:        turn.NewTurnService(),
-		ThreadStatus: NewThreadStatusManager(),
-		Reviews:      review.NewService(),
-		Misc:         NewMiscService(),
-		CommandExec:  NewCommandExecService(),
-		Processes:    NewProcessService(),
-		Feedback:     &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)},
-		DefaultCWD:   codexHome,
+		Plugins:            pluginService,
+		Models:             model.NewModelService(nil),
+		Permissions:        sandbox.NewPermissionProfileService(nil),
+		MCP:                mcp.NewMCPService(nil),
+		Features:           features.NewFeatureService(nil),
+		Apps:               apps.NewAppService(nil),
+		Turns:              turn.NewTurnService(),
+		ThreadStatus:       NewThreadStatusManager(),
+		Reviews:            review.NewService(),
+		Misc:               NewMiscService(),
+		CommandExec:        NewCommandExecService(),
+		Processes:          NewProcessService(),
+		Feedback:           &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)},
+		SkillShadowMetrics: state.NewTaskMetrics(),
+		DefaultCWD:         codexHome,
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
 	}
@@ -1168,6 +1180,7 @@ func experimentalAPIMethod(method Method) bool {
 	case MethodCollaborationModeList,
 		MethodEnvironmentAdd,
 		MethodEnvironmentInfo,
+		MethodEnvironmentStatus,
 		MethodFuzzyFileSearchStart,
 		MethodFuzzyFileSearchStop,
 		MethodFuzzyFileSearchUpdate,
@@ -1389,6 +1402,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleExperimentalFeatureSet(request)
 	case MethodAppList:
 		return r.handleAppList(request)
+	case MethodAppRead:
+		return r.handleAppRead(request)
 	case MethodGetAuthStatus:
 		return r.handleGetAuthStatus(request)
 	case MethodGetConversationSummary:
@@ -1497,6 +1512,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleEnvironmentAdd(request)
 	case MethodEnvironmentInfo:
 		return r.handleEnvironmentInfo(request)
+	case MethodEnvironmentStatus:
+		return r.handleEnvironmentStatus(request)
 	case MethodWindowsSandboxSetupStart:
 		return r.handleWindowsSandboxSetupStart(request)
 	case MethodWindowsSandboxReadiness:
@@ -1651,6 +1668,13 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 	}
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 		return nil, err
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
+	if err != nil {
+		return nil, threadReadError(params.ThreadID, err)
+	}
+	if threadUsesPaginatedHistory(record) {
+		return nil, jsonRPCInvalidRequest("paginated threads do not support thread/rollback")
 	}
 	if r.activeRuntimeTurnSnapshot(params.ThreadID) != nil {
 		return nil, jsonRPCInvalidRequest("Cannot rollback while a turn is in progress.")
@@ -2274,11 +2298,12 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
-		Mode:       mode,
-		LastN:      params.LastN,
-		LastTurnID: params.LastTurnID,
-		Ephemeral:  true,
-		Now:        runtimeRouterNow(r).UTC(),
+		Mode:         mode,
+		LastN:        params.LastN,
+		LastTurnID:   params.LastTurnID,
+		BeforeTurnID: params.BeforeTurnID,
+		Ephemeral:    true,
+		Now:          runtimeRouterNow(r).UTC(),
 	})
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
@@ -2433,6 +2458,19 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	record.Metadata.ServiceTier = serviceTier
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	if tokenBudget, tokenBudgetErr := cfg.TokenBudgetConfig(); tokenBudgetErr == nil && tokenBudget != nil {
+		record.Metadata.Extra["token_budget_enabled"] = tokenBudget.Enabled
+		if tokenBudget.AutoCompactFallbackPrompt != "" {
+			record.Metadata.Extra["auto_compact_fallback_prompt"] = tokenBudget.AutoCompactFallbackPrompt
+		} else {
+			delete(record.Metadata.Extra, "auto_compact_fallback_prompt")
+		}
+		if tokenBudget.AutoCompactFallbackBufferTokens != nil {
+			record.Metadata.Extra["auto_compact_fallback_buffer_tokens"] = *tokenBudget.AutoCompactFallbackBufferTokens
+		} else {
+			delete(record.Metadata.Extra, "auto_compact_fallback_buffer_tokens")
+		}
+	}
 	if len(runtimeWorkspaceRoots) > 0 {
 		record.Metadata.Extra["runtime_workspace_roots"] = append([]string(nil), runtimeWorkspaceRoots...)
 	} else {
@@ -2966,6 +3004,7 @@ func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
 		usage.Last = last
 		usage.InputTokens = last.InputTokens
 		usage.CachedInputTokens = last.CachedInputTokens
+		usage.CacheWriteInputTokens = last.CacheWriteInputTokens
 		usage.OutputTokens = last.OutputTokens
 		usage.ReasoningOutputTokens = last.ReasoningOutputTokens
 		usage.TotalTokens = last.TotalTokens
@@ -2984,6 +3023,7 @@ func tokenUsageBreakdownFromMetadata(value any) *TokenUsageBreakdown {
 	breakdown := &TokenUsageBreakdown{
 		InputTokens:           int64FromAnyValue(firstMapValue(values, "input_tokens", "inputTokens")),
 		CachedInputTokens:     int64FromAnyValue(firstMapValue(values, "cached_input_tokens", "cachedInputTokens")),
+		CacheWriteInputTokens: int64FromAnyValue(firstMapValue(values, "cache_write_input_tokens", "cacheWriteInputTokens")),
 		OutputTokens:          int64FromAnyValue(firstMapValue(values, "output_tokens", "outputTokens")),
 		ReasoningOutputTokens: int64FromAnyValue(firstMapValue(values, "reasoning_output_tokens", "reasoningOutputTokens")),
 		TotalTokens:           int64FromAnyValue(firstMapValue(values, "total_tokens", "totalTokens")),
@@ -2991,7 +3031,7 @@ func tokenUsageBreakdownFromMetadata(value any) *TokenUsageBreakdown {
 	if breakdown.TotalTokens == 0 {
 		breakdown.TotalTokens = breakdown.InputTokens + breakdown.OutputTokens
 	}
-	if breakdown.InputTokens == 0 && breakdown.CachedInputTokens == 0 && breakdown.OutputTokens == 0 && breakdown.ReasoningOutputTokens == 0 && breakdown.TotalTokens == 0 {
+	if breakdown.InputTokens == 0 && breakdown.CachedInputTokens == 0 && breakdown.CacheWriteInputTokens == 0 && breakdown.OutputTokens == 0 && breakdown.ReasoningOutputTokens == 0 && breakdown.TotalTokens == 0 {
 		return nil
 	}
 	return breakdown
@@ -3074,7 +3114,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
 		return nil, true, err
 	}
-	if strings.TrimSpace(params.LastTurnID) != "" {
+	if strings.TrimSpace(params.LastTurnID) != "" || strings.TrimSpace(params.BeforeTurnID) != "" {
 		return nil, false, nil
 	}
 	sourceID, err := threadForkSourceID(&params)
@@ -3099,11 +3139,12 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	}
 	annotateActiveForkSourceSnapshot(sourceRecord, active, now)
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, session.ForkOptions{
-		Mode:       mode,
-		LastN:      params.LastN,
-		LastTurnID: params.LastTurnID,
-		Ephemeral:  params.Ephemeral,
-		Now:        now,
+		Mode:         mode,
+		LastN:        params.LastN,
+		LastTurnID:   params.LastTurnID,
+		BeforeTurnID: params.BeforeTurnID,
+		Ephemeral:    params.Ephemeral,
+		Now:          now,
 	})
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
@@ -4133,6 +4174,13 @@ func (r *RuntimeRouter) prepareDetachedReviewThread(request *Request, params *re
 		return "", nil
 	}
 	parentID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	parent, err := r.threadRecord(parentID, true, false)
+	if err != nil {
+		return "", threadReadError(string(parentID), err)
+	}
+	if threadUsesPaginatedHistory(parent) {
+		return "", jsonRPCInvalidRequest("paginated threads do not support detached review")
+	}
 	if err := r.ensureDetachedReviewParentMaterialized(parentID); err != nil {
 		return "", err
 	}
@@ -4818,6 +4866,92 @@ func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, 
 		}
 	}
 	return response, nil
+}
+
+func (r *RuntimeRouter) handleAppRead(request *Request) (*apps.AppsReadResponse, error) {
+	var params apps.AppsReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if len(params.AppIDs) > 100 {
+		return nil, &appReadInvalidParamsError{message: "app/read accepts at most 100 appIds"}
+	}
+	configValues, err := r.appListConfigValues(nil)
+	if err != nil {
+		return nil, err
+	}
+	if !features.Enabled((&config.Config{Values: configValues}).FeatureSettings(), "apps") {
+		return &apps.AppsReadResponse{Apps: []apps.ConnectorMetadata{}, MissingAppIDs: dedupeAppReadIDs(params.AppIDs)}, nil
+	}
+	service := r.requireApps()
+	r.configureAppMetadataProvider(service, configValues)
+	response, err := service.Read(&params)
+	if err != nil {
+		if errors.Is(err, apps.ErrInvalidAppRequest) {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidAppRequest.Error()+": "))
+		}
+		return nil, fmt.Errorf("failed to read app metadata: %w", err)
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) configureAppMetadataProvider(service *apps.AppService, values map[string]any) {
+	if r == nil || service == nil || r.services.Config == nil {
+		return
+	}
+	cfg := &config.Config{Values: values}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		service.SetMetadataProvider(nil)
+		return
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil || resolved == nil {
+		service.SetMetadataProvider(nil)
+		return
+	}
+	token := appDirectoryAuthToken(&resolved.Auth)
+	accountID := auth.AccountIDFromAuthForRestrictions(&resolved.Auth)
+	if token == "" || accountID == "" {
+		service.SetMetadataProvider(nil)
+		return
+	}
+	productSKU := strings.TrimSpace(stringFromMap(values, "apps_mcp_product_sku"))
+	provider := apps.NewChatGPTMetadataProvider(&apps.ChatGPTMetadataProviderOptions{
+		BaseURL: cfg.ChatGPTBaseURL(),
+		Headers: http.Header{
+			"Authorization":      []string{"Bearer " + token},
+			"ChatGPT-Account-ID": []string{accountID},
+		},
+		ProductSKU: productSKU,
+		HTTPClient: r.httpClientForConfig(cfg),
+	})
+	service.SetMetadataProvider(provider)
+}
+
+type appReadInvalidParamsError struct {
+	message string
+}
+
+func (e *appReadInvalidParamsError) Error() string {
+	return e.message
+}
+
+func (e *appReadInvalidParamsError) Unwrap() error {
+	return ErrInvalidRequest
+}
+
+func dedupeAppReadIDs(ids []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 func (r *RuntimeRouter) appListConfigValues(params *apps.AppListParams) (map[string]any, error) {
@@ -5946,6 +6080,14 @@ func (r *RuntimeRouter) handleEnvironmentInfo(request *Request) (*EnvironmentInf
 	return r.requireEnvironment().Info(&params)
 }
 
+func (r *RuntimeRouter) handleEnvironmentStatus(request *Request) (*EnvironmentStatusResponse, error) {
+	var params EnvironmentStatusParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireEnvironment().Status(&params)
+}
+
 func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandbox.WindowsSetupStartResponse, error) {
 	var params sandbox.WindowsSetupStartParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -6482,20 +6624,20 @@ func authAccountFromProviderAccount(account *model.ProviderAccount) *auth.Accoun
 		}
 	case "amazon-bedrock":
 		return &auth.Account{
-			Type:             auth.AccountAmazonBedrock,
-			CredentialSource: bedrockCredentialSourceFromProvider(account.CredentialSource),
+			Type:                        auth.AccountAmazonBedrock,
+			UsesCodexManagedCredentials: bedrockUsesCodexManagedCredentials(account.CredentialSource),
 		}
 	default:
 		return nil
 	}
 }
 
-func bedrockCredentialSourceFromProvider(source string) auth.BedrockCredentialSource {
+func bedrockUsesCodexManagedCredentials(source string) bool {
 	switch strings.TrimSpace(source) {
 	case "codex-managed", "codexManaged", "apiKey":
-		return auth.BedrockCredentialSourceCodexManaged
+		return true
 	default:
-		return auth.BedrockCredentialSourceAWSManaged
+		return false
 	}
 }
 
@@ -7322,18 +7464,39 @@ func (r *RuntimeRouter) bypassHookTrustFromConfig() bool {
 }
 
 func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
-	discovery := r.requireHooksDiscovery()
+	r.servicesMu.Lock()
+	base := r.requireHooksDiscovery()
+	codexHome := base.CodexHome
+	configService := base.Config
+	if configService == nil {
+		configService = r.services.Config
+	}
+	var pluginSources []plugin.HookSource
+	if r.services.Plugins != nil {
+		pluginSources = append([]plugin.HookSource(nil), r.services.Plugins.EnabledHookSources()...)
+	}
+	r.servicesMu.Unlock()
+
+	discovery := NewHookDiscoveryService(codexHome)
+	discovery.Config = configService
 	discovery.States = r.hookStatesFromConfig()
 	discovery.BypassTrust = r.bypassHookTrustFromConfig()
-	if r.services.Plugins != nil {
-		discovery.PluginHookSources = r.services.Plugins.EnabledHookSources()
-	} else {
-		discovery.PluginHookSources = nil
-	}
+	discovery.PluginHookSources = pluginSources
 	return discovery
 }
 
+func (r *RuntimeRouter) hookRunnerConfigured() bool {
+	if r == nil {
+		return false
+	}
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
+	return r.services.HookRunner != nil
+}
+
 func (r *RuntimeRouter) requireHookRunner() *HookRunner {
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
 	if r.services.HookRunner == nil {
 		r.services.HookRunner = NewHookRunner()
 	}
@@ -7597,13 +7760,35 @@ func (r *RuntimeRouter) requireTurns() *turn.TurnService {
 }
 
 func (r *RuntimeRouter) requireSteerMailbox() *turn.SteerMailbox {
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
 	if r.services.SteerMailbox == nil {
 		r.services.SteerMailbox = turn.NewSteerMailbox()
 	}
 	return r.services.SteerMailbox
 }
 
+func (r *RuntimeRouter) agentConfigured() bool {
+	if r == nil {
+		return false
+	}
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
+	return r.services.Agent != nil
+}
+
+func (r *RuntimeRouter) agentSnapshot() model.AgentRunner {
+	if r == nil {
+		return nil
+	}
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
+	return r.services.Agent
+}
+
 func (r *RuntimeRouter) requireAgent() model.AgentRunner {
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
 	if r.services.Agent == nil {
 		r.services.Agent = &model.UnavailableAgentRunner{}
 	}
@@ -7739,6 +7924,19 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
 	options.EnableAgents = false
+	if cfg != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
+		agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
+		if agentsErr != nil {
+			return nil, agentsErr
+		}
+		enabled := agentsConfig.Enabled == nil || *agentsConfig.Enabled
+		if enabled && len(agentsConfig.Roles) > 0 {
+			options.EnableAgents = true
+			options.AgentController = newRuntimeAgentController(r, threadID, cwd, agentsConfig.MaxConcurrentThreadsPerSession)
+			options.AgentRoles = agentsConfig.Roles
+			options.AgentDefaults = agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
+		}
+	}
 	if params != nil && len(params.DynamicTools) > 0 {
 		options.DynamicToolCaller = dynamicToolServerRequestCaller{broker: r.requireServerRequests()}
 		options.DynamicTools = params.CloneDynamicTools()
@@ -7766,6 +7964,15 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+func (r *RuntimeRouter) configBaseDirForAgents() string {
+	if r != nil && r.services.Config != nil {
+		if home := strings.TrimSpace(r.services.Config.CodexHome()); home != "" {
+			return home
+		}
+	}
+	return processCWD()
 }
 
 func windowsSandboxPrivateDesktopFromConfigValues(values map[string]any) bool {
@@ -8541,7 +8748,7 @@ func requireSingleCurrentTimeConnection(connectionIDs []string) (string, error) 
 }
 
 func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID string) tool.HookRunner {
-	if r == nil || params == nil || r.services.HookRunner == nil {
+	if r == nil || params == nil || !r.hookRunnerConfigured() {
 		return nil
 	}
 	hooks := r.hooksForCWD(params.CWD)

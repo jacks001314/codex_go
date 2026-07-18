@@ -135,10 +135,7 @@ func appImageGenerationStandaloneEnabled(provider model.ProviderInfo, capabiliti
 	if !features.Enabled(featureSettings, "image_generation") {
 		return false
 	}
-	if !info.UseResponsesLite && !features.Enabled(featureSettings, "imagegenext") {
-		return false
-	}
-	return appImageGenerationAuthEnabled(provider, snapshot)
+	return appImageGenerationStandaloneAuthEnabled(provider, snapshot)
 }
 
 func appImageGenerationHostedEnabled(provider model.ProviderInfo, capabilities model.ProviderCapabilities, info *model.ModelInfo, snapshot *auth.AuthDotJSON, featureSettings map[string]bool) bool {
@@ -155,6 +152,19 @@ func appImageGenerationHostedEnabled(provider model.ProviderInfo, capabilities m
 		return false
 	}
 	return appImageGenerationAuthEnabled(provider, snapshot)
+}
+
+func appImageGenerationStandaloneAuthEnabled(provider model.ProviderInfo, snapshot *auth.AuthDotJSON) bool {
+	if provider.UsesOpenAIActorAuthorization() {
+		return true
+	}
+	if snapshot == nil {
+		return false
+	}
+	if appAuthSnapshotUsesCodexBackend(snapshot) {
+		return provider.RequiresOpenAIAuth || provider.IsOpenAI()
+	}
+	return false
 }
 
 func appImageGenerationAuthEnabled(provider model.ProviderInfo, snapshot *auth.AuthDotJSON) bool {

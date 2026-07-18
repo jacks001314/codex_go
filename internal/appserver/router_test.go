@@ -2553,6 +2553,36 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	}
 }
 
+func TestRouterThreadResumeReturnsStableHistoryHeadCursorsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	createRecord(t, store, "thread-head-cursors", fixedTime())
+
+	resume := func(id int64) *ThreadResumeResponse {
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadResume, ThreadResumeParams{ThreadID: "thread-head-cursors", ExcludeTurns: true}))
+		if response.Error != nil {
+			t.Fatalf("resume error = %+v", response.Error)
+		}
+		return response.Result.(*ThreadResumeResponse)
+	}
+	first := resume(1)
+	second := resume(2)
+	if first.TurnsBackwardsCursor == nil || first.ItemsBackwardsCursor == nil {
+		t.Fatalf("resume cursors = turns %v items %v", first.TurnsBackwardsCursor, first.ItemsBackwardsCursor)
+	}
+	if stringPtrValue(first.TurnsBackwardsCursor) != stringPtrValue(second.TurnsBackwardsCursor) || stringPtrValue(first.ItemsBackwardsCursor) != stringPtrValue(second.ItemsBackwardsCursor) {
+		t.Fatalf("unstable cursors: first=%#v second=%#v", first, second)
+	}
+	turnsResponse := router.Handle(requestWithParams(t, IntID(3), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-head-cursors", Cursor: first.TurnsBackwardsCursor, SortDirection: SortDesc}))
+	if turnsResponse.Error != nil || len(turnsResponse.Result.(*TurnsPage).Data) != 2 {
+		t.Fatalf("turns page = %+v", turnsResponse)
+	}
+	itemsResponse := router.Handle(requestWithParams(t, IntID(4), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-head-cursors", Cursor: first.ItemsBackwardsCursor, SortDirection: SortDesc}))
+	if itemsResponse.Error != nil || len(itemsResponse.Result.(*ThreadItemsListResponse).Data) != 2 {
+		t.Fatalf("items page = %+v", itemsResponse)
+	}
+}
+
 func TestRouterResumeEmptyPathUsesThreadID(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
@@ -2745,8 +2775,8 @@ func TestRouterThreadTurnsListSupportsRequestedItemsView(t *testing.T) {
 		},
 		Items: []session.Item{
 			{ID: "first", Type: "message", Role: "user", Text: "First from history", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-items"}},
-			{ID: "draft", Type: "message", Role: "assistant", Text: "Draft answer", CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-items"}},
-			{ID: "final", Type: "message", Role: "assistant", Text: "Final answer", CreatedAt: now.Add(2 * time.Second), Metadata: map[string]any{"turnId": "turn-items"}},
+			{ID: "final", Type: "message", Role: "assistant", Text: "Final answer", CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-items", "phase": "final_answer"}},
+			{ID: "commentary", Type: "message", Role: "assistant", Text: "Late commentary", CreatedAt: now.Add(2 * time.Second), Metadata: map[string]any{"turnId": "turn-items", "phase": "commentary"}},
 		},
 	}); err != nil {
 		t.Fatalf("Create record error: %v", err)
@@ -2780,6 +2810,30 @@ func TestRouterThreadTurnsListSupportsRequestedItemsView(t *testing.T) {
 	notLoaded := readTurn(4, TurnItemsNotLoaded)
 	if notLoaded.ItemsView != TurnItemsNotLoaded || len(notLoaded.Items) != 0 || notLoaded.ID != full.ID || notLoaded.Status != full.Status || !sameInt64Ptr(notLoaded.StartedAt, full.StartedAt) || !sameInt64Ptr(notLoaded.CompletedAt, full.CompletedAt) {
 		t.Fatalf("notLoaded turn = %+v full=%+v", notLoaded, full)
+	}
+}
+
+func TestSummarizeTurnItemsHonorsFinalAnswerBoundaryLikeRust(t *testing.T) {
+	items := []ThreadItem{
+		{ID: "user", Type: "userMessage", Text: "question"},
+		{ID: "final", Type: "agentMessage", Text: "answer", Data: map[string]any{"phase": "final_answer"}},
+		{ID: "commentary", Type: "agentMessage", Text: "late note", Data: map[string]any{"phase": "commentary"}},
+	}
+	summary := summarizeTurnItems(items, TurnStatusCompleted)
+	if len(summary) != 2 || summary[1].ID != "final" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	commentaryOnly := summarizeTurnItems(items[2:], TurnStatusCompleted)
+	if len(commentaryOnly) != 0 {
+		t.Fatalf("commentary-only summary = %+v", commentaryOnly)
+	}
+	legacyRunning := summarizeTurnItems([]ThreadItem{{ID: "legacy", Type: "agentMessage", Text: "unphased"}}, TurnStatusInProgress)
+	if len(legacyRunning) != 0 {
+		t.Fatalf("running legacy summary crossed final boundary = %+v", legacyRunning)
+	}
+	legacyCompleted := summarizeTurnItems([]ThreadItem{{ID: "legacy", Type: "agentMessage", Text: "unphased"}}, TurnStatusCompleted)
+	if len(legacyCompleted) != 1 || legacyCompleted[0].ID != "legacy" {
+		t.Fatalf("completed legacy summary = %+v", legacyCompleted)
 	}
 }
 
@@ -3189,6 +3243,39 @@ func TestRouterForkAtLastTurnIDKeepsTerminalPrefix(t *testing.T) {
 	}))
 	if synthetic.Error == nil || synthetic.Error.Code != -32600 || synthetic.Error.Message != "lastTurnId 'turn-1' is not a persisted canonical turn in the source thread" {
 		t.Fatalf("synthetic lastTurnId response = %+v", synthetic)
+	}
+}
+
+func TestRouterForkBeforeTurnIDKeepsSourcePreservingPrefixLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	source := &session.Record{ID: "thread-before", SessionID: "thread-before", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{RolloutTurns: []session.TurnSnapshot{{ID: "turn-1", Status: string(TurnStatusCompleted)}, {ID: "turn-2", Status: string(TurnStatusCompleted)}}}, Items: []session.Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "retained prompt", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "retained answer", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "u2", Type: "message", Role: "user", Text: "selected prompt", Metadata: map[string]any{"turnId": "turn-2"}},
+	}}
+	if err := store.Save(source); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: "thread-before", BeforeTurnID: "turn-2"}))
+	if response.Error != nil {
+		t.Fatalf("fork error = %+v", response.Error)
+	}
+	forked := response.Result.(*ThreadForkResponse).Thread
+	if len(forked.Turns) != 1 || forked.Turns[0].ID != "turn-1" {
+		t.Fatalf("fork turns = %+v", forked.Turns)
+	}
+	loaded, err := store.Read("thread-before", true, true)
+	if err != nil {
+		t.Fatalf("Read(source) = %v", err)
+	}
+	if len(loaded.Items) != 3 {
+		t.Fatalf("source items = %+v", loaded.Items)
+	}
+	both := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{ThreadID: "thread-before", LastTurnID: "turn-1", BeforeTurnID: "turn-2"}))
+	if both.Error == nil || both.Error.Code != -32600 || both.Error.Message != "`beforeTurnId` cannot be combined with `lastTurnId`" {
+		t.Fatalf("both response = %+v", both)
 	}
 }
 
@@ -3661,6 +3748,14 @@ func routerTestScalarNullString(t *testing.T, db *sql.DB, query string, args ...
 }
 
 func createRecord(t *testing.T, store *session.Store, id session.ThreadID, now time.Time) {
+	createRecordWithHistoryMode(t, store, id, now, string(ThreadHistoryLegacy))
+}
+
+func createPaginatedRecord(t *testing.T, store *session.Store, id session.ThreadID, now time.Time) {
+	createRecordWithHistoryMode(t, store, id, now, string(ThreadHistoryPaginated))
+}
+
+func createRecordWithHistoryMode(t *testing.T, store *session.Store, id session.ThreadID, now time.Time, historyMode string) {
 	t.Helper()
 	err := store.Create(&session.Record{
 		ID:        id,
@@ -3674,7 +3769,7 @@ func createRecord(t *testing.T, store *session.Store, id session.ThreadID, now t
 			CWD:           "D:/repo",
 			ModelProvider: "openai",
 			Source:        "cli",
-			HistoryMode:   "paginated",
+			HistoryMode:   historyMode,
 		},
 		Items: []session.Item{
 			{

@@ -847,6 +847,114 @@ func TestUnifiedExecPruningPolicyMatchesRustFixtures(t *testing.T) {
 	if _, ok := unifiedExecProcessIDToPrune(meta(map[int]bool{})[:8]); ok {
 		t.Fatal("eight most recent entries should all be protected")
 	}
+	interacting := meta(map[int]bool{})
+	interacting[0].Interacting = true
+	if got, ok := unifiedExecProcessIDToPrune(interacting); !ok || got != 2 {
+		t.Fatalf("candidate with interacting lru = %d, %v, want 2", got, ok)
+	}
+}
+
+func TestUnifiedExecWriteStdinSerializesPerSessionAndRunsAcrossSessions(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(2, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	open := func(callID string) int {
+		result, err := manager.Exec(context.Background(), &ShellRequest{
+			Command:         unifiedExecHelperCommand("echo"),
+			CWD:             t.TempDir(),
+			TTY:             true,
+			YieldTimeMS:     unifiedExecMinYieldMS,
+			TimeoutMS:       15_000,
+			MaxOutputTokens: intPtr(100),
+		}, callID)
+		if err != nil || result.ProcessID == nil {
+			t.Fatalf("Exec(%s) = %#v, %v", callID, result, err)
+		}
+		return *result.ProcessID
+	}
+	first := open("first")
+	second := open("second")
+
+	run := func(sessionIDs []int) time.Duration {
+		start := make(chan struct{})
+		errs := make(chan error, len(sessionIDs))
+		started := time.Now()
+		for index, sessionID := range sessionIDs {
+			go func(index int, sessionID int) {
+				<-start
+				_, err := manager.WriteStdin(context.Background(), &WriteStdinArgs{
+					SessionID:   sessionID,
+					Chars:       fmt.Sprintf("message-%d\n", index),
+					YieldTimeMS: unifiedExecMinYieldMS,
+				}, nil)
+				errs <- err
+			}(index, sessionID)
+		}
+		close(start)
+		for range sessionIDs {
+			if err := <-errs; err != nil {
+				t.Fatalf("WriteStdin() error = %v", err)
+			}
+		}
+		return time.Since(started)
+	}
+
+	parallel := run([]int{first, second})
+	serialized := run([]int{first, first})
+	if serialized < parallel+200*time.Millisecond {
+		t.Fatalf("same-session duration = %v, cross-session duration = %v; want serialized interaction", serialized, parallel)
+	}
+}
+
+func TestWriteStdinPostToolUseKeepsParallelSessionMetadataSeparateLikeRust(t *testing.T) {
+	executor := NewWriteStdinExecutor(nil, nil)
+	output := func(eventCallID string, hookCommand string, response string) *Output {
+		return &Output{Data: map[string]any{
+			"exit_code":     0,
+			"event_call_id": eventCallID,
+			"hook_command":  hookCommand,
+			"hook_response": response,
+		}}
+	}
+
+	postB, okB := executor.PostToolUsePayload(&Invocation{CallID: "write-call-b"}, output(
+		"exec-call-b", "sleep 1; echo beta", "beta\n",
+	))
+	postA, okA := executor.PostToolUsePayload(&Invocation{CallID: "write-call-a"}, output(
+		"exec-call-a", "sleep 2; echo alpha", "alpha\n",
+	))
+	if !okA || !okB {
+		t.Fatalf("PostToolUsePayload() ok = %v, %v", okA, okB)
+	}
+	if postB.ToolUseID != "exec-call-b" || postB.ToolInput.(map[string]any)["command"] != "sleep 1; echo beta" || postB.ToolResponse != "beta\n" {
+		t.Fatalf("post B = %#v", postB)
+	}
+	if postA.ToolUseID != "exec-call-a" || postA.ToolInput.(map[string]any)["command"] != "sleep 2; echo alpha" || postA.ToolResponse != "alpha\n" {
+		t.Fatalf("post A = %#v", postA)
+	}
+}
+
+func TestUnifiedExecAllocationDoesNotPruneInteractingProcess(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(10, unifiedExecMinEmptyPollYieldMS)
+	now := time.Now()
+	for id := 1; id <= 10; id++ {
+		manager.processes[id] = &unifiedExecProcess{
+			id:       id,
+			lastUsed: now.Add(time.Duration(id) * time.Second),
+		}
+	}
+	manager.nextID = 11
+	manager.processes[1].interactions.Add(1)
+
+	id, err := manager.allocateProcessID()
+	if err != nil || id != 11 {
+		t.Fatalf("allocateProcessID() = %d, %v", id, err)
+	}
+	if manager.processes[1] == nil {
+		t.Fatal("interacting process was pruned")
+	}
+	if manager.processes[2] != nil {
+		t.Fatal("least-recent non-interacting process was not pruned")
+	}
 }
 
 func TestUnifiedExecBackgroundProcessListAndTerminateAreThreadScopedLikeRust(t *testing.T) {

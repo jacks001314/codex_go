@@ -72,9 +72,6 @@ func (m *Model) applyReviewModalOption(optionID string, optionLabel string) bubb
 		m.refreshTranscript()
 		return nil
 	}
-	m.notice = "Review"
-	m.refreshTranscript()
-	return nil
 }
 
 func (m *Model) applyRenameCommand(args string) {

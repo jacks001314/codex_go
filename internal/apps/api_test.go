@@ -7,6 +7,95 @@ import (
 	"testing"
 )
 
+type metadataProviderFunc func(*AppMetadataReadParams) (*AppMetadataReadResponse, error)
+
+func (f metadataProviderFunc) ReadAppMetadata(params *AppMetadataReadParams) (*AppMetadataReadResponse, error) {
+	return f(params)
+}
+
+func TestReadDeduplicatesOrdersMissesAndCaches(t *testing.T) {
+	service := NewAppService(nil)
+	calls := 0
+	service.SetMetadataProvider(metadataProviderFunc(func(params *AppMetadataReadParams) (*AppMetadataReadResponse, error) {
+		calls++
+		if strings.Join(params.AppIDs, ",") != "beta,missing,alpha" || !params.IncludeTools {
+			t.Fatalf("params = %#v", params)
+		}
+		return &AppMetadataReadResponse{Apps: []ConnectorMetadata{
+			{ID: "alpha", Name: "Alpha", ToolSummaries: []AppToolSummary{{Name: "alpha_tool", Description: "Use Alpha"}}},
+			{ID: "beta", Name: "Beta", ToolSummaries: []AppToolSummary{{Name: "beta_tool", Description: "Use Beta"}}},
+		}}, nil
+	}))
+	response, err := service.Read(&AppsReadParams{AppIDs: []string{"beta", "missing", "alpha", "beta"}, IncludeTools: true})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(response.Apps) != 2 || response.Apps[0].ID != "beta" || response.Apps[1].ID != "alpha" || len(response.MissingAppIDs) != 1 || response.MissingAppIDs[0] != "missing" {
+		t.Fatalf("response = %#v", response)
+	}
+	if _, err := service.Read(&AppsReadParams{AppIDs: []string{"alpha", "beta"}, IncludeTools: true}); err != nil {
+		t.Fatalf("cached Read() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestReadRefetchesWhenToolsAreRequested(t *testing.T) {
+	service := NewAppService(nil)
+	calls := []bool{}
+	service.SetMetadataProvider(metadataProviderFunc(func(params *AppMetadataReadParams) (*AppMetadataReadResponse, error) {
+		calls = append(calls, params.IncludeTools)
+		return &AppMetadataReadResponse{Apps: []ConnectorMetadata{{ID: "app", Name: "App", ToolSummaries: []AppToolSummary{{Name: "tool", Description: "Use"}}}}}, nil
+	}))
+	without, err := service.Read(&AppsReadParams{AppIDs: []string{"app"}})
+	if err != nil || len(without.Apps) != 1 || without.Apps[0].ToolsRequested {
+		t.Fatalf("without tools = %#v err=%v", without, err)
+	}
+	with, err := service.Read(&AppsReadParams{AppIDs: []string{"app"}, IncludeTools: true})
+	if err != nil || len(with.Apps[0].ToolSummaries) != 1 || !with.Apps[0].ToolsRequested {
+		t.Fatalf("with tools = %#v err=%v", with, err)
+	}
+	if len(calls) != 2 || calls[0] || !calls[1] {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestReadRejectsMoreThanOneHundredIDs(t *testing.T) {
+	ids := make([]string, 101)
+	if _, err := NewAppService(nil).Read(&AppsReadParams{AppIDs: ids}); !errors.Is(err, ErrInvalidAppRequest) {
+		t.Fatalf("Read() error = %v", err)
+	}
+}
+
+func TestReadUsesStaticMetadataWithoutProvider(t *testing.T) {
+	description := "Static description"
+	service := NewAppService([]AppEntry{{ID: "static", Name: "Static", Description: &description}})
+	response, err := service.Read(&AppsReadParams{AppIDs: []string{"static", "missing"}})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(response.Apps) != 1 || response.Apps[0].ID != "static" || response.Apps[0].Description == nil || *response.Apps[0].Description != description {
+		t.Fatalf("response = %#v", response)
+	}
+	if len(response.MissingAppIDs) != 1 || response.MissingAppIDs[0] != "missing" {
+		t.Fatalf("missing ids = %#v", response.MissingAppIDs)
+	}
+}
+
+func TestAppsReadResponseJSONUsesRequiredArraysAndNullableTools(t *testing.T) {
+	data, err := json.Marshal(&AppsReadResponse{Apps: []ConnectorMetadata{{ID: "app", Name: "App"}}})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{`"apps":[`, `"missingAppIds":[]`, `"toolSummaries":null`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("JSON %s missing %s", text, want)
+		}
+	}
+}
+
 func TestListSortsAndClonesApps(t *testing.T) {
 	service := NewAppService([]AppEntry{
 		{ID: "b", Name: "Beta", Labels: []string{"two"}},

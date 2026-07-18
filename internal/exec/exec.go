@@ -161,6 +161,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	parallelToolCalls := modelSupportsParallelToolCalls(modelID)
 	useResponsesLite := modelUsesResponsesLite(modelID)
 	reasoningEffort := effectiveReasoningEffort(req, cfg)
+	concurrentReasoningSummaries := features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries")
 	modelVerbosity := effectiveModelVerbosity(cfg)
 	includeTimingMetrics := effectiveIncludeTimingMetrics(cfg)
 	betaFeaturesHeader := features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings())
@@ -224,23 +225,24 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	subagentHeader, subagentKind := execReviewSubagentMetadata(req)
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
-		Prompt:               runPrompt,
-		InputItems:           inputItems,
-		Model:                modelID,
-		ProviderID:           providerID,
-		TaskKind:             taskKind,
-		ThreadID:             threadID,
-		TurnID:               turnID,
-		PreviousResponseID:   resumePreviousResponseID(resumeContext),
-		ParallelToolCalls:    parallelToolCalls,
-		ReasoningEffort:      reasoningEffort,
-		ModelVerbosity:       modelVerbosity,
-		IncludeTimingMetrics: includeTimingMetrics,
-		BetaFeaturesHeader:   betaFeaturesHeader,
-		ItemIDsEnabled:       itemIDsEnabled,
-		PromptCacheKey:       threadID,
-		ServiceTier:          serviceTier,
-		Instructions:         instructions,
+		Prompt:                       runPrompt,
+		InputItems:                   inputItems,
+		Model:                        modelID,
+		ProviderID:                   providerID,
+		TaskKind:                     taskKind,
+		ThreadID:                     threadID,
+		TurnID:                       turnID,
+		PreviousResponseID:           resumePreviousResponseID(resumeContext),
+		ParallelToolCalls:            parallelToolCalls,
+		ReasoningEffort:              reasoningEffort,
+		ConcurrentReasoningSummaries: concurrentReasoningSummaries,
+		ModelVerbosity:               modelVerbosity,
+		IncludeTimingMetrics:         includeTimingMetrics,
+		BetaFeaturesHeader:           betaFeaturesHeader,
+		ItemIDsEnabled:               itemIDsEnabled,
+		PromptCacheKey:               threadID,
+		ServiceTier:                  serviceTier,
+		Instructions:                 instructions,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:   installationID,
 			SessionID:        threadID,
@@ -337,6 +339,7 @@ type agentRunConfig struct {
 	ParallelToolCalls            bool
 	ReasoningEffort              string
 	ReasoningSummary             string
+	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool
 	BetaFeaturesHeader           string
@@ -582,6 +585,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		ParallelToolCalls:            run.ParallelToolCalls,
 		ReasoningEffort:              run.ReasoningEffort,
 		ReasoningSummary:             run.ReasoningSummary,
+		ConcurrentReasoningSummaries: run.ConcurrentReasoningSummaries,
 		ModelVerbosity:               run.ModelVerbosity,
 		IncludeTimingMetrics:         run.IncludeTimingMetrics,
 		BetaFeaturesHeader:           run.BetaFeaturesHeader,
@@ -739,10 +743,7 @@ func imageGenerationStandaloneEnabled(provider model.ProviderInfo, capabilities 
 	if !features.Enabled(featureSettings, "image_generation") {
 		return false
 	}
-	if !info.UseResponsesLite && !features.Enabled(featureSettings, "imagegenext") {
-		return false
-	}
-	return imageGenerationAuthEnabledExec(provider, snapshot)
+	return imageGenerationStandaloneAuthEnabledExec(provider, snapshot)
 }
 
 func imageGenerationHostedEnabledExec(provider model.ProviderInfo, capabilities model.ProviderCapabilities, info *model.ModelInfo, snapshot *auth.AuthDotJSON, featureSettings map[string]bool) bool {
@@ -759,6 +760,19 @@ func imageGenerationHostedEnabledExec(provider model.ProviderInfo, capabilities 
 		return false
 	}
 	return imageGenerationAuthEnabledExec(provider, snapshot)
+}
+
+func imageGenerationStandaloneAuthEnabledExec(provider model.ProviderInfo, snapshot *auth.AuthDotJSON) bool {
+	if provider.UsesOpenAIActorAuthorization() {
+		return true
+	}
+	if snapshot == nil {
+		return false
+	}
+	if authSnapshotUsesCodexBackendExec(snapshot) {
+		return provider.RequiresOpenAIAuth || provider.IsOpenAI()
+	}
+	return false
 }
 
 func imageGenerationAuthEnabledExec(provider model.ProviderInfo, snapshot *auth.AuthDotJSON) bool {
@@ -1370,6 +1384,7 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 	return sink.Emit(protocol.TurnCompleted(protocol.Usage{
 		InputTokens:           usage.InputTokens,
 		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 	}))
@@ -1583,6 +1598,7 @@ func eventsFromAgentResponse(threadID string, response *model.AgentResponse, exe
 	events = append(events, protocol.TurnCompleted(protocol.Usage{
 		InputTokens:           response.Usage.InputTokens,
 		CachedInputTokens:     response.Usage.CachedInputTokens,
+		CacheWriteInputTokens: response.Usage.CacheWriteInputTokens,
 		OutputTokens:          response.Usage.OutputTokens,
 		ReasoningOutputTokens: response.Usage.ReasoningOutputTokens,
 	}))

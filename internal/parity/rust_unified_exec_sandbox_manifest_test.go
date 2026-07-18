@@ -82,6 +82,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"unified_exec_terminal_interaction_captures_delayed_output",
 				"unified_exec_timeout_and_followup_poll",
 				"write_stdin_clamps_model_requested_max_output_tokens_to_policy",
+				"write_stdin_calls_run_in_parallel_across_sessions",
 				"write_stdin_ctrl_c_default_interrupt_reports_130_for_non_tty_session",
 				"write_stdin_ctrl_c_interrupts_non_tty_session",
 				"write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows",

@@ -55,7 +55,11 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 		if provider.AWS != nil && id != AmazonBedrockProviderID {
 			return nil, fmt.Errorf("model_providers.%s: provider aws is only supported for `%s`", id, AmazonBedrockProviderID)
 		}
-		if id != AmazonBedrockProviderID {
+		if id == AmazonBedrockProviderID {
+			if provider.Auth != nil && strings.TrimSpace(provider.Auth.Command) == "" {
+				return nil, fmt.Errorf("model_providers.%s: provider auth.command must not be empty", id)
+			}
+		} else {
 			if err := provider.Validate(); err != nil {
 				return nil, fmt.Errorf("model_providers.%s: %w", id, err)
 			}

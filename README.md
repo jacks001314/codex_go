@@ -6,8 +6,8 @@
 
 ## 环境要求
 
-- Go 1.24.2+
-- 推荐使用 Go toolchain 1.24.3
+- Go 1.26.2+
+- 推荐使用 Go toolchain 1.26.2
 - Windows、Linux 或 macOS
 
 模块信息见 [go.mod](./go.mod)。

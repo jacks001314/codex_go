@@ -142,3 +142,22 @@ func TestRegisterMultiAgentHandlersDiscoverable(t *testing.T) {
 		t.Fatalf("tool_search output = %q", output.Body)
 	}
 }
+
+func TestRegisterMultiAgentHandlersWithRolesDescribesConfiguredTypes(t *testing.T) {
+	registry := tool.NewRegistry()
+	err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: &captureToolController{}, Exposure: tool.ExposureModelVisible,
+		Roles: map[string]RoleConfig{"reviewer": {Description: "Reviews changes.", Settings: map[string]string{"model_reasoning_effort": "high"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV1Namespace, string(MultiAgentToolSpawn)))
+	if !ok {
+		t.Fatal("spawn_agent missing")
+	}
+	description := executor.Spec().Description
+	if !strings.Contains(description, "`reviewer`: Reviews changes.") || !strings.Contains(description, "reasoning effort is set to `high`") || strings.Contains(description, "`explorer`") {
+		t.Fatalf("description = %q", description)
+	}
+}

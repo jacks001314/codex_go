@@ -491,6 +491,22 @@ func TestModelCtrlCInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 	}
 }
 
+func TestModelInterruptedPromptRemainsInSubmittedHistoryLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{OnSubmit: func(string) bubbletea.Cmd { return nil }, OnInterrupt: func() bubbletea.Cmd { return func() bubbletea.Msg { return TurnInterruptedMsg{} } }})
+	typeText(t, model, "keep this interrupted prompt")
+	model.Update(key(bubbletea.KeyEnter))
+	state.SetStatus("running")
+	_, command := model.Update(key(bubbletea.KeyCtrlC))
+	if command == nil {
+		t.Fatal("interrupt command = nil")
+	}
+	model.Update(command())
+	if got := model.SubmittedPrompts(); len(got) != 1 || got[0] != "keep this interrupted prompt" {
+		t.Fatalf("submitted prompts = %#v", got)
+	}
+}
+
 func TestModelCtrlCQuitsWhenIdle(t *testing.T) {
 	model := NewModel(nil, Options{})
 	_, cmd := model.Update(key(bubbletea.KeyCtrlC))

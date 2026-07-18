@@ -21,6 +21,7 @@ type ThreadSessionState struct {
 	MessageHistory          any
 	NetworkProxy            any
 	RolloutPath             *string
+	Originator              string
 }
 
 type ThreadPermissionSettings struct {

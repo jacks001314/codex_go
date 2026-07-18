@@ -52,7 +52,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 			"id":"resp-1",
 			"model":"gpt-test",
 			"output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from api"}]}],
-			"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":12,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}
+			"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":12,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":4},"output_tokens_details":{"reasoning_tokens":1}}
 		}`))
 	}))
 	defer server.Close()
@@ -91,14 +91,15 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 			"parameters":  map[string]any{"type": "object"},
 			"strict":      false,
 		}},
-		Model:                "gpt-test",
-		ProviderID:           OpenAIProviderID,
-		ParallelToolCalls:    true,
-		ReasoningEffort:      "ultra",
-		ReasoningSummary:     "concise",
-		ModelVerbosity:       "high",
-		IncludeTimingMetrics: true,
-		BetaFeaturesHeader:   "memories,remote_compaction_v2",
+		Model:                        "gpt-test",
+		ProviderID:                   OpenAIProviderID,
+		ParallelToolCalls:            true,
+		ReasoningEffort:              "ultra",
+		ReasoningSummary:             "concise",
+		ConcurrentReasoningSummaries: true,
+		ModelVerbosity:               "high",
+		IncludeTimingMetrics:         true,
+		BetaFeaturesHeader:           "memories,remote_compaction_v2",
 	})
 	if err != nil {
 		t.Fatalf("Run error = %v", err)
@@ -127,6 +128,10 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	reasoning, ok := recordedBody["reasoning"].(map[string]any)
 	if !ok || reasoning["effort"] != "max" || reasoning["summary"] != "concise" {
 		t.Fatalf("reasoning = %#v", recordedBody["reasoning"])
+	}
+	streamOptions, ok := recordedBody["stream_options"].(map[string]any)
+	if !ok || streamOptions["reasoning_summary_delivery"] != "sequential_cutoff" {
+		t.Fatalf("stream_options = %#v", recordedBody["stream_options"])
 	}
 	include, ok := recordedBody["include"].([]any)
 	if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
@@ -159,7 +164,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	if response.Message != "hello from api" || response.Model != "gpt-test" || response.ProviderID != OpenAIProviderID {
 		t.Fatalf("response = %#v", response)
 	}
-	if response.Usage.InputTokens != 7 || response.Usage.CachedInputTokens != 2 || response.Usage.OutputTokens != 3 || response.Usage.ReasoningOutputTokens != 1 || response.Usage.TotalTokens != 12 {
+	if response.Usage.InputTokens != 7 || response.Usage.CachedInputTokens != 2 || response.Usage.CacheWriteInputTokens != 4 || response.Usage.OutputTokens != 3 || response.Usage.ReasoningOutputTokens != 1 || response.Usage.TotalTokens != 12 {
 		t.Fatalf("usage = %#v", response.Usage)
 	}
 	if response.RequestID != "req-1" || response.ServerModel != "gpt-server" || response.TurnState != "turn-state-1" || response.ModelsETag != `"models-etag-1"` {
@@ -170,6 +175,84 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	}
 	if response.ReasoningIncluded == nil || !*response.ReasoningIncluded {
 		t.Fatalf("reasoning included = %#v", response.ReasoningIncluded)
+	}
+}
+
+func TestResponsesAgentRunnerConcurrentReasoningSummaryStreamOptionsOmittedForNoneSummary(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp-1",
+			"model":"gpt-test",
+			"output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:                       "gpt-test",
+			SupportsReasoningSummaries: true,
+			DefaultReasoningLevel:      "medium",
+			DefaultReasoningSummary:    "auto",
+		}}}),
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{
+		Prompt:                       "hello",
+		Model:                        "gpt-test",
+		ConcurrentReasoningSummaries: true,
+		ReasoningSummary:             "none",
+	})
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if _, ok := recordedBody["stream_options"]; ok {
+		t.Fatalf("stream_options present for summary=none: %#v", recordedBody["stream_options"])
+	}
+}
+
+func TestResponsesAgentRunnerConcurrentReasoningSummaryStreamOptionsOmittedForNonOpenAIProvider(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp-1",
+			"model":"gpt-test",
+			"output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: "Azure OpenAI", BaseURL: server.URL + "/v1"},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:                       "gpt-test",
+			SupportsReasoningSummaries: true,
+			DefaultReasoningLevel:      "medium",
+			DefaultReasoningSummary:    "auto",
+		}}}),
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{
+		Prompt:                       "hello",
+		Model:                        "gpt-test",
+		ConcurrentReasoningSummaries: true,
+		ReasoningSummary:             "concise",
+	})
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if _, ok := recordedBody["stream_options"]; ok {
+		t.Fatalf("stream_options present for non-OpenAI provider: %#v", recordedBody["stream_options"])
 	}
 }
 

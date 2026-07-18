@@ -722,6 +722,17 @@ func (c *Client) EnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) 
 	return &response, nil
 }
 
+func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, error) {
+	var response EnvironmentStatus
+	if err := c.call(ctx, MethodEnvironmentStatus, map[string]any{}, &response); err != nil {
+		return nil, err
+	}
+	if response.Status == "" {
+		response.Status = EnvironmentStatusReady
+	}
+	return &response, nil
+}
+
 func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
 	normalized, err := normalizeFSReadFileParams(params)
 	if err != nil {

@@ -34,6 +34,11 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		return nil
 	}
 	query, ok := skillPopupQuery(m.composer.Value())
+	mention := false
+	if !ok {
+		query, ok = mentionPopupQuery(m.composer.Value())
+		mention = ok
+	}
 	if !ok {
 		m.skillPopup = skillPopupState{}
 		return nil
@@ -76,6 +81,9 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		Items:    items,
 		Selected: selected,
 		Err:      m.skillsInventoryErr,
+	}
+	if mention {
+		m.skillPopup.Active = true
 	}
 	return nil
 }
@@ -142,7 +150,10 @@ func (m *Model) insertSelectedSkillPopupItem() bool {
 	}
 	item := m.skillPopup.Items[m.skillPopup.Selected]
 	insert := "$" + strings.TrimSpace(item.Name)
-	if insert == "$" {
+	if _, _, _, ok := mentionPopupTokenRange(m.composer.Value()); ok {
+		insert = "@" + strings.TrimSpace(item.Name)
+	}
+	if insert == "$" || insert == "@" {
 		return false
 	}
 	text := replaceSkillPopupToken(m.composer.Value(), insert+" ")
@@ -221,6 +232,11 @@ func skillPopupQuery(text string) (string, bool) {
 	return query, ok
 }
 
+func mentionPopupQuery(text string) (string, bool) {
+	_, _, query, ok := mentionPopupTokenRange(text)
+	return query, ok
+}
+
 func skillPopupTokenRange(text string) (int, int, string, bool) {
 	if text == "" {
 		return 0, 0, "", false
@@ -237,6 +253,26 @@ func skillPopupTokenRange(text string) (int, int, string, bool) {
 		return 0, 0, "", false
 	}
 	return start, len(text), strings.TrimPrefix(token, "$"), true
+}
+
+// mentionPopupTokenRange mirrors the Rust mentions_v2 trigger: @ starts a
+// tool/plugin mention, while $ remains reserved for skills and apps.
+func mentionPopupTokenRange(text string) (int, int, string, bool) {
+	text = strings.TrimRight(text, "\r\n")
+	end := len(text)
+	start := end
+	for start > 0 {
+		b := text[start-1]
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-' || b == '_' {
+			start--
+			continue
+		}
+		break
+	}
+	if start == 0 || text[start-1] != '@' {
+		return 0, 0, "", false
+	}
+	return start - 1, end, text[start:end], true
 }
 
 func replaceSkillPopupToken(text string, insert string) string {

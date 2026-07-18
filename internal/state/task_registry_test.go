@@ -112,6 +112,19 @@ func TestTaskMetricsAndCompactMetric(t *testing.T) {
 	}
 }
 
+func TestTaskMetricsPreservesHistogramZeroAndDuration(t *testing.T) {
+	metrics := NewTaskMetrics()
+	metrics.Histogram("histogram", 0, map[string]string{"method": "test"})
+	metrics.RecordDuration("duration", 1500*time.Microsecond, nil)
+	records := metrics.Records()
+	if len(records) != 2 || records[0].Kind != "histogram" || records[0].Value != 0 {
+		t.Fatalf("histogram records = %#v", records)
+	}
+	if records[1].Kind != "duration" || records[1].DurationMS != 1.5 {
+		t.Fatalf("duration record = %#v", records[1])
+	}
+}
+
 func TestTaskCancelToken(t *testing.T) {
 	token := NewTaskCancelToken()
 	if token.Cancelled() {

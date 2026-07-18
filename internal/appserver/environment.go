@@ -61,6 +61,31 @@ type EnvironmentInfoResponse struct {
 	CWD   *string              `json:"cwd"`
 }
 
+type EnvironmentStatusParams struct {
+	EnvironmentID string `json:"environmentId"`
+}
+
+func (p *EnvironmentStatusParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.EnvironmentID) == "" {
+		return fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
+	}
+	return nil
+}
+
+type EnvironmentStatusKind string
+
+const (
+	EnvironmentStatusReady        EnvironmentStatusKind = "ready"
+	EnvironmentStatusPending      EnvironmentStatusKind = "pending"
+	EnvironmentStatusDisconnected EnvironmentStatusKind = "disconnected"
+	EnvironmentStatusUnknown      EnvironmentStatusKind = "unknown"
+)
+
+type EnvironmentStatusResponse struct {
+	Status EnvironmentStatusKind `json:"status"`
+	Error  *string               `json:"error,omitempty"`
+}
+
 type EnvironmentShellInfo struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
@@ -194,6 +219,42 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd)}, nil
 }
 
+func (m *EnvironmentManager) Status(params *EnvironmentStatusParams) (*EnvironmentStatusResponse, error) {
+	return m.StatusContext(context.Background(), params)
+}
+
+func (m *EnvironmentManager) StatusContext(ctx context.Context, params *EnvironmentStatusParams) (*EnvironmentStatusResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	record, ok := m.records[params.EnvironmentID]
+	m.mu.Unlock()
+	if !ok {
+		return &EnvironmentStatusResponse{
+			Status: EnvironmentStatusUnknown,
+			Error:  environmentStringPtr(fmt.Sprintf("unknown environment id `%s`", params.EnvironmentID)),
+		}, nil
+	}
+	if record.InfoOverride {
+		return &EnvironmentStatusResponse{Status: EnvironmentStatusReady}, nil
+	}
+	if strings.TrimSpace(record.ExecServerURL) == "" && record.NoiseProvider == nil {
+		return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+	}
+	status, err := fetchRemoteEnvironmentStatus(ctx, &record)
+	if err != nil {
+		return &EnvironmentStatusResponse{
+			Status: EnvironmentStatusDisconnected,
+			Error:  environmentStringPtr(err.Error()),
+		}, nil
+	}
+	if status == nil || status.Status == "" {
+		return &EnvironmentStatusResponse{Status: EnvironmentStatusReady}, nil
+	}
+	return status, nil
+}
+
 func (m *EnvironmentManager) Remove(environmentID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -270,6 +331,10 @@ func cloneUint64Ptr(value *uint64) *uint64 {
 	}
 	clone := *value
 	return &clone
+}
+
+func environmentStringPtr(value string) *string {
+	return &value
 }
 
 type execServerJSONRPCRequest struct {
@@ -355,6 +420,75 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		return nil, err
 	}
 	return &info, nil
+}
+
+func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord) (*EnvironmentStatusResponse, error) {
+	if record == nil {
+		return nil, errors.New("environment record is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	defer cancel()
+	if record.NoiseProvider != nil {
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+		status, err := client.EnvironmentStatus(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &EnvironmentStatusResponse{Status: EnvironmentStatusKind(status.Status)}, nil
+	}
+	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]any{
+			"clientName": "codex-go",
+		},
+	}); err != nil {
+		return nil, err
+	}
+	if _, err := readExecServerResponse(ctx, conn, 1); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+		}
+		return nil, err
+	}
+	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  "initialized",
+	}); err != nil {
+		return nil, err
+	}
+	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "environment/status",
+	}); err != nil {
+		return nil, err
+	}
+	result, err := readExecServerResponse(ctx, conn, 2)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+		}
+		return nil, err
+	}
+	var status EnvironmentStatusResponse
+	if err := json.Unmarshal(result, &status); err != nil {
+		return nil, err
+	}
+	if status.Status == "" {
+		status.Status = EnvironmentStatusReady
+	}
+	return &status, nil
 }
 
 func environmentConnectTimeout(connectTimeoutMS *uint64) time.Duration {

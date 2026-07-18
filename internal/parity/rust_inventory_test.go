@@ -56,7 +56,6 @@ func rustTopLevelDirectoriesSnapshot() []string {
 	return []string{
 		".cargo",
 		".config",
-		".github",
 		"agent-graph-store",
 		"agent-identity",
 		"analytics",
@@ -101,10 +100,8 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"exec-server",
 		"exec-server-protocol",
 		"execpolicy",
-		"execpolicy-legacy",
 		"ext",
 		"external-agent-migration",
-		"external-agent-sessions",
 		"features",
 		"feedback",
 		"file-search",
@@ -112,6 +109,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"file-watcher",
 		"git-utils",
 		"hooks",
+		"http-client",
 		"install-context",
 		"keyring-store",
 		"linux-sandbox",
@@ -130,7 +128,6 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"process-hardening",
 		"prompts",
 		"protocol",
-		"realtime-webrtc",
 		"response-debug-context",
 		"responses-api-proxy",
 		"rmcp-client",
@@ -154,6 +151,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"utils",
 		"v8-poc",
 		"vendor",
+		"websocket-client",
 		"windows-sandbox-rs",
 	}
 }

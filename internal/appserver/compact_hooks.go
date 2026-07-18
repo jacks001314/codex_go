@@ -23,7 +23,7 @@ type compactHookContext struct {
 }
 
 func (r *RuntimeRouter) compactHookContext(record *session.Record, request *compact.Request) *compactHookContext {
-	if r == nil || request == nil || r.services.HookRunner == nil {
+	if r == nil || request == nil || !r.hookRunnerConfigured() {
 		return nil
 	}
 	ctx := &compactHookContext{

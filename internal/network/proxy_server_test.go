@@ -713,6 +713,7 @@ func TestProxyManagedNetworkMITMInspectsHTTP2StreamsLikeRust(t *testing.T) {
 	settings.MITM = true
 	settings.SetAllowedDomains([]string{"127.0.0.1"})
 	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
 	upstreamCAPath := filepath.Join(home, "upstream-h2-ca.pem")
 	upstreamCAPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw})
 	if err := os.WriteFile(upstreamCAPath, upstreamCAPEM, 0o600); err != nil {

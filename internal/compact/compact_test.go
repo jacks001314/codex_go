@@ -30,6 +30,17 @@ func TestEvaluatePolicy(t *testing.T) {
 	}
 }
 
+func TestEvaluatePolicyReservesFallbackBuffer(t *testing.T) {
+	status := Evaluate(Policy{Enabled: true, TokenLimit: 100, WindowTokens: 500, FallbackBufferTokens: 40}, 110)
+	if status.ShouldCompact || status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 0 || status.TokensUntilCompaction == nil || *status.TokensUntilCompaction != 30 {
+		t.Fatalf("status = %+v", status)
+	}
+	status = Evaluate(Policy{Enabled: true, TokenLimit: 100, WindowTokens: 500, FallbackBufferTokens: 40}, 140)
+	if !status.ShouldCompact || status.Reason != ReasonTokenLimit {
+		t.Fatalf("buffer exhaustion status = %+v", status)
+	}
+}
+
 func TestWindowLifecycle(t *testing.T) {
 	window := NewWindowWithIDs(WindowIDs{FirstWindowID: "first", WindowID: "current"})
 	next := "next"
@@ -39,6 +50,9 @@ func TestWindowLifecycle(t *testing.T) {
 	}
 	if !window.ClaimTokenBudgetReminder() || window.ClaimTokenBudgetReminder() {
 		t.Fatal("reminder claim should only succeed once")
+	}
+	if !window.ClaimAutoCompactFallback() || window.ClaimAutoCompactFallback() {
+		t.Fatal("fallback claim should only succeed once")
 	}
 	window.RequestNewContextWindow()
 	if !window.TakeNewContextWindowRequest() || window.TakeNewContextWindowRequest() {

@@ -89,6 +89,19 @@ func TestBuildToolRegistryIncludesCoreAndRuntimeTools(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryAppliesConfiguredAgentRoles(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.AgentRoles = map[string]agent.RoleConfig{"reviewer": {Description: "Reviews changes."}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, ok := registry.Lookup(tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolSpawn)))
+	if !ok || !strings.Contains(executor.Spec().Description, "`reviewer`: Reviews changes.") {
+		t.Fatalf("spawn spec = %#v, found=%v", executor, ok)
+	}
+}
+
 func TestBuildToolRegistryViewImageFollowsModelCapabilityOption(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	registry, err := BuildToolRegistry(options)

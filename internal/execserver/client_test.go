@@ -559,6 +559,44 @@ func TestClientRejectsMalformedPushedProcessEventsLikeRust(t *testing.T) {
 	}
 }
 
+func TestClientEnvironmentStatusReturnsReadyLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	defer cancelServer()
+	urlCh := make(chan string, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &execServerURLChannelWriter{url: urlCh})
+	}()
+	var serverURL string
+	select {
+	case serverURL = <-urlCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exec-server URL was not reported")
+	}
+	client, err := DialClient(context.Background(), serverURL, "client-status-test")
+	if err != nil {
+		t.Fatalf("DialClient() error = %v", err)
+	}
+	defer client.Close()
+	status, err := client.EnvironmentStatus(context.Background())
+	if err != nil {
+		t.Fatalf("EnvironmentStatus() error = %v", err)
+	}
+	if status.Status != EnvironmentStatusReady {
+		t.Fatalf("EnvironmentStatus() = %+v", status)
+	}
+	cancelServer()
+	_ = client.Close()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("exec-server shutdown error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("exec-server did not stop")
+	}
+}
+
 type execServerURLChannelWriter struct {
 	url chan string
 }

@@ -34,6 +34,7 @@ type AgentRequest struct {
 	ParallelToolCalls            bool
 	ReasoningEffort              string
 	ReasoningSummary             string
+	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool
 	BetaFeaturesHeader           string
@@ -50,6 +51,7 @@ type AgentRequest struct {
 type AgentUsage struct {
 	InputTokens           int64
 	CachedInputTokens     int64
+	CacheWriteInputTokens int64
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 	TotalTokens           int64

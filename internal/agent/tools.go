@@ -43,6 +43,9 @@ type SpawnAgentArgs struct {
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 	ServiceTier     *string `json:"service_tier,omitempty"`
 	ForkContext     bool    `json:"fork_context,omitempty"`
+
+	ResolvedRole       string   `json:"-"`
+	NicknameCandidates []string `json:"-"`
 }
 
 type SpawnAgentResult struct {
@@ -236,9 +239,10 @@ const (
 )
 
 type MultiAgentToolExecutor struct {
-	kind       MultiAgentToolKind
-	controller ToolController
-	exposure   tool.Exposure
+	kind             MultiAgentToolKind
+	controller       ToolController
+	exposure         tool.Exposure
+	spawnDescription string
 }
 
 func NewMultiAgentToolExecutor(kind MultiAgentToolKind, controller ToolController) *MultiAgentToolExecutor {
@@ -249,12 +253,39 @@ func NewMultiAgentToolExecutor(kind MultiAgentToolKind, controller ToolControlle
 }
 
 func RegisterMultiAgentHandlers(registry *tool.Registry, controller ToolController, exposure tool.Exposure) error {
+	return RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{Controller: controller, Exposure: exposure})
+}
+
+type MultiAgentHandlerOptions struct {
+	Controller ToolController
+	Exposure   tool.Exposure
+	Roles      map[string]RoleConfig
+	Defaults   SpawnDefaults
+}
+
+type SpawnDefaults struct {
+	Model           string
+	ReasoningEffort string
+	ServiceTier     string
+}
+
+func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *MultiAgentHandlerOptions) error {
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", tool.ErrToolInvalidCall)
 	}
+	if options == nil {
+		options = &MultiAgentHandlerOptions{}
+	}
+	controller := options.Controller
+	if len(options.Roles) > 0 || options.Defaults != (SpawnDefaults{}) {
+		controller = NewRoleAwareToolController(controller, options.Roles, options.Defaults)
+	}
 	for _, kind := range []MultiAgentToolKind{MultiAgentToolSpawn, MultiAgentToolSend, MultiAgentToolWait, MultiAgentToolResume, MultiAgentToolClose} {
 		executor := NewMultiAgentToolExecutor(kind, controller)
-		executor.exposure = exposure
+		executor.exposure = options.Exposure
+		if kind == MultiAgentToolSpawn && len(options.Roles) > 0 {
+			executor.spawnDescription = NewRoleResolver(map[string]RoleConfig{}).SpawnToolDescription(options.Roles)
+		}
 		if err := registry.Register(executor); err != nil {
 			return err
 		}
@@ -264,6 +295,9 @@ func RegisterMultiAgentHandlers(registry *tool.Registry, controller ToolControll
 
 func (e *MultiAgentToolExecutor) Spec() tool.Spec {
 	spec := multiAgentToolSpec(e.kind)
+	if e.kind == MultiAgentToolSpawn && strings.TrimSpace(e.spawnDescription) != "" {
+		spec.Description += "\n\n" + e.spawnDescription
+	}
 	spec.Exposure = e.exposure
 	if spec.Exposure == tool.ExposureDiscoverable {
 		spec.Search = &tool.SearchInfo{

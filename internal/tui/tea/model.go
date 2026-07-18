@@ -700,7 +700,6 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 		programOptions = append(programOptions, bubbletea.WithOutput(output))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
-	programOptions = append(programOptions, bubbletea.WithMouseCellMotion())
 	if !options.NoAltScreen {
 		programOptions = append(programOptions, bubbletea.WithAltScreen())
 	}
@@ -871,6 +870,17 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		if msg.Type == bubbletea.KeyRunes && msg.Paste {
+			// Handle bracketed paste before overlays, popups and keymaps. Windows
+			// Terminal commonly delivers Ctrl+V/right-click paste through this
+			// path rather than as KeyCtrlV.
+			if pasted := string(msg.Runes); pasted != "" && m.modal == nil {
+				m.composer.InsertString(pasted)
+				m.extendComposerPasteWindow(m.currentTime())
+				m.refreshSlashPopup()
+				return m, m.refreshSkillPopup()
+			}
+		}
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayKey(msg)
 		}
@@ -888,6 +898,28 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlD:
 			return m, bubbletea.Quit
+		case bubbletea.KeyCtrlV:
+			// Bubble Tea does not provide a portable text-paste message on all
+			// terminals. Read the native clipboard explicitly and insert it into
+			// the focused composer.
+			if m.modal == nil && m.overlay == nil {
+				if path, err := pasteImageFromClipboard(); err == nil {
+					m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path})
+					m.notice = "Attached image " + path
+					return m, nil
+				}
+				text, err := sysclipboard.ReadAll()
+				if err != nil {
+					m.notice = "Paste failed: " + err.Error()
+					return m, nil
+				}
+				if text != "" {
+					m.composer.InsertString(text)
+					m.extendComposerPasteWindow(m.currentTime())
+					m.refreshSlashPopup()
+				}
+				return m, nil
+			}
 		}
 		if m.modal != nil {
 			return m, m.updateModal(msg)

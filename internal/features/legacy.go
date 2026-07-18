@@ -20,6 +20,7 @@ var legacyFeatureAliases = map[string]string{
 	"memory_tool":                         "memories",
 	"telepathy":                           "chronicle",
 	"codex_hooks":                         "hooks",
+	"imagegenext":                         "image_generation",
 }
 
 var ignoredFeatureKeys = map[string]bool{
@@ -81,6 +82,11 @@ func ResolveSettings(raw map[string]any) (map[string]bool, []LegacyFeatureUsage)
 		}
 		if key != canonical {
 			recordLegacyUsage(usages, key, canonical)
+			if rawCanonical, canonicalPresent := raw[canonical]; canonicalPresent {
+				if _, ok := featureEnabledValue(rawCanonical); ok {
+					continue
+				}
+			}
 		}
 		settings[canonical] = enabled
 	}

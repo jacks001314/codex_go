@@ -1,0 +1,17 @@
+{
+  "rustBaseline": "315195492c",
+  "rustTag": "rust-v0.145.0-alpha.20",
+  "generatedAt": "2026-07-18",
+  "items": [
+    {"id":"apps-read","status":"done","area":"appserver","test":"go test ./internal/appserver ./internal/apps ./internal/chatgptapi"},
+    {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./internal/config ./internal/agent ./internal/appserver"},
+    {"id":"auto-compact-fallback","status":"done","area":"compaction","test":"go test ./internal/config ./internal/compact ./internal/turn ./internal/appserver"},
+    {"id":"unified-exec-race","status":"done","area":"unified_exec","test":"go test -race ./internal/tool ./internal/execserver ./internal/mcp ./internal/appserver -count=1"},
+    {"id":"skill-selection","status":"done","area":"skills","test":"go test ./internal/prompt ./internal/appserver -run \"SkillSelection|SkillShadow|SkillsContext|ExplicitSkill|selection\" -count=1"},
+    {"id":"environment-status","status":"done","area":"appserver","test":"go test ./internal/appserver ./internal/execserver -run \"EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads\" -count=1"},
+    {"id":"tui-session-history","status":"done","area":"tui","test":"go test ./internal/tui/... ./internal/session ./internal/appserver"},
+    {"id":"external-agent-memory-import","status":"partial","area":"memory","reason":"Feature key external_agent_memory_import is accepted; memory item detection/import behavior and imported memory scope/provenance semantics remain pending in Go.","test":"go test ./internal/parity ./internal/memories ./internal/session -count=1"},
+    {"id":"realtime-webrtc-crate-removal","status":"intentional_difference","area":"realtime","reason":"The Rust crate removal is repository-structure cleanup, not a wire-protocol removal.","userImpact":"Go retains its existing realtime capability; external protocol behavior is unchanged.","test":"go test ./internal/appserver ./internal/model"},
+    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap verified on a native Kali runner; macOS seatbelt/native-root reports still require a native runner.","test":"go test ./..."}
+  ]
+}

@@ -89,6 +89,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              request.ReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
+			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
 			IncludeTimingMetrics:         request.IncludeTimingMetrics,
 			BetaFeaturesHeader:           request.BetaFeaturesHeader,

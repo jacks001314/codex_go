@@ -228,10 +228,13 @@ func (r *TaskRegistry) finish(id string, result string, err error) {
 }
 
 type TaskMetric struct {
-	Name string
-	Inc  int
-	Tags map[string]string
-	At   time.Time
+	Name       string
+	Kind       string
+	Inc        int
+	Value      int
+	DurationMS float64
+	Tags       map[string]string
+	At         time.Time
 }
 
 type TaskMetrics struct {
@@ -262,10 +265,23 @@ func (m *TaskMetrics) Counter(name string, inc int, tags map[string]string) {
 	}
 	m.records = append(m.records, &TaskMetric{
 		Name: name,
+		Kind: "counter",
 		Inc:  inc,
 		Tags: cloneStringMap(tags),
 		At:   m.now().UTC(),
 	})
+}
+
+func (m *TaskMetrics) Histogram(name string, value int, tags map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, &TaskMetric{Name: name, Kind: "histogram", Value: value, Tags: cloneStringMap(tags), At: m.now().UTC()})
+}
+
+func (m *TaskMetrics) RecordDuration(name string, duration time.Duration, tags map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, &TaskMetric{Name: name, Kind: "duration", DurationMS: float64(duration) / float64(time.Millisecond), Tags: cloneStringMap(tags), At: m.now().UTC()})
 }
 
 func (m *TaskMetrics) Records() []*TaskMetric {

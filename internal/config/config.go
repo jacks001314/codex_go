@@ -172,6 +172,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 
 var knownTopLevelConfigFields = map[string]struct{}{
 	"analytics":                            {},
+	"agents":                               {},
 	"apps":                                 {},
 	"apps_mcp_product_sku":                 {},
 	"approval_policy":                      {},
@@ -242,6 +243,38 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if err := validateKnownMCPServerFields(values["mcp_servers"]); err != nil {
 		return err
 	}
+	if err := validateKnownAgentsFields(values["agents"]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateKnownAgentsFields(value any) error {
+	agents, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	knownSettings := map[string]bool{
+		"enabled": true, "max_concurrent_threads_per_session": true, "max_threads": true,
+		"max_depth": true, "default_subagent_model": true,
+		"default_subagent_reasoning_effort": true, "job_max_runtime_seconds": true,
+		"interrupt_message": true,
+	}
+	knownRoleFields := map[string]bool{"description": true, "config_file": true, "nickname_candidates": true}
+	for key, raw := range agents {
+		if knownSettings[key] {
+			continue
+		}
+		role, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("unknown configuration field `agents.%s`", key)
+		}
+		for field := range role {
+			if !knownRoleFields[field] {
+				return fmt.Errorf("unknown configuration field `agents.%s.%s`", key, field)
+			}
+		}
+	}
 	return nil
 }
 
@@ -253,6 +286,14 @@ func validateKnownFeatureFields(value any) error {
 	for key := range features {
 		if !knownStrictFeatureFields[key] {
 			return fmt.Errorf("unknown configuration field `features.%s`", key)
+		}
+	}
+	if tokenBudget, ok := features["token_budget"].(map[string]any); ok {
+		known := map[string]bool{"enabled": true, "reminder_threshold_tokens": true, "reminder_message_template": true, "guidance_message": true, "auto_compact_fallback_prompt": true, "auto_compact_fallback_buffer_tokens": true}
+		for key := range tokenBudget {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.token_budget.%s`", key)
+			}
 		}
 	}
 	return nil
@@ -280,7 +321,7 @@ func validateKnownMCPServerFields(value any) error {
 var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth_client_id": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true}
 
 var knownStrictFeatureFields = map[string]bool{
-	"shell_tool": true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "local_thread_store_compression": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "plugins": true, "in_app_browser": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "item_ids": true, "skill_mcp_dependency_install": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
+	"shell_tool": true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "plugins": true, "in_app_browser": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
 }
 
 func ProjectConfigPath(cwd string) string {
@@ -354,6 +395,33 @@ func (c *Config) IncludeSkillInstructions() bool {
 		return true
 	}
 	return include
+}
+
+func (c *Config) SkillShadowSelectionEnabled() bool {
+	if featureflags.Enabled(c.FeatureSettings(), "skill_search") {
+		return true
+	}
+	if c == nil || c.Values == nil {
+		return false
+	}
+	skills, ok := c.Values["skills"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := skills["shadow_selection_enabled"].(bool)
+	return ok && enabled
+}
+
+func (c *Config) SkillSelectionEnabled() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	skills, ok := c.Values["skills"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := skills["selection_enabled"].(bool)
+	return ok && enabled
 }
 
 func (c *Config) OrchestratorSkillsEnabled() bool {

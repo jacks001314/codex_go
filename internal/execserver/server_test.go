@@ -56,6 +56,20 @@ func TestStdioInitializeAndEnvironmentInfo(t *testing.T) {
 	}
 }
 
+func TestStdioInitializeAndEnvironmentStatus(t *testing.T) {
+	input := `{"id":1,"method":"initialize","params":{"clientName":"test"}}` + "\n" +
+		`{"method":"initialized","params":{}}` + "\n" +
+		`{"id":2,"method":"environment/status","params":{}}` + "\n"
+	var stdout bytes.Buffer
+	if err := NewServer().Serve(context.Background(), strings.NewReader(input), &stdout); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `"sessionId"`) || !strings.Contains(output, `"status":"ready"`) {
+		t.Fatalf("stdout = %q", output)
+	}
+}
+
 func TestStdioMalformedJSONReportsRustErrorAndKeepsRunning(t *testing.T) {
 	input := "not-json\n" + `{"id":1,"method":"initialize","params":{"clientName":"test"}}` + "\n"
 	var stdout bytes.Buffer
@@ -111,7 +125,8 @@ func TestConnectionInitializationSequenceAndResumeValidationMatchRust(t *testing
 		`{"id":3,"method":"environment/info","params":{}}` + "\n" +
 		`{"method":"initialized","params":{}}` + "\n" +
 		`{"id":4,"method":"environment/info","params":{}}` + "\n" +
-		`{"id":5,"method":"initialize","params":{"clientName":"test"}}` + "\n"
+		`{"id":5,"method":"environment/status","params":{}}` + "\n" +
+		`{"id":6,"method":"initialize","params":{"clientName":"test"}}` + "\n"
 	var stdout bytes.Buffer
 	if err := server.Serve(context.Background(), strings.NewReader(input), &stdout); err != nil {
 		t.Fatalf("Serve() error = %v", err)
@@ -122,6 +137,7 @@ func TestConnectionInitializationSequenceAndResumeValidationMatchRust(t *testing
 		"client must send initialized before using environment info methods",
 		"initialize may only be sent once per connection",
 		`"id":4,"result":{"shell"`,
+		`"id":5,"result":{"status":"ready"}`,
 	} {
 		if !strings.Contains(output, message) {
 			t.Fatalf("stdout = %q, missing %q", output, message)
@@ -1570,12 +1586,12 @@ func TestParseListenURLLikeRust(t *testing.T) {
 func TestWebSocketTransportServesInitializeAndRejectsOrigin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout bytes.Buffer
+	urlCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- NewServer().ServeTransport(ctx, "ws://127.0.0.1:0", nil, &stdout)
+		errCh <- NewServer().ServeTransport(ctx, "ws://127.0.0.1:0", nil, &execServerURLChannelWriter{url: urlCh})
 	}()
-	listenURL := waitForExecServerListenURL(t, &stdout)
+	listenURL := waitForExecServerListenURL(t, urlCh)
 
 	client := &http.Client{Timeout: time.Second}
 	readyURL := "http://" + strings.TrimPrefix(listenURL, "ws://") + "/readyz"
@@ -1651,16 +1667,16 @@ func TestWebSocketTransportServesInitializeAndRejectsOrigin(t *testing.T) {
 	}
 }
 
-func waitForExecServerListenURL(t *testing.T, stdout *bytes.Buffer) string {
+func waitForExecServerListenURL(t *testing.T, urlCh <-chan string) string {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		line := strings.TrimSpace(stdout.String())
+	select {
+	case line := <-urlCh:
 		if strings.HasPrefix(line, "ws://") {
 			return line
 		}
-		time.Sleep(10 * time.Millisecond)
+		t.Fatalf("exec-server listen URL has unexpected value: %q", line)
+	case <-time.After(time.Second):
+		t.Fatal("exec-server listen URL was not written")
 	}
-	t.Fatalf("exec-server listen URL not written: %q", stdout.String())
 	return ""
 }

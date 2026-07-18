@@ -193,6 +193,7 @@ type ForkOptions struct {
 	Mode           ForkMode
 	LastN          int
 	LastTurnID     string
+	BeforeTurnID   string
 	Title          string
 	SessionID      string
 	ParentThreadID ThreadID
@@ -635,10 +636,13 @@ func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error)
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	if strings.TrimSpace(options.LastTurnID) != "" && strings.TrimSpace(options.BeforeTurnID) != "" {
+		return nil, fmt.Errorf("%w: `beforeTurnId` cannot be combined with `lastTurnId`", ErrInvalidThreadID)
+	}
 	if err := validateForkLastTurnSnapshot(source.Metadata.RolloutTurns, options.LastTurnID); err != nil {
 		return nil, err
 	}
-	items, err := forkItems(source.Items, options.Mode, options.LastN, options.LastTurnID)
+	items, err := forkItems(source.Items, options.Mode, options.LastN, options.LastTurnID, options.BeforeTurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -919,8 +923,12 @@ func sortTime(record *Record, key SortKey) time.Time {
 	}
 }
 
-func forkItems(items []Item, mode ForkMode, lastN int, lastTurnID string) ([]Item, error) {
+func forkItems(items []Item, mode ForkMode, lastN int, lastTurnID string, beforeTurnID string) ([]Item, error) {
 	items, err := itemsThroughTurn(items, lastTurnID)
+	if err != nil {
+		return nil, err
+	}
+	items, err = itemsBeforeTurn(items, beforeTurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -940,6 +948,31 @@ func forkItems(items []Item, mode ForkMode, lastN int, lastTurnID string) ([]Ite
 	default:
 		return nil, fmt.Errorf("%w: unknown fork mode %q", ErrInvalidThreadID, mode)
 	}
+}
+
+func itemsBeforeTurn(items []Item, beforeTurnID string) ([]Item, error) {
+	beforeTurnID = strings.TrimSpace(beforeTurnID)
+	if beforeTurnID == "" {
+		return items, nil
+	}
+	firstIndex := -1
+	canonical := false
+	for i := range items {
+		turnID, explicit := itemTurnIDWithExplicit(&items[i], i)
+		if turnID == beforeTurnID {
+			if firstIndex < 0 {
+				firstIndex = i
+			}
+			canonical = canonical || explicit
+		}
+	}
+	if firstIndex < 0 {
+		return nil, fmt.Errorf("%w: beforeTurnId '%s' was not found in the source thread", ErrInvalidThreadID, beforeTurnID)
+	}
+	if !canonical {
+		return nil, fmt.Errorf("%w: beforeTurnId '%s' is not a persisted canonical turn in the source thread", ErrInvalidThreadID, beforeTurnID)
+	}
+	return items[:firstIndex], nil
 }
 
 func itemsThroughTurn(items []Item, lastTurnID string) ([]Item, error) {

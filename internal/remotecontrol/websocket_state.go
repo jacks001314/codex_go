@@ -1,6 +1,9 @@
 package remotecontrol
 
-import "sort"
+import (
+	"sort"
+	"sync"
+)
 
 type envelopeStreamKey struct {
 	clientID ClientID
@@ -136,6 +139,7 @@ func websocketClientMessageKey(envelope *ClientEnvelope) (clientMessageKey, uint
 }
 
 type ServerEnvelopeBuffer struct {
+	mu             sync.RWMutex
 	bufferByStream map[envelopeStreamKey][]ServerEnvelope
 }
 
@@ -147,6 +151,8 @@ func (b *ServerEnvelopeBuffer) Insert(envelope *ServerEnvelope) {
 	if envelope == nil {
 		return
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.bufferByStream == nil {
 		b.bufferByStream = map[envelopeStreamKey][]ServerEnvelope{}
 	}
@@ -155,7 +161,12 @@ func (b *ServerEnvelopeBuffer) Insert(envelope *ServerEnvelope) {
 }
 
 func (b *ServerEnvelopeBuffer) Ack(clientID ClientID, streamID StreamID, ackedSeqID uint64, ackedSegmentID *int) {
-	if b == nil || b.bufferByStream == nil {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bufferByStream == nil {
 		return
 	}
 	key := envelopeStreamKey{clientID: clientID, streamID: streamID}
@@ -179,7 +190,12 @@ func (b *ServerEnvelopeBuffer) Ack(clientID ClientID, streamID StreamID, ackedSe
 }
 
 func (b *ServerEnvelopeBuffer) ForStream(clientID ClientID, streamID StreamID) []ServerEnvelope {
-	if b == nil || b.bufferByStream == nil {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.bufferByStream == nil {
 		return nil
 	}
 	key := envelopeStreamKey{clientID: clientID, streamID: streamID}
@@ -187,7 +203,12 @@ func (b *ServerEnvelopeBuffer) ForStream(clientID ClientID, streamID StreamID) [
 }
 
 func (b *ServerEnvelopeBuffer) Envelopes() []ServerEnvelope {
-	if b == nil || b.bufferByStream == nil {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.bufferByStream == nil {
 		return nil
 	}
 	keys := make([]envelopeStreamKey, 0, len(b.bufferByStream))

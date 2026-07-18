@@ -98,6 +98,7 @@ type CodexTurnEventParams struct {
 	ImageGenerationCount      *int                         `json:"image_generation_count"`
 	InputTokens               *int64                       `json:"input_tokens"`
 	CachedInputTokens         *int64                       `json:"cached_input_tokens"`
+	CacheWriteInputTokens     *int64                       `json:"cache_write_input_tokens"`
 	OutputTokens              *int64                       `json:"output_tokens"`
 	ReasoningOutputTokens     *int64                       `json:"reasoning_output_tokens"`
 	TotalTokens               *int64                       `json:"total_tokens"`
@@ -167,6 +168,7 @@ type CodexTurnToolCounts struct {
 type CodexTurnTokenUsage struct {
 	InputTokens           int64
 	CachedInputTokens     int64
+	CacheWriteInputTokens int64
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 	TotalTokens           int64
@@ -238,6 +240,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ImageGenerationCount:      toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ImageGeneration }),
 			InputTokens:               tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.InputTokens }),
 			CachedInputTokens:         tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CachedInputTokens }),
+			CacheWriteInputTokens:     tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CacheWriteInputTokens }),
 			OutputTokens:              tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.OutputTokens }),
 			ReasoningOutputTokens:     tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.ReasoningOutputTokens }),
 			TotalTokens:               tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.TotalTokens }),

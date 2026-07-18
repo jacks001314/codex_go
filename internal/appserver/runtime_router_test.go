@@ -1753,7 +1753,24 @@ func TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows(t *testing.T) {
 	if info.Error != nil || info.Result.(*EnvironmentInfoResponse).Shell.Name != "bash" {
 		t.Fatalf("environment info = %+v", info)
 	}
+	statusServerURL, statusDone := newEnvironmentStatusExecServerForTest(t, map[string]any{"status": "ready"})
+	statusAdd := router.Handle(requestWithParams(t, IntID(30), MethodEnvironmentAdd, EnvironmentAddParams{
+		EnvironmentID: "env-status",
+		ExecServerURL: statusServerURL,
+	}))
+	if statusAdd.Error != nil {
+		t.Fatalf("environment status add error: %+v", statusAdd.Error)
+	}
+	status := router.Handle(requestWithParams(t, IntID(31), MethodEnvironmentStatus, EnvironmentStatusParams{EnvironmentID: "env-status"}))
+	if status.Error != nil || status.Result.(*EnvironmentStatusResponse).Status != EnvironmentStatusReady {
+		t.Fatalf("environment status = %+v", status)
+	}
+	missingStatus := router.Handle(requestWithParams(t, IntID(32), MethodEnvironmentStatus, EnvironmentStatusParams{EnvironmentID: "missing-env"}))
+	if missingStatus.Error != nil || missingStatus.Result.(*EnvironmentStatusResponse).Status != EnvironmentStatusUnknown {
+		t.Fatalf("environment missing status = %+v", missingStatus)
+	}
 	waitEnvironmentInfoExecServerForTest(t, done)
+	waitEnvironmentInfoExecServerForTest(t, statusDone)
 	cwd := t.TempDir()
 	setup := router.Handle(requestWithParams(t, IntID(4), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
 		Mode: sandbox.WindowsSetupElevated,
@@ -4391,7 +4408,7 @@ func TestRuntimeRouterGetAccountWithAmazonBedrockProvider(t *testing.T) {
 		t.Fatalf("get account = %+v", response)
 	}
 	account := response.Result.(*auth.GetAccountResponse)
-	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || account.Account.CredentialSource != auth.BedrockCredentialSourceAWSManaged {
+	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || account.Account.UsesCodexManagedCredentials {
 		t.Fatalf("account = %+v", account)
 	}
 }
@@ -4412,7 +4429,7 @@ func TestRuntimeRouterGetAccountWithManagedBedrockAPIKey(t *testing.T) {
 		t.Fatalf("get account = %+v", response)
 	}
 	account := response.Result.(*auth.GetAccountResponse)
-	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || account.Account.CredentialSource != auth.BedrockCredentialSourceCodexManaged {
+	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || !account.Account.UsesCodexManagedCredentials {
 		t.Fatalf("account = %+v", account)
 	}
 }
@@ -6631,6 +6648,40 @@ func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterReviewStartRejectsDetachedDeliveryForPaginatedParentLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Reviews: review.NewService(), ThreadStatus: NewThreadStatusManager()})
+	defer router.Close()
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: ThreadHistoryPaginated}))
+	if started.Error != nil {
+		t.Fatalf("thread start = %+v", started.Error)
+	}
+	detached := "detached"
+	response := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: started.Result.(*ThreadStartResponse).Thread.ID,
+		Delivery: &detached,
+		Target:   review.APITarget{Type: "custom", Instructions: "detached review"},
+	}))
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support detached review" {
+		t.Fatalf("review response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterThreadRollbackRejectsPaginatedThreadLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadStatus: NewThreadStatusManager()})
+	defer router.Close()
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: ThreadHistoryPaginated}))
+	if started.Error != nil {
+		t.Fatalf("thread start = %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	response := router.Handle(requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{ThreadID: threadID, NumTurns: 1}))
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support thread/rollback" {
+		t.Fatalf("rollback response = %+v", response)
+	}
+}
+
 func TestRuntimeRouterReviewStartRunsReviewTurnAndEmitsExitLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	home := t.TempDir()
@@ -6805,7 +6856,6 @@ func TestRuntimeRouterReviewRuntimeDisablesStandaloneWebAndImageToolsLikeRust(t 
 		"features": map[string]any{
 			"standalone_web_search": true,
 			"image_generation":      true,
-			"imagegenext":           true,
 		},
 	}}
 	params := &turn.TurnStartParams{Originator: "review"}
@@ -11108,6 +11158,34 @@ func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestActiveTurnEnvironmentSnapshotRemainsStableAcrossLaterUpdatesLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	original := &turn.TurnStartParams{
+		ThreadID: "thread-stable-environment",
+		CWD:      "D:/workspace/old",
+		Environments: []map[string]any{{
+			"environmentId": "old-environment",
+			"cwd":           "D:/workspace/old",
+		}},
+	}
+	if err := router.registerActiveRuntimeTurn(original.ThreadID, "turn-active", nil, 1, original); err != nil {
+		t.Fatalf("register active turn: %v", err)
+	}
+	original.CWD = "D:/workspace/new"
+	original.Environments[0]["environmentId"] = "new-environment"
+	original.Environments[0]["cwd"] = "D:/workspace/new"
+
+	snapshot := router.activeTurnParams(original.ThreadID)
+	if snapshot == nil || snapshot.CWD != "D:/workspace/old" || len(snapshot.Environments) != 1 || snapshot.Environments[0]["environmentId"] != "old-environment" || snapshot.Environments[0]["cwd"] != "D:/workspace/old" {
+		t.Fatalf("active environment snapshot changed = %#v", snapshot)
+	}
+	snapshot.Environments[0]["cwd"] = "D:/workspace/mutated-copy"
+	again := router.activeTurnParams(original.ThreadID)
+	if again.Environments[0]["cwd"] != "D:/workspace/old" {
+		t.Fatalf("returned snapshot was not isolated = %#v", again.Environments)
+	}
 }
 
 func TestRuntimeRouterTurnStartUpdatesCWDBetweenTurnsLikeRust(t *testing.T) {
@@ -19798,7 +19876,7 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterChatGPTTurnIncludesHostedImageGenerationLikeRust(t *testing.T) {
+func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
@@ -19870,11 +19948,11 @@ func TestRuntimeRouterChatGPTTurnIncludesHostedImageGenerationLikeRust(t *testin
 	if !ok {
 		t.Fatalf("tools = %#v", recordedBody["tools"])
 	}
-	if !modelToolsContainHostedImageGeneration(tools) {
-		t.Fatalf("tools missing hosted image_generation: %#v", tools)
+	if !modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", tools)
 	}
-	if modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
-		t.Fatalf("hosted image generation should be used by default, got standalone namespace: %#v", tools)
+	if modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", tools)
 	}
 	inputText := inputItemText(recordedBody["input"])
 	for _, want := range []string{"<name>imagegen</name>", "Use the built-in image generation path before shell fallbacks."} {
@@ -19952,7 +20030,7 @@ func TestRuntimeRouterAPIKeyOpenAIProviderIncludesHostedImageGeneration(t *testi
 	}
 }
 
-func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenExtEnabled(t *testing.T) {
+func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImageGenerationEnabled(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
@@ -19977,7 +20055,7 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImagegenEx
 		)))
 	}))
 	defer server.Close()
-	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\nimagegenext = true\n"
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\nimage_generation = true\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("Write config error = %v", err)
 	}

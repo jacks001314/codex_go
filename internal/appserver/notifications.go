@@ -17,6 +17,7 @@ const (
 	NotificationItemGuardianApprovalReviewStarted   NotificationMethod = "item/autoApprovalReview/started"
 	NotificationItemGuardianApprovalReviewCompleted NotificationMethod = "item/autoApprovalReview/completed"
 	NotificationRawResponseItemCompleted            NotificationMethod = "rawResponseItem/completed"
+	NotificationRawResponseCompleted                NotificationMethod = "rawResponse/completed"
 	NotificationHookStarted                         NotificationMethod = "hook/started"
 	NotificationHookCompleted                       NotificationMethod = "hook/completed"
 	NotificationExternalAgentConfigImportProgress   NotificationMethod = "externalAgentConfig/import/progress"
@@ -86,6 +87,7 @@ type ThreadTokenUsageUpdatedNotification struct {
 type TokenUsage struct {
 	InputTokens           int64 `json:"inputTokens"`
 	CachedInputTokens     int64 `json:"cachedInputTokens,omitempty"`
+	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens,omitempty"`
 	OutputTokens          int64 `json:"outputTokens"`
 	ReasoningOutputTokens int64 `json:"reasoningOutputTokens,omitempty"`
 	TotalTokens           int64 `json:"totalTokens"`
@@ -98,6 +100,7 @@ type TokenUsageBreakdown struct {
 	TotalTokens           int64 `json:"totalTokens"`
 	InputTokens           int64 `json:"inputTokens"`
 	CachedInputTokens     int64 `json:"cachedInputTokens"`
+	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
 	OutputTokens          int64 `json:"outputTokens"`
 	ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
 }
@@ -138,6 +141,7 @@ func tokenUsageBreakdownFromUsage(u *TokenUsage) *TokenUsageBreakdown {
 		TotalTokens:           total,
 		InputTokens:           u.InputTokens,
 		CachedInputTokens:     u.CachedInputTokens,
+		CacheWriteInputTokens: u.CacheWriteInputTokens,
 		OutputTokens:          u.OutputTokens,
 		ReasoningOutputTokens: u.ReasoningOutputTokens,
 	}
@@ -488,6 +492,13 @@ type RawResponseItemCompletedNotification struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 	Item     any    `json:"item"`
+}
+
+type RawResponseCompletedNotification struct {
+	ThreadID   string               `json:"threadId"`
+	TurnID     string               `json:"turnId"`
+	ResponseID string               `json:"responseId"`
+	Usage      *TokenUsageBreakdown `json:"usage"`
 }
 
 type HookStartedNotification struct {

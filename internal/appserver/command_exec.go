@@ -37,6 +37,7 @@ type CommandExecService struct {
 }
 
 type managedCommandExec struct {
+	mu                  sync.Mutex
 	connectionID        string
 	processID           string
 	cmd                 *osexec.Cmd
@@ -50,6 +51,90 @@ type managedCommandExec struct {
 	response            chan commandExecResult
 	notify              func(NotificationMethod, any)
 	terminalInteraction *CommandExecTerminalInteractionContext
+}
+
+func (a *managedCommandExec) setPTY(process *ptyProcess, stdin io.WriteCloser, pty *ptyHandle, outputActivity chan struct{}, outputDone chan struct{}) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.process = process
+	a.stdin = stdin
+	a.pty = pty
+	a.outputActivity = outputActivity
+	a.outputDone = outputDone
+	a.mu.Unlock()
+}
+
+func (a *managedCommandExec) commandProcessHandle() *os.Process {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cmd == nil {
+		return nil
+	}
+	return a.cmd.Process
+}
+
+func (a *managedCommandExec) snapshotForWait(cmd *osexec.Cmd) (*ptyProcess, *ptyHandle, chan struct{}, chan struct{}, context.CancelFunc, chan commandExecResult, chan struct{}) {
+	if a == nil {
+		return nil, nil, nil, nil, nil, nil, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.process, a.pty, a.outputActivity, a.outputDone, a.cancel, a.response, a.done
+}
+
+func (a *managedCommandExec) stdinWriter() io.WriteCloser {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stdin
+}
+
+func (a *managedCommandExec) clearStdinIfCurrent(stdin io.WriteCloser) {
+	if a == nil || stdin == nil {
+		return
+	}
+	a.mu.Lock()
+	if a.stdin == stdin {
+		a.stdin = nil
+	}
+	a.mu.Unlock()
+}
+
+func (a *managedCommandExec) cancelCommand() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	cancel := a.cancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (a *managedCommandExec) ptySession() *ptyHandle {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pty
+}
+
+func (a *managedCommandExec) startCommand(cmd *osexec.Cmd) error {
+	if a == nil || cmd == nil {
+		return errors.New("command/exec active command is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return cmd.Start()
 }
 
 type CommandExecOptions struct {
@@ -179,7 +264,7 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 			}
 			return nil, err
 		}
-		if err := cmd.Start(); err != nil {
+		if err := active.startCommand(cmd); err != nil {
 			s.removeCommandExec(connectionID, *params.ProcessID)
 			if cancel != nil {
 				cancel()
@@ -197,7 +282,7 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 			}
 			return nil, err
 		}
-		if err := cmd.Start(); err != nil {
+		if err := active.startCommand(cmd); err != nil {
 			s.removeCommandExec(connectionID, *params.ProcessID)
 			if cancel != nil {
 				cancel()
@@ -215,7 +300,7 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 			}
 			return nil, err
 		}
-		if err := cmd.Start(); err != nil {
+		if err := active.startCommand(cmd); err != nil {
 			s.removeCommandExec(connectionID, *params.ProcessID)
 			if cancel != nil {
 				cancel()
@@ -295,9 +380,7 @@ func (s *CommandExecService) WriteWithConnection(connectionID string, params *Co
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	stdin := active.stdin
-	s.mu.Unlock()
+	stdin := active.stdinWriter()
 	if stdin == nil {
 		return nil, jsonRPCInvalidRequest("stdin streaming is not enabled for this command/exec")
 	}
@@ -320,11 +403,7 @@ func (s *CommandExecService) WriteWithConnection(connectionID string, params *Co
 		if err := stdin.Close(); err != nil {
 			return nil, fmt.Errorf("%w: stdin is already closed", ErrInvalidRequest)
 		}
-		s.mu.Lock()
-		if active.stdin == stdin {
-			active.stdin = nil
-		}
-		s.mu.Unlock()
+		active.clearStdinIfCurrent(stdin)
 	}
 	return &CommandExecWriteResponse{}, nil
 }
@@ -341,9 +420,7 @@ func (s *CommandExecService) TerminateWithConnection(connectionID string, params
 	if err != nil {
 		return nil, err
 	}
-	if active.cancel != nil {
-		active.cancel()
-	}
+	active.cancelCommand()
 	terminateCommandExecProcess(active)
 	return &CommandExecTerminateResponse{}, nil
 }
@@ -360,9 +437,7 @@ func (s *CommandExecService) ResizeWithConnection(connectionID string, params *C
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	ptySession := active.pty
-	s.mu.Unlock()
+	ptySession := active.ptySession()
 	if ptySession == nil {
 		return nil, jsonRPCInvalidRequest("command/exec resize is only supported for PTY processes")
 	}
@@ -477,21 +552,19 @@ func (s *CommandExecService) executePTYWithConnection(execCtx context.Context, c
 		return nil, err
 	}
 
+	active.mu.Lock()
 	process, ptySession, err := startPTYCommand(execCtx, cmd, params.Size)
+	active.mu.Unlock()
 	if err != nil {
 		s.removeCommandExec(connectionID, *params.ProcessID)
 		cancel()
 		return nil, fmt.Errorf("failed to start command/exec: %w", err)
 	}
-	active.outputActivity = make(chan struct{}, 1)
-	active.outputDone = make(chan struct{})
-	s.mu.Lock()
-	active.process = process
-	active.stdin = ptySession
-	active.pty = ptySession
-	s.mu.Unlock()
+	outputActivity := make(chan struct{}, 1)
+	outputDone := make(chan struct{})
+	active.setPTY(process, ptySession, ptySession, outputActivity, outputDone)
 
-	go readPTYOutput(ptySession, stdout, active.outputActivity, active.outputDone, func(data []byte) {
+	go readPTYOutput(ptySession, stdout, outputActivity, outputDone, func(data []byte) {
 		if len(data) == 0 || notify == nil {
 			return
 		}
@@ -558,28 +631,29 @@ func (s *CommandExecService) removeCommandExec(connectionID string, processID st
 func (s *CommandExecService) waitCommandExec(ctx context.Context, connectionID string, processID string, cmd *osexec.Cmd) {
 	active, _ := s.activeCommandExecForConnection(connectionID, processID)
 	err := error(nil)
-	if active != nil && active.process != nil {
-		err = active.process.Wait()
+	process, ptySession, outputActivity, outputDone, cancel, response, done := active.snapshotForWait(cmd)
+	if process != nil {
+		err = process.Wait()
 	} else {
 		err = cmd.Wait()
 	}
 	exitCode, waitErr := commandExecExitCode(ctx, err)
-	if active != nil && active.pty != nil {
-		waitForPTYOutputAfterExit(active.outputActivity, active.outputDone)
-		_ = active.pty.ClosePTY()
-		waitForPTYOutputDone(active.pty, active.outputDone)
-		_ = active.pty.Cleanup()
+	if ptySession != nil {
+		waitForPTYOutputAfterExit(outputActivity, outputDone)
+		_ = ptySession.ClosePTY()
+		waitForPTYOutputDone(ptySession, outputDone)
+		_ = ptySession.Cleanup()
 	}
-	if active != nil && active.cancel != nil {
-		active.cancel()
+	if cancel != nil {
+		cancel()
 	}
-	if active != nil && active.response != nil {
-		active.response <- commandExecResult{exitCode: exitCode, err: waitErr}
-		close(active.response)
+	if response != nil {
+		response <- commandExecResult{exitCode: exitCode, err: waitErr}
+		close(response)
 	}
 	s.removeCommandExec(connectionID, processID)
-	if active != nil {
-		close(active.done)
+	if done != nil {
+		close(done)
 	}
 }
 
@@ -597,9 +671,7 @@ func (s *CommandExecService) ConnectionClosed(connectionID string) {
 	}
 	s.mu.Unlock()
 	for _, active := range sessions {
-		if active.cancel != nil {
-			active.cancel()
-		}
+		active.cancelCommand()
 		terminateCommandExecProcess(active)
 	}
 }
@@ -625,9 +697,7 @@ func (s *CommandExecService) waitCommandExecResponse(ctx context.Context, active
 		}
 		return commandExecFinalResponse(result.exitCode, stdout, stderr, outputStreamed), nil
 	case <-ctx.Done():
-		if active.cancel != nil {
-			active.cancel()
-		}
+		active.cancelCommand()
 		result, ok := <-active.response
 		if !ok {
 			if ctx.Err() == context.DeadlineExceeded {

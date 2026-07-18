@@ -14,8 +14,9 @@ func prepareCommandExecProcess(cmd *osexec.Cmd) {
 }
 
 func terminateCommandExecProcess(active *managedCommandExec) {
-	if active == nil || active.cmd == nil || active.cmd.Process == nil {
+	process := active.commandProcessHandle()
+	if process == nil {
 		return
 	}
-	_ = syscall.Kill(-active.cmd.Process.Pid, syscall.SIGKILL)
+	_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
 }

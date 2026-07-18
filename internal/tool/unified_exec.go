@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -183,6 +184,8 @@ type unifiedExecProcess struct {
 	turnID          string
 
 	mu            sync.Mutex
+	interactionMu sync.Mutex
+	interactions  atomic.Int32
 	eventMu       sync.Mutex
 	output        *unifiedExecHeadTailBuffer
 	transcript    *unifiedExecHeadTailBuffer
@@ -630,10 +633,13 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 	if args == nil {
 		return nil, errors.New("write_stdin arguments are required")
 	}
-	process, err := m.process(args.SessionID)
+	process, err := m.processForInteraction(args.SessionID)
 	if err != nil {
 		return nil, err
 	}
+	defer process.interactions.Add(-1)
+	process.interactionMu.Lock()
+	defer process.interactionMu.Unlock()
 	if args.Chars != "" {
 		if !process.tty {
 			if args.Chars != unifiedExecInterrupt {
@@ -831,7 +837,12 @@ func (m *UnifiedExecManager) allocateProcessID() (int, error) {
 		meta := make([]unifiedExecProcessMeta, 0, len(m.processes))
 		for id, process := range m.processes {
 			if process != nil {
-				meta = append(meta, unifiedExecProcessMeta{ID: id, LastUsed: process.lastUsed, Exited: process.hasExited()})
+				meta = append(meta, unifiedExecProcessMeta{
+					ID:          id,
+					LastUsed:    process.lastUsed,
+					Exited:      process.hasExited(),
+					Interacting: process.interactions.Load() > 0,
+				})
 			}
 		}
 		candidate, ok := unifiedExecProcessIDToPrune(meta)
@@ -863,10 +874,23 @@ func (m *UnifiedExecManager) process(id int) (*unifiedExecProcess, error) {
 	return process, nil
 }
 
+func (m *UnifiedExecManager) processForInteraction(id int) (*unifiedExecProcess, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	process := m.processes[id]
+	if process == nil {
+		return nil, fmt.Errorf("%w %d", ErrUnifiedExecUnknownProcess, id)
+	}
+	process.interactions.Add(1)
+	process.lastUsed = time.Now()
+	return process, nil
+}
+
 type unifiedExecProcessMeta struct {
-	ID       int
-	LastUsed time.Time
-	Exited   bool
+	ID          int
+	LastUsed    time.Time
+	Exited      bool
+	Interacting bool
 }
 
 func unifiedExecProcessIDToPrune(meta []unifiedExecProcessMeta) (int, bool) {
@@ -883,12 +907,12 @@ func unifiedExecProcessIDToPrune(meta []unifiedExecProcessMeta) (int, bool) {
 	lru := append([]unifiedExecProcessMeta(nil), meta...)
 	sort.Slice(lru, func(i int, j int) bool { return lru[i].LastUsed.Before(lru[j].LastUsed) })
 	for _, entry := range lru {
-		if !protected[entry.ID] && entry.Exited {
+		if !protected[entry.ID] && !entry.Interacting && entry.Exited {
 			return entry.ID, true
 		}
 	}
 	for _, entry := range lru {
-		if !protected[entry.ID] {
+		if !protected[entry.ID] && !entry.Interacting {
 			return entry.ID, true
 		}
 	}

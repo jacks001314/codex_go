@@ -202,7 +202,7 @@ func TestProviderConfigAllowsOnlyAmazonBedrockAWSOverride(t *testing.T) {
 	if err == nil {
 		t.Fatal("ProviderForConfigID returned nil error, want unsupported override failure")
 	}
-	if !strings.Contains(err.Error(), "only supports changing aws.profile and aws.region") {
+	if !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`") {
 		t.Fatalf("error = %v", err)
 	}
 
@@ -216,5 +216,33 @@ func TestProviderConfigAllowsOnlyAmazonBedrockAWSOverride(t *testing.T) {
 	}
 	if provider.AWS == nil || provider.AWS.Profile != "codex-bedrock" {
 		t.Fatalf("aws = %#v", provider.AWS)
+	}
+}
+
+func TestProviderConfigAppliesAmazonBedrockTransportOverrides(t *testing.T) {
+	values := map[string]any{"model_providers": map[string]any{
+		AmazonBedrockProviderID: map[string]any{
+			"base_url":     "https://proxy.example.com/v1",
+			"auth":         map[string]any{"command": "print-token", "args": []any{"--json"}},
+			"http_headers": map[string]any{"x-example-header": "value"},
+			"aws":          map[string]any{"profile": "codex-bedrock", "region": "us-west-2"},
+		},
+	}}
+	provider, err := ProviderForConfigID(values, AmazonBedrockProviderID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.BaseURL != "https://proxy.example.com/v1" || provider.Auth == nil || provider.Auth.Command != "print-token" || provider.AWS == nil || provider.AWS.Profile != "codex-bedrock" || provider.HTTPHeaders["x-example-header"] != "value" || provider.HTTPHeaders[AmazonBedrockMantleClientHeader] != AmazonBedrockMantleClientValue {
+		t.Fatalf("provider = %+v", provider)
+	}
+}
+
+func TestProviderConfigRejectsEmptyAmazonBedrockAuthCommand(t *testing.T) {
+	values := map[string]any{"model_providers": map[string]any{
+		AmazonBedrockProviderID: map[string]any{"auth": map[string]any{"command": "  "}},
+	}}
+	_, err := ProvidersFromConfig(values, "")
+	if err == nil || !strings.Contains(err.Error(), "model_providers.amazon-bedrock: provider auth.command must not be empty") {
+		t.Fatalf("error = %v", err)
 	}
 }

@@ -53,33 +53,45 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 	lineage := r.responsesMetadataLineage(request.ThreadID)
 	sessionID := firstNonEmpty(strings.TrimSpace(record.SessionID), lineage.SessionID, request.ThreadID)
 	event := telemetry.NewCodexCompactionEvent(telemetry.CodexCompactionEventInput{
-		ThreadID:                  request.ThreadID,
-		SessionID:                 sessionID,
-		TurnID:                    strings.TrimSpace(request.TurnID),
-		AppServerClient:           client,
-		ThreadOriginator:          strings.TrimSpace(record.Metadata.Originator),
-		Runtime:                   telemetry.CurrentRuntimeMetadata(),
-		ThreadSource:              stringPtrIfNotEmpty(firstNonEmpty(lineage.ThreadSource, record.Metadata.ThreadSource)),
-		SubagentSource:            stringPtrIfNotEmpty(lineage.SubagentKind),
-		ParentThreadID:            stringPtrIfNotEmpty(lineage.ParentThreadID),
-		Trigger:                   compactionAnalyticsTrigger(request.Trigger),
-		Reason:                    compactionAnalyticsReason(request.Reason),
-		Implementation:            compactionAnalyticsImplementation(result),
-		Phase:                     compactionAnalyticsPhase(request.Phase),
-		Strategy:                  telemetry.CompactionStrategyMemento,
-		Status:                    compactionAnalyticsStatus(result, compactErr),
-		CodexErrorKind:            codexErrorKind,
-		CodexErrorHTTPStatusCode:  codexErrorHTTPStatusCode,
-		ActiveContextTokensBefore: activeContextTokensBefore,
-		ActiveContextTokensAfter:  activeContextTokensAfter,
-		RetainedImageCount:        compactionAnalyticsRetainedImageCount(result),
-		CompactionSummaryTokens:   compactionAnalyticsSummaryTokens(result),
-		CachedInputTokens:         compactionAnalyticsCachedInputTokens(result),
-		StartedAt:                 uint64FromNonNegativeInt64(startedAt.UTC().Unix()),
-		CompletedAt:               uint64FromNonNegativeInt64(completedAt.UTC().Unix()),
-		DurationMS:                uint64PtrFromNonNegativeInt64(completedAt.Sub(startedAt).Milliseconds()),
+		ThreadID:                        request.ThreadID,
+		SessionID:                       sessionID,
+		TurnID:                          strings.TrimSpace(request.TurnID),
+		AppServerClient:                 client,
+		ThreadOriginator:                strings.TrimSpace(record.Metadata.Originator),
+		Runtime:                         telemetry.CurrentRuntimeMetadata(),
+		ThreadSource:                    stringPtrIfNotEmpty(firstNonEmpty(lineage.ThreadSource, record.Metadata.ThreadSource)),
+		SubagentSource:                  stringPtrIfNotEmpty(lineage.SubagentKind),
+		ParentThreadID:                  stringPtrIfNotEmpty(lineage.ParentThreadID),
+		Trigger:                         compactionAnalyticsTrigger(request.Trigger),
+		Reason:                          compactionAnalyticsReason(request.Reason),
+		Implementation:                  compactionAnalyticsImplementation(result),
+		Phase:                           compactionAnalyticsPhase(request.Phase),
+		Strategy:                        telemetry.CompactionStrategyMemento,
+		Status:                          compactionAnalyticsStatus(result, compactErr),
+		CodexErrorKind:                  codexErrorKind,
+		CodexErrorHTTPStatusCode:        codexErrorHTTPStatusCode,
+		ActiveContextTokensBefore:       activeContextTokensBefore,
+		ActiveContextTokensAfter:        activeContextTokensAfter,
+		RetainedImageCount:              compactionAnalyticsRetainedImageCount(result),
+		CompactionSummaryTokens:         compactionAnalyticsSummaryTokens(result),
+		CachedInputTokens:               compactionAnalyticsCachedInputTokens(result),
+		CacheWriteInputTokens:           compactionAnalyticsCacheWriteInputTokens(result),
+		StartedAt:                       uint64FromNonNegativeInt64(startedAt.UTC().Unix()),
+		CompletedAt:                     uint64FromNonNegativeInt64(completedAt.UTC().Unix()),
+		DurationMS:                      uint64PtrFromNonNegativeInt64(completedAt.Sub(startedAt).Milliseconds()),
+		AutoCompactFallbackTriggered:    boolFromAny(record.Metadata.Extra["auto_compact_fallback_delivered"]),
+		AutoCompactFallbackOutcome:      stringPtrIfNotEmpty(stringFromAny(record.Metadata.Extra["auto_compact_fallback_outcome"])),
+		AutoCompactFallbackBufferTokens: int64PtrIfPositive(intFromAny(record.Metadata.Extra["auto_compact_fallback_buffer_tokens"])),
 	})
 	sink.TrackCodexCompactionEvent(ctx, event)
+}
+
+func int64PtrIfPositive(value int) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	converted := int64(value)
+	return &converted
 }
 
 func compactionAnalyticsTrigger(trigger compact.Trigger) string {
@@ -215,5 +227,13 @@ func compactionAnalyticsCachedInputTokens(result *compact.Result) *int64 {
 		return nil
 	}
 	value := result.Usage.CachedInputTokens
+	return &value
+}
+
+func compactionAnalyticsCacheWriteInputTokens(result *compact.Result) *int64 {
+	if result == nil || result.Usage == nil {
+		return nil
+	}
+	value := result.Usage.CacheWriteInputTokens
 	return &value
 }

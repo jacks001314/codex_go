@@ -127,29 +127,34 @@ type ExternalAuthRefreshResponse struct {
 type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefreshRequest) (*ExternalAuthRefreshResponse, error)
 
 type responsesAgentRequest struct {
-	Model                string              `json:"model"`
-	Instructions         string              `json:"instructions,omitempty"`
-	Input                []any               `json:"input"`
-	Tools                []any               `json:"tools,omitempty"`
-	ToolChoice           string              `json:"tool_choice,omitempty"`
-	Stream               bool                `json:"stream"`
-	Store                bool                `json:"store"`
-	ParallelToolCalls    bool                `json:"parallel_tool_calls"`
-	Reasoning            *responsesReasoning `json:"reasoning,omitempty"`
-	Include              []string            `json:"include,omitempty"`
-	ServiceTier          string              `json:"service_tier,omitempty"`
-	PromptCacheKey       string              `json:"prompt_cache_key,omitempty"`
-	ClientMetadata       map[string]string   `json:"client_metadata,omitempty"`
-	Text                 *responsesTextParam `json:"text,omitempty"`
-	UseResponsesLite     bool                `json:"-"`
-	IncludeTimingMetrics bool                `json:"-"`
-	BetaFeaturesHeader   string              `json:"-"`
+	Model                string                  `json:"model"`
+	Instructions         string                  `json:"instructions,omitempty"`
+	Input                []any                   `json:"input"`
+	Tools                []any                   `json:"tools,omitempty"`
+	ToolChoice           string                  `json:"tool_choice,omitempty"`
+	Stream               bool                    `json:"stream"`
+	Store                bool                    `json:"store"`
+	ParallelToolCalls    bool                    `json:"parallel_tool_calls"`
+	Reasoning            *responsesReasoning     `json:"reasoning,omitempty"`
+	StreamOptions        *responsesStreamOptions `json:"stream_options,omitempty"`
+	Include              []string                `json:"include,omitempty"`
+	ServiceTier          string                  `json:"service_tier,omitempty"`
+	PromptCacheKey       string                  `json:"prompt_cache_key,omitempty"`
+	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
+	Text                 *responsesTextParam     `json:"text,omitempty"`
+	UseResponsesLite     bool                    `json:"-"`
+	IncludeTimingMetrics bool                    `json:"-"`
+	BetaFeaturesHeader   string                  `json:"-"`
 }
 
 type responsesReasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	Context string `json:"context,omitempty"`
+}
+
+type responsesStreamOptions struct {
+	ReasoningSummaryDelivery string `json:"reasoning_summary_delivery"`
 }
 
 type responsesTextParam struct {
@@ -211,7 +216,8 @@ type responsesAgentAPIUsage struct {
 	OutputTokens       int64 `json:"output_tokens"`
 	TotalTokens        int64 `json:"total_tokens"`
 	InputTokensDetails *struct {
-		CachedTokens int64 `json:"cached_tokens"`
+		CachedTokens     int64 `json:"cached_tokens"`
+		CacheWriteTokens int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -388,6 +394,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
+	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -430,6 +437,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.Reasoning != nil {
 		payload["reasoning"] = apiRequest.Reasoning
 		payload["include"] = apiRequest.Include
+	}
+	if apiRequest.StreamOptions != nil {
+		payload["stream_options"] = apiRequest.StreamOptions
 	}
 	if apiRequest.Text != nil {
 		payload["text"] = apiRequest.Text
@@ -499,6 +509,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
+	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
 	if apiRequest.Reasoning != nil {
 		apiRequest.Include = []string{"reasoning.encrypted_content"}
 	}
@@ -622,6 +633,9 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	}
 	if apiRequest.Reasoning != nil {
 		payload["reasoning"] = apiRequest.Reasoning
+	}
+	if apiRequest.StreamOptions != nil {
+		payload["stream_options"] = apiRequest.StreamOptions
 	}
 	if apiRequest.Text != nil {
 		payload["text"] = apiRequest.Text
@@ -779,6 +793,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		BetaFeaturesHeader:   strings.TrimSpace(request.BetaFeaturesHeader),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
+	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
 	if apiRequest.Reasoning != nil {
 		apiRequest.Include = []string{"reasoning.encrypted_content"}
 	}
@@ -831,6 +846,19 @@ func responsesReasoningParam(request *AgentRequest, info *ModelInfo) *responsesR
 		reasoning.Context = "all_turns"
 	}
 	return reasoning
+}
+
+func responsesStreamOptionsForRequest(request *AgentRequest, reasoning *responsesReasoning, providerName string) *responsesStreamOptions {
+	if request == nil || !request.ConcurrentReasoningSummaries || reasoning == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(providerName), OpenAIProviderName) {
+		return nil
+	}
+	if strings.TrimSpace(reasoning.Summary) == "" {
+		return nil
+	}
+	return &responsesStreamOptions{ReasoningSummaryDelivery: "sequential_cutoff"}
 }
 
 func (r *ResponsesAgentRunner) modelInfoForRequest(modelID string) ModelInfo {
@@ -1664,6 +1692,7 @@ func usageFromResponses(usage *responsesAgentAPIUsage, fallbackText string) Agen
 	}
 	if usage.InputTokensDetails != nil {
 		out.CachedInputTokens = usage.InputTokensDetails.CachedTokens
+		out.CacheWriteInputTokens = usage.InputTokensDetails.CacheWriteTokens
 	}
 	if usage.OutputTokensDetails != nil {
 		out.ReasoningOutputTokens = usage.OutputTokensDetails.ReasoningTokens

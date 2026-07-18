@@ -197,3 +197,31 @@ func TestMCPToolResponseDataShape(t *testing.T) {
 		t.Fatalf("nested hook_response = %#v", hookResponse)
 	}
 }
+
+func TestMCPToolModelContentItemsPreserveEncryptedContentLikeRust(t *testing.T) {
+	response := &MCPToolCallResponse{Content: []MCPToolCallContent{
+		{Type: "text", Text: "Lookup completed"},
+		{Type: "encrypted_content", Raw: map[string]any{
+			"type":              "encrypted_content",
+			"encrypted_content": "gAAAA-test",
+		}},
+	}}
+	got := mcpToolModelContentItems(response)
+	want := []any{
+		map[string]any{"type": "input_text", "text": "Lookup completed"},
+		map[string]any{"type": "encrypted_content", "encrypted_content": "gAAAA-test"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("content items = %#v, want %#v", got, want)
+	}
+}
+
+func TestMcpToolCallAppContextOmitsRemovedTemplateIDLikeRust(t *testing.T) {
+	encoded, err := json.Marshal(McpToolCallAppContext{ConnectorID: "connector"})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "templateId") {
+		t.Fatalf("app context = %s", encoded)
+	}
+}

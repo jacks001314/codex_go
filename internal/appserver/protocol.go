@@ -67,6 +67,7 @@ const (
 	MethodExperimentalFeatureList                Method = "experimentalFeature/list"
 	MethodExperimentalFeatureSet                 Method = "experimentalFeature/enablement/set"
 	MethodAppList                                Method = "app/list"
+	MethodAppRead                                Method = "app/read"
 	MethodGetAuthStatus                          Method = "getAuthStatus"
 	MethodGetConversationSummary                 Method = "getConversationSummary"
 	MethodGitDiffToRemote                        Method = "gitDiffToRemote"
@@ -122,6 +123,7 @@ const (
 	MethodRemoteControlClientsRevoke             Method = "remoteControl/client/revoke"
 	MethodEnvironmentAdd                         Method = "environment/add"
 	MethodEnvironmentInfo                        Method = "environment/info"
+	MethodEnvironmentStatus                      Method = "environment/status"
 	MethodWindowsSandboxSetupStart               Method = "windowsSandbox/setupStart"
 	MethodWindowsSandboxReadiness                Method = "windowsSandbox/readiness"
 	MethodFeedbackUpload                         Method = "feedback/upload"
@@ -1489,6 +1491,8 @@ func (p *ThreadInitialPageParams) Validate() error {
 type ThreadResumeResponse struct {
 	Thread                  *Thread                          `json:"thread"`
 	InitialTurnsPage        *TurnsPage                       `json:"initialTurnsPage,omitempty"`
+	TurnsBackwardsCursor    *string                          `json:"turnsBackwardsCursor,omitempty"`
+	ItemsBackwardsCursor    *string                          `json:"itemsBackwardsCursor,omitempty"`
 	ApprovalPolicy          any                              `json:"approvalPolicy,omitempty"`
 	ApprovalsReviewer       *string                          `json:"approvalsReviewer,omitempty"`
 	CWD                     string                           `json:"cwd,omitempty"`
@@ -1507,6 +1511,8 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Thread                  *Thread                          `json:"thread"`
 		InitialTurnsPage        *TurnsPage                       `json:"initialTurnsPage"`
+		TurnsBackwardsCursor    *string                          `json:"turnsBackwardsCursor"`
+		ItemsBackwardsCursor    *string                          `json:"itemsBackwardsCursor"`
 		ApprovalPolicy          any                              `json:"approvalPolicy"`
 		ApprovalsReviewer       string                           `json:"approvalsReviewer"`
 		CWD                     string                           `json:"cwd"`
@@ -1522,6 +1528,8 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 	}{
 		Thread:                  r.Thread,
 		InitialTurnsPage:        r.InitialTurnsPage,
+		TurnsBackwardsCursor:    cloneString(r.TurnsBackwardsCursor),
+		ItemsBackwardsCursor:    cloneString(r.ItemsBackwardsCursor),
 		ApprovalPolicy:          threadResponseApprovalPolicy(r.ApprovalPolicy),
 		ApprovalsReviewer:       threadResponseApprovalsReviewer(r.ApprovalsReviewer),
 		CWD:                     r.CWD,
@@ -1654,6 +1662,7 @@ type ThreadForkParams struct {
 	HistoryMode           session.ForkMode `json:"historyMode,omitempty"`
 	LastN                 int              `json:"lastN,omitempty"`
 	LastTurnID            string           `json:"lastTurnId,omitempty"`
+	BeforeTurnID          string           `json:"beforeTurnId,omitempty"`
 	CWD                   *string          `json:"cwd,omitempty"`
 	Model                 *string          `json:"model,omitempty"`
 	ModelProvider         *string          `json:"modelProvider,omitempty"`
@@ -1699,6 +1708,9 @@ func (p *ThreadForkParams) Validate() error {
 	}
 	if strings.TrimSpace(p.ThreadID) == "" && (p.Path == nil || strings.TrimSpace(*p.Path) == "") {
 		return fmt.Errorf("%w: threadId or path is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(p.LastTurnID) != "" && strings.TrimSpace(p.BeforeTurnID) != "" {
+		return jsonRPCInvalidRequest("`beforeTurnId` cannot be combined with `lastTurnId`")
 	}
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
@@ -2835,13 +2847,13 @@ func applyTurnItemsView(turns []Turn, view TurnItemsView) {
 		case TurnItemsFull:
 			turns[i].ItemsView = TurnItemsFull
 		default:
-			turns[i].Items = summarizeTurnItems(turns[i].Items)
+			turns[i].Items = summarizeTurnItems(turns[i].Items, turns[i].Status)
 			turns[i].ItemsView = TurnItemsSummary
 		}
 	}
 }
 
-func summarizeTurnItems(items []ThreadItem) []ThreadItem {
+func summarizeTurnItems(items []ThreadItem, status TurnStatus) []ThreadItem {
 	if len(items) == 0 {
 		return []ThreadItem{}
 	}
@@ -2854,9 +2866,17 @@ func summarizeTurnItems(items []ThreadItem) []ThreadItem {
 	}
 	var finalAgent *ThreadItem
 	for i := len(items) - 1; i >= 0; i-- {
-		if threadItemIsAgentMessage(items[i]) {
+		if threadItemIsAgentMessage(items[i]) && threadItemMessagePhase(items[i]) == string(MessagePhaseFinalAnswer) {
 			finalAgent = &items[i]
 			break
+		}
+	}
+	if finalAgent == nil && turnStatusIsTerminal(status) {
+		for i := len(items) - 1; i >= 0; i-- {
+			if threadItemIsAgentMessage(items[i]) && threadItemMessagePhase(items[i]) == "" {
+				finalAgent = &items[i]
+				break
+			}
 		}
 	}
 	switch {
@@ -2869,6 +2889,16 @@ func summarizeTurnItems(items []ThreadItem) []ThreadItem {
 	default:
 		return []ThreadItem{}
 	}
+}
+
+func threadItemMessagePhase(item ThreadItem) string {
+	value := threadItemAnyFromData(item.Data, "phase", "messagePhase")
+	phase, _ := value.(string)
+	return strings.TrimSpace(phase)
+}
+
+func turnStatusIsTerminal(status TurnStatus) bool {
+	return status == TurnStatusCompleted || status == TurnStatusInterrupted || status == TurnStatusFailed
 }
 
 func threadItemIsUserMessage(item ThreadItem) bool {

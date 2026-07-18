@@ -448,3 +448,34 @@ func TestFunctionCallOutputPayloadSerializesAsWireBody(t *testing.T) {
 		t.Fatalf("Text() = %q", payload.Text())
 	}
 }
+
+func TestMCPEncryptedContentSerializesAsFunctionOutputItemsLikeRust(t *testing.T) {
+	invocation := &tool.Invocation{
+		CallID:   "encrypted-1",
+		ToolName: tool.NamespacedName("rmcp", "encrypted_output"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: "{}"},
+	}
+	response := ToolResponseFromOutput(invocation, &tool.Output{
+		Success: true,
+		Data: map[string]any{"content_items": []any{
+			map[string]any{"type": "input_text", "text": "Lookup completed"},
+			map[string]any{"type": "encrypted_content", "encrypted_content": "gAAAA-test"},
+		}},
+	})
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	items, ok := wire["output"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("output = %#v", wire["output"])
+	}
+	encrypted, _ := items[1].(map[string]any)
+	if encrypted["type"] != "encrypted_content" || encrypted["encrypted_content"] != "gAAAA-test" {
+		t.Fatalf("encrypted output = %#v", encrypted)
+	}
+}

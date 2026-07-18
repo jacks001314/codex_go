@@ -137,12 +137,14 @@ func typeScriptLegacyClientRequestMethods() []ProtocolMethod {
 func typeScriptOnlyNotificationMethods() []ProtocolMethod {
 	return []ProtocolMethod{
 		{Method: string(NotificationRawResponseItemCompleted)},
+		{Method: string(NotificationRawResponseCompleted)},
 	}
 }
 
 func baseClientRequestMethods() []ProtocolMethod {
 	return []ProtocolMethod{
 		{Method: string(MethodAppList)},
+		{Method: string(MethodAppRead)},
 		{Method: string(MethodCancelLoginAccount)},
 		{Method: string(MethodCommandExec)},
 		{Method: string(MethodCommandExecResize)},
@@ -237,6 +239,7 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodCollaborationModeList), Experimental: true},
 		{Method: string(MethodEnvironmentAdd), Experimental: true},
 		{Method: string(MethodEnvironmentInfo), Experimental: true},
+		{Method: string(MethodEnvironmentStatus), Experimental: true},
 		{Method: string(MethodFuzzyFileSearchStart), Experimental: true},
 		{Method: string(MethodFuzzyFileSearchStop), Experimental: true},
 		{Method: string(MethodFuzzyFileSearchUpdate), Experimental: true},
@@ -429,6 +432,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodAccountSessionsLogout):                  {Params: "AccountSessionsLogoutParams", Result: "AccountSessionsResponse"},
 		string(MethodAccountSessionsSwitch):                  {Params: "AccountSessionsSwitchParams", Result: "AccountSessionsResponse"},
 		string(MethodAppList):                                {Params: "AppsListParams", Result: "AppsListResponse"},
+		string(MethodAppRead):                                {Params: "AppsReadParams", Result: "AppsReadResponse"},
 		string(MethodCancelLoginAccount):                     {Params: "CancelLoginAccountParams", Result: "CancelLoginAccountResponse"},
 		string(MethodCollaborationModeList):                  {Params: "CollaborationModeListParams", Result: "CollaborationModeListResponse"},
 		string(MethodCommandExec):                            {Params: "CommandExecParams", Result: "CommandExecResponse"},
@@ -443,6 +447,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodConsumeAccountRateLimitResetCredit):     {Params: "ConsumeAccountRateLimitResetCreditParams", Result: "ConsumeAccountRateLimitResetCreditResponse"},
 		string(MethodEnvironmentAdd):                         {Params: "EnvironmentAddParams", Result: "EnvironmentAddResponse"},
 		string(MethodEnvironmentInfo):                        {Params: "EnvironmentInfoParams", Result: "EnvironmentInfoResponse"},
+		string(MethodEnvironmentStatus):                      {Params: "EnvironmentStatusParams", Result: "EnvironmentStatusResponse"},
 		string(MethodExperimentalFeatureList):                {Params: "ExperimentalFeatureListParams", Result: "ExperimentalFeatureListResponse"},
 		string(MethodExperimentalFeatureSet):                 {Params: "ExperimentalFeatureEnablementSetParams", Result: "ExperimentalFeatureEnablementSetResponse"},
 		string(MethodExternalAgentConfigDetect):              {Params: "ExternalAgentConfigDetectParams", Result: "ExternalAgentConfigDetectResponse"},
@@ -604,6 +609,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(NotificationProcessExited):                       {Params: "ProcessExitedNotification"},
 		string(NotificationProcessOutputDelta):                  {Params: "ProcessOutputDeltaNotification"},
 		string(NotificationRawResponseItemCompleted):            {Params: "RawResponseItemCompletedNotification"},
+		string(NotificationRawResponseCompleted):                {Params: "RawResponseCompletedNotification"},
 		string(NotificationReasoningSummaryPartAdded):           {Params: "ReasoningSummaryPartAddedNotification"},
 		string(NotificationReasoningSummaryTextDelta):           {Params: "ReasoningSummaryTextDeltaNotification"},
 		string(NotificationReasoningTextDelta):                  {Params: "ReasoningTextDeltaNotification"},

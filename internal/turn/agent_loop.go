@@ -21,6 +21,15 @@ type AgentLoopOptions struct {
 	Now          func() time.Time
 }
 
+type SamplingFollowUpContext struct {
+	Response     *model.AgentResponse
+	Usage        model.AgentUsage
+	Iteration    int
+	HasToolCalls bool
+}
+
+type SamplingFollowUp func(*SamplingFollowUpContext) []any
+
 type AgentLoop struct {
 	agent        model.AgentRunner
 	dispatcher   *ToolDispatcher
@@ -47,6 +56,7 @@ type AgentLoopRequest struct {
 	ParallelToolCalls            bool
 	ReasoningEffort              string
 	ReasoningSummary             string
+	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool
 	BetaFeaturesHeader           string
@@ -60,16 +70,18 @@ type AgentLoopRequest struct {
 	PostToolInputItems           ToolPostExecutionInputItems
 	OnToolStarted                ToolStartedCallback
 	Timing                       *TimingState
+	SamplingFollowUp             SamplingFollowUp
 }
 
 type AgentLoopResult struct {
-	Response       *model.AgentResponse
-	Responses      []*model.AgentResponse
-	ToolExecutions []ToolExecutionResult
-	InputItems     []any
-	Usage          model.AgentUsage
-	Iterations     int
-	TimingProfile  *Profile
+	Response          *model.AgentResponse
+	Responses         []*model.AgentResponse
+	ToolExecutions    []ToolExecutionResult
+	InputItems        []any
+	Usage             model.AgentUsage
+	Iterations        int
+	TimingProfile     *Profile
+	SamplingFollowUps int
 }
 
 func (r *AgentLoopResult) ModelResponses() []*model.AgentResponse {
@@ -171,6 +183,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              request.ReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
+			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
 			IncludeTimingMetrics:         request.IncludeTimingMetrics,
 			BetaFeaturesHeader:           request.BetaFeaturesHeader,
@@ -210,6 +223,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 
 		toolItems := toolAgentItems(response)
+		if len(toolItems) == 0 && request.SamplingFollowUp != nil {
+			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: len(toolItems) > 0})
+			if len(followUp) > 0 {
+				result.InputItems = append(result.InputItems, followUp...)
+				result.SamplingFollowUps++
+				continue
+			}
+		}
 		if len(toolItems) == 0 {
 			profile := timing.CompleteProfile(l.now())
 			result.TimingProfile = &profile
@@ -235,6 +256,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 			if len(executions[i].InputItems) > 0 {
 				result.InputItems = append(result.InputItems, executions[i].InputItems...)
+			}
+		}
+		if request.SamplingFollowUp != nil {
+			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: true})
+			if len(followUp) > 0 {
+				result.InputItems = append(result.InputItems, followUp...)
+				result.SamplingFollowUps++
 			}
 		}
 	}
@@ -321,6 +349,7 @@ func drainSteer(mailbox *SteerMailbox, request *AgentLoopRequest) *SteerDrainRes
 func addAgentUsage(left model.AgentUsage, right model.AgentUsage) model.AgentUsage {
 	left.InputTokens += right.InputTokens
 	left.CachedInputTokens += right.CachedInputTokens
+	left.CacheWriteInputTokens += right.CacheWriteInputTokens
 	left.OutputTokens += right.OutputTokens
 	left.ReasoningOutputTokens += right.ReasoningOutputTokens
 	left.TotalTokens += model.AgentUsageTotalTokens(right)

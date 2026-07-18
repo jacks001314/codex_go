@@ -15,7 +15,6 @@ type McpToolCallAppContext struct {
 	LinkID      *string `json:"linkId"`
 	ResourceURI *string `json:"resourceUri"`
 	AppName     *string `json:"appName"`
-	TemplateID  *string `json:"templateId"`
 	ActionName  *string `json:"actionName"`
 }
 

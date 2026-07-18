@@ -31,6 +31,8 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 	if r == nil {
 		return &model.UnavailableAgentRunner{}
 	}
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
 	if r.services.Agent != nil {
 		return r.services.Agent
 	}

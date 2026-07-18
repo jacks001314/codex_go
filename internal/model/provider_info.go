@@ -331,8 +331,9 @@ func CreateAmazonBedrockProvider(aws *ProviderAWSAuthInfo) ProviderInfo {
 		aws = &ProviderAWSAuthInfo{}
 	}
 	return ProviderInfo{
-		Name:               AmazonBedrockProviderName,
-		BaseURL:            AmazonBedrockDefaultBaseURL,
+		Name: AmazonBedrockProviderName,
+		// An empty base URL means the runtime derives the regional Mantle endpoint.
+		BaseURL:            "",
 		AWS:                &ProviderAWSAuthInfo{Profile: aws.Profile, Region: aws.Region},
 		WireAPI:            WireAPIResponses,
 		HTTPHeaders:        map[string]string{AmazonBedrockMantleClientHeader: AmazonBedrockMantleClientValue},
@@ -381,24 +382,32 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 	out := cloneProviderMap(providers)
 	for key, provider := range configured {
 		if key == AmazonBedrockProviderID {
+			baseURLOverride := provider.BaseURL
+			provider.BaseURL = ""
+			authOverride := provider.Auth
+			provider.Auth = nil
 			awsOverride := provider.AWS
 			provider.AWS = nil
+			httpHeadersOverride := provider.HTTPHeaders
+			provider.HTTPHeaders = nil
 			if !(&provider).isZero() {
-				return nil, fmt.Errorf("model_providers.%s only supports changing aws.profile and aws.region; other non-default provider fields are not supported", AmazonBedrockProviderID)
+				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported", AmazonBedrockProviderID)
 			}
+			builtIn := out[AmazonBedrockProviderID]
+			builtIn.BaseURL = baseURLOverride
+			builtIn.Auth = cloneProviderAuthInfo(authOverride)
 			if awsOverride != nil {
-				builtIn := out[AmazonBedrockProviderID]
-				if builtIn.AWS == nil {
-					builtIn.AWS = &ProviderAWSAuthInfo{}
-				}
-				if awsOverride.Profile != "" {
-					builtIn.AWS.Profile = awsOverride.Profile
-				}
-				if awsOverride.Region != "" {
-					builtIn.AWS.Region = awsOverride.Region
-				}
-				out[AmazonBedrockProviderID] = builtIn
+				builtIn.AWS = &ProviderAWSAuthInfo{Profile: awsOverride.Profile, Region: awsOverride.Region}
 			}
+			if len(httpHeadersOverride) > 0 {
+				if builtIn.HTTPHeaders == nil {
+					builtIn.HTTPHeaders = map[string]string{}
+				}
+				for name, value := range httpHeadersOverride {
+					builtIn.HTTPHeaders[name] = value
+				}
+			}
+			out[AmazonBedrockProviderID] = builtIn
 			continue
 		}
 		if _, exists := out[key]; !exists {

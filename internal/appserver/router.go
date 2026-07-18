@@ -861,6 +861,22 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		InstructionSources:      threadRecordInstructionSources(record),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}
+	cursorRecord := record
+	if !includeTurns {
+		if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
+			cursorRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
+		} else {
+			cursorRecord, err = r.store.Read(sourceID, true, true)
+			if err != nil {
+				cursorRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		r.attachRolloutTurnSnapshots(cursorRecord)
+	}
+	response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(cursorRecord)
 	if ShouldRedactThreadResumePayloads(params.ClientName) && response.Thread != nil {
 		response.Thread.Turns = RedactThreadResumePayloads(response.Thread.Turns)
 	}
@@ -956,6 +972,7 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}
+	response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(record)
 	if params.InitialTurnsPage != nil {
 		page, err := BuildTurnsResponse(record, &ThreadTurnsListParams{
 			ThreadID:      string(threadID),
@@ -978,6 +995,31 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		}
 	}
 	return response, nil
+}
+
+func threadResumeHeadCursors(record *session.Record) (*string, *string) {
+	if record == nil {
+		return nil, nil
+	}
+	turns := turnsFromRecord(record)
+	var turnsCursor *string
+	if len(turns) > 0 {
+		if cursor, err := serializeThreadTurnsCursor(turns[len(turns)-1].ID, true); err == nil {
+			turnsCursor = stringPtrIfNotEmpty(cursor)
+		}
+	}
+	hasItems := false
+	for i := range record.Items {
+		if !sessionItemIsHiddenThreadItem(&record.Items[i]) {
+			hasItems = true
+			break
+		}
+	}
+	var itemsCursor *string
+	if hasItems {
+		itemsCursor = stringPtrIfNotEmpty("0")
+	}
+	return turnsCursor, itemsCursor
 }
 
 func resumeServiceTier(params *ThreadResumeParams, record *session.Record) *string {
@@ -1304,11 +1346,12 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
 	record, err := r.store.ForkRecord(sourceRecord, session.ForkOptions{
-		Mode:       mode,
-		LastN:      params.LastN,
-		LastTurnID: params.LastTurnID,
-		Ephemeral:  params.Ephemeral,
-		Now:        r.now().UTC(),
+		Mode:         mode,
+		LastN:        params.LastN,
+		LastTurnID:   params.LastTurnID,
+		BeforeTurnID: params.BeforeTurnID,
+		Ephemeral:    params.Ephemeral,
+		Now:          r.now().UTC(),
 	})
 	if err != nil {
 		return nil, threadForkRecordError(err)
@@ -1357,7 +1400,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 }
 
 func threadForkRecordError(err error) error {
-	if errors.Is(err, session.ErrInvalidThreadID) && strings.Contains(err.Error(), "lastTurnId") {
+	if errors.Is(err, session.ErrInvalidThreadID) && (strings.Contains(err.Error(), "lastTurnId") || strings.Contains(err.Error(), "beforeTurnId")) {
 		message := strings.TrimPrefix(err.Error(), session.ErrInvalidThreadID.Error()+": ")
 		return jsonRPCInvalidRequest(message)
 	}
@@ -2199,6 +2242,9 @@ func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse
 			return nil, err
 		}
 	}
+	if threadUsesPaginatedHistory(record) {
+		return nil, jsonRPCInvalidRequest("paginated threads do not support thread/rollback")
+	}
 	record.Items = rollbackItems(record.Items, params.NumTurns)
 	record.UpdatedAt = r.now().UTC()
 	record.RecencyAt = record.UpdatedAt
@@ -2311,6 +2357,10 @@ func methodNotFound(message string) error {
 
 func paginatedRolloutHistory(record *session.Record) bool {
 	return record != nil && record.FromRollout && strings.EqualFold(strings.TrimSpace(record.Metadata.HistoryMode), string(ThreadHistoryPaginated))
+}
+
+func threadUsesPaginatedHistory(record *session.Record) bool {
+	return record != nil && strings.EqualFold(strings.TrimSpace(record.Metadata.HistoryMode), string(ThreadHistoryPaginated))
 }
 
 func unmaterializedThread(record *session.Record) bool {

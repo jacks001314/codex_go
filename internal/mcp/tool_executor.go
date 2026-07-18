@@ -116,6 +116,9 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	body := MCPToolResponseText(response)
 	data := mcpToolResponseData(response)
+	if contentItems := mcpToolModelContentItems(response); len(contentItems) > 0 {
+		data["content_items"] = contentItems
+	}
 	data["server"] = e.resolvedServerName()
 	data["tool"] = e.resolvedRemoteToolName()
 	return &tool.Output{
@@ -311,6 +314,30 @@ func MCPToolResponseText(response *MCPToolCallResponse) string {
 		return ""
 	}
 	return string(encoded)
+}
+
+func mcpToolModelContentItems(response *MCPToolCallResponse) []any {
+	if response == nil {
+		return nil
+	}
+	items := make([]any, 0, len(response.Content))
+	for i := range response.Content {
+		item := response.Content[i].Map()
+		switch item["type"] {
+		case "text":
+			text, _ := item["text"].(string)
+			items = append(items, map[string]any{"type": "input_text", "text": text})
+		case "encrypted_content":
+			encrypted, _ := item["encrypted_content"].(string)
+			if encrypted != "" {
+				items = append(items, map[string]any{
+					"type":              "encrypted_content",
+					"encrypted_content": encrypted,
+				})
+			}
+		}
+	}
+	return items
 }
 
 func mcpHookToolInput(rawArguments string) any {

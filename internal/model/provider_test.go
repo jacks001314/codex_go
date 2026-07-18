@@ -351,6 +351,22 @@ func TestAmazonBedrockProviderAPIAuthUsesManagedAPIKey(t *testing.T) {
 	}
 }
 
+func TestAmazonBedrockProviderAPIAuthUsesCommandOverride(t *testing.T) {
+	info := CreateAmazonBedrockProvider(nil)
+	info.Auth = commandAuthForTest("command-bedrock-token")
+	provider := CreateRuntimeProvider(info, nil)
+	headers, err := provider.APIAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headers.Headers.Get("Authorization") != "Bearer command-bedrock-token" {
+		t.Fatalf("headers = %#v", headers.Headers)
+	}
+	if headers.SignRequest != nil {
+		t.Fatal("command-auth Bedrock request should not use AWS request signing")
+	}
+}
+
 func TestAmazonBedrockProviderAPIAuthUsesBearerTokenEnv(t *testing.T) {
 	t.Setenv(AmazonBedrockBearerTokenEnv, "env-bedrock-token")
 	t.Setenv("AWS_REGION", "us-east-2")

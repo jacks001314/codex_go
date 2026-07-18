@@ -249,7 +249,7 @@ func (p *AmazonBedrockProvider) AccountState() (ProviderAccountState, error) {
 
 func (p *AmazonBedrockProvider) APIProvider() (APIProvider, error) {
 	info := p.info
-	if info.BaseURL == "" || info.BaseURL == AmazonBedrockDefaultBaseURL {
+	if info.BaseURL == "" {
 		baseURL, err := p.RuntimeBaseURL()
 		if err != nil {
 			return APIProvider{}, err
@@ -281,6 +281,18 @@ func (p *AmazonBedrockProvider) RuntimeBaseURLNoError() string {
 
 func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 	headers := p.info.BuildHeaderMap()
+	if p.info.Auth != nil {
+		resolved, err := ResolveProviderCommandAuth(context.Background(), p.info.Auth)
+		if err != nil {
+			return AuthHeaders{}, err
+		}
+		for name, values := range resolved.Headers {
+			for _, value := range values {
+				headers.Add(name, value)
+			}
+		}
+		return AuthHeaders{Headers: headers}, nil
+	}
 	if p.auth != nil && p.auth.Mode() == "bedrock-api-key" {
 		if token := bedrockAPIKeyValue(p.auth.BedrockAPIKey); token != "" {
 			headers.Set("Authorization", "Bearer "+token)

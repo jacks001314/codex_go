@@ -104,6 +104,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"image_generation_count": null,
 			"input_tokens": null,
 			"cached_input_tokens": null,
+			"cache_write_input_tokens": null,
 			"output_tokens": null,
 			"reasoning_output_tokens": null,
 			"total_tokens": null,

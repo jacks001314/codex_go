@@ -78,6 +78,7 @@ func compactUsageFromAgentUsage(usage *model.AgentUsage) *compact.Usage {
 	return &compact.Usage{
 		InputTokens:           usage.InputTokens,
 		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 	}

@@ -30,6 +30,7 @@ const (
 	MethodInitialize           = "initialize"
 	MethodInitialized          = "initialized"
 	MethodEnvironmentInfo      = "environment/info"
+	MethodEnvironmentStatus    = "environment/status"
 	MethodProcessStart         = "process/start"
 	MethodProcessRead          = "process/read"
 	MethodProcessWrite         = "process/write"
@@ -199,6 +200,7 @@ type processState struct {
 	seenWriteOrder  []string
 	notify          processNotifier
 	onClosed        func()
+	retention       time.Duration
 	retentionOnce   sync.Once
 }
 
@@ -250,6 +252,16 @@ type EnvironmentInfo struct {
 	Shell ShellInfo `json:"shell"`
 	CWD   *string   `json:"cwd"`
 }
+
+type EnvironmentStatus struct {
+	Status EnvironmentStatusKind `json:"status"`
+}
+
+type EnvironmentStatusKind string
+
+const (
+	EnvironmentStatusReady EnvironmentStatusKind = "ready"
+)
 
 type ShellInfo struct {
 	Name string `json:"name"`
@@ -1033,6 +1045,8 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		return InitializeResponse{SessionID: entry.id}, nil
 	case MethodEnvironmentInfo:
 		return localEnvironmentInfo(), nil
+	case MethodEnvironmentStatus:
+		return EnvironmentStatus{Status: EnvironmentStatusReady}, nil
 	case MethodProcessStart:
 		var params ExecParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1198,6 +1212,8 @@ func execServerMethodFamily(method string) string {
 	switch method {
 	case MethodEnvironmentInfo:
 		return "environment info"
+	case MethodEnvironmentStatus:
+		return "environment status"
 	case MethodProcessStart, MethodProcessRead, MethodProcessWrite, MethodProcessTerminate, MethodProcessSignal:
 		return "exec"
 	case MethodHTTPRequest:
@@ -1436,9 +1452,10 @@ func (s *Server) reserveProcessState(ctx context.Context, params *ExecParams) (*
 		nextSeq:      1,
 		seenWriteIDs: map[string]bool{},
 		notify:       processNotifierFromContext(ctx),
+		retention:    execServerExitedProcessRetention,
 	}
 	state.onClosed = func() {
-		timer := time.NewTimer(execServerExitedProcessRetention)
+		timer := time.NewTimer(state.retention)
 		defer timer.Stop()
 		<-timer.C
 		s.mu.Lock()

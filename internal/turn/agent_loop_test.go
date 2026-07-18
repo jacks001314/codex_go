@@ -119,6 +119,75 @@ func TestAgentLoopAllowsEmptyInput(t *testing.T) {
 	}
 }
 
+func TestAgentLoopSamplingFollowUpContinuesWithDeveloperInput(t *testing.T) {
+	agent := &followUpLoopAgent{}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})
+	called := 0
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "do work",
+		SamplingFollowUp: func(ctx *SamplingFollowUpContext) []any {
+			called++
+			if called == 1 && ctx != nil && !ctx.HasToolCalls && model.AgentUsageTotalTokens(ctx.Usage) == 100 {
+				return []any{model.DeveloperMessageInputItem("Save important state.")}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Iterations != 2 || result.Usage.TotalTokens != 120 || result.SamplingFollowUps != 1 || len(agent.requests) != 2 {
+		t.Fatalf("result = %+v requests=%d", result, len(agent.requests))
+	}
+	found := false
+	for _, raw := range agent.requests[1].InputItems {
+		item, ok := raw.(map[string]any)
+		if ok && item["role"] == "developer" && contentHasInputText(item["content"], "Save important state.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("second request input = %#v", agent.requests[1].InputItems)
+	}
+}
+
+func TestAgentLoopSamplingFollowUpAfterToolKeepsToolOutput(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}), MaxTurns: 3})
+	delivered := false
+	_, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "run", Tools: []any{"same-tools"}, SamplingFollowUp: func(ctx *SamplingFollowUpContext) []any {
+		if !delivered && ctx != nil && ctx.HasToolCalls {
+			delivered = true
+			return []any{model.DeveloperMessageInputItem("Save state.")}
+		}
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.requests) != 2 || len(agent.requests[0].Tools) != 1 || len(agent.requests[1].Tools) != 1 {
+		t.Fatalf("requests = %#v", agent.requests)
+	}
+	if !resultInputItemsHaveText(agent.requests[1].InputItems, "Save state.") {
+		t.Fatalf("second input = %#v", agent.requests[1].InputItems)
+	}
+	foundOutput := false
+	for _, item := range agent.requests[1].InputItems {
+		if output, ok := item.(*ToolResponseItem); ok && output.Output.Text() == "tool result" {
+			foundOutput = true
+		}
+	}
+	if !foundOutput {
+		t.Fatalf("tool output missing: %#v", agent.requests[1].InputItems)
+	}
+}
+
 func TestAgentLoopStopsAtIterationLimit(t *testing.T) {
 	agent := &fakeLoopAgent{alwaysTool: true}
 	registry := tool.NewRegistry()
@@ -279,6 +348,19 @@ type streamTimingLoopAgent struct {
 
 type emptyInputLoopAgent struct {
 	requests []model.AgentRequest
+}
+
+type followUpLoopAgent struct{ requests []model.AgentRequest }
+
+func (a *followUpLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	usage := model.AgentUsage{TotalTokens: 100}
+	message := "initial"
+	if len(a.requests) > 1 {
+		usage = model.AgentUsage{TotalTokens: 20}
+		message = "done"
+	}
+	return &model.AgentResponse{ResponseID: "resp-" + strconv.Itoa(len(a.requests)), Message: message, Usage: usage, Items: []model.AgentItem{{Type: "agent_message", Text: message}}}, nil
 }
 
 func (a *emptyInputLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

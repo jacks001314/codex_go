@@ -139,3 +139,19 @@ func TestThreadEventStoreSetTurnsAndRollbackMatchRust(t *testing.T) {
 		t.Fatalf("rollback turns = %#v", store.Turns)
 	}
 }
+
+func TestThreadEventStoreRetrySnapshotPreservesContextInflightAndOriginatorLikeRust(t *testing.T) {
+	store := NewThreadEventStoreWithSession(8, ThreadSessionState{ThreadID: "thread-1", Originator: "codex-tui", Model: "gpt-test"}, []appserver.Turn{{ID: "turn-running", Status: appserver.TurnStatusInProgress}})
+	store.SetInputState(&ThreadInputState{Draft: "retry draft"})
+	store.EnqueueRequest(ServerRequest{ID: "approval-1", Kind: ServerRequestCommandExecutionApproval, TurnID: "turn-running", ItemID: "exec-1"})
+	snapshot := store.Snapshot()
+	if snapshot.Session == nil || snapshot.Session.Originator != "codex-tui" || snapshot.Session.Model != "gpt-test" {
+		t.Fatalf("session context = %#v", snapshot.Session)
+	}
+	if store.ActiveTurn() != "turn-running" || len(snapshot.Events) != 1 || snapshot.Events[0].Request == nil || snapshot.Events[0].Request.ID != "approval-1" {
+		t.Fatalf("in-flight snapshot = %#v active=%q", snapshot.Events, store.ActiveTurn())
+	}
+	if snapshot.InputState == nil || snapshot.InputState.Draft != "retry draft" {
+		t.Fatalf("input state = %#v", snapshot.InputState)
+	}
+}

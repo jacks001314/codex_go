@@ -3,6 +3,10 @@ package tea
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	appsapi "codex_go/internal/apps"
@@ -12,6 +16,24 @@ import (
 	bottompane "codex_go/internal/tui/bottom_pane"
 	chatwidget "codex_go/internal/tui/chatwidget"
 )
+
+func pasteImageFromClipboard() (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", fmt.Errorf("image clipboard is unavailable on %s", runtime.GOOS)
+	}
+	dir, err := os.MkdirTemp("", "codex-paste-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "clipboard.png")
+	script := "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; $img=[Windows.Forms.Clipboard]::GetImage(); if ($null -eq $img) { exit 2 }; $img.Save('" + strings.ReplaceAll(path, "'", "''") + "', [Drawing.Imaging.ImageFormat]::Png)"
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Sta", "-Command", script)
+	if output, runErr := cmd.CombinedOutput(); runErr != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("%v: %s", runErr, strings.TrimSpace(string(output)))
+	}
+	return path, nil
+}
 
 func (m *Model) applyAttachmentCommand(args string, kind bottompane.AttachmentKind) {
 	if m == nil {

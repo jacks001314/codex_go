@@ -289,15 +289,15 @@ func TestRustExecThreadItemDetailsDerivedFromSource(t *testing.T) {
 	rustPath := rustExecEventsSourcePath(t)
 	rustItems := rustEnumVariantNames(t, rustPath, "pub enum ThreadItemDetails")
 	goItems := map[string]ThreadItem{
-		"AgentMessage":      AgentMessageItem("agent-1", "done"),
-		"Reasoning":         {ID: "reasoning-1", Type: "reasoning", Text: "thinking"},
-		"CommandExecution":  CommandExecutionItem("cmd-1", "ls", "", nil, "in_progress"),
-		"FileChange":        FileChangeItem("patch-1", []FileChange{{Path: "a.txt", Kind: "update"}}, "completed"),
-		"McpToolCall":       MCPToolCallItem("mcp-1", "docs", "search", nil, nil, nil, "in_progress"),
-		"CollabToolCall":    CollabToolCallItem("collab-1", "spawn_agent", "thread-1", nil, nil, nil, "in_progress"),
-		"WebSearch":         WebSearchItem("search-1", "codex", map[string]any{"type": "search", "query": "codex"}),
-		"TodoList":          TodoListItem("todo-1", []TodoItem{{Text: "write", Completed: false}}),
-		"Error":             ErrorItem("error-1", "failed"),
+		"AgentMessage":     AgentMessageItem("agent-1", "done"),
+		"Reasoning":        {ID: "reasoning-1", Type: "reasoning", Text: "thinking"},
+		"CommandExecution": CommandExecutionItem("cmd-1", "ls", "", nil, "in_progress"),
+		"FileChange":       FileChangeItem("patch-1", []FileChange{{Path: "a.txt", Kind: "update"}}, "completed"),
+		"McpToolCall":      MCPToolCallItem("mcp-1", "docs", "search", nil, nil, nil, "in_progress"),
+		"CollabToolCall":   CollabToolCallItem("collab-1", "spawn_agent", "thread-1", nil, nil, nil, "in_progress"),
+		"WebSearch":        WebSearchItem("search-1", "codex", map[string]any{"type": "search", "query": "codex"}),
+		"TodoList":         TodoListItem("todo-1", []TodoItem{{Text: "write", Completed: false}}),
+		"Error":            ErrorItem("error-1", "failed"),
 	}
 	for _, rustVariant := range rustItems {
 		item, ok := goItems[rustVariant]
@@ -412,6 +412,7 @@ func TestTurnTerminalEventJSONShape(t *testing.T) {
 	completed := TurnCompleted(Usage{
 		InputTokens:           1,
 		CachedInputTokens:     2,
+		CacheWriteInputTokens: 5,
 		OutputTokens:          3,
 		ReasoningOutputTokens: 4,
 	})
@@ -419,7 +420,7 @@ func TestTurnTerminalEventJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal completed returned error: %v", err)
 	}
-	wantCompleted := `{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":4}}`
+	wantCompleted := `{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":2,"cache_write_input_tokens":5,"output_tokens":3,"reasoning_output_tokens":4}}`
 	if string(data) != wantCompleted {
 		t.Fatalf("completed json = %s, want %s", data, wantCompleted)
 	}

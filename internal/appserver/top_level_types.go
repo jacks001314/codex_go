@@ -19,13 +19,6 @@ const (
 	AuthModeBedrockAPIKey       AuthMode = "bedrockApiKey"
 )
 
-type AmazonBedrockCredentialSource string
-
-const (
-	AmazonBedrockCredentialSourceCodexManaged AmazonBedrockCredentialSource = "codexManaged"
-	AmazonBedrockCredentialSourceAWSManaged   AmazonBedrockCredentialSource = "awsManaged"
-)
-
 type AutoCompactTokenLimitScope string
 
 const (

@@ -498,6 +498,39 @@ func TestStoreForkLastTurnID(t *testing.T) {
 	}
 }
 
+func TestStoreForkBeforeTurnIDPreservesSourceAndKeepsPrefixLikeRust(t *testing.T) {
+	store := NewStore(t.TempDir())
+	source := &Record{ID: "source", Metadata: Metadata{RolloutTurns: []TurnSnapshot{{ID: "turn-1", Status: "completed"}, {ID: "turn-2", Status: "completed"}}}, Items: []Item{
+		{ID: "u1", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "a1", Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "u2", Metadata: map[string]any{"turnId": "turn-2"}},
+		{ID: "a2", Metadata: map[string]any{"turnId": "turn-2"}},
+	}}
+	if err := store.Save(source); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	forked, err := store.Fork("source", ForkOptions{NewID: "fork", Mode: ForkAll, BeforeTurnID: "turn-2"})
+	if err != nil {
+		t.Fatalf("Fork(before turn) error = %v", err)
+	}
+	if got := itemIDs(forked.Items); !reflect.DeepEqual(got, []string{"u1", "a1"}) {
+		t.Fatalf("fork items = %v", got)
+	}
+	loaded, err := store.Read("source", true, true)
+	if err != nil {
+		t.Fatalf("Read(source) = %v", err)
+	}
+	if got := itemIDs(loaded.Items); !reflect.DeepEqual(got, []string{"u1", "a1", "u2", "a2"}) {
+		t.Fatalf("source mutated = %v", got)
+	}
+	if _, err := store.Fork("source", ForkOptions{NewID: "missing", BeforeTurnID: "turn-missing"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "beforeTurnId 'turn-missing' was not found") {
+		t.Fatalf("missing error = %v", err)
+	}
+	if _, err := store.Fork("source", ForkOptions{NewID: "both", LastTurnID: "turn-1", BeforeTurnID: "turn-2"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("mutual exclusion error = %v", err)
+	}
+}
+
 func TestStoreForkClonesStructuredItemFields(t *testing.T) {
 	store := NewStore(t.TempDir())
 	detail := "high"

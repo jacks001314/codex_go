@@ -33,6 +33,8 @@ type ToolRegistryOptions struct {
 
 	AgentController agent.ToolController
 	AgentExposure   tool.Exposure
+	AgentRoles      map[string]agent.RoleConfig
+	AgentDefaults   agent.SpawnDefaults
 
 	PluginInstallCandidates            []plugin.DiscoverableInfo
 	PluginInstallRecommendationContext bool
@@ -139,7 +141,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		return nil, err
 	}
 	if options.EnableAgents {
-		if err := agent.RegisterMultiAgentHandlers(registry, options.AgentController, options.AgentExposure); err != nil {
+		if err := agent.RegisterMultiAgentHandlersWithOptions(registry, &agent.MultiAgentHandlerOptions{
+			Controller: options.AgentController,
+			Exposure:   options.AgentExposure,
+			Roles:      options.AgentRoles,
+			Defaults:   options.AgentDefaults,
+		}); err != nil {
 			return nil, err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -45,6 +46,7 @@ func bridgeStdioToUDS(socketPath string, stdin io.Reader, stdout io.Writer) erro
 }
 
 type windowsNamedPipe struct {
+	mu     sync.Mutex
 	handle windows.Handle
 }
 
@@ -72,7 +74,8 @@ func (p *windowsNamedPipe) Read(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	if p == nil || p.handle == 0 {
+	handle := p.currentHandle()
+	if handle == 0 {
 		return 0, io.ErrClosedPipe
 	}
 	event, overlapped, err := newWindowsPipeOverlapped()
@@ -80,10 +83,11 @@ func (p *windowsNamedPipe) Read(buf []byte) (int, error) {
 		return 0, err
 	}
 	defer windows.CloseHandle(event)
-	err = windows.ReadFile(p.handle, buf, nil, overlapped)
-	read, err := completeWindowsPipeOverlapped(p.handle, overlapped, err)
+	var immediate uint32
+	err = windows.ReadFile(handle, buf, &immediate, overlapped)
+	read, err := completeWindowsPipeOverlapped(handle, overlapped, err)
 	if err != nil {
-		if err == windows.ERROR_BROKEN_PIPE || err == windows.ERROR_HANDLE_EOF {
+		if err == windows.ERROR_BROKEN_PIPE || err == windows.ERROR_HANDLE_EOF || err == windows.ERROR_OPERATION_ABORTED || err == windows.ERROR_INVALID_HANDLE {
 			return int(read), io.EOF
 		}
 		return int(read), err
@@ -95,7 +99,8 @@ func (p *windowsNamedPipe) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	if p == nil || p.handle == 0 {
+	handle := p.currentHandle()
+	if handle == 0 {
 		return 0, io.ErrClosedPipe
 	}
 	var total int
@@ -105,12 +110,13 @@ func (p *windowsNamedPipe) Write(buf []byte) (int, error) {
 		if err != nil {
 			return total, err
 		}
-		err = windows.WriteFile(p.handle, chunk, nil, overlapped)
-		written, err := completeWindowsPipeOverlapped(p.handle, overlapped, err)
+		var immediate uint32
+		err = windows.WriteFile(handle, chunk, &immediate, overlapped)
+		written, err := completeWindowsPipeOverlapped(handle, overlapped, err)
 		_ = windows.CloseHandle(event)
 		total += int(written)
 		if err != nil {
-			if err == windows.ERROR_BROKEN_PIPE || err == windows.ERROR_NO_DATA {
+			if err == windows.ERROR_BROKEN_PIPE || err == windows.ERROR_NO_DATA || err == windows.ERROR_OPERATION_ABORTED || err == windows.ERROR_INVALID_HANDLE {
 				return total, io.ErrClosedPipe
 			}
 			return total, err
@@ -123,12 +129,27 @@ func (p *windowsNamedPipe) Write(buf []byte) (int, error) {
 }
 
 func (p *windowsNamedPipe) Close() error {
-	if p == nil || p.handle == 0 {
+	if p == nil {
 		return nil
 	}
+	p.mu.Lock()
 	handle := p.handle
 	p.handle = 0
+	p.mu.Unlock()
+	if handle == 0 {
+		return nil
+	}
+	_ = windows.CancelIoEx(handle, nil)
 	return windows.CloseHandle(handle)
+}
+
+func (p *windowsNamedPipe) currentHandle() windows.Handle {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.handle
 }
 
 func newWindowsPipeOverlapped() (windows.Handle, *windows.Overlapped, error) {

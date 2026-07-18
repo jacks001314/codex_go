@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -275,7 +276,7 @@ func TestStdioServerHandlesConcurrentTurnStarts(t *testing.T) {
 		"",
 	}, "\n")
 
-	var out strings.Builder
+	var out lockedStringBuilder
 	if err := server.Serve(strings.NewReader(input), &out); err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
@@ -285,6 +286,23 @@ func TestStdioServerHandlesConcurrentTurnStarts(t *testing.T) {
 			t.Fatalf("response id %v missing from %#v", id, lines)
 		}
 	}
+}
+
+type lockedStringBuilder struct {
+	mu      sync.Mutex
+	builder strings.Builder
+}
+
+func (b *lockedStringBuilder) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.Write(data)
+}
+
+func (b *lockedStringBuilder) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.String()
 }
 
 func mustJSONLine(t *testing.T, value any) string {

@@ -12,9 +12,10 @@ const (
 )
 
 type RoleConfig struct {
-	Description string            `json:"description,omitempty"`
-	ConfigFile  string            `json:"config_file,omitempty"`
-	Settings    map[string]string `json:"settings,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	ConfigFile         string            `json:"config_file,omitempty"`
+	NicknameCandidates []string          `json:"nickname_candidates,omitempty"`
+	Settings           map[string]string `json:"settings,omitempty"`
 }
 
 type RuntimeConfig struct {
@@ -177,6 +178,7 @@ func cloneRole(role *RoleConfig) *RoleConfig {
 		return nil
 	}
 	cloned := *role
+	cloned.NicknameCandidates = append([]string(nil), role.NicknameCandidates...)
 	if role.Settings != nil {
 		cloned.Settings = make(map[string]string, len(role.Settings))
 		for key, value := range role.Settings {

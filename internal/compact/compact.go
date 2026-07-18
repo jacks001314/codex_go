@@ -54,22 +54,24 @@ const (
 )
 
 type Policy struct {
-	Enabled       bool
-	TokenLimit    int
-	WindowTokens  int
-	PrefillTokens int
-	Scope         Scope
-	MinMessages   int
+	Enabled              bool
+	TokenLimit           int
+	WindowTokens         int
+	PrefillTokens        int
+	Scope                Scope
+	MinMessages          int
+	FallbackBufferTokens int
 }
 
 type TokenStatus struct {
-	ActiveContextTokens      int
-	AutoCompactScopeTokens   int
-	AutoCompactScopeLimit    int
-	TokensUntilCompaction    *int
-	ShouldCompact            bool
-	Reason                   Reason
-	NewContextWindowRequired bool
+	ActiveContextTokens       int
+	AutoCompactScopeTokens    int
+	AutoCompactScopeLimit     int
+	TokensUntilCompaction     *int
+	BaseWindowTokensRemaining *int
+	ShouldCompact             bool
+	Reason                    Reason
+	NewContextWindowRequired  bool
 }
 
 func Evaluate(policy Policy, activeContextTokens int) TokenStatus {
@@ -100,9 +102,15 @@ func Evaluate(policy Policy, activeContextTokens int) TokenStatus {
 		status.TokensUntilCompaction = nil
 		return status
 	}
-	remaining := limit - scopeTokens
+	baseRemaining := limit - scopeTokens
+	if baseRemaining < 0 {
+		baseRemaining = 0
+	}
+	status.BaseWindowTokensRemaining = &baseRemaining
+	bufferedLimit := limit + max(0, policy.FallbackBufferTokens)
+	remaining := bufferedLimit - scopeTokens
 	status.TokensUntilCompaction = &remaining
-	if scopeTokens >= limit {
+	if scopeTokens >= bufferedLimit {
 		status.ShouldCompact = true
 		status.Reason = ReasonTokenLimit
 	}
@@ -182,6 +190,7 @@ type Result struct {
 type Usage struct {
 	InputTokens           int64
 	CachedInputTokens     int64
+	CacheWriteInputTokens int64
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 }
@@ -510,6 +519,7 @@ type Window struct {
 	prefillInputTokens           *int
 	prefillServerObserved        bool
 	tokenBudgetReminderDelivered bool
+	autoCompactFallbackDelivered bool
 	nextID                       func() string
 }
 
@@ -572,7 +582,18 @@ func (w *Window) Advance() (uint64, WindowIDs) {
 	w.ids.WindowID = w.nextID()
 	w.newContextWindowRequested = false
 	w.tokenBudgetReminderDelivered = false
+	w.autoCompactFallbackDelivered = false
 	return w.number, w.ids
+}
+
+func (w *Window) ClaimAutoCompactFallback() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.autoCompactFallbackDelivered {
+		return false
+	}
+	w.autoCompactFallbackDelivered = true
+	return true
 }
 
 func (w *Window) ClaimTokenBudgetReminder() bool {

@@ -46,7 +46,7 @@ func TestAccountFromAuth(t *testing.T) {
 		AuthMode:      "bedrock-api-key",
 		BedrockAPIKey: &BedrockAPIKeyAuth{APIKey: "bedrock-key", Region: "us-east-1"},
 	})
-	if bedrock == nil || bedrock.Type != AccountAmazonBedrock || bedrock.CredentialSource != BedrockCredentialSourceCodexManaged {
+	if bedrock == nil || bedrock.Type != AccountAmazonBedrock || !bedrock.UsesCodexManagedCredentials {
 		t.Fatalf("bedrock account = %+v", bedrock)
 	}
 
@@ -277,8 +277,8 @@ func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 		},
 		{
 			name: "amazon bedrock",
-			in:   &GetAccountResponse{Account: &Account{Type: AccountAmazonBedrock, CredentialSource: BedrockCredentialSourceCodexManaged}},
-			want: `{"account":{"type":"amazonBedrock","credentialSource":"codexManaged"},"requiresOpenaiAuth":false}`,
+			in:   &GetAccountResponse{Account: &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}},
+			want: `{"account":{"type":"amazonBedrock","usesCodexManagedCredentials":true},"requiresOpenaiAuth":false}`,
 		},
 	}
 	for _, tc := range cases {

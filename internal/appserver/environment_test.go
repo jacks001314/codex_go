@@ -112,6 +112,62 @@ func TestManagerInfoFetchesRemoteExecServer(t *testing.T) {
 	waitEnvironmentInfoExecServerForTest(t, done)
 }
 
+func TestManagerStatusReportsRustShapedStates(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "pending", ExecServerURL: "ws://example.test/exec"}); err != nil {
+		t.Fatalf("Add(pending) error = %v", err)
+	}
+	if err := manager.SetInfo("local", EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "/workspace"); err != nil {
+		t.Fatalf("SetInfo(local) error = %v", err)
+	}
+
+	local, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "local"})
+	if err != nil || local.Status != EnvironmentStatusReady || local.Error != nil {
+		t.Fatalf("Status(local) = %+v, %v", local, err)
+	}
+	missing, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "missing"})
+	if err != nil || missing.Status != EnvironmentStatusUnknown || missing.Error == nil || *missing.Error != "unknown environment id `missing`" {
+		t.Fatalf("Status(missing) = %+v, %v", missing, err)
+	}
+	disconnected, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "pending"})
+	if err != nil || disconnected.Status != EnvironmentStatusDisconnected || disconnected.Error == nil {
+		t.Fatalf("Status(unreachable websocket) = %+v, %v", disconnected, err)
+	}
+}
+
+func TestManagerStatusFetchesRemoteExecServer(t *testing.T) {
+	execServerURL, done := newEnvironmentStatusExecServerForTest(t, map[string]any{"status": "ready"})
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: execServerURL}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	status, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "remote"})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.Status != EnvironmentStatusReady || status.Error != nil {
+		t.Fatalf("Status() = %+v", status)
+	}
+	waitEnvironmentInfoExecServerForTest(t, done)
+}
+
+func TestManagerStatusReportsPendingForConnectedUninitializedExecServer(t *testing.T) {
+	execServerURL, done := newPendingEnvironmentStatusExecServerForTest(t)
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	timeoutMS := uint64(50)
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "pending", ExecServerURL: execServerURL, ConnectTimeoutMS: &timeoutMS}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	status, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "pending"})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.Status != EnvironmentStatusPending || status.Error != nil {
+		t.Fatalf("Status() = %+v", status)
+	}
+	waitEnvironmentInfoExecServerForTest(t, done)
+}
+
 func TestManagerRemove(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
 	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "env", ExecServerURL: "ws://example.test"}); err != nil {
@@ -153,6 +209,63 @@ func newEnvironmentInfoExecServerForTest(t *testing.T, result map[string]any) (s
 			done <- err
 			return
 		}
+		done <- nil
+	}))
+	t.Cleanup(server.Close)
+	return "ws" + strings.TrimPrefix(server.URL, "http"), done
+}
+
+func newEnvironmentStatusExecServerForTest(t *testing.T, result map[string]any) (string, <-chan error) {
+	t.Helper()
+	done := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := expectExecServerRequestForTest(ctx, conn, "initialize", func(request map[string]any) error {
+			return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{"sessionId": "status-session"})
+		}); err != nil {
+			done <- err
+			return
+		}
+		if err := expectExecServerRequestForTest(ctx, conn, "initialized", nil); err != nil {
+			done <- err
+			return
+		}
+		if err := expectExecServerRequestForTest(ctx, conn, "environment/status", func(request map[string]any) error {
+			return writeExecServerResponseForTest(ctx, conn, request["id"], result)
+		}); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}))
+	t.Cleanup(server.Close)
+	return "ws" + strings.TrimPrefix(server.URL, "http"), done
+}
+
+func newPendingEnvironmentStatusExecServerForTest(t *testing.T) (string, <-chan error) {
+	t.Helper()
+	done := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := expectExecServerRequestForTest(ctx, conn, "initialize", nil); err != nil {
+			done <- err
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
 		done <- nil
 	}))
 	t.Cleanup(server.Close)

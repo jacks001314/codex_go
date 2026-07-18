@@ -7,23 +7,26 @@ import (
 
 func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 	event := NewCodexCompactionEvent(CodexCompactionEventInput{
-		ThreadID:                  "thread-1",
-		SessionID:                 "session-thread-1",
-		TurnID:                    "turn-1",
-		AppServerClient:           sampleAppServerClientMetadata(),
-		Runtime:                   sampleRuntimeMetadata(),
-		ThreadSource:              stringPtrTelemetry("user"),
-		Trigger:                   CompactionTriggerAuto,
-		Reason:                    CompactionReasonContextLimit,
-		Implementation:            CompactionImplementationResponsesCompact,
-		Phase:                     CompactionPhaseMidTurn,
-		Strategy:                  CompactionStrategyMemento,
-		Status:                    CompactionStatusCompleted,
-		ActiveContextTokensBefore: 120000,
-		ActiveContextTokensAfter:  18000,
-		StartedAt:                 100,
-		CompletedAt:               106,
-		DurationMS:                uint64PtrTelemetry(6543),
+		ThreadID:                        "thread-1",
+		SessionID:                       "session-thread-1",
+		TurnID:                          "turn-1",
+		AppServerClient:                 sampleAppServerClientMetadata(),
+		Runtime:                         sampleRuntimeMetadata(),
+		ThreadSource:                    stringPtrTelemetry("user"),
+		Trigger:                         CompactionTriggerAuto,
+		Reason:                          CompactionReasonContextLimit,
+		Implementation:                  CompactionImplementationResponsesCompact,
+		Phase:                           CompactionPhaseMidTurn,
+		Strategy:                        CompactionStrategyMemento,
+		Status:                          CompactionStatusCompleted,
+		ActiveContextTokensBefore:       120000,
+		ActiveContextTokensAfter:        18000,
+		StartedAt:                       100,
+		CompletedAt:                     106,
+		DurationMS:                      uint64PtrTelemetry(6543),
+		AutoCompactFallbackTriggered:    true,
+		AutoCompactFallbackOutcome:      stringPtrTelemetry("reserve_exhausted"),
+		AutoCompactFallbackBufferTokens: int64PtrCompactionTelemetry(8000),
 	})
 
 	data, err := json.Marshal(event)
@@ -44,14 +47,17 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 		params["implementation"] != CompactionImplementationResponsesCompact ||
 		params["phase"] != CompactionPhaseMidTurn ||
 		params["strategy"] != CompactionStrategyMemento ||
-		params["status"] != CompactionStatusCompleted {
+		params["status"] != CompactionStatusCompleted ||
+		params["auto_compact_fallback_triggered"] != true ||
+		params["auto_compact_fallback_outcome"] != "reserve_exhausted" ||
+		params["auto_compact_fallback_buffer_tokens"] != float64(8000) {
 		t.Fatalf("payload = %s", data)
 	}
 	if params["codex_error_kind"] != nil ||
 		params["codex_error_http_status_code"] != nil ||
 		params["retained_image_count"] != nil ||
 		params["compaction_summary_tokens"] != nil ||
-		params["cached_input_tokens"] != nil {
+		params["cached_input_tokens"] != nil || params["cache_write_input_tokens"] != nil {
 		t.Fatalf("optional null fields = %s", data)
 	}
 	if params["active_context_tokens_before"] != float64(120000) ||
@@ -60,3 +66,5 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 		t.Fatalf("numeric fields = %s", data)
 	}
 }
+
+func int64PtrCompactionTelemetry(value int64) *int64 { return &value }

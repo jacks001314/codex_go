@@ -28,13 +28,6 @@ const (
 	PlanEdu                         PlanType = "edu"
 )
 
-type BedrockCredentialSource string
-
-const (
-	BedrockCredentialSourceAWSManaged   BedrockCredentialSource = "awsManaged"
-	BedrockCredentialSourceCodexManaged BedrockCredentialSource = "codexManaged"
-)
-
 type AccountType string
 
 const (
@@ -44,10 +37,10 @@ const (
 )
 
 type Account struct {
-	Type             AccountType             `json:"type"`
-	Email            *string                 `json:"email,omitempty"`
-	PlanType         PlanType                `json:"planType,omitempty"`
-	CredentialSource BedrockCredentialSource `json:"credentialSource,omitempty"`
+	Type                        AccountType `json:"type"`
+	Email                       *string     `json:"email,omitempty"`
+	PlanType                    PlanType    `json:"planType,omitempty"`
+	UsesCodexManagedCredentials bool        `json:"usesCodexManagedCredentials,omitempty"`
 }
 
 func (a *Account) MarshalJSON() ([]byte, error) {
@@ -67,14 +60,10 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 			PlanType PlanType    `json:"planType"`
 		}{Type: AccountChatGPT, Email: a.Email, PlanType: plan})
 	case AccountAmazonBedrock:
-		source := a.CredentialSource
-		if source == "" {
-			source = BedrockCredentialSourceAWSManaged
-		}
 		return json.Marshal(struct {
-			Type             AccountType             `json:"type"`
-			CredentialSource BedrockCredentialSource `json:"credentialSource"`
-		}{Type: AccountAmazonBedrock, CredentialSource: source})
+			Type                        AccountType `json:"type"`
+			UsesCodexManagedCredentials bool        `json:"usesCodexManagedCredentials"`
+		}{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: a.UsesCodexManagedCredentials})
 	default:
 		type accountAlias Account
 		return json.Marshal(accountAlias(*a))
@@ -105,7 +94,7 @@ func AccountFromAuth(snapshot *AuthDotJSON) *Account {
 			PlanType: planFromString(plan),
 		}
 	case "bedrock-api-key":
-		return &Account{Type: AccountAmazonBedrock, CredentialSource: BedrockCredentialSourceCodexManaged}
+		return &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}
 	case "personal-access-token":
 		return AccountFromPersonalAccessTokenMetadata(personalAccessTokenMetadataFromAuth(snapshot))
 	case "agent-identity":

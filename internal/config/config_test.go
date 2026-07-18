@@ -94,6 +94,25 @@ use_legacy_landlock = true
 	}
 }
 
+func TestFeatureSettingsTreatsImagegenextAsLegacyAlias(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"imagegenext": true}}}
+	settings, usages := cfg.FeatureSettingsWithLegacyUsages()
+	if !settings["image_generation"] {
+		t.Fatalf("image_generation = false, want true from imagegenext alias: %#v", settings)
+	}
+	if _, ok := settings["imagegenext"]; ok {
+		t.Fatalf("imagegenext should not remain a canonical feature setting: %#v", settings)
+	}
+	want := []string{"imagegenext -> image_generation"}
+	got := make([]string, 0, len(usages))
+	for _, usage := range usages {
+		got = append(got, usage.Alias+" -> "+usage.Feature)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy usages = %#v, want %#v", got, want)
+	}
+}
+
 func TestIncludeSkillInstructionsUsesRustDefaultAndSkillsConfig(t *testing.T) {
 	if !(&Config{Values: map[string]any{}}).IncludeSkillInstructions() {
 		t.Fatal("IncludeSkillInstructions() default = false, want true")
@@ -105,6 +124,42 @@ func TestIncludeSkillInstructionsUsesRustDefaultAndSkillsConfig(t *testing.T) {
 	invalid := &Config{Values: map[string]any{"skills": map[string]any{"include_instructions": "false"}}}
 	if !invalid.IncludeSkillInstructions() {
 		t.Fatal("IncludeSkillInstructions() invalid value should use true default")
+	}
+}
+
+func TestSkillShadowSelectionEnabledUsesRustDefaultAndSkillsConfig(t *testing.T) {
+	if !(&Config{Values: map[string]any{}}).SkillShadowSelectionEnabled() {
+		t.Fatal("SkillShadowSelectionEnabled() default = false, want true")
+	}
+	disabled := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}}}
+	if disabled.SkillShadowSelectionEnabled() {
+		t.Fatal("SkillShadowSelectionEnabled() = true, want false when skill_search=false")
+	}
+	enabled := &Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	if !enabled.SkillShadowSelectionEnabled() {
+		t.Fatal("SkillShadowSelectionEnabled() = false, want true")
+	}
+	compat := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}, "skills": map[string]any{"shadow_selection_enabled": true}}}
+	if !compat.SkillShadowSelectionEnabled() {
+		t.Fatal("SkillShadowSelectionEnabled() legacy skills.shadow_selection_enabled=true should enable compatibility path")
+	}
+	invalid := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}, "skills": map[string]any{"shadow_selection_enabled": "true"}}}
+	if invalid.SkillShadowSelectionEnabled() {
+		t.Fatal("SkillShadowSelectionEnabled() invalid value should use false default")
+	}
+}
+
+func TestSkillSelectionEnabledDefaultsOffAndRequiresBoolean(t *testing.T) {
+	if (&Config{}).SkillSelectionEnabled() {
+		t.Fatal("SkillSelectionEnabled() default = true, want false")
+	}
+	enabled := &Config{Values: map[string]any{"skills": map[string]any{"selection_enabled": true}}}
+	if !enabled.SkillSelectionEnabled() {
+		t.Fatal("SkillSelectionEnabled() = false, want true")
+	}
+	invalid := &Config{Values: map[string]any{"skills": map[string]any{"selection_enabled": "true"}}}
+	if invalid.SkillSelectionEnabled() {
+		t.Fatal("SkillSelectionEnabled() accepted a non-boolean value")
 	}
 }
 
@@ -264,6 +319,29 @@ func TestLoadEffectiveStrictConfigAllowsTUI(t *testing.T) {
 	}
 	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
 		t.Fatalf("LoadEffectiveWithOptions strict tui returned error: %v", err)
+	}
+}
+
+func TestLoadEffectiveStrictConfigAllowsAgents(t *testing.T) {
+	dir := t.TempDir()
+	body := "[agents]\nmax_concurrent_threads_per_session = 4\n[agents.reviewer]\ndescription = \"Reviews changes.\"\nnickname_candidates = [\"Sage\"]\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+		t.Fatalf("strict agents config error = %v", err)
+	}
+}
+
+func TestLoadEffectiveStrictConfigRejectsUnknownAgentRoleField(t *testing.T) {
+	dir := t.TempDir()
+	body := "[agents.reviewer]\ndescription = \"Reviews changes.\"\nunknown = true\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `agents.reviewer.unknown`") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

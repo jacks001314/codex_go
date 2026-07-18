@@ -463,6 +463,20 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		})
 	case model.ResponsesStreamEventSafetyBuffer:
 		return
+	case model.ResponsesStreamEventCompleted:
+		if !state.experimentalRawEvents {
+			return
+		}
+		var usage *TokenUsageBreakdown
+		if event.Usage != nil {
+			usage = tokenUsageBreakdownFromAgentUsage(*event.Usage)
+		}
+		r.notify(NotificationRawResponseCompleted, &RawResponseCompletedNotification{
+			ThreadID:   threadID,
+			TurnID:     turnID,
+			ResponseID: strings.TrimSpace(event.ResponseID),
+			Usage:      usage,
+		})
 	}
 }
 
@@ -809,7 +823,7 @@ func (r *RuntimeRouter) reviewRuntimeAvailable() bool {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return false
 	}
-	return r.services.Agent != nil || r.services.TurnRuntime != nil
+	return r.agentConfigured() || r.services.TurnRuntime != nil
 }
 
 func (r *RuntimeRouter) reviewRuntimeTurnStartParams(params *review.StartParams, response *review.StartResponse) *turn.TurnStartParams {
@@ -884,33 +898,35 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
-		Prompt:               agentPrompt,
-		Instructions:         runConfig.Instructions,
-		InputItems:           inputItems,
-		HostedTools:          append([]any(nil), runConfig.HostedTools...),
-		SteerMailbox:         r.requireSteerMailbox(),
-		Model:                runConfig.Model,
-		ProviderID:           runConfig.ProviderID,
-		TaskKind:             model.AgentTaskRegular,
-		ThreadID:             threadID,
-		TurnID:               turnID,
-		Originator:           runConfig.Originator,
-		Store:                runConfig.Store,
-		PreviousResponseID:   runConfig.PreviousResponseID,
-		ParallelToolCalls:    runConfig.ParallelToolCalls,
-		ReasoningEffort:      runConfig.ReasoningEffort,
-		ReasoningSummary:     runConfig.ReasoningSummary,
-		ModelVerbosity:       runConfig.ModelVerbosity,
-		IncludeTimingMetrics: runConfig.IncludeTimingMetrics,
-		BetaFeaturesHeader:   runConfig.BetaFeaturesHeader,
-		ItemIDsEnabled:       runConfig.ItemIDsEnabled,
-		PromptCacheKey:       runConfig.PromptCacheKey,
-		ServiceTier:          runConfig.ServiceTier,
-		ClientMetadata:       cloneStringMap(runConfig.ClientMetadata),
-		AttestationProvider:  runConfig.AttestationProvider,
-		OutputSchema:         params.OutputSchema,
-		PostToolInputItems:   runConfig.PostToolInputItems,
-		OnToolStarted:        r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		Prompt:                       agentPrompt,
+		Instructions:                 runConfig.Instructions,
+		InputItems:                   inputItems,
+		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
+		SteerMailbox:                 r.requireSteerMailbox(),
+		Model:                        runConfig.Model,
+		ProviderID:                   runConfig.ProviderID,
+		TaskKind:                     model.AgentTaskRegular,
+		ThreadID:                     threadID,
+		TurnID:                       turnID,
+		Originator:                   runConfig.Originator,
+		Store:                        runConfig.Store,
+		PreviousResponseID:           runConfig.PreviousResponseID,
+		ParallelToolCalls:            runConfig.ParallelToolCalls,
+		ReasoningEffort:              runConfig.ReasoningEffort,
+		ReasoningSummary:             runConfig.ReasoningSummary,
+		ConcurrentReasoningSummaries: runConfig.ConcurrentReasoningSummaries,
+		ModelVerbosity:               runConfig.ModelVerbosity,
+		IncludeTimingMetrics:         runConfig.IncludeTimingMetrics,
+		BetaFeaturesHeader:           runConfig.BetaFeaturesHeader,
+		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
+		PromptCacheKey:               runConfig.PromptCacheKey,
+		ServiceTier:                  runConfig.ServiceTier,
+		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
+		AttestationProvider:          runConfig.AttestationProvider,
+		OutputSchema:                 params.OutputSchema,
+		PostToolInputItems:           runConfig.PostToolInputItems,
+		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		SamplingFollowUp:             r.autoCompactFallbackFollowUp(threadID, runConfig),
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -1002,9 +1018,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			TurnID:     turnID,
 			TokenUsage: *usage,
 		})
-		if statusErr == nil && status != nil && status.ShouldCompact {
-			if notification, err := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); err == nil && notification != nil {
-				r.notify(NotificationContextCompacted, notification)
+		if statusErr == nil && status != nil {
+			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status)
+			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
+			if !fallbackRecorded && fallbackErr == nil && status.ShouldCompact {
+				if notification, err := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); err == nil && notification != nil {
+					r.notify(NotificationContextCompacted, notification)
+				}
 			}
 		}
 	}
@@ -1019,6 +1039,64 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnID string, result *turn.AgentLoopResult, status *compact.TokenStatus) error {
+	if r == nil || result == nil || result.SamplingFollowUps == 0 || status == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return err
+	}
+	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
+	extra["auto_compact_fallback_delivered"] = true
+	extra["auto_compact_fallback_turn_id"] = strings.TrimSpace(turnID)
+	extra["auto_compact_fallback_follow_up_count"] = result.SamplingFollowUps
+	extra["auto_compact_fallback_active_context_tokens"] = status.ActiveContextTokens
+	outcome := "reserve_remaining"
+	if status.ShouldCompact {
+		outcome = "reserve_exhausted"
+	}
+	extra["auto_compact_fallback_outcome"] = outcome
+	record.Metadata.Extra = extra
+	if runtimeRecordEphemeral(record) {
+		r.saveEphemeralThreadRecord(record)
+		return nil
+	}
+	return r.services.ThreadRouter.store.Save(record)
+}
+
+func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *appTurnRunConfig) turn.SamplingFollowUp {
+	if r == nil || runConfig == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	extra := cloneAnyMap(record.Metadata.Extra)
+	prompt := strings.TrimSpace(stringFromAny(extra["auto_compact_fallback_prompt"]))
+	buffer := intFromAny(extra["auto_compact_fallback_buffer_tokens"])
+	limit := compactTokenLimitFromMetadata(extra)
+	if prompt == "" || buffer <= 0 || limit <= 0 || boolFromAny(extra["auto_compact_fallback_delivered"]) {
+		return nil
+	}
+	delivered := false
+	return func(ctx *turn.SamplingFollowUpContext) []any {
+		if delivered || ctx == nil {
+			return nil
+		}
+		status := compact.Evaluate(compact.Policy{Enabled: true, TokenLimit: limit, FallbackBufferTokens: buffer}, int(model.AgentUsageTotalTokens(ctx.Usage)))
+		if status.ShouldCompact || status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 0 {
+			return nil
+		}
+		delivered = true
+		if item := model.DeveloperMessageInputItem(prompt); item != nil {
+			return []any{item}
+		}
+		return nil
+	}
 }
 
 func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime, connectionID string) {
@@ -1059,6 +1137,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		ParallelToolCalls:            runConfig.ParallelToolCalls,
 		ReasoningEffort:              runConfig.ReasoningEffort,
 		ReasoningSummary:             runConfig.ReasoningSummary,
+		ConcurrentReasoningSummaries: runConfig.ConcurrentReasoningSummaries,
 		ModelVerbosity:               runConfig.ModelVerbosity,
 		IncludeTimingMetrics:         runConfig.IncludeTimingMetrics,
 		BetaFeaturesHeader:           runConfig.BetaFeaturesHeader,
@@ -3200,15 +3279,27 @@ func tokenUsageFromAgentLoopResult(result *turn.AgentLoopResult) *TokenUsage {
 }
 
 func tokenUsageFromAgentUsage(usage model.AgentUsage) *TokenUsage {
-	if usage.InputTokens == 0 && usage.CachedInputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningOutputTokens == 0 && usage.TotalTokens == 0 {
+	if usage.InputTokens == 0 && usage.CachedInputTokens == 0 && usage.CacheWriteInputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningOutputTokens == 0 && usage.TotalTokens == 0 {
 		return nil
 	}
 	return &TokenUsage{
 		InputTokens:           usage.InputTokens,
 		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 		TotalTokens:           model.AgentUsageTotalTokens(usage),
+	}
+}
+
+func tokenUsageBreakdownFromAgentUsage(usage model.AgentUsage) *TokenUsageBreakdown {
+	return &TokenUsageBreakdown{
+		TotalTokens:           model.AgentUsageTotalTokens(usage),
+		InputTokens:           usage.InputTokens,
+		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 	}
 }
 
@@ -3244,8 +3335,9 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, usage model.A
 		extra = map[string]any{}
 	}
 	status := compact.Evaluate(compact.Policy{
-		Enabled:    true,
-		TokenLimit: compactTokenLimitFromMetadata(extra),
+		Enabled:              true,
+		TokenLimit:           compactTokenLimitFromMetadata(extra),
+		FallbackBufferTokens: intFromAny(extra["auto_compact_fallback_buffer_tokens"]),
 	}, int(model.AgentUsageTotalTokens(usage)))
 	extra["token_status"] = compactTokenStatusMap(status)
 	extra["last_token_usage"] = tokenUsageMetadataMap(usage)
@@ -3259,6 +3351,38 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, usage model.A
 		return nil, err
 	}
 	return &status, nil
+}
+
+func (r *RuntimeRouter) recordAutoCompactFallbackPrompt(threadID string, turnID string, status *compact.TokenStatus) (bool, error) {
+	if r == nil || status == nil || status.ShouldCompact || status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 0 {
+		return false, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return false, err
+	}
+	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
+	prompt := strings.TrimSpace(stringFromAny(extra["auto_compact_fallback_prompt"]))
+	if prompt == "" || boolFromAny(extra["auto_compact_fallback_delivered"]) {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	item := session.Item{
+		ID: "auto-compact-fallback-" + safeIdentifier(turnID), Type: "message", Role: "developer", Text: prompt, CreatedAt: now,
+		Metadata: map[string]any{"turnId": turnID, "kind": "auto_compact_fallback_prompt"},
+	}
+	record.Items = append(record.Items, item)
+	extra["auto_compact_fallback_delivered"] = true
+	record.Metadata.Extra = extra
+	if runtimeRecordEphemeral(record) {
+		r.saveEphemeralThreadRecord(record)
+		return true, nil
+	}
+	if err := r.services.ThreadRouter.store.Save(record); err != nil {
+		return false, err
+	}
+	_ = r.services.ThreadRouter.appendThreadRollout(record.ID, []session.Item{item}, now)
+	return true, nil
 }
 
 func (r *RuntimeRouter) autoCompactThreadAfterTurn(threadID string, turnID string, connectionID string, status *compact.TokenStatus) (*ContextCompactedNotification, error) {
@@ -3420,6 +3544,7 @@ func compactUsageMetadataMap(usage *compact.Usage) map[string]any {
 	return map[string]any{
 		"inputTokens":           usage.InputTokens,
 		"cachedInputTokens":     usage.CachedInputTokens,
+		"cacheWriteInputTokens": usage.CacheWriteInputTokens,
 		"outputTokens":          usage.OutputTokens,
 		"reasoningOutputTokens": usage.ReasoningOutputTokens,
 		"totalTokens":           usage.InputTokens + usage.OutputTokens,
@@ -3433,10 +3558,11 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 	if r.services.CompactRunner != nil {
 		return r.services.CompactRunner
 	}
-	if r.services.Agent == nil || record == nil {
+	agent := r.agentSnapshot()
+	if agent == nil || record == nil {
 		return nil
 	}
-	if _, ok := r.services.Agent.(*model.ResponsesAgentRunner); !ok {
+	if _, ok := agent.(*model.ResponsesAgentRunner); !ok {
 		return nil
 	}
 	providerID := strings.TrimSpace(record.Metadata.ModelProvider)
@@ -3451,7 +3577,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 		return nil
 	}
 	return &agentCompactRunner{
-		agent:      r.services.Agent,
+		agent:      agent,
 		model:      firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel),
 		providerID: firstNonEmpty(providerID, model.OpenAIProviderID),
 	}
@@ -3517,6 +3643,9 @@ func compactTokenStatusMap(status compact.TokenStatus) map[string]any {
 	if status.TokensUntilCompaction != nil {
 		out["tokensUntilCompaction"] = *status.TokensUntilCompaction
 	}
+	if status.BaseWindowTokensRemaining != nil {
+		out["baseWindowTokensRemaining"] = *status.BaseWindowTokensRemaining
+	}
 	return out
 }
 
@@ -3536,6 +3665,9 @@ func compactTokenStatusFromMetadata(extra map[string]any) compact.TokenStatus {
 	if tokens, ok := intPtrFromAny(raw["tokensUntilCompaction"]); ok {
 		status.TokensUntilCompaction = tokens
 	}
+	if tokens, ok := intPtrFromAny(raw["baseWindowTokensRemaining"]); ok {
+		status.BaseWindowTokensRemaining = tokens
+	}
 	return status
 }
 
@@ -3543,6 +3675,7 @@ func tokenUsageMetadataMap(usage model.AgentUsage) map[string]any {
 	return map[string]any{
 		"inputTokens":           usage.InputTokens,
 		"cachedInputTokens":     usage.CachedInputTokens,
+		"cacheWriteInputTokens": usage.CacheWriteInputTokens,
 		"outputTokens":          usage.OutputTokens,
 		"reasoningOutputTokens": usage.ReasoningOutputTokens,
 		"totalTokens":           model.AgentUsageTotalTokens(usage),
@@ -3613,16 +3746,18 @@ func appResponseMetadata(turnID string, response *model.AgentResponse, usage *mo
 			metadata["tokenUsage"] = map[string]any{
 				"inputTokens":           tokenUsage.InputTokens,
 				"cachedInputTokens":     tokenUsage.CachedInputTokens,
+				"cacheWriteInputTokens": tokenUsage.CacheWriteInputTokens,
 				"outputTokens":          tokenUsage.OutputTokens,
 				"reasoningOutputTokens": tokenUsage.ReasoningOutputTokens,
 				"totalTokens":           tokenUsage.TotalTokens,
 			}
 			metadata["usage"] = map[string]any{
-				"input_tokens":            tokenUsage.InputTokens,
-				"cached_input_tokens":     tokenUsage.CachedInputTokens,
-				"output_tokens":           tokenUsage.OutputTokens,
-				"reasoning_output_tokens": tokenUsage.ReasoningOutputTokens,
-				"total_tokens":            tokenUsage.TotalTokens,
+				"input_tokens":             tokenUsage.InputTokens,
+				"cached_input_tokens":      tokenUsage.CachedInputTokens,
+				"cache_write_input_tokens": tokenUsage.CacheWriteInputTokens,
+				"output_tokens":            tokenUsage.OutputTokens,
+				"reasoning_output_tokens":  tokenUsage.ReasoningOutputTokens,
+				"total_tokens":             tokenUsage.TotalTokens,
 			}
 		}
 	}
@@ -4075,43 +4210,44 @@ func providerFromTurnStart(params *turn.TurnStartParams) string {
 }
 
 type appTurnRunConfig struct {
-	Model                string
-	ProviderID           string
-	Instructions         string
-	Originator           string
-	ClientMetadata       map[string]string
-	SessionID            string
-	ThreadSource         string
-	SubagentSource       string
-	ParentThreadID       string
-	Ephemeral            bool
-	WorkspaceKind        string
-	NumInputImages       int
-	IsFirstTurn          bool
-	ApprovalPolicy       string
-	ApprovalsReviewer    string
-	SandboxPolicy        string
-	SandboxNetworkAccess bool
-	CollaborationMode    string
-	Personality          string
-	InputItems           []any
-	HostedTools          []any
-	SessionItems         []session.Item
-	ExtraSessionItems    func() []session.Item
-	PostToolInputItems   turn.ToolPostExecutionInputItems
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
-	ModelVerbosity       string
-	IncludeTimingMetrics bool
-	BetaFeaturesHeader   string
-	ItemIDsEnabled       bool
-	PromptCacheKey       string
-	ServiceTier          string
-	Store                bool
-	AttestationProvider  codexapi.AttestationProvider
-	UnifiedExecEnabled   bool
+	Model                        string
+	ProviderID                   string
+	Instructions                 string
+	Originator                   string
+	ClientMetadata               map[string]string
+	SessionID                    string
+	ThreadSource                 string
+	SubagentSource               string
+	ParentThreadID               string
+	Ephemeral                    bool
+	WorkspaceKind                string
+	NumInputImages               int
+	IsFirstTurn                  bool
+	ApprovalPolicy               string
+	ApprovalsReviewer            string
+	SandboxPolicy                string
+	SandboxNetworkAccess         bool
+	CollaborationMode            string
+	Personality                  string
+	InputItems                   []any
+	HostedTools                  []any
+	SessionItems                 []session.Item
+	ExtraSessionItems            func() []session.Item
+	PostToolInputItems           turn.ToolPostExecutionInputItems
+	PreviousResponseID           string
+	ParallelToolCalls            bool
+	ReasoningEffort              string
+	ReasoningSummary             string
+	ConcurrentReasoningSummaries bool
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	PromptCacheKey               string
+	ServiceTier                  string
+	Store                        bool
+	AttestationProvider          codexapi.AttestationProvider
+	UnifiedExecEnabled           bool
 }
 
 type responsesMetadataLineage struct {
@@ -4215,42 +4351,43 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		unifiedExecEnabled = false
 	}
 	return &appTurnRunConfig{
-		Model:                modelProviderConfig.Model,
-		ProviderID:           modelProviderConfig.ProviderID,
-		Instructions:         instructions,
-		Originator:           strings.TrimSpace(params.Originator),
-		SessionID:            firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
-		ThreadSource:         lineage.ThreadSource,
-		SubagentSource:       lineage.SubagentKind,
-		ParentThreadID:       lineage.ParentThreadID,
-		Ephemeral:            threadSnapshot.Ephemeral,
-		WorkspaceKind:        strings.TrimSpace(extraMetadata["workspace_kind"]),
-		NumInputImages:       countTurnStartInputImages(params),
-		IsFirstTurn:          threadSnapshot.IsFirstTurn,
-		ApprovalPolicy:       string(approvalPolicy),
-		ApprovalsReviewer:    turnApprovalsReviewerForTurn(cfg, params),
-		SandboxPolicy:        analyticsSandboxPolicy(permissionProfile, cwd),
-		SandboxNetworkAccess: analyticsSandboxNetworkAccess(permissionProfile),
-		CollaborationMode:    analyticsCollaborationMode(params),
-		Personality:          analyticsOptionalModeString(personality),
-		InputItems:           inputItems,
-		HostedTools:          hostedTools,
-		SessionItems:         sessionItems,
-		ExtraSessionItems:    extraSessionItemsSnapshot,
-		PostToolInputItems:   postToolInputItems,
-		PreviousResponseID:   previousResponseID,
-		ParallelToolCalls:    r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:      firstNonEmpty(stringPtrValue(params.Effort), stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort")),
-		ReasoningSummary:     stringPtrValue(params.Summary),
-		ModelVerbosity:       firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
-		IncludeTimingMetrics: appIncludeTimingMetrics(cfg),
-		BetaFeaturesHeader:   features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
-		ItemIDsEnabled:       cfg.FeatureSettings()["item_ids"],
-		PromptCacheKey:       threadID,
-		ServiceTier:          serviceTier,
-		Store:                modelProviderConfig.Store,
-		AttestationProvider:  r.appServerAttestationProvider(),
-		UnifiedExecEnabled:   unifiedExecEnabled,
+		Model:                        modelProviderConfig.Model,
+		ProviderID:                   modelProviderConfig.ProviderID,
+		Instructions:                 instructions,
+		Originator:                   strings.TrimSpace(params.Originator),
+		SessionID:                    firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
+		ThreadSource:                 lineage.ThreadSource,
+		SubagentSource:               lineage.SubagentKind,
+		ParentThreadID:               lineage.ParentThreadID,
+		Ephemeral:                    threadSnapshot.Ephemeral,
+		WorkspaceKind:                strings.TrimSpace(extraMetadata["workspace_kind"]),
+		NumInputImages:               countTurnStartInputImages(params),
+		IsFirstTurn:                  threadSnapshot.IsFirstTurn,
+		ApprovalPolicy:               string(approvalPolicy),
+		ApprovalsReviewer:            turnApprovalsReviewerForTurn(cfg, params),
+		SandboxPolicy:                analyticsSandboxPolicy(permissionProfile, cwd),
+		SandboxNetworkAccess:         analyticsSandboxNetworkAccess(permissionProfile),
+		CollaborationMode:            analyticsCollaborationMode(params),
+		Personality:                  analyticsOptionalModeString(personality),
+		InputItems:                   inputItems,
+		HostedTools:                  hostedTools,
+		SessionItems:                 sessionItems,
+		ExtraSessionItems:            extraSessionItemsSnapshot,
+		PostToolInputItems:           postToolInputItems,
+		PreviousResponseID:           previousResponseID,
+		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
+		ReasoningEffort:              firstNonEmpty(stringPtrValue(params.Effort), stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort")),
+		ReasoningSummary:             stringPtrValue(params.Summary),
+		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
+		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
+		IncludeTimingMetrics:         appIncludeTimingMetrics(cfg),
+		BetaFeaturesHeader:           features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
+		ItemIDsEnabled:               cfg.FeatureSettings()["item_ids"],
+		PromptCacheKey:               threadID,
+		ServiceTier:                  serviceTier,
+		Store:                        modelProviderConfig.Store,
+		AttestationProvider:          r.appServerAttestationProvider(),
+		UnifiedExecEnabled:           unifiedExecEnabled,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:     installationID,
 			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
@@ -4495,6 +4632,7 @@ func analyticsTurnTokenUsage(result *turn.AgentLoopResult) *telemetry.CodexTurnT
 	return &telemetry.CodexTurnTokenUsage{
 		InputTokens:           usage.InputTokens,
 		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		OutputTokens:          usage.OutputTokens,
 		ReasoningOutputTokens: usage.ReasoningOutputTokens,
 		TotalTokens:           usage.TotalTokens,
@@ -5387,6 +5525,12 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 			Message:  message,
 		})
 	}
+	r.runSkillShadowSelection(cfg, params, hostSkillMetadata, orchestratorMetadata)
+	hostSkillMetadata = selectSkillMetadata(cfg, params, hostSkillMetadata)
+	selectedCapabilitySkillMetadata = selectSkillMetadata(cfg, params, selectedCapabilitySkillMetadata)
+	orchestratorMetadata = selectSkillMetadata(cfg, params, orchestratorMetadata)
+	customMetadata = selectSkillMetadata(cfg, params, customMetadata)
+	skillMetadata = append(append(append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...), orchestratorMetadata...), customMetadata...)
 	r.maybePromptAndInstallSkillMCPDependencies(ctx, threadID, turnID, cfg, params, skillEntries, skillMetadata)
 	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
 	postToolInputItems := r.implicitSkillInvocationEventProvider(threadID, turnID, modelID, params, skillMetadata)
