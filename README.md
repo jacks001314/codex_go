@@ -105,30 +105,81 @@ go test ./...
 go fmt ./...
 ```
 
+## 编译、安装与发布
+
+编译当前平台的开发版本：
+
+```powershell
+.\scripts\build.ps1
+```
+
+编译指定版本和目标平台：
+
+```powershell
+.\scripts\build.ps1 -Version 0.1.0 -GOOS linux -GOARCH amd64 -CGO off
+```
+
+从当前源码安装。Windows 默认安装到 `%LOCALAPPDATA%\Programs\CodexGo\bin`，
+其他系统默认安装到 `~/.local/bin`：
+
+```powershell
+.\scripts\install.ps1 -Version 0.1.0
+```
+
+也可以指定安装目录：
+
+```powershell
+.\scripts\install.ps1 -InstallDir C:\Tools\CodexGo -Force
+```
+
+生成 Windows、Linux 和 macOS 的 amd64/arm64 发布包及 SHA-256 校验清单：
+
+```powershell
+.\scripts\release.ps1 -Version 0.1.0
+```
+
+发布产物默认写入 `dist/v<版本号>`。可用 `-Targets windows/amd64,linux/amd64`
+限制目标平台，或用 `-SkipTests` 跳过发布前的全包编译检查。
+
+Linux、macOS、WSL 或其他 POSIX Shell 环境可以使用对应的 Shell 脚本：
+
+```sh
+./scripts/build.sh --version 0.1.0
+./scripts/install.sh --version 0.1.0
+./scripts/release.sh --version 0.1.0
+```
+
+指定发布目标：
+
+```sh
+./scripts/release.sh --version 0.1.0 \
+  --targets 'linux/amd64 linux/arm64 darwin/arm64'
+```
+
 ## 目录结构
 
 ```text
 cmd/codex                         可执行入口
-internal/app                      顶层命令分发和运行时拼装
-internal/cli                      命令行解析、参数校验、dispatch alias
-internal/config                   配置加载、profile、feature override、权限配置
-internal/auth                     登录凭据、auth.json、OAuth/API key/access token
-internal/model                    模型 provider、Responses 请求/流式事件、模型 catalog
-internal/codexapi                 OpenAI/Codex API 客户端辅助
-internal/turn                     agent loop、tool dispatch、turn runtime
-internal/tool                     shell/apply_patch/MCP/tool_search/agent 工具运行时
-internal/exec                     codex exec/review 的非交互运行
-internal/appserver                JSON-RPC app-server、thread/turn/runtime 服务
-internal/mcp                      MCP client/server、OAuth、resource、tool runtime
-internal/tui                      终端 UI 状态、渲染、组件和 Bubble Tea adapter
-internal/session                  会话存储、resume/fork/archive/delete
-internal/rollout                  rollout JSONL 记录和恢复
-internal/sandbox                  权限 profile、Linux/Windows 沙箱、执行计划
-internal/review                   review 目标解析和 git diff 采集
-internal/doctor                   环境诊断
-internal/plugin                   插件 manifest、marketplace、安装流程
-internal/agent                    多 agent graph、身份、registry、工具
-internal/utils                    路径、JSON、ANSI、LRU、截断等共享工具
+app                      顶层命令分发和运行时拼装
+cli                      命令行解析、参数校验、dispatch alias
+config                   配置加载、profile、feature override、权限配置
+auth                     登录凭据、auth.json、OAuth/API key/access token
+model                    模型 provider、Responses 请求/流式事件、模型 catalog
+codexapi                 OpenAI/Codex API 客户端辅助
+turn                     agent loop、tool dispatch、turn runtime
+tool                     shell/apply_patch/MCP/tool_search/agent 工具运行时
+exec                     codex exec/review 的非交互运行
+appserver                JSON-RPC app-server、thread/turn/runtime 服务
+mcp                      MCP client/server、OAuth、resource、tool runtime
+tui                      终端 UI 状态、渲染、组件和 Bubble Tea adapter
+session                  会话存储、resume/fork/archive/delete
+rollout                  rollout JSONL 记录和恢复
+sandbox                  权限 profile、Linux/Windows 沙箱、执行计划
+review                   review 目标解析和 git diff 采集
+doctor                   环境诊断
+plugin                   插件 manifest、marketplace、安装流程
+agent                    多 agent graph、身份、registry、工具
+utils                    路径、JSON、ANSI、LRU、截断等共享工具
 docs                              设计和技术选型文档
 ```
 

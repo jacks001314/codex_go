@@ -1,0 +1,22774 @@
+package appserver
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"codex_go/agent"
+	"codex_go/apps"
+	"codex_go/auth"
+	"codex_go/codexapi"
+	"codex_go/compact"
+	"codex_go/config"
+	"codex_go/execserver"
+	"codex_go/features"
+	"codex_go/mcp"
+	"codex_go/model"
+	"codex_go/plugin"
+	promptctx "codex_go/prompt"
+	"codex_go/remotecontrol"
+	"codex_go/review"
+	"codex_go/rollout"
+	"codex_go/sandbox"
+	"codex_go/session"
+	"codex_go/skillprovider"
+	"codex_go/state"
+	"codex_go/telemetry"
+	"codex_go/tool"
+	"codex_go/turn"
+
+	"github.com/google/uuid"
+)
+
+func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		FS:           NewFSService(),
+	})
+	router.SetNotificationSink(sink)
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: "D:/repo", Prompt: "hello"}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	if !sinkHasMethod(sink, NotificationThreadStarted) {
+		t.Fatalf("thread started notification missing: %+v", sink.List())
+	}
+	path := filepath.Join(t.TempDir(), "note.txt")
+	write := router.Handle(requestWithParams(t, IntID(2), MethodFSWriteFile, WriteFileParams{
+		Path:       path,
+		DataBase64: base64.StdEncoding.EncodeToString([]byte("hello")),
+	}))
+	if write.Error != nil {
+		t.Fatalf("fs write error: %+v", write.Error)
+	}
+	read := router.Handle(requestWithParams(t, IntID(3), MethodFSReadFile, ReadFileParams{Path: path}))
+	if read.Error != nil {
+		t.Fatalf("fs read error: %+v", read.Error)
+	}
+	response := read.Result.(*ReadFileResponse)
+	decoded, err := base64.StdEncoding.DecodeString(response.DataBase64)
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	if string(decoded) != "hello" {
+		t.Fatalf("decoded = %q, want hello", decoded)
+	}
+}
+
+func TestRuntimeRouterFSGetMetadataReturnsOnlyUsedFieldsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{FS: NewFSService()})
+	path := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatalf("WriteFile fixture error = %v", err)
+	}
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodFSGetMetadata, GetMetadataParams{Path: path}))
+	if response.Error != nil {
+		t.Fatalf("fs/getMetadata error: %+v", response.Error)
+	}
+	data, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal(metadata) error = %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal(metadata) error = %v", err)
+	}
+	keys := make([]string, 0, len(result))
+	for key := range result {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	wantKeys := []string{"createdAtMs", "isDirectory", "isFile", "isSymlink", "modifiedAtMs"}
+	if !reflect.DeepEqual(keys, wantKeys) {
+		t.Fatalf("metadata keys = %+v, want %+v; json=%s", keys, wantKeys, data)
+	}
+	stat := response.Result.(*GetMetadataResponse)
+	if stat.IsDirectory || !stat.IsFile || stat.IsSymlink || stat.ModifiedAtMS <= 0 {
+		t.Fatalf("metadata = %+v, want regular file with modifiedAtMs", stat)
+	}
+}
+
+func TestRuntimeRouterFSMethodsReturnErrorWhenLocalEnvironmentDisabledLikeRust(t *testing.T) {
+	t.Setenv(CodexExecServerURLEnvVar, "none")
+	router := NewRuntimeRouter(RuntimeServices{FS: NewFSService()})
+	path := filepath.Join(t.TempDir(), "absolute.txt")
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodFSReadFile, ReadFileParams{Path: path}))
+	if response.Error == nil {
+		t.Fatalf("fs/readFile response = %+v, want local filesystem error", response)
+	}
+	if response.Error.Code != JSONRPCInternalErrorCode || response.Error.Message != "local filesystem is not configured" {
+		t.Fatalf("fs/readFile disabled error = %+v", response.Error)
+	}
+}
+
+func TestRuntimeRouterFSWriteFileRejectsInvalidBase64LikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{FS: NewFSService()})
+	path := filepath.Join(t.TempDir(), "blob.bin")
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodFSWriteFile, WriteFileParams{
+		Path:       path,
+		DataBase64: "%%%",
+	}))
+	if response.Error == nil {
+		t.Fatalf("fs/writeFile response = %+v, want invalid base64 error", response)
+	}
+	if response.Error.Code != JSONRPCInvalidParamsErrorCode ||
+		!strings.HasPrefix(response.Error.Message, "fs/writeFile requires valid base64 dataBase64:") {
+		t.Fatalf("fs/writeFile invalid base64 error = %+v", response.Error)
+	}
+}
+
+func TestRuntimeRouterFSMethodsRejectRelativePathsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{FS: NewFSService()})
+	absoluteFile := filepath.Join(t.TempDir(), "absolute.txt")
+	if err := os.WriteFile(absoluteFile, []byte("hello"), 0o600); err != nil {
+		t.Fatalf("WriteFile fixture error = %v", err)
+	}
+	expected := "Invalid request: AbsolutePathBuf deserialized without a base path"
+	cases := []struct {
+		name   string
+		method Method
+		params any
+	}{
+		{name: "read", method: MethodFSReadFile, params: map[string]any{"path": "relative.txt"}},
+		{name: "write", method: MethodFSWriteFile, params: map[string]any{"path": "relative.txt", "dataBase64": base64.StdEncoding.EncodeToString([]byte("hello"))}},
+		{name: "create directory", method: MethodFSCreateDirectory, params: map[string]any{"path": "relative-dir", "recursive": nil}},
+		{name: "metadata", method: MethodFSGetMetadata, params: map[string]any{"path": "relative.txt"}},
+		{name: "read directory", method: MethodFSReadDirectory, params: map[string]any{"path": "relative-dir"}},
+		{name: "remove", method: MethodFSRemove, params: map[string]any{"path": "relative.txt", "recursive": nil, "force": nil}},
+		{name: "copy source", method: MethodFSCopy, params: map[string]any{"sourcePath": "relative.txt", "destinationPath": absoluteFile, "recursive": false}},
+		{name: "copy destination", method: MethodFSCopy, params: map[string]any{"sourcePath": absoluteFile, "destinationPath": "relative-copy.txt", "recursive": false}},
+		{name: "watch", method: MethodFSWatch, params: map[string]any{"watchId": "watch-1", "path": "relative-dir"}},
+	}
+	for i, tc := range cases {
+		response := router.Handle(requestWithParams(t, IntID(int64(i+1)), tc.method, tc.params))
+		if response.Error == nil {
+			t.Fatalf("%s response = %+v, want relative path error", tc.name, response)
+		}
+		if response.Error.Code != JSONRPCInvalidRequestErrorCode || response.Error.Message != expected {
+			t.Fatalf("%s error = %+v", tc.name, response.Error)
+		}
+	}
+}
+
+func TestRuntimeRouterThreadListDefaultsToConfiguredModelProvider(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"azure\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	now := fixedTime()
+	openaiID := session.ThreadID("00000000-0000-0000-0000-000000000101")
+	azureID := session.ThreadID("00000000-0000-0000-0000-000000000102")
+	childID := session.ThreadID("00000000-0000-0000-0000-000000000103")
+	create := func(id session.ThreadID, provider string, parent session.ThreadID, createdAt time.Time) {
+		t.Helper()
+		if err := store.Create(&session.Record{
+			ID:             id,
+			SessionID:      string(id),
+			ParentThreadID: parent,
+			Preview:        string(id),
+			CreatedAt:      createdAt,
+			UpdatedAt:      createdAt,
+			RecencyAt:      createdAt,
+			Metadata: session.Metadata{
+				CWD:           "D:/repo",
+				ModelProvider: provider,
+				Source:        string(SessionSourceCli),
+				HistoryMode:   string(ThreadHistoryLegacy),
+			},
+		}); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+	}
+	create(openaiID, "openai", "", now)
+	create(azureID, "azure", "", now.Add(time.Minute))
+	create(childID, "openai", azureID, now.Add(2*time.Minute))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+
+	defaultList := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{}))
+	if defaultList.Error != nil {
+		t.Fatalf("thread/list default error: %+v", defaultList.Error)
+	}
+	if data := defaultList.Result.(*ThreadListResponse).Data; len(data) != 1 || data[0].ID != string(azureID) {
+		t.Fatalf("default provider list = %+v", data)
+	}
+
+	allProviders := router.Handle(&Request{
+		JSONRPC: "2.0",
+		ID:      IntID(2),
+		Method:  MethodThreadList,
+		Params:  json.RawMessage(`{"modelProviders":[]}`),
+	})
+	if allProviders.Error != nil {
+		t.Fatalf("thread/list all providers error: %+v", allProviders.Error)
+	}
+	if data := allProviders.Result.(*ThreadListResponse).Data; len(data) != 3 || data[0].ID != string(childID) || data[1].ID != string(azureID) || data[2].ID != string(openaiID) {
+		t.Fatalf("explicit empty provider list = %+v", data)
+	}
+
+	parent := string(azureID)
+	relation := router.Handle(requestWithParams(t, IntID(3), MethodThreadList, ThreadListParams{ParentThreadID: &parent}))
+	if relation.Error != nil {
+		t.Fatalf("thread/list relation error: %+v", relation.Error)
+	}
+	if data := relation.Result.(*ThreadListResponse).Data; len(data) != 1 || data[0].ID != string(childID) {
+		t.Fatalf("relation provider list = %+v", data)
+	}
+}
+
+func TestRuntimeRouterThreadListAndSearchOverlayRuntimeStatus(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := session.ThreadID("thread-system-error")
+	if err := store.Create(&session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Preview:   "needle preview",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			Source:        string(SessionSourceCli),
+			ModelProvider: "openai",
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.requireThreadStatus().UpsertThread(string(threadID), false)
+	router.requireThreadStatus().NoteSystemError(string(threadID))
+
+	list := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{
+		ModelProviders: []string{"openai"},
+	}))
+	if list.Error != nil {
+		t.Fatalf("thread/list error: %+v", list.Error)
+	}
+	listData := list.Result.(*ThreadListResponse).Data
+	if len(listData) != 1 || listData[0].ID != string(threadID) {
+		t.Fatalf("thread/list data = %+v", listData)
+	}
+	if got := listData[0].Status.Type; got != SystemErrorStatus().Type {
+		t.Fatalf("thread/list status = %q, want %q", got, SystemErrorStatus().Type)
+	}
+
+	search := router.Handle(requestWithParams(t, IntID(2), MethodThreadSearch, ThreadSearchParams{
+		SearchTerm: "needle",
+	}))
+	if search.Error != nil {
+		t.Fatalf("thread/search error: %+v", search.Error)
+	}
+	searchData := search.Result.(*ThreadSearchResponse).Data
+	if len(searchData) != 1 || searchData[0].Thread.ID != string(threadID) {
+		t.Fatalf("thread/search data = %+v", searchData)
+	}
+	if got := searchData[0].Thread.Status.Type; got != SystemErrorStatus().Type {
+		t.Fatalf("thread/search status = %q, want %q", got, SystemErrorStatus().Type)
+	}
+}
+
+func TestRuntimeRouterThreadStartAcceptsPaginatedHistoryMode(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	persistent := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		HistoryMode: ThreadHistoryPaginated,
+	}))
+	if persistent.Error != nil || persistent.Result.(*ThreadStartResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("persistent start = %+v", persistent)
+	}
+	ephemeral := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		HistoryMode: ThreadHistoryPaginated,
+		Ephemeral:   true,
+	}))
+	if ephemeral.Error != nil || ephemeral.Result.(*ThreadStartResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+		t.Fatalf("ephemeral start = %+v", ephemeral)
+	}
+	ephemeralID := ephemeral.Result.(*ThreadStartResponse).Thread.ID
+	if _, err := uuid.Parse(ephemeralID); err != nil {
+		t.Fatalf("ephemeral thread id = %q, want UUID: %v", ephemeralID, err)
+	}
+}
+
+func TestRuntimeRouterThreadResumeRejectsUnmaterializedThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadStatus: NewThreadStatusManager()})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if thread.Path == nil {
+		t.Fatalf("start path = nil")
+	}
+	if _, err := os.Stat(*thread.Path); !os.IsNotExist(err) {
+		t.Fatalf("start path should be unmaterialized, stat err = %v", err)
+	}
+
+	resume := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: thread.ID}))
+	if resume.Error == nil || resume.Error.Code != -32600 || !strings.Contains(resume.Error.Message, "no rollout found for thread id") {
+		t.Fatalf("resume error = %+v", resume.Error)
+	}
+	resumeMetadataOnly := router.Handle(requestWithParams(t, IntID(3), MethodThreadResume, ThreadResumeParams{ThreadID: thread.ID, ExcludeTurns: true}))
+	if resumeMetadataOnly.Error == nil || resumeMetadataOnly.Error.Code != -32600 || !strings.Contains(resumeMetadataOnly.Error.Message, "no rollout found for thread id") {
+		t.Fatalf("resume excludeTurns error = %+v", resumeMetadataOnly.Error)
+	}
+}
+
+func TestRuntimeRouterThreadSetNameMaterializesStartRolloutPathForFork(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	now := fixedTime()
+	threadRouter.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, ThreadStatus: NewThreadStatusManager()})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if thread.Path == nil || strings.TrimSpace(*thread.Path) == "" {
+		t.Fatalf("thread/start path = %+v", thread.Path)
+	}
+	startPath := *thread.Path
+
+	now = now.Add(5 * time.Minute)
+	named := router.Handle(requestWithParams(t, IntID(2), MethodThreadNameSet, ThreadSetNameParams{
+		ThreadID: thread.ID,
+		Name:     "SDK lifecycle example",
+	}))
+	if named.Error != nil {
+		t.Fatalf("thread/name/set error: %+v", named.Error)
+	}
+	if _, err := os.Stat(startPath); err != nil {
+		t.Fatalf("stat start rollout path %s: %v", startPath, err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{ThreadID: thread.ID}))
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if forked.ForkedFromID == nil || *forked.ForkedFromID != thread.ID {
+		t.Fatalf("fork lineage = %+v, want source %s", forked, thread.ID)
+	}
+}
+
+func TestRuntimeRouterThreadLifecycleRejectsPermissionsWithSandboxBeforeStarting(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	permissions := "dev"
+	sandboxPolicy := map[string]any{"mode": "read-only"}
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		Permissions: &permissions,
+		Sandbox:     sandboxPolicy,
+	}))
+	assertPermissionsSandboxConflict(t, start)
+
+	resume := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID:    "thread-missing",
+		Permissions: &permissions,
+		Sandbox:     sandboxPolicy,
+	}))
+	assertPermissionsSandboxConflict(t, resume)
+
+	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{
+		ThreadID:    "thread-missing",
+		Permissions: &permissions,
+		Sandbox:     sandboxPolicy,
+	}))
+	assertPermissionsSandboxConflict(t, fork)
+	if notifications := sink.List(); len(notifications) != 0 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+}
+
+func TestRuntimeRouterThreadStartInstructionSourcesFeedTurns(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("global instructions"), 0o600); err != nil {
+		t.Fatalf("write global AGENTS.md: %v", err)
+	}
+	workspace := t.TempDir()
+	projectAgents := filepath.Join(workspace, "AGENTS.md")
+	if err := os.WriteFile(projectAgents, []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("write project AGENTS.md: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: workspace}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	startResult := start.Result.(*ThreadStartResponse)
+	globalSource := filepath.Join(home, "AGENTS.md")
+	if len(startResult.InstructionSources) != 2 || !sameAppPath(startResult.InstructionSources[0], globalSource) || !sameAppPath(startResult.InstructionSources[1], projectAgents) {
+		t.Fatalf("instruction sources = %#v", startResult.InstructionSources)
+	}
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: startResult.Thread.ID,
+		Prompt:   "inspect",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "global instructions") || !strings.Contains(request.Instructions, "project instructions") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	if err := os.Remove(projectAgents); err != nil {
+		t.Fatalf("remove project AGENTS.md: %v", err)
+	}
+	resume := router.Handle(requestWithParams(t, IntID(5), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     startResult.Thread.ID,
+		ExcludeTurns: true,
+	}))
+	if resume.Error != nil {
+		t.Fatalf("resume error: %+v", resume.Error)
+	}
+	resumeResult := resume.Result.(*ThreadResumeResponse)
+	if len(resumeResult.InstructionSources) != 2 || !sameAppPath(resumeResult.InstructionSources[0], globalSource) || !sameAppPath(resumeResult.InstructionSources[1], projectAgents) {
+		t.Fatalf("resume instruction sources = %#v", resumeResult.InstructionSources)
+	}
+
+	startNoEnvironment := router.Handle(requestWithParams(t, IntID(3), MethodThreadStart, map[string]any{
+		"cwd":          workspace,
+		"environments": []any{},
+	}))
+	if startNoEnvironment.Error != nil {
+		t.Fatalf("thread start with empty environments error: %+v", startNoEnvironment.Error)
+	}
+	startNoEnvironmentResult := startNoEnvironment.Result.(*ThreadStartResponse)
+	if len(startNoEnvironmentResult.InstructionSources) != 1 || !sameAppPath(startNoEnvironmentResult.InstructionSources[0], globalSource) {
+		t.Fatalf("empty environment instruction sources = %#v", startNoEnvironmentResult.InstructionSources)
+	}
+
+	emptyWorkspace := t.TempDir()
+	emptyProjectAgents := filepath.Join(emptyWorkspace, "AGENTS.md")
+	if err := os.WriteFile(emptyProjectAgents, []byte(""), 0o600); err != nil {
+		t.Fatalf("write empty project AGENTS.md: %v", err)
+	}
+	startEmptyProject := router.Handle(requestWithParams(t, IntID(6), MethodThreadStart, ThreadStartParams{CWD: emptyWorkspace}))
+	if startEmptyProject.Error != nil {
+		t.Fatalf("thread start with empty project AGENTS.md error: %+v", startEmptyProject.Error)
+	}
+	startEmptyProjectResult := startEmptyProject.Result.(*ThreadStartResponse)
+	if len(startEmptyProjectResult.InstructionSources) != 1 || !sameAppPath(startEmptyProjectResult.InstructionSources[0], globalSource) {
+		t.Fatalf("empty project AGENTS.md instruction sources = %#v", startEmptyProjectResult.InstructionSources)
+	}
+
+	turnStart = router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: startNoEnvironmentResult.Thread.ID,
+		Prompt:   "inspect global only",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start with empty environments error: %+v", turnStart.Error)
+	}
+	turnID = turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	request = waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "global instructions") || strings.Contains(request.Instructions, "project instructions") {
+		t.Fatalf("empty environment instructions = %q", request.Instructions)
+	}
+}
+
+func TestRuntimeRouterMaterializesUnpromptedThreadRolloutOnFirstTurn(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if thread.Path == nil || !strings.HasSuffix(*thread.Path, ".jsonl") {
+		t.Fatalf("thread path = %+v", thread.Path)
+	}
+	if _, err := os.Stat(*thread.Path); !os.IsNotExist(err) {
+		t.Fatalf("thread path should not exist before first turn, stat err = %v", err)
+	}
+	read := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID}))
+	if read.Error != nil {
+		t.Fatalf("thread read error: %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	if readThread.Status.Type != "idle" || readThread.Path == nil || *readThread.Path != *thread.Path {
+		t.Fatalf("read thread = %+v, want idle path %q", readThread, *thread.Path)
+	}
+
+	archiveBeforeMaterialized := router.Handle(requestWithParams(t, IntID(3), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
+	if archiveBeforeMaterialized.Error == nil || archiveBeforeMaterialized.Error.Code != -32600 || !strings.Contains(archiveBeforeMaterialized.Error.Message, "no rollout found for thread id "+thread.ID) {
+		t.Fatalf("archive before materialized error = %+v", archiveBeforeMaterialized.Error)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: thread.ID,
+		Prompt:   "materialize",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if _, err := os.Stat(*thread.Path); err != nil {
+		t.Fatalf("thread path should exist after first turn: %v", err)
+	}
+	found, err := rollout.FindThreadPath(store.Root(), thread.ID, false)
+	if err != nil {
+		t.Fatalf("FindThreadPath() error = %v", err)
+	}
+	if found != *thread.Path {
+		t.Fatalf("materialized path = %q, want %q", found, *thread.Path)
+	}
+	archive := router.Handle(requestWithParams(t, IntID(5), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
+	if archive.Error != nil {
+		t.Fatalf("archive after materialized error: %+v", archive.Error)
+	}
+}
+
+func TestRuntimeRouterThreadItemTurnListMissingThreadUsesRustErrors(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(session.NewStore(t.TempDir()))})
+
+	items := router.Handle(requestWithParams(t, IntID(1), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-missing"}))
+	if items.Error == nil || items.Error.Code != -32600 || items.Error.Message != "no rollout found for thread id thread-missing" {
+		t.Fatalf("items missing thread response = %+v", items)
+	}
+
+	turns := router.Handle(requestWithParams(t, IntID(2), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: "thread-missing"}))
+	if turns.Error == nil || turns.Error.Code != -32600 || turns.Error.Message != "thread not loaded: thread-missing" {
+		t.Fatalf("turns missing thread response = %+v", turns)
+	}
+}
+
+func TestRuntimeRouterEphemeralThreadStartStaysInMemory(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ephemeral ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:       t.TempDir(),
+		Prompt:    "seed",
+		Ephemeral: true,
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if !thread.Ephemeral || thread.Path != nil || thread.Status.Type != "idle" {
+		t.Fatalf("ephemeral start thread = %+v", thread)
+	}
+	storePath, err := store.Path(session.ThreadID(thread.ID))
+	if err != nil {
+		t.Fatalf("store.Path() error = %v", err)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("ephemeral thread should not be persisted, stat err = %v", err)
+	}
+	list := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, ThreadListParams{}))
+	if list.Error != nil {
+		t.Fatalf("thread list error: %+v", list.Error)
+	}
+	for _, listed := range list.Result.(*ThreadListResponse).Data {
+		if listed.ID == thread.ID {
+			t.Fatalf("ephemeral thread appeared in thread/list: %+v", listed)
+		}
+	}
+	loaded := router.Handle(requestWithParams(t, IntID(3), MethodThreadLoadedList, ThreadLoadedListParams{}))
+	if loaded.Error != nil {
+		t.Fatalf("loaded list error: %+v", loaded.Error)
+	}
+	if got := loaded.Result.(*ThreadLoadedListResponse).Data; len(got) != 1 || got[0] != thread.ID {
+		t.Fatalf("loaded ids = %v, want [%s]", got, thread.ID)
+	}
+	read := router.Handle(requestWithParams(t, IntID(4), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID}))
+	if read.Error != nil {
+		t.Fatalf("thread read error: %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	if !readThread.Ephemeral || readThread.Path != nil || readThread.Status.Type != "idle" {
+		t.Fatalf("read thread = %+v", readThread)
+	}
+	includeTurns := router.Handle(requestWithParams(t, IntID(5), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID, IncludeTurns: true}))
+	if includeTurns.Error == nil || includeTurns.Error.Code != -32600 || includeTurns.Error.Message != "ephemeral threads do not support includeTurns" {
+		t.Fatalf("includeTurns error = %+v", includeTurns.Error)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(6), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: thread.ID,
+		Prompt:   "continue",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("ephemeral thread should remain unpersisted after turn, stat err = %v", err)
+	}
+	record, ok := router.ephemeralThreadRecord(session.ThreadID(thread.ID), true)
+	if !ok {
+		t.Fatalf("ephemeral record missing after turn")
+	}
+	if len(record.Items) < 3 || record.Metadata.LastResponseID != "resp-"+turnID {
+		t.Fatalf("ephemeral record after turn = %+v", record)
+	}
+	turnsList := router.Handle(requestWithParams(t, IntID(7), MethodThreadTurnsList, ThreadTurnsListParams{ThreadID: thread.ID}))
+	if turnsList.Error == nil || turnsList.Error.Code != -32600 || turnsList.Error.Message != "ephemeral threads do not support thread/turns/list" {
+		t.Fatalf("turns/list error = %+v", turnsList.Error)
+	}
+	itemsList := router.Handle(requestWithParams(t, IntID(71), MethodThreadItemsList, ThreadItemsListParams{ThreadID: thread.ID}))
+	if itemsList.Error == nil || itemsList.Error.Code != -32600 || itemsList.Error.Message != "ephemeral threads do not support thread/items/list" {
+		t.Fatalf("items/list error = %+v", itemsList.Error)
+	}
+	deleteResp := router.Handle(requestWithParams(t, IntID(8), MethodThreadDelete, ThreadDeleteParams{ThreadID: thread.ID}))
+	wantDelete := "thread is not persisted and cannot be deleted: " + thread.ID
+	if deleteResp.Error == nil || deleteResp.Error.Code != -32600 || deleteResp.Error.Message != wantDelete {
+		t.Fatalf("delete error = %+v, want %q", deleteResp.Error, wantDelete)
+	}
+	loadedAfterDelete := router.Handle(requestWithParams(t, IntID(9), MethodThreadLoadedList, ThreadLoadedListParams{}))
+	if got := loadedAfterDelete.Result.(*ThreadLoadedListResponse).Data; len(got) != 1 || got[0] != thread.ID {
+		t.Fatalf("loaded ids after failed delete = %v, want [%s]", got, thread.ID)
+	}
+	objective := "finish"
+	goal := router.Handle(requestWithParams(t, IntID(10), MethodThreadGoalSet, GoalSetParams{
+		ThreadID:  thread.ID,
+		Objective: &objective,
+	}))
+	wantGoal := "ephemeral thread does not support goals: " + thread.ID
+	if goal.Error == nil || goal.Error.Code != -32600 || goal.Error.Message != wantGoal {
+		t.Fatalf("goal error = %+v, want %q", goal.Error, wantGoal)
+	}
+	branch := "main"
+	metadata := router.Handle(requestWithParams(t, IntID(11), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: thread.ID,
+		GitInfo:  &ThreadMetadataGitInfoPatch{Branch: OptionalString{Set: true, Value: &branch}},
+	}))
+	wantMetadata := "ephemeral thread does not support metadata updates: " + thread.ID
+	if metadata.Error == nil || metadata.Error.Code != -32600 || metadata.Error.Message != wantMetadata {
+		t.Fatalf("metadata error = %+v, want %q", metadata.Error, wantMetadata)
+	}
+}
+
+func TestRuntimeRouterEphemeralForkStaysReadableAndUnlisted(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        newRecordingRuntimeAgent("fork ok"),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "source"}))
+	if start.Error != nil {
+		t.Fatalf("source start error: %+v", start.Error)
+	}
+	source := start.Result.(*ThreadStartResponse).Thread
+	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+		ThreadID:  source.ID,
+		Ephemeral: true,
+	}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forkThread := fork.Result.(*ThreadForkResponse).Thread
+	if !forkThread.Ephemeral || forkThread.Path != nil || len(forkThread.Turns) == 0 {
+		t.Fatalf("ephemeral fork thread = %+v", forkThread)
+	}
+	storePath, err := store.Path(session.ThreadID(forkThread.ID))
+	if err != nil {
+		t.Fatalf("store.Path() error = %v", err)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("ephemeral fork should not be persisted, stat err = %v", err)
+	}
+	read := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: forkThread.ID}))
+	if read.Error != nil {
+		t.Fatalf("fork read error: %+v", read.Error)
+	}
+	if got := read.Result.(*ThreadReadResponse).Thread; !got.Ephemeral || got.Path != nil || got.Status.Type != "idle" {
+		t.Fatalf("read fork thread = %+v", got)
+	}
+	list := router.Handle(requestWithParams(t, IntID(4), MethodThreadList, ThreadListParams{}))
+	if list.Error != nil {
+		t.Fatalf("thread list error: %+v", list.Error)
+	}
+	seenSource := false
+	for _, listed := range list.Result.(*ThreadListResponse).Data {
+		if listed.ID == source.ID {
+			seenSource = true
+		}
+		if listed.ID == forkThread.ID {
+			t.Fatalf("ephemeral fork appeared in thread/list: %+v", listed)
+		}
+	}
+	if !seenSource {
+		t.Fatalf("persistent source missing from thread/list")
+	}
+	if err := store.Save(&session.Record{
+		ID:        "thread-legacy-ephemeral",
+		SessionID: "thread-legacy-ephemeral",
+		Items:     []session.Item{{ID: "legacy-item", Type: "message", Role: "user", Text: "legacy"}},
+	}); err != nil {
+		t.Fatalf("Save legacy thread error: %v", err)
+	}
+	synthetic := router.Handle(requestWithParams(t, IntID(41), MethodThreadFork, ThreadForkParams{
+		ThreadID:   "thread-legacy-ephemeral",
+		LastTurnID: "turn-1",
+		Ephemeral:  true,
+	}))
+	if synthetic.Error == nil || synthetic.Error.Code != -32600 || synthetic.Error.Message != "lastTurnId 'turn-1' is not a persisted canonical turn in the source thread" {
+		t.Fatalf("synthetic ephemeral fork response = %+v", synthetic)
+	}
+	turnStart := router.Handle(requestWithParams(t, IntID(5), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: forkThread.ID,
+		Prompt:   "continue",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("fork turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("ephemeral fork should remain unpersisted after turn, stat err = %v", err)
+	}
+}
+
+func TestRuntimeRouterTurnStartEmptyInputRunsAgent(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Prompt != "" || len(request.InputItems) != 0 {
+		t.Fatalf("agent request = %#v", request)
+	}
+}
+
+func TestRuntimeRouterTurnStartRejectsOversizedInputWithRustErrorData(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{Turns: turn.NewTurnService()})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-1",
+		Input: []turn.TurnUserInput{
+			{Type: "text", Text: strings.Repeat("x", turn.MaxUserInputTextChars+1)},
+			{Type: "mention", Name: "README", Path: "README.md"},
+		},
+	}))
+	if response.Error == nil {
+		t.Fatalf("expected oversized input error, got %+v", response)
+	}
+	if response.Error.Code != -32602 {
+		t.Fatalf("error code = %d, want -32602", response.Error.Code)
+	}
+	wantMessage := "Input exceeds the maximum length of 1048576 characters."
+	if response.Error.Message != wantMessage {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, wantMessage)
+	}
+	if response.Error.Data["input_error_code"] != turn.InputTooLargeCode {
+		t.Fatalf("error data = %#v", response.Error.Data)
+	}
+	if response.Error.Data["max_chars"] != turn.MaxUserInputTextChars || response.Error.Data["actual_chars"] != turn.MaxUserInputTextChars+1 {
+		t.Fatalf("error data = %#v", response.Error.Data)
+	}
+}
+
+func TestRuntimeRouterTurnStartRejectsPermissionsWithSandboxPolicyBeforeStarting(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Turns: turn.NewTurnService()})
+	router.SetNotificationSink(sink)
+	permissions := "danger-full-access"
+	response := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:      "thread-1",
+		Input:         []turn.TurnUserInput{{Text: "hello"}},
+		Permissions:   &permissions,
+		SandboxPolicy: sandbox.NewDangerFullAccessPolicy(),
+	}))
+	if response.Error == nil {
+		t.Fatalf("expected permissions/sandboxPolicy conflict error, got %+v", response)
+	}
+	if response.Error.Code != -32600 {
+		t.Fatalf("error code = %d, want -32600", response.Error.Code)
+	}
+	wantMessage := "`permissions` cannot be combined with `sandboxPolicy`"
+	if response.Error.Message != wantMessage {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, wantMessage)
+	}
+	if len(sink.List()) != 0 {
+		t.Fatalf("unexpected notifications on rejected turn/start: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterTurnStartRejectsUnknownEnvironmentBeforeStarting(t *testing.T) {
+	sink := NewNotificationBuffer()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Environment:  NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, ""),
+	})
+	router.SetNotificationSink(sink)
+	response := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-1",
+		Input:    []turn.TurnUserInput{{Text: "hello"}},
+		Environments: []map[string]any{{
+			"environmentId": "missing",
+			"cwd":           "D:/repo",
+		}},
+	}))
+	if response.Error == nil {
+		t.Fatalf("expected unknown environment error, got %+v", response)
+	}
+	if response.Error.Code != -32600 || response.Error.Message != "unknown turn environment id `missing`" {
+		t.Fatalf("error = %+v", response.Error)
+	}
+	if len(sink.List()) != 0 {
+		t.Fatalf("unexpected notifications on rejected turn/start: %+v", sink.List())
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: "D:/repo",
+		Environments: []map[string]any{{
+			"environmentId": "missing",
+			"cwd":           "D:/repo",
+		}},
+	}))
+	if threadStart.Error == nil || threadStart.Error.Code != -32600 || threadStart.Error.Message != "unknown turn environment id `missing`" {
+		t.Fatalf("thread/start error = %+v", threadStart.Error)
+	}
+	if len(sink.List()) != 0 {
+		t.Fatalf("unexpected notifications on rejected thread/start: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterTurnStartRejectsRelativeEnvironmentCWD(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Environment:  NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, ""),
+	})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-1",
+		Input:    []turn.TurnUserInput{{Text: "hello"}},
+		Environments: []map[string]any{{
+			"environmentId": "missing",
+			"cwd":           "relative/path",
+		}},
+	}))
+	if response.Error == nil {
+		t.Fatalf("expected invalid cwd error, got %+v", response)
+	}
+	want := "invalid cwd for environment `missing`: path `relative/path` does not use absolute POSIX or Windows path syntax"
+	if response.Error.Code != -32600 || response.Error.Message != want {
+		t.Fatalf("error = %+v", response.Error)
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: "D:/repo",
+		Environments: []map[string]any{{
+			"environmentId": "missing",
+			"cwd":           "relative/path",
+		}},
+	}))
+	if threadStart.Error == nil || threadStart.Error.Code != -32600 || threadStart.Error.Message != want {
+		t.Fatalf("thread/start error = %+v", threadStart.Error)
+	}
+}
+
+func TestRuntimeRouterRequestHandlersRejectRemoteImageURLsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	remoteToolOutput := map[string]any{
+		"type":    "function_call_output",
+		"call_id": "call-1",
+		"output": map[string]any{
+			"content": []any{
+				map[string]any{
+					"type":      "input_image",
+					"image_url": "https://example.com/tool.png",
+					"detail":    "high",
+				},
+			},
+		},
+	}
+	cases := []struct {
+		name   string
+		method Method
+		params any
+	}{
+		{
+			name:   "turn start",
+			method: MethodTurnStart,
+			params: map[string]any{
+				"threadId": threadID,
+				"input": []any{
+					map[string]any{"type": "image", "url": "HTTP://example.com/start.png", "detail": "high"},
+				},
+			},
+		},
+		{
+			name:   "turn steer",
+			method: MethodTurnSteer,
+			params: map[string]any{
+				"threadId":       threadID,
+				"expectedTurnId": "turn-id",
+				"input": []any{
+					map[string]any{"type": "image", "url": "https://example.com/steer.png", "detail": "high"},
+				},
+			},
+		},
+		{
+			name:   "thread inject items",
+			method: MethodThreadInjectItems,
+			params: map[string]any{
+				"threadId": threadID,
+				"items":    []any{remoteToolOutput},
+			},
+		},
+	}
+	for i, tc := range cases {
+		response := router.Handle(requestWithParams(t, IntID(int64(i+2)), tc.method, tc.params))
+		if response.Error == nil {
+			t.Fatalf("%s: expected remote image error, got %+v", tc.name, response)
+		}
+		if response.Error.Code != -32600 || response.Error.Message != remoteImageURLError {
+			t.Fatalf("%s: error = %+v", tc.name, response.Error)
+		}
+		if response.Error.Data != nil {
+			t.Fatalf("%s: error data = %#v, want nil", tc.name, response.Error.Data)
+		}
+		data, err := json.Marshal(response)
+		if err != nil {
+			t.Fatalf("%s: Marshal(response) error = %v", tc.name, err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatalf("%s: Unmarshal(response) error = %v", tc.name, err)
+		}
+		errorPayload, ok := payload["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: error payload = %#v", tc.name, payload["error"])
+		}
+		if _, ok := errorPayload["data"]; ok {
+			t.Fatalf("%s: serialized error contains data: %s", tc.name, data)
+		}
+	}
+}
+
+func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	explicitDetail := "original"
+	localImageBytes, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==")
+	if err != nil {
+		t.Fatalf("DecodeString local image error = %v", err)
+	}
+	localImagePath := filepath.Join(t.TempDir(), "local.png")
+	if err := os.WriteFile(localImagePath, localImageBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile local image error = %v", err)
+	}
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{
+			{Type: "text", Text: "describe these"},
+			{Type: "image", URL: "data:image/png;base64,AAAA"},
+			{Type: "localImage", Path: localImagePath, Detail: &explicitDetail},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Prompt != "" {
+		t.Fatalf("prompt = %q, want structured input item only", request.Prompt)
+	}
+	if !agentRequestInputItemsContain(request, "describe these") {
+		t.Fatalf("agent request input items missing text: %#v", request.InputItems)
+	}
+	details := inputImageDetails(request.InputItems)
+	if len(details) != 2 || details[0] != "high" || details[1] != "original" {
+		t.Fatalf("input image details = %#v, input items = %#v", details, request.InputItems)
+	}
+	imageURLs := inputImageURLs(request.InputItems)
+	if len(imageURLs) != 2 || imageURLs[0] != "data:image/png;base64,AAAA" || !strings.HasPrefix(imageURLs[1], "data:image/png;base64,") {
+		t.Fatalf("input image URLs = %#v, input items = %#v", imageURLs, request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartEmitsUserMessageStartedWithTextElements(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	clientID := "client-message-1"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:            threadID,
+		ClientUserMessageID: clientID,
+		Input: []turn.TurnUserInput{{
+			Text: "Hello",
+			TextElements: []turn.TextElement{{
+				ByteRange:   turn.ByteRange{Start: 0, End: 5},
+				Placeholder: stringPtrIfNotEmpty("<note>"),
+			}},
+		}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	_ = waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationItemStarted {
+			continue
+		}
+		started, ok := notification.Params.(*ItemStartedNotification)
+		if !ok || started.Item["type"] != "userMessage" {
+			continue
+		}
+		if started.Item["clientId"] != clientID {
+			t.Fatalf("clientId = %#v", started.Item["clientId"])
+		}
+		content, ok := started.Item["content"].([]any)
+		if !ok || len(content) != 1 {
+			t.Fatalf("content = %#v", started.Item["content"])
+		}
+		text, ok := content[0].(map[string]any)
+		if !ok || text["type"] != "text" || text["text"] != "Hello" {
+			t.Fatalf("text content = %#v", content[0])
+		}
+		elements, ok := text["text_elements"].([]any)
+		if !ok || len(elements) != 1 {
+			t.Fatalf("text_elements = %#v", text["text_elements"])
+		}
+		element, ok := elements[0].(map[string]any)
+		byteRange, rangeOK := element["byteRange"].(map[string]any)
+		if !ok || !rangeOK || byteRange["start"] != float64(0) || byteRange["end"] != float64(5) || element["placeholder"] != "<note>" {
+			t.Fatalf("text element = %#v", elements[0])
+		}
+		return
+	}
+	t.Fatalf("userMessage item/started missing: %+v", sink.List())
+}
+
+func TestRuntimeRouterTurnStartLocalImageReadFailureBecomesInputText(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	missingPath := filepath.Join(t.TempDir(), "missing.png")
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Type: "localImage", Path: missingPath}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	text := inputItemText(request.InputItems)
+	if !strings.Contains(text, "Codex could not read the local image at `"+missingPath+"`") {
+		t.Fatalf("input items = %#v", request.InputItems)
+	}
+	if urls := inputImageURLs(request.InputItems); len(urls) != 0 {
+		t.Fatalf("input image URLs = %#v, want none", urls)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterFSWatchUsesConnectionScope(t *testing.T) {
+	fs := NewFSService()
+	router := NewRuntimeRouter(RuntimeServices{FS: fs})
+	root := t.TempDir()
+
+	request := requestWithParams(t, IntID(1), MethodFSWatch, WatchParams{WatchID: "watch-1", Path: root})
+	request.ConnectionID = "conn-a"
+	response := router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("fs/watch conn-a error: %+v", response.Error)
+	}
+
+	request = requestWithParams(t, IntID(2), MethodFSWatch, WatchParams{WatchID: "watch-1", Path: root})
+	request.ConnectionID = "conn-b"
+	response = router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("fs/watch conn-b error: %+v", response.Error)
+	}
+
+	request = requestWithParams(t, IntID(3), MethodFSWatch, WatchParams{WatchID: "watch-1", Path: root})
+	request.ConnectionID = "conn-a"
+	response = router.Handle(request)
+	if response.Error == nil || !strings.Contains(response.Error.Message, "watchId already exists") {
+		t.Fatalf("duplicate fs/watch conn-a = %+v, want duplicate watch error", response)
+	}
+
+	request = requestWithParams(t, IntID(4), MethodFSUnwatch, UnwatchParams{WatchID: "watch-1"})
+	request.ConnectionID = "conn-b"
+	response = router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("fs/unwatch conn-b error: %+v", response.Error)
+	}
+
+	if _, ok := fs.ChangedForConnection("conn-a", "watch-1", filepath.Join(root, "a.txt")); !ok {
+		t.Fatalf("ChangedForConnection(conn-a) ok = false, want true")
+	}
+	if _, ok := fs.ChangedForConnection("conn-b", "watch-1", filepath.Join(root, "b.txt")); ok {
+		t.Fatalf("ChangedForConnection(conn-b) ok = true after unwatch, want false")
+	}
+
+	router.ConnectionClosed("conn-a")
+	if fs.WatchCount() != 0 {
+		t.Fatalf("WatchCount() = %d after ConnectionClosed, want 0", fs.WatchCount())
+	}
+}
+
+func TestRuntimeRouterFSWriteFileEmitsTargetedChangedNotifications(t *testing.T) {
+	fs := NewFSService()
+	router := NewRuntimeRouter(RuntimeServices{FS: fs})
+	sink := &targetedNotificationTestSink{}
+	router.SetNotificationSink(sink)
+	root := t.TempDir()
+	file := filepath.Join(root, "FETCH_HEAD")
+
+	request := requestWithParams(t, IntID(1), MethodFSWatch, WatchParams{WatchID: "watch-dir", Path: root})
+	request.ConnectionID = "conn-a"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch dir error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-a")
+	request = requestWithParams(t, IntID(2), MethodFSWatch, WatchParams{WatchID: "watch-file", Path: file})
+	request.ConnectionID = "conn-b"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch file error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-b")
+
+	write := requestWithParams(t, IntID(3), MethodFSWriteFile, WriteFileParams{
+		Path:       file,
+		DataBase64: base64.StdEncoding.EncodeToString([]byte("updated\n")),
+	})
+	if response := router.Handle(write); response.Error != nil {
+		t.Fatalf("fs/writeFile error: %+v", response.Error)
+	}
+
+	dirPayload := waitForTargetedFSChanged(t, sink, "conn-a", "watch-dir", file)
+	if len(dirPayload.ChangedPaths) != 1 || dirPayload.ChangedPaths[0] != file {
+		t.Fatalf("dir changed paths = %+v, want %q", dirPayload.ChangedPaths, file)
+	}
+	filePayload := waitForTargetedFSChanged(t, sink, "conn-b", "watch-file", file)
+	if len(filePayload.ChangedPaths) != 1 || filePayload.ChangedPaths[0] != file {
+		t.Fatalf("file changed paths = %+v, want %q", filePayload.ChangedPaths, file)
+	}
+}
+
+func TestRuntimeRouterFSWatchReportsExternalFileChanges(t *testing.T) {
+	fs := NewFSService()
+	router := NewRuntimeRouter(RuntimeServices{FS: fs})
+	sink := &targetedNotificationTestSink{}
+	router.SetNotificationSink(sink)
+	root := t.TempDir()
+	file := filepath.Join(root, "external.txt")
+	if err := os.WriteFile(file, []byte("old"), 0o600); err != nil {
+		t.Fatalf("WriteFile fixture error = %v", err)
+	}
+
+	request := requestWithParams(t, IntID(1), MethodFSWatch, WatchParams{WatchID: "watch-file", Path: file})
+	request.ConnectionID = "conn-a"
+	if response := router.Handle(request); response.Error != nil {
+		t.Fatalf("fs/watch file error: %+v", response.Error)
+	}
+	defer router.ConnectionClosed("conn-a")
+	time.Sleep(2 * defaultFSWatchPollInterval)
+	if err := os.WriteFile(file, []byte("updated outside appserver"), 0o600); err != nil {
+		t.Fatalf("WriteFile external change error = %v", err)
+	}
+
+	payload := waitForTargetedFSChanged(t, sink, "conn-a", "watch-file", file)
+	if len(payload.ChangedPaths) != 1 || payload.ChangedPaths[0] != file {
+		t.Fatalf("changed paths = %+v, want %q", payload.ChangedPaths, file)
+	}
+}
+
+type targetedNotificationTestSink struct {
+	mu            sync.Mutex
+	notifications []targetedNotificationTestRecord
+}
+
+type targetedNotificationTestRecord struct {
+	connectionID string
+	notification *Notification
+}
+
+func (s *targetedNotificationTestSink) Notify(notification *Notification) {
+	s.append("", notification)
+}
+
+func (s *targetedNotificationTestSink) NotifyToConnection(connectionID string, notification *Notification) {
+	s.append(connectionID, notification)
+}
+
+func (s *targetedNotificationTestSink) append(connectionID string, notification *Notification) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifications = append(s.notifications, targetedNotificationTestRecord{connectionID: connectionID, notification: notification})
+}
+
+func (s *targetedNotificationTestSink) List() []targetedNotificationTestRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]targetedNotificationTestRecord(nil), s.notifications...)
+}
+
+func waitForTargetedFSChanged(t *testing.T, sink *targetedNotificationTestSink, connectionID string, watchID string, changedPath string) *ChangedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []targetedNotificationTestRecord
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, sent := range last {
+			if sent.connectionID != connectionID || sent.notification == nil || sent.notification.Method != NotificationFSChanged {
+				continue
+			}
+			payload, ok := sent.notification.Params.(*ChangedNotification)
+			if !ok || payload == nil || payload.WatchID != watchID {
+				continue
+			}
+			for _, path := range payload.ChangedPaths {
+				if path == changedPath {
+					return payload
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for fs/changed target=%s watch=%s path=%s in %+v", connectionID, watchID, changedPath, last)
+	return nil
+}
+
+func TestRuntimeRouterThreadUnsubscribeTracksConnectionSubscriptions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	assertUnsubscribe := func(t *testing.T, router *RuntimeRouter, id int64, connectionID string, threadID string, want ThreadUnsubscribeStatus) {
+		t.Helper()
+		request := requestWithParams(t, IntID(id), MethodThreadUnsubscribe, ThreadUnsubscribeParams{ThreadID: threadID})
+		request.ConnectionID = connectionID
+		response := router.Handle(request)
+		if response.Error != nil {
+			t.Fatalf("thread/unsubscribe error: %+v", response.Error)
+		}
+		result := response.Result.(*ThreadUnsubscribeResponse)
+		if result.Status != want {
+			t.Fatalf("thread/unsubscribe connection=%s thread=%s status = %s, want %s", connectionID, threadID, result.Status, want)
+		}
+	}
+
+	startRequest := requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "hello"})
+	startRequest.ConnectionID = "conn-a"
+	start := router.Handle(startRequest)
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	assertUnsubscribe(t, router, 2, "conn-b", threadID, ThreadUnsubscribeStatusNotSubscribed)
+	assertUnsubscribe(t, router, 3, "conn-a", threadID, ThreadUnsubscribeStatusUnsubscribed)
+	assertUnsubscribe(t, router, 4, "conn-a", threadID, ThreadUnsubscribeStatusNotSubscribed)
+
+	resumeRequest := requestWithParams(t, IntID(5), MethodThreadResume, ThreadResumeParams{ThreadID: threadID, ExcludeTurns: true})
+	resumeRequest.ConnectionID = "conn-b"
+	resume := router.Handle(resumeRequest)
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	assertUnsubscribe(t, router, 6, "conn-b", threadID, ThreadUnsubscribeStatusUnsubscribed)
+
+	forkRequest := requestWithParams(t, IntID(7), MethodThreadFork, ThreadForkParams{ThreadID: threadID})
+	forkRequest.ConnectionID = "conn-c"
+	fork := router.Handle(forkRequest)
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error: %+v", fork.Error)
+	}
+	forkThreadID := fork.Result.(*ThreadForkResponse).Thread.ID
+	assertUnsubscribe(t, router, 8, "conn-c", forkThreadID, ThreadUnsubscribeStatusUnsubscribed)
+
+	rejoinRequest := requestWithParams(t, IntID(9), MethodThreadResume, ThreadResumeParams{ThreadID: threadID, ExcludeTurns: true})
+	rejoinRequest.ConnectionID = "conn-a"
+	rejoin := router.Handle(rejoinRequest)
+	if rejoin.Error != nil {
+		t.Fatalf("thread/resume rejoin error: %+v", rejoin.Error)
+	}
+	router.ConnectionClosed("conn-a")
+	assertUnsubscribe(t, router, 10, "conn-a", threadID, ThreadUnsubscribeStatusNotSubscribed)
+
+	coldStore := session.NewStore(t.TempDir())
+	coldStart := NewRouter(coldStore).Handle(requestWithParams(t, IntID(11), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "cold"}))
+	if coldStart.Error != nil {
+		t.Fatalf("cold thread/start error: %+v", coldStart.Error)
+	}
+	coldThreadID := coldStart.Result.(*ThreadStartResponse).Thread.ID
+	coldRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(coldStore),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	assertUnsubscribe(t, coldRouter, 12, "conn-a", coldThreadID, ThreadUnsubscribeStatusNotLoaded)
+}
+
+func TestRuntimeRouterThreadResumeRejectsHistoryWhileRunning(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-running-history", fixedTime())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	if err := router.registerActiveRuntimeTurn("thread-running-history", "turn-running", func() {}, fixedTime().UnixMilli(), &turn.TurnStartParams{
+		ThreadID: "thread-running-history",
+		Prompt:   "still running",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{
+		ThreadID: "thread-running-history",
+		History: []ThreadResumeHistoryItem{
+			ThreadResumeHistoryItem(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"history override"}]}`)),
+		},
+	}))
+	if response.Error == nil || response.Error.Code != -32600 {
+		t.Fatalf("resume response = %+v", response)
+	}
+	wantMessage := "cannot resume thread thread-running-history with history while it is already running"
+	if response.Error.Message != wantMessage {
+		t.Fatalf("resume error = %q, want %q", response.Error.Message, wantMessage)
+	}
+}
+
+func TestRuntimeRouterThreadResumeRejectsStalePathWhileRunning(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "materialized",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	thread := start.Result.(*ThreadStartResponse).Thread
+	if thread.Path == nil || strings.TrimSpace(*thread.Path) == "" {
+		t.Fatalf("thread path = %+v", thread.Path)
+	}
+	if err := router.registerActiveRuntimeTurn(thread.ID, "turn-running", func() {}, fixedTime().UnixMilli(), &turn.TurnStartParams{
+		ThreadID: thread.ID,
+		Prompt:   "still running",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+
+	stalePath := filepath.Join(t.TempDir(), "stale-rollout.jsonl")
+	stale := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     thread.ID,
+		Path:         &stalePath,
+		ExcludeTurns: true,
+	}))
+	activePath := canonicalThreadLifecyclePath(*thread.Path, codexHomeFromSessionStore(store))
+	wantStaleMessage := "cannot resume running thread " + thread.ID + " with stale path: requested `" + stalePath + "`, active `" + activePath + "`"
+	if stale.Error == nil || stale.Error.Code != -32600 || stale.Error.Message != wantStaleMessage {
+		t.Fatalf("stale resume response = %+v", stale)
+	}
+
+	currentPath := *thread.Path
+	current := router.Handle(requestWithParams(t, IntID(3), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     thread.ID,
+		Path:         &currentPath,
+		ExcludeTurns: true,
+	}))
+	if current.Error != nil {
+		t.Fatalf("current path resume error: %+v", current.Error)
+	}
+}
+
+func TestRuntimeRouterThreadResumeRunningIgnoresOverrideMismatch(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	extras := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: routerStore,
+		ThreadExtras: extras,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	cwd := t.TempDir()
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    cwd,
+		Model:  "gpt-running",
+		Prompt: "seed",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	if err := router.registerActiveRuntimeTurn(threadID, "turn-running", func() {}, fixedTime().Add(time.Minute).UnixMilli(), &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      cwd,
+		Model:    "gpt-running",
+		Prompt:   "still running",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+	overrideModel := "not-the-running-model"
+	overrideCWD := t.TempDir()
+	limit := 1
+	resume := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID: threadID,
+		Model:    &overrideModel,
+		CWD:      &overrideCWD,
+		InitialTurnsPage: &ThreadInitialPageParams{
+			Limit: &limit,
+		},
+	}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	result := resume.Result.(*ThreadResumeResponse)
+	if result.Model != "gpt-running" {
+		t.Fatalf("resume model = %q", result.Model)
+	}
+	if result.CWD != cwd {
+		t.Fatalf("resume cwd = %q, want %q", result.CWD, cwd)
+	}
+	if result.InitialTurnsPage == nil || len(result.InitialTurnsPage.Data) != 1 {
+		t.Fatalf("initialTurnsPage = %+v", result.InitialTurnsPage)
+	}
+	runningTurn := result.InitialTurnsPage.Data[0]
+	if runningTurn.ID != "turn-running" || runningTurn.Status != TurnStatusInProgress {
+		t.Fatalf("running turn = %+v", runningTurn)
+	}
+	if settings := extras.Settings(threadID); settings != nil && (settings.Model == overrideModel || settings.CWD == overrideCWD) {
+		t.Fatalf("running resume persisted override settings: %+v", settings)
+	}
+}
+
+func TestRuntimeRouterThreadLoadedListUsesRuntimeLoadedStatus(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	coldStart := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "cold"}))
+	if coldStart.Error != nil {
+		t.Fatalf("cold thread/start error: %+v", coldStart.Error)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	listLoaded := func(t *testing.T, id int64, params ThreadLoadedListParams) *ThreadLoadedListResponse {
+		t.Helper()
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadLoadedList, params))
+		if response.Error != nil {
+			t.Fatalf("thread/loaded/list error: %+v", response.Error)
+		}
+		return response.Result.(*ThreadLoadedListResponse)
+	}
+	empty := listLoaded(t, 2, ThreadLoadedListParams{})
+	if len(empty.Data) != 0 || empty.NextCursor != nil {
+		t.Fatalf("cold loaded list = %+v, want empty", empty)
+	}
+
+	startLoaded := func(id int64) string {
+		start := router.Handle(requestWithParams(t, IntID(id), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "loaded"}))
+		if start.Error != nil {
+			t.Fatalf("thread/start error: %+v", start.Error)
+		}
+		return start.Result.(*ThreadStartResponse).Thread.ID
+	}
+	first := startLoaded(3)
+	second := startLoaded(4)
+	expected := []string{first, second}
+	sort.Strings(expected)
+
+	zero := 0
+	firstPage := listLoaded(t, 5, ThreadLoadedListParams{Limit: &zero})
+	if len(firstPage.Data) != 1 || firstPage.Data[0] != expected[0] || firstPage.NextCursor == nil || *firstPage.NextCursor != expected[0] {
+		t.Fatalf("first page = %+v, expected first id %s with next cursor", firstPage, expected[0])
+	}
+	one := 1
+	secondPage := listLoaded(t, 6, ThreadLoadedListParams{Cursor: firstPage.NextCursor, Limit: &one})
+	if len(secondPage.Data) != 1 || secondPage.Data[0] != expected[1] || secondPage.NextCursor != nil {
+		t.Fatalf("second page = %+v, expected second id %s with no next cursor", secondPage, expected[1])
+	}
+
+	missingCursor := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	insertPage := listLoaded(t, 7, ThreadLoadedListParams{Cursor: &missingCursor, Limit: &one})
+	if len(insertPage.Data) != 0 || insertPage.NextCursor != nil {
+		t.Fatalf("missing cursor page = %+v, expected empty page after max UUID cursor", insertPage)
+	}
+
+	badCursor := "not-a-cursor"
+	bad := router.Handle(requestWithParams(t, IntID(8), MethodThreadLoadedList, ThreadLoadedListParams{Cursor: &badCursor}))
+	if bad.Error == nil || bad.Error.Code != -32600 || bad.Error.Message != "invalid cursor: not-a-cursor" {
+		t.Fatalf("thread/loaded/list invalid cursor response = %+v", bad)
+	}
+}
+
+func TestRuntimeRouterThreadArchiveDeleteUnloadRuntimeStatus(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	startLoaded := func(id int64, connectionID string) string {
+		request := requestWithParams(t, IntID(id), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "loaded"})
+		request.ConnectionID = connectionID
+		response := router.Handle(request)
+		if response.Error != nil {
+			t.Fatalf("thread/start error: %+v", response.Error)
+		}
+		return response.Result.(*ThreadStartResponse).Thread.ID
+	}
+	loadedIDs := func(id int64) []string {
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadLoadedList, ThreadLoadedListParams{}))
+		if response.Error != nil {
+			t.Fatalf("thread/loaded/list error: %+v", response.Error)
+		}
+		ids := append([]string(nil), response.Result.(*ThreadLoadedListResponse).Data...)
+		sort.Strings(ids)
+		return ids
+	}
+	hasString := func(values []string, target string) bool {
+		for _, value := range values {
+			if value == target {
+				return true
+			}
+		}
+		return false
+	}
+	unsubscribeStatus := func(id int64, connectionID string, threadID string) ThreadUnsubscribeStatus {
+		request := requestWithParams(t, IntID(id), MethodThreadUnsubscribe, ThreadUnsubscribeParams{ThreadID: threadID})
+		request.ConnectionID = connectionID
+		response := router.Handle(request)
+		if response.Error != nil {
+			t.Fatalf("thread/unsubscribe error: %+v", response.Error)
+		}
+		return response.Result.(*ThreadUnsubscribeResponse).Status
+	}
+
+	archiveID := startLoaded(1, "conn-archive")
+	deleteID := startLoaded(2, "conn-delete")
+	if ids := loadedIDs(3); !hasString(ids, archiveID) || !hasString(ids, deleteID) {
+		t.Fatalf("loaded before archive/delete = %#v, want %s and %s", ids, archiveID, deleteID)
+	}
+
+	archive := router.Handle(requestWithParams(t, IntID(4), MethodThreadArchive, ThreadArchiveParams{ThreadID: archiveID}))
+	if archive.Error != nil {
+		t.Fatalf("thread/archive error: %+v", archive.Error)
+	}
+	if ids := loadedIDs(5); hasString(ids, archiveID) || !hasString(ids, deleteID) {
+		t.Fatalf("loaded after archive = %#v, want only %s among archived/deleted pair", ids, deleteID)
+	}
+	if status := unsubscribeStatus(6, "conn-archive", archiveID); status != ThreadUnsubscribeStatusNotLoaded {
+		t.Fatalf("archived unsubscribe status = %s, want notLoaded", status)
+	}
+
+	deleted := router.Handle(requestWithParams(t, IntID(7), MethodThreadDelete, ThreadDeleteParams{ThreadID: deleteID}))
+	if deleted.Error != nil {
+		t.Fatalf("thread/delete error: %+v", deleted.Error)
+	}
+	if ids := loadedIDs(8); hasString(ids, deleteID) {
+		t.Fatalf("loaded after delete = %#v, want delete thread absent", ids)
+	}
+	if status := unsubscribeStatus(9, "conn-delete", deleteID); status != ThreadUnsubscribeStatusNotLoaded {
+		t.Fatalf("deleted unsubscribe status = %s, want notLoaded", status)
+	}
+}
+
+func TestRuntimeRouterDispatchesRemoteEnvironmentAndWindows(t *testing.T) {
+	execServerURL, done := newEnvironmentInfoExecServerForTest(t, map[string]any{
+		"shell": map[string]any{"name": "bash", "path": "/bin/bash"},
+		"cwd":   "file:///workspace",
+	})
+	envManager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Remote:             remotecontrol.NewManager("codex", "install"),
+		Environment:        envManager,
+		Windows:            sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:             config.NewConfigService(t.TempDir()),
+		WindowsSetupRunner: func(*WindowsSandboxSetupRuntimeRequest) error { return nil },
+	})
+	router.SetNotificationSink(sink)
+	enable := router.Handle(requestWithParams(t, IntID(1), MethodRemoteControlEnable, remotecontrol.EnableParams{}))
+	if enable.Error != nil || enable.Result.(*remotecontrol.EnableResponse).Status != remotecontrol.StatusConnected {
+		t.Fatalf("remote enable = %+v", enable)
+	}
+	add := router.Handle(requestWithParams(t, IntID(2), MethodEnvironmentAdd, EnvironmentAddParams{
+		EnvironmentID: "env-1",
+		ExecServerURL: execServerURL,
+	}))
+	if add.Error != nil {
+		t.Fatalf("environment add error: %+v", add.Error)
+	}
+	info := router.Handle(requestWithParams(t, IntID(3), MethodEnvironmentInfo, EnvironmentInfoParams{EnvironmentID: "env-1"}))
+	if info.Error != nil || info.Result.(*EnvironmentInfoResponse).Shell.Name != "bash" {
+		t.Fatalf("environment info = %+v", info)
+	}
+	statusServerURL, statusDone := newEnvironmentStatusExecServerForTest(t, map[string]any{"status": "ready"})
+	statusAdd := router.Handle(requestWithParams(t, IntID(30), MethodEnvironmentAdd, EnvironmentAddParams{
+		EnvironmentID: "env-status",
+		ExecServerURL: statusServerURL,
+	}))
+	if statusAdd.Error != nil {
+		t.Fatalf("environment status add error: %+v", statusAdd.Error)
+	}
+	status := router.Handle(requestWithParams(t, IntID(31), MethodEnvironmentStatus, EnvironmentStatusParams{EnvironmentID: "env-status"}))
+	if status.Error != nil || status.Result.(*EnvironmentStatusResponse).Status != EnvironmentStatusReady {
+		t.Fatalf("environment status = %+v", status)
+	}
+	missingStatus := router.Handle(requestWithParams(t, IntID(32), MethodEnvironmentStatus, EnvironmentStatusParams{EnvironmentID: "missing-env"}))
+	if missingStatus.Error != nil || missingStatus.Result.(*EnvironmentStatusResponse).Status != EnvironmentStatusUnknown {
+		t.Fatalf("environment missing status = %+v", missingStatus)
+	}
+	waitEnvironmentInfoExecServerForTest(t, done)
+	waitEnvironmentInfoExecServerForTest(t, statusDone)
+	cwd := t.TempDir()
+	setup := router.Handle(requestWithParams(t, IntID(4), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupElevated,
+		CWD:  &cwd,
+	}))
+	if setup.Error != nil || !setup.Result.(*sandbox.WindowsSetupStartResponse).Started {
+		t.Fatalf("windows setup = %+v", setup)
+	}
+	waitForNotificationMethod(t, sink, NotificationWindowsSandboxSetupCompleted)
+}
+
+func TestRuntimeRouterWindowsSandboxSetupStartEmitsCompletionNotificationLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nexperimental_windows_sandbox = true\nelevated_windows_sandbox = true\nenable_experimental_windows_sandbox = true\n"), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	requests := make(chan *WindowsSandboxSetupRuntimeRequest, 1)
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(home),
+		WindowsSetupRunner: func(request *WindowsSandboxSetupRuntimeRequest) error {
+			requests <- request
+			return nil
+		},
+	})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupUnelevated,
+		CWD:  &cwd,
+	}))
+	if response.Error != nil || !response.Result.(*sandbox.WindowsSetupStartResponse).Started {
+		t.Fatalf("windows setup start = %+v", response)
+	}
+	setupRequest := <-requests
+	if setupRequest.Mode != sandbox.WindowsSetupUnelevated || setupRequest.CWD != filepath.Clean(cwd) || setupRequest.CodexHome != home {
+		t.Fatalf("setup runtime request = %+v", setupRequest)
+	}
+	if setupRequest.PermissionProfile == nil || setupRequest.PermissionProfileID != sandbox.BuiltInPermissionProfileWorkspace {
+		t.Fatalf("setup permission profile = %+v id=%q", setupRequest.PermissionProfile, setupRequest.PermissionProfileID)
+	}
+	if len(setupRequest.WorkspaceRoots) != 1 || setupRequest.WorkspaceRoots[0] != filepath.Clean(cwd) {
+		t.Fatalf("setup workspace roots = %#v", setupRequest.WorkspaceRoots)
+	}
+
+	notification := waitForNotificationMethod(t, sink, NotificationWindowsSandboxSetupCompleted)
+	payload, ok := notification.Params.(*sandbox.WindowsSetupCompletedNotification)
+	if !ok || payload == nil || payload.Mode != sandbox.WindowsSetupUnelevated || !payload.Success || payload.Error != nil {
+		t.Fatalf("setup completed notification = %#v", notification.Params)
+	}
+	wantReadiness := sandbox.WindowsReadinessReady
+	if runtime.GOOS != "windows" {
+		wantReadiness = sandbox.WindowsReadinessNotConfigured
+	}
+	if readiness := router.Handle(requestWithParams(t, IntID(2), MethodWindowsSandboxReadiness, map[string]any{})); readiness.Error != nil || readiness.Result.(*sandbox.WindowsReadinessResponse).Status != wantReadiness {
+		t.Fatalf("readiness after setup = %+v", readiness)
+	}
+	read, err := config.NewConfigService(home).Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("read config after setup: %v", err)
+	}
+	windowsConfig, _ := read.Config["windows"].(map[string]any)
+	if windowsConfig["sandbox"] != "unelevated" {
+		t.Fatalf("windows config = %#v", windowsConfig)
+	}
+	features, _ := read.Config["features"].(map[string]any)
+	for _, key := range []string{"experimental_windows_sandbox", "elevated_windows_sandbox", "enable_experimental_windows_sandbox"} {
+		if _, ok := features[key]; ok {
+			t.Fatalf("legacy feature flag %s was not cleared: %#v", key, features)
+		}
+	}
+}
+
+func TestRuntimeRouterWindowsSandboxSetupStartUsesEffectiveWorkspaceRootsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	profileRoot := t.TempDir()
+	profileRootKey := strings.ReplaceAll(filepath.Clean(profileRoot), `\`, `\\`)
+	configBody := "default_permissions = \"dev\"\n\n[permissions.dev.workspace_roots]\n\"" + profileRootKey + "\" = true\n\n[permissions.dev.filesystem]\n\":workspace_roots\" = \"write\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	requests := make(chan *WindowsSandboxSetupRuntimeRequest, 1)
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(home),
+		WindowsSetupRunner: func(request *WindowsSandboxSetupRuntimeRequest) error {
+			requests <- request
+			return errors.New("stop after capture")
+		},
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupUnelevated,
+		CWD:  &cwd,
+	}))
+	if response.Error != nil || !response.Result.(*sandbox.WindowsSetupStartResponse).Started {
+		t.Fatalf("windows setup start = %+v", response)
+	}
+	setupRequest := <-requests
+	if len(setupRequest.WorkspaceRoots) != 2 ||
+		!sameAppPath(setupRequest.WorkspaceRoots[0], cwd) ||
+		!sameAppPath(setupRequest.WorkspaceRoots[1], profileRoot) {
+		t.Fatalf("setup workspace roots = %#v, want cwd and profile root %q", setupRequest.WorkspaceRoots, profileRoot)
+	}
+}
+
+func TestRuntimeRouterWindowsSandboxSetupStartNotificationReportsFailureLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(home),
+		WindowsSetupRunner: func(*WindowsSandboxSetupRuntimeRequest) error {
+			return errors.New("legacy Windows sandbox setup is only supported on Windows")
+		},
+	})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupUnelevated,
+		CWD:  &cwd,
+	}))
+	if response.Error != nil || !response.Result.(*sandbox.WindowsSetupStartResponse).Started {
+		t.Fatalf("windows setup start = %+v", response)
+	}
+	notification := waitForNotificationMethod(t, sink, NotificationWindowsSandboxSetupCompleted)
+	payload, ok := notification.Params.(*sandbox.WindowsSetupCompletedNotification)
+	if !ok || payload == nil || payload.Mode != sandbox.WindowsSetupUnelevated || payload.Success || payload.Error == nil || !strings.Contains(*payload.Error, "legacy Windows sandbox setup is only supported on Windows") {
+		t.Fatalf("setup completed notification = %#v", notification.Params)
+	}
+	if readiness := router.Handle(requestWithParams(t, IntID(2), MethodWindowsSandboxReadiness, map[string]any{})); readiness.Error != nil || readiness.Result.(*sandbox.WindowsReadinessResponse).Status != sandbox.WindowsReadinessNotConfigured {
+		t.Fatalf("readiness after setup failure = %+v", readiness)
+	}
+}
+
+func TestRuntimeRouterWindowsSandboxSetupStartRejectsRelativeCWDLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(t.TempDir()),
+	})
+	cwd := "relative"
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxSetupStart, sandbox.WindowsSetupStartParams{
+		Mode: sandbox.WindowsSetupUnelevated,
+		CWD:  &cwd,
+	}))
+	if response.Error == nil || response.Error.Code != JSONRPCInvalidRequestErrorCode || response.Error.Message != "Invalid request: AbsolutePathBuf deserialized without a base path" {
+		t.Fatalf("relative cwd response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterWindowsSandboxReadinessUsesConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	configBody := "[windows]\nsandbox = \"unelevated\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodWindowsSandboxReadiness, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("readiness error: %+v", response.Error)
+	}
+	want := sandbox.WindowsReadinessReady
+	if runtime.GOOS != "windows" {
+		want = sandbox.WindowsReadinessNotConfigured
+	}
+	if got := response.Result.(*sandbox.WindowsReadinessResponse).Status; got != want {
+		t.Fatalf("readiness = %s, want %s", got, want)
+	}
+}
+
+func TestWindowsSandboxLevelFromConfigValuesMatchesRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+		want   sandbox.WindowsSandboxLevel
+	}{
+		{
+			name:   "explicit elevated",
+			values: map[string]any{"windows": map[string]any{"sandbox": "elevated"}},
+			want:   sandbox.WindowsSandboxElevated,
+		},
+		{
+			name:   "explicit unelevated wins over elevated feature",
+			values: map[string]any{"windows": map[string]any{"sandbox": "unelevated"}, "features": map[string]any{"elevated_windows_sandbox": true}},
+			want:   sandbox.WindowsSandboxUnelevated,
+		},
+		{
+			name:   "legacy elevated feature",
+			values: map[string]any{"features": map[string]any{"elevated_windows_sandbox": true}},
+			want:   sandbox.WindowsSandboxElevated,
+		},
+		{
+			name:   "legacy unelevated feature",
+			values: map[string]any{"features": map[string]any{"experimental_windows_sandbox": true}},
+			want:   sandbox.WindowsSandboxUnelevated,
+		},
+		{
+			name:   "legacy enable alias",
+			values: map[string]any{"features": map[string]any{"enable_experimental_windows_sandbox": true}},
+			want:   sandbox.WindowsSandboxUnelevated,
+		},
+		{
+			name:   "disabled",
+			values: map[string]any{},
+			want:   sandbox.WindowsSandboxDisabled,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windowsSandboxLevelFromConfigValues(tc.values); got != tc.want {
+				t.Fatalf("windowsSandboxLevelFromConfigValues() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWindowsSandboxPrivateDesktopFromConfigValuesMatchesRust(t *testing.T) {
+	if windowsSandboxPrivateDesktopFromConfigValues(nil) {
+		t.Fatal("nil config enabled private desktop")
+	}
+	if !windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
+		"permissions": map[string]any{"windows_sandbox_private_desktop": true},
+	}) {
+		t.Fatal("snake_case private desktop config was not enabled")
+	}
+	if !windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
+		"permissions": map[string]any{"windowsSandboxPrivateDesktop": true},
+	}) {
+		t.Fatal("camelCase private desktop config was not enabled")
+	}
+}
+
+func TestRuntimeRouterRemoteControlStatusChangedNotifications(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Remote: remotecontrol.NewManager("codex", "install-1")})
+	router.SetNotificationSink(sink)
+
+	enable := router.Handle(requestWithParams(t, IntID(1), MethodRemoteControlEnable, remotecontrol.EnableParams{}))
+	if enable.Error != nil {
+		t.Fatalf("remote enable error: %+v", enable.Error)
+	}
+	enableResult := enable.Result.(*remotecontrol.EnableResponse)
+	if enableResult.Status != remotecontrol.StatusConnected || enableResult.EnvironmentID == nil || *enableResult.EnvironmentID != "default" {
+		t.Fatalf("remote enable result = %+v", enableResult)
+	}
+	statuses := remoteControlStatusChangedNotifications(sink)
+	if len(statuses) != 1 || statuses[0].Status != remotecontrol.StatusConnected || statuses[0].EnvironmentID == nil || *statuses[0].EnvironmentID != "default" {
+		t.Fatalf("remote status notifications after enable = %+v", statuses)
+	}
+
+	secondEnable := router.Handle(requestWithParams(t, IntID(2), MethodRemoteControlEnable, remotecontrol.EnableParams{}))
+	if secondEnable.Error != nil {
+		t.Fatalf("second remote enable error: %+v", secondEnable.Error)
+	}
+	if statuses := remoteControlStatusChangedNotifications(sink); len(statuses) != 1 {
+		t.Fatalf("second enable notifications = %+v, want unchanged", statuses)
+	}
+
+	disable := router.Handle(requestWithParams(t, IntID(3), MethodRemoteControlDisable, remotecontrol.DisableParams{}))
+	if disable.Error != nil {
+		t.Fatalf("remote disable error: %+v", disable.Error)
+	}
+	disableResult := disable.Result.(*remotecontrol.DisableResponse)
+	if disableResult.Status != remotecontrol.StatusDisabled || disableResult.EnvironmentID != nil {
+		t.Fatalf("remote disable result = %+v", disableResult)
+	}
+	statuses = remoteControlStatusChangedNotifications(sink)
+	if len(statuses) != 2 || statuses[1].Status != remotecontrol.StatusDisabled || statuses[1].EnvironmentID != nil {
+		t.Fatalf("remote status notifications after disable = %+v", statuses)
+	}
+
+	secondDisable := router.Handle(requestWithParams(t, IntID(4), MethodRemoteControlDisable, remotecontrol.DisableParams{}))
+	if secondDisable.Error != nil {
+		t.Fatalf("second remote disable error: %+v", secondDisable.Error)
+	}
+	if statuses := remoteControlStatusChangedNotifications(sink); len(statuses) != 2 {
+		t.Fatalf("second disable notifications = %+v, want unchanged", statuses)
+	}
+}
+
+func TestRuntimeRouterRemoteControlStatusChangedHonorsOptOut(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Remote: remotecontrol.NewManager("codex", "install-1")})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-test", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			ExperimentalAPI:           true,
+			OptOutNotificationMethods: []string{string(NotificationRemoteControlStatusChanged)},
+		},
+	})
+	initialize.ConnectionID = "conn-remote-opt-out"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	enable := requestWithParams(t, IntID(2), MethodRemoteControlEnable, remotecontrol.EnableParams{})
+	enable.ConnectionID = "conn-remote-opt-out"
+	if response := router.Handle(enable); response.Error != nil {
+		t.Fatalf("remote enable error: %+v", response.Error)
+	}
+	if statuses := remoteControlStatusChangedNotifications(sink); len(statuses) != 0 {
+		t.Fatalf("remote status notifications = %+v, want opt-out filtered", statuses)
+	}
+}
+
+func TestRuntimeRouterEnvironmentErrorsUseInvalidRequest(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		Environment: NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir()),
+	})
+	add := router.Handle(requestWithParams(t, IntID(1), MethodEnvironmentAdd, EnvironmentAddParams{
+		EnvironmentID: "env-1",
+		ExecServerURL: "https://example.test/exec",
+	}))
+	if add.Error == nil || add.Error.Code != -32600 {
+		t.Fatalf("environment add error = %+v, want invalid_request", add.Error)
+	}
+	info := router.Handle(requestWithParams(t, IntID(2), MethodEnvironmentInfo, EnvironmentInfoParams{EnvironmentID: "missing"}))
+	if info.Error == nil || info.Error.Code != -32600 {
+		t.Fatalf("environment info error = %+v, want invalid_request", info.Error)
+	}
+}
+
+func TestRuntimeRouterDispatchesConfigAccountHooksAndFeedback(t *testing.T) {
+	home := t.TempDir()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:     config.NewConfigService(home),
+		Account:    auth.NewAccountManager(),
+		Hooks:      NewHookRegistry(),
+		DefaultCWD: "/repo",
+	})
+	router.SetNotificationSink(sink)
+	if err := router.services.Hooks.Add("/repo", HookMetadata{
+		Key:         "hook-1",
+		EventName:   HookEventPostToolUse,
+		HandlerType: HookHandlerCommand,
+		SourcePath:  "/repo/hooks.json",
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("Hooks.Add() error = %v", err)
+	}
+	configWrite := router.Handle(requestWithParams(t, IntID(1), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "model",
+		Value:         "gpt-5",
+		MergeStrategy: config.MergeReplace,
+	}))
+	if configWrite.Error != nil {
+		t.Fatalf("config write error: %+v", configWrite.Error)
+	}
+	configRead := router.Handle(requestWithParams(t, IntID(2), MethodConfigRead, config.ConfigReadParams{}))
+	if configRead.Error != nil || configRead.Result.(*config.ConfigReadResponse).Config["model"] != "gpt-5" {
+		t.Fatalf("config read = %+v", configRead)
+	}
+	login := router.Handle(requestWithParams(t, IntID(3), MethodLoginAccount, auth.LoginAccountParams{
+		Type:   auth.AccountAPIKey,
+		APIKey: "sk-test",
+	}))
+	if login.Error != nil || login.Result.(*auth.LoginAccountResponse).Type != auth.AccountAPIKey {
+		t.Fatalf("login = %+v", login)
+	}
+	loaded, err := auth.NewStore(home).Load()
+	if err != nil {
+		t.Fatalf("auth load error: %v", err)
+	}
+	if loaded == nil || loaded.OpenAIAPIKey != "sk-test" {
+		t.Fatalf("persisted auth = %+v", loaded)
+	}
+	if !sinkHasMethod(sink, NotificationAccountLoginCompleted) || !sinkHasMethod(sink, NotificationAccountUpdated) {
+		t.Fatalf("account login notifications = %+v", sink.List())
+	}
+	hookList := router.Handle(requestWithParams(t, IntID(4), MethodHooksList, HookListParams{}))
+	if hookList.Error != nil || len(hookList.Result.(*HookListResponse).Data) != 1 {
+		t.Fatalf("hooks list = %+v", hookList)
+	}
+	threadID := "thread-1"
+	feedbackResponse := router.Handle(requestWithParams(t, IntID(5), MethodFeedbackUpload, map[string]any{"threadId": threadID, "classification": "bug"}))
+	if feedbackResponse.Error != nil || feedbackResponse.Result.(*FeedbackUploadResponse).ThreadID != "thread-1" {
+		t.Fatalf("feedback upload = %+v", feedbackResponse)
+	}
+	badFeedback := router.Handle(requestWithParams(t, IntID(6), MethodFeedbackUpload, map[string]any{"threadId": threadID}))
+	if badFeedback.Error == nil || badFeedback.Error.Code != -32600 {
+		t.Fatalf("feedback upload validation error = %+v, want invalid_request", badFeedback.Error)
+	}
+}
+
+func TestRuntimeRouterConfigRequirementsReadIncludesNewThreadModelDefaultsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := `
+[models.new_thread]
+model = "gpt-managed"
+model_reasoning_effort = "medium"
+service_tier = "fast"
+`
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRequirementsRead, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("configRequirements/read error: %+v", response.Error)
+	}
+	read, ok := response.Result.(*config.ConfigRequirementsReadResponse)
+	if !ok {
+		t.Fatalf("configRequirements/read result = %T, want *ConfigRequirementsReadResponse", response.Result)
+	}
+	if read.Requirements == nil || read.Requirements.Models == nil || read.Requirements.Models.NewThread == nil {
+		t.Fatalf("requirements = %#v, want new-thread model defaults", read.Requirements)
+	}
+	defaults := read.Requirements.Models.NewThread
+	if defaults.Model == nil || *defaults.Model != "gpt-managed" {
+		t.Fatalf("Model = %#v, want gpt-managed", defaults.Model)
+	}
+	if defaults.ModelReasoningEffort == nil || *defaults.ModelReasoningEffort != "medium" {
+		t.Fatalf("ModelReasoningEffort = %#v, want medium", defaults.ModelReasoningEffort)
+	}
+	if defaults.ServiceTier == nil || *defaults.ServiceTier != "fast" {
+		t.Fatalf("ServiceTier = %#v, want fast", defaults.ServiceTier)
+	}
+}
+
+func TestRuntimeRouterConfigReadWebSearchToolConfigMatchesRust(t *testing.T) {
+	readConfigJSON := func(t *testing.T, body string) map[string]any {
+		t.Helper()
+		home := t.TempDir()
+		if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+		response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{}))
+		if response.Error != nil {
+			t.Fatalf("config/read error: %+v", response.Error)
+		}
+		data, err := json.Marshal(response.Result)
+		if err != nil {
+			t.Fatalf("Marshal config/read result error = %v", err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("Unmarshal config/read result error = %v", err)
+		}
+		configMap, ok := result["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("config/read JSON config = %#v", result["config"])
+		}
+		return configMap
+	}
+
+	nested := readConfigJSON(t, `
+web_search = "live"
+
+[tools.web_search]
+context_size = "high"
+allowed_domains = ["example.com"]
+location = { country = "US", city = "New York", timezone = "America/New_York" }
+`)
+	tools, ok := nested["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested tools = %#v", nested["tools"])
+	}
+	webSearch, ok := tools["web_search"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested tools.web_search = %#v", tools["web_search"])
+	}
+	if webSearch["context_size"] != "high" {
+		t.Fatalf("context_size = %#v, want high", webSearch["context_size"])
+	}
+	allowedDomains, ok := webSearch["allowed_domains"].([]any)
+	if !ok || len(allowedDomains) != 1 || allowedDomains[0] != "example.com" {
+		t.Fatalf("allowed_domains = %#v, want [example.com]", webSearch["allowed_domains"])
+	}
+	location, ok := webSearch["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("location = %#v", webSearch["location"])
+	}
+	if location["country"] != "US" || location["city"] != "New York" || location["timezone"] != "America/New_York" {
+		t.Fatalf("location = %#v, want Rust web search location", location)
+	}
+	if _, ok := location["region"]; !ok || location["region"] != nil {
+		t.Fatalf("location.region = %#v, want explicit null", location["region"])
+	}
+
+	boolTool := readConfigJSON(t, `
+[tools]
+web_search = true
+`)
+	tools, ok = boolTool["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("bool tools = %#v", boolTool["tools"])
+	}
+	if tools["web_search"] != nil {
+		t.Fatalf("bool tools.web_search = %#v, want null like Rust", tools["web_search"])
+	}
+}
+
+func TestRuntimeRouterConfigReadForcedWorkspaceIDsMatchRust(t *testing.T) {
+	readForced := func(t *testing.T, body string) any {
+		t.Helper()
+		home := t.TempDir()
+		if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+		response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{}))
+		if response.Error != nil {
+			t.Fatalf("config/read error: %+v", response.Error)
+		}
+		data, err := json.Marshal(response.Result)
+		if err != nil {
+			t.Fatalf("Marshal config/read result error = %v", err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("Unmarshal config/read result error = %v", err)
+		}
+		return result["config"].(map[string]any)["forced_chatgpt_workspace_id"]
+	}
+
+	const workspaceA = "123e4567-e89b-42d3-a456-426614174000"
+	const workspaceB = "123e4567-e89b-42d3-a456-426614174001"
+	if got := readForced(t, `forced_chatgpt_workspace_id = "`+workspaceA+`"`); got != workspaceA {
+		t.Fatalf("forced_chatgpt_workspace_id single = %#v, want %s", got, workspaceA)
+	}
+	gotList, ok := readForced(t, `forced_chatgpt_workspace_id = ["`+workspaceA+`", "`+workspaceB+`"]`).([]any)
+	if !ok || len(gotList) != 2 || gotList[0] != workspaceA || gotList[1] != workspaceB {
+		t.Fatalf("forced_chatgpt_workspace_id list = %#v, want [%s %s]", gotList, workspaceA, workspaceB)
+	}
+}
+
+func TestRuntimeRouterConfigReadReturnsEffectiveAndLayersLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := `
+model = "gpt-user"
+sandbox_mode = "workspace-write"
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}))
+	if response.Error != nil {
+		t.Fatalf("config/read error: %+v", response.Error)
+	}
+	read := response.Result.(*config.ConfigReadResponse)
+	if read.Config["model"] != "gpt-user" || read.Config["sandbox_mode"] != "workspace-write" {
+		t.Fatalf("config = %+v, want effective user config", read.Config)
+	}
+	origin := read.Origins["model"]
+	if origin.Name.Type != config.LayerSourceUser || origin.Name.File != config.ConfigPath(home) {
+		t.Fatalf("model origin = %+v, want user config file", origin)
+	}
+	if len(read.Layers) != 1 ||
+		read.Layers[0].Name.Type != config.LayerSourceUser ||
+		read.Layers[0].Name.File != config.ConfigPath(home) {
+		t.Fatalf("layers = %+v, want single user layer", read.Layers)
+	}
+}
+
+func TestRuntimeRouterConfigReadAppsAndDesktopSettingsMatchRust(t *testing.T) {
+	home := t.TempDir()
+	appsConfig := `
+[apps._default]
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
+
+[apps.app1]
+enabled = false
+approvals_reviewer = "user"
+destructive_enabled = false
+default_tools_approval_mode = "prompt"
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(appsConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile apps config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}))
+	if response.Error != nil {
+		t.Fatalf("config/read apps error: %+v", response.Error)
+	}
+	read := response.Result.(*config.ConfigReadResponse)
+	for _, key := range []string{
+		"apps._default.approvals_reviewer",
+		"apps._default.default_tools_approval_mode",
+		"apps.app1.enabled",
+		"apps.app1.approvals_reviewer",
+		"apps.app1.destructive_enabled",
+		"apps.app1.default_tools_approval_mode",
+	} {
+		origin, ok := read.Origins[key]
+		if !ok {
+			t.Fatalf("origin %s missing in %+v", key, read.Origins)
+		}
+		if origin.Name.Type != config.LayerSourceUser {
+			t.Fatalf("origin %s = %+v, want user", key, origin)
+		}
+	}
+	if len(read.Layers) != 1 || read.Layers[0].Name.Type != config.LayerSourceUser {
+		t.Fatalf("layers = %+v, want user layer", read.Layers)
+	}
+	data, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal apps config/read result error = %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal apps config/read result error = %v", err)
+	}
+	configMap := result["config"].(map[string]any)
+	apps := configMap["apps"].(map[string]any)
+	defaults := apps["_default"].(map[string]any)
+	if defaults["enabled"] != true ||
+		defaults["approvals_reviewer"] != "auto_review" ||
+		defaults["destructive_enabled"] != true ||
+		defaults["open_world_enabled"] != true ||
+		defaults["default_tools_approval_mode"] != "approve" {
+		t.Fatalf("apps._default = %#v, want Rust defaults plus configured values", defaults)
+	}
+	app1 := apps["app1"].(map[string]any)
+	if app1["enabled"] != false ||
+		app1["approvals_reviewer"] != "user" ||
+		app1["destructive_enabled"] != false ||
+		app1["open_world_enabled"] != nil ||
+		app1["default_tools_approval_mode"] != "prompt" ||
+		app1["default_tools_enabled"] != nil ||
+		app1["tools"] != nil {
+		t.Fatalf("apps.app1 = %#v, want Rust app config", app1)
+	}
+
+	desktopHome := t.TempDir()
+	desktopConfig := `
+[desktop]
+appearanceTheme = "dark"
+selected-avatar-id = "codex"
+
+[desktop.workspace]
+collapsed = true
+width = 320
+`
+	if err := os.WriteFile(config.ConfigPath(desktopHome), []byte(desktopConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile desktop config error = %v", err)
+	}
+	desktopRouter := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(desktopHome)})
+	desktopResponse := desktopRouter.Handle(requestWithParams(t, IntID(2), MethodConfigRead, config.ConfigReadParams{}))
+	if desktopResponse.Error != nil {
+		t.Fatalf("config/read desktop error: %+v", desktopResponse.Error)
+	}
+	data, err = json.Marshal(desktopResponse.Result)
+	if err != nil {
+		t.Fatalf("Marshal desktop config/read result error = %v", err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal desktop config/read result error = %v", err)
+	}
+	configMap = result["config"].(map[string]any)
+	desktop := configMap["desktop"].(map[string]any)
+	if desktop["appearanceTheme"] != "dark" || desktop["selected-avatar-id"] != "codex" {
+		t.Fatalf("desktop = %#v, want Rust desktop settings", desktop)
+	}
+	workspace := desktop["workspace"].(map[string]any)
+	if workspace["collapsed"] != true || workspace["width"] != float64(320) {
+		t.Fatalf("desktop.workspace = %#v, want collapsed true width 320", workspace)
+	}
+}
+
+func TestRuntimeRouterConfigReadIncludesManagedLayerOverridesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	userConfig := `
+model = "gpt-user"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = ["D:\\user"]
+network_access = true
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(userConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile user config error = %v", err)
+	}
+	managedPath := filepath.Join(t.TempDir(), "managed_config.toml")
+	managedConfig := `
+model = "gpt-system"
+approval_policy = "never"
+
+[sandbox_workspace_write]
+writable_roots = ["D:\\system"]
+`
+	if err := os.WriteFile(managedPath, []byte(managedConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile managed config error = %v", err)
+	}
+	t.Setenv("CODEX_APP_SERVER_MANAGED_CONFIG_PATH", managedPath)
+
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}))
+	if response.Error != nil {
+		t.Fatalf("config/read error: %+v", response.Error)
+	}
+	read := response.Result.(*config.ConfigReadResponse)
+	if read.Config["model"] != "gpt-system" || read.Config["approval_policy"] != "never" {
+		t.Fatalf("config = %+v, want managed model and approval policy", read.Config)
+	}
+	if read.Config["sandbox_mode"] != "workspace-write" {
+		t.Fatalf("sandbox_mode = %#v, want user workspace-write", read.Config["sandbox_mode"])
+	}
+	sandboxConfig := read.Config["sandbox_workspace_write"].(map[string]any)
+	writableRoots := sandboxConfig["writable_roots"].([]any)
+	if len(writableRoots) != 1 || writableRoots[0] != `D:\system` {
+		t.Fatalf("writable_roots = %#v, want managed root", writableRoots)
+	}
+	if sandboxConfig["network_access"] != true {
+		t.Fatalf("network_access = %#v, want user true", sandboxConfig["network_access"])
+	}
+	if origin := read.Origins["model"]; origin.Name.Type != config.LayerSourceLegacyManagedConfigFromFile || origin.Name.File != managedPath {
+		t.Fatalf("model origin = %+v, want managed file", origin)
+	}
+	if origin := read.Origins["approval_policy"]; origin.Name.Type != config.LayerSourceLegacyManagedConfigFromFile || origin.Name.File != managedPath {
+		t.Fatalf("approval_policy origin = %+v, want managed file", origin)
+	}
+	if origin := read.Origins["sandbox_mode"]; origin.Name.Type != config.LayerSourceUser {
+		t.Fatalf("sandbox_mode origin = %+v, want user", origin)
+	}
+	if origin := read.Origins["sandbox_workspace_write.writable_roots.0"]; origin.Name.Type != config.LayerSourceLegacyManagedConfigFromFile || origin.Name.File != managedPath {
+		t.Fatalf("writable_roots origin = %+v, want managed file", origin)
+	}
+	if origin := read.Origins["sandbox_workspace_write.network_access"]; origin.Name.Type != config.LayerSourceUser {
+		t.Fatalf("network_access origin = %+v, want user", origin)
+	}
+	if len(read.Layers) != 2 ||
+		read.Layers[0].Name.Type != config.LayerSourceUser ||
+		read.Layers[1].Name.Type != config.LayerSourceLegacyManagedConfigFromFile {
+		t.Fatalf("layers = %+v, want user then managed file", read.Layers)
+	}
+}
+
+func TestRuntimeRouterConfigReadIncludesProjectLayerForCWDLikeRust(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	projectTrust := strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)
+	userConfig := "model = \"gpt-user\"\n\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(userConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile user config error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .codex error = %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte("model_reasoning_effort = \"high\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{
+		IncludeLayers: true,
+		CWD:           &workspace,
+	}))
+	if response.Error != nil {
+		t.Fatalf("config/read error: %+v", response.Error)
+	}
+	read := response.Result.(*config.ConfigReadResponse)
+	if read.Config["model_reasoning_effort"] != "high" {
+		t.Fatalf("model_reasoning_effort = %#v, want high", read.Config["model_reasoning_effort"])
+	}
+	origin := read.Origins["model_reasoning_effort"]
+	wantDotCodex := filepath.Join(workspace, ".codex")
+	if origin.Name.Type != config.LayerSourceProject || origin.Name.DotCodexFolder != wantDotCodex {
+		t.Fatalf("origin = %+v, want project dot-codex %q", origin, wantDotCodex)
+	}
+	if len(read.Layers) != 2 ||
+		read.Layers[0].Name.Type != config.LayerSourceUser ||
+		read.Layers[1].Name.Type != config.LayerSourceProject ||
+		read.Layers[1].Name.DotCodexFolder != wantDotCodex {
+		t.Fatalf("layers = %+v, want user then project", read.Layers)
+	}
+}
+
+func TestRuntimeRouterInitializeEmitsConfigWarnings(t *testing.T) {
+	home := t.TempDir()
+	configService := config.NewConfigService(home)
+	details := "bad config value"
+	configService.SetWarnings([]config.ConfigWarningNotification{{
+		Summary: "Invalid configuration; using defaults.",
+		Details: &details,
+	}})
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Config: configService})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-test", Version: "1.0.0"},
+	}))
+	if response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+	notifications := sink.List()
+	if len(notifications) != 1 || notifications[0].Method != NotificationConfigWarning {
+		t.Fatalf("config warning notifications = %+v", notifications)
+	}
+	warning, ok := notifications[0].Params.(*config.ConfigWarningNotification)
+	if !ok || warning.Summary != "Invalid configuration; using defaults." || warning.Details == nil || *warning.Details != details {
+		t.Fatalf("config warning payload = %#v", notifications[0].Params)
+	}
+}
+
+func TestRuntimeRouterInitializeRejectsInvalidClientName(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "bad\rname", Version: "0.1.0"},
+	}))
+	want := "Invalid clientInfo.name: 'bad\rname'. Must be a valid HTTP header value."
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != want {
+		t.Fatalf("initialize error = %+v, want %q", response.Error, want)
+	}
+}
+
+func TestRuntimeRouterInitializeUserAgentOriginator(t *testing.T) {
+	cases := []struct {
+		name        string
+		clientName  string
+		envOverride *string
+		wantPrefix  string
+		wantSuffix  bool
+	}{
+		{
+			name:       "client name originator",
+			clientName: "codex_vscode",
+			wantPrefix: "codex_vscode/",
+			wantSuffix: true,
+		},
+		{
+			name:       "probe keeps default",
+			clientName: "codex_app_server_daemon",
+			wantPrefix: "codex_cli_rs/",
+		},
+		{
+			name:       "backend keeps default",
+			clientName: "codex-backend",
+			wantPrefix: "codex_cli_rs/",
+		},
+		{
+			name:        "env override wins",
+			clientName:  "codex_vscode",
+			envOverride: stringPtr("codex_originator_via_env_var"),
+			wantPrefix:  "codex_originator_via_env_var/",
+			wantSuffix:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setOriginatorOverrideForTest(t, tc.envOverride)
+			router := NewRuntimeRouter(RuntimeServices{})
+			response := router.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+				ClientInfo: ClientInfo{Name: tc.clientName, Version: "0.1.0"},
+			}))
+			if response.Error != nil {
+				t.Fatalf("initialize = %+v", response)
+			}
+			result := response.Result.(*InitializeResponse)
+			if !strings.HasPrefix(result.UserAgent, tc.wantPrefix) {
+				t.Fatalf("user agent = %q, want prefix %q", result.UserAgent, tc.wantPrefix)
+			}
+			if _, err := ParseAppServerVersionFromUserAgent(result.UserAgent); err != nil {
+				t.Fatalf("ParseAppServerVersionFromUserAgent(%q) error = %v", result.UserAgent, err)
+			}
+			if version, err := ParseAppServerVersionFromUserAgent(result.UserAgent); err != nil || version != "0.0.0" {
+				t.Fatalf("parsed app-server version = %q, %v", version, err)
+			}
+			if tc.wantSuffix && !strings.Contains(result.UserAgent, fmt.Sprintf("(%s; 0.1.0)", tc.clientName)) {
+				t.Fatalf("user agent = %q, want client suffix", result.UserAgent)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterInitializeRejectsAlreadyInitializedConnection(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	first := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+	})
+	first.ConnectionID = "conn-a"
+	if response := router.Handle(first); response.Error != nil {
+		t.Fatalf("first initialize = %+v", response)
+	}
+
+	second := requestWithParams(t, IntID(2), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.1"},
+	})
+	second.ConnectionID = "conn-a"
+	if response := router.Handle(second); response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "Already initialized" {
+		t.Fatalf("second initialize = %+v, want Already initialized", response)
+	}
+
+	otherConnection := requestWithParams(t, IntID(3), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+	})
+	otherConnection.ConnectionID = "conn-b"
+	if response := router.Handle(otherConnection); response.Error != nil {
+		t.Fatalf("other connection initialize = %+v", response)
+	}
+
+	router.ConnectionClosed("conn-a")
+	reopened := requestWithParams(t, IntID(4), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.2"},
+	})
+	reopened.ConnectionID = "conn-a"
+	if response := router.Handle(reopened); response.Error != nil {
+		t.Fatalf("reopened connection initialize = %+v", response)
+	}
+}
+
+func TestRuntimeRouterRejectsExplicitConnectionBeforeInitialize(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	request := requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{})
+	request.ConnectionID = "conn-a"
+	if response := router.Handle(request); response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "Not initialized" {
+		t.Fatalf("pre-initialize response = %+v, want Not initialized", response)
+	}
+
+	direct := router.Handle(requestWithParams(t, IntID(2), MethodConfigRead, config.ConfigReadParams{}))
+	if direct.Error != nil {
+		t.Fatalf("direct no-connection config/read = %+v", direct)
+	}
+
+	initialize := requestWithParams(t, IntID(3), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+	})
+	initialize.ConnectionID = "conn-a"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+	afterInitialize := requestWithParams(t, IntID(4), MethodConfigRead, config.ConfigReadParams{})
+	afterInitialize.ConnectionID = "conn-a"
+	if response := router.Handle(afterInitialize); response.Error != nil {
+		t.Fatalf("config/read after initialize = %+v", response)
+	}
+}
+
+func setOriginatorOverrideForTest(t *testing.T, value *string) {
+	t.Helper()
+	previous, hadPrevious := os.LookupEnv(originatorOverrideEnv)
+	if value == nil {
+		if err := os.Unsetenv(originatorOverrideEnv); err != nil {
+			t.Fatalf("Unsetenv(%s) error = %v", originatorOverrideEnv, err)
+		}
+	} else if err := os.Setenv(originatorOverrideEnv, *value); err != nil {
+		t.Fatalf("Setenv(%s) error = %v", originatorOverrideEnv, err)
+	}
+	t.Cleanup(func() {
+		if hadPrevious {
+			_ = os.Setenv(originatorOverrideEnv, previous)
+		} else {
+			_ = os.Unsetenv(originatorOverrideEnv)
+		}
+	})
+}
+
+func TestRuntimeRouterInitializeOptOutNotificationMethodsFiltersStatusChanged(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadStatus: NewThreadStatusManager()})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			OptOutNotificationMethods: []string{string(NotificationThreadStatusChanged)},
+		},
+	}))
+	if response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	router.notifyThreadStatus(router.requireThreadStatus().NoteTurnStarted("thread-opt-out"))
+	if sinkHasMethod(sink, NotificationThreadStatusChanged) {
+		t.Fatalf("status changed notification should be filtered: %+v", sink.List())
+	}
+
+	router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: &Thread{ID: "thread-opt-out"}})
+	if !sinkHasMethod(sink, NotificationThreadStarted) {
+		t.Fatalf("non-opted notification missing: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterInitializeOptOutNotificationMethodsFiltersThreadStarted(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			OptOutNotificationMethods: []string{string(NotificationThreadStarted)},
+		},
+	})
+	initialize.ConnectionID = "conn-opt-out-thread-started"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	start := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()})
+	start.ConnectionID = "conn-opt-out-thread-started"
+	if response := router.Handle(start); response.Error != nil {
+		t.Fatalf("thread/start = %+v", response)
+	}
+	if sinkHasMethod(sink, NotificationThreadStarted) {
+		t.Fatalf("thread/started should be filtered by optOutNotificationMethods: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterThreadStartStartedNotificationMatchesRustWireShape(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadSource := ThreadSourceUser
+	start := requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: &threadSource,
+	})
+	start.ConnectionID = "conn-thread-started-shape"
+	response := router.Handle(start)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	started := threadStartedNotificationForTest(t, sink)
+	if started.Thread == nil || started.Thread.Name != nil {
+		t.Fatalf("thread/started notification thread = %+v, want nil name", started.Thread)
+	}
+
+	data, err := json.Marshal(&Notification{Method: NotificationThreadStarted, Params: started})
+	if err != nil {
+		t.Fatalf("Marshal(thread/started notification) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal(thread/started notification) error = %v", err)
+	}
+	params, ok := payload["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/started params = %T, want object", payload["params"])
+	}
+	threadPayload, ok := params["thread"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/started params.thread = %T, want object", params["thread"])
+	}
+	if _, ok := params["sessionId"]; ok {
+		t.Fatalf("thread/started params has top-level sessionId: %v", params["sessionId"])
+	}
+	if value, ok := threadPayload["name"]; !ok || value != nil {
+		t.Fatalf("thread/started thread.name = %v, present=%v; want explicit null", value, ok)
+	}
+	if value, ok := threadPayload["ephemeral"].(bool); !ok || value {
+		t.Fatalf("thread/started thread.ephemeral = %v, present=%v; want false", threadPayload["ephemeral"], ok)
+	}
+	if value, ok := threadPayload["threadSource"].(string); !ok || value != string(ThreadSourceUser) {
+		t.Fatalf("thread/started thread.threadSource = %v, present=%v; want user", threadPayload["threadSource"], ok)
+	}
+}
+
+func threadStartedNotificationForTest(t *testing.T, sink *NotificationBuffer) *ThreadStartedNotification {
+	t.Helper()
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationThreadStarted {
+			continue
+		}
+		if payload, ok := notification.Params.(*ThreadStartedNotification); ok {
+			return payload
+		}
+		t.Fatalf("thread/started params = %T, want *ThreadStartedNotification", notification.Params)
+	}
+	t.Fatalf("thread/started notification missing: %+v", sink.List())
+	return nil
+}
+
+func findThreadStartedNotificationAfter(t *testing.T, sink *NotificationBuffer, start int, threadID string) *ThreadStartedNotification {
+	t.Helper()
+	notifications := sink.List()
+	if start < 0 || start > len(notifications) {
+		start = 0
+	}
+	for _, notification := range notifications[start:] {
+		if notification == nil || notification.Method != NotificationThreadStarted {
+			continue
+		}
+		payload, ok := notification.Params.(*ThreadStartedNotification)
+		if !ok || payload == nil || payload.Thread == nil {
+			continue
+		}
+		if payload.Thread.ID == threadID {
+			return payload
+		}
+	}
+	t.Fatalf("thread/started notification for %s missing after %d in %+v", threadID, start, notifications)
+	return nil
+}
+
+func TestRuntimeRouterExperimentalAPICapabilityGate(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-test", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			ExperimentalAPI: false,
+		},
+	})
+	initialize.ConnectionID = "conn-no-experimental"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	assertExperimentalErrorForConnection := func(connectionID string, id int64, method Method, params any, reason string) {
+		t.Helper()
+		request := requestWithParams(t, IntID(id), method, params)
+		request.ConnectionID = connectionID
+		response := router.Handle(request)
+		want := reason + " requires experimentalApi capability"
+		if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != want {
+			t.Fatalf("%s response = %+v, want %q", method, response, want)
+		}
+	}
+	assertExperimentalError := func(id int64, method Method, params any, reason string) {
+		t.Helper()
+		assertExperimentalErrorForConnection("conn-no-experimental", id, method, params, reason)
+	}
+
+	assertExperimentalError(2, MethodMockExperimentalMethod, MockExperimentalMethodParams{Value: "x"}, "mock/experimentalMethod")
+	assertExperimentalError(3, MethodThreadMemoryModeSet, ThreadMemoryModeSetParams{ThreadID: "thread-a", Mode: ThreadMemoryModeDisabled}, "thread/memoryMode/set")
+	assertExperimentalError(4, MethodThreadSettingsUpdate, SettingsUpdateParams{ThreadID: "thread-a"}, "thread/settings/update")
+	assertExperimentalError(5, MethodThreadRealtimeStart, map[string]any{"threadId": "thread-a"}, "thread/realtime/start")
+	assertExperimentalError(6, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "mockExperimentalField": "mock"}, "thread/start.mockExperimentalField")
+	assertExperimentalError(7, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "dynamicTools": []any{map[string]any{"namespace": "tools", "tools": []any{map[string]any{"name": "echo", "description": "Echo", "inputSchema": map[string]any{"type": "object"}}}}}}, "thread/start.dynamicTools")
+	assertExperimentalError(8, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "approvalPolicy": map[string]any{"granular": map[string]any{"sandbox_approval": true}}}, "askForApproval.granular")
+
+	start := requestWithParams(t, IntID(9), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()})
+	start.ConnectionID = "conn-no-experimental"
+	if response := router.Handle(start); response.Error != nil {
+		t.Fatalf("stable thread/start should be allowed: %+v", response.Error)
+	}
+
+	omittedCapabilities := requestWithParams(t, IntID(10), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-default-capabilities", Version: "0.1.0"},
+	})
+	omittedCapabilities.ConnectionID = "conn-default-capabilities"
+	if response := router.Handle(omittedCapabilities); response.Error != nil {
+		t.Fatalf("initialize with omitted capabilities error: %+v", response.Error)
+	}
+	assertExperimentalErrorForConnection("conn-default-capabilities", 11, MethodMockExperimentalMethod, MockExperimentalMethodParams{Value: "x"}, "mock/experimentalMethod")
+
+	nullCapabilities := &Request{
+		JSONRPC:      "2.0",
+		ID:           IntID(12),
+		Method:       MethodInitialize,
+		Params:       json.RawMessage(`{"clientInfo":{"name":"codex-null-capabilities","version":"0.1.0"},"capabilities":null}`),
+		ConnectionID: "conn-null-capabilities",
+	}
+	if response := router.Handle(nullCapabilities); response.Error != nil {
+		t.Fatalf("initialize with null capabilities error: %+v", response.Error)
+	}
+	assertExperimentalErrorForConnection("conn-null-capabilities", 13, MethodMockExperimentalMethod, MockExperimentalMethodParams{Value: "x"}, "mock/experimentalMethod")
+}
+
+func TestRuntimeRouterInitializeMCPServerOpenAIFormCapabilityAdvertisesExtension(t *testing.T) {
+	initializeParams := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var request struct {
+			ID     int64          `json:"id"`
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			initializeParams <- request.Params
+			w.Header().Set("Mcp-Session-Id", "session-1")
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "docs", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resources": []any{}})
+		case "resources/templates/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resourceTemplates": []any{}})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	router := NewRuntimeRouter(RuntimeServices{
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			"docs": {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+	})
+
+	initializeDefault := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-default-mcp-form", Version: "0.1.0"},
+	})
+	initializeDefault.ConnectionID = "conn-default-mcp-form"
+	if response := router.Handle(initializeDefault); response.Error != nil {
+		t.Fatalf("initialize default error: %+v", response.Error)
+	}
+	statusDefault := requestWithParams(t, IntID(2), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
+	})
+	statusDefault.ConnectionID = "conn-default-mcp-form"
+	if response := router.Handle(statusDefault); response.Error != nil {
+		t.Fatalf("status default error: %+v", response.Error)
+	}
+	assertRuntimeRouterMCPInitializeOpenAIFormExtension(t, <-initializeParams, false)
+
+	initializeOpenAIForm := requestWithParams(t, IntID(3), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-openai-form", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			MCPServerOpenAIFormElicitation: true,
+		},
+	})
+	initializeOpenAIForm.ConnectionID = "conn-openai-form"
+	if response := router.Handle(initializeOpenAIForm); response.Error != nil {
+		t.Fatalf("initialize openai/form error: %+v", response.Error)
+	}
+	statusOpenAIForm := requestWithParams(t, IntID(4), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{
+		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
+	})
+	statusOpenAIForm.ConnectionID = "conn-openai-form"
+	if response := router.Handle(statusOpenAIForm); response.Error != nil {
+		t.Fatalf("status openai/form error: %+v", response.Error)
+	}
+	assertRuntimeRouterMCPInitializeOpenAIFormExtension(t, <-initializeParams, true)
+}
+
+func writeRuntimeRouterMCPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result}); err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+}
+
+func assertRuntimeRouterMCPInitializeOpenAIFormExtension(t *testing.T, params map[string]any, want bool) {
+	t.Helper()
+	capabilities, ok := params["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("capabilities = %#v", params["capabilities"])
+	}
+	extensions, _ := capabilities["extensions"].(map[string]any)
+	openAIForm, ok := extensions["openai/form"].(map[string]any)
+	if want {
+		if !ok || len(openAIForm) != 0 {
+			t.Fatalf("openai/form extension = %#v", extensions["openai/form"])
+		}
+		return
+	}
+	if ok {
+		t.Fatalf("openai/form extension should be absent: %#v", extensions["openai/form"])
+	}
+}
+
+func TestRuntimeRouterAccountCancelAndLogoutNotify(t *testing.T) {
+	sink := NewNotificationBuffer()
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{Account: auth.NewAccountManager(), Config: config.NewConfigService(home)})
+	router.SetNotificationSink(sink)
+
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{Type: auth.AccountChatGPT}))
+	if login.Error != nil {
+		t.Fatalf("login = %+v", login)
+	}
+	loginID := login.Result.(*auth.LoginAccountResponse).LoginID
+	cancel := router.Handle(requestWithParams(t, IntID(2), MethodCancelLoginAccount, auth.CancelLoginAccountParams{LoginID: loginID}))
+	if cancel.Error != nil || cancel.Result.(*auth.CancelLoginAccountResponse).Status != auth.CancelLoginCanceled {
+		t.Fatalf("cancel = %+v", cancel)
+	}
+	if !sinkHasMethod(sink, NotificationAccountLoginCompleted) {
+		t.Fatalf("cancel notification missing: %+v", sink.List())
+	}
+	cancelNote := latestNotificationPayload[*auth.AccountLoginCompletedNotification](t, sink, NotificationAccountLoginCompleted)
+	if cancelNote.LoginID == nil || *cancelNote.LoginID != loginID || cancelNote.Success || cancelNote.Error == nil || *cancelNote.Error == "" {
+		t.Fatalf("cancel notification payload = %+v", cancelNote)
+	}
+
+	apiLogin := router.Handle(requestWithParams(t, IntID(3), MethodLoginAccount, auth.LoginAccountParams{Type: auth.AccountAPIKey, APIKey: "sk-test"}))
+	if apiLogin.Error != nil {
+		t.Fatalf("api login = %+v", apiLogin)
+	}
+	loginNote := latestNotificationPayload[*auth.AccountLoginCompletedNotification](t, sink, NotificationAccountLoginCompleted)
+	if loginNote.LoginID != nil || !loginNote.Success || loginNote.Error != nil {
+		t.Fatalf("api login completed payload = %+v", loginNote)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); err != nil {
+		t.Fatalf("auth.json after login stat error: %v", err)
+	}
+	logout := router.Handle(requestWithParams(t, IntID(4), MethodLogoutAccount, map[string]any{}))
+	if logout.Error != nil {
+		t.Fatalf("logout = %+v", logout)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("auth.json after logout stat error = %v, want not exist", err)
+	}
+	if got := router.services.Account.GetAccount(&auth.GetAccountParams{}); got.Account != nil || !got.RequiresOpenAIAuth {
+		t.Fatalf("account after logout = %+v", got)
+	}
+	if !sinkHasMethod(sink, NotificationAccountUpdated) {
+		t.Fatalf("logout account/updated missing: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterAccountSessionsRPC(t *testing.T) {
+	sink := NewNotificationBuffer()
+	manager := auth.NewAccountManager()
+	active := "session-1"
+	manager.SetSessions(&active, []auth.Session{
+		{
+			SessionID: "session-1",
+			IsActive:  true,
+			Workspaces: []auth.SessionWorkspace{{
+				AccountID: "account-1",
+			}},
+		},
+		{
+			SessionID: "session-2",
+			Workspaces: []auth.SessionWorkspace{{
+				AccountID: "account-2",
+			}},
+		},
+	})
+	router := NewRuntimeRouter(RuntimeServices{Account: manager})
+	router.SetNotificationSink(sink)
+
+	list := router.Handle(requestWithParams(t, IntID(1), MethodAccountSessionsList, auth.AccountSessionsListParams{RefreshWorkspaceMetadata: true}))
+	if list.Error != nil {
+		t.Fatalf("sessions list = %+v", list)
+	}
+	if got := list.Result.(*auth.AccountSessionsResponse); got.ActiveSessionID == nil || *got.ActiveSessionID != "session-1" || len(got.Sessions) != 2 {
+		t.Fatalf("sessions list result = %+v", got)
+	}
+
+	add := router.Handle(requestWithParams(t, IntID(2), MethodAccountSessionsAdd, auth.AccountSessionsAddParams{SwitchToAddedAccount: true}))
+	if add.Error != nil || len(add.Result.(*auth.AccountSessionsResponse).Sessions) != 2 {
+		t.Fatalf("sessions add = %+v", add)
+	}
+
+	switched := router.Handle(requestWithParams(t, IntID(3), MethodAccountSessionsSwitch, auth.AccountSessionsSwitchParams{
+		SessionID: "session-2",
+		AccountID: "account-2",
+	}))
+	if switched.Error != nil {
+		t.Fatalf("sessions switch = %+v", switched)
+	}
+	switchResult := switched.Result.(*auth.AccountSessionsResponse)
+	if switchResult.ActiveSessionID == nil || *switchResult.ActiveSessionID != "session-2" || !switchResult.Sessions[1].IsActive {
+		t.Fatalf("sessions switch result = %+v", switchResult)
+	}
+	if !sinkHasMethod(sink, NotificationAccountUpdated) {
+		t.Fatalf("sessions switch did not notify account/updated: %+v", sink.List())
+	}
+
+	missing := router.Handle(requestWithParams(t, IntID(4), MethodAccountSessionsSwitch, auth.AccountSessionsSwitchParams{
+		SessionID: "session-2",
+		AccountID: "missing",
+	}))
+	if missing.Error == nil || missing.Error.Code != -32602 {
+		t.Fatalf("missing workspace switch = %+v", missing)
+	}
+
+	loggedOut := router.Handle(requestWithParams(t, IntID(5), MethodAccountSessionsLogout, auth.AccountSessionsLogoutParams{SessionID: "session-2"}))
+	if loggedOut.Error != nil {
+		t.Fatalf("sessions logout = %+v", loggedOut)
+	}
+	logoutResult := loggedOut.Result.(*auth.AccountSessionsResponse)
+	if logoutResult.ActiveSessionID == nil || *logoutResult.ActiveSessionID != "session-1" || len(logoutResult.Sessions) != 1 {
+		t.Fatalf("sessions logout result = %+v", logoutResult)
+	}
+}
+
+func TestRuntimeRouterLogoutRevokesStoredChatGPTToken(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.PersistChatGPTTokens(home, &auth.ExchangedTokens{
+		IDToken:      fakeJWTAppserver(map[string]any{"chatgpt_account_id": "account-1"}),
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+	}); err != nil {
+		t.Fatalf("PersistChatGPTTokens() error = %v", err)
+	}
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/revoke" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		writeJSON(t, w, map[string]string{"message": "success"})
+	}))
+	defer server.Close()
+	t.Setenv(auth.RevokeTokenURLEnvOverride, server.URL+"/oauth/revoke")
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	logout := router.Handle(requestWithParams(t, IntID(1), MethodLogoutAccount, map[string]any{}))
+	if logout.Error != nil {
+		t.Fatalf("logout = %+v", logout)
+	}
+	if requestBody["token"] != "refresh-token" || requestBody["token_type_hint"] != "refresh_token" {
+		t.Fatalf("revoke request = %#v", requestBody)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("auth.json after logout stat error = %v, want not exist", err)
+	}
+}
+
+func TestRuntimeRouterSendAddCreditsNudgeEmailUsesChatGPTBackend(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/accounts/send_add_credits_nudge_email" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodSendAddCreditsNudgeEmail, auth.SendAddCreditsNudgeEmailParams{
+		CreditType: auth.AddCreditsNudgeUsageLimit,
+	}))
+	if response.Error != nil {
+		t.Fatalf("send nudge error = %+v", response.Error)
+	}
+	if response.Result.(*auth.SendAddCreditsNudgeEmailResponse).Status != auth.AddCreditsNudgeEmailSent {
+		t.Fatalf("send nudge response = %+v", response.Result)
+	}
+	if requestBody["credit_type"] != "usage_limit" {
+		t.Fatalf("request body = %#v", requestBody)
+	}
+}
+
+func TestRuntimeRouterSendAddCreditsNudgeEmailMapsCooldown(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodSendAddCreditsNudgeEmail, auth.SendAddCreditsNudgeEmailParams{
+		CreditType: auth.AddCreditsNudgeCredits,
+	}))
+	if response.Error != nil {
+		t.Fatalf("send nudge cooldown error = %+v", response.Error)
+	}
+	if response.Result.(*auth.SendAddCreditsNudgeEmailResponse).Status != auth.AddCreditsNudgeEmailCooldownActive {
+		t.Fatalf("send nudge cooldown response = %+v", response.Result)
+	}
+}
+
+func TestRuntimeRouterSendAddCreditsNudgeEmailHydratesPersonalAccessTokenRouting(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAccessToken("at-test-token")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/user-auth-credential/whoami" {
+			t.Fatalf("auth path = %q", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"chatgpt_user_id":            "user-pat",
+			"chatgpt_account_id":         "account-pat",
+			"chatgpt_plan_type":          "team",
+			"chatgpt_account_is_fedramp": true,
+		})
+	}))
+	defer authServer.Close()
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/accounts/send_add_credits_nudge_email" {
+			t.Fatalf("backend path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer at-test-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-pat" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		if got := r.Header.Get("X-OpenAI-Fedramp"); got != "true" {
+			t.Fatalf("X-OpenAI-Fedramp = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backendServer.Close()
+	t.Setenv(auth.AuthAPIBaseURLEnv, authServer.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backendServer.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Account: auth.NewAccountManager(), Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodSendAddCreditsNudgeEmail, auth.SendAddCreditsNudgeEmailParams{
+		CreditType: auth.AddCreditsNudgeCredits,
+	}))
+	if response.Error != nil {
+		t.Fatalf("send nudge response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterSendAddCreditsNudgeEmailRequiresChatGPTAuth(t *testing.T) {
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	missing := router.Handle(requestWithParams(t, IntID(1), MethodSendAddCreditsNudgeEmail, auth.SendAddCreditsNudgeEmailParams{
+		CreditType: auth.AddCreditsNudgeCredits,
+	}))
+	if missing.Error == nil || missing.Error.Code != -32600 || missing.Error.Message != "codex account authentication required to notify workspace owner" {
+		t.Fatalf("missing auth response = %+v", missing.Error)
+	}
+
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save api key auth error = %v", err)
+	}
+	apiKey := router.Handle(requestWithParams(t, IntID(2), MethodSendAddCreditsNudgeEmail, auth.SendAddCreditsNudgeEmailParams{
+		CreditType: auth.AddCreditsNudgeUsageLimit,
+	}))
+	if apiKey.Error == nil || apiKey.Error.Code != -32600 || apiKey.Error.Message != "chatgpt authentication required to notify workspace owner" {
+		t.Fatalf("api key auth response = %+v", apiKey.Error)
+	}
+}
+
+func TestRuntimeRouterConsumeRateLimitResetCreditUsesChatGPTBackend(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/rate-limit-reset-credits/consume" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		writeJSON(t, w, map[string]any{"code": "reset", "windows_reset": 2})
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{
+		IdempotencyKey: "request-1",
+	}))
+	if response.Error != nil {
+		t.Fatalf("consume reset credit error = %+v", response.Error)
+	}
+	if response.Result.(*auth.ConsumeRateLimitResetCreditResponse).Outcome != auth.ResetCreditOutcomeReset {
+		t.Fatalf("consume reset credit response = %+v", response.Result)
+	}
+	if requestBody["redeem_request_id"] != "request-1" {
+		t.Fatalf("request body = %#v", requestBody)
+	}
+}
+
+func TestRuntimeRouterConsumeRateLimitResetCreditHydratesPersonalAccessTokenRouting(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAccessToken("at-test-token")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"chatgpt_user_id":            "user-pat",
+			"chatgpt_account_id":         "account-pat",
+			"chatgpt_plan_type":          "team",
+			"chatgpt_account_is_fedramp": true,
+		})
+	}))
+	defer authServer.Close()
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/rate-limit-reset-credits/consume" {
+			t.Fatalf("backend path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer at-test-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-pat" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		if got := r.Header.Get("X-OpenAI-Fedramp"); got != "true" {
+			t.Fatalf("X-OpenAI-Fedramp = %q", got)
+		}
+		writeJSON(t, w, map[string]any{"code": "reset"})
+	}))
+	defer backendServer.Close()
+	t.Setenv(auth.AuthAPIBaseURLEnv, authServer.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backendServer.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Account: auth.NewAccountManager(), Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{
+		IdempotencyKey: "request-1",
+	}))
+	if response.Error != nil {
+		t.Fatalf("consume reset credit response = %+v", response)
+	}
+	if response.Result.(*auth.ConsumeRateLimitResetCreditResponse).Outcome != auth.ResetCreditOutcomeReset {
+		t.Fatalf("consume reset credit response = %+v", response.Result)
+	}
+}
+
+func TestRuntimeRouterConsumeRateLimitResetCreditMapsOutcomes(t *testing.T) {
+	cases := []struct {
+		code    string
+		outcome auth.ConsumeRateLimitResetCreditOutcome
+	}{
+		{code: "reset", outcome: auth.ResetCreditOutcomeReset},
+		{code: "nothing_to_reset", outcome: auth.ResetCreditOutcomeNothingToReset},
+		{code: "no_credit", outcome: auth.ResetCreditOutcomeNoCredit},
+		{code: "already_redeemed", outcome: auth.ResetCreditOutcomeAlreadyRedeemed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			home := t.TempDir()
+			if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", nil)); err != nil {
+				t.Fatalf("Save auth error = %v", err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(t, w, map[string]any{"code": tc.code, "windows_reset": 0})
+			}))
+			defer server.Close()
+			if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+				t.Fatalf("Write config error = %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+
+			response := router.Handle(requestWithParams(t, IntID(1), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{
+				IdempotencyKey: "request-1",
+			}))
+			if response.Error != nil {
+				t.Fatalf("consume reset credit error = %+v", response.Error)
+			}
+			if response.Result.(*auth.ConsumeRateLimitResetCreditResponse).Outcome != tc.outcome {
+				t.Fatalf("consume reset credit response = %+v", response.Result)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterConsumeRateLimitResetCreditRequiresChatGPTAuth(t *testing.T) {
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	empty := router.Handle(requestWithParams(t, IntID(1), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{}))
+	if empty.Error == nil || empty.Error.Code != -32600 || empty.Error.Message != "idempotencyKey must not be empty" {
+		t.Fatalf("empty key response = %+v", empty.Error)
+	}
+	missing := router.Handle(requestWithParams(t, IntID(2), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{
+		IdempotencyKey: "request-1",
+	}))
+	if missing.Error == nil || missing.Error.Code != -32600 || missing.Error.Message != "codex account authentication required for rate limit reset credits" {
+		t.Fatalf("missing auth response = %+v", missing.Error)
+	}
+
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save api key auth error = %v", err)
+	}
+	apiKey := router.Handle(requestWithParams(t, IntID(3), MethodConsumeAccountRateLimitResetCredit, auth.ConsumeRateLimitResetCreditParams{
+		IdempotencyKey: "request-2",
+	}))
+	if apiKey.Error == nil || apiKey.Error.Code != -32600 || apiKey.Error.Message != "chatgpt authentication required for rate limit reset credits" {
+		t.Fatalf("api key auth response = %+v", apiKey.Error)
+	}
+}
+
+func TestRuntimeRouterAccountBackendReadsRequireChatGPTAuth(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	cases := []struct {
+		method   Method
+		resource string
+		result   func(*Response) bool
+	}{
+		{
+			method:   MethodGetAccountRateLimits,
+			resource: "rate limits",
+			result: func(response *Response) bool {
+				_, ok := response.Result.(*auth.GetAccountRateLimitsResponse)
+				return ok
+			},
+		},
+		{
+			method:   MethodGetAccountTokenUsage,
+			resource: "token usage",
+			result: func(response *Response) bool {
+				_, ok := response.Result.(*auth.GetAccountTokenUsageResponse)
+				return ok
+			},
+		},
+		{
+			method:   MethodGetWorkspaceMessages,
+			resource: "workspace messages",
+			result: func(response *Response) bool {
+				_, ok := response.Result.(*auth.GetWorkspaceMessagesResponse)
+				return ok
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.method)+" without auth", func(t *testing.T) {
+			home := t.TempDir()
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			response := router.Handle(requestWithParams(t, IntID(1), tc.method, map[string]any{}))
+			expected := "codex account authentication required to read " + tc.resource
+			if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != expected {
+				t.Fatalf("response = %+v, want %q", response, expected)
+			}
+		})
+
+		t.Run(string(tc.method)+" with api key", func(t *testing.T) {
+			home := t.TempDir()
+			if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+				t.Fatalf("auth save error: %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			response := router.Handle(requestWithParams(t, IntID(1), tc.method, map[string]any{}))
+			expected := "chatgpt authentication required to read " + tc.resource
+			if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != expected {
+				t.Fatalf("response = %+v, want %q", response, expected)
+			}
+		})
+
+		t.Run(string(tc.method)+" with chatgpt tokens", func(t *testing.T) {
+			home := t.TempDir()
+			plan := "pro"
+			if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens(
+				"chatgpt-token",
+				"account-1",
+				&plan,
+			)); err != nil {
+				t.Fatalf("auth save error: %v", err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+					t.Fatalf("Authorization = %q", got)
+				}
+				if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-1" {
+					t.Fatalf("ChatGPT-Account-ID = %q", got)
+				}
+				switch r.URL.Path {
+				case "/api/codex/usage":
+					writeJSON(t, w, map[string]any{
+						"plan_type": "pro",
+						"rate_limit": map[string]any{
+							"primary_window": map[string]any{
+								"used_percent":         42.5,
+								"limit_window_seconds": 3600,
+								"reset_at":             1735693200,
+							},
+						},
+						"rate_limit_reset_credits": map[string]any{"available_count": 3},
+					})
+				case "/api/codex/profiles/me":
+					writeJSON(t, w, map[string]any{
+						"stats": map[string]any{
+							"lifetime_tokens":          123,
+							"peak_daily_tokens":        45,
+							"longest_running_turn_sec": 67,
+							"current_streak_days":      8,
+							"longest_streak_days":      9,
+							"daily_usage_buckets": []map[string]any{{
+								"start_date": "2026-05-29",
+								"tokens":     10,
+							}},
+						},
+					})
+				case "/api/codex/workspace-messages":
+					writeJSON(t, w, map[string]any{
+						"messages": []map[string]any{{
+							"message_id":   "headline-id",
+							"message_type": "headline",
+							"message_body": "Headline body",
+							"created_at":   "2026-06-14T00:00:00Z",
+							"archived_at":  "2026-06-15T00:00:00Z",
+						}},
+					})
+				default:
+					t.Fatalf("path = %q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+				t.Fatalf("Write config error = %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			response := router.Handle(requestWithParams(t, IntID(1), tc.method, map[string]any{}))
+			if response.Error != nil || !tc.result(response) {
+				t.Fatalf("response = %+v", response)
+			}
+			if tc.method == MethodGetAccountRateLimits {
+				limits := response.Result.(*auth.GetAccountRateLimitsResponse)
+				if limits.RateLimits.Primary == nil || limits.RateLimits.Primary.UsedPercent != 43 || limits.RateLimitResetCredits.AvailableCount != 3 {
+					t.Fatalf("rate limits = %+v", limits)
+				}
+				data, err := json.Marshal(limits)
+				if err != nil {
+					t.Fatalf("Marshal rate limits error: %v", err)
+				}
+				if !strings.Contains(string(data), `"usedPercent":43`) || strings.Contains(string(data), `"usedPercent":42.5`) {
+					t.Fatalf("rate limits JSON = %s", data)
+				}
+			}
+			if tc.method == MethodGetAccountTokenUsage {
+				usage := response.Result.(*auth.GetAccountTokenUsageResponse)
+				if usage.Summary.LifetimeTokens == nil || *usage.Summary.LifetimeTokens != 123 || len(usage.DailyUsageBuckets) != 1 || usage.DailyUsageBuckets[0].Tokens != 10 {
+					t.Fatalf("usage = %+v", usage)
+				}
+			}
+			if tc.method == MethodGetWorkspaceMessages {
+				messages := response.Result.(*auth.GetWorkspaceMessagesResponse)
+				if !messages.FeatureEnabled || len(messages.Messages) != 1 || messages.Messages[0].CreatedAt == nil || *messages.Messages[0].CreatedAt != 1781395200 {
+					t.Fatalf("messages = %+v", messages)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterGetAccountRateLimitsReturnsSnapshotLikeRust(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	plan := "pro"
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", &plan)); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	const primaryReset = int64(1735689720)
+	const secondaryReset = int64(1735693200)
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/codex/usage" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		writeJSON(t, w, map[string]any{
+			"plan_type": "pro",
+			"rate_limit": map[string]any{
+				"allowed":       true,
+				"limit_reached": false,
+				"primary_window": map[string]any{
+					"used_percent":         42,
+					"limit_window_seconds": 3600,
+					"reset_after_seconds":  120,
+					"reset_at":             primaryReset,
+				},
+				"secondary_window": map[string]any{
+					"used_percent":         5,
+					"limit_window_seconds": 86400,
+					"reset_after_seconds":  43200,
+					"reset_at":             secondaryReset,
+				},
+			},
+			"rate_limit_reached_type": map[string]any{
+				"type": "workspace_member_usage_limit_reached",
+			},
+			"spend_control": map[string]any{
+				"reached": false,
+				"individual_limit": map[string]any{
+					"source":              "workspace_spend_controls",
+					"limit":               "25000",
+					"used":                "8000",
+					"remaining":           "17000",
+					"used_percent":        32,
+					"remaining_percent":   68,
+					"reset_after_seconds": 43200,
+					"reset_at":            secondaryReset,
+				},
+			},
+			"additional_rate_limits": []map[string]any{
+				{
+					"limit_name":      "codex_other",
+					"metered_feature": "codex_other",
+					"rate_limit": map[string]any{
+						"allowed":       true,
+						"limit_reached": false,
+						"primary_window": map[string]any{
+							"used_percent":         88,
+							"limit_window_seconds": 1800,
+							"reset_after_seconds":  600,
+							"reset_at":             1735693200,
+						},
+					},
+				},
+			},
+			"rate_limit_reset_credits": map[string]any{"available_count": 3},
+		})
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccountRateLimits, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("rate limits response = %+v", response)
+	}
+	if requests != 1 {
+		t.Fatalf("usage requests = %d, want 1", requests)
+	}
+	limits := response.Result.(*auth.GetAccountRateLimitsResponse)
+	if limits.RateLimitResetCredits == nil || limits.RateLimitResetCredits.AvailableCount != 3 {
+		t.Fatalf("reset credits = %+v", limits.RateLimitResetCredits)
+	}
+	codex := limits.RateLimits
+	if codex.LimitID == nil || *codex.LimitID != "codex" || codex.LimitName != nil {
+		t.Fatalf("codex identity = %+v", codex)
+	}
+	if codex.Primary == nil || codex.Primary.UsedPercent != 42 || codex.Primary.WindowDurationMins == nil || *codex.Primary.WindowDurationMins != 60 || codex.Primary.ResetsAt == nil || *codex.Primary.ResetsAt != primaryReset {
+		t.Fatalf("primary window = %+v", codex.Primary)
+	}
+	if codex.Secondary == nil || codex.Secondary.UsedPercent != 5 || codex.Secondary.WindowDurationMins == nil || *codex.Secondary.WindowDurationMins != 1440 || codex.Secondary.ResetsAt == nil || *codex.Secondary.ResetsAt != secondaryReset {
+		t.Fatalf("secondary window = %+v", codex.Secondary)
+	}
+	if codex.IndividualLimit == nil || codex.IndividualLimit.Limit != "25000" || codex.IndividualLimit.Used != "8000" || codex.IndividualLimit.RemainingPercent != 68 || codex.IndividualLimit.ResetsAt != secondaryReset {
+		t.Fatalf("individual limit = %+v", codex.IndividualLimit)
+	}
+	if codex.PlanType == nil || *codex.PlanType != auth.PlanPro {
+		t.Fatalf("plan type = %+v", codex.PlanType)
+	}
+	if codex.RateLimitReachedType == nil || *codex.RateLimitReachedType != auth.WorkspaceMemberUsageLimitReached {
+		t.Fatalf("rate limit reached type = %+v", codex.RateLimitReachedType)
+	}
+	if limits.RateLimitsByLimitID == nil || len(limits.RateLimitsByLimitID) != 2 {
+		t.Fatalf("rate limits by id = %+v", limits.RateLimitsByLimitID)
+	}
+	if !reflect.DeepEqual(limits.RateLimitsByLimitID["codex"], codex) {
+		t.Fatalf("codex by id = %+v, want %+v", limits.RateLimitsByLimitID["codex"], codex)
+	}
+	other := limits.RateLimitsByLimitID["codex_other"]
+	if other.LimitID == nil || *other.LimitID != "codex_other" || other.LimitName == nil || *other.LimitName != "codex_other" {
+		t.Fatalf("other identity = %+v", other)
+	}
+	if other.Primary == nil || other.Primary.UsedPercent != 88 || other.Primary.WindowDurationMins == nil || *other.Primary.WindowDurationMins != 30 || other.Primary.ResetsAt == nil || *other.Primary.ResetsAt != 1735693200 {
+		t.Fatalf("other primary = %+v", other.Primary)
+	}
+	if other.Secondary != nil || other.Credits != nil || other.IndividualLimit != nil || other.RateLimitReachedType != nil {
+		t.Fatalf("other optional fields = %+v", other)
+	}
+	if other.PlanType == nil || *other.PlanType != auth.PlanPro {
+		t.Fatalf("other plan type = %+v", other.PlanType)
+	}
+}
+
+func TestRuntimeRouterPersonalAccessTokenBackendReadsHydrateAccountRouting(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAccessToken("at-test-token")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	authRequests := 0
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authRequests++
+		if r.URL.Path != "/v1/user-auth-credential/whoami" {
+			t.Fatalf("auth path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer at-test-token" {
+			t.Fatalf("auth Authorization = %q", got)
+		}
+		writeJSON(t, w, map[string]any{
+			"email":                      "pat@example.com",
+			"chatgpt_user_id":            "user-pat",
+			"chatgpt_account_id":         "account-pat",
+			"chatgpt_plan_type":          "team",
+			"chatgpt_account_is_fedramp": true,
+		})
+	}))
+	defer authServer.Close()
+	backendRequests := 0
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendRequests++
+		if r.URL.Path != "/api/codex/usage" {
+			t.Fatalf("backend path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer at-test-token" {
+			t.Fatalf("backend Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-pat" {
+			t.Fatalf("backend ChatGPT-Account-ID = %q", got)
+		}
+		if got := r.Header.Get("X-OpenAI-Fedramp"); got != "true" {
+			t.Fatalf("backend X-OpenAI-Fedramp = %q", got)
+		}
+		writeJSON(t, w, map[string]any{
+			"plan_type": "team",
+			"rate_limit": map[string]any{
+				"primary_window": map[string]any{
+					"used_percent":         11,
+					"limit_window_seconds": 3600,
+					"reset_at":             1735693200,
+				},
+			},
+		})
+	}))
+	defer backendServer.Close()
+	t.Setenv(auth.AuthAPIBaseURLEnv, authServer.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backendServer.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccountRateLimits, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("rate limits response = %+v", response)
+	}
+	if authRequests != 1 || backendRequests != 1 {
+		t.Fatalf("requests auth=%d backend=%d, want 1/1", authRequests, backendRequests)
+	}
+}
+
+func TestRuntimeRouterAccountBackendClientConstructionErrorIsWrapped(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	keyMaterial, err := agent.GenerateAgentKeyMaterial()
+	if err != nil {
+		t.Fatalf("GenerateAgentKeyMaterial() error = %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.AuthDotJSON{
+		AuthMode: "agent-identity",
+		AgentIdentity: &auth.AgentIdentityAuthRecord{
+			AgentRuntimeID:  "agent-runtime",
+			AgentPrivateKey: keyMaterial.PrivateKeyPKCS8Base64,
+			AccountID:       "account-1",
+			ChatGPTUserID:   "user-1",
+		},
+	}); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccountRateLimits, map[string]any{}))
+	if response.Error == nil || response.Error.Code != -32603 || response.Error.Message != "failed to construct backend client: agent identity auth is missing task id" {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterAccountBackendTimeoutsMatchRust(t *testing.T) {
+	if accountTokenUsageFetchTimeout() != 10*time.Second {
+		t.Fatalf("token usage timeout = %s, want 10s", accountTokenUsageFetchTimeout())
+	}
+	if accountWorkspaceMessagesFetchTimeout() != time.Second {
+		t.Fatalf("workspace messages timeout = %s, want 1s", accountWorkspaceMessagesFetchTimeout())
+	}
+}
+
+func TestRuntimeRouterWorkspaceMessagesNotFoundDisablesFeature(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/workspace-messages" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetWorkspaceMessages, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("workspace messages response = %+v", response)
+	}
+	messages := response.Result.(*auth.GetWorkspaceMessagesResponse)
+	if messages.FeatureEnabled || len(messages.Messages) != 0 {
+		t.Fatalf("messages = %+v, want disabled empty", messages)
+	}
+}
+
+func TestRuntimeRouterExternalChatGPTTokensPersistAndNotify(t *testing.T) {
+	home := t.TempDir()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+	plan := "pro"
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      fakeJWTAppserver(map[string]any{"email": "external@example.com", "plan_type": "plus"}),
+		ChatGPTAccountID: "account-1",
+		ChatGPTPlanType:  &plan,
+	}))
+	if login.Error != nil || login.Result.(*auth.LoginAccountResponse).Type != "chatgptAuthTokens" {
+		t.Fatalf("login = %+v", login)
+	}
+	read := router.Handle(requestWithParams(t, IntID(2), MethodGetAccount, auth.GetAccountParams{RefreshToken: true}))
+	if read.Error != nil {
+		t.Fatalf("account read = %+v", read)
+	}
+	account := read.Result.(*auth.GetAccountResponse).Account
+	if account == nil || account.Email == nil || *account.Email != "external@example.com" || account.PlanType != auth.PlanPro {
+		t.Fatalf("account = %+v", read.Result)
+	}
+	loaded, err := auth.NewStore(home).Load()
+	if err != nil {
+		t.Fatalf("auth load error: %v", err)
+	}
+	if loaded == nil || loaded.Mode() != "chatgptAuthTokens" || loaded.Tokens["account_id"] != "account-1" || loaded.Tokens["plan_type"] != "pro" {
+		t.Fatalf("persisted auth = %+v", loaded)
+	}
+	if !sinkHasMethod(sink, NotificationAccountUpdated) {
+		t.Fatalf("account updated notification missing: %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterExternalChatGPTTokensCancelActiveLogin(t *testing.T) {
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{Type: auth.AccountChatGPT}))
+	if login.Error != nil {
+		t.Fatalf("login = %+v", login)
+	}
+	loginID := login.Result.(*auth.LoginAccountResponse).LoginID
+	plan := "pro"
+	external := router.Handle(requestWithParams(t, IntID(2), MethodLoginAccount, auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      fakeJWTAppserver(map[string]any{"email": "external@example.com", "plan_type": "pro"}),
+		ChatGPTAccountID: "account-1",
+		ChatGPTPlanType:  &plan,
+	}))
+	if external.Error != nil {
+		t.Fatalf("external auth = %+v", external)
+	}
+	cancel := router.Handle(requestWithParams(t, IntID(3), MethodCancelLoginAccount, auth.CancelLoginAccountParams{LoginID: loginID}))
+	if cancel.Error != nil {
+		t.Fatalf("cancel = %+v", cancel)
+	}
+	if cancel.Result.(*auth.CancelLoginAccountResponse).Status != auth.CancelLoginNotFound {
+		t.Fatalf("cancel after external auth = %+v", cancel.Result)
+	}
+}
+
+func TestRuntimeRouterExternalChatGPTTokensRejectsForcedWorkspaceMismatch(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`forced_chatgpt_workspace_id = ["workspace-allowed"]`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      fakeJWTAppserver(map[string]any{"email": "external@example.com"}),
+		ChatGPTAccountID: "workspace-denied",
+	}))
+	if login.Error == nil || !strings.Contains(login.Error.Message, "External auth must use one of workspace(s)") {
+		t.Fatalf("login should reject forced workspace mismatch: %+v", login)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("auth.json should not exist after rejected login: %v", err)
+	}
+}
+
+func TestRuntimeRouterChatGPTLoginIncludesForcedWorkspaceQuery(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "single",
+			body: `forced_chatgpt_workspace_id = "workspace-allowed"`,
+			want: "workspace-allowed",
+		},
+		{
+			name: "allowlist",
+			body: `forced_chatgpt_workspace_id = ["workspace-allowed", "workspace-second"]`,
+			want: "workspace-allowed,workspace-second",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(config.ConfigPath(home), []byte(tc.body+"\n"), 0o600); err != nil {
+				t.Fatalf("WriteFile config returned error: %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			response := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{Type: auth.AccountChatGPT}))
+			if response.Error != nil {
+				t.Fatalf("login response = %+v", response)
+			}
+			login := response.Result.(*auth.LoginAccountResponse)
+			parsed, err := url.Parse(login.AuthURL)
+			if err != nil {
+				t.Fatalf("Parse auth URL %q: %v", login.AuthURL, err)
+			}
+			if got := parsed.Query().Get("allowed_workspace_id"); got != tc.want {
+				t.Fatalf("allowed_workspace_id = %q, want %q; url=%s", got, tc.want, login.AuthURL)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterRejectsLoginAgainstForcedMethod(t *testing.T) {
+	cases := []struct {
+		name    string
+		config  string
+		params  auth.LoginAccountParams
+		message string
+	}{
+		{
+			name:    "api key disabled",
+			config:  `forced_login_method = "chatgpt"`,
+			params:  auth.LoginAccountParams{Type: auth.AccountAPIKey, APIKey: "sk-test"},
+			message: "API key login is disabled. Use ChatGPT login instead.",
+		},
+		{
+			name:    "chatgpt disabled",
+			config:  `forced_login_method = "api"`,
+			params:  auth.LoginAccountParams{Type: auth.AccountChatGPT},
+			message: "ChatGPT login is disabled. Use API key login instead.",
+		},
+		{
+			name:   "external chatgpt disabled",
+			config: `forced_login_method = "api"`,
+			params: auth.LoginAccountParams{
+				Type:             "chatgptAuthTokens",
+				AccessToken:      fakeJWTAppserver(map[string]any{"email": "external@example.com"}),
+				ChatGPTAccountID: "account-1",
+			},
+			message: "External ChatGPT auth is disabled. Use API key login instead.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(config.ConfigPath(home), []byte(tc.config+"\n"), 0o600); err != nil {
+				t.Fatalf("WriteFile config returned error: %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				Account: auth.NewAccountManager(),
+				Config:  config.NewConfigService(home),
+			})
+			response := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, tc.params))
+			if response.Error == nil || response.Error.Message != tc.message {
+				t.Fatalf("login response = %+v, want error %q", response, tc.message)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterRejectsReplacingActiveExternalChatGPTAuth(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	plan := "pro"
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens(
+		fakeJWTAppserver(map[string]any{"email": "external@example.com", "plan_type": "pro"}),
+		"account-1",
+		&plan,
+	)); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+	for _, params := range []auth.LoginAccountParams{
+		{Type: auth.AccountAPIKey, APIKey: "sk-test"},
+		{Type: auth.AccountChatGPT},
+		{Type: "chatgptDeviceCode"},
+	} {
+		response := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, params))
+		if response.Error == nil || response.Error.Message != externalChatGPTAuthActiveMessage {
+			t.Fatalf("login %s response = %+v", params.Type, response)
+		}
+	}
+	update := router.Handle(requestWithParams(t, IntID(2), MethodLoginAccount, auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      fakeJWTAppserver(map[string]any{"email": "new@example.com", "plan_type": "pro"}),
+		ChatGPTAccountID: "account-2",
+		ChatGPTPlanType:  &plan,
+	}))
+	if update.Error != nil {
+		t.Fatalf("external auth update = %+v", update)
+	}
+}
+
+func TestRuntimeRouterEnforcesStoredAuthForcedLoginMethod(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`forced_login_method = "chatgpt"`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
+	if response.Error != nil {
+		t.Fatalf("get auth status = %+v", response)
+	}
+	status := response.Result.(*AuthStatusResponse)
+	if status.Authenticated || status.AuthMethod != nil {
+		t.Fatalf("status = %+v, want logged out", status)
+	}
+	if loaded, err := auth.NewStore(home).Load(); err != nil || loaded != nil {
+		t.Fatalf("auth store after restriction = %+v, err=%v", loaded, err)
+	}
+}
+
+func TestRuntimeRouterEnforcesStoredAuthForcedWorkspace(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`forced_chatgpt_workspace_id = ["workspace-allowed"]`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	snapshot := auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token": fakeJWTAppserver(map[string]any{"chatgpt_account_id": "workspace-denied"}),
+			"account_id":   "workspace-denied",
+		},
+	}
+	if err := auth.NewStore(home).Save(snapshot); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error != nil {
+		t.Fatalf("get account = %+v", response)
+	}
+	account := response.Result.(*auth.GetAccountResponse)
+	if account.Account != nil || !account.RequiresOpenAIAuth {
+		t.Fatalf("account = %+v, want logged out requiring auth", account)
+	}
+	if loaded, err := auth.NewStore(home).Load(); err != nil || loaded != nil {
+		t.Fatalf("auth store after restriction = %+v, err=%v", loaded, err)
+	}
+}
+
+func TestRuntimeRouterForcedLoginMethodRejectsEnvAuth(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`forced_login_method = "chatgpt"`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	t.Setenv(auth.OpenAIAPIKeyEnv, "sk-env")
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
+	if response.Error == nil || !strings.Contains(response.Error.Message, "ChatGPT login is required, but an API key is currently being used") {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterGetAuthStatusReadsAuthStore(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-status")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	withoutToken := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
+	if withoutToken.Error != nil {
+		t.Fatalf("get auth status = %+v", withoutToken)
+	}
+	status := withoutToken.Result.(*AuthStatusResponse)
+	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModeAPIKey) || status.Mode != string(AuthModeAPIKey) {
+		t.Fatalf("status = %+v", status)
+	}
+	if status.AuthToken != nil {
+		t.Fatalf("auth token leaked without includeToken: %+v", status)
+	}
+	if status.RequiresOpenAIAuth == nil || !*status.RequiresOpenAIAuth {
+		t.Fatalf("requires openai auth = %+v", status.RequiresOpenAIAuth)
+	}
+
+	includeToken := true
+	withToken := router.Handle(requestWithParams(t, IntID(2), MethodGetAuthStatus, AuthStatusParams{IncludeToken: &includeToken}))
+	if withToken.Error != nil {
+		t.Fatalf("get auth status include token = %+v", withToken)
+	}
+	tokenStatus := withToken.Result.(*AuthStatusResponse)
+	if tokenStatus.AuthToken == nil || *tokenStatus.AuthToken != "sk-status" {
+		t.Fatalf("token status = %+v", tokenStatus)
+	}
+}
+
+func TestDefaultRuntimeRouterReadsConfiguredKeyringAuthStore(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`cli_auth_credentials_store = "keyring"`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("keyring", false))
+	if err := store.Save(auth.FromAPIKey("sk-keyring")); err != nil {
+		t.Fatalf("Save keyring auth error: %v", err)
+	}
+	router := NewDefaultRuntimeRouter(session.NewStore(filepath.Join(home, "sessions")), home)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
+	if response.Error != nil {
+		t.Fatalf("get auth status = %+v", response)
+	}
+	status := response.Result.(*AuthStatusResponse)
+	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModeAPIKey) {
+		t.Fatalf("status = %+v", status)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("auth.json should not exist for keyring auth: %v", err)
+	}
+}
+
+func TestRuntimeRouterGetAuthStatusReadsExternalChatGPTTokens(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	plan := "pro"
+	snapshot := auth.FromChatGPTAuthTokens(
+		fakeJWTAppserver(map[string]any{"email": "external@example.com", "chatgpt_account_id": "account-jwt", "plan_type": "pro"}),
+		"account-explicit",
+		&plan,
+	)
+	if err := auth.NewStore(home).Save(snapshot); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	includeToken := true
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{IncludeToken: &includeToken}))
+	if response.Error != nil {
+		t.Fatalf("get auth status = %+v", response)
+	}
+	status := response.Result.(*AuthStatusResponse)
+	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModeChatGPTAuthTokens) {
+		t.Fatalf("status = %+v", status)
+	}
+	if status.AuthToken == nil || !strings.Contains(*status.AuthToken, ".") {
+		t.Fatalf("auth token = %+v", status.AuthToken)
+	}
+	if status.AccountID != "account-explicit" {
+		t.Fatalf("account id = %q, want account-explicit", status.AccountID)
+	}
+}
+
+func TestRuntimeRouterPersonalAccessTokenAuthStatusAndAccountRead(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/v1/user-auth-credential/whoami" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer at-test-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"email":                      nil,
+			"chatgpt_user_id":            "user-123",
+			"chatgpt_account_id":         "account-123",
+			"chatgpt_plan_type":          "pro",
+			"chatgpt_account_is_fedramp": false,
+		}); err != nil {
+			t.Fatalf("Encode() error = %v", err)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(auth.CodexAccessTokenEnv, "at-test-token")
+	t.Setenv(auth.AuthAPIBaseURLEnv, server.URL)
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+	includeToken := true
+
+	statusResponse := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{IncludeToken: &includeToken}))
+	if statusResponse.Error != nil {
+		t.Fatalf("get auth status = %+v", statusResponse)
+	}
+	status := statusResponse.Result.(*AuthStatusResponse)
+	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModePersonalAccessToken) || status.AuthToken != nil {
+		t.Fatalf("status = %+v", status)
+	}
+
+	accountResponse := router.Handle(requestWithParams(t, IntID(2), MethodGetAccount, auth.GetAccountParams{}))
+	if accountResponse.Error != nil {
+		t.Fatalf("get account = %+v", accountResponse)
+	}
+	account := accountResponse.Result.(*auth.GetAccountResponse)
+	if account.Account == nil || account.Account.Type != auth.AccountChatGPT || account.Account.Email != nil || account.Account.PlanType != auth.PlanPro || !account.RequiresOpenAIAuth {
+		t.Fatalf("account = %+v", account)
+	}
+	if requests != 1 {
+		t.Fatalf("whoami requests = %d, want 1", requests)
+	}
+}
+
+func TestRuntimeRouterGetAuthStatusUsesProviderRequirement(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-local")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"lmstudio\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
+	if response.Error != nil {
+		t.Fatalf("get auth status = %+v", response)
+	}
+	status := response.Result.(*AuthStatusResponse)
+	if status.RequiresOpenAIAuth == nil || *status.RequiresOpenAIAuth {
+		t.Fatalf("requires openai auth = %+v, want false", status.RequiresOpenAIAuth)
+	}
+}
+
+func TestRuntimeRouterGetAccountWithAmazonBedrockProvider(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"amazon-bedrock\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error != nil {
+		t.Fatalf("get account = %+v", response)
+	}
+	account := response.Result.(*auth.GetAccountResponse)
+	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || account.Account.UsesCodexManagedCredentials {
+		t.Fatalf("account = %+v", account)
+	}
+}
+
+func TestRuntimeRouterGetAccountWithManagedBedrockAPIKey(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"amazon-bedrock\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromBedrockAPIKey("managed-bedrock-api-key", "us-west-2")); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error != nil {
+		t.Fatalf("get account = %+v", response)
+	}
+	account := response.Result.(*auth.GetAccountResponse)
+	if account.RequiresOpenAIAuth || account.Account == nil || account.Account.Type != auth.AccountAmazonBedrock || !account.Account.UsesCodexManagedCredentials {
+		t.Fatalf("account = %+v", account)
+	}
+}
+
+func TestRuntimeRouterAuthStatusAndAccountOmitChatGPTAfterPermanentRefreshFailure(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	snapshot := auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"id_token":      fakeJWTAppserver(map[string]any{"chatgpt_account_id": "account-1"}),
+			"access_token":  "stale-access-token",
+			"refresh_token": "stale-refresh-token",
+			"account_id":    "account-1",
+			"email":         "user@example.com",
+			"plan_type":     "pro",
+		},
+	}
+	if err := auth.NewStore(home).Save(snapshot); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"code": "refresh_token_reused"},
+		}); err != nil {
+			t.Fatalf("Encode() error = %v", err)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, server.URL)
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	includeToken := true
+	refreshToken := true
+
+	statusResponse := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{
+		IncludeToken: &includeToken,
+		RefreshToken: &refreshToken,
+	}))
+	if statusResponse.Error != nil {
+		t.Fatalf("get auth status = %+v", statusResponse)
+	}
+	status := statusResponse.Result.(*AuthStatusResponse)
+	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModeChatGPT) {
+		t.Fatalf("status = %+v", status)
+	}
+	if status.AuthToken != nil {
+		t.Fatalf("auth token after permanent failure = %+v, want nil", status.AuthToken)
+	}
+
+	accountResponse := router.Handle(requestWithParams(t, IntID(2), MethodGetAccount, auth.GetAccountParams{}))
+	if accountResponse.Error != nil {
+		t.Fatalf("get account = %+v", accountResponse)
+	}
+	account := accountResponse.Result.(*auth.GetAccountResponse)
+	if account.Account != nil || !account.RequiresOpenAIAuth {
+		t.Fatalf("account after permanent failure = %+v", account)
+	}
+	if requests != 1 {
+		t.Fatalf("refresh endpoint requests = %d, want 1", requests)
+	}
+}
+
+func TestRuntimeRouterExternalAuthRefreshBridgeUpdatesAccount(t *testing.T) {
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	plan := "pro"
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestChatGPTAuthTokensRefresh {
+			t.Errorf("server request method = %s", request.Method)
+		}
+		params, ok := request.Params.(*auth.ChatGPTAuthTokensRefreshParams)
+		if !ok || params.PreviousAccountID == nil || *params.PreviousAccountID != "account-old" || params.Reason != auth.RefreshUnauthorized {
+			t.Errorf("server request params = %#v", request.Params)
+		}
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, auth.ChatGPTAuthTokensRefreshResponse{
+				AccessToken:      fakeJWTAppserver(map[string]any{"email": "refresh@example.com", "plan_type": "pro"}),
+				ChatGPTAccountID: "account-new",
+				ChatGPTPlanType:  &plan,
+			}))
+		}()
+	}))
+	beforeRevision, err := router.authRevisionSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("auth revision before refresh error: %v", err)
+	}
+	response, err := router.externalAuthRefresh(context.Background(), &model.ExternalAuthRefreshRequest{
+		Reason:            model.ExternalAuthRefreshUnauthorized,
+		PreviousAccountID: "account-old",
+	})
+	if err != nil {
+		t.Fatalf("externalAuthRefresh() error = %v", err)
+	}
+	if response.AccessToken == "" || response.ChatGPTAccountID != "account-new" {
+		t.Fatalf("response = %+v", response)
+	}
+	read := router.services.Account.GetAccount(&auth.GetAccountParams{})
+	if read.Account == nil || read.Account.Email == nil || *read.Account.Email != "refresh@example.com" || read.Account.PlanType != auth.PlanPro {
+		t.Fatalf("account = %+v", read)
+	}
+	loaded, err := auth.NewStore(home).Load()
+	if err != nil {
+		t.Fatalf("auth load error: %v", err)
+	}
+	if loaded == nil || loaded.Mode() != "chatgptAuthTokens" || loaded.Tokens["account_id"] != "account-new" {
+		t.Fatalf("loaded auth = %+v", loaded)
+	}
+	afterRevision, err := router.authRevisionSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("auth revision after refresh error: %v", err)
+	}
+	if afterRevision != beforeRevision+1 {
+		t.Fatalf("auth revision = %d, want %d", afterRevision, beforeRevision+1)
+	}
+	if !sinkHasMethod(sink, NotificationAccountUpdated) {
+		t.Fatalf("account updated notification missing: %+v", sink.List())
+	}
+}
+
+func TestRemoteControlAuthRecoveryLogObserverEmitsRustMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+
+	changed := true
+	remoteControlAuthRecoveryLogObserver(remotecontrol.RemoteControlAuthRecoveryEvent{
+		Mode:              "managed",
+		Step:              "reload",
+		UnavailableReason: "ready",
+		AuthStateChanged:  &changed,
+	})
+	output := buf.String()
+	for _, want := range []string{
+		`msg="remote control unauthorized recovery step"`,
+		"mode=managed",
+		"step=reload",
+		"unavailable_reason=ready",
+		"auth_state_changed=true",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("success log missing %q in %q", want, output)
+		}
+	}
+
+	buf.Reset()
+	remoteControlAuthRecoveryLogObserver(remotecontrol.RemoteControlAuthRecoveryEvent{
+		Mode:              "external",
+		Step:              "external_refresh",
+		UnavailableReason: "ready",
+		Err:               errors.New("boom"),
+	})
+	output = buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		`msg="remote control unauthorized recovery failed"`,
+		"mode=external",
+		"step=external_refresh",
+		"error=boom",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("failure log missing %q in %q", want, output)
+		}
+	}
+}
+
+func TestRuntimeRouterRemoteControlAuthRecoveryUsesExternalRefreshBridge(t *testing.T) {
+	home := t.TempDir()
+	oldSnapshot := auth.FromChatGPTAuthTokens("old-token", "account-old", nil)
+	if err := auth.NewStore(home).Save(oldSnapshot); err != nil {
+		t.Fatalf("save auth: %v", err)
+	}
+
+	var authorizations []string
+	var accountIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/wham/remote/control/server/enroll" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		accountIDs = append(accountIDs, r.Header.Get(remotecontrol.RemoteControlAccountIDHeader))
+		if len(authorizations) == 1 {
+			http.Error(w, `{"error":"expired"}`, http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(remotecontrol.EnrollRemoteServerResponse{
+			ServerID:           "srv_e_recovered",
+			EnvironmentID:      "env_recovered",
+			RemoteControlToken: "server-token",
+			ExpiresAt:          time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		})
+	}))
+	defer server.Close()
+
+	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(filepath.Join(home, "sessions")), home, &RuntimeRouterOptions{
+		RemoteControlBackendEnabled: true,
+		RemoteControlURL:            server.URL + "/backend-api",
+		RemoteControlServerAPIOptions: &remotecontrol.ServerAPIOptions{
+			HTTPClient: server.Client(),
+		},
+	})
+	defer router.Close()
+
+	refreshRequests := make(chan *ServerRequest, 1)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		refreshRequests <- request
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, auth.ChatGPTAuthTokensRefreshResponse{
+				AccessToken:      "new-token",
+				ChatGPTAccountID: "account-old",
+			}))
+		}()
+	}))
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodRemoteControlEnable, remotecontrol.EnableParams{}))
+	if response.Error != nil {
+		t.Fatalf("remote control enable error: %+v", response.Error)
+	}
+	result := response.Result.(*remotecontrol.EnableResponse)
+	if result.Status != remotecontrol.StatusConnecting || result.EnvironmentID == nil || *result.EnvironmentID != "env_recovered" {
+		t.Fatalf("remote control enable result = %+v", result)
+	}
+	select {
+	case request := <-refreshRequests:
+		if request.Method != ServerRequestChatGPTAuthTokensRefresh {
+			t.Fatalf("server request method = %s", request.Method)
+		}
+		params, ok := request.Params.(*auth.ChatGPTAuthTokensRefreshParams)
+		if !ok || params.Reason != auth.RefreshUnauthorized || params.PreviousAccountID == nil || *params.PreviousAccountID != "account-old" {
+			t.Fatalf("server request params = %#v", request.Params)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for external auth refresh server request")
+	}
+	if strings.Join(authorizations, ",") != "Bearer old-token,Bearer new-token" {
+		t.Fatalf("authorizations = %#v", authorizations)
+	}
+	if strings.Join(accountIDs, ",") != "account-old,account-old" {
+		t.Fatalf("account ids = %#v", accountIDs)
+	}
+	loaded, err := auth.NewStore(home).Load()
+	if err != nil {
+		t.Fatalf("load auth: %v", err)
+	}
+	if loaded == nil || loaded.Mode() != "chatgptAuthTokens" || loaded.Tokens["access_token"] != "new-token" || loaded.Tokens["account_id"] != "account-old" {
+		t.Fatalf("loaded auth after recovery = %+v", loaded)
+	}
+}
+
+func TestRuntimeRouterRequestCurrentTimeBridge(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.subscribeThreadConnection("thread-time", "conn-time")
+	sink := &currentTimeTargetSink{
+		router:   router,
+		requests: make(chan targetedCurrentTimeRequest, 1),
+	}
+	router.SetServerRequestSink(sink)
+	current, err := router.requestCurrentTime(context.Background(), "thread-time")
+	if err != nil {
+		t.Fatalf("requestCurrentTime() error = %v", err)
+	}
+	if current.Unix() != 1781717655 || current.Location() != time.UTC {
+		t.Fatalf("current time = %s", current)
+	}
+	sent := <-sink.requests
+	if sent.connectionID != "conn-time" {
+		t.Fatalf("target connection = %q", sent.connectionID)
+	}
+	if sent.request.Method != ServerRequestCurrentTimeRead {
+		t.Fatalf("server request method = %s", sent.request.Method)
+	}
+	params, ok := sent.request.Params.(*CurrentTimeReadParams)
+	if !ok || params.ThreadID != "thread-time" {
+		t.Fatalf("server request params = %#v", sent.request.Params)
+	}
+	if _, err := router.requestCurrentTime(context.Background(), ""); err == nil {
+		t.Fatal("empty threadID requestCurrentTime() error = nil")
+	}
+}
+
+func TestRuntimeRouterRequestCurrentTimeRequiresSingleSubscriber(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.subscribeThreadConnection("thread-time", "conn-a")
+	router.subscribeThreadConnection("thread-time", "conn-b")
+
+	_, err := router.requestCurrentTime(context.Background(), "thread-time")
+	if err == nil || err.Error() != "expected exactly one client subscribed to the thread, found 2" {
+		t.Fatalf("requestCurrentTime() error = %v", err)
+	}
+}
+
+func TestRuntimeRouterRequestCurrentTimeWaitsForSubscriber(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	_, err := router.requestCurrentTime(ctx, "thread-time")
+	if err == nil || err.Error() != "timed out waiting for a client to subscribe to the thread after 10s" {
+		t.Fatalf("requestCurrentTime() error = %v", err)
+	}
+}
+
+type targetedCurrentTimeRequest struct {
+	connectionID string
+	request      *ServerRequest
+}
+
+type currentTimeTargetSink struct {
+	router   *RuntimeRouter
+	requests chan targetedCurrentTimeRequest
+}
+
+func (s *currentTimeTargetSink) SendServerRequest(request *ServerRequest) {
+	s.send("", request)
+}
+
+func (s *currentTimeTargetSink) SendServerRequestToConnection(connectionID string, request *ServerRequest) {
+	s.send(connectionID, request)
+}
+
+func (s *currentTimeTargetSink) send(connectionID string, request *ServerRequest) {
+	s.requests <- targetedCurrentTimeRequest{connectionID: connectionID, request: request}
+	go func() {
+		_, _ = s.router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
+	}()
+}
+
+type currentTimeSequenceSink struct {
+	mu     sync.Mutex
+	router *RuntimeRouter
+	values []int64
+}
+
+func (s *currentTimeSequenceSink) SendServerRequest(request *ServerRequest) {
+	s.send(request)
+}
+
+func (s *currentTimeSequenceSink) SendServerRequestToConnection(_ string, request *ServerRequest) {
+	s.send(request)
+}
+
+func (s *currentTimeSequenceSink) send(request *ServerRequest) {
+	if request.Method != ServerRequestCurrentTimeRead {
+		return
+	}
+	value := int64(1781717655)
+	s.mu.Lock()
+	if len(s.values) > 0 {
+		value = s.values[0]
+		s.values = s.values[1:]
+	}
+	s.mu.Unlock()
+	go func() {
+		_, _ = s.router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: value}))
+	}()
+}
+
+func TestRuntimeRouterConfigProfileService(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-main\"\n"), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+	if err := os.WriteFile(config.ProfileConfigPath(home, "work"), []byte("model = \"gpt-work\"\n"), 0o600); err != nil {
+		t.Fatalf("write profile config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewProfileConfigService(home, "work"),
+	})
+
+	read := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}))
+	if read.Error != nil {
+		t.Fatalf("config read error: %+v", read.Error)
+	}
+	readResult := read.Result.(*config.ConfigReadResponse)
+	if readResult.Config["model"] != "gpt-work" {
+		t.Fatalf("profile config read = %+v", readResult.Config)
+	}
+	if len(readResult.Layers) != 1 || readResult.Layers[0].Name.Profile == nil || *readResult.Layers[0].Name.Profile != "work" {
+		t.Fatalf("profile layer metadata = %+v", readResult.Layers)
+	}
+
+	write := router.Handle(requestWithParams(t, IntID(2), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "model",
+		Value:         "gpt-updated",
+		MergeStrategy: config.MergeReplace,
+	}))
+	if write.Error != nil {
+		t.Fatalf("config write error: %+v", write.Error)
+	}
+	if write.Result.(*config.ConfigWriteResponse).FilePath != config.ProfileConfigPath(home, "work") {
+		t.Fatalf("write response = %+v", write.Result)
+	}
+	mainData, err := os.ReadFile(config.ConfigPath(home))
+	if err != nil {
+		t.Fatalf("read main config: %v", err)
+	}
+	if string(mainData) != "model = \"gpt-main\"\n" {
+		t.Fatalf("main config changed: %q", string(mainData))
+	}
+}
+
+func TestRuntimeRouterConfigRejectsLegacyProfileWrite(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(t.TempDir()),
+	})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "profiles.work.model",
+		Value:         "gpt-5",
+		MergeStrategy: config.MergeReplace,
+	}))
+	if response.Error == nil || response.Error.Code != -32602 {
+		t.Fatalf("expected invalid request error, got %+v", response.Error)
+	}
+	if response.Error == nil || !strings.Contains(response.Error.Message, "legacy config profile tables") {
+		t.Fatalf("unexpected error = %+v", response.Error)
+	}
+	if got := response.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteValidation) {
+		t.Fatalf("error data = %+v, want config_write_error_code=%s", response.Error.Data, config.ConfigWriteValidation)
+	}
+}
+
+func TestRuntimeRouterConfigWriteErrorDataMatchesRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-old\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(home),
+	})
+
+	staleVersion := "sha256:stale"
+	conflict := router.Handle(requestWithParams(t, IntID(1), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:         "model",
+		Value:           "gpt-new",
+		MergeStrategy:   config.MergeReplace,
+		ExpectedVersion: &staleVersion,
+	}))
+	if conflict.Error == nil || conflict.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("version conflict error = %+v", conflict.Error)
+	}
+	if got := conflict.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteVersionConflict) {
+		t.Fatalf("version conflict data = %+v, want %s", conflict.Error.Data, config.ConfigWriteVersionConflict)
+	}
+
+	otherPath := filepath.Join(t.TempDir(), "config.toml")
+	readOnly := router.Handle(requestWithParams(t, IntID(2), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "model",
+		Value:         "gpt-new",
+		MergeStrategy: config.MergeReplace,
+		FilePath:      &otherPath,
+	}))
+	if readOnly.Error == nil || readOnly.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("readonly path error = %+v", readOnly.Error)
+	}
+	if got := readOnly.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteLayerReadonly) {
+		t.Fatalf("readonly path data = %+v, want %s", readOnly.Error.Data, config.ConfigWriteLayerReadonly)
+	}
+	if _, err := os.Stat(otherPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("readonly path stat error = %v, want not written", err)
+	}
+}
+
+func TestRuntimeRouterConfigWriteSuccessPathsMatchRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-old\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	read := router.Handle(requestWithParams(t, IntID(1), MethodConfigRead, config.ConfigReadParams{}))
+	if read.Error != nil {
+		t.Fatalf("config/read before write error: %+v", read.Error)
+	}
+	version := read.Result.(*config.ConfigReadResponse).Origins["model"].Version
+	write := router.Handle(requestWithParams(t, IntID(2), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:         "model",
+		Value:           "gpt-new",
+		MergeStrategy:   config.MergeReplace,
+		ExpectedVersion: &version,
+	}))
+	if write.Error != nil {
+		t.Fatalf("config/value/write error: %+v", write.Error)
+	}
+	writeResult := write.Result.(*config.ConfigWriteResponse)
+	if writeResult.Status != config.WriteOK || writeResult.FilePath != config.ConfigPath(home) || writeResult.OverriddenMetadata != nil {
+		t.Fatalf("write result = %+v, want Rust ok result", writeResult)
+	}
+	verify := router.Handle(requestWithParams(t, IntID(3), MethodConfigRead, config.ConfigReadParams{}))
+	if verify.Error != nil || verify.Result.(*config.ConfigReadResponse).Config["model"] != "gpt-new" {
+		t.Fatalf("config/read after write = %+v", verify)
+	}
+
+	desktopHome := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(desktopHome), []byte(""), 0o600); err != nil {
+		t.Fatalf("write empty desktop config: %v", err)
+	}
+	desktopRouter := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(desktopHome)})
+	desktopWrite := desktopRouter.Handle(requestWithParams(t, IntID(4), MethodConfigValueWrite, config.ConfigValueWriteParams{
+		KeyPath:       "desktop.appearanceTheme",
+		Value:         "dark",
+		MergeStrategy: config.MergeReplace,
+	}))
+	if desktopWrite.Error != nil || desktopWrite.Result.(*config.ConfigWriteResponse).Status != config.WriteOK {
+		t.Fatalf("desktop config/value/write = %+v", desktopWrite)
+	}
+	desktopRead := desktopRouter.Handle(requestWithParams(t, IntID(5), MethodConfigRead, config.ConfigReadParams{}))
+	if desktopRead.Error != nil {
+		t.Fatalf("desktop config/read error: %+v", desktopRead.Error)
+	}
+	desktop := desktopRead.Result.(*config.ConfigReadResponse).Config["desktop"].(map[string]any)
+	if desktop["appearanceTheme"] != "dark" {
+		t.Fatalf("desktop after value write = %#v", desktop)
+	}
+
+	batchHome := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(batchHome), []byte(""), 0o600); err != nil {
+		t.Fatalf("write empty batch config: %v", err)
+	}
+	batchRouter := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(batchHome)})
+	writableRoot := filepath.Join(t.TempDir(), "workspace")
+	batch := batchRouter.Handle(requestWithParams(t, IntID(6), MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+		Edits: []config.ConfigEdit{
+			{KeyPath: "sandbox_mode", Value: "workspace-write", MergeStrategy: config.MergeReplace},
+			{KeyPath: "sandbox_workspace_write", Value: map[string]any{
+				"writable_roots": []any{writableRoot},
+				"network_access": false,
+			}, MergeStrategy: config.MergeReplace},
+		},
+	}))
+	if batch.Error != nil {
+		t.Fatalf("config/batchWrite error: %+v", batch.Error)
+	}
+	batchResult := batch.Result.(*config.ConfigWriteResponse)
+	if batchResult.Status != config.WriteOK || batchResult.FilePath != config.ConfigPath(batchHome) {
+		t.Fatalf("batch result = %+v, want Rust ok result", batchResult)
+	}
+	batchRead := batchRouter.Handle(requestWithParams(t, IntID(7), MethodConfigRead, config.ConfigReadParams{}))
+	if batchRead.Error != nil {
+		t.Fatalf("batch config/read error: %+v", batchRead.Error)
+	}
+	batchConfig := batchRead.Result.(*config.ConfigReadResponse).Config
+	if batchConfig["sandbox_mode"] != "workspace-write" {
+		t.Fatalf("sandbox_mode after batch = %#v", batchConfig["sandbox_mode"])
+	}
+	sandboxConfig := batchConfig["sandbox_workspace_write"].(map[string]any)
+	roots := sandboxConfig["writable_roots"].([]any)
+	if len(roots) != 1 || roots[0] != writableRoot || sandboxConfig["network_access"] != false {
+		t.Fatalf("sandbox_workspace_write after batch = %#v", sandboxConfig)
+	}
+
+	desktopBatch := desktopRouter.Handle(requestWithParams(t, IntID(8), MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+		Edits: []config.ConfigEdit{
+			{KeyPath: "desktop.selected-avatar-id", Value: "codex", MergeStrategy: config.MergeReplace},
+			{KeyPath: "desktop.workspace", Value: map[string]any{
+				"collapsed": true,
+				"width":     320,
+			}, MergeStrategy: config.MergeReplace},
+		},
+	}))
+	if desktopBatch.Error != nil {
+		t.Fatalf("desktop config/batchWrite error = %+v", desktopBatch.Error)
+	}
+	desktopBatchResult := desktopBatch.Result.(*config.ConfigWriteResponse)
+	if desktopBatchResult.Status != config.WriteOK {
+		t.Fatalf("desktop config/batchWrite result = %+v metadata=%+v, want ok", desktopBatchResult, desktopBatchResult.OverriddenMetadata)
+	}
+	desktopRead = desktopRouter.Handle(requestWithParams(t, IntID(9), MethodConfigRead, config.ConfigReadParams{}))
+	if desktopRead.Error != nil {
+		t.Fatalf("desktop config/read after batch error: %+v", desktopRead.Error)
+	}
+	desktop = desktopRead.Result.(*config.ConfigReadResponse).Config["desktop"].(map[string]any)
+	if desktop["selected-avatar-id"] != "codex" {
+		t.Fatalf("desktop selected-avatar-id after batch = %#v", desktop)
+	}
+	workspace := desktop["workspace"].(map[string]any)
+	if workspace["collapsed"] != true || fmt.Sprint(workspace["width"]) != "320" {
+		t.Fatalf("desktop workspace after batch = %#v", workspace)
+	}
+}
+
+func TestRuntimeRouterConfigBatchWriteRejectsLegacyProfilesAtomicallyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	configPath := config.ConfigPath(home)
+	original := "[profiles.\"team.prod\"]\nmodel = \"gpt-5.3-spark\"\n"
+	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(home),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+		Edits: []config.ConfigEdit{
+			{KeyPath: "model", Value: "gpt-new", MergeStrategy: config.MergeReplace},
+			{KeyPath: "profiles.\"team.prod\".model", Value: "gpt-5.5", MergeStrategy: config.MergeReplace},
+		},
+	}))
+	if response.Error == nil || response.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("batch legacy profiles error = %+v", response.Error)
+	}
+	if got := response.Error.Data["config_write_error_code"]; got != string(config.ConfigWriteValidation) {
+		t.Fatalf("batch legacy profiles data = %+v, want %s", response.Error.Data, config.ConfigWriteValidation)
+	}
+	if !strings.Contains(response.Error.Message, "`profiles`") {
+		t.Fatalf("batch legacy profiles message = %q", response.Error.Message)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config after failed batch: %v", err)
+	}
+	if string(body) != original {
+		t.Fatalf("config changed after failed batch:\n%s", body)
+	}
+}
+
+func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "skill-a")
+	if _, err := NewFSService().CreateDirectory(&CreateDirectoryParams{Path: skillDir}); err != nil {
+		t.Fatalf("CreateDirectory() error = %v", err)
+	}
+	if _, err := NewFSService().WriteFile(&WriteFileParams{
+		Path:       filepath.Join(skillDir, "SKILL.md"),
+		DataBase64: base64.StdEncoding.EncodeToString([]byte("---\nname: skill-a\ndescription: Skill A\n---\n")),
+	}); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.SetMarketplaceMaterializer(plugin.MarketplaceMaterializerFunc(func(source *plugin.ParsedMarketplaceSource, sparsePaths []string, destination string) error {
+		if source != nil && source.Kind == plugin.MarketplaceSourceGit {
+			if err := os.MkdirAll(destination, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(destination, "materialized.txt"), []byte(source.Display()), 0o600)
+		}
+		return nil
+	}))
+	plugins.AddPlugin(plugin.PluginDetail{Summary: plugin.PluginSummary{Name: "sample", MarketplaceName: "local", DisplayName: "Sample"}})
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills:      NewSkillsService([]string{skillsRoot}),
+		Plugins:     plugins,
+		Models:      model.NewModelService(nil),
+		Permissions: sandbox.NewPermissionProfileService(nil),
+		MCP:         mcp.NewMCPService(nil),
+	})
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	skills := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{}))
+	if skills.Error != nil || len(skills.Result.(*SkillsListResponse).Skills) != 1 {
+		t.Fatalf("skills = %+v", skills)
+	}
+	rootsSet := router.Handle(requestWithParams(t, IntID(20), MethodSkillsExtraRootsSet, SkillsExtraRootsSetParams{ExtraRoots: []string{t.TempDir()}}))
+	if rootsSet.Error != nil {
+		t.Fatalf("skills extra roots set = %+v", rootsSet)
+	}
+	if !sinkHasMethod(sink, NotificationSkillsChanged) {
+		t.Fatalf("skills changed notification missing after extra roots set: %+v", sink.List())
+	}
+	notificationCount := len(sink.List())
+	configWrite := router.Handle(requestWithParams(t, IntID(21), MethodSkillsConfigWrite, SkillsConfigWriteParams{Name: "skill-a", Enabled: false}))
+	if configWrite.Error != nil || configWrite.Result.(*SkillsConfigWriteResponse).EffectiveEnabled {
+		t.Fatalf("skills config write = %+v", configWrite)
+	}
+	if len(sink.List()) != notificationCount {
+		t.Fatalf("skills config write emitted immediate notification unlike Rust: %+v", sink.List())
+	}
+	marketplace := router.Handle(requestWithParams(t, IntID(2), MethodMarketplaceAdd, plugin.MarketplaceAddParams{URL: "https://github.com/acme/plugins.git"}))
+	if marketplace.Error != nil || marketplace.Result.(*plugin.MarketplaceAddResponse).Marketplace.Name != "plugins" {
+		t.Fatalf("marketplace = %+v", marketplace)
+	}
+	pluginList := router.Handle(requestWithParams(t, IntID(3), MethodPluginList, plugin.PluginListParams{}))
+	if pluginList.Error != nil || len(pluginList.Result.(*plugin.PluginListResponse).Plugins) != 1 {
+		t.Fatalf("plugin list = %+v", pluginList)
+	}
+	invalidPluginInstall := router.Handle(requestWithParams(t, IntID(30), MethodPluginInstall, plugin.PluginInstallParams{}))
+	if invalidPluginInstall.Error == nil || invalidPluginInstall.Error.Code != -32600 || !strings.Contains(invalidPluginInstall.Error.Message, "plugin id or plugin name is required") {
+		t.Fatalf("invalid plugin install = %+v", invalidPluginInstall)
+	}
+	models := router.Handle(requestWithParams(t, IntID(4), MethodModelList, model.ModelListParams{}))
+	if models.Error != nil || len(models.Result.(*model.ModelListResponse).Models) == 0 {
+		t.Fatalf("models = %+v", models)
+	}
+	badCursor := "bad"
+	invalidModels := router.Handle(requestWithParams(t, IntID(40), MethodModelList, model.ModelListParams{Cursor: &badCursor}))
+	if invalidModels.Error == nil || invalidModels.Error.Code != -32600 || invalidModels.Error.Message != "invalid cursor: bad" {
+		t.Fatalf("invalid models = %+v", invalidModels)
+	}
+	permissions := router.Handle(requestWithParams(t, IntID(5), MethodPermissionProfileList, sandbox.PermissionProfileListParams{}))
+	if permissions.Error != nil || len(permissions.Result.(*sandbox.PermissionProfileListResponse).Data) == 0 {
+		t.Fatalf("permissions = %+v", permissions)
+	}
+	badPermissionCursor := "bad"
+	badPermissions := router.Handle(requestWithParams(t, IntID(50), MethodPermissionProfileList, sandbox.PermissionProfileListParams{Cursor: &badPermissionCursor}))
+	if badPermissions.Error == nil || badPermissions.Error.Code != -32600 {
+		t.Fatalf("permission cursor error = %+v, want invalid_request", badPermissions.Error)
+	}
+	mcpStatus := router.Handle(requestWithParams(t, IntID(6), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{}))
+	if mcpStatus.Error != nil {
+		t.Fatalf("mcp status = %+v", mcpStatus)
+	}
+	invalidMCPStatus := router.Handle(requestWithParams(t, IntID(60), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{Cursor: &badCursor}))
+	if invalidMCPStatus.Error == nil || invalidMCPStatus.Error.Code != -32600 || invalidMCPStatus.Error.Message != "invalid cursor: bad" {
+		t.Fatalf("invalid mcp status = %+v", invalidMCPStatus)
+	}
+	invalidMCPToolCall := router.Handle(requestWithParams(t, IntID(61), MethodMCPServerToolCall, mcp.MCPToolCallParams{ServerName: "custom"}))
+	if invalidMCPToolCall.Error == nil || invalidMCPToolCall.Error.Code != -32600 || invalidMCPToolCall.Error.Message != "server and tool are required" {
+		t.Fatalf("invalid mcp tool call = %+v", invalidMCPToolCall)
+	}
+}
+
+func TestRuntimeRouterSkillsListDefaultsCWDAndIncludesConfiguredPluginSkillsLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repo skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoSkillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: repo skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(repo skill) error = %v", err)
+	}
+	pluginRoot := t.TempDir()
+	pluginSkillDir := filepath.Join(pluginRoot, "skills", "review")
+	if err := os.MkdirAll(pluginSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginSkillDir, SkillFilename), []byte("---\nname: review\ndescription: plugin review\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+	home := t.TempDir()
+	configService := config.NewConfigService(home)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Name: "docs:review", Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig(plugin) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "docs",
+			MarketplaceName: "local",
+			DisplayName:     "Docs",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD: cwd,
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Config: configService,
+		}),
+		Plugins: plugins,
+	})
+
+	result := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{}))
+	if result.Error != nil {
+		t.Fatalf("skills/list error = %+v", result.Error)
+	}
+	response := result.Result.(*SkillsListResponse)
+	if len(response.Data) != 1 || response.Data[0].CWD != cwd {
+		t.Fatalf("response = %#v, want default cwd entry", response)
+	}
+	byName := map[string]SkillsListEntry{}
+	for _, skill := range response.Data[0].Skills {
+		byName[skill.Name] = skill
+	}
+	if byName["repo-skill"].Scope != "repo" {
+		t.Fatalf("repo skill = %#v", byName["repo-skill"])
+	}
+	pluginSkill, ok := byName["docs:review"]
+	if !ok || pluginSkill.Enabled || pluginSkill.Scope != "user" || pluginSkill.PluginID == "" {
+		t.Fatalf("plugin skill = %#v, want retained disabled user-scope plugin skill", pluginSkill)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal(response) error = %v", err)
+	}
+	if strings.Contains(string(payload), "pluginId") || strings.Contains(string(payload), `"scope":"plugin"`) {
+		t.Fatalf("skills/list payload diverges from Rust SkillMetadata: %s", payload)
+	}
+}
+
+func TestRuntimeRouterSkillsListRefreshesRemoteInstalledPluginCacheAfterPluginListLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	pluginRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", "local")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".codex-plugin"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin manifest) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), []byte(`{"name":"linear"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin manifest) error = %v", err)
+	}
+	skillDir := filepath.Join(pluginRoot, "skills", "triage-issues")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: triage-issues\ndescription: Triage Linear issues\n---\n\n# Body\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+
+	var requestMu sync.Mutex
+	requestsByScope := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/ps/plugins/installed" {
+			http.NotFound(w, request)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer chatgpt-token" || request.Header.Get("ChatGPT-Account-ID") != "account-123" {
+			http.Error(w, "missing auth headers", http.StatusUnauthorized)
+			return
+		}
+		if request.URL.Query().Get("includeDownloadUrls") != "true" {
+			http.Error(w, "missing includeDownloadUrls", http.StatusBadRequest)
+			return
+		}
+		scope := request.URL.Query().Get("scope")
+		requestMu.Lock()
+		requestsByScope[scope]++
+		requestMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if scope == "GLOBAL" {
+			_, _ = w.Write([]byte(`{"plugins":[{"id":"plugins~Plugin_linear","name":"linear","enabled":true,"disabled_skill_names":[],"release":{"display_name":"Linear","description":"Track work in Linear"}}],"pagination":{"next_page_token":null}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"plugins":[],"pagination":{"next_page_token":null}}`))
+	}))
+	defer server.Close()
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\n\n[features]\nplugins = true\n", server.URL)), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	account := auth.NewAccountManager()
+	if _, err := account.Login(&auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      "chatgpt-token",
+		ChatGPTAccountID: "account-123",
+	}); err != nil {
+		t.Fatalf("Login(chatgptAuthTokens) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.SetCodexHome(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:  cwd,
+		Config:      config.NewConfigService(home),
+		Account:     account,
+		AccountHTTP: server.Client(),
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Config: config.NewConfigService(home),
+		}),
+		Plugins: plugins,
+	})
+
+	initial := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if initial.Error != nil {
+		t.Fatalf("initial skills/list error = %+v", initial.Error)
+	}
+	if _, ok := skillByName(initial.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+		t.Fatal("remote installed plugin skill was visible before plugin/list refreshed the cache")
+	}
+	listed := router.Handle(requestWithParams(t, IntID(2), MethodPluginList, plugin.PluginListParams{}))
+	if listed.Error != nil {
+		t.Fatalf("plugin/list error = %+v", listed.Error)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var refreshed *SkillsListEntry
+	for time.Now().Before(deadline) {
+		response := router.Handle(requestWithParams(t, IntID(3), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}}))
+		if response.Error != nil {
+			t.Fatalf("refreshed skills/list error = %+v", response.Error)
+		}
+		if skill, ok := skillByName(response.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+			refreshed = skill
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if refreshed == nil {
+		t.Fatal("remote installed plugin skill did not appear after plugin/list cache refresh")
+	}
+	if refreshed.Path != skillPath || !refreshed.Enabled || refreshed.Scope != "user" {
+		t.Fatalf("refreshed remote plugin skill = %#v", refreshed)
+	}
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
+		if requestsByScope[scope] != 1 {
+			t.Fatalf("installed plugin requests = %#v, want one request for %s", requestsByScope, scope)
+		}
+	}
+}
+
+func TestRuntimeRouterPluginListDownloadsVersionedRemoteInstalledPluginBundleLikeRust(t *testing.T) {
+	t.Setenv("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
+	home := t.TempDir()
+	cwd := t.TempDir()
+	staleRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "stale", "local")
+	if err := os.MkdirAll(staleRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stale cache) error = %v", err)
+	}
+	bundle := remotePluginBundleForTest(t, "linear", "triage-issues")
+	var bundleRequests atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/ps/plugins/installed":
+			w.Header().Set("Content-Type", "application/json")
+			if request.URL.Query().Get("scope") == "GLOBAL" {
+				body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_linear","name":"linear","scope":"GLOBAL","enabled":true,"release":{"version":"1.2.3","display_name":"Linear","description":"Track work","bundle_download_url":%q}}],"pagination":{"next_page_token":null}}`, server.URL+"/bundle.tar.gz")
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte(`{"plugins":[],"pagination":{"next_page_token":null}}`))
+		case "/bundle.tar.gz":
+			bundleRequests.Add(1)
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("chatgpt_base_url = %q\n\n[features]\nplugins = true\n", server.URL)), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	account := auth.NewAccountManager()
+	if _, err := account.Login(&auth.LoginAccountParams{Type: "chatgptAuthTokens", AccessToken: "chatgpt-token", ChatGPTAccountID: "account-123"}); err != nil {
+		t.Fatalf("Login(chatgptAuthTokens) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.SetCodexHome(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:  cwd,
+		Config:      config.NewConfigService(home),
+		Account:     account,
+		AccountHTTP: server.Client(),
+		Skills:      NewSkillsService(nil),
+		Plugins:     plugins,
+	})
+	listed := router.Handle(requestWithParams(t, IntID(1), MethodPluginList, plugin.PluginListParams{}))
+	if listed.Error != nil {
+		t.Fatalf("plugin/list error = %+v", listed.Error)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var downloaded *SkillsListEntry
+	for time.Now().Before(deadline) {
+		response := router.Handle(requestWithParams(t, IntID(2), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}}))
+		if response.Error != nil {
+			t.Fatalf("skills/list error = %+v", response.Error)
+		}
+		if skill, ok := skillByName(response.Result.(*SkillsListResponse), "linear:triage-issues"); ok {
+			downloaded = skill
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if downloaded == nil {
+		t.Fatal("downloaded remote plugin skill did not appear")
+	}
+	wantRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", "1.2.3")
+	if downloaded.Path != filepath.Join(wantRoot, "skills", "triage-issues", SkillFilename) {
+		t.Fatalf("downloaded skill path = %q", downloaded.Path)
+	}
+	if bundleRequests.Load() != 1 {
+		t.Fatalf("bundle requests = %d, want 1", bundleRequests.Load())
+	}
+	manifestContents, err := os.ReadFile(filepath.Join(wantRoot, ".codex-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(installed manifest) error = %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestContents, &manifest); err != nil || manifest["version"] != "1.2.3" {
+		t.Fatalf("installed manifest = %s err=%v", manifestContents, err)
+	}
+	metadataContents, err := os.ReadFile(filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", remotePluginInstallMetadataFilename))
+	if err != nil || !strings.Contains(string(metadataContents), "plugins~Plugin_linear") {
+		t.Fatalf("remote install metadata = %s err=%v", metadataContents, err)
+	}
+	if _, err := os.Stat(filepath.Dir(staleRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale remote plugin cache still exists: %v", err)
+	}
+}
+
+func remotePluginBundleForTest(t *testing.T, pluginName string, skillName string) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	gzipWriter := gzip.NewWriter(&output)
+	archive := tar.NewWriter(gzipWriter)
+	files := map[string]string{
+		".codex-plugin/plugin.json":         fmt.Sprintf(`{"name":%q}`, pluginName),
+		"skills/" + skillName + "/SKILL.md": "---\nname: " + skillName + "\ndescription: Remote skill\n---\n\n# Body\n",
+	}
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		contents := []byte(files[path])
+		if err := archive.WriteHeader(&tar.Header{Name: path, Mode: 0o600, Size: int64(len(contents)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("WriteHeader(%s) error = %v", path, err)
+		}
+		if _, err := archive.Write(contents); err != nil {
+			t.Fatalf("Write(%s) error = %v", path, err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("Close(tar) error = %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("Close(gzip) error = %v", err)
+	}
+	return output.Bytes()
+}
+
+func skillByName(response *SkillsListResponse, name string) (*SkillsListEntry, bool) {
+	if response == nil {
+		return nil, false
+	}
+	for dataIndex := range response.Data {
+		for skillIndex := range response.Data[dataIndex].Skills {
+			if response.Data[dataIndex].Skills[skillIndex].Name == name {
+				return &response.Data[dataIndex].Skills[skillIndex], true
+			}
+		}
+	}
+	return nil, false
+}
+
+func TestRuntimeRouterSkillsWatcherClearsCacheAndNotifiesLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: demo\ndescription: initial\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(initial) error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{Roots: []string{root}, WatchInterval: 25 * time.Millisecond})
+	router := NewRuntimeRouter(RuntimeServices{Skills: service})
+	t.Cleanup(func() { _ = router.Close() })
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	service.WatchCWDs([]string{t.TempDir()})
+	initial, err := service.List(&SkillsListParams{})
+	if err != nil || len(initial.Skills) != 1 || initial.Skills[0].Description != "initial" {
+		t.Fatalf("initial skills = %#v err=%v", initial, err)
+	}
+	if err := os.WriteFile(skillPath, []byte("---\nname: demo\ndescription: updated\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(updated) error = %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !sinkHasMethod(sink, NotificationSkillsChanged) && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !sinkHasMethod(sink, NotificationSkillsChanged) {
+		t.Fatalf("skills/changed notification missing: %#v", sink.List())
+	}
+	updated, err := service.List(&SkillsListParams{})
+	if err != nil || len(updated.Skills) != 1 || updated.Skills[0].Description != "updated" {
+		t.Fatalf("updated skills = %#v err=%v", updated, err)
+	}
+}
+
+func TestRuntimeRouterSkillsListSkipsCWDRootsWhenLocalEnvironmentDisabledLikeRust(t *testing.T) {
+	userRoot := t.TempDir()
+	userSkillDir := filepath.Join(userRoot, "home-skill")
+	if err := os.MkdirAll(userSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(user skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userSkillDir, SkillFilename), []byte("---\nname: home-skill\ndescription: home\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user skill) error = %v", err)
+	}
+	cwd := t.TempDir()
+	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repo skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoSkillDir, SkillFilename), []byte("---\nname: repo-skill\ndescription: repo\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(repo skill) error = %v", err)
+	}
+	disabled := false
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills:                  NewSkillsServiceWithOptions(&SkillsServiceOptions{RootSpecs: []SkillsRoot{{Path: userRoot, Scope: "user"}}}),
+		LocalEnvironmentEnabled: &disabled,
+	})
+	t.Cleanup(func() { _ = router.Close() })
+	result := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("skills/list error = %+v", result.Error)
+	}
+	response := result.Result.(*SkillsListResponse)
+	if len(response.Data) != 1 || response.Data[0].CWD != cwd {
+		t.Fatalf("response = %#v", response)
+	}
+	names := map[string]bool{}
+	for _, skill := range response.Data[0].Skills {
+		names[skill.Name] = true
+	}
+	if !names["home-skill"] || names["repo-skill"] {
+		t.Fatalf("skills = %#v, want global skill without cwd skill", names)
+	}
+}
+
+func TestRuntimeRouterSkillsListHonorsPluginFeatureAndWorkspaceGateLikeRust(t *testing.T) {
+	pluginRoot := t.TempDir()
+	skillDir := filepath.Join(pluginRoot, "skills", "plugin-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: plugin-skill\ndescription: plugin\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "demo-plugin",
+			MarketplaceName: "local",
+			DisplayName:     "demo-plugin",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	cwd := t.TempDir()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[features]\nplugins = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	featureRouter := NewRuntimeRouter(RuntimeServices{
+		Skills:  NewSkillsService(nil),
+		Plugins: plugins,
+		Config:  config.NewConfigService(home),
+	})
+	t.Cleanup(func() { _ = featureRouter.Close() })
+	result := featureRouter.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("feature-gated skills/list error = %+v", result.Error)
+	}
+	for _, skill := range result.Result.(*SkillsListResponse).Data[0].Skills {
+		if skill.Name == "demo-plugin:plugin-skill" {
+			t.Fatalf("plugin skill visible with features.plugins=false: %#v", skill)
+		}
+	}
+
+	workspaceDisabled := false
+	workspaceRouter := NewRuntimeRouter(RuntimeServices{
+		Skills:                       NewSkillsService(nil),
+		Plugins:                      plugins,
+		WorkspaceCodexPluginsEnabled: &workspaceDisabled,
+	})
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+	result = workspaceRouter.Handle(requestWithParams(t, IntID(2), MethodSkillsList, SkillsListParams{CWDs: []string{cwd}, ForceReload: true}))
+	if result.Error != nil {
+		t.Fatalf("workspace-gated skills/list error = %+v", result.Error)
+	}
+	for _, skill := range result.Result.(*SkillsListResponse).Data[0].Skills {
+		if skill.Name == "demo-plugin:plugin-skill" {
+			t.Fatalf("plugin skill visible with workspace plugins disabled: %#v", skill)
+		}
+	}
+}
+
+func TestRuntimeRouterPluginManagementEmitsAnalyticsLikeRust(t *testing.T) {
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			Name:            "sample",
+			MarketplaceName: "test",
+			RemotePluginID:  "remote-sample",
+			HasSkills:       true,
+			MCPServers:      []string{"mcp-a", "mcp-b"},
+			AppConnectors:   []string{"calendar"},
+		},
+		Skills: []plugin.PluginSkill{{
+			Name:    "review",
+			Enabled: true,
+		}},
+		MCPServers: []string{"mcp-a", "mcp-b"},
+		Apps: []plugin.AppSummary{{
+			ID:          "calendar",
+			Name:        "calendar",
+			DisplayName: "Calendar",
+		}, {
+			ID:          "drive",
+			Name:        "drive",
+			DisplayName: "Drive",
+		}},
+	})
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Plugins:   plugins,
+		Analytics: analytics,
+	})
+	connectionID := "conn-plugin-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	install := requestWithParams(t, IntID(2), MethodPluginInstall, plugin.PluginInstallParams{PluginID: "sample@test"})
+	install.ConnectionID = connectionID
+	if response := router.Handle(install); response.Error != nil {
+		t.Fatalf("plugin install = %+v", response)
+	}
+	installed := waitForPluginStateAnalyticsEvent(t, analytics, telemetry.CodexPluginInstalledEventType, "sample@test")
+	if installed.EventType != telemetry.CodexPluginInstalledEventType {
+		t.Fatalf("installed event type = %q", installed.EventType)
+	}
+	params := installed.EventParams
+	if params.RemotePluginID == nil || *params.RemotePluginID != "remote-sample" ||
+		params.PluginName == nil || *params.PluginName != "sample" ||
+		params.MarketplaceName == nil || *params.MarketplaceName != "test" ||
+		params.HasSkills == nil || !*params.HasSkills ||
+		params.MCPServerCount == nil || *params.MCPServerCount != 2 ||
+		params.ProductClientID == nil || *params.ProductClientID != expectedProductClientID ||
+		!reflect.DeepEqual(params.ConnectorIDs, []string{"calendar", "drive"}) {
+		t.Fatalf("installed event params = plugin_id=%q remote=%q name=%q marketplace=%q has_skills=%v mcp_count=%v connectors=%#v product=%q",
+			stringValueForTest(params.PluginID),
+			stringValueForTest(params.RemotePluginID),
+			stringValueForTest(params.PluginName),
+			stringValueForTest(params.MarketplaceName),
+			boolValueForTest(params.HasSkills),
+			intValueForTest(params.MCPServerCount),
+			params.ConnectorIDs,
+			stringValueForTest(params.ProductClientID),
+		)
+	}
+
+	failedInstall := requestWithParams(t, IntID(3), MethodPluginInstall, plugin.PluginInstallParams{PluginID: "missing@test"})
+	failedInstall.ConnectionID = connectionID
+	if response := router.Handle(failedInstall); response.Error == nil {
+		t.Fatalf("missing plugin install unexpectedly succeeded: %+v", response)
+	}
+	failed := waitForPluginInstallFailedAnalyticsEvent(t, analytics, "missing@test")
+	if failed.EventType != telemetry.CodexPluginInstallFailedEventType ||
+		failed.EventParams.PluginName == nil || *failed.EventParams.PluginName != "missing" ||
+		failed.EventParams.MarketplaceName == nil || *failed.EventParams.MarketplaceName != "test" ||
+		failed.EventParams.HasSkills != nil ||
+		failed.EventParams.MCPServerCount != nil ||
+		failed.EventParams.ConnectorIDs != nil ||
+		failed.EventParams.ProductClientID == nil || *failed.EventParams.ProductClientID != expectedProductClientID ||
+		failed.EventParams.ErrorType != "store_invalid" {
+		t.Fatalf("failed install event params = %#v", failed.EventParams)
+	}
+
+	uninstall := requestWithParams(t, IntID(4), MethodPluginUninstall, plugin.PluginUninstallParams{PluginID: "sample@test"})
+	uninstall.ConnectionID = connectionID
+	if response := router.Handle(uninstall); response.Error != nil {
+		t.Fatalf("plugin uninstall = %+v", response)
+	}
+	uninstalled := waitForPluginStateAnalyticsEvent(t, analytics, telemetry.CodexPluginUninstalledEventType, "sample@test")
+	if uninstalled.EventType != telemetry.CodexPluginUninstalledEventType {
+		t.Fatalf("uninstalled event type = %q", uninstalled.EventType)
+	}
+	if !reflect.DeepEqual(uninstalled.EventParams.ConnectorIDs, []string{"calendar", "drive"}) ||
+		uninstalled.EventParams.HasSkills == nil || !*uninstalled.EventParams.HasSkills ||
+		uninstalled.EventParams.MCPServerCount == nil || *uninstalled.EventParams.MCPServerCount != 2 {
+		t.Fatalf("uninstalled event params = %#v", uninstalled.EventParams)
+	}
+}
+
+func TestRuntimeRouterExternalAgentConfigImportEmitsAnalyticsLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:    config.NewConfigService(t.TempDir()),
+		Analytics: analytics,
+	})
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	connectionID := "conn-external-import-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	source := "test_import"
+	details := config.NewMigrationDetails()
+	details.Sessions = []config.SessionMigration{{
+		Path: "",
+		CWD:  t.TempDir(),
+	}}
+	request := requestWithParams(t, IntID(2), MethodExternalAgentConfigImport, config.ExternalAgentConfigImportParams{
+		Source: &source,
+		MigrationItems: []config.ExternalAgentConfigMigrationItem{{
+			ItemType:    config.MigrationSessions,
+			Description: "Import sessions",
+			Details:     details,
+		}},
+	})
+	request.ConnectionID = connectionID
+	response := router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("externalAgentConfig/import = %+v", response)
+	}
+	importResponse := response.Result.(*config.ExternalAgentConfigImportResponse)
+	if importResponse.ImportID == "" {
+		t.Fatalf("empty import id in response = %+v", importResponse)
+	}
+	var completed *config.ExternalAgentConfigImportCompletedNotification
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationExternalAgentConfigImportCompleted {
+			continue
+		}
+		completed, _ = notification.Params.(*config.ExternalAgentConfigImportCompletedNotification)
+		break
+	}
+	if completed == nil ||
+		completed.ImportID != importResponse.ImportID ||
+		len(completed.ItemTypeResults) != 1 ||
+		completed.ItemTypeResults[0].ItemType != config.MigrationSessions ||
+		len(completed.ItemTypeResults[0].Successes) != 0 ||
+		len(completed.ItemTypeResults[0].Failures) != 1 {
+		t.Fatalf("completed notification = %#v", completed)
+	}
+
+	complete := waitForExternalAgentImportCompleteEvent(t, analytics, importResponse.ImportID, string(config.MigrationSessions))
+	if complete.EventType != telemetry.CodexOnboardingExternalAgentImportCompleteEventType ||
+		complete.EventParams.Source != source ||
+		complete.EventParams.SuccessCount != 0 ||
+		complete.EventParams.FailedCount != 1 ||
+		complete.EventParams.ProductClientID == nil ||
+		*complete.EventParams.ProductClientID != expectedProductClientID {
+		t.Fatalf("complete event = %#v", complete)
+	}
+	failure := waitForExternalAgentImportFailureEvent(t, analytics, importResponse.ImportID, string(config.MigrationSessions))
+	if failure.EventType != telemetry.CodexOnboardingExternalAgentImportFailureEventType ||
+		failure.EventParams.Source != source ||
+		failure.EventParams.FailureStage != "session_missing" ||
+		failure.EventParams.ErrorType != "session_missing" ||
+		failure.EventParams.ProductClientID == nil ||
+		*failure.EventParams.ProductClientID != expectedProductClientID {
+		t.Fatalf("failure event = %#v", failure)
+	}
+}
+
+func TestRuntimeRouterHookRunCompletedEmitsAnalyticsLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		Analytics: analytics,
+	})
+	connectionID := "conn-hook-analytics"
+	clientInfo := ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	expectedProductClientID := initializeOriginator(clientInfo)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: clientInfo,
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize = %+v", response)
+	}
+
+	threadID := "thread-hook-analytics"
+	turnID := "turn-hook-analytics"
+	router.turnsMu.Lock()
+	router.active[threadID] = &activeRuntimeTurn{
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ConnectionID: connectionID,
+		RunConfig: &appTurnRunConfig{
+			Model: "gpt-5",
+		},
+	}
+	router.turnsMu.Unlock()
+
+	router.notify(NotificationHookCompleted, &HookRunCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   &turnID,
+		Run: HookRunSummary{
+			EventName: HookEventPreToolUse,
+			Source:    HookSourceCloudRequirements,
+			Status:    HookRunRunning,
+		},
+	})
+
+	event := waitForCodexHookRunEvent(t, analytics, turnID)
+	if event.EventType != telemetry.CodexHookRunEventType ||
+		event.EventParams.ThreadID == nil || *event.EventParams.ThreadID != threadID ||
+		event.EventParams.TurnID == nil || *event.EventParams.TurnID != turnID ||
+		event.EventParams.ProductClientID == nil || *event.EventParams.ProductClientID != expectedProductClientID ||
+		event.EventParams.ModelSlug == nil || *event.EventParams.ModelSlug != "gpt-5" ||
+		event.EventParams.HookName == nil || *event.EventParams.HookName != "PreToolUse" ||
+		event.EventParams.HookSource == nil || *event.EventParams.HookSource != "cloud_requirements" ||
+		event.EventParams.Status == nil || *event.EventParams.Status != "failed" {
+		t.Fatalf("hook run event = %#v", event)
+	}
+}
+
+func TestRuntimeRouterPermissionProfileListReturnsBuiltinAndConfiguredProfiles(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+default_permissions = "dev"
+
+[permissions.dev]
+description = "Day-to-day coding work."
+
+[permissions.dev.filesystem]
+":workspace_roots" = "write"
+
+[permissions.audit]
+description = "Inspect without writes."
+
+[permissions.audit.filesystem]
+":workspace_roots" = "read"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodPermissionProfileList, sandbox.PermissionProfileListParams{}))
+	if response.Error != nil {
+		t.Fatalf("permissionProfile/list = %+v", response)
+	}
+	got := response.Result.(*sandbox.PermissionProfileListResponse)
+	assertPermissionProfileSummaries(t, got.Data, []sandbox.PermissionProfileSummary{
+		{ID: ":read-only", Allowed: true},
+		{ID: ":workspace", Allowed: true},
+		{ID: ":danger-full-access", Allowed: true},
+		{ID: "audit", Description: "Inspect without writes.", Allowed: true},
+		{ID: "dev", Description: "Day-to-day coding work.", Allowed: true},
+	})
+	if got.NextCursor != nil {
+		t.Fatalf("nextCursor = %v, want nil", *got.NextCursor)
+	}
+}
+
+func TestRuntimeRouterPermissionProfileListResolvesProjectProfilesAndPaginates(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir project config: %v", err)
+	}
+	projectTrust := strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("default_permissions = \":workspace\"\n\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte(`
+[permissions.project]
+description = "Project-scoped profile."
+
+[permissions.project.filesystem]
+":workspace_roots" = "write"
+`), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	limit := 3
+
+	firstResponse := router.Handle(requestWithParams(t, IntID(1), MethodPermissionProfileList, sandbox.PermissionProfileListParams{
+		Limit: &limit,
+		CWD:   &workspace,
+	}))
+	if firstResponse.Error != nil {
+		t.Fatalf("first permissionProfile/list = %+v", firstResponse)
+	}
+	first := firstResponse.Result.(*sandbox.PermissionProfileListResponse)
+	assertPermissionProfileSummaries(t, first.Data, []sandbox.PermissionProfileSummary{
+		{ID: ":read-only", Allowed: true},
+		{ID: ":workspace", Allowed: true},
+		{ID: ":danger-full-access", Allowed: true},
+	})
+	if first.NextCursor == nil || *first.NextCursor != "3" {
+		t.Fatalf("first nextCursor = %v, want 3", first.NextCursor)
+	}
+
+	secondResponse := router.Handle(requestWithParams(t, IntID(2), MethodPermissionProfileList, sandbox.PermissionProfileListParams{
+		Cursor: first.NextCursor,
+		Limit:  &limit,
+		CWD:    &workspace,
+	}))
+	if secondResponse.Error != nil {
+		t.Fatalf("second permissionProfile/list = %+v", secondResponse)
+	}
+	second := secondResponse.Result.(*sandbox.PermissionProfileListResponse)
+	assertPermissionProfileSummaries(t, second.Data, []sandbox.PermissionProfileSummary{
+		{ID: "project", Description: "Project-scoped profile.", Allowed: true},
+	})
+	if second.NextCursor != nil {
+		t.Fatalf("second nextCursor = %v, want nil", *second.NextCursor)
+	}
+}
+
+func TestRuntimeRouterPermissionProfileListDiscoversProjectProfilesWithoutDefaultSelection(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir project config: %v", err)
+	}
+	projectTrust := strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte(`
+[permissions.project]
+description = "Project-scoped profile."
+
+[permissions.project.filesystem]
+":workspace_roots" = "write"
+`), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodPermissionProfileList, sandbox.PermissionProfileListParams{CWD: &workspace}))
+	if response.Error != nil {
+		t.Fatalf("permissionProfile/list = %+v", response)
+	}
+	got := response.Result.(*sandbox.PermissionProfileListResponse)
+	assertPermissionProfileSummaries(t, got.Data, []sandbox.PermissionProfileSummary{
+		{ID: ":read-only", Allowed: true},
+		{ID: ":workspace", Allowed: true},
+		{ID: ":danger-full-access", Allowed: true},
+		{ID: "project", Description: "Project-scoped profile.", Allowed: true},
+	})
+}
+
+func assertPermissionProfileSummaries(t *testing.T, got []sandbox.PermissionProfileSummary, want []sandbox.PermissionProfileSummary) {
+	t.Helper()
+	visible := make([]sandbox.PermissionProfileSummary, len(got))
+	for i, profile := range got {
+		visible[i] = sandbox.PermissionProfileSummary{
+			ID:          profile.ID,
+			Description: profile.Description,
+			Allowed:     profile.Allowed,
+		}
+	}
+	if !reflect.DeepEqual(visible, want) {
+		t.Fatalf("profiles = %#v, want %#v", got, want)
+	}
+}
+
+func TestTurnSandboxPermissionProfilePreservesModePolicyFields(t *testing.T) {
+	extra := filepath.Join(t.TempDir(), "extra")
+	resolved, err := turnSandboxPermissionProfile(&config.Config{Values: map[string]any{}}, t.TempDir(), &turn.TurnStartParams{
+		SandboxPolicy: map[string]any{
+			"mode":          "workspace-write",
+			"writableRoots": []string{extra},
+			"networkAccess": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("turnSandboxPermissionProfile() error = %v", err)
+	}
+	if resolved == nil || resolved.Profile == nil {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	policy := resolved.Profile.LegacySandboxPolicy()
+	if resolved.ID != sandbox.BuiltInPermissionProfileWorkspace || policy.Kind != sandbox.SandboxWorkspaceWrite || !resolved.Profile.AllowsNetwork() {
+		t.Fatalf("resolved = %#v policy = %#v", resolved, policy)
+	}
+	if len(policy.WritableRoots) != 1 || policy.WritableRoots[0] != extra {
+		t.Fatalf("WritableRoots = %#v, want %q", policy.WritableRoots, extra)
+	}
+}
+
+func TestRuntimeRouterMCPThreadScopedRequestsRejectUnknownThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		MCP:          mcp.NewMCPService(nil),
+	})
+
+	threadID := "missing-thread"
+	statusList := router.Handle(requestWithParams(t, IntID(1), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{
+		ThreadID: &threadID,
+	}))
+	if statusList.Error == nil || statusList.Error.Code != -32004 || !strings.Contains(statusList.Error.Message, "thread not found") {
+		t.Fatalf("status list error = %+v", statusList.Error)
+	}
+
+	oauthLogin := router.Handle(requestWithParams(t, IntID(2), MethodMCPServerOauthLogin, mcp.MCPServerOauthLoginParams{
+		Name:     "custom",
+		ThreadID: &threadID,
+	}))
+	if oauthLogin.Error == nil || oauthLogin.Error.Code != -32004 || !strings.Contains(oauthLogin.Error.Message, "thread not found") {
+		t.Fatalf("oauth login error = %+v", oauthLogin.Error)
+	}
+
+	toolCall := router.Handle(requestWithParams(t, IntID(3), MethodMCPServerToolCall, mcp.MCPToolCallParams{
+		ThreadID: "missing-thread",
+		Server:   "custom",
+		Tool:     "read",
+	}))
+	if toolCall.Error == nil || toolCall.Error.Code != -32004 || !strings.Contains(toolCall.Error.Message, "thread not found") {
+		t.Fatalf("tool call error = %+v", toolCall.Error)
+	}
+
+	resourceRead := router.Handle(requestWithParams(t, IntID(4), MethodMCPServerResourceRead, mcp.MCPResourceReadParams{
+		ThreadID: &threadID,
+		Server:   "custom",
+		URI:      "file://demo",
+	}))
+	if resourceRead.Error == nil || resourceRead.Error.Code != -32004 || !strings.Contains(resourceRead.Error.Message, "thread not found") {
+		t.Fatalf("resource read error = %+v", resourceRead.Error)
+	}
+}
+
+func TestRuntimeRouterMCPRemoteErrorsIncludeRustErrorData(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		methods = append(methods, request.Method)
+		switch request.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "session-router-error")
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "router-error", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			writeRuntimeRouterMCPError(t, w, request.ID, -32042, "tool denied", map[string]any{"reason": "policy", "retry": false})
+		case "resources/read":
+			writeRuntimeRouterMCPError(t, w, request.ID, -32043, "resource missing", map[string]any{"uri": "file://missing"})
+		default:
+			writeRuntimeRouterMCPError(t, w, request.ID, -32601, "not found", nil)
+		}
+	}))
+	defer server.Close()
+
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	start := threadRouter.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "hello"}))
+	if start.Error != nil {
+		t.Fatalf("thread start error = %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			"remote": {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+	})
+
+	toolCall := router.Handle(requestWithParams(t, IntID(2), MethodMCPServerToolCall, mcp.MCPToolCallParams{
+		ThreadID:  threadID,
+		Server:    "remote",
+		Tool:      "echo",
+		Arguments: map[string]any{"message": "hello"},
+	}))
+	requireRuntimeRouterMCPRemoteError(t, toolCall, -32042, "tool denied", "tools/call", map[string]any{"reason": "policy", "retry": false})
+
+	resourceRead := router.Handle(requestWithParams(t, IntID(3), MethodMCPServerResourceRead, mcp.MCPResourceReadParams{
+		Server: "remote",
+		URI:    "file://missing",
+	}))
+	requireRuntimeRouterMCPRemoteError(t, resourceRead, -32043, "resource missing", "resources/read", map[string]any{"uri": "file://missing"})
+	if !reflect.DeepEqual(methods, []string{"initialize", "notifications/initialized", "tools/call", "resources/read"}) {
+		t.Fatalf("MCP methods = %#v", methods)
+	}
+}
+
+func requireRuntimeRouterMCPRemoteError(t *testing.T, response *Response, code int, message string, method string, payload map[string]any) {
+	t.Helper()
+	if response == nil || response.Error == nil {
+		t.Fatalf("response = %+v, want error", response)
+	}
+	if response.Error.Code != code || !strings.Contains(response.Error.Message, message) {
+		t.Fatalf("error = %+v, want code=%d message containing %q", response.Error, code, message)
+	}
+	data := response.Error.Data
+	if data["type"] != "mcp_remote_error" || data["method"] != method || data["message"] != message {
+		t.Fatalf("error data = %#v", data)
+	}
+	if gotCode, ok := data["code"].(int64); !ok || gotCode != int64(code) {
+		t.Fatalf("error data code = %#v, want %d", data["code"], code)
+	}
+	gotPayload, ok := data["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("error data payload = %#v", data["data"])
+	}
+	for key, want := range payload {
+		if gotPayload[key] != want {
+			t.Fatalf("error data payload[%s] = %#v, want %#v (payload=%#v)", key, gotPayload[key], want, gotPayload)
+		}
+	}
+}
+
+func writeRuntimeRouterMCPError(t *testing.T, w http.ResponseWriter, id int64, code int64, message string, data any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	errPayload := map[string]any{"code": code, "message": message}
+	if data != nil {
+		errPayload["data"] = data
+	}
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": errPayload}); err != nil {
+		t.Fatalf("Encode MCP error error = %v", err)
+	}
+}
+
+func TestRuntimeRouterMCPConfigReloadAppliesConfig(t *testing.T) {
+	home := t.TempDir()
+	body := `[features]
+apps = false
+
+[mcp_servers.docs]
+command = "mcp-docs"
+args = ["--repo", "codex"]
+required = true
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(home),
+		MCP:    mcp.NewMCPService(nil),
+	})
+
+	reload := router.Handle(requestWithParams(t, IntID(1), MethodConfigMCPServerReload, map[string]any{}))
+	if reload.Error != nil {
+		t.Fatalf("reload = %+v", reload)
+	}
+	status := router.Handle(requestWithParams(t, IntID(2), MethodMCPServerStatusList, mcp.MCPListServerStatusParams{}))
+	if status.Error != nil {
+		t.Fatalf("status = %+v", status)
+	}
+	response := status.Result.(*mcp.MCPListServerStatusResponse)
+	if len(response.Data) != 1 || response.Data[0].Name != "docs" || response.Data[0].Server.Command != "mcp-docs" {
+		t.Fatalf("status response = %+v", response.Data)
+	}
+}
+
+func TestAppserverMCPElicitationHandlerRequestsServer(t *testing.T) {
+	broker := NewServerRequestBroker()
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestMCPElicitation {
+			t.Fatalf("method = %s", request.Method)
+		}
+		params, ok := request.Params.(*MCPElicitationRequestParams)
+		if !ok {
+			t.Fatalf("params = %#v", request.Params)
+		}
+		if params.ThreadID != "thread-1" || params.TurnID == nil || *params.TurnID != "turn-1" || params.ServerName != "docs" || params.Message != "Approve?" {
+			t.Fatalf("params = %#v", params)
+		}
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{
+			Action:  MCPElicitationActionAccept,
+			Content: map[string]any{"approved": true},
+			Meta:    map[string]any{"handled": true},
+		}))
+	}))
+	handler := &appserverMCPElicitationHandler{broker: broker}
+	response, err := handler.HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{
+		ServerName:      "docs",
+		ThreadID:        "thread-1",
+		TurnID:          "turn-1",
+		Method:          "elicitation/create",
+		Message:         "Approve?",
+		RequestedSchema: map[string]any{"type": "object"},
+		ElicitationID:   "el-1",
+		Meta: map[string]any{
+			"threadId": "stale-thread",
+			"turnId":   "stale-turn",
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleMCPElicitation() error = %v", err)
+	}
+	if response.Action != mcp.MCPElicitationActionAccept {
+		t.Fatalf("response = %#v", response)
+	}
+	content, ok := response.Content.(map[string]any)
+	if !ok || content["approved"] != true {
+		t.Fatalf("content = %#v", response.Content)
+	}
+}
+
+func TestAppserverMCPElicitationHandlerUsesRustFallbackActions(t *testing.T) {
+	t.Run("cancelled", func(t *testing.T) {
+		broker := NewServerRequestBroker()
+		broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {}))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		response, err := (&appserverMCPElicitationHandler{broker: broker}).HandleMCPElicitation(ctx, &mcp.MCPElicitationRequest{ServerName: "docs"})
+		if err != nil || response == nil || response.Action != mcp.MCPElicitationActionCancel || response.Meta != nil {
+			t.Fatalf("response = %#v, error = %v", response, err)
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		broker := NewServerRequestBroker()
+		broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+			_, _ = broker.Resolve(ErrorResponse(request.ID, -32603, "bad response", nil))
+		}))
+		response, err := (&appserverMCPElicitationHandler{broker: broker}).HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{ServerName: "docs"})
+		if err != nil {
+			t.Fatalf("HandleMCPElicitation() error = %v", err)
+		}
+		if response == nil || response.Action != mcp.MCPElicitationActionDecline || response.Meta != nil {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+}
+
+func TestGuardianMCPElicitationValidationMatchesRust(t *testing.T) {
+	base := func() *mcp.MCPElicitationRequest {
+		return &mcp.MCPElicitationRequest{Method: "elicitation/create", RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}}, Meta: map[string]any{"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call", "tool_name": "access_browser_origin", "tool_params": map[string]any{"origin": "https://example.com"}}}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*mcp.MCPElicitationRequest)
+		want   string
+	}{
+		{name: "url", mutate: func(r *mcp.MCPElicitationRequest) { r.URL = "https://example.com" }, want: "only supports form"},
+		{name: "approval kind", mutate: func(r *mcp.MCPElicitationRequest) { r.Meta.(map[string]any)["codex_approval_kind"] = "tool_suggestion" }, want: "mcp_tool_call approval kind"},
+		{name: "schema", mutate: func(r *mcp.MCPElicitationRequest) {
+			r.RequestedSchema = map[string]any{"properties": map[string]any{"confirmed": map[string]any{"type": "boolean"}}}
+		}, want: "empty form schemas"},
+		{name: "tool name", mutate: func(r *mcp.MCPElicitationRequest) { delete(r.Meta.(map[string]any), "tool_name") }, want: "non-empty tool_name"},
+		{name: "tool params", mutate: func(r *mcp.MCPElicitationRequest) { r.Meta.(map[string]any)["tool_params"] = "bad" }, want: "must be an object"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := base()
+			tc.mutate(r)
+			if got := validateGuardianMCPElicitation(r); !strings.Contains(got, tc.want) {
+				t.Fatalf("validation = %q", got)
+			}
+		})
+	}
+	withoutOptIn := base()
+	delete(withoutOptIn.Meta.(map[string]any), "codex_request_type")
+	if guardianMCPApprovalRequested(withoutOptIn) {
+		t.Fatal("request without codex_request_type should not opt in")
+	}
+}
+
+func TestGuardianMCPElicitationInvalidShapeAutoDeclines(t *testing.T) {
+	request := &mcp.MCPElicitationRequest{Method: "elicitation/create", Meta: map[string]any{"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call"}}
+	response, err := (&appserverMCPElicitationHandler{}).HandleMCPElicitation(context.Background(), request)
+	if err != nil || response.Action != mcp.MCPElicitationActionDecline {
+		t.Fatalf("response = %#v, error = %v", response, err)
+	}
+	meta, ok := response.Meta.(map[string]any)
+	if !ok || meta["approvals_reviewer"] != "auto_review" {
+		t.Fatalf("meta = %#v", response.Meta)
+	}
+}
+
+type guardianReviewerFunc func(context.Context, string, string, string, state.Action) (state.ReviewDecision, string, error)
+
+func (f guardianReviewerFunc) Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+	return f(ctx, threadID, turnID, targetItemID, action)
+}
+
+func TestGuardianMCPElicitationUsesDedicatedReviewer(t *testing.T) {
+	request := &mcp.MCPElicitationRequest{
+		ServerName: "codex_apps", ThreadID: "thread-1", TurnID: "turn-1", ElicitationID: "call-1", Method: "elicitation/create",
+		RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Meta: map[string]any{
+			"codex_request_type": "approval_request", "codex_approval_kind": "mcp_tool_call",
+			"tool_name": "calendar_create", "tool_params": map[string]any{"title": "Lunch"}, "connector_id": "calendar", "connector_name": "Calendar", "tool_title": "Create event",
+		},
+	}
+	for _, tc := range []struct {
+		name     string
+		decision state.ReviewDecision
+		want     mcp.MCPElicitationAction
+	}{
+		{name: "approved", decision: state.DecisionApproved, want: mcp.MCPElicitationActionAccept},
+		{name: "denied", decision: state.DecisionDenied, want: mcp.MCPElicitationActionDecline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reviewer := guardianReviewerFunc(func(_ context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+				arguments, _ := action.Extra["arguments"].(map[string]any)
+				if threadID != "thread-1" || turnID != "turn-1" || targetItemID != "call-1" || action.Server != "codex_apps" || action.ToolName != "calendar_create" || arguments["title"] != "Lunch" || action.ConnectorID != "calendar" || action.ConnectorName != "Calendar" || action.ToolTitle != "Create event" {
+					t.Fatalf("context=%s/%s/%s action=%#v", threadID, turnID, targetItemID, action)
+				}
+				return tc.decision, "reviewed", nil
+			})
+			response, err := (&appserverMCPElicitationHandler{reviewer: reviewer}).HandleMCPElicitation(context.Background(), request)
+			if err != nil || response.Action != tc.want {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+			meta, ok := response.Meta.(map[string]any)
+			if !ok || meta["approvals_reviewer"] != "auto_review" {
+				t.Fatalf("meta=%#v", response.Meta)
+			}
+			if tc.want == mcp.MCPElicitationActionDecline && meta["reason"] != "reviewed" {
+				t.Fatalf("meta=%#v", meta)
+			}
+		})
+	}
+}
+
+func TestAppserverMCPElicitationParamsURLModeAndIDFallback(t *testing.T) {
+	params := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
+		ServerName: "codex_apps",
+		ID:         json.RawMessage(`"codex_apps_auth_call_123"`),
+		Message:    "Reconnect Google Calendar on ChatGPT.",
+		URL:        "https://chatgpt.com/apps/google-calendar/connector_calendar",
+		Meta: map[string]any{
+			"_codex_apps": map[string]any{
+				"connector_auth_failure": map[string]any{
+					"is_auth_failure": true,
+					"connector_id":    "connector_calendar",
+					"connector_name":  "Google Calendar",
+				},
+			},
+		},
+	})
+	if params.Mode != "url" || params.ElicitationID != "codex_apps_auth_call_123" || params.URL == "" {
+		t.Fatalf("params = %#v", params)
+	}
+	meta, ok := params.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %#v", params.Meta)
+	}
+	if _, ok := meta["_codex_apps"]; !ok {
+		t.Fatalf("meta missing _codex_apps: %#v", meta)
+	}
+}
+
+func TestAppserverMCPElicitationParamsOpenAIFormMode(t *testing.T) {
+	params := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
+		ServerName:      "docs",
+		ThreadID:        "thread-1",
+		Method:          "openai/form",
+		Message:         "Approve?",
+		RequestedSchema: map[string]any{"type": "object"},
+	})
+	if params.Mode != "openai/form" || params.ThreadID != "thread-1" || params.TurnID != nil {
+		t.Fatalf("params = %#v", params)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal params returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("Unmarshal params returned error: %v", err)
+	}
+	if payload["mode"] != "openai/form" || payload["threadId"] != "thread-1" || payload["turnId"] != nil || payload["serverName"] != "docs" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if _, ok := payload["requestedSchema"].(map[string]any); !ok {
+		t.Fatalf("requestedSchema missing: %#v", payload)
+	}
+}
+
+func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {
+	searchRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(searchRoot, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write search fixture: %v", err)
+	}
+	appService := apps.NewAppService([]apps.AppEntry{{ID: "chat", Name: "Chat", Enabled: true, IsAccessible: true}})
+	featureService := features.NewFeatureService([]features.FeatureEntry{{Key: "alpha", Stage: features.FeatureStageBeta}})
+	misc := NewMiscService()
+	misc.SetAuthStatus(AuthStatusResponse{Authenticated: true, Mode: "api-key"})
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Apps:         appService,
+		Features:     featureService,
+		Turns:        turn.NewTurnService(),
+		Reviews:      review.NewService(),
+		Misc:         misc,
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	featureSet := router.Handle(requestWithParams(t, IntID(1), MethodExperimentalFeatureSet, features.FeatureEnablementSetParams{Enablement: map[string]bool{"alpha": true, "missing": true}}))
+	if featureSet.Error != nil {
+		t.Fatalf("feature set = %+v", featureSet)
+	}
+	setResult := featureSet.Result.(*features.FeatureEnablementSetResponse)
+	if len(setResult.Enablement) != 1 || !setResult.Enablement["alpha"] {
+		t.Fatalf("feature set enablement = %#v, want only alpha=true", setResult.Enablement)
+	}
+	featureList := router.Handle(requestWithParams(t, IntID(2), MethodExperimentalFeatureList, features.FeatureListParams{}))
+	if featureList.Error != nil || !featureList.Result.(*features.FeatureListResponse).Data[0].Enabled {
+		t.Fatalf("feature list = %+v", featureList)
+	}
+	appList := router.Handle(requestWithParams(t, IntID(3), MethodAppList, apps.AppListParams{}))
+	if appList.Error != nil || len(appList.Result.(*apps.AppListResponse).Apps) != 1 {
+		t.Fatalf("app list = %+v", appList)
+	}
+	appListJSON, err := json.Marshal(appList.Result)
+	if err != nil {
+		t.Fatalf("marshal app list: %v", err)
+	}
+	if strings.Contains(string(appListJSON), `"apps"`) {
+		t.Fatalf("app list JSON contains legacy apps field: %s", string(appListJSON))
+	}
+	badCursor := "bad"
+	badFeatureList := router.Handle(requestWithParams(t, IntID(31), MethodExperimentalFeatureList, features.FeatureListParams{Cursor: &badCursor}))
+	if badFeatureList.Error == nil || badFeatureList.Error.Code != -32600 || !strings.Contains(badFeatureList.Error.Message, "invalid cursor: bad") {
+		t.Fatalf("bad feature cursor = %+v", badFeatureList.Error)
+	}
+	badAppList := router.Handle(requestWithParams(t, IntID(32), MethodAppList, apps.AppListParams{Cursor: &badCursor}))
+	if badAppList.Error == nil || badAppList.Error.Code != -32600 || !strings.Contains(badAppList.Error.Message, "invalid cursor: bad") {
+		t.Fatalf("bad app cursor = %+v", badAppList.Error)
+	}
+	blankCursor := "  "
+	blankAppList := router.Handle(requestWithParams(t, IntID(33), MethodAppList, apps.AppListParams{Cursor: &blankCursor}))
+	if blankAppList.Error == nil || blankAppList.Error.Code != -32600 || !strings.Contains(blankAppList.Error.Message, "invalid cursor:   ") {
+		t.Fatalf("blank app cursor = %+v", blankAppList.Error)
+	}
+	authStatus := router.Handle(requestWithParams(t, IntID(4), MethodGetAuthStatus, AuthStatusParams{}))
+	if authStatus.Error != nil || !authStatus.Result.(*AuthStatusResponse).Authenticated {
+		t.Fatalf("auth status = %+v", authStatus)
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(50), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(5), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "hi"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start = %+v", turnStart)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+	clientUserMessageID := "client-steer-1"
+	turnSteer := router.Handle(requestWithParams(t, IntID(6), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:            threadID,
+		ExpectedTurnID:      turnID,
+		Prompt:              "more",
+		ClientUserMessageID: clientUserMessageID,
+		AdditionalContext: map[string]turn.AdditionalContextEntry{
+			"ide": {Value: "selection", Kind: turn.AdditionalContextApplication},
+		},
+	}))
+	if turnSteer.Error != nil || turnSteer.Result.(*turn.TurnSteerResponse).TurnID != turnID {
+		t.Fatalf("turn steer = %+v", turnSteer)
+	}
+	emptySteer := router.Handle(requestWithParams(t, IntID(61), MethodTurnSteer, turn.TurnSteerParams{ThreadID: threadID, ExpectedTurnID: turnID}))
+	if emptySteer.Error == nil || emptySteer.Error.Code != -32600 || emptySteer.Error.Message != "input must not be empty" {
+		t.Fatalf("empty steer = %+v", emptySteer)
+	}
+	missingExpected := router.Handle(requestWithParams(t, IntID(62), MethodTurnSteer, turn.TurnSteerParams{ThreadID: threadID, Prompt: "more"}))
+	if missingExpected.Error == nil || missingExpected.Error.Code != -32600 || missingExpected.Error.Message != "expectedTurnId must not be empty" {
+		t.Fatalf("missing expected steer = %+v", missingExpected)
+	}
+	reviewStart := router.Handle(requestWithParams(t, IntID(7), MethodReviewStart, review.StartParams{ThreadID: threadID}))
+	if reviewStart.Error != nil || reviewStart.Result.(*review.StartResponse).Turn.ID != "review-"+threadID {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	search := router.Handle(requestWithParams(t, IntID(8), MethodFuzzyFileSearch, FuzzyFileSearchParams{Query: "readme", Roots: []string{searchRoot}}))
+	if search.Error != nil || len(search.Result.(*FuzzyFileSearchResponse).Files) != 1 {
+		t.Fatalf("search = %+v", search)
+	}
+	summary := router.Handle(requestWithParams(t, IntID(9), MethodGetConversationSummary, ConversationSummaryParams{ThreadID: threadID}))
+	if summary.Error != nil {
+		t.Fatalf("summary = %+v", summary)
+	}
+	interrupt := router.Handle(requestWithParams(t, IntID(10), MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt = %+v", interrupt)
+	}
+}
+
+func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target:   review.APITarget{Type: "baseBranch", Branch: "main"},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	response := reviewStart.Result.(*review.StartResponse)
+	turnID := response.Turn.ID
+	if turnID != "review-"+threadID {
+		t.Fatalf("turn id = %q, want review-%s", turnID, threadID)
+	}
+
+	started := waitForItemStarted(t, sink, turnID)
+	startedItem := notificationItemMap(t, started.Item)
+	if started.ThreadID != threadID || started.TurnID != turnID || started.StartedAtMS == 0 {
+		t.Fatalf("started notification = %#v", started)
+	}
+	if startedItem["type"] != "enteredReviewMode" || startedItem["id"] != turnID || startedItem["review"] != "changes against 'main'" {
+		t.Fatalf("started item = %#v", startedItem)
+	}
+
+	completed := waitForItemCompleted(t, sink, turnID)
+	completedItem := notificationItemMap(t, completed.Item)
+	if completed.ThreadID != threadID || completed.TurnID != turnID || completed.CompletedAtMS == 0 {
+		t.Fatalf("completed notification = %#v", completed)
+	}
+	if !reflect.DeepEqual(completedItem, startedItem) {
+		t.Fatalf("completed item = %#v, want %#v", completedItem, startedItem)
+	}
+}
+
+func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("review_model = \"gpt-review\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Model: "gpt-parent"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	parentThread := threadStart.Result.(*ThreadStartResponse).Thread
+	if parentThread.Path == nil {
+		t.Fatal("parent thread path missing")
+	}
+	if _, err := os.Stat(*parentThread.Path); !os.IsNotExist(err) {
+		t.Fatalf("parent rollout should start unmaterialized, stat err = %v", err)
+	}
+	baselineNotifications := len(sink.List())
+	detached := "detached"
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: parentThread.ID,
+		Delivery: &detached,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "detached review",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	if _, err := os.Stat(*parentThread.Path); err != nil {
+		t.Fatalf("parent rollout should be materialized before detached fork: %v", err)
+	}
+	response := reviewStart.Result.(*review.StartResponse)
+	if response.ReviewThreadID == "" || response.ReviewThreadID == parentThread.ID {
+		t.Fatalf("reviewThreadId = %q, parent = %q", response.ReviewThreadID, parentThread.ID)
+	}
+	if response.Turn.ID == "" || len(response.Turn.Items) != 1 {
+		t.Fatalf("review turn = %+v", response.Turn)
+	}
+
+	startedThread := findThreadStartedNotificationAfter(t, sink, baselineNotifications, response.ReviewThreadID)
+	if startedThread.Thread.SessionID != response.ReviewThreadID {
+		t.Fatalf("review thread sessionId = %q, want %q", startedThread.Thread.SessionID, response.ReviewThreadID)
+	}
+	if len(startedThread.Thread.Turns) != 0 {
+		t.Fatalf("detached review thread/started turns = %+v, want omitted", startedThread.Thread.Turns)
+	}
+	readReviewThread := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: response.ReviewThreadID}))
+	if readReviewThread.Error != nil {
+		t.Fatalf("review thread should be readable: %+v", readReviewThread.Error)
+	}
+	reviewRecord, err := store.Read(session.ThreadID(response.ReviewThreadID), true, false)
+	if err != nil {
+		t.Fatalf("read review record: %v", err)
+	}
+	if reviewRecord.Metadata.Model != "gpt-review" {
+		t.Fatalf("review thread model = %q, want gpt-review", reviewRecord.Metadata.Model)
+	}
+	parentRecord, err := store.Read(session.ThreadID(parentThread.ID), true, false)
+	if err != nil {
+		t.Fatalf("read parent record: %v", err)
+	}
+	if parentRecord.Metadata.Model != "gpt-parent" {
+		t.Fatalf("parent thread model = %q, want gpt-parent", parentRecord.Metadata.Model)
+	}
+
+	started := waitForItemStarted(t, sink, response.Turn.ID)
+	startedItem := notificationItemMap(t, started.Item)
+	if started.ThreadID != response.ReviewThreadID || started.TurnID != response.Turn.ID {
+		t.Fatalf("entered review notification = %#v", started)
+	}
+	if startedItem["type"] != "enteredReviewMode" || startedItem["review"] != "detached review" {
+		t.Fatalf("entered review item = %#v", startedItem)
+	}
+}
+
+func TestRuntimeRouterReviewStartRejectsDetachedDeliveryForPaginatedParentLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Reviews: review.NewService(), ThreadStatus: NewThreadStatusManager()})
+	defer router.Close()
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: ThreadHistoryPaginated}))
+	if started.Error != nil {
+		t.Fatalf("thread start = %+v", started.Error)
+	}
+	detached := "detached"
+	response := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: started.Result.(*ThreadStartResponse).Thread.ID,
+		Delivery: &detached,
+		Target:   review.APITarget{Type: "custom", Instructions: "detached review"},
+	}))
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support detached review" {
+		t.Fatalf("review response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterThreadRollbackRejectsPaginatedThreadLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadStatus: NewThreadStatusManager()})
+	defer router.Close()
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: ThreadHistoryPaginated}))
+	if started.Error != nil {
+		t.Fatalf("thread start = %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	response := router.Handle(requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{ThreadID: threadID, NumTurns: 1}))
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support thread/rollback" {
+		t.Fatalf("rollback response = %+v", response)
+	}
+}
+
+func TestRuntimeRouterReviewStartRunsReviewTurnAndEmitsExitLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("review_model = \"gpt-review\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	reviewerJSON := `{"findings":[{"title":"Unsafe write","body":"Check bounds before writing.","confidence_score":0.9,"priority":1,"code_location":{"absolute_file_path":"/tmp/file.rs","line_range":{"start":10,"end":20}}}],"overall_correctness":"patch is incorrect","overall_explanation":"Needs changes","overall_confidence_score":0.8}`
+	agent := newRecordingRuntimeAgent(reviewerJSON)
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+		Agent:        agent,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Model: "gpt-parent"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.TaskKind != model.AgentTaskReview {
+		t.Fatalf("task kind = %q, want review", request.TaskKind)
+	}
+	if request.Model != "gpt-review" {
+		t.Fatalf("model = %q, want review_model override", request.Model)
+	}
+	if strings.TrimSpace(request.Instructions) != strings.TrimSpace(review.ReviewPrompt) {
+		t.Fatalf("review instructions mismatch")
+	}
+	if !request.DisableHostedImageGeneration {
+		t.Fatalf("DisableHostedImageGeneration = false, want true")
+	}
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exited.ThreadID != threadID || exited.TurnID != turnID {
+		t.Fatalf("exited review notification = %#v", exited)
+	}
+	reviewText, _ := exitedItem["review"].(string)
+	if !strings.Contains(reviewText, "Unsafe write") || !strings.Contains(reviewText, "/tmp/file.rs:10-20") {
+		t.Fatalf("exited review text = %q", reviewText)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if !strings.Contains(fmt.Sprint(assistantItem["text"]), "Unsafe write") {
+		t.Fatalf("assistant review item = %#v", assistantItem)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	assertNoItemNotification(t, sink, "msg-1")
+}
+
+func TestRuntimeRouterReviewStartInterruptEmitsInterruptedExitLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	agent := newBlockingReviewRuntimeAgent()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        agent,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+	_ = waitForBlockingReviewRuntimeAgentRequest(t, agent)
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt review turn = %+v", interrupt.Error)
+	}
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exitedItem["review"] != review.FallbackMessage {
+		t.Fatalf("interrupted exited review item = %#v", exitedItem)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if assistantItem["text"] != review.InterruptedMessage {
+		t.Fatalf("interrupted assistant item = %#v", assistantItem)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterReviewStartRuntimeErrorEmitsFallbackExitAndCompletesLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Reviews:      review.NewService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        &apiErrorRuntimeAgent{err: errors.New("review runtime failed")},
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start = %+v", threadStart)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	reviewStart := router.Handle(requestWithParams(t, IntID(2), MethodReviewStart, review.StartParams{
+		ThreadID: threadID,
+		Target: review.APITarget{
+			Type:         "custom",
+			Instructions: "review this patch",
+		},
+	}))
+	if reviewStart.Error != nil {
+		t.Fatalf("review start = %+v", reviewStart)
+	}
+	turnID := reviewStart.Result.(*review.StartResponse).Turn.ID
+
+	exited := waitForItemCompletedType(t, sink, turnID, "exitedReviewMode")
+	exitedItem := notificationItemMap(t, exited.Item)
+	if exitedItem["review"] != review.FallbackMessage {
+		t.Fatalf("runtime-error exited review item = %#v", exitedItem)
+	}
+	assistant := waitForItemCompletedType(t, sink, review.ReviewRolloutAssistantMessageID, "agentMessage")
+	assistantItem := notificationItemMap(t, assistant.Item)
+	if assistantItem["text"] != review.InterruptedMessage {
+		t.Fatalf("runtime-error assistant item = %#v", assistantItem)
+	}
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if completed.Turn.Error != nil {
+		t.Fatalf("review runtime error should be swallowed like Rust, got turn error %#v", completed.Turn.Error)
+	}
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationError {
+			if payload, ok := notification.Params.(*ErrorNotification); ok && payload.TurnID == turnID {
+				t.Fatalf("review runtime error emitted generic error notification: %#v", payload)
+			}
+		}
+	}
+}
+
+func TestRuntimeRouterReviewRuntimeDisablesStandaloneWebAndImageToolsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	cfg := &config.Config{Values: map[string]any{
+		"features": map[string]any{
+			"standalone_web_search": true,
+			"image_generation":      true,
+		},
+	}}
+	params := &turn.TurnStartParams{Originator: "review"}
+	webSearchOptions, err := router.webSearchOptionsForTurn(cfg, params)
+	if err != nil {
+		t.Fatalf("webSearchOptionsForTurn error = %v", err)
+	}
+	if webSearchOptions != nil {
+		t.Fatalf("review web search options = %#v, want nil", webSearchOptions)
+	}
+	imageGenerationOptions, err := router.imageGenerationOptionsForTurn(cfg, params)
+	if err != nil {
+		t.Fatalf("imageGenerationOptionsForTurn error = %v", err)
+	}
+	if imageGenerationOptions != nil {
+		t.Fatalf("review image generation options = %#v, want nil", imageGenerationOptions)
+	}
+	hostedTools, err := router.hostedToolsForTurn(params)
+	if err != nil {
+		t.Fatalf("hostedToolsForTurn error = %v", err)
+	}
+	if len(hostedTools) != 0 {
+		t.Fatalf("review hosted tools = %#v, want none", hostedTools)
+	}
+}
+
+func TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust(t *testing.T) {
+	cases := []struct {
+		name string
+		info model.ModelInfo
+		want model.ProviderCapabilitiesReadResponse
+	}{
+		{
+			name: "default provider",
+			info: model.ModelInfo{
+				Slug:                      "gpt-test",
+				Visibility:                model.VisibilityVisible,
+				SupportedInAPI:            true,
+				Priority:                  0,
+				SupportsParallelToolCalls: true,
+				SupportsSearchTool:        true,
+				InputModalities:           []string{"text", "image"},
+			},
+			want: model.ProviderCapabilitiesReadResponse{
+				NamespaceTools:  true,
+				ImageGeneration: true,
+				WebSearch:       true,
+			},
+		},
+		{
+			name: "amazon bedrock provider",
+			info: model.ModelInfo{
+				Slug:                      "openai.gpt-5.4",
+				Visibility:                model.VisibilityVisible,
+				SupportedInAPI:            true,
+				Priority:                  0,
+				SupportsParallelToolCalls: true,
+				InputModalities:           []string{"text"},
+			},
+			want: model.ProviderCapabilitiesReadResponse{
+				NamespaceTools:  true,
+				ImageGeneration: false,
+				WebSearch:       false,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			models := model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{tc.info}}))
+			router := NewRuntimeRouter(RuntimeServices{Models: models})
+			response := router.Handle(requestWithParams(t, IntID(1), MethodModelProviderCapabilitiesRead, model.ProviderCapabilitiesReadParams{}))
+			if response.Error != nil {
+				t.Fatalf("modelProvider/capabilities/read error = %+v", response.Error)
+			}
+			got := response.Result.(*model.ProviderCapabilitiesReadResponse)
+			if *got != tc.want {
+				t.Fatalf("capabilities = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterMemoryResetClearsMemoriesAndPreservesThreadsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	store := session.NewStore(root)
+	createRecord(t, store, "thread-memory-reset-runtime", fixedTime())
+	memoryRoot := filepath.Join(root, "memories")
+	if err := os.MkdirAll(filepath.Join(memoryRoot, "rollout_summaries"), 0o755); err != nil {
+		t.Fatalf("MkdirAll memories error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "MEMORY.md"), []byte("stale memory\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile MEMORY.md error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "rollout_summaries", "stale.md"), []byte("stale summary\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale summary error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	response := router.Handle(&Request{JSONRPC: "2.0", ID: IntID(1), Method: MethodMemoryReset})
+	if response.Error != nil {
+		t.Fatalf("memory/reset error = %+v", response.Error)
+	}
+	if _, ok := response.Result.(*MemoryResetResponse); !ok {
+		t.Fatalf("memory/reset result = %#v, want *MemoryResetResponse", response.Result)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal response error = %v", err)
+	}
+	if !strings.Contains(string(payload), `"result":{}`) {
+		t.Fatalf("memory/reset response payload = %s, want empty result object", payload)
+	}
+	entries, err := os.ReadDir(memoryRoot)
+	if err != nil {
+		t.Fatalf("ReadDir memories error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("memory root entries after reset = %+v", entries)
+	}
+	if _, err := store.Read("thread-memory-reset-runtime", true, true); err != nil {
+		t.Fatalf("thread was not preserved: %v", err)
+	}
+}
+
+func TestRuntimeRouterTurnStartOutputSchemaIsPerTurnLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	outputSchema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"answer": map[string]any{"type": "string"}},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	first := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:     threadID,
+		Prompt:       "Hello",
+		OutputSchema: outputSchema,
+	}))
+	if first.Error != nil {
+		t.Fatalf("first turn start error: %+v", first.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	firstSchema, ok := firstRequest.OutputSchema.(map[string]any)
+	if !ok || firstSchema["type"] != "object" || firstSchema["additionalProperties"] != false {
+		t.Fatalf("first output schema = %#v", firstRequest.OutputSchema)
+	}
+	waitForTurnCompletedStatus(t, sink, first.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	second := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "Hello again",
+	}))
+	if second.Error != nil {
+		t.Fatalf("second turn start error: %+v", second.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if secondRequest.OutputSchema != nil {
+		t.Fatalf("second output schema = %#v, want nil", secondRequest.OutputSchema)
+	}
+	waitForTurnCompletedStatus(t, sink, second.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSendsOutputSchemaTextFormatLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		call := len(bodies) + 1
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		responseID := fmt.Sprintf("resp-output-schema-%d", call)
+		messageID := fmt.Sprintf("msg-output-schema-%d", call)
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, responseID),
+			fmt.Sprintf(`{"type":"response.output_item.added","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, responseID),
+		)))
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	outputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	first := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:     threadID,
+		Input:        []turn.TurnUserInput{{Text: "Hello"}},
+		OutputSchema: outputSchema,
+	}))
+	if first.Error != nil {
+		t.Fatalf("first turn start error: %+v", first.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, first.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	second := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Text: "Hello again"}},
+	}))
+	if second.Error != nil {
+		t.Fatalf("second turn start error: %+v", second.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, second.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	firstText, ok := bodies[0]["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("first text = %#v", bodies[0]["text"])
+	}
+	wantFormat := map[string]any{
+		"name":   "codex_output_schema",
+		"type":   "json_schema",
+		"strict": true,
+		"schema": outputSchema,
+	}
+	if !reflect.DeepEqual(firstText["format"], wantFormat) {
+		t.Fatalf("first text.format = %#v, want %#v; body=%#v", firstText["format"], wantFormat, bodies[0])
+	}
+	if secondText, ok := bodies[1]["text"].(map[string]any); ok {
+		if _, hasFormat := secondText["format"]; hasFormat {
+			t.Fatalf("second text.format = %#v, want absent; body=%#v", secondText["format"], bodies[1])
+		}
+	}
+}
+
+func TestRuntimeRouterSDKContractSmoke(t *testing.T) {
+	var mcpMethods []string
+	mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		mcpMethods = append(mcpMethods, request.Method)
+		switch request.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "session-sdk-smoke")
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "sdk-smoke", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"content": []any{map[string]any{"type": "text", "text": "mcp ok"}},
+				"isError": false,
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer mcpServer.Close()
+
+	store := session.NewStore(t.TempDir())
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		CommandExec:  NewCommandExecService(),
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			"sdk": {Config: mcp.ServerConfig{URL: mcpServer.URL, Enabled: true}},
+		}}),
+	})
+	connectionID := "conn-sdk-smoke"
+	send := func(id int64, method Method, params any) *Response {
+		request := requestWithParams(t, IntID(id), method, params)
+		request.ConnectionID = connectionID
+		return router.Handle(request)
+	}
+
+	initialize := send(1, MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "sdk-smoke", Version: "0.1.0"},
+		Capabilities: &InitializeCapabilities{
+			ExperimentalAPI: true,
+		},
+	})
+	if initialize.Error != nil {
+		t.Fatalf("initialize error = %+v", initialize.Error)
+	}
+
+	threadStart := send(2, MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "hello sdk"})
+	if threadStart.Error != nil {
+		t.Fatalf("thread/start error = %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+
+	threadRead := send(3, MethodThreadRead, ThreadReadParams{ThreadID: threadID})
+	if threadRead.Error != nil || threadRead.Result.(*ThreadReadResponse).Thread.ID != threadID {
+		t.Fatalf("thread/read response = %+v", threadRead)
+	}
+	threadList := send(4, MethodThreadList, ThreadListParams{})
+	if threadList.Error != nil || len(threadList.Result.(*ThreadListResponse).Data) != 1 {
+		t.Fatalf("thread/list response = %+v", threadList)
+	}
+
+	turnStart := send(5, MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "run turn"})
+	if turnStart.Error != nil || turnStart.Result.(*turn.TurnStartResponse).Turn.ID == "" {
+		t.Fatalf("turn/start response = %+v", turnStart)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	turnSteer := send(51, MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Prompt:         "more sdk input",
+	})
+	if turnSteer.Error != nil || turnSteer.Result.(*turn.TurnSteerResponse).TurnID != turnID {
+		t.Fatalf("turn/steer response = %+v", turnSteer)
+	}
+	turnInterrupt := send(52, MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID})
+	if turnInterrupt.Error != nil {
+		t.Fatalf("turn/interrupt response = %+v", turnInterrupt)
+	}
+
+	commandExec := send(6, MethodCommandExec, CommandExecParams{Command: commandExecTestOutputCommand("exec ok", "")})
+	if commandExec.Error != nil {
+		t.Fatalf("command/exec error = %+v", commandExec.Error)
+	}
+	if result := commandExec.Result.(*CommandExecResponse); result.Stdout != "exec ok" || result.ExitCode != 0 {
+		t.Fatalf("command/exec result = %+v", result)
+	}
+
+	mcpTool := send(7, MethodMCPServerToolCall, mcp.MCPToolCallParams{
+		ThreadID:  threadID,
+		Server:    "sdk",
+		Tool:      "echo",
+		Arguments: map[string]any{"message": "hello"},
+	})
+	if mcpTool.Error != nil {
+		t.Fatalf("mcpServer/tool/call error = %+v", mcpTool.Error)
+	}
+	mcpResult := mcpTool.Result.(*mcp.MCPToolCallResponse)
+	if len(mcpResult.Content) != 1 || mcpResult.Content[0].Text != "mcp ok" {
+		t.Fatalf("mcpServer/tool/call result = %+v", mcpResult)
+	}
+	if !reflect.DeepEqual(mcpMethods, []string{"initialize", "notifications/initialized", "tools/list", "resources/list", "resources/templates/list", "tools/call"}) {
+		t.Fatalf("MCP methods = %#v", mcpMethods)
+	}
+}
+
+func TestRuntimeRouterFuzzyFileSearchSessionUpdateNotifiesRustShape(t *testing.T) {
+	searchRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(searchRoot, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write search fixture: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Misc: NewMiscService()})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodFuzzyFileSearchStart, FuzzyFileSearchSessionStartParams{
+		SessionID: "session-1",
+		Roots:     []string{searchRoot},
+	}))
+	if start.Error != nil {
+		t.Fatalf("session start = %+v", start)
+	}
+
+	update := router.Handle(requestWithParams(t, IntID(2), MethodFuzzyFileSearchUpdate, FuzzyFileSearchSessionUpdateParams{
+		SessionID: "session-1",
+		Query:     "read",
+		Limit:     1,
+	}))
+	if update.Error != nil {
+		t.Fatalf("session update = %+v", update)
+	}
+	responseJSON, err := json.Marshal(update.Result)
+	if err != nil {
+		t.Fatalf("Marshal update result error = %v", err)
+	}
+	if string(responseJSON) != `{}` {
+		t.Fatalf("session update response JSON = %s", responseJSON)
+	}
+
+	notifications := sink.List()
+	if len(notifications) != 2 {
+		t.Fatalf("notifications = %#v, want updated and completed", notifications)
+	}
+	updated, ok := notifications[0].Params.(*FuzzyFileSearchSessionUpdatedNotification)
+	if notifications[0].Method != NotificationFuzzyFileSearchSessionUpdated || !ok || updated.SessionID != "session-1" || updated.Query != "read" || len(updated.Files) != 1 {
+		t.Fatalf("updated notification = %#v", notifications[0])
+	}
+	completed, ok := notifications[1].Params.(*FuzzyFileSearchSessionCompletedNotification)
+	if notifications[1].Method != NotificationFuzzyFileSearchSessionCompleted || !ok || completed.SessionID != "session-1" {
+		t.Fatalf("completed notification = %#v", notifications[1])
+	}
+	updatedJSON, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatalf("Marshal updated notification error = %v", err)
+	}
+	if !strings.Contains(string(updatedJSON), `"files":[`) || strings.Contains(string(updatedJSON), `"limit"`) {
+		t.Fatalf("updated notification JSON = %s", updatedJSON)
+	}
+}
+
+func TestRuntimeRouterFuzzyFileSearchSessionStopRejectsFurtherUpdates(t *testing.T) {
+	searchRoot := t.TempDir()
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Misc: NewMiscService()})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodFuzzyFileSearchStart, FuzzyFileSearchSessionStartParams{
+		SessionID: "session-1",
+		Roots:     []string{searchRoot},
+	}))
+	if start.Error != nil {
+		t.Fatalf("session start = %+v", start)
+	}
+	stop := router.Handle(requestWithParams(t, IntID(2), MethodFuzzyFileSearchStop, FuzzyFileSearchSessionStopParams{
+		SessionID: "session-1",
+	}))
+	if stop.Error != nil {
+		t.Fatalf("session stop = %+v", stop)
+	}
+	update := router.Handle(requestWithParams(t, IntID(3), MethodFuzzyFileSearchUpdate, FuzzyFileSearchSessionUpdateParams{
+		SessionID: "session-1",
+		Query:     "read",
+	}))
+	if update.Error == nil || !strings.Contains(update.Error.Message, "fuzzy file search session not found") {
+		t.Fatalf("session update after stop = %+v, want not found error", update)
+	}
+	if notifications := sink.List(); len(notifications) != 0 {
+		t.Fatalf("notifications after stopped session update = %#v, want none", notifications)
+	}
+}
+
+func TestRuntimeRouterExperimentalFeatureListResolvesThreadProjectConfig(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir project config: %v", err)
+	}
+	projectTrust := strings.ReplaceAll(filepath.Clean(project), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("[features]\nmemories = true\n"), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(home),
+		Features:     features.NewFeatureService(nil),
+	})
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: project}))
+	if start.Error != nil {
+		t.Fatalf("thread/start = %+v", start)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	response := router.Handle(requestWithParams(t, IntID(2), MethodExperimentalFeatureList, features.FeatureListParams{ThreadID: &threadID}))
+	if response.Error != nil {
+		t.Fatalf("experimentalFeature/list = %+v", response)
+	}
+	memories := featureEntryForTest(t, response.Result.(*features.FeatureListResponse), "memories")
+	if !memories.Enabled {
+		t.Fatalf("memories enabled = false, want true from project config")
+	}
+}
+
+func TestRuntimeRouterExperimentalFeatureListRejectsUnknownThreadID(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(t.TempDir()),
+		Features:     features.NewFeatureService(nil),
+	})
+	threadID := "00000000-0000-4000-8000-000000000001"
+	response := router.Handle(requestWithParams(t, IntID(1), MethodExperimentalFeatureList, features.FeatureListParams{ThreadID: &threadID}))
+	if response.Error == nil || response.Error.Code != -32600 || !strings.Contains(response.Error.Message, "thread not found: "+threadID) {
+		t.Fatalf("experimentalFeature/list unknown thread = %+v", response.Error)
+	}
+}
+
+func TestRuntimeRouterExperimentalFeatureEnablementSetAppliesToConfigReadsWithoutOverridingUserConfig(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:   config.NewConfigService(home),
+		Features: features.NewFeatureService(nil),
+	})
+
+	set := router.Handle(requestWithParams(t, IntID(1), MethodExperimentalFeatureSet, features.FeatureEnablementSetParams{
+		Enablement: map[string]bool{"auth_elicitation": true},
+	}))
+	if set.Error != nil {
+		t.Fatalf("experimentalFeature/enablement/set = %+v", set)
+	}
+	setResult := set.Result.(*features.FeatureEnablementSetResponse)
+	if len(setResult.Enablement) != 1 || !setResult.Enablement["auth_elicitation"] {
+		t.Fatalf("set enablement = %#v", setResult.Enablement)
+	}
+	for _, cwd := range []*string{nil, &project} {
+		read := router.Handle(requestWithParams(t, IntID(2), MethodConfigRead, config.ConfigReadParams{CWD: cwd}))
+		if read.Error != nil {
+			t.Fatalf("config/read = %+v", read)
+		}
+		if !featureEnabledInConfig(t, read.Result.(*config.ConfigReadResponse).Config, "auth_elicitation") {
+			t.Fatalf("auth_elicitation missing from config/read cwd=%v", cwd)
+		}
+	}
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nmemories = false\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	set = router.Handle(requestWithParams(t, IntID(3), MethodExperimentalFeatureSet, features.FeatureEnablementSetParams{
+		Enablement: map[string]bool{"memories": true},
+	}))
+	if set.Error != nil {
+		t.Fatalf("experimentalFeature/enablement/set memories = %+v", set)
+	}
+	read := router.Handle(requestWithParams(t, IntID(4), MethodConfigRead, config.ConfigReadParams{}))
+	if read.Error != nil {
+		t.Fatalf("config/read after user override = %+v", read)
+	}
+	if featureEnabledInConfig(t, read.Result.(*config.ConfigReadResponse).Config, "memories") {
+		t.Fatalf("memories should remain false from user config")
+	}
+}
+
+func TestRuntimeRouterExperimentalFeatureEnablementSetIgnoresInvalidFeaturesLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:   config.NewConfigService(t.TempDir()),
+		Features: features.NewFeatureService(nil),
+	})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodExperimentalFeatureSet, features.FeatureEnablementSetParams{
+		Enablement: map[string]bool{
+			"apps":                      false,
+			"auth_elicitation":          true,
+			"connectors":                false,
+			"personality":               false,
+			"plugins":                   false,
+			"tool_call_mcp_elicitation": false,
+			"unknown_feature":           true,
+		},
+	}))
+	if response.Error != nil {
+		t.Fatalf("experimentalFeature/enablement/set = %+v", response)
+	}
+	got := response.Result.(*features.FeatureEnablementSetResponse).Enablement
+	if len(got) != 1 || !got["auth_elicitation"] {
+		t.Fatalf("enablement = %#v, want only auth_elicitation=true", got)
+	}
+}
+
+func featureEntryForTest(t *testing.T, response *features.FeatureListResponse, key string) features.FeatureEntry {
+	t.Helper()
+	if response == nil {
+		t.Fatalf("feature list response is nil")
+	}
+	for _, entry := range response.Data {
+		if entry.Key == key {
+			return entry
+		}
+	}
+	t.Fatalf("feature %q missing from %#v", key, response.Data)
+	return features.FeatureEntry{}
+}
+
+func featureEnabledInConfig(t *testing.T, values map[string]any, key string) bool {
+	t.Helper()
+	featureValues, ok := values["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("features missing from config: %#v", values)
+	}
+	enabled, ok := featureValues[key].(bool)
+	if !ok {
+		t.Fatalf("features.%s missing/bad in %#v", key, featureValues)
+	}
+	return enabled
+}
+
+func TestRuntimeRouterAppListLoadsChatGPTDirectory(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("auth save error = %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.Path {
+		case "/connectors/directory/list":
+			if got := r.URL.Query().Get("external_logos"); got != "true" {
+				t.Fatalf("external_logos = %q", got)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+				t.Fatalf("Authorization = %q", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"apps": []map[string]any{{
+					"id":   "drive",
+					"name": "Google Drive",
+				}},
+			})
+		case "/connectors/directory/list_workspace":
+			writeJSON(t, w, map[string]any{"apps": []map[string]any{}})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config: config.NewConfigService(home),
+		Apps:   apps.NewAppService(nil),
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodAppList, apps.AppListParams{}))
+	if response.Error != nil {
+		t.Fatalf("app list response = %+v", response)
+	}
+	appList := response.Result.(*apps.AppListResponse)
+	if len(appList.Apps) != 1 || appList.Apps[0].ID != "drive" || appList.Apps[0].InstallURL == nil {
+		t.Fatalf("apps = %+v", appList.Apps)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestRuntimeRouterAppListUsesThreadProjectFeatureConfigLikeRust(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir project config: %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("auth save error = %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.Path {
+		case "/connectors/directory/list":
+			writeJSON(t, w, map[string]any{
+				"apps": []map[string]any{{
+					"id":   "beta",
+					"name": "Beta",
+				}},
+			})
+		case "/connectors/directory/list_workspace":
+			writeJSON(t, w, map[string]any{"apps": []map[string]any{}})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	projectTrust := strings.ReplaceAll(filepath.Clean(project), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("chatgpt_base_url = \""+server.URL+"\"\n\n[features]\nconnectors = false\n\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("[features]\nconnectors = true\n"), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Config:       config.NewConfigService(home),
+		Apps:         apps.NewAppService(nil),
+	})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: project}))
+	if start.Error != nil {
+		t.Fatalf("thread/start = %+v", start)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	global := router.Handle(requestWithParams(t, IntID(2), MethodAppList, apps.AppListParams{}))
+	if global.Error != nil {
+		t.Fatalf("global app/list = %+v", global)
+	}
+	if len(global.Result.(*apps.AppListResponse).Data) != 0 {
+		t.Fatalf("global apps = %#v, want empty from user connectors=false", global.Result.(*apps.AppListResponse).Data)
+	}
+	if requests != 0 {
+		t.Fatalf("global app/list made %d requests despite apps disabled", requests)
+	}
+
+	thread := router.Handle(requestWithParams(t, IntID(3), MethodAppList, apps.AppListParams{ThreadID: &threadID}))
+	if thread.Error != nil {
+		t.Fatalf("thread app/list = %+v", thread)
+	}
+	data := thread.Result.(*apps.AppListResponse).Data
+	if len(data) != 1 || data[0].ID != "beta" {
+		t.Fatalf("thread apps = %#v, want beta from thread project config", data)
+	}
+	if requests != 2 {
+		t.Fatalf("thread app/list requests = %d, want 2", requests)
+	}
+}
+
+func TestRuntimeRouterAppListEmitsUpdatedNotificationWithFullList(t *testing.T) {
+	limit := uint32(1)
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Apps: apps.NewAppService([]apps.AppEntry{{
+			ID:   "b",
+			Name: "Beta",
+		}, {
+			ID:   "a",
+			Name: "Alpha",
+		}}),
+	})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodAppList, apps.AppListParams{Limit: &limit}))
+	if response.Error != nil {
+		t.Fatalf("app list response = %+v", response)
+	}
+	appList := response.Result.(*apps.AppListResponse)
+	if len(appList.Data) != 1 || appList.Data[0].ID != "a" {
+		t.Fatalf("paged apps = %+v", appList.Data)
+	}
+	notification := realtimeNotification[*apps.AppListUpdatedNotification](t, sink, NotificationAppListUpdated)
+	if notification == nil || len(notification.Data) != 2 {
+		t.Fatalf("app list updated notification = %#v", notification)
+	}
+	if notification.Data[0].ID != "a" || notification.Data[1].ID != "b" {
+		t.Fatalf("notification apps = %+v", notification.Data)
+	}
+}
+
+func TestRuntimeRouterAppListForceRefetchEmitsCachedThenFreshNotification(t *testing.T) {
+	alphaV1 := "Alpha v1"
+	betaV1 := "Beta v1"
+	alphaV2 := "Alpha v2"
+	directory := &runtimeTestDirectoryProvider{apps: []apps.AppEntry{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Description: &alphaV1,
+	}, {
+		ID:          "beta",
+		Name:        "Beta",
+		Description: &betaV1,
+	}}}
+	accessible := &runtimeTestAccessibleProvider{apps: []apps.AppEntry{{
+		ID:           "beta",
+		Name:         "Beta",
+		IsAccessible: true,
+	}}}
+	service := apps.NewAppService(nil)
+	service.SetDirectoryProvider(directory)
+	service.SetAccessibleProvider(accessible)
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Apps: service})
+	router.SetNotificationSink(sink)
+
+	warm := router.Handle(requestWithParams(t, IntID(1), MethodAppList, apps.AppListParams{}))
+	if warm.Error != nil {
+		t.Fatalf("warm app list response = %+v", warm)
+	}
+	if directory.calls != 1 || accessible.calls != 1 {
+		t.Fatalf("warm provider calls = %d/%d, want 1/1", directory.calls, accessible.calls)
+	}
+	updates := appListUpdatedNotificationsForTest(t, sink)
+	if len(updates) != 1 {
+		t.Fatalf("warm updates = %#v, want one", updates)
+	}
+
+	directory.apps = []apps.AppEntry{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Description: &alphaV2,
+	}}
+	accessible.apps = nil
+	force := router.Handle(requestWithParams(t, IntID(2), MethodAppList, apps.AppListParams{ForceRefetch: true}))
+	if force.Error != nil {
+		t.Fatalf("force app list response = %+v", force)
+	}
+	if directory.calls != 2 || accessible.calls != 2 {
+		t.Fatalf("force provider calls = %d/%d, want 2/2", directory.calls, accessible.calls)
+	}
+	updates = appListUpdatedNotificationsForTest(t, sink)
+	if len(updates) != 3 {
+		t.Fatalf("force updates = %#v, want warm + cached + fresh", updates)
+	}
+	cached := updates[1].Data
+	if len(cached) != 2 || cached[0].ID != "beta" || cached[0].Description == nil || *cached[0].Description != betaV1 || cached[1].ID != "alpha" {
+		t.Fatalf("cached update = %+v", cached)
+	}
+	fresh := updates[2].Data
+	if len(fresh) != 1 || fresh[0].ID != "alpha" || fresh[0].Description == nil || *fresh[0].Description != alphaV2 {
+		t.Fatalf("fresh update = %+v", fresh)
+	}
+}
+
+type runtimeTestDirectoryProvider struct {
+	apps  []apps.AppEntry
+	calls int
+}
+
+func (p *runtimeTestDirectoryProvider) ListDirectoryApps(params *apps.AppDirectoryListParams) (*apps.AppDirectoryListResponse, error) {
+	p.calls++
+	allLoaded := true
+	return &apps.AppDirectoryListResponse{Apps: append([]apps.AppEntry(nil), p.apps...), AllConnectorsLoaded: &allLoaded}, nil
+}
+
+type runtimeTestAccessibleProvider struct {
+	apps  []apps.AppEntry
+	calls int
+}
+
+func (p *runtimeTestAccessibleProvider) ListAccessibleApps(params *apps.AppAccessibleListParams) (*apps.AppAccessibleListResponse, error) {
+	p.calls++
+	return &apps.AppAccessibleListResponse{Apps: append([]apps.AppEntry(nil), p.apps...), CodexAppsReady: true}, nil
+}
+
+func appListUpdatedNotificationsForTest(t *testing.T, sink *NotificationBuffer) []*apps.AppListUpdatedNotification {
+	t.Helper()
+	var out []*apps.AppListUpdatedNotification
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationAppListUpdated {
+			continue
+		}
+		payload, ok := notification.Params.(*apps.AppListUpdatedNotification)
+		if !ok {
+			t.Fatalf("app/list updated params = %#v", notification.Params)
+		}
+		out = append(out, payload)
+	}
+	return out
+}
+
+func TestRuntimeRouterAppListUsesPluginAppMetadata(t *testing.T) {
+	description := "Track work"
+	installURL := "https://chatgpt.com/connectors/linear"
+	logoURL := "https://example.com/slack.png"
+	slackID := "slack"
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			ID:          "linear-plugin@debug",
+			Name:        "linear-plugin",
+			DisplayName: "Linear Plugin",
+			Installed:   true,
+			Enabled:     true,
+		},
+		Apps: []plugin.AppSummary{{
+			ID:          "linear",
+			DisplayName: "Linear",
+			Description: &description,
+			InstallURL:  &installURL,
+		}},
+		AppTemplates: []plugin.AppTemplateSummary{{
+			TemplateID:           "slack-template",
+			DisplayName:          "Slack Template",
+			CanonicalConnectorID: &slackID,
+			LogoURL:              &logoURL,
+		}},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		Apps:    apps.NewAppService(nil),
+		Plugins: plugins,
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodAppList, apps.AppListParams{}))
+	if response.Error != nil {
+		t.Fatalf("app list response = %+v", response)
+	}
+	appList := response.Result.(*apps.AppListResponse)
+	linear := appEntryByIDForTest(appList.Apps, "linear")
+	if linear == nil || linear.Name != "Linear" || linear.Description == nil || *linear.Description != "Track work" {
+		t.Fatalf("linear app = %#v", linear)
+	}
+	if linear.InstallURL == nil || *linear.InstallURL != installURL || strings.Join(linear.PluginDisplayNames, ",") != "Linear Plugin" {
+		t.Fatalf("linear metadata = %#v", linear)
+	}
+	slack := appEntryByIDForTest(appList.Apps, "slack")
+	if slack == nil || slack.Name != "Slack Template" || slack.LogoURL == nil || *slack.LogoURL != logoURL {
+		t.Fatalf("slack template app = %#v", slack)
+	}
+}
+
+func appEntryByIDForTest(entries []apps.AppEntry, id string) *apps.AppEntry {
+	for i := range entries {
+		if entries[i].ID == id {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+func TestRuntimeRouterAppListMergesMCPAccessibleConnectors(t *testing.T) {
+	mcpService := mcp.NewMCPService(nil)
+	mcpService.SetServer(mcp.MCPServerStatus{
+		Name:  mcp.CodexAppsServerName,
+		State: mcp.MCPServerReady,
+		Server: mcp.MCPServerInfo{
+			Name: mcp.CodexAppsServerName,
+		},
+		Tools: []mcp.MCPToolInfo{{
+			Name: "search",
+			Meta: map[string]any{
+				"codex_apps": map[string]any{
+					"connector_id":           "drive",
+					"connector_name":         "Google Drive",
+					"connector_description":  "Drive files",
+					"connector_icon_url":     "https://example.com/drive.png",
+					"connector_color":        "#4285f4",
+					"homepage_url":           "https://drive.example.com",
+					"docs_url":               "https://docs.example.com/drive",
+					"is_enabled":             false,
+					"plugin_display_names":   []any{"Docs Plugin"},
+					"namespace_description":  "Files",
+					"synthetic_link_ignored": false,
+				},
+			},
+		}},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		Apps: apps.NewAppService([]apps.AppEntry{{
+			ID:        "drive",
+			Name:      "drive",
+			IsEnabled: true,
+			Enabled:   true,
+		}}),
+		MCP: mcpService,
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodAppList, apps.AppListParams{}))
+	if response.Error != nil {
+		t.Fatalf("app list response = %+v", response)
+	}
+	appList := response.Result.(*apps.AppListResponse)
+	if len(appList.Apps) != 1 {
+		t.Fatalf("apps = %+v, want one", appList.Apps)
+	}
+	app := appList.Apps[0]
+	if app.ID != "drive" || app.Name != "Google Drive" || !app.IsAccessible || app.Description == nil || *app.Description != "Drive files" {
+		t.Fatalf("app = %+v", app)
+	}
+	if app.IsEnabled {
+		t.Fatalf("app IsEnabled = true, want false from MCP connector metadata")
+	}
+	if len(app.PluginDisplayNames) != 1 || app.PluginDisplayNames[0] != "Docs Plugin" {
+		t.Fatalf("plugin names = %+v", app.PluginDisplayNames)
+	}
+	if app.InstallURL == nil || !strings.Contains(*app.InstallURL, "/google-drive/drive") {
+		t.Fatalf("install URL = %+v", app.InstallURL)
+	}
+	if app.LogoURL == nil || *app.LogoURL != "https://example.com/drive.png" {
+		t.Fatalf("logo URL = %+v", app.LogoURL)
+	}
+	branding, ok := app.Branding.(map[string]any)
+	if !ok || branding["iconUrl"] != "https://example.com/drive.png" || branding["color"] != "#4285f4" || branding["website"] != "https://drive.example.com" || branding["docsUrl"] != "https://docs.example.com/drive" {
+		t.Fatalf("branding = %#v", app.Branding)
+	}
+}
+
+func TestRuntimeRouterToolRouterForTurnExposesMCPStatusTools(t *testing.T) {
+	hidden := false
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[apps.mail]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	mcpService := mcp.NewMCPService(nil)
+	mcpService.SetServer(mcp.MCPServerStatus{
+		Name:  "drive",
+		State: mcp.MCPServerReady,
+		Server: mcp.MCPServerInfo{
+			Name: "drive",
+		},
+		Tools: []mcp.MCPToolInfo{
+			{
+				Name:        "read",
+				Description: "Read Drive files",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string"},
+					},
+				},
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			{
+				Name:         "secret",
+				Description:  "Hidden Drive tool",
+				Meta:         map[string]any{"modelVisible": hidden},
+				Annotations:  map[string]any{"readOnlyHint": true},
+				InputSchema:  map[string]any{"type": "object"},
+				OutputSchema: map[string]any{"type": "object"},
+			},
+		},
+	})
+	mcpService.SetServer(mcp.MCPServerStatus{
+		Name:  mcp.CodexAppsServerName,
+		State: mcp.MCPServerReady,
+		Server: mcp.MCPServerInfo{
+			Name: mcp.CodexAppsServerName,
+		},
+		Tools: []mcp.MCPToolInfo{
+			{
+				Name:        "create_event",
+				Description: "Create calendar events",
+				Meta: map[string]any{
+					"codex_apps": map[string]any{
+						"connector_id":         "calendar",
+						"connector_name":       "Calendar",
+						"plugin_display_names": []any{"Calendar Plugin"},
+					},
+				},
+			},
+			{
+				Name:        "send_mail",
+				Description: "Send mail",
+				Meta: map[string]any{
+					"codex_apps": map[string]any{
+						"connector_id":   "mail",
+						"connector_name": "Mail",
+					},
+				},
+			},
+			{
+				Name:        "synthetic_link",
+				Description: "Synthetic connector link",
+				Meta: map[string]any{
+					"codex_apps": map[string]any{
+						"connector_id":   "calendar",
+						"connector_name": "Calendar",
+						"synthetic_link": true,
+					},
+				},
+			},
+		},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		Apps:   apps.NewAppService(nil),
+		Config: config.NewConfigService(home),
+		MCP:    mcpService,
+	})
+
+	toolRouter, err := router.toolRouterForTurn(t.TempDir(), &turn.TurnStartParams{ThreadID: "thread-1"}, "turn-1")
+	if err != nil {
+		t.Fatalf("toolRouterForTurn() error = %v", err)
+	}
+	visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+	if !visible[tool.ToolSearchName] {
+		t.Fatalf("model-visible specs = %#v, missing tool_search", visible)
+	}
+	for _, name := range []string{"mcp__drive.read", "mcp__codex_apps__calendar.create_event"} {
+		if visible[name] {
+			t.Fatalf("model-visible specs = %#v, %s should be deferred", visible, name)
+		}
+	}
+
+	driveSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "drive files")
+	driveRead, ok := driveSpecs["mcp__drive.read"]
+	if !ok {
+		t.Fatalf("drive search specs = %#v, missing mcp__drive.read", sortedToolSpecKeysForTest(driveSpecs))
+	}
+	if !driveRead.Parallel {
+		t.Fatalf("drive.read Parallel = false, want readOnlyHint to carry through")
+	}
+	if properties, ok := driveRead.InputSchema["properties"].(map[string]any); !ok || properties["path"] == nil {
+		t.Fatalf("drive.read input schema = %#v", driveRead.InputSchema)
+	}
+	if _, ok := driveSpecs["drive.secret"]; ok {
+		t.Fatalf("drive search specs = %#v, should not include hidden tool", sortedToolSpecKeysForTest(driveSpecs))
+	}
+
+	calendarSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "calendar event")
+	calendarCreate, ok := calendarSpecs["mcp__codex_apps__calendar.create_event"]
+	if !ok {
+		t.Fatalf("calendar search specs = %#v, missing mcp__codex_apps__calendar.create_event", sortedToolSpecKeysForTest(calendarSpecs))
+	}
+	if !strings.Contains(calendarCreate.Description, "Calendar Plugin") {
+		t.Fatalf("calendar description = %q, missing plugin provenance", calendarCreate.Description)
+	}
+	for _, name := range []string{"mcp__codex_apps__mail.send_mail", "mcp__codex_apps__mail.synthetic_link"} {
+		if _, ok := calendarSpecs[name]; ok {
+			t.Fatalf("calendar search specs = %#v, should not include %s", sortedToolSpecKeysForTest(calendarSpecs), name)
+		}
+	}
+	mailSpecs := runtimeRouterToolSearchSpecsForTest(t, toolRouter, "mail")
+	if _, ok := mailSpecs["mcp__codex_apps__mail.send_mail"]; ok {
+		t.Fatalf("mail search specs = %#v, disabled connector should not be exposed", sortedToolSpecKeysForTest(mailSpecs))
+	}
+}
+
+func TestRuntimeRouterUnifiedExecToolSurfaceFollowsEffectiveFeatureConfigLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			body := fmt.Sprintf("[features]\nunified_exec = %t\n", tc.enabled)
+			if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+			defer router.Close()
+
+			toolRouter, err := router.toolRouterForTurn(t.TempDir(), &turn.TurnStartParams{
+				ThreadID: "thread-unified-exec",
+			}, "turn-unified-exec")
+			if err != nil {
+				t.Fatalf("toolRouterForTurn() error = %v", err)
+			}
+			visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+			if visible[tool.DefaultWriteStdinToolName] != tc.enabled {
+				t.Fatalf("model-visible specs = %#v, write_stdin enabled = %t", visible, tc.enabled)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
+	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
+	if err := store.Save(&session.Record{ID: "thread-unified", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("save thread: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Analytics:    analyticsSink,
+	})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	router.clientInfo["conn-unified"] = ClientInfo{Name: "codex-tui", Version: "1.2.3"}
+	router.active["thread-unified"] = &activeRuntimeTurn{
+		ThreadID:     "thread-unified",
+		TurnID:       "turn-unified",
+		ConnectionID: "conn-unified",
+		RunConfig:    &appTurnRunConfig{},
+	}
+	emit := router.runtimeUnifiedExecEventSink("thread-unified", "turn-unified")
+	startedAt := time.Now().Add(-time.Second).UTC()
+
+	emit(tool.UnifiedExecEvent{
+		Kind:        tool.UnifiedExecEventBegin,
+		CallID:      "call-unified",
+		HookCommand: "printf hello",
+		CWD:         t.TempDir(),
+		ProcessID:   42,
+		StartedAt:   startedAt,
+	})
+	emit(tool.UnifiedExecEvent{Kind: tool.UnifiedExecEventOutputDelta, CallID: "call-unified", ProcessID: 42, Output: "hello"})
+	emit(tool.UnifiedExecEvent{Kind: tool.UnifiedExecEventTerminalInteraction, CallID: "call-unified", ProcessID: 42, Input: "quit\n"})
+	emit(tool.UnifiedExecEvent{
+		Kind:        tool.UnifiedExecEventEnd,
+		CallID:      "call-unified",
+		HookCommand: "printf hello",
+		CWD:         t.TempDir(),
+		ProcessID:   42,
+		Output:      "hello",
+		ExitCode:    7,
+		Duration:    1500 * time.Millisecond,
+		StartedAt:   startedAt,
+	})
+
+	notifications := sink.List()
+	if len(notifications) != 4 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	started, ok := notifications[0].Params.(*ItemStartedNotification)
+	if !ok || notifications[0].Method != NotificationItemStarted || started.ThreadID != "thread-unified" || started.TurnID != "turn-unified" {
+		t.Fatalf("started notification = %#v", notifications[0])
+	}
+	if started.Item["id"] != "call-unified" || started.Item["source"] != string(CommandExecutionSourceUnifiedExecStartup) || started.Item["processId"] != "42" || started.Item["status"] != string(CommandExecutionInProgress) {
+		t.Fatalf("started item = %#v", started.Item)
+	}
+	delta, ok := notifications[1].Params.(*CommandExecutionOutputDeltaNotification)
+	if !ok || notifications[1].Method != NotificationCommandExecutionOutputDelta || delta.ItemID != "call-unified" || delta.Delta != "hello" {
+		t.Fatalf("delta notification = %#v", notifications[1])
+	}
+	interaction, ok := notifications[2].Params.(*TerminalInteractionNotification)
+	if !ok || notifications[2].Method != NotificationTerminalInteraction || interaction.ItemID != "call-unified" || interaction.ProcessID != "42" || interaction.Stdin != "quit\n" {
+		t.Fatalf("interaction notification = %#v", notifications[2])
+	}
+	completed, ok := notifications[3].Params.(*ItemCompletedNotification)
+	if !ok || notifications[3].Method != NotificationItemCompleted {
+		t.Fatalf("completed notification = %#v", notifications[3])
+	}
+	if completed.Item["id"] != "call-unified" || completed.Item["status"] != string(CommandExecutionFailed) || completed.Item["exitCode"] != float64(7) || completed.Item["aggregatedOutput"] != "hello" {
+		t.Fatalf("completed item = %#v", completed.Item)
+	}
+	analytics := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, "turn-unified").EventParams
+	if analytics.ItemID != "call-unified" || analytics.ToolName != "unified_exec" || analytics.CommandExecutionSource != "unified_exec_startup" || analytics.ExitCode == nil || *analytics.ExitCode != 7 {
+		t.Fatalf("unified exec analytics = %#v", analytics)
+	}
+	if analytics.StartedAtMS != uint64(startedAt.UnixMilli()) || analytics.CompletedAtMS != uint64(startedAt.Add(1500*time.Millisecond).UnixMilli()) || analytics.ExecutionDurationMS == nil || *analytics.ExecutionDurationMS != 1500 {
+		t.Fatalf("unified exec analytics timing = %#v", analytics)
+	}
+
+	if shouldNotifyRuntimeItemCompleted(ThreadItem{Type: "tool_output", Data: map[string]any{"unified_exec_evented": true}}) {
+		t.Fatal("evented unified exec output should not emit a duplicate completed notification")
+	}
+
+	if _, err := store.AppendItem("thread-unified", session.Item{
+		ID:       "transport-output",
+		Type:     "tool_output",
+		Text:     "model transport",
+		Data:     map[string]any{"command": "printf hello"},
+		Metadata: map[string]any{"turnId": "turn-unified", "hiddenFromThread": true},
+	}); err != nil {
+		t.Fatalf("append hidden transport: %v", err)
+	}
+	record, err := store.Load("thread-unified")
+	if err != nil {
+		t.Fatalf("load thread: %v", err)
+	}
+	items, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: "thread-unified"})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	if len(items.Data) != 1 || threadItemWireType(&items.Data[0]) != "commandExecution" || items.Data[0].ID != "call-unified" {
+		t.Fatalf("visible persisted items = %#v", items.Data)
+	}
+}
+
+func TestRuntimeRouterMCPToolStartedMapsToRustV2Notification(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	startedAt := time.Now().UTC()
+
+	notify := router.runtimeToolStartedNotifier("thread-mcp", "turn-mcp", t.TempDir(), false)
+	notify(context.Background(), &tool.Invocation{
+		CallID:   "call-mcp",
+		ToolName: tool.NamespacedName("mcp__geogebra", "geogebra_create_point"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"label":"A"}`},
+	}, startedAt)
+
+	notifications := sink.List()
+	if len(notifications) != 1 || notifications[0].Method != NotificationItemStarted {
+		t.Fatalf("MCP start notifications = %#v", notifications)
+	}
+	started, ok := notifications[0].Params.(*ItemStartedNotification)
+	if !ok {
+		t.Fatalf("MCP start notification = %#v", notifications[0])
+	}
+	if started.Item["id"] != "call-mcp" || started.Item["type"] != "mcpToolCall" || started.Item["server"] != "geogebra" || started.Item["tool"] != "geogebra_create_point" || started.Item["status"] != "inProgress" {
+		t.Fatalf("MCP start item = %#v", started.Item)
+	}
+	arguments, ok := started.Item["arguments"].(map[string]any)
+	if !ok || arguments["label"] != "A" {
+		t.Fatalf("MCP start arguments = %#v", started.Item["arguments"])
+	}
+}
+
+func TestRuntimeRouterUnifiedExecBackgroundTerminalHelper(t *testing.T) {
+	if os.Getenv("CODEX_GO_UNIFIED_EXEC_BACKGROUND_HELPER") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
+
+func TestRuntimeRouterBackgroundTerminalsIncludeThreadScopedUnifiedExecLikeRust(t *testing.T) {
+	manager := tool.NewUnifiedExecManagerWithOptions(2, 5_000)
+	defer manager.Close()
+	result, err := manager.Exec(context.Background(), &tool.ShellRequest{
+		Command:             []string{os.Args[0], "-test.run=^TestRuntimeRouterUnifiedExecBackgroundTerminalHelper$"},
+		HookCommand:         "background helper",
+		CWD:                 t.TempDir(),
+		Env:                 map[string]string{"CODEX_GO_UNIFIED_EXEC_BACKGROUND_HELPER": "1"},
+		YieldTimeMS:         250,
+		TimeoutMS:           15_000,
+		UnifiedExecThreadID: "thread-background",
+		UnifiedExecTurnID:   "turn-background",
+	}, "call-background")
+	if err != nil || result.ProcessID == nil {
+		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+
+	extras := NewThreadExtraService()
+	extras.SetBackgroundTerminals("thread-background", []BackgroundTerminal{{
+		ItemID: "user-shell", ProcessID: "900", Command: "user shell", CWD: t.TempDir(),
+	}})
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras, UnifiedExec: manager})
+	defer router.Close()
+
+	listed, err := router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-background"})
+	if err != nil {
+		t.Fatalf("listBackgroundTerminals() error = %v", err)
+	}
+	if len(listed.Data) != 2 || listed.Data[0].ProcessID != strconv.Itoa(*result.ProcessID) || listed.Data[0].ItemID != "call-background" || listed.Data[0].Command != "background helper" || listed.Data[1].ProcessID != "900" {
+		t.Fatalf("background terminals = %#v", listed.Data)
+	}
+	other, err := router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-other"})
+	if err != nil || len(other.Data) != 0 {
+		t.Fatalf("other thread terminals = %#v, %v", other, err)
+	}
+
+	terminated, err := router.terminateBackgroundTerminal(&BackgroundTerminalsTerminateParams{
+		ThreadID: "thread-background", ProcessID: strconv.Itoa(*result.ProcessID),
+	})
+	if err != nil || !terminated.Terminated {
+		t.Fatalf("terminateBackgroundTerminal() = %#v, %v", terminated, err)
+	}
+	if _, err := router.cleanBackgroundTerminals(&BackgroundTerminalsCleanParams{ThreadID: "thread-background"}); err != nil {
+		t.Fatalf("cleanBackgroundTerminals() error = %v", err)
+	}
+	listed, err = router.listBackgroundTerminals(&BackgroundTerminalsListParams{ThreadID: "thread-background"})
+	if err != nil || len(listed.Data) != 0 {
+		t.Fatalf("terminals after clean = %#v, %v", listed, err)
+	}
+}
+
+type appServerExecServerURLWriter struct {
+	once sync.Once
+	url  chan string
+}
+
+func (w *appServerExecServerURLWriter) Write(data []byte) (int, error) {
+	w.once.Do(func() { w.url <- strings.TrimSpace(string(data)) })
+	return len(data), nil
+}
+
+func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	urlCh := make(chan string, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &appServerExecServerURLWriter{url: urlCh})
+	}()
+	var execServerURL string
+	select {
+	case execServerURL = <-urlCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exec-server URL was not reported")
+	}
+	defer func() {
+		cancelServer()
+		select {
+		case err := <-serverDone:
+			if err != nil {
+				t.Errorf("exec-server shutdown error = %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("exec-server did not stop")
+		}
+	}()
+
+	home := t.TempDir()
+	configBody := "sandbox_mode = \"workspace-write\"\n" +
+		"[features]\nunified_exec = true\n" +
+		"[network_proxy]\n" +
+		"enabled = true\n" +
+		"proxy_url = \"http://127.0.0.1:0\"\n" +
+		"enable_socks5 = false\n" +
+		"mode = \"full\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cwd := t.TempDir()
+	shellInfo := EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}
+	if runtime.GOOS == "windows" {
+		shellInfo = EnvironmentShellInfo{Name: "powershell", Path: "powershell"}
+	}
+	environments := NewEnvironmentManager(shellInfo, cwd)
+	for _, id := range []string{"remote-primary", "remote-secondary"} {
+		if _, err := environments.Add(&EnvironmentAddParams{EnvironmentID: id, ExecServerURL: execServerURL}); err != nil {
+			t.Fatalf("add environment %s: %v", id, err)
+		}
+		if err := environments.SetInfo(id, shellInfo, cwd); err != nil {
+			t.Fatalf("set environment info %s: %v", id, err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:                     config.NewConfigService(home),
+		Environment:                environments,
+		ManagedNetworkRequirements: &config.NetworkRequirements{Enabled: boolPtr(true)},
+	})
+	defer router.Close()
+	params := &turn.TurnStartParams{
+		ThreadID:       "thread-remote-environment",
+		ApprovalPolicy: sandbox.ApprovalNever,
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+		Environments: []map[string]any{
+			{"environmentId": "remote-primary", "cwd": cwd},
+			{"environmentId": "remote-secondary", "cwd": cwd},
+		},
+	}
+	toolRouter, err := router.toolRouterForTurn(cwd, params, "turn-remote-environment")
+	if err != nil {
+		t.Fatalf("toolRouterForTurn() error = %v", err)
+	}
+	visibleSpecs := toolRouter.ModelVisibleSpecs()
+	var execSpec *tool.Spec
+	for i := range visibleSpecs {
+		if visibleSpecs[i].Name.Key() == tool.DefaultExecCommandToolName {
+			execSpec = &visibleSpecs[i]
+			break
+		}
+	}
+	if execSpec == nil {
+		t.Fatalf("exec spec = %#v", execSpec)
+	}
+	properties, ok := execSpec.InputSchema["properties"].(map[string]any)
+	if !ok || properties["environment_id"] == nil {
+		t.Fatalf("exec spec = %#v", execSpec)
+	}
+	proxyCommand := `printf '%s' "$HTTP_PROXY"`
+	if runtime.GOOS == "windows" {
+		proxyCommand = `Write-Output $env:HTTP_PROXY`
+	}
+	arguments, err := json.Marshal(map[string]any{"cmd": proxyCommand, "environment_id": "remote-secondary", "yield_time_ms": 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := toolRouter.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "call-remote-environment",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)},
+	})
+	if err != nil {
+		t.Fatalf("remote exec dispatch error = %v", err)
+	}
+	if output == nil || output.Data["exit_code"] != 0 {
+		t.Fatalf("remote exec output = %#v", output)
+	}
+	router.managedNetworksMu.Lock()
+	managed := router.managedNetworks[params.ThreadID]
+	router.managedNetworksMu.Unlock()
+	if managed == nil {
+		t.Fatal("thread managed network was not started")
+	}
+	secondaryEnv, _, err := managed.PrepareForEnvironment("remote-secondary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondaryProxy := secondaryEnv["HTTP_PROXY"]
+	if secondaryProxy == "" || secondaryProxy == managed.EnvSnapshot()["HTTP_PROXY"] || !strings.Contains(output.Body, secondaryProxy) {
+		t.Fatalf("remote output did not use isolated secondary proxy %q; root=%q output=%q", secondaryProxy, managed.EnvSnapshot()["HTTP_PROXY"], output.Body)
+	}
+	primaryEnv, _, err := managed.PrepareForEnvironment("remote-primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primaryEnv["HTTP_PROXY"] == secondaryProxy {
+		t.Fatalf("primary and secondary environments share proxy %q", secondaryProxy)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEnvironmentUsesRemoteInfoShellLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	urlCh := make(chan string, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &appServerExecServerURLWriter{url: urlCh})
+	}()
+	serverURL := <-urlCh
+	defer func() {
+		cancelServer()
+		<-serverDone
+	}()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "fake", Path: "fake-shell"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "remote-info", ExecServerURL: serverURL}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	defer router.Close()
+	environments := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{Environments: []map[string]any{{
+		"environmentId": "remote-info",
+		"cwd":           t.TempDir(),
+	}}})
+	if len(environments) != 1 || environments[0].Shell == nil || environments[0].Shell.Path == "fake-shell" {
+		t.Fatalf("environments = %#v", environments)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEnvironmentInfoFailureDoesNotUseDefaultShellLikeRust(t *testing.T) {
+	timeoutMS := uint64(50)
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "fake", Path: "fake-shell"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID:    "remote-failed-info",
+		ExecServerURL:    "ws://127.0.0.1:1",
+		ConnectTimeoutMS: &timeoutMS,
+	}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	defer router.Close()
+	environments := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{Environments: []map[string]any{{
+		"environmentId": "remote-failed-info",
+		"cwd":           t.TempDir(),
+	}}})
+	if len(environments) != 1 || environments[0].Shell != nil {
+		t.Fatalf("environments = %#v", environments)
+	}
+}
+
+func runtimeRouterToolSearchSpecsForTest(t *testing.T, router *tool.Router, query string) map[string]tool.Spec {
+	t.Helper()
+	output, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "search-" + strings.ReplaceAll(query, " ", "-"),
+		ToolName: tool.PlainName(tool.ToolSearchName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"query":` + strconv.Quote(query) + `}`},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch(tool_search %q) error = %v", query, err)
+	}
+	rawTools, ok := output.Data["tools"].([]any)
+	if !ok {
+		t.Fatalf("tool_search output data = %#v", output.Data)
+	}
+	specs := make(map[string]tool.Spec, len(rawTools))
+	for _, raw := range rawTools {
+		spec, ok := raw.(tool.Spec)
+		if !ok {
+			t.Fatalf("tool_search tool = %#v, want tool.Spec", raw)
+		}
+		specs[spec.Name.Key()] = spec
+	}
+	return specs
+}
+
+func toolSpecKeySetForTest(specs []tool.Spec) map[string]bool {
+	out := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		if key := spec.Name.Key(); key != "" {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+func sortedToolSpecKeysForTest(specs map[string]tool.Spec) []string {
+	keys := make([]string, 0, len(specs))
+	for key := range specs {
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func TestRuntimeRouterDispatchesThreadExtrasAndRealtime(t *testing.T) {
+	extras := NewThreadExtraService()
+	extras.SetBackgroundTerminals("thread-1", []BackgroundTerminal{
+		{ItemID: "item-1", ProcessID: "proc-1", Command: "sleep", CWD: "D:/repo"},
+	})
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-1", false)
+
+	budget := int64(100)
+	objective := "finish"
+	setGoal := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-1", Objective: &objective, TokenBudget: &budget,
+	}))
+	if setGoal.Error != nil || setGoal.Result.(*GoalSetResponse).Goal.Objective != "finish" {
+		t.Fatalf("goal set = %+v", setGoal)
+	}
+	getGoal := router.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-1"}))
+	if getGoal.Error != nil || getGoal.Result.(*GoalGetResponse).Goal == nil {
+		t.Fatalf("goal get = %+v", getGoal)
+	}
+	shell := router.Handle(requestWithParams(t, IntID(3), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID: "thread-1", Command: "pwd",
+	}))
+	if shell.Error != nil {
+		t.Fatalf("shell command = %+v", shell)
+	}
+	terminals := router.Handle(requestWithParams(t, IntID(4), MethodThreadBackgroundTerminalsList, BackgroundTerminalsListParams{ThreadID: "thread-1"}))
+	if terminals.Error != nil {
+		t.Fatalf("background terminals = %+v", terminals)
+	}
+	terminalData := terminals.Result.(*BackgroundTerminalsListResponse).Data
+	foundPreexistingTerminal := false
+	for _, terminal := range terminalData {
+		if terminal.ProcessID == "proc-1" {
+			foundPreexistingTerminal = true
+			break
+		}
+	}
+	if !foundPreexistingTerminal {
+		t.Fatalf("background terminals missing preexisting terminal: %+v", terminalData)
+	}
+	clearGoal := router.Handle(requestWithParams(t, IntID(5), MethodThreadGoalClear, GoalClearParams{ThreadID: "thread-1"}))
+	if clearGoal.Error != nil || !clearGoal.Result.(*GoalClearResponse).Cleared {
+		t.Fatalf("goal clear = %+v", clearGoal)
+	}
+	modelName := "gpt-settings"
+	permissions := "trusted"
+	settingsUpdate := router.Handle(requestWithParams(t, IntID(6), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:    "thread-1",
+		Model:       &modelName,
+		Permissions: &permissions,
+	}))
+	if settingsUpdate.Error != nil {
+		t.Fatalf("settings update = %+v", settingsUpdate)
+	}
+	settingsNotification := threadSettingsNotification(t, sink, "thread-1")
+	if settingsNotification.ThreadSettings.Model != "gpt-settings" ||
+		settingsNotification.ThreadSettings.ActivePermissionProfile == nil ||
+		*settingsNotification.ThreadSettings.ActivePermissionProfile != "trusted" {
+		t.Fatalf("thread/settings/updated = %+v", settingsNotification)
+	}
+	serviceTier := "priority"
+	setServiceTier := router.Handle(requestWithParams(t, IntID(7), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:    "thread-1",
+		ServiceTier: &ThreadExtraOptionalString{Set: true, Value: &serviceTier},
+	}))
+	if setServiceTier.Error != nil {
+		t.Fatalf("settings service tier set = %+v", setServiceTier)
+	}
+	clearServiceTier := router.Handle(requestWithParams(t, IntID(8), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:    "thread-1",
+		ServiceTier: &ThreadExtraOptionalString{Set: true},
+	}))
+	if clearServiceTier.Error != nil {
+		t.Fatalf("settings service tier clear = %+v", clearServiceTier)
+	}
+	clearNotification := lastThreadSettingsNotification(t, sink, "thread-1")
+	if clearNotification.ThreadSettings.Model != "gpt-settings" ||
+		clearNotification.ThreadSettings.ServiceTier == nil ||
+		*clearNotification.ThreadSettings.ServiceTier != model.ServiceTierDefaultRequestValue {
+		t.Fatalf("thread/settings/updated clear = %+v", clearNotification)
+	}
+	sandboxPolicy := "read-only"
+	conflict := router.Handle(requestWithParams(t, IntID(9), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:      "thread-1",
+		Permissions:   &permissions,
+		SandboxPolicy: &sandboxPolicy,
+	}))
+	if conflict.Error == nil || conflict.Error.Code != -32600 || conflict.Error.Message != "`permissions` cannot be combined with `sandboxPolicy`" {
+		t.Fatalf("settings conflict error = %+v", conflict.Error)
+	}
+
+	realtimeSink := NewNotificationBuffer()
+	realtimeRouter := NewRuntimeRouter(RuntimeServices{})
+	realtimeRouter.SetNotificationSink(realtimeSink)
+	start := realtimeRouter.Handle(requestWithParams(t, IntID(10), MethodThreadRealtimeStart, map[string]any{
+		"threadId": "thread-1", "outputModality": "text", "realtimeSessionId": "rt-1",
+	}))
+	if start.Error != nil {
+		t.Fatalf("realtime start = %+v", start)
+	}
+	started := realtimeNotification[*ThreadRealtimeStartedNotification](t, realtimeSink, NotificationThreadRealtimeStarted)
+	if started.ThreadID != "thread-1" || started.RealtimeSessionID == nil || *started.RealtimeSessionID != "rt-1" || started.Version != "v2" {
+		t.Fatalf("realtime started notification = %+v", started)
+	}
+	appendText := realtimeRouter.Handle(requestWithParams(t, IntID(11), MethodThreadRealtimeAppendText, map[string]any{
+		"threadId": "thread-1", "text": "hello",
+	}))
+	if appendText.Error != nil {
+		t.Fatalf("realtime append text = %+v", appendText)
+	}
+	voices := realtimeRouter.Handle(requestWithParams(t, IntID(12), MethodThreadRealtimeListVoices, map[string]any{}))
+	if voices.Error != nil {
+		t.Fatalf("realtime voices = %+v", voices)
+	}
+	stop := realtimeRouter.Handle(requestWithParams(t, IntID(11), MethodThreadRealtimeStop, map[string]any{"threadId": "thread-1"}))
+	if stop.Error != nil {
+		t.Fatalf("realtime stop = %+v", stop)
+	}
+	closed := realtimeNotification[*ThreadRealtimeClosedNotification](t, realtimeSink, NotificationThreadRealtimeClosed)
+	if closed.ThreadID != "thread-1" || closed.Reason == nil || *closed.Reason != "client" {
+		t.Fatalf("realtime closed notification = %+v", closed)
+	}
+	webrtc := realtimeRouter.Handle(requestWithParams(t, IntID(11), MethodThreadRealtimeStart, map[string]any{
+		"threadId": "thread-1", "outputModality": "audio", "transport": map[string]any{"type": "webrtc", "sdp": "offer"},
+	}))
+	if webrtc.Error != nil {
+		t.Fatalf("realtime webrtc start = %+v", webrtc)
+	}
+	sdp := realtimeNotification[*ThreadRealtimeSDPNotification](t, realtimeSink, NotificationThreadRealtimeSDP)
+	if sdp.ThreadID != "thread-1" || sdp.SDP != "answer:offer" {
+		t.Fatalf("realtime sdp notification = %+v", sdp)
+	}
+}
+
+func TestRuntimeRouterLiveThreadOnlyMethodsRejectNotLoaded(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-cold", fixedTime())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		ThreadExtras:   NewThreadExtraService(),
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: NewServerRequestBroker(),
+	})
+	modelName := "gpt-cold"
+
+	cases := []struct {
+		name   string
+		method Method
+		params any
+	}{
+		{"increment", MethodThreadIncrementElicitation, ThreadIncrementElicitationParams{ThreadID: "thread-cold"}},
+		{"legacy increment", MethodThreadIncrementElicitationLegacy, ThreadIncrementElicitationParams{ThreadID: "thread-cold"}},
+		{"decrement", MethodThreadDecrementElicitation, ThreadDecrementElicitationParams{ThreadID: "thread-cold"}},
+		{"legacy decrement", MethodThreadDecrementElicitationLegacy, ThreadDecrementElicitationParams{ThreadID: "thread-cold"}},
+		{"guardian", MethodThreadApproveGuardianDeniedAction, ThreadApproveGuardianDeniedActionParams{ThreadID: "thread-cold", Event: json.RawMessage(`{"id":"denied"}`)}},
+		{"settings", MethodThreadSettingsUpdate, SettingsUpdateParams{ThreadID: "thread-cold", Model: &modelName}},
+		{"settings conflict", MethodThreadSettingsUpdate, SettingsUpdateParams{ThreadID: "thread-cold", Permissions: stringPtr("trusted"), SandboxPolicy: stringPtr("workspace-write")}},
+		{"inject items", MethodThreadInjectItems, ThreadInjectItemsParams{ThreadID: "thread-cold", Items: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"injected"}]}`)}}},
+		{"shell", MethodThreadShellCommand, ShellCommandParams{ThreadID: "thread-cold", Command: "pwd"}},
+		{"terminals clean", MethodThreadBackgroundTerminalsClean, BackgroundTerminalsCleanParams{ThreadID: "thread-cold"}},
+		{"terminals list", MethodThreadBackgroundTerminalsList, BackgroundTerminalsListParams{ThreadID: "thread-cold"}},
+		{"terminals terminate", MethodThreadBackgroundTerminalsTerminate, BackgroundTerminalsTerminateParams{ThreadID: "thread-cold", ProcessID: "1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := router.Handle(requestWithParams(t, IntID(1), tc.method, tc.params))
+			if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "thread not found: thread-cold" {
+				t.Fatalf("%s response = %+v", tc.method, response)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications(t *testing.T) {
+	sink := NewNotificationBuffer()
+	extras := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras, DefaultCWD: t.TempDir()})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-shell-1", false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID: "thread-shell-1",
+		Command:  "  echo shell-ok  ",
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/shellCommand response = %+v", response)
+	}
+	if history := extras.shellHistory["thread-shell-1"]; len(history) != 1 || history[0] != "echo shell-ok" {
+		t.Fatalf("shell history = %#v", history)
+	}
+	started := waitForCommandExecutionStartedBySource(t, sink, CommandExecutionSourceUserShell)
+	itemID, _ := started.Item["id"].(string)
+	if itemID == "" {
+		t.Fatalf("started item missing id: %+v", started.Item)
+	}
+	waitForCommandExecutionOutputDeltaContaining(t, sink, started.TurnID, itemID, "shell-ok")
+	completed := waitForItemCompleted(t, sink, itemID)
+	completedItem := notificationItemMap(t, completed.Item)
+	if completedItem["type"] != "commandExecution" || completedItem["source"] != string(CommandExecutionSourceUserShell) {
+		t.Fatalf("completed item = %+v", completedItem)
+	}
+	if !strings.Contains(stringFromAny(completedItem["aggregatedOutput"]), "shell-ok") {
+		t.Fatalf("completed aggregatedOutput = %+v", completedItem["aggregatedOutput"])
+	}
+	waitForTurnCompletedStatus(t, sink, started.TurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadShellCommandEnqueuesActiveTurnContext(t *testing.T) {
+	sink := NewNotificationBuffer()
+	mailbox := turn.NewSteerMailbox()
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: NewThreadExtraService(), SteerMailbox: mailbox, DefaultCWD: t.TempDir()})
+	router.SetNotificationSink(sink)
+	threadID := "thread-shell-active"
+	turnID := "turn-shell-active"
+	router.requireThreadStatus().UpsertThread(threadID, false)
+	router.turnsMu.Lock()
+	router.active[threadID] = &activeRuntimeTurn{ThreadID: threadID, TurnID: turnID, StartedAtMS: time.Now().UTC().UnixMilli()}
+	router.turnsMu.Unlock()
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID: threadID,
+		Command:  "echo active-shell",
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/shellCommand response = %+v", response)
+	}
+	started := waitForCommandExecutionStartedBySource(t, sink, CommandExecutionSourceUserShell)
+	if started.TurnID != turnID {
+		t.Fatalf("started turn id = %q, want %q", started.TurnID, turnID)
+	}
+	itemID, _ := started.Item["id"].(string)
+	waitForCommandExecutionOutputDeltaContaining(t, sink, turnID, itemID, "active-shell")
+	waitForItemCompleted(t, sink, itemID)
+
+	items := mailbox.Drain(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
+	text := inputItemText(items)
+	if !strings.Contains(text, "<user_shell_command>") || !strings.Contains(text, "active-shell") {
+		t.Fatalf("mailbox items = %s", text)
+	}
+}
+
+func TestRuntimeRouterThreadShellCommandPersistsUserShellRecord(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-shell-store")
+	if err := store.Save(&session.Record{ID: threadID, Metadata: session.Metadata{CWD: t.TempDir()}}); err != nil {
+		t.Fatalf("Save thread error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadExtras: NewThreadExtraService()})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread(string(threadID), false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID: string(threadID),
+		Command:  "echo persisted-shell",
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/shellCommand response = %+v", response)
+	}
+	started := waitForCommandExecutionStartedBySource(t, sink, CommandExecutionSourceUserShell)
+	itemID, _ := started.Item["id"].(string)
+	waitForItemCompleted(t, sink, itemID)
+	waitForTurnCompletedStatus(t, sink, started.TurnID, TurnStatusCompleted)
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if len(record.Items) != 1 {
+		t.Fatalf("record items = %#v", record.Items)
+	}
+	item := record.Items[0]
+	if item.Type == "commandExecution" || item.Metadata["kind"] != "user_shell_command" {
+		t.Fatalf("persisted item = %#v", item)
+	}
+	if !strings.Contains(item.Text, "<user_shell_command>") || !strings.Contains(item.Text, "persisted-shell") {
+		t.Fatalf("persisted shell text = %q", item.Text)
+	}
+
+	read := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{
+		ThreadID:     string(threadID),
+		IncludeTurns: true,
+	}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error = %+v", read.Error)
+	}
+	assertNoCommandExecutionInPayload(t, read.Result, "thread/read")
+
+	turns := router.Handle(requestWithParams(t, IntID(3), MethodThreadTurnsList, ThreadTurnsListParams{
+		ThreadID: string(threadID),
+	}))
+	if turns.Error != nil {
+		t.Fatalf("thread/turns/list error = %+v", turns.Error)
+	}
+	assertNoCommandExecutionInPayload(t, turns.Result, "thread/turns/list")
+}
+
+func assertNoCommandExecutionInPayload(t *testing.T, value any, context string) {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal(%s) error = %v", context, err)
+	}
+	if strings.Contains(string(payload), `"type":"commandExecution"`) {
+		t.Fatalf("%s leaked commandExecution item: %s", context, payload)
+	}
+}
+
+func TestRuntimeRouterRealtimeRejectsUnknownThreadWhenStoreBacked(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadRealtimeStart, map[string]any{
+		"threadId": "missing-thread", "outputModality": "text",
+	}))
+	if start.Error == nil || start.Error.Code != -32004 || !strings.Contains(start.Error.Message, "thread not found") {
+		t.Fatalf("realtime missing thread = %+v", start.Error)
+	}
+}
+
+func TestRuntimeRouterTurnStartRunsRuntimeAndPersistsItems(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        model.NewLocalAgentRunner(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello runtime",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello runtime",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	record := waitForSessionItem(t, store, threadID, "agent_message")
+	if len(record.Items) < 2 {
+		t.Fatalf("record items = %#v", record.Items)
+	}
+	if record.Metadata.SessionPrefix == "" {
+		t.Fatalf("session prefix missing: %#v", record.Metadata)
+	}
+	if got := record.Items[len(record.Items)-1].Metadata["turnId"]; got != turnID {
+		t.Fatalf("assistant turn id = %#v, want %s", got, turnID)
+	}
+	if record.Items[len(record.Items)-1].Metadata["timingProfile"] == nil || record.Items[len(record.Items)-1].Metadata["timing_profile"] == nil {
+		t.Fatalf("assistant timing profile metadata = %#v", record.Items[len(record.Items)-1].Metadata)
+	}
+	if record.Metadata.LastResponseID != "resp-"+turnID {
+		t.Fatalf("last response id = %q", record.Metadata.LastResponseID)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if got := router.services.ThreadStatus.LoadedStatusForThread(threadID); got.Type != "idle" {
+		t.Fatalf("thread status = %#v", got)
+	}
+	if !sinkHasMethod(sink, NotificationTurnStarted) || !sinkHasMethod(sink, NotificationTurnCompleted) || !sinkHasMethod(sink, NotificationItemCompleted) {
+		t.Fatalf("notifications = %#v", sink.List())
+	}
+	var startedNotification *TurnStartedNotification
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationTurnStarted {
+			startedNotification, _ = notification.Params.(*TurnStartedNotification)
+			break
+		}
+	}
+	if startedNotification == nil || startedNotification.Turn.ItemsView != TurnItemsNotLoaded || len(startedNotification.Turn.Items) != 0 {
+		t.Fatalf("turn started notification = %#v, want notLoaded empty items", startedNotification)
+	}
+	staleSteer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Prompt:         "too late",
+	}))
+	if staleSteer.Error == nil {
+		t.Fatalf("expected steer after completed runtime to fail")
+	}
+	rolloutPath, err := rollout.FindThreadPath(store.Root(), threadID, false)
+	if err != nil {
+		t.Fatalf("rollout path error: %v", err)
+	}
+	lines, _, err := rollout.Load(rolloutPath)
+	if err != nil {
+		t.Fatalf("rollout load error: %v", err)
+	}
+	if len(lines) < len(record.Items)+1 {
+		t.Fatalf("rollout lines = %d, items = %d", len(lines), len(record.Items))
+	}
+}
+
+func TestRuntimeRouterTurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("Done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "mock-model",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	startTurn := func(id int64, text string, modelOverride string) (string, model.AgentRequest) {
+		t.Helper()
+		params := turn.TurnStartParams{
+			ThreadID: threadID,
+			Input: []turn.TurnUserInput{{
+				Type: "text",
+				Text: text,
+			}},
+		}
+		if modelOverride != "" {
+			params.Model = modelOverride
+		}
+		turnStart := router.Handle(requestWithParams(t, IntID(id), MethodTurnStart, params))
+		if turnStart.Error != nil {
+			t.Fatalf("turn start error: %+v", turnStart.Error)
+		}
+		turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+		if turnID == "" {
+			t.Fatalf("turn id is empty")
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		started := waitForTurnStartedStatus(t, sink, turnID, TurnStatusInProgress)
+		if started.ThreadID != threadID || started.Turn.ItemsView != TurnItemsNotLoaded || len(started.Turn.Items) != 0 {
+			t.Fatalf("turn started notification = %#v, want notLoaded empty items for thread %s", started, threadID)
+		}
+		completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+		if completed.ThreadID != threadID || completed.Turn.ItemsView != TurnItemsNotLoaded || len(completed.Turn.Items) != 0 {
+			t.Fatalf("turn completed notification = %#v, want notLoaded empty items for thread %s", completed, threadID)
+		}
+		return turnID, request
+	}
+
+	firstTurnID, firstRequest := startTurn(2, "Hello", "")
+	if firstRequest.Model != "mock-model" {
+		t.Fatalf("first agent model = %q, want mock-model", firstRequest.Model)
+	}
+	secondTurnID, secondRequest := startTurn(3, "Second", "mock-model-override")
+	if secondTurnID == firstTurnID {
+		t.Fatalf("second turn id = first turn id %q", secondTurnID)
+	}
+	if secondRequest.Model != "mock-model-override" {
+		t.Fatalf("second agent model = %q, want mock-model-override", secondRequest.Model)
+	}
+}
+
+func TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("Done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "gpt-5.3-codex",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	effort := "low"
+	summary := "auto"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{{
+			Type: "text",
+			Text: "Hello",
+		}},
+		Model:   "mock-model-override",
+		Effort:  &effort,
+		Summary: &summary,
+		CollaborationMode: map[string]any{
+			"mode": "default",
+			"settings": map[string]any{
+				"model":                  "mock-model-collab",
+				"reasoning_effort":       "high",
+				"developer_instructions": nil,
+			},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "mock-model-collab" || request.ReasoningEffort != "high" || request.ReasoningSummary != "auto" {
+		t.Fatalf("agent request = %#v", request)
+	}
+	if !agentRequestInputItemsContain(request, "Use the `request_user_input` tool only when it is listed in the available tools") {
+		t.Fatalf("agent input items missing default collaboration instructions: %#v", request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartUsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("Done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "gpt-5.3-codex",
+		Config: map[string]any{
+			"features.default_mode_request_user_input": true,
+		},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	effort := "low"
+	summary := "auto"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{{
+			Type: "text",
+			Text: "Hello",
+		}},
+		Model:   "mock-model-override",
+		Effort:  &effort,
+		Summary: &summary,
+		CollaborationMode: map[string]any{
+			"mode": "default",
+			"settings": map[string]any{
+				"model":                  "mock-model-collab",
+				"reasoning_effort":       "high",
+				"developer_instructions": nil,
+			},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "mock-model-collab" || request.ReasoningEffort != "high" || request.ReasoningSummary != "auto" {
+		t.Fatalf("agent request = %#v", request)
+	}
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal(tools) error = %v", err)
+	}
+	if !strings.Contains(string(toolsJSON), "This tool is only available in Default or Plan mode.") {
+		t.Fatalf("tools missing default-mode request_user_input description: %s", toolsJSON)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterStandaloneWebSearchMatchesRustFixture(t *testing.T) {
+	home := t.TempDir()
+	searchServerPath := ""
+	searchHeaders := http.Header{}
+	var searchBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		searchServerPath = r.URL.Path
+		searchHeaders = r.Header.Clone()
+		if err := json.NewDecoder(r.Body).Decode(&searchBody); err != nil {
+			t.Fatalf("Decode(search body) error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"encrypted_output":"ciphertext","output":"Search result"}`))
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "openai-custom"
+chatgpt_base_url = "%s"
+
+[features]
+standalone_web_search = true
+
+[model_providers.openai-custom]
+name = "OpenAI"
+base_url = "%s/api/codex"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+supports_websockets = false
+requires_openai_auth = true
+`, server.URL, server.URL)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save(auth) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newStandaloneWebSearchRuntimeAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Config:                config.NewConfigService(home),
+		Account:               auth.NewAccountManager(),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	connectionID := "conn-web-search-analytics"
+	initialize := requestWithParams(t, IntID(0), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStartRequest := requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStartRequest.ConnectionID = connectionID
+	threadStart := router.Handle(threadStartRequest)
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStartRequest := requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "Search the web",
+	})
+	turnStartRequest.ConnectionID = connectionID
+	turnStart := router.Handle(turnStartRequest)
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	firstRequest := waitForStandaloneWebSearchRuntimeAgentRequest(t, agent)
+	secondRequest := waitForStandaloneWebSearchRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	if !modelToolsContainWebRun(firstRequest.Tools) {
+		t.Fatalf("first request tools missing web.run: %#v", firstRequest.Tools)
+	}
+	if modelToolsContainHostedWebSearch(firstRequest.Tools) {
+		t.Fatalf("first request should not expose hosted web_search: %#v", firstRequest.Tools)
+	}
+	secondInputJSON, err := json.Marshal(secondRequest.InputItems)
+	if err != nil {
+		t.Fatalf("Marshal(second input) error = %v", err)
+	}
+	for _, want := range []string{`"type":"function_call_output"`, `"call_id":"call_web_run"`, `"type":"input_text"`, `"text":"Search result"`} {
+		if !strings.Contains(string(secondInputJSON), want) {
+			t.Fatalf("second input missing %s: %s", want, secondInputJSON)
+		}
+	}
+	if searchServerPath != "/api/codex/alpha/search" {
+		t.Fatalf("search path = %q", searchServerPath)
+	}
+	if searchHeaders.Get("Authorization") != "Bearer chatgpt-token" || searchHeaders.Get("ChatGPT-Account-ID") != "account-1" {
+		t.Fatalf("search auth headers = %#v", searchHeaders)
+	}
+	assertStandaloneWebSearchBody(t, searchBody)
+
+	started := waitForItemStarted(t, sink, "call_web_run")
+	if started.Item["type"] != "webSearch" || started.Item["query"] != "" {
+		t.Fatalf("started webSearch = %#v", started.Item)
+	}
+	completed := waitForItemCompleted(t, sink, "call_web_run")
+	if completed.Item["type"] != "webSearch" || completed.Item["query"] != "standalone web search" {
+		t.Fatalf("completed webSearch = %#v", completed.Item)
+	}
+	action, ok := completed.Item["action"].(map[string]any)
+	if !ok || action["type"] != "search" || action["query"] != "standalone web search" {
+		t.Fatalf("completed action = %#v", completed.Item["action"])
+	}
+	record := waitForSessionItem(t, store, threadID, "webSearch")
+	webSearchCount := 0
+	for i := range record.Items {
+		if record.Items[i].Type == "webSearch" {
+			webSearchCount++
+			if record.Items[i].ID != "call_web_run" || record.Items[i].Text != "standalone web search" {
+				t.Fatalf("webSearch session item = %#v", record.Items[i])
+			}
+		}
+		if record.Items[i].CallID == "call_web_run" && (record.Items[i].Type == "function_call" || record.Items[i].Type == "tool_output") {
+			t.Fatalf("web search leaked ordinary tool item: %#v", record.Items[i])
+		}
+	}
+	if webSearchCount != 1 {
+		t.Fatalf("webSearch count = %d, items = %#v", webSearchCount, record.Items)
+	}
+	read := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: threadID, IncludeTurns: true}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error = %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	readTurn := turnByID(readThread.Turns, turnID)
+	if readTurn == nil {
+		t.Fatalf("turn %s missing from thread/read: %#v", turnID, readThread.Turns)
+	}
+	readWebSearchCount := 0
+	for i := range readTurn.Items {
+		if readTurn.Items[i].Type == "webSearch" {
+			readWebSearchCount++
+		}
+	}
+	if readWebSearchCount != 1 {
+		t.Fatalf("thread/read webSearch count = %d, items = %#v", readWebSearchCount, readTurn.Items)
+	}
+	event := waitForWebSearchAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if event.EventType != telemetry.CodexWebSearchEventType ||
+		eventParams.ThreadID != threadID ||
+		eventParams.TurnID != turnID ||
+		eventParams.ItemID != "call_web_run" ||
+		eventParams.ToolName != "web_search" {
+		t.Fatalf("web search analytics ids = %#v", event)
+	}
+	if eventParams.WebSearchAction == nil || *eventParams.WebSearchAction != "search" ||
+		!eventParams.QueryPresent ||
+		eventParams.QueryCount == nil || *eventParams.QueryCount != 1 {
+		t.Fatalf("web search analytics query fields = %#v", eventParams)
+	}
+	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
+		eventParams.FailureKind != nil ||
+		eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("web search analytics outcome = %#v", eventParams)
+	}
+	if eventParams.StartedAtMS == 0 || eventParams.CompletedAtMS == 0 || eventParams.DurationMS == nil {
+		t.Fatalf("web search analytics timing = %#v", eventParams)
+	}
+}
+
+func TestRuntimeRouterTurnStartWritesRolloutTurnLifecycle(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        model.NewLocalAgentRunner(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello lifecycle",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "complete lifecycle",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	snapshots := rolloutTurnSnapshotsForThread(t, store, threadID)
+	if len(snapshots) != 1 {
+		t.Fatalf("rollout turn snapshots = %#v", snapshots)
+	}
+	snapshot := snapshots[0]
+	if snapshot.ID != turnID || snapshot.Status != string(TurnStatusCompleted) {
+		t.Fatalf("rollout turn snapshot = %#v", snapshot)
+	}
+	if snapshot.StartedAt == nil || snapshot.CompletedAt == nil || snapshot.DurationMS == nil {
+		t.Fatalf("rollout turn timing = %#v", snapshot)
+	}
+}
+
+func TestRuntimeRouterTurnInterruptWritesRolloutTurnLifecycle(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello interrupt lifecycle",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "interrupt lifecycle",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+
+	record := rolloutRecordForThread(t, store, threadID)
+	if len(record.Items) != 2 || record.Items[0].Text != "interrupt lifecycle" {
+		t.Fatalf("interrupted record items = %#v", record.Items)
+	}
+	marker := record.Items[1]
+	if marker.Metadata["kind"] != "turn_aborted" || marker.Metadata["turnId"] != turnID || !strings.Contains(marker.Text, "<turn_aborted>") {
+		t.Fatalf("interrupted marker item = %#v", record.Items)
+	}
+	snapshots := record.Metadata.RolloutTurns
+	if len(snapshots) != 1 {
+		t.Fatalf("rollout turn snapshots = %#v", snapshots)
+	}
+	snapshot := snapshots[0]
+	if snapshot.ID != turnID || snapshot.Status != string(TurnStatusInterrupted) {
+		t.Fatalf("rollout turn snapshot = %#v", snapshot)
+	}
+	if snapshot.StartedAt == nil || snapshot.CompletedAt == nil || snapshot.DurationMS == nil {
+		t.Fatalf("rollout turn timing = %#v", snapshot)
+	}
+}
+
+func TestRuntimeRouterTurnInterruptResolvesPendingCommandApprovalLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	agent := newApprovalRequestRuntimeAgent(broker)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		Turns:          turn.NewTurnService(),
+		Agent:          agent,
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello approval interrupt",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "needs command approval",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	var pending *ServerRequest
+	select {
+	case pending = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending approval request")
+	}
+	if pending.Method != ServerRequestCommandExecutionApproval {
+		t.Fatalf("pending request method = %s", pending.Method)
+	}
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "call_sleep_approval" {
+		t.Fatalf("pending request params = %#v", pending.Params)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	resolved := waitForNotificationMethod(t, sink, NotificationServerRequestResolved)
+	resolvedParams, ok := resolved.Params.(*ServerRequestResolvedNotification)
+	if !ok || resolvedParams.ThreadID != threadID || resolvedParams.RequestID.String() != pending.ID.String() {
+		t.Fatalf("serverRequest/resolved params = %#v", resolved.Params)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+
+	select {
+	case err := <-agent.done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("agent approval request error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for approval agent to exit")
+	}
+}
+
+func TestRuntimeRouterTurnStartExecApprovalToggleLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 2)
+	agent := &shellCommandRuntimeAgent{callIDs: []string{"call1", "call2"}, command: "echo approval-ok"}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		Turns:          turn.NewTurnService(),
+		Agent:          agent,
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello approval toggle",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run command",
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if firstTurnStart.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurnStart.Error)
+	}
+	firstTurnID := firstTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	firstRequest := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	firstParams, ok := firstRequest.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || firstParams.ItemID != "call1" || firstParams.EnvironmentID == nil || *firstParams.EnvironmentID != "local" {
+		t.Fatalf("first approval params = %#v", firstRequest.Params)
+	}
+	if ok, err := broker.Resolve(OK(firstRequest.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalAccept})); err != nil || !ok {
+		t.Fatalf("resolve first approval ok=%v err=%v", ok, err)
+	}
+	resolved := waitForNotificationMethod(t, sink, NotificationServerRequestResolved)
+	resolvedParams, ok := resolved.Params.(*ServerRequestResolvedNotification)
+	if !ok || resolvedParams.ThreadID != threadID || resolvedParams.RequestID.String() != firstRequest.ID.String() {
+		t.Fatalf("serverRequest/resolved params = %#v", resolved.Params)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	secondTurnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run command again",
+		ApprovalPolicy: sandbox.ApprovalNever,
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+	}))
+	if secondTurnStart.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurnStart.Error)
+	}
+	secondTurnID := secondTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+	select {
+	case request := <-requests:
+		t.Fatalf("unexpected approval request on never policy: %+v", request)
+	default:
+	}
+}
+
+func TestRuntimeRouterTurnStartExecApprovalDeclineLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	workspace := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		Turns:          turn.NewTurnService(),
+		Agent:          &shellCommandRuntimeAgent{callIDs: []string{"call-decline"}, command: "echo should-not-run"},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello approval decline",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	started := waitForItemStarted(t, sink, "call-decline")
+	if started.Item["type"] != "commandExecution" || started.Item["status"] != string(CommandExecutionInProgress) {
+		t.Fatalf("started command item = %#v", started.Item)
+	}
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ItemID != "call-decline" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve decline ok=%v err=%v", ok, err)
+	}
+	completed := waitForItemCompleted(t, sink, "call-decline")
+	if completed.Item["type"] != "commandExecution" || completed.Item["status"] != string(CommandExecutionDeclined) {
+		t.Fatalf("completed command item = %#v", completed.Item)
+	}
+	if completed.Item["exitCode"] != nil || completed.Item["aggregatedOutput"] != nil {
+		t.Fatalf("declined command should omit exit/aggregate output: %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartExecApprovalIncludesPrefixRuleAmendmentLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	workspace := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent: &shellCommandRuntimeAgent{
+			callIDs:     []string{"call-prefix"},
+			command:     "echo prefix-ok",
+			prefixRules: [][]string{{"echo", "prefix-ok"}},
+		},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello approval amendment",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ItemID != "call-prefix" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("approval params = %#v", pending.Params)
+	}
+	amendment := stringSliceFromAny(params.ProposedExecPolicyAmendment)
+	if !reflect.DeepEqual(amendment, []string{"echo", "prefix-ok"}) {
+		t.Fatalf("proposed execpolicy amendment = %#v, want echo prefix-ok", params.ProposedExecPolicyAmendment)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve decline ok=%v err=%v", ok, err)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartExecApprovalAcceptForSessionPersistsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 2)
+	workspace := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent: &shellCommandRuntimeAgent{
+			callIDs:  []string{"call-command-session-1", "call-command-session-2"},
+			commands: []string{"echo command-session-one", "echo command-session-two"},
+		},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello command approval session",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run first command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if firstTurnStart.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurnStart.Error)
+	}
+	firstTurnID := firstTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	firstRequest := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	firstParams, ok := firstRequest.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || firstParams.ItemID != "call-command-session-1" {
+		t.Fatalf("first approval params = %#v", firstRequest.Params)
+	}
+	if ok, err := broker.Resolve(OK(firstRequest.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalAcceptForSession})); err != nil || !ok {
+		t.Fatalf("resolve acceptForSession ok=%v err=%v", ok, err)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	secondTurnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run second command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if secondTurnStart.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurnStart.Error)
+	}
+	secondTurnID := secondTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForItemCompleted(t, sink, "call-command-session-2")
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+	select {
+	case unexpected := <-requests:
+		t.Fatalf("unexpected command approval request after acceptForSession: %+v", unexpected)
+	default:
+	}
+}
+
+func TestRuntimeRouterTurnStartFileChangeApprovalLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	workspace := t.TempDir()
+	patch := `*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+`
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		Turns:          turn.NewTurnService(),
+		Agent:          &applyPatchRuntimeAgent{patch: patch, callID: "patch-call"},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello file approval",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply patch",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	started := waitForItemStarted(t, sink, "patch-call")
+	if started.Item["type"] != "fileChange" || started.Item["status"] != string(PatchApplyInProgress) {
+		t.Fatalf("started file change item = %#v", started.Item)
+	}
+	changes, ok := started.Item["changes"].([]any)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("started file change changes = %#v", started.Item["changes"])
+	}
+	change, ok := changes[0].(map[string]any)
+	expectedPath := filepath.Join(workspace, "README.md")
+	if !ok || change["path"] != expectedPath || change["diff"] != "new line\n" {
+		t.Fatalf("started file change = %#v, want path %q", change, expectedPath)
+	}
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestFileChangeApproval)
+	params, ok := pending.Params.(*FileChangeRequestApprovalParams)
+	if !ok || params.ItemID != "patch-call" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("file approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &FileChangeRequestApprovalResponse{Decision: FileChangeApprovalAccept})); err != nil || !ok {
+		t.Fatalf("resolve file approval ok=%v err=%v", ok, err)
+	}
+	resolved := waitForNotificationMethod(t, sink, NotificationServerRequestResolved)
+	resolvedParams, ok := resolved.Params.(*ServerRequestResolvedNotification)
+	if !ok || resolvedParams.ThreadID != threadID || resolvedParams.RequestID.String() != pending.ID.String() {
+		t.Fatalf("serverRequest/resolved params = %#v", resolved.Params)
+	}
+	completed := waitForItemCompleted(t, sink, "patch-call")
+	if completed.Item["type"] != "fileChange" || completed.Item["status"] != string(PatchApplyCompleted) {
+		t.Fatalf("completed file change item = %#v", completed.Item)
+	}
+	if data, err := os.ReadFile(expectedPath); err != nil || string(data) != "new line\n" {
+		t.Fatalf("README contents = %q/%v", string(data), err)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	workspace := t.TempDir()
+	patches := []string{
+		`*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+`,
+		`*** Begin Patch
+*** Update File: README.md
+@@
+-new line
++updated line
+*** End Patch
+`,
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent: &applyPatchSequenceRuntimeAgent{
+			patches: patches,
+			callIDs: []string{"patch-call-1", "patch-call-2"},
+		},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello file approval session",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply patch 1",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	startedFirst := waitForItemStarted(t, sink, "patch-call-1")
+	if startedFirst.Item["type"] != "fileChange" || startedFirst.Item["status"] != string(PatchApplyInProgress) {
+		t.Fatalf("first started file change item = %#v", startedFirst.Item)
+	}
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestFileChangeApproval)
+	params, ok := pending.Params.(*FileChangeRequestApprovalParams)
+	if !ok || params.ItemID != "patch-call-1" || params.ThreadID != threadID || params.TurnID != firstTurnID {
+		t.Fatalf("file approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &FileChangeRequestApprovalResponse{Decision: FileChangeApprovalAcceptForSession})); err != nil || !ok {
+		t.Fatalf("resolve file approval ok=%v err=%v", ok, err)
+	}
+	waitForItemCompleted(t, sink, "patch-call-1")
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+	readmePath := filepath.Join(workspace, "README.md")
+	if data, err := os.ReadFile(readmePath); err != nil || string(data) != "new line\n" {
+		t.Fatalf("README after first patch = %q/%v", string(data), err)
+	}
+
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply patch 2",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	startedSecond := waitForItemStarted(t, sink, "patch-call-2")
+	if startedSecond.Item["type"] != "fileChange" || startedSecond.Item["status"] != string(PatchApplyInProgress) {
+		t.Fatalf("second started file change item = %#v", startedSecond.Item)
+	}
+	select {
+	case unexpected := <-requests:
+		t.Fatalf("unexpected file approval request after acceptForSession: %+v", unexpected)
+	case <-time.After(150 * time.Millisecond):
+	}
+	waitForItemCompleted(t, sink, "patch-call-2")
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+	if data, err := os.ReadFile(readmePath); err != nil || string(data) != "updated line\n" {
+		t.Fatalf("README after second patch = %q/%v", string(data), err)
+	}
+}
+
+func TestRuntimeRouterTurnStartFileChangeApprovalDeclineLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	workspace := t.TempDir()
+	patch := `*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+`
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		Turns:          turn.NewTurnService(),
+		Agent:          &applyPatchRuntimeAgent{patch: patch, callID: "patch-call"},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello file decline",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply patch",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	started := waitForItemStarted(t, sink, "patch-call")
+	if started.Item["type"] != "fileChange" || started.Item["status"] != string(PatchApplyInProgress) {
+		t.Fatalf("started file change item = %#v", started.Item)
+	}
+	changes, ok := started.Item["changes"].([]any)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("started file change changes = %#v", started.Item["changes"])
+	}
+	change, ok := changes[0].(map[string]any)
+	expectedPath := filepath.Join(workspace, "README.md")
+	if !ok || change["path"] != expectedPath || change["diff"] != "new line\n" {
+		t.Fatalf("started file change = %#v, want path %q", change, expectedPath)
+	}
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestFileChangeApproval)
+	params, ok := pending.Params.(*FileChangeRequestApprovalParams)
+	if !ok || params.ItemID != "patch-call" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("file approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &FileChangeRequestApprovalResponse{Decision: FileChangeApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve file decline ok=%v err=%v", ok, err)
+	}
+	completed := waitForItemCompleted(t, sink, "patch-call")
+	if completed.Item["type"] != "fileChange" || completed.Item["status"] != string(PatchApplyDeclined) {
+		t.Fatalf("completed file change item = %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if _, err := os.Stat(expectedPath); !os.IsNotExist(err) {
+		t.Fatalf("declined patch should not create README, stat err=%v", err)
+	}
+}
+
+func TestRuntimeRouterTurnFailureWritesRolloutTurnLifecycle(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        &failThenOKRuntimeAgent{},
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello failed lifecycle",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "fail lifecycle",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusFailed)
+
+	snapshots := rolloutTurnSnapshotsForThread(t, store, threadID)
+	if len(snapshots) != 1 {
+		t.Fatalf("rollout turn snapshots = %#v", snapshots)
+	}
+	snapshot := snapshots[0]
+	if snapshot.ID != turnID || snapshot.Status != string(TurnStatusFailed) || !strings.Contains(snapshot.ErrorMessage, "context deadline exceeded") {
+		t.Fatalf("rollout turn snapshot = %#v", snapshot)
+	}
+	if snapshot.StartedAt == nil || snapshot.CompletedAt == nil || snapshot.DurationMS == nil {
+		t.Fatalf("rollout turn timing = %#v", snapshot)
+	}
+}
+
+func TestRuntimeRouterSessionItemsForTurnPersistsAllModelResponses(t *testing.T) {
+	router := &RuntimeRouter{}
+	createdAt := time.Unix(1781717000, 0).UTC()
+	result := &turn.AgentLoopResult{
+		Responses: []*model.AgentResponse{{
+			ResponseID:  "resp-first",
+			RequestID:   "req-first",
+			ServerModel: "gpt-server-first",
+			Model:       "gpt-test",
+			ProviderID:  model.OpenAIProviderID,
+			Items: []model.AgentItem{{
+				ID:   "reasoning-1",
+				Type: "reasoning",
+				Text: "thinking",
+			}, {
+				ID:     "call-1",
+				Type:   "function_call",
+				Name:   "echo",
+				CallID: "call-1",
+			}, {
+				ID:     "call-2",
+				Type:   "function_call",
+				Name:   "echo",
+				CallID: "call-2",
+			}},
+		}, {
+			ResponseID: "resp-final",
+			Model:      "gpt-test",
+			ProviderID: model.OpenAIProviderID,
+			Items: []model.AgentItem{{
+				ID:   "msg-final",
+				Type: "agent_message",
+				Text: "done",
+			}},
+		}},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID:   "call-1",
+				ToolName: tool.PlainName("echo"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+			},
+			Output: &tool.Output{CallID: "call-1", Success: true, Body: "tool ok"},
+		}, {
+			Invocation: &tool.Invocation{
+				CallID:   "call-2",
+				ToolName: tool.PlainName("echo"),
+				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+			},
+			Output: &tool.Output{CallID: "call-2", Success: true, Body: "tool ok 2"},
+		}},
+	}
+	result.Response = result.Responses[1]
+	items := router.sessionItemsForTurn("turn-app", &turn.TurnStartParams{Prompt: "hello"}, result, createdAt)
+
+	reasoning := sessionItemByID(items, "reasoning-1")
+	if reasoning == nil || reasoning.ResponseID != "resp-first" || reasoning.Metadata["responseId"] != "resp-first" {
+		t.Fatalf("reasoning item = %#v", reasoning)
+	}
+	if reasoning.Metadata["requestId"] != "req-first" || reasoning.Metadata["server_model"] != "gpt-server-first" {
+		t.Fatalf("reasoning metadata = %#v", reasoning.Metadata)
+	}
+	final := sessionItemByID(items, "msg-final")
+	if final == nil || final.ResponseID != "resp-final" || final.Metadata["response_id"] != "resp-final" {
+		t.Fatalf("final item = %#v", final)
+	}
+	if sessionItemByID(items, "call-1") != nil {
+		t.Fatalf("tool call response item should be represented by tool execution, items = %#v", items)
+	}
+	reasoningIndex := sessionItemIndexByID(items, "reasoning-1")
+	call1Index := sessionItemIndexByTypeAndCallID(items, "function_call", "call-1")
+	call2Index := sessionItemIndexByTypeAndCallID(items, "function_call", "call-2")
+	output1Index := sessionItemIndexByTypeAndCallID(items, "tool_output", "call-1")
+	output2Index := sessionItemIndexByTypeAndCallID(items, "tool_output", "call-2")
+	finalIndex := sessionItemIndexByID(items, "msg-final")
+	if reasoningIndex < 0 || call1Index < 0 || call2Index < 0 || output1Index < 0 || output2Index < 0 || finalIndex < 0 ||
+		!(reasoningIndex < call1Index && call1Index < call2Index && call2Index < output1Index && output1Index < output2Index && output2Index < finalIndex) {
+		t.Fatalf("item order = %#v", items)
+	}
+	if items[call1Index].Metadata["request_id"] != "req-first" || items[output1Index].Metadata["requestId"] != "req-first" {
+		t.Fatalf("tool response metadata call=%#v output=%#v", items[call1Index].Metadata, items[output1Index].Metadata)
+	}
+}
+
+func TestRuntimeRouterFinishTurnClearsDiffTracker(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{ThreadStatus: NewThreadStatusManager()})
+	startedAtMS := time.Now().UTC().UnixMilli()
+	cases := []struct {
+		name     string
+		threadID string
+		turnID   string
+		finish   func()
+	}{{
+		name:     "failed",
+		threadID: "thread-failed",
+		turnID:   "turn-failed",
+		finish: func() {
+			router.finishTurnWithError("thread-failed", "turn-failed", startedAtMS, context.Canceled)
+		},
+	}, {
+		name:     "interrupted",
+		threadID: "thread-interrupted",
+		turnID:   "turn-interrupted",
+		finish: func() {
+			router.finishTurnInterrupted("thread-interrupted", "turn-interrupted", startedAtMS)
+		},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router.turnsMu.Lock()
+			router.ensureActiveDiffTrackerLocked(tc.threadID, tc.turnID)
+			router.turnsMu.Unlock()
+
+			tc.finish()
+
+			router.turnsMu.Lock()
+			_, ok := router.diffs[activeTurnDiffKey(tc.threadID, tc.turnID)]
+			router.turnsMu.Unlock()
+			if ok {
+				t.Fatalf("diff tracker for %s/%s was not cleared", tc.threadID, tc.turnID)
+			}
+		})
+	}
+}
+
+func sessionItemByID(items []session.Item, id string) *session.Item {
+	for i := range items {
+		if items[i].ID == id {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func sessionItemIndexByID(items []session.Item, id string) int {
+	for i := range items {
+		if items[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func sessionItemIndexByType(items []session.Item, itemType string) int {
+	for i := range items {
+		if items[i].Type == itemType {
+			return i
+		}
+	}
+	return -1
+}
+
+func sessionItemIndexByTypeAndCallID(items []session.Item, itemType string, callID string) int {
+	for i := range items {
+		if items[i].Type == itemType && items[i].CallID == callID {
+			return i
+		}
+	}
+	return -1
+}
+
+func turnByID(turns []Turn, turnID string) *Turn {
+	for i := range turns {
+		if turns[i].ID == turnID {
+			return &turns[i]
+		}
+	}
+	return nil
+}
+
+func turnHasItemText(turn *Turn, text string) bool {
+	if turn == nil {
+		return false
+	}
+	for i := range turn.Items {
+		if strings.Contains(turn.Items[i].Text, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRuntimeRouterTurnSteerRequiresActiveTurnLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	steer := router.Handle(requestWithParams(t, IntID(2), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: "turn-does-not-exist",
+		Prompt:         "steer",
+	}))
+	if steer.Error == nil || steer.Error.Code != -32600 || steer.Error.Message != "no active turn to steer" {
+		t.Fatalf("turn/steer error = %+v", steer.Error)
+	}
+}
+
+func TestRuntimeRouterTurnInterruptRejectsCompletedTurnLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "complete",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	_ = waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error == nil || interrupt.Error.Code != -32600 {
+		t.Fatalf("turn/interrupt error = %+v, want invalid request", interrupt.Error)
+	}
+}
+
+func TestRuntimeRouterTurnSteerPersistsUserInput(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello steer",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	clientID := "client-steer-1"
+	steer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:            threadID,
+		ExpectedTurnID:      turnID,
+		ClientUserMessageID: clientID,
+		Input: []turn.TurnUserInput{{
+			Text: "extra user input",
+			TextElements: []turn.TextElement{{
+				ByteRange:   turn.ByteRange{Start: 0, End: 5},
+				Placeholder: stringPtrIfNotEmpty("<steer>"),
+			}},
+		}},
+		AdditionalContext: map[string]turn.AdditionalContextEntry{
+			"ide": {Value: "selection", Kind: turn.AdditionalContextApplication},
+		},
+	}))
+	if steer.Error != nil {
+		t.Fatalf("turn steer error: %+v", steer.Error)
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	var steered *session.Item
+	for i := range record.Items {
+		if record.Items[i].ID == clientID {
+			steered = &record.Items[i]
+			break
+		}
+	}
+	if steered == nil || steered.Text != "extra user input" || steered.Metadata["steered"] != true {
+		t.Fatalf("steered item = %#v", steered)
+	}
+	additional, ok := steered.Metadata["additionalContext"].(map[string]any)
+	if !ok || additional["ide"] == nil {
+		t.Fatalf("additional context = %#v", steered.Metadata["additionalContext"])
+	}
+	started := waitForItemStarted(t, sink, clientID)
+	if started.ThreadID != threadID || started.TurnID != turnID || started.Item["type"] != "userMessage" {
+		t.Fatalf("item started = %#v", started)
+	}
+	if started.Item["clientId"] != clientID {
+		t.Fatalf("started clientId = %#v", started.Item["clientId"])
+	}
+	startedContent, ok := started.Item["content"].([]any)
+	if !ok || len(startedContent) != 1 {
+		t.Fatalf("started content = %#v", started.Item["content"])
+	}
+	startedText, ok := startedContent[0].(map[string]any)
+	if !ok || startedText["type"] != "text" || startedText["text"] != "extra user input" {
+		t.Fatalf("started text content = %#v", startedContent[0])
+	}
+	startedElements, ok := startedText["text_elements"].([]any)
+	if !ok || len(startedElements) != 1 {
+		t.Fatalf("started text_elements = %#v", startedText["text_elements"])
+	}
+	startedElement, ok := startedElements[0].(map[string]any)
+	startedRange, rangeOK := startedElement["byteRange"].(map[string]any)
+	if !ok || !rangeOK || startedRange["start"] != float64(0) || startedRange["end"] != float64(5) || startedElement["placeholder"] != "<steer>" {
+		t.Fatalf("started text element = %#v", startedElements[0])
+	}
+	completed := waitForItemCompleted(t, sink, clientID)
+	if completed.ThreadID != threadID || completed.TurnID != turnID {
+		t.Fatalf("item completed = %#v", completed)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterTurnSteerRejectsOversizedInputWithRustErrorData(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	oversized := strings.Repeat("x", turn.MaxUserInputTextChars+1)
+	steer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Input:          []turn.TurnUserInput{{Type: "text", Text: oversized}},
+	}))
+	if steer.Error == nil {
+		t.Fatalf("expected oversized steer error, got %+v", steer)
+	}
+	if steer.Error.Code != -32602 {
+		t.Fatalf("error code = %d, want -32602", steer.Error.Code)
+	}
+	if steer.Error.Message != "Input exceeds the maximum length of 1048576 characters." {
+		t.Fatalf("error message = %q", steer.Error.Message)
+	}
+	if steer.Error.Data["input_error_code"] != turn.InputTooLargeCode || steer.Error.Data["max_chars"] != turn.MaxUserInputTextChars || steer.Error.Data["actual_chars"] != turn.MaxUserInputTextChars+1 {
+		t.Fatalf("error data = %#v", steer.Error.Data)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterTurnSteerRejectsContextOnlyInputWithoutMergingContextLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+	before, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread before steer error = %v", err)
+	}
+
+	steer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		AdditionalContext: map[string]turn.AdditionalContextEntry{
+			"browser_info": {Value: "tab one", Kind: turn.AdditionalContextUntrusted},
+		},
+	}))
+	if steer.Error == nil || steer.Error.Code != -32600 || steer.Error.Message != "input must not be empty" {
+		t.Fatalf("context-only steer response = %+v", steer)
+	}
+	after, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread after steer error = %v", err)
+	}
+	if len(after.Items) != len(before.Items) {
+		t.Fatalf("context-only steer appended items: before=%d after=%d items=%#v", len(before.Items), len(after.Items), after.Items)
+	}
+	for i := range after.Items {
+		if after.Items[i].Metadata["additionalContext"] != nil {
+			t.Fatalf("context-only steer leaked additional context into item %#v", after.Items[i])
+		}
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterTurnSteerDeliveredToNextAgentSampling(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[responsesapi_client_metadata]
+workspace_kind = "git"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newSteerAwareToolAgent()
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ToolRouter:   tool.NewRouter(registry),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello steer delivery",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "start tools",
+		ResponsesAPIMetadata: map[string]string{
+			"fiber_run_id": "fiber-start-123",
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForSteerAwareFirstRequest(t, agent)
+
+	steer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Input: []turn.TurnUserInput{{
+			Text: "live steer input",
+		}},
+		ResponsesAPIMetadata: map[string]string{
+			"fiber_run_id": "fiber-steer-456",
+			"origin":       "gaas",
+		},
+	}))
+	if steer.Error != nil {
+		t.Fatalf("turn steer error: %+v", steer.Error)
+	}
+	agent.releaseFirstResponse()
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if !agent.sawSteerText("live steer input") {
+		t.Fatalf("agent requests did not include steer input: %#v", agent.snapshotRequests())
+	}
+	requests := agent.snapshotRequests()
+	if len(requests) != 2 {
+		t.Fatalf("agent requests = %#v", requests)
+	}
+	var firstMetadata map[string]any
+	if err := json.Unmarshal([]byte(requests[0].ClientMetadata["x-codex-turn-metadata"]), &firstMetadata); err != nil {
+		t.Fatalf("first turn metadata json error = %v metadata=%#v", err, requests[0].ClientMetadata)
+	}
+	if firstMetadata["fiber_run_id"] != "fiber-start-123" || firstMetadata["workspace_kind"] != "git" || firstMetadata["turn_id"] != turnID {
+		t.Fatalf("first turn metadata = %#v", firstMetadata)
+	}
+	var secondMetadata map[string]any
+	if err := json.Unmarshal([]byte(requests[1].ClientMetadata["x-codex-turn-metadata"]), &secondMetadata); err != nil {
+		t.Fatalf("second turn metadata json error = %v metadata=%#v", err, requests[1].ClientMetadata)
+	}
+	if secondMetadata["fiber_run_id"] != "fiber-steer-456" || secondMetadata["origin"] != "gaas" || secondMetadata["workspace_kind"] != "git" || secondMetadata["turn_id"] != turnID {
+		t.Fatalf("second turn metadata = %#v", secondMetadata)
+	}
+}
+
+func TestRuntimeRouterTurnStartUsesProjectConfigFromThreadCWD(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	projectTrust := strings.ReplaceAll(filepath.Clean(project), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\nmodel_provider = \"openai\"\n\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile user config returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".codex", "instructions.md"), []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile instructions returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("model = \"gpt-project\"\nmodel_instructions_file = \"instructions.md\"\nmodel_reasoning_effort = \"high\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    project,
+		Prompt: "hello project",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	startResult := threadStart.Result.(*ThreadStartResponse)
+	if startResult.Model != "gpt-project" || startResult.ModelProvider != "openai" || startResult.ReasoningEffort == nil || *startResult.ReasoningEffort != "high" {
+		t.Fatalf("thread start result = %+v", startResult)
+	}
+	threadID := startResult.Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello project",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "gpt-project" || request.ProviderID != "openai" || request.ReasoningEffort != "high" || request.Instructions != "project instructions" {
+		t.Fatalf("agent request = %#v", request)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	usage := waitForTokenUsageUpdated(t, sink, turnID)
+	if usage.TokenUsage.InputTokens != 2 || usage.TokenUsage.CachedInputTokens != 1 || usage.TokenUsage.OutputTokens != 3 || usage.TokenUsage.ReasoningOutputTokens != 1 {
+		t.Fatalf("usage = %+v", usage.TokenUsage)
+	}
+	if usage.TokenUsage.ModelContextWindow == nil || *usage.TokenUsage.ModelContextWindow <= 0 {
+		t.Fatalf("modelContextWindow = %#v", usage.TokenUsage.ModelContextWindow)
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	tokenStatus, ok := record.Metadata.Extra["token_status"].(map[string]any)
+	if !ok || tokenStatus["activeContextTokens"] == nil {
+		t.Fatalf("token_status = %#v", record.Metadata.Extra["token_status"])
+	}
+	lastUsage, ok := record.Metadata.Extra["last_token_usage"].(map[string]any)
+	if !ok || lastUsage["totalTokens"] == nil {
+		t.Fatalf("last_token_usage = %#v", record.Metadata.Extra["last_token_usage"])
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadStartServiceTierFiltersByModelCatalog(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"mock-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Models:       model.NewModelService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	unsupported := "experimental-tier-id"
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		ServiceTier: &unsupported,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("unsupported tier start error: %+v", threadStart.Error)
+	}
+	startResult := threadStart.Result.(*ThreadStartResponse)
+	if startResult.ServiceTier != nil {
+		t.Fatalf("unsupported tier response = %+v", startResult.ServiceTier)
+	}
+	record, err := store.Read(session.ThreadID(startResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read unsupported tier record error = %v", err)
+	}
+	if record.Metadata.ServiceTier != "" {
+		t.Fatalf("unsupported tier metadata = %q", record.Metadata.ServiceTier)
+	}
+
+	modelID, serviceTierID := modelWithServiceTierForRuntimeTest(t)
+	supported := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		Model:       modelID,
+		ServiceTier: &serviceTierID,
+	}))
+	if supported.Error != nil {
+		t.Fatalf("supported tier start error: %+v", supported.Error)
+	}
+	supportedResult := supported.Result.(*ThreadStartResponse)
+	if supportedResult.ServiceTier == nil || *supportedResult.ServiceTier != serviceTierID {
+		t.Fatalf("supported tier response = %+v", supportedResult.ServiceTier)
+	}
+
+	ephemeral := router.Handle(requestWithParams(t, IntID(3), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		Ephemeral:   true,
+		ServiceTier: &unsupported,
+	}))
+	if ephemeral.Error != nil {
+		t.Fatalf("ephemeral unsupported tier start error: %+v", ephemeral.Error)
+	}
+	ephemeralResult := ephemeral.Result.(*ThreadStartResponse)
+	if ephemeralResult.ServiceTier != nil {
+		t.Fatalf("ephemeral unsupported tier response = %+v", ephemeralResult.ServiceTier)
+	}
+	ephemeralRecord, err := router.threadRecord(session.ThreadID(ephemeralResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("ephemeral threadRecord error = %v", err)
+	}
+	if ephemeralRecord.Metadata.ServiceTier != "" {
+		t.Fatalf("ephemeral unsupported tier metadata = %q", ephemeralRecord.Metadata.ServiceTier)
+	}
+
+	defaultStart := router.Handle(requestWithParams(t, IntID(4), MethodThreadStart, map[string]any{
+		"cwd":         t.TempDir(),
+		"serviceTier": model.ServiceTierDefaultRequestValue,
+	}))
+	if defaultStart.Error != nil {
+		t.Fatalf("default tier start error: %+v", defaultStart.Error)
+	}
+	defaultResult := defaultStart.Result.(*ThreadStartResponse)
+	if defaultResult.ServiceTier == nil || *defaultResult.ServiceTier != model.ServiceTierDefaultRequestValue {
+		t.Fatalf("default tier response = %+v", defaultResult.ServiceTier)
+	}
+}
+
+func TestRuntimeRouterThreadStartProviderModelFallbackUsesBedrockStaticCatalog(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"amazon-bedrock\"\nmodel = \"gpt-5.4-mini\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	configuredFallback := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:                        t.TempDir(),
+		AllowProviderModelFallback: true,
+	}))
+	if configuredFallback.Error != nil {
+		t.Fatalf("configured fallback start error: %+v", configuredFallback.Error)
+	}
+	configuredResult := configuredFallback.Result.(*ThreadStartResponse)
+	if configuredResult.Model != model.AmazonBedrockGPT55ModelID || configuredResult.ModelProvider != model.AmazonBedrockProviderID {
+		t.Fatalf("configured fallback response = model:%q provider:%q", configuredResult.Model, configuredResult.ModelProvider)
+	}
+	record, err := store.Read(session.ThreadID(configuredResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read configured fallback record error = %v", err)
+	}
+	if record.Metadata.Model != model.AmazonBedrockGPT55ModelID {
+		t.Fatalf("configured fallback metadata model = %q", record.Metadata.Model)
+	}
+
+	supported := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:                        t.TempDir(),
+		Model:                      model.AmazonBedrockGPT54ModelID,
+		AllowProviderModelFallback: true,
+	}))
+	if supported.Error != nil {
+		t.Fatalf("supported fallback start error: %+v", supported.Error)
+	}
+	supportedResult := supported.Result.(*ThreadStartResponse)
+	if supportedResult.Model != model.AmazonBedrockGPT54ModelID {
+		t.Fatalf("supported fallback model = %q", supportedResult.Model)
+	}
+
+	unsupportedNoFallback := router.Handle(requestWithParams(t, IntID(3), MethodThreadStart, ThreadStartParams{
+		CWD:                        t.TempDir(),
+		Model:                      "gpt-5.4-mini",
+		AllowProviderModelFallback: false,
+	}))
+	if unsupportedNoFallback.Error != nil {
+		t.Fatalf("unsupported no fallback start error: %+v", unsupportedNoFallback.Error)
+	}
+	unsupportedNoFallbackResult := unsupportedNoFallback.Result.(*ThreadStartResponse)
+	if unsupportedNoFallbackResult.Model != "gpt-5.4-mini" {
+		t.Fatalf("unsupported no fallback model = %q", unsupportedNoFallbackResult.Model)
+	}
+
+	dynamicProvider := router.Handle(requestWithParams(t, IntID(4), MethodThreadStart, ThreadStartParams{
+		CWD:                        t.TempDir(),
+		Model:                      "unlisted-dynamic-model",
+		ModelProvider:              "mock_provider",
+		AllowProviderModelFallback: true,
+	}))
+	if dynamicProvider.Error != nil {
+		t.Fatalf("dynamic provider start error: %+v", dynamicProvider.Error)
+	}
+	dynamicProviderResult := dynamicProvider.Result.(*ThreadStartResponse)
+	if dynamicProviderResult.Model != "unlisted-dynamic-model" {
+		t.Fatalf("dynamic provider model = %q", dynamicProviderResult.Model)
+	}
+}
+
+func TestRuntimeRouterThreadStartRuntimeWorkspaceRootsUseEffectiveCWD(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	extraRoot := t.TempDir()
+	profileRoot := t.TempDir()
+	profileRootKey := strings.ReplaceAll(filepath.Clean(profileRoot), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"mock-model\"\ndefault_permissions = \"dev\"\n\n[permissions.dev.workspace_roots]\n\""+profileRootKey+"\" = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: cwd}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	startResult := start.Result.(*ThreadStartResponse)
+	if startResult.CWD != cwd {
+		t.Fatalf("cwd = %q, want %q", startResult.CWD, cwd)
+	}
+	if len(startResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(startResult.RuntimeWorkspaceRoots[0], cwd) {
+		t.Fatalf("runtimeWorkspaceRoots = %#v, want cwd %q", startResult.RuntimeWorkspaceRoots, cwd)
+	}
+	if sameAppPath(startResult.RuntimeWorkspaceRoots[0], profileRoot) {
+		t.Fatalf("profile root leaked into runtimeWorkspaceRoots: %#v", startResult.RuntimeWorkspaceRoots)
+	}
+	record, err := store.Read(session.ThreadID(startResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread record error = %v", err)
+	}
+	recordRoots := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
+	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], cwd) {
+		t.Fatalf("record runtime roots = %#v", recordRoots)
+	}
+
+	explicit := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:                   cwd,
+		RuntimeWorkspaceRoots: []string{extraRoot, extraRoot},
+	}))
+	if explicit.Error != nil {
+		t.Fatalf("explicit roots start error: %+v", explicit.Error)
+	}
+	explicitResult := explicit.Result.(*ThreadStartResponse)
+	if len(explicitResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(explicitResult.RuntimeWorkspaceRoots[0], extraRoot) {
+		t.Fatalf("explicit runtimeWorkspaceRoots = %#v", explicitResult.RuntimeWorkspaceRoots)
+	}
+	explicitRecord, err := store.Read(session.ThreadID(explicitResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read explicit roots thread record error = %v", err)
+	}
+	explicitRecordRoots := stringSliceFromAny(explicitRecord.Metadata.Extra["runtime_workspace_roots"])
+	if len(explicitRecordRoots) != 1 || !sameAppPath(explicitRecordRoots[0], extraRoot) {
+		t.Fatalf("explicit record runtime roots = %#v", explicitRecordRoots)
+	}
+}
+
+func TestRuntimeRouterThreadStartOmittedCWDUsesDefaultCWD(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	defaultCWD := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		DefaultCWD:   defaultCWD,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	startResult := start.Result.(*ThreadStartResponse)
+	if startResult.CWD != defaultCWD || startResult.Thread.CWD != defaultCWD {
+		t.Fatalf("start cwd = response:%q thread:%q, want %q", startResult.CWD, startResult.Thread.CWD, defaultCWD)
+	}
+	if len(startResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(startResult.RuntimeWorkspaceRoots[0], defaultCWD) {
+		t.Fatalf("runtimeWorkspaceRoots = %#v, want default cwd %q", startResult.RuntimeWorkspaceRoots, defaultCWD)
+	}
+	record, err := store.Read(session.ThreadID(startResult.Thread.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread record error = %v", err)
+	}
+	if record.Metadata.CWD != defaultCWD {
+		t.Fatalf("record cwd = %q, want %q", record.Metadata.CWD, defaultCWD)
+	}
+	recordRoots := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
+	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], defaultCWD) {
+		t.Fatalf("record runtime roots = %#v, want default cwd %q", recordRoots, defaultCWD)
+	}
+
+	ephemeral := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{Ephemeral: true}))
+	if ephemeral.Error != nil {
+		t.Fatalf("ephemeral thread start error: %+v", ephemeral.Error)
+	}
+	ephemeralResult := ephemeral.Result.(*ThreadStartResponse)
+	if ephemeralResult.CWD != defaultCWD || ephemeralResult.Thread.CWD != defaultCWD {
+		t.Fatalf("ephemeral cwd = response:%q thread:%q, want %q", ephemeralResult.CWD, ephemeralResult.Thread.CWD, defaultCWD)
+	}
+	if len(ephemeralResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(ephemeralResult.RuntimeWorkspaceRoots[0], defaultCWD) {
+		t.Fatalf("ephemeral runtimeWorkspaceRoots = %#v, want default cwd %q", ephemeralResult.RuntimeWorkspaceRoots, defaultCWD)
+	}
+}
+
+func TestRuntimeRouterTurnStartRuntimeWorkspaceRootsResumeFromLoadedThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("roots ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	cwd := t.TempDir()
+	extraRoot := t.TempDir()
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: cwd}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:              threadID,
+		Prompt:                "hello roots",
+		RuntimeWorkspaceRoots: []string{extraRoot, filepath.Join(extraRoot, ".")},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread record error = %v", err)
+	}
+	recordRoots := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
+	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], extraRoot) {
+		t.Fatalf("record runtime roots = %#v", recordRoots)
+	}
+
+	resume := router.Handle(requestWithParams(t, IntID(3), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     threadID,
+		ExcludeTurns: true,
+	}))
+	if resume.Error != nil {
+		t.Fatalf("resume error: %+v", resume.Error)
+	}
+	resumeResult := resume.Result.(*ThreadResumeResponse)
+	if len(resumeResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(resumeResult.RuntimeWorkspaceRoots[0], extraRoot) {
+		t.Fatalf("resume runtimeWorkspaceRoots = %#v", resumeResult.RuntimeWorkspaceRoots)
+	}
+
+	resumeRoot := t.TempDir()
+	resumeExplicit := router.Handle(requestWithParams(t, IntID(4), MethodThreadResume, ThreadResumeParams{
+		ThreadID:              threadID,
+		ExcludeTurns:          true,
+		RuntimeWorkspaceRoots: []string{resumeRoot, filepath.Join(resumeRoot, ".")},
+	}))
+	if resumeExplicit.Error != nil {
+		t.Fatalf("explicit resume error: %+v", resumeExplicit.Error)
+	}
+	resumeExplicitResult := resumeExplicit.Result.(*ThreadResumeResponse)
+	if len(resumeExplicitResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(resumeExplicitResult.RuntimeWorkspaceRoots[0], resumeRoot) {
+		t.Fatalf("explicit resume runtimeWorkspaceRoots = %#v", resumeExplicitResult.RuntimeWorkspaceRoots)
+	}
+	record, err = store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read explicit resume record error = %v", err)
+	}
+	recordRoots = stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
+	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], resumeRoot) {
+		t.Fatalf("explicit resume record runtime roots = %#v", recordRoots)
+	}
+}
+
+func TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project config dir returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte("model_reasoning_effort = \"high\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	first := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:     workspace,
+		Sandbox: "workspace-write",
+	}))
+	if first.Error != nil {
+		t.Fatalf("first start error: %+v", first.Error)
+	}
+	body, err := os.ReadFile(config.ConfigPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile config returned error: %v", err)
+	}
+	if !strings.Contains(string(body), "[projects."+strconv.Quote(filepath.Clean(workspace))+"]") || !strings.Contains(string(body), "trust_level = \"trusted\"") {
+		t.Fatalf("trusted project config = %s", string(body))
+	}
+
+	second := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{CWD: workspace}))
+	if second.Error != nil {
+		t.Fatalf("second start error: %+v", second.Error)
+	}
+	secondResult := second.Result.(*ThreadStartResponse)
+	if secondResult.ReasoningEffort == nil || *secondResult.ReasoningEffort != "high" {
+		t.Fatalf("second reasoning effort = %+v", secondResult.ReasoningEffort)
+	}
+}
+
+func TestRuntimeRouterTurnStartElevatedSandboxDoesNotPersistProjectTrustLikeRust(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:      threadID,
+		Prompt:        "hello elevated",
+		CWD:           workspace,
+		SandboxPolicy: string(sandbox.SandboxDangerFullAccess),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	body, err := os.ReadFile(config.ConfigPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile config returned error: %v", err)
+	}
+	if strings.Contains(string(body), "trust_level = \"trusted\"") || strings.Contains(string(body), filepath.Clean(workspace)) {
+		t.Fatalf("turn/start elevated sandbox unexpectedly persisted project trust: %s", string(body))
+	}
+}
+
+func TestRuntimeRouterThreadStartProjectTrustWriteGuards(t *testing.T) {
+	readOnlyHome := t.TempDir()
+	readOnlyWorkspace := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(readOnlyHome), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile read-only config returned error: %v", err)
+	}
+	readOnlyRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(readOnlyHome, "sessions"))),
+		Config:       config.NewConfigService(readOnlyHome),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	readOnly := readOnlyRouter.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:     readOnlyWorkspace,
+		Sandbox: "read-only",
+	}))
+	if readOnly.Error != nil {
+		t.Fatalf("read-only start error: %+v", readOnly.Error)
+	}
+	readOnlyBody, err := os.ReadFile(config.ConfigPath(readOnlyHome))
+	if err != nil {
+		t.Fatalf("ReadFile read-only config returned error: %v", err)
+	}
+	if strings.Contains(string(readOnlyBody), "trust_level = \"trusted\"") {
+		t.Fatalf("read-only config unexpectedly trusted project: %s", string(readOnlyBody))
+	}
+
+	untrustedHome := t.TempDir()
+	untrustedWorkspace := t.TempDir()
+	untrustedConfig := "model = \"gpt-user\"\n\n[projects." + strconv.Quote(filepath.Clean(untrustedWorkspace)) + "]\ntrust_level = \"untrusted\"\n"
+	if err := os.WriteFile(config.ConfigPath(untrustedHome), []byte(untrustedConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile untrusted config returned error: %v", err)
+	}
+	untrustedRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(untrustedHome, "sessions"))),
+		Config:       config.NewConfigService(untrustedHome),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	untrusted := untrustedRouter.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:     untrustedWorkspace,
+		Sandbox: "workspace-write",
+	}))
+	if untrusted.Error != nil {
+		t.Fatalf("untrusted start error: %+v", untrusted.Error)
+	}
+	untrustedBody, err := os.ReadFile(config.ConfigPath(untrustedHome))
+	if err != nil {
+		t.Fatalf("ReadFile untrusted config returned error: %v", err)
+	}
+	if string(untrustedBody) != untrustedConfig {
+		t.Fatalf("untrusted config changed:\n%s", string(untrustedBody))
+	}
+
+	gitHome := t.TempDir()
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir .git returned error: %v", err)
+	}
+	nested := filepath.Join(repoRoot, "nested", "project")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll nested returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(gitHome), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile git config returned error: %v", err)
+	}
+	gitRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(gitHome, "sessions"))),
+		Config:       config.NewConfigService(gitHome),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	gitStart := gitRouter.Handle(requestWithParams(t, IntID(3), MethodThreadStart, ThreadStartParams{
+		CWD:     nested,
+		Sandbox: "workspace-write",
+	}))
+	if gitStart.Error != nil {
+		t.Fatalf("git start error: %+v", gitStart.Error)
+	}
+	gitBody, err := os.ReadFile(config.ConfigPath(gitHome))
+	if err != nil {
+		t.Fatalf("ReadFile git config returned error: %v", err)
+	}
+	if !strings.Contains(string(gitBody), "[projects."+strconv.Quote(filepath.Clean(repoRoot))+"]") {
+		t.Fatalf("git config did not trust repo root: %s", string(gitBody))
+	}
+	if strings.Contains(string(gitBody), "[projects."+strconv.Quote(filepath.Clean(nested))+"]") {
+		t.Fatalf("git config trusted nested cwd: %s", string(gitBody))
+	}
+}
+
+func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
+	home := t.TempDir()
+	initialProject := t.TempDir()
+	updatedProject := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(updatedProject, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(updatedProject, ".codex", "instructions.md"), []byte("updated project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile instructions returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(updatedProject), []byte("model_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+	projectTrust := strings.ReplaceAll(filepath.Clean(updatedProject), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile user config returned error: %v", err)
+	}
+	modelID, serviceTierID := modelWithServiceTierForRuntimeTest(t)
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    initialProject,
+		Prompt: "initial",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	effort := "high"
+	summary := "auto"
+	personality := "friendly"
+	settingsUpdate := router.Handle(requestWithParams(t, IntID(2), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:    threadID,
+		CWD:         &updatedProject,
+		Model:       &modelID,
+		ServiceTier: &ThreadExtraOptionalString{Set: true, Value: &serviceTierID},
+		Effort:      &effort,
+		Summary:     &summary,
+		Personality: &personality,
+	}))
+	if settingsUpdate.Error != nil {
+		t.Fatalf("settings update error: %+v", settingsUpdate.Error)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "uses updated settings",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != modelID ||
+		request.Instructions != "updated project instructions" ||
+		request.ServiceTier != serviceTierID ||
+		request.ReasoningEffort != effort ||
+		request.ReasoningSummary != summary {
+		t.Fatalf("agent request = %#v", request)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestActiveTurnEnvironmentSnapshotRemainsStableAcrossLaterUpdatesLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	original := &turn.TurnStartParams{
+		ThreadID: "thread-stable-environment",
+		CWD:      "D:/workspace/old",
+		Environments: []map[string]any{{
+			"environmentId": "old-environment",
+			"cwd":           "D:/workspace/old",
+		}},
+	}
+	if err := router.registerActiveRuntimeTurn(original.ThreadID, "turn-active", nil, 1, original); err != nil {
+		t.Fatalf("register active turn: %v", err)
+	}
+	original.CWD = "D:/workspace/new"
+	original.Environments[0]["environmentId"] = "new-environment"
+	original.Environments[0]["cwd"] = "D:/workspace/new"
+
+	snapshot := router.activeTurnParams(original.ThreadID)
+	if snapshot == nil || snapshot.CWD != "D:/workspace/old" || len(snapshot.Environments) != 1 || snapshot.Environments[0]["environmentId"] != "old-environment" || snapshot.Environments[0]["cwd"] != "D:/workspace/old" {
+		t.Fatalf("active environment snapshot changed = %#v", snapshot)
+	}
+	snapshot.Environments[0]["cwd"] = "D:/workspace/mutated-copy"
+	again := router.activeTurnParams(original.ThreadID)
+	if again.Environments[0]["cwd"] != "D:/workspace/old" {
+		t.Fatalf("returned snapshot was not isolated = %#v", again.Environments)
+	}
+}
+
+func TestRuntimeRouterTurnStartUpdatesCWDBetweenTurnsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	initialProject := t.TempDir()
+	firstProject := t.TempDir()
+	secondProject := t.TempDir()
+	writeProjectInstructions := func(dir string, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, ".codex"), 0o755); err != nil {
+			t.Fatalf("MkdirAll project .codex returned error: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".codex", "instructions.md"), []byte(text), 0o600); err != nil {
+			t.Fatalf("WriteFile instructions returned error: %v", err)
+		}
+		if err := os.WriteFile(config.ProjectConfigPath(dir), []byte("model_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile project config returned error: %v", err)
+		}
+	}
+	writeProjectInstructions(firstProject, "first project instructions")
+	writeProjectInstructions(secondProject, "second project instructions")
+	trustProject := func(dir string) string {
+		return "[projects." + strconv.Quote(filepath.Clean(dir)) + "]\ntrust_level = \"trusted\"\n"
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte(trustProject(firstProject)+trustProject(secondProject)), 0o600); err != nil {
+		t.Fatalf("WriteFile user config returned error: %v", err)
+	}
+
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    initialProject,
+		Prompt: "initial",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	startTurn := func(id int64, prompt string, cwd string, wantInstructions string) {
+		t.Helper()
+		params := turn.TurnStartParams{ThreadID: threadID, Prompt: prompt}
+		if cwd != "" {
+			params.CWD = cwd
+		}
+		response := router.Handle(requestWithParams(t, IntID(id), MethodTurnStart, params))
+		if response.Error != nil {
+			t.Fatalf("turn start %d error: %+v", id, response.Error)
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		if request.Instructions != wantInstructions {
+			t.Fatalf("turn %d instructions = %q, want %q", id, request.Instructions, wantInstructions)
+		}
+		turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+		waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	}
+
+	startTurn(2, "first cwd", firstProject, "first project instructions")
+	startTurn(3, "second cwd", secondProject, "second project instructions")
+	startTurn(4, "sticky second cwd", "", "second project instructions")
+}
+
+func TestRuntimeRouterTurnStartUpdatesSandboxAndCWDBetweenTurnsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	workspaceRoot := t.TempDir()
+	firstCWD := filepath.Join(workspaceRoot, "turn1")
+	secondCWD := filepath.Join(workspaceRoot, "turn2")
+	if err := os.MkdirAll(firstCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll first cwd returned error: %v", err)
+	}
+	if err := os.MkdirAll(secondCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll second cwd returned error: %v", err)
+	}
+	agent := &secondTurnShellCommandRuntimeAgent{callID: "call-second", command: "echo second turn"}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Prompt: "hello",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "first turn",
+		CWD:            firstCWD,
+		ApprovalPolicy: string(sandbox.ApprovalNever),
+		SandboxPolicy: map[string]any{
+			"type":                string(sandbox.SandboxWorkspaceWrite),
+			"writableRoots":       []string{firstCWD},
+			"networkAccess":       false,
+			"excludeTmpdirEnvVar": true,
+			"excludeSlashTmp":     true,
+		},
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "second turn",
+		CWD:            secondCWD,
+		ApprovalPolicy: string(sandbox.ApprovalNever),
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	started := waitForItemStarted(t, sink, "call-second")
+	if started.Item["type"] != "commandExecution" || started.Item["status"] != string(CommandExecutionInProgress) {
+		t.Fatalf("second command started item = %#v", started.Item)
+	}
+	if started.Item["cwd"] != secondCWD {
+		t.Fatalf("second command cwd = %#v, want %q", started.Item["cwd"], secondCWD)
+	}
+	if started.Item["command"] != "echo second turn" {
+		t.Fatalf("second command = %#v", started.Item["command"])
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	modelID, _ := modelWithServiceTierForRuntimeTest(t)
+	effort := "low"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+		Model:    modelID,
+		Effort:   &effort,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	updated := lastThreadSettingsNotification(t, sink, threadID)
+	if updated.ThreadSettings.Model != modelID || updated.ThreadSettings.Effort == nil || *updated.ThreadSettings.Effort != effort {
+		t.Fatalf("thread/settings/updated = %+v", updated)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if firstRequest.Model != modelID || firstRequest.ReasoningEffort != effort {
+		t.Fatalf("first agent request = %#v", firstRequest)
+	}
+	firstTurnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	secondTurnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "again",
+	}))
+	if secondTurnStart.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurnStart.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if secondRequest.Model != modelID || secondRequest.ReasoningEffort != effort {
+		t.Fatalf("second agent request = %#v", secondRequest)
+	}
+	secondTurnID := secondTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	extras := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: extras,
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	router.SetNotificationSink(sink)
+
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, map[string]any{
+		"threadId":       threadID,
+		"prompt":         "hello",
+		"multiAgentMode": "proactive",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Prompt != "hello" {
+		t.Fatalf("agent prompt = %q, want hello", request.Prompt)
+	}
+	if strings.Contains(request.Instructions, "Proactive multi-agent delegation is active.") {
+		t.Fatalf("deprecated multiAgentMode leaked into instructions: %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if sinkHasMethod(sink, NotificationThreadSettingsUpdated) {
+		t.Fatalf("deprecated multiAgentMode should not emit settings update: %+v", sink.List())
+	}
+	if settings := extras.Settings(threadID); settings != nil && settings.MultiAgentMode != "" {
+		t.Fatalf("deprecated multiAgentMode persisted to settings: %+v", settings)
+	}
+}
+
+func TestRuntimeRouterThreadStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, map[string]any{
+		"multiAgentMode": "proactive",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	startResponse := threadStart.Result.(*ThreadStartResponse)
+	data, err := json.Marshal(startResponse)
+	if err != nil {
+		t.Fatalf("Marshal thread start response: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal thread start response: %v", err)
+	}
+	if payload["multiAgentMode"] != string(MultiAgentModeExplicitRequestOnly) {
+		t.Fatalf("thread/start multiAgentMode = %#v", payload["multiAgentMode"])
+	}
+
+	threadID := startResponse.Thread.ID
+	router.SetNotificationSink(sink)
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "Proactive multi-agent delegation is active.") {
+		t.Fatalf("deprecated thread/start multiAgentMode leaked into instructions: %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "personality-model",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, map[string]any{
+		"threadId":    threadID,
+		"prompt":      "hello",
+		"personality": "friendly",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "Base friendly personality") || !strings.Contains(request.Instructions, "<personality_spec>") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "personality-model",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(firstRequest.Instructions, "Base default personality") || strings.Contains(firstRequest.Instructions, "<personality_spec>") {
+		t.Fatalf("first instructions = %q", firstRequest.Instructions)
+	}
+	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, map[string]any{
+		"threadId":    threadID,
+		"prompt":      "hello again",
+		"personality": "friendly",
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(secondRequest.Instructions, "Base friendly personality") || !strings.Contains(secondRequest.Instructions, "<personality_spec>") {
+		t.Fatalf("second instructions = %q", secondRequest.Instructions)
+	}
+	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	start := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model:  "personality-model",
+		Prompt: "materialize",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	modelID := "personality-model"
+	personality := "friendly"
+	resume := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID:    threadID,
+		Model:       &modelID,
+		Personality: &personality,
+	}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	updated := lastThreadSettingsNotification(t, sink, threadID)
+	if updated.ThreadSettings.Model != modelID || updated.ThreadSettings.Personality == nil || *updated.ThreadSettings.Personality != personality {
+		t.Fatalf("thread/settings/updated = %+v", updated)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "uses resumed settings",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != modelID ||
+		!strings.Contains(request.Instructions, "Base friendly personality") ||
+		!strings.Contains(request.Instructions, "<personality_spec>") {
+		t.Fatalf("agent request = %#v", request)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"personality-model\"\npersonality = \"pragmatic\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "personality-model" || !strings.Contains(request.Instructions, "Base pragmatic personality") {
+		t.Fatalf("agent request = %#v", request)
+	}
+	if strings.Contains(request.Instructions, "<personality_spec>") {
+		t.Fatalf("config personality should be baked, not emitted as update: %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"personality-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	writeRuntimeRouterPersonalityMigrationRollout(t, home)
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	body, err := os.ReadFile(config.ConfigPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile config returned error: %v", err)
+	}
+	if !strings.Contains(string(body), `personality = "pragmatic"`) {
+		t.Fatalf("config.toml after migration = %s", body)
+	}
+	if _, err := os.Stat(filepath.Join(home, config.PersonalityMigrationFilename)); err != nil {
+		t.Fatalf("personality migration marker stat error = %v", err)
+	}
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "personality-model",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "Base pragmatic personality") || strings.Contains(request.Instructions, "<personality_spec>") {
+		t.Fatalf("instructions after migration = %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadStartEmptyInstructionOverrideSuppressesModelInstructions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	empty := ""
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalityModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model:                 "personality-model",
+		BaseInstructions:      &empty,
+		DeveloperInstructions: &empty,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Instructions != "" {
+		t.Fatalf("instructions = %q, want empty", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartNullServiceTierClearsConfigDefault(t *testing.T) {
+	home := t.TempDir()
+	modelID, serviceTierID := modelWithServiceTierForRuntimeTest(t)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("service_tier = "+strconv.Quote(serviceTierID)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, map[string]any{
+		"threadId":    threadID,
+		"prompt":      "clear service tier",
+		"model":       modelID,
+		"serviceTier": nil,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	updated := lastThreadSettingsNotification(t, sink, threadID)
+	if updated.ThreadSettings.ServiceTier == nil || *updated.ThreadSettings.ServiceTier != model.ServiceTierDefaultRequestValue {
+		t.Fatalf("thread/settings/updated = %+v", updated)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != modelID || request.ServiceTier != "" {
+		t.Fatalf("agent request = %#v", request)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSendsServiceTierIDToModelRequestLikeRust(t *testing.T) {
+	home := t.TempDir()
+	modelID, serviceTierID := modelWithServiceTierForRuntimeTest(t)
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: modelID,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:    threadID,
+		ServiceTier: &serviceTierID,
+		Input:       []turn.TurnUserInput{{Type: "text", Text: "Hello"}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != modelID || request.ServiceTier != serviceTierID {
+		t.Fatalf("agent request = %#v, want model %q service tier %q", request, modelID, serviceTierID)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			Name:            "docs",
+			MarketplaceName: "local",
+			DisplayName:     "Docs",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+			MCPServers:      []string{"docs-mcp"},
+			AppConnectors:   []string{"docs-app"},
+		},
+	})
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			Name:            "drive",
+			MarketplaceName: "market",
+			DisplayName:     "Drive",
+			Description:     "Search Drive files",
+			InstallPolicy:   plugin.InstallAllowed,
+		},
+	})
+	mcpService := mcp.NewMCPService(nil)
+	mcpService.SetServer(mcp.MCPServerStatus{
+		Name:  "docs-mcp",
+		State: mcp.MCPServerReady,
+		Server: mcp.MCPServerInfo{
+			Name: "docs-mcp",
+		},
+		Tools: []mcp.MCPToolInfo{{
+			Name:        "search",
+			Description: "Search docs",
+		}},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Plugins:      plugins,
+		MCP:          mcpService,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello plugin",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{{
+			Type: "mention",
+			Path: "plugin://docs@local",
+		}, {
+			Type: "text",
+			Text: "use this plugin",
+		}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, want := range []string{"## Plugins", "Capabilities from the `Docs` plugin:", "`docs-mcp`", "`docs-app`"} {
+		if !strings.Contains(request.Instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, request.Instructions)
+		}
+	}
+	if strings.Contains(request.Instructions, "<plugin_instructions>") {
+		t.Fatalf("instructions should not contain plugin wrapper tag:\n%s", request.Instructions)
+	}
+	inputText := inputItemText(request.InputItems)
+	if !strings.Contains(inputText, "<recommended_plugins>") || !strings.Contains(inputText, "Drive (drive@market)") {
+		t.Fatalf("recommended plugin input item missing: %s", inputText)
+	}
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal tools error = %v", err)
+	}
+	if !strings.Contains(string(toolsJSON), "request_plugin_install") {
+		t.Fatalf("request_plugin_install tool missing: %s", toolsJSON)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	appMentionTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{{
+			Type: "mention",
+			Path: "app://docs-app",
+		}, {
+			Type: "text",
+			Text: "use this app",
+		}},
+	}))
+	if appMentionTurn.Error != nil {
+		t.Fatalf("app mention turn start error: %+v", appMentionTurn.Error)
+	}
+	appMentionRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(appMentionRequest.Instructions, "## Plugins") {
+		t.Fatalf("available plugin instructions missing for app mention:\n%s", appMentionRequest.Instructions)
+	}
+	if strings.Contains(appMentionRequest.Instructions, "Capabilities from the `Docs` plugin:") {
+		t.Fatalf("app mention should not inject explicit plugin instructions like Rust:\n%s", appMentionRequest.Instructions)
+	}
+	appMentionTurnID := appMentionTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, appMentionTurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterFirstTurnAfterExternalLoginWaitsForRecommendedPluginsLikeRust(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	var gotAuthorization string
+	var gotAccountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ps/plugins/suggested" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("scope") != "GLOBAL" {
+			t.Errorf("scope query = %q, want GLOBAL", r.URL.Query().Get("scope"))
+		}
+		mu.Lock()
+		requests++
+		gotAuthorization = r.Header.Get("Authorization")
+		gotAccountID = r.Header.Get("ChatGPT-Account-ID")
+		mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"enabled": true,
+			"plugins": [{
+				"id": "plugin_github",
+				"name": "github",
+				"status": "ENABLED",
+				"installation_policy": "AVAILABLE",
+				"release": {"display_name": "GitHub"}
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"
+
+[features]
+apps = true
+plugins = true
+remote_plugin = true
+tool_suggest = true
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	store := session.NewStore(home)
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	plugins := plugin.NewPluginService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Account:      auth.NewAccountManager(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Plugins:      plugins,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	router.SetNotificationSink(sink)
+	plan := "pro"
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
+		Type:             "chatgptAuthTokens",
+		AccessToken:      "access-token",
+		ChatGPTAccountID: "workspace-1",
+		ChatGPTPlanType:  &plan,
+	}))
+	if login.Error != nil {
+		t.Fatalf("login error: %+v", login.Error)
+	}
+
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{Prompt: "hello"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "suggest a plugin",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	inputText := inputItemText(request.InputItems)
+	if !strings.Contains(inputText, "<recommended_plugins>") || !strings.Contains(inputText, "- GitHub (github@openai-curated-remote)") {
+		t.Fatalf("recommended plugin input item missing: %s", inputText)
+	}
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal tools error = %v", err)
+	}
+	if !strings.Contains(string(toolsJSON), "request_plugin_install") || strings.Contains(string(toolsJSON), "list_available_plugins_to_install") {
+		t.Fatalf("recommendation tools mismatch: %s", toolsJSON)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 || gotAuthorization != "Bearer access-token" || gotAccountID != "workspace-1" {
+		t.Fatalf("suggested request count=%d auth=%q account=%q", requests, gotAuthorization, gotAccountID)
+	}
+}
+
+func TestRuntimeRouterTurnStartDoesNotRecommendConnectorOnlyCandidates(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			ID:              "installed@market",
+			Name:            "installed",
+			DisplayName:     "Installed",
+			MarketplaceName: "market",
+			Installed:       true,
+			Enabled:         true,
+		},
+		Apps: []plugin.AppSummary{{ID: "connector_docs", DisplayName: "Docs Connector"}},
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Plugins:      plugins,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{Prompt: "hello connector"}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	inputItemsJSON, err := json.Marshal(request.InputItems)
+	if err != nil {
+		t.Fatalf("Marshal input items error = %v", err)
+	}
+	if strings.Contains(string(inputItemsJSON), "<recommended_plugins>") {
+		t.Fatalf("connector-only candidate should not be in recommended plugins: %s", inputItemsJSON)
+	}
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal tools error = %v", err)
+	}
+	if strings.Contains(string(toolsJSON), "request_plugin_install") {
+		t.Fatalf("request_plugin_install should not be registered for connector-only recommendations: %s", toolsJSON)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartInjectsAvailableSkills(t *testing.T) {
+	skillsRoot := t.TempDir()
+	visibleSkill := filepath.Join(skillsRoot, "build-stuff")
+	if err := os.MkdirAll(visibleSkill, 0o755); err != nil {
+		t.Fatalf("MkdirAll(visible skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(visibleSkill, SkillFilename), []byte("---\nname: build-stuff\ndescription: Build code quickly\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(visible skill) error = %v", err)
+	}
+	hiddenSkill := filepath.Join(skillsRoot, "hidden-skill")
+	if err := os.MkdirAll(filepath.Join(hiddenSkill, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(hidden skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenSkill, SkillFilename), []byte("---\nname: hidden-skill\ndescription: Do not expose\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(hidden skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenSkill, SkillMetadataDir, SkillMetadataFilename), []byte("policy:\n  allow_implicit_invocation: false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(hidden metadata) error = %v", err)
+	}
+	pluginRoot := t.TempDir()
+	pluginSkill := filepath.Join(pluginRoot, "skills", "review")
+	if err := os.MkdirAll(pluginSkill, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginSkill, SkillFilename), []byte("---\nname: review\ndescription: Review with plugin context\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin skill) error = %v", err)
+	}
+	disabledPluginSkill := filepath.Join(pluginRoot, "skills", "archive")
+	if err := os.MkdirAll(disabledPluginSkill, 0o755); err != nil {
+		t.Fatalf("MkdirAll(disabled plugin skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(disabledPluginSkill, SkillFilename), []byte("---\nname: archive\ndescription: Archive with plugin context\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(disabled plugin skill) error = %v", err)
+	}
+	configHome := t.TempDir()
+	configService := config.NewConfigService(configHome)
+	if _, err := configService.WriteSkillConfig(&config.SkillConfigWriteParams{Name: "docs:archive", Enabled: false}); err != nil {
+		t.Fatalf("WriteSkillConfig(disabled plugin skill) error = %v", err)
+	}
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		MarketplaceRoot: pluginRoot,
+		Summary: plugin.PluginSummary{
+			Name:            "docs",
+			MarketplaceName: "local",
+			DisplayName:     "Docs",
+			Installed:       true,
+			Enabled:         true,
+			HasSkills:       true,
+		},
+	})
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{
+			Roots:  []string{skillsRoot},
+			Config: configService,
+		}),
+		Plugins:      plugins,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello skills",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use skills",
+		Input: []turn.TurnUserInput{{
+			Type: "skill",
+			Name: "build-stuff",
+			Path: filepath.Join(visibleSkill, SkillFilename),
+		}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, want := range []string{"## Skills", "build-stuff", "Build code quickly", "docs:review", "Review with plugin context"} {
+		if !strings.Contains(request.Instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, request.Instructions)
+		}
+	}
+	if strings.Contains(request.Instructions, "hidden-skill") {
+		t.Fatalf("instructions included disabled implicit skill:\n%s", request.Instructions)
+	}
+	if strings.Contains(request.Instructions, "docs:archive") || strings.Contains(request.Instructions, "Archive with plugin context") {
+		t.Fatalf("instructions included plugin skill disabled by name:\n%s", request.Instructions)
+	}
+	for _, want := range []string{"<skill>", "<name>build-stuff</name>", filepath.ToSlash(filepath.Join(visibleSkill, SkillFilename))} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("input items missing explicit skill fragment %q: %#v", want, request.InputItems)
+		}
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSkillsConfigUsesSessionFlagsNotMergedProjectConfigLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "config-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: config-skill\ndescription: config skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	mergedProjectConfig := &config.Config{Values: map[string]any{
+		"skills": map[string]any{"config": []any{
+			map[string]any{"name": "config-skill", "enabled": false},
+		}},
+	}}
+	instructions, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-project-rule", "turn-project-rule", mergedProjectConfig, &turn.TurnStartParams{}, "")
+	if err != nil {
+		t.Fatalf("project instructions error = %v", err)
+	}
+	if !strings.Contains(instructions, "config-skill") {
+		t.Fatalf("merged project skills.config disabled a skill unlike Rust:\n%s", instructions)
+	}
+
+	sessionParams := &turn.TurnStartParams{Config: map[string]any{
+		"skills.config": []any{
+			map[string]any{"name": "config-skill", "enabled": false},
+		},
+	}}
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-session-rule", "turn-session-rule", mergedProjectConfig, sessionParams, "")
+	if err != nil {
+		t.Fatalf("session instructions error = %v", err)
+	}
+	if strings.Contains(instructions, "config-skill") || len(items) != 0 {
+		t.Fatalf("session skills.config did not disable skill: instructions=%q items=%#v", instructions, items)
+	}
+}
+
+func TestRuntimeRouterPromptHiddenSkillCanStillBeInvokedLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "hidden-skill")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: hidden-skill\ndescription: Hidden from automatic discovery\n---\n# Hidden\nUse this when explicitly selected.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("policy:\n  allow_implicit_invocation: false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-hidden-explicit", "turn-hidden-explicit", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{
+		CWD: t.TempDir(),
+		Input: []turn.TurnUserInput{{
+			Type: "skill",
+			Name: "hidden-skill",
+			Path: skillPath,
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContextForTurn() error = %v", err)
+	}
+	if strings.Contains(instructions, "hidden-skill") {
+		t.Fatalf("prompt-hidden skill leaked into catalog:\n%s", instructions)
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(items); err != nil {
+		t.Fatalf("Encode(items) error = %v", err)
+	}
+	for _, want := range []string{"<name>hidden-skill</name>", "Use this when explicitly selected."} {
+		if !strings.Contains(encoded.String(), want) {
+			t.Fatalf("explicit hidden skill items missing %q: %s", want, encoded.String())
+		}
+	}
+}
+
+func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "imagegen")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: imagegen\ndescription: Generate images\n---\nUse hosted image generation before shell fallbacks.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("loaded")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService([]string{skillsRoot}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "$imagegen",
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if firstRequest.Prompt != "$imagegen" {
+		t.Fatalf("first prompt = %q, want $imagegen", firstRequest.Prompt)
+	}
+	for _, want := range []string{"<skill>", "<name>imagegen</name>", filepath.ToSlash(skillPath), "Use hosted image generation before shell fallbacks."} {
+		if !agentRequestInputItemsContain(firstRequest, want) {
+			t.Fatalf("first request missing skill fragment %q: %#v", want, firstRequest.InputItems)
+		}
+	}
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+		if !strings.Contains(firstRequest.Instructions, want) {
+			t.Fatalf("first request instructions missing %q:\n%s", want, firstRequest.Instructions)
+		}
+	}
+	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var skillItem *session.Item
+	for i := range record.Items {
+		if sessionItemIsSkillInstructions(&record.Items[i]) {
+			skillItem = &record.Items[i]
+			break
+		}
+	}
+	if skillItem == nil || !strings.Contains(skillItem.Text, "<name>imagegen</name>") {
+		t.Fatalf("record missing hidden skill instructions item: %#v", record.Items)
+	}
+	itemsResponse, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: threadID})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	for _, item := range itemsResponse.Data {
+		if item.ID == skillItem.ID || strings.Contains(item.Text, "<name>imagegen</name>") {
+			t.Fatalf("visible thread items leaked skill instructions: %#v", itemsResponse.Data)
+		}
+	}
+
+	agent.message = "done"
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if secondRequest.Prompt != "draw a portrait" {
+		t.Fatalf("second prompt = %q, want draw a portrait", secondRequest.Prompt)
+	}
+	for _, want := range []string{"<skill>", "<name>imagegen</name>", "Use hosted image generation before shell fallbacks."} {
+		if !agentRequestInputItemsContain(secondRequest, want) {
+			t.Fatalf("second request missing persisted skill fragment %q: %#v", want, secondRequest.InputItems)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestPromptSkillMetadataPreservesPluginID(t *testing.T) {
+	entries := []SkillsListEntry{{
+		Name:             "Docs:review",
+		Path:             filepath.Join("plugins", "docs", "skills", "review", SkillFilename),
+		Scope:            "plugin",
+		Description:      "Long plugin review guidance",
+		ShortDescription: "Short review guidance",
+		Enabled:          true,
+		PluginID:         "docs@market",
+	}}
+	metadata := promptSkillMetadataFromEntries(entries)
+	if len(metadata) != 1 || metadata[0].PluginID != "docs@market" {
+		t.Fatalf("prompt skill metadata = %#v", metadata)
+	}
+	if metadata[0].Description != "Short review guidance" {
+		t.Fatalf("prompt skill description = %q, want short description", metadata[0].Description)
+	}
+}
+
+func TestRuntimeRouterAppMentionInjectsAppContext(t *testing.T) {
+	description := "Drive files"
+	installURL := "https://chatgpt.com/apps/google-drive/drive"
+	appService := apps.NewAppService([]apps.AppEntry{{
+		ID:                 "drive",
+		Name:               "Google Drive",
+		Description:        &description,
+		InstallURL:         &installURL,
+		IsAccessible:       true,
+		IsEnabled:          true,
+		PluginDisplayNames: []string{"Docs"},
+	}})
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Apps:         appService,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "Use [$drive](app://drive) and [$missing](app://missing)",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, want := range []string{
+		"<app>",
+		"<id>drive</id>",
+		"<name>Google Drive</name>",
+		"<description>Drive files</description>",
+		"<is_accessible>true</is_accessible>",
+		"<plugin_display_names>Docs</plugin_display_names>",
+		"<id>missing</id>",
+		"https://chatgpt.com/apps/missing/missing",
+	} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("input items missing app fragment %q: %#v", want, request.InputItems)
+		}
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestAppInstructionsDataHonorsExplicitDisabledState(t *testing.T) {
+	data := appInstructionsData(&apps.AppEntry{
+		ID:              "drive",
+		Name:            "Drive",
+		IsEnabled:       false,
+		Enabled:         true,
+		EnabledExplicit: true,
+	})
+	if data.IsEnabled {
+		t.Fatalf("explicit disabled app rendered enabled: %+v", data)
+	}
+
+	legacy := appInstructionsData(&apps.AppEntry{
+		ID:      "legacy",
+		Name:    "Legacy",
+		Enabled: true,
+	})
+	if !legacy.IsEnabled {
+		t.Fatalf("legacy enabled app rendered disabled: %+v", legacy)
+	}
+}
+
+func TestRuntimeRouterSkillsContextEmitsBudgetWarning(t *testing.T) {
+	skillsRoot := t.TempDir()
+	description := strings.Repeat("long ", 100)
+	for i := 0; i < 30; i++ {
+		skillDir := filepath.Join(skillsRoot, fmt.Sprintf("skill-%02d", i))
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(skill) error = %v", err)
+		}
+		body := fmt.Sprintf("---\nname: skill-%02d\ndescription: %s\n---\n", i, description)
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile(skill) error = %v", err)
+		}
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+			Slug:          "tiny-skills",
+			ContextWindow: 100,
+		}}})),
+	})
+	router.SetNotificationSink(sink)
+	instructions, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{"model": "tiny-skills"}}, &turn.TurnStartParams{}, "base")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	if !strings.Contains(instructions, "## Skills") {
+		t.Fatalf("instructions missing skills:\n%s", instructions)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 {
+		t.Fatalf("warning notifications = %+v, want one", warnings)
+	}
+	if warnings[0].ThreadID == nil || *warnings[0].ThreadID != "thread-skills" {
+		t.Fatalf("warning threadId = %+v, want thread-skills", warnings[0].ThreadID)
+	}
+	if !strings.HasPrefix(warnings[0].Message, "Exceeded skills context budget of 2%.") ||
+		!strings.Contains(warnings[0].Message, "All skill descriptions were removed") ||
+		!strings.Contains(warnings[0].Message, "additional skills were not included in the model-visible skills list") {
+		t.Fatalf("warning message = %q", warnings[0].Message)
+	}
+}
+
+func TestRuntimeRouterSkillsContextFollowsModelUsageInstructionsFlagLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "repo-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-helper\ndescription: Repo helper\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name         string
+		includeUsage bool
+		wantUsage    bool
+	}{
+		{name: "disabled", includeUsage: false, wantUsage: false},
+		{name: "enabled", includeUsage: true, wantUsage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modelID := "skills-usage-" + tc.name
+			router := NewRuntimeRouter(RuntimeServices{
+				Skills: NewSkillsService([]string{skillsRoot}),
+				Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+					Slug:                           modelID,
+					ContextWindow:                  100000,
+					IncludeSkillsUsageInstructions: tc.includeUsage,
+				}}})),
+			})
+			instructions, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{"model": modelID}}, &turn.TurnStartParams{}, "base")
+			if err != nil {
+				t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+			}
+			if !strings.Contains(instructions, "repo-helper") {
+				t.Fatalf("instructions missing skill:\n%s", instructions)
+			}
+			hasUsage := strings.Contains(instructions, "### How to use skills") || strings.Contains(instructions, "read its `SKILL.md` completely")
+			if hasUsage != tc.wantUsage {
+				t.Fatalf("usage instructions present = %v, want %v:\n%s", hasUsage, tc.wantUsage, instructions)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterSkillsContextIncludesCWDRepoSkills(t *testing.T) {
+	cwd := t.TempDir()
+	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: repo-helper\ndescription: Repo helper\n---\nUse repo context.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService(nil)})
+	instructions, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{CWD: cwd}, "base")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	if !strings.Contains(instructions, "repo-helper") || !strings.Contains(instructions, "Repo helper") {
+		t.Fatalf("instructions missing repo skill:\n%s", instructions)
+	}
+}
+
+func TestRuntimeRouterSkillsContextDoesNotWarnForUnselectedMCPDependenciesLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "calendar-skill")
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill metadata) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: calendar-skill\ndescription: Calendar helper\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte(`
+dependencies:
+  tools:
+    - type: mcp
+      value: calendar
+      url: https://mcp.example.test
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill metadata) error = %v", err)
+	}
+
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	router.SetNotificationSink(sink)
+	if _, _, _, err := router.instructionsWithSkillsContext("thread-skills", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{}, "base"); err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 0 {
+		t.Fatalf("unselected dependency warnings = %+v, want none", warnings)
+	}
+
+	configuredSink := NewNotificationBuffer()
+	configured := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	configured.SetNotificationSink(configuredSink)
+	cfg := &config.Config{Values: map[string]any{
+		"mcp_servers": map[string]any{
+			"calendar": map[string]any{"url": "https://mcp.example.test"},
+		},
+	}}
+	if _, _, _, err := configured.instructionsWithSkillsContext("thread-skills", cfg, &turn.TurnStartParams{}, "base"); err != nil {
+		t.Fatalf("instructionsWithSkillsContext(configured) error = %v", err)
+	}
+	if warnings := warningNotificationsForTest(configuredSink); len(warnings) != 0 {
+		t.Fatalf("configured warnings = %+v, want none", warnings)
+	}
+}
+
+func warningNotificationsForTest(sink *NotificationBuffer) []*WarningNotification {
+	if sink == nil {
+		return nil
+	}
+	var out []*WarningNotification
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationWarning {
+			continue
+		}
+		warning, ok := notification.Params.(*WarningNotification)
+		if ok {
+			out = append(out, warning)
+		}
+	}
+	return out
+}
+
+func TestRuntimeRouterSkillInstructionsInputItemTruncatesMainPromptLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+
+	name := strings.Repeat("n", promptctx.SkillNameMaxBytes+10)
+	locatorPath := "skill://" + strings.Repeat("p", promptctx.SkillPathMaxBytes+20)
+	contents := strings.Repeat("a", promptctx.SkillMainPromptMaxBytes-1) + "é" + "tail"
+	items := router.explicitSkillInputItems("thread-skill-truncation", &turn.TurnStartParams{
+		Prompt: "[$" + name + "](" + locatorPath + ")",
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:        name,
+		Path:        "environment://remote/skills/long/SKILL.md",
+		LocatorPath: locatorPath,
+		Contents:    contents,
+	}})
+	if len(items) != 1 {
+		t.Fatalf("explicitSkillInputItems() = %#v", items)
+	}
+	text := inputItemText(items)
+	if !strings.Contains(text, "<name>"+strings.Repeat("n", promptctx.SkillNameMaxBytes)+"</name>") || strings.Contains(text, "<name>"+name+"</name>") {
+		t.Fatalf("skill name was not truncated like Rust:\n%s", text)
+	}
+	wantPath := locatorPath[:promptctx.SkillPathMaxBytes]
+	if !strings.Contains(text, "<path>"+wantPath+"</path>") || strings.Contains(text, locatorPath+"</path>") {
+		t.Fatalf("skill path was not truncated like Rust:\n%s", text)
+	}
+	if !strings.Contains(text, strings.Repeat("a", promptctx.SkillMainPromptMaxBytes-1)) || strings.Contains(text, "é") || strings.Contains(text, "tail") {
+		t.Fatalf("skill contents were not truncated at UTF-8 boundary like Rust:\n%s", text)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || warnings[0].Message != promptctx.SkillMainPromptTruncatedWarning(name) {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "build-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: build-skill\ndescription: Build helper\n---\nUse this build helper.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(scripts) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "scripts", "build.py"), []byte("print('build')\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(script) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	analytics := newRecordingTurnEventSink()
+	agent := newImplicitSkillRuntimeAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService([]string{skillsRoot}),
+		Analytics:    analytics,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: skillDir}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:   threadID,
+		CWD:        skillDir,
+		Prompt:     "run build",
+		Originator: "codex-test",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	second := waitForImplicitSkillAgentRequest(t, agent, 2)
+	if agentRequestInputItemsContain(second, "<name>build-skill</name>") {
+		t.Fatalf("implicit skill instructions were injected unlike Rust: %#v", second.InputItems)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.EventType != telemetry.SkillInvocationEventType || event.SkillName != "build-skill" || stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeImplicit || stringPtrValue(event.EventParams.ThreadID) != threadID || stringPtrValue(event.EventParams.TurnID) != turnID || stringPtrValue(event.EventParams.ProductClientID) != "codex-test" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for implicit skill invocation analytics")
+	}
+}
+
+func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
+	skillDir := t.TempDir()
+	disabled := false
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	provider := router.implicitSkillInvocationEventProvider("thread-hidden", "turn-hidden", "model-hidden", &turn.TurnStartParams{CWD: skillDir}, []promptctx.InstructionsSkillMetadata{{
+		Name:                    "disabled-skill",
+		Path:                    filepath.Join(skillDir, SkillFilename),
+		AllowImplicitInvocation: &disabled,
+	}})
+	items := provider(context.Background(), &tool.Invocation{
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"cmd":"python3 scripts/run.py"}`,
+		},
+	}, nil)
+	if len(items) != 0 {
+		t.Fatalf("implicit skill produced model items: %#v", items)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.SkillName != "disabled-skill" || stringPtrValue(event.EventParams.SkillScope) != "user" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hidden skill invocation analytics")
+	}
+}
+
+func TestPromptSkillMetadataMapsHostDisplayPathLikeRust(t *testing.T) {
+	metadata := promptSkillMetadataFromEntries([]SkillsListEntry{{
+		Name:        "host-skill",
+		Path:        `C:\skills\host-skill\SKILL.md`,
+		Scope:       "user",
+		Description: "host",
+		Enabled:     true,
+	}})
+	if len(metadata) != 1 || metadata[0].LocatorKind != "file" || metadata[0].LocatorPath != "C:/skills/host-skill/SKILL.md" {
+		t.Fatalf("host metadata = %#v", metadata)
+	}
+}
+
+func TestInstructionsWithSkillsContextEmitsHostCatalogWarningsLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	invalidDir := filepath.Join(skillsRoot, "invalid-skill")
+	if err := os.MkdirAll(invalidDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	invalidPath := filepath.Join(invalidDir, SkillFilename)
+	if err := os.WriteFile(invalidPath, []byte("missing frontmatter"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	router.SetNotificationSink(sink)
+	if _, _, _, err := router.instructionsWithSkillsContext("thread-host-warning", nil, &turn.TurnStartParams{CWD: t.TempDir()}, ""); err != nil {
+		t.Fatalf("instructionsWithSkillsContext() error = %v", err)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Message, "Failed to load skill at "+invalidPath+": ") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := &RuntimeRouter{}
+	router.SetNotificationSink(sink)
+	missingPath := filepath.Join(t.TempDir(), "missing", SkillFilename)
+	items := router.explicitSkillInputItems("thread-host-read", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "missing-skill", Path: missingPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name: "missing-skill",
+		Path: missingPath,
+	}})
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none", items)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Message, "Failed to load skill `missing-skill`: failed to read host skill resource "+missingPath+": ") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing.T) {
+	skillDir := t.TempDir()
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: tracked-skill\ndescription: tracked\n---\nbody\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	items := router.explicitSkillInputItemsForTurn("thread-explicit", "turn-explicit", "model-explicit", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "tracked-skill", Path: skillPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:        "tracked-skill",
+		Path:        skillPath,
+		LocatorPath: filepath.ToSlash(skillPath),
+		LocatorKind: "file",
+		Scope:       "user",
+	}})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one skill fragment", items)
+	}
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.SkillName != "tracked-skill" || event.SkillID == "" || stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeExplicit || stringPtrValue(event.EventParams.TurnID) != "turn-explicit" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for explicit skill invocation analytics")
+	}
+}
+
+func TestSkillMCPDependencyPromptOnlyForSelectedSkillAndDedupesLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "dependency-skill")
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{skillsRoot})})
+	requestCount := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		requestCount++
+		params, ok := request.Params.(*ToolRequestUserInputParams)
+		if !ok || params == nil || len(params.Questions) != 1 {
+			t.Errorf("request params = %#v", request.Params)
+			return
+		}
+		question := params.Questions[0]
+		if question.ID != skillMCPDependencyPromptID || question.Header != "Install MCP servers?" || !strings.Contains(question.Question, "docs") || len(question.Options) != 2 || question.Options[0].Label != "Install" || question.Options[1].Label != "Continue anyway" {
+			t.Errorf("question = %#v", question)
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Continue anyway"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	baseParams := &turn.TurnStartParams{CWD: t.TempDir(), Originator: "codex_cli_rs"}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-unmentioned", cfg, baseParams, ""); err != nil {
+		t.Fatalf("unmentioned instructions error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("unmentioned skill prompted %d times", requestCount)
+	}
+	selectedParams := baseParams
+	selectedParams.Input = []turn.TurnUserInput{{Type: "skill", Name: "dependency-skill", Path: skillPath}}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-selected", cfg, selectedParams, ""); err != nil {
+		t.Fatalf("selected instructions error = %v", err)
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-deps", "turn-selected-2", cfg, selectedParams, ""); err != nil {
+		t.Fatalf("repeat instructions error = %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("dependency prompt count = %d, want 1", requestCount)
+	}
+}
+
+func TestSkillMCPDependencyInstallPersistsGlobalConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "install-skill")
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+		MCP:    mcp.NewMCPService(nil),
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Install"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	params := &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input:      []turn.TurnUserInput{{Type: "skill", Name: "install-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-install", "turn-install", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	read, err := configService.Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Config.Read() error = %v", err)
+	}
+	runtimeConfig := mcp.RuntimeConfigFromValues(read.Config, home)
+	registration, ok := runtimeConfig.Servers["docs"]
+	if !ok || registration.Config.URL != "https://docs.example.test/mcp" || !registration.Config.Enabled || registration.Config.Required {
+		t.Fatalf("installed MCP config = %#v, ok=%v", registration, ok)
+	}
+}
+
+func TestSkillMCPDependencyInstallDiscoversScopesRetriesAndCompletesOAuthLikeRust(t *testing.T) {
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server/mcp", "/.well-known/oauth-authorization-server":
+			writeJSON(t, w, map[string]any{
+				"issuer":                 issuer.URL,
+				"authorization_endpoint": issuer.URL + "/authorize",
+				"token_endpoint":         issuer.URL + "/token",
+				"registration_endpoint":  issuer.URL + "/register",
+				"scopes_supported":       []string{"read", "write"},
+			})
+		case "/register":
+			writeJSON(t, w, map[string]any{"client_id": "dynamic-client", "token_endpoint_auth_method": "none"})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("ParseForm() error = %v", err)
+			}
+			if r.Form.Get("code") != "oauth-code" || r.Form.Get("client_id") != "dynamic-client" {
+				t.Errorf("token form = %#v", r.Form)
+			}
+			writeJSON(t, w, map[string]any{"access_token": "skill-access", "refresh_token": "skill-refresh", "token_type": "Bearer", "expires_in": 3600})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+
+	home := t.TempDir()
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyURLForTest(t, skillsRoot, "oauth-skill", issuer.URL+"/mcp")
+	configService := config.NewConfigService(home)
+	service := mcp.NewMCPService(&mcp.RuntimeConfig{CodexHome: home})
+	var openedScopes []string
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+		MCP:    service,
+		BrowserOpen: func(target string) error {
+			authorizationURL, err := url.Parse(target)
+			if err != nil {
+				return err
+			}
+			query := authorizationURL.Query()
+			openedScopes = append(openedScopes, query.Get("scope"))
+			callbackURL, err := url.Parse(query.Get("redirect_uri"))
+			if err != nil {
+				return err
+			}
+			callbackQuery := callbackURL.Query()
+			callbackQuery.Set("state", query.Get("state"))
+			if len(openedScopes) == 1 {
+				callbackQuery.Set("error", "invalid_scope")
+				callbackQuery.Set("error_description", "scope rejected")
+			} else {
+				callbackQuery.Set("code", "oauth-code")
+			}
+			callbackURL.RawQuery = callbackQuery.Encode()
+			response, err := http.Get(callbackURL.String())
+			if err != nil {
+				return err
+			}
+			return response.Body.Close()
+		},
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Install"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{}}
+	params := &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input:      []turn.TurnUserInput{{Type: "skill", Name: "oauth-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-oauth-install", "turn-oauth-install", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	if !reflect.DeepEqual(openedScopes, []string{"read write", ""}) {
+		t.Fatalf("opened OAuth scopes = %#v, want discovered scopes then empty retry", openedScopes)
+	}
+	tokens, err := mcp.NewOAuthStore(home).Load("docs", issuer.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("OAuthStore.Load() error = %v", err)
+	}
+	if tokens == nil || tokens.AccessToken != "skill-access" || len(tokens.Scopes) != 0 {
+		t.Fatalf("stored OAuth tokens = %#v", tokens)
+	}
+}
+
+func TestRuntimeRouterOrchestratorSkillCatalogAndExplicitReadLikeRust(t *testing.T) {
+	const skillPackage = "skill://drive/docs"
+	const mainResource = skillPackage + "/SKILL.md"
+	var methodsMu sync.Mutex
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		methodsMu.Lock()
+		methods = append(methods, request.Method)
+		methodsMu.Unlock()
+		switch request.Method {
+		case "initialize":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"resources": map[string]any{}},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"resources": []map[string]any{{
+					"uri":         skillPackage,
+					"name":        "docs",
+					"description": "Search shared docs.",
+					"mimeType":    "mcp/skill",
+					"_meta": map[string]any{
+						"plugin_name": "Drive",
+						"skill_name":  "doc-search",
+					},
+				}},
+			})
+		case "resources/templates/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resourceTemplates": []any{}})
+		case "resources/read":
+			var params struct {
+				URI string `json:"uri"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				t.Fatalf("resources/read params error = %v", err)
+			}
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"contents": []map[string]string{{"uri": params.URI, "text": "# Docs\nUse the shared documentation index."}},
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	mcpService := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+		mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+	}})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		MCP:          mcpService,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstCatalog, firstWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	secondCatalog, secondWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	if len(firstCatalog) != 1 || len(secondCatalog) != 1 || len(firstWarnings) != 0 || len(secondWarnings) != 0 {
+		t.Fatalf("cached orchestrator catalogs = %#v/%#v warnings=%#v/%#v", firstCatalog, secondCatalog, firstWarnings, secondWarnings)
+	}
+	methodsMu.Lock()
+	if countString(methods, "resources/list") != 1 {
+		t.Fatalf("catalog discovery methods = %#v, want one resources/list", methods)
+	}
+	methodsMu.Unlock()
+	mcpService.Refresh()
+	refreshedCatalog, refreshedWarnings := router.orchestratorSkillMetadataForRuntime(threadID)
+	if len(refreshedCatalog) != 1 || len(refreshedWarnings) != 0 {
+		t.Fatalf("refreshed orchestrator catalog = %#v warnings=%#v", refreshedCatalog, refreshedWarnings)
+	}
+	methodsMu.Lock()
+	if countString(methods, "resources/list") != 2 {
+		t.Fatalf("refreshed catalog methods = %#v, want rediscovery", methods)
+	}
+	methodsMu.Unlock()
+	for index := 0; index < 2; index++ {
+		started := router.Handle(requestWithParams(t, IntID(int64(2+index)), MethodTurnStart, turn.TurnStartParams{
+			ThreadID: threadID,
+			Prompt:   "use shared docs",
+			Input: []turn.TurnUserInput{{
+				Type: "skill",
+				Name: "Drive:doc-search",
+				Path: mainResource,
+			}},
+		}))
+		if started.Error != nil {
+			t.Fatalf("turn %d start error: %+v", index, started.Error)
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		for _, want := range []string{"Drive:doc-search", "(orchestrator resource: " + skillPackage + ")"} {
+			if !strings.Contains(request.Instructions, want) {
+				t.Fatalf("turn %d instructions missing %q:\n%s", index, want, request.Instructions)
+			}
+		}
+		for _, want := range []string{"<skill>", "<name>Drive:doc-search</name>", "<path>" + skillPackage + "</path>", "Use the shared documentation index."} {
+			if !agentRequestInputItemsContain(request, want) {
+				t.Fatalf("turn %d input items missing %q: %#v", index, want, request.InputItems)
+			}
+		}
+		waitForTurnCompletedStatus(t, sink, started.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	}
+	methodsMu.Lock()
+	defer methodsMu.Unlock()
+	if countString(methods, "resources/read") != 1 {
+		t.Fatalf("MCP methods = %#v, want cached orchestrator resource", methods)
+	}
+}
+
+func TestRuntimeRouterOrchestratorSkillsConfigDisablesCatalogAndToolsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[orchestrator.skills]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	var methodsMu sync.Mutex
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		methodsMu.Lock()
+		methods = append(methods, payload.Method)
+		methodsMu.Unlock()
+		switch payload.Method {
+		case "initialize":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"resources": map[string]any{}},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{"tools": []any{}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{
+				"resources": []map[string]any{
+					{
+						"uri":         "skill://hidden/package",
+						"name":        "hidden",
+						"description": "Must stay hidden",
+						"mimeType":    "mcp/skill",
+					},
+				},
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, payload.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+	configService := config.NewConfigService(home)
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Config:       configService,
+		Skills:       NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService}),
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect tools"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "skill://hidden/package") || strings.Contains(request.Instructions, "Must stay hidden") {
+		t.Fatalf("disabled orchestrator skill leaked into instructions:\n%s", request.Instructions)
+	}
+	for _, rawTool := range request.Tools {
+		toolMap, ok := rawTool.(map[string]any)
+		if ok && toolMap["type"] == "namespace" && toolMap["name"] == "skills" {
+			t.Fatalf("skills namespace registered while orchestrator.skills is disabled: %#v", request.Tools)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	methodsMu.Lock()
+	defer methodsMu.Unlock()
+	if countString(methods, "resources/read") != 0 {
+		t.Fatalf("disabled orchestrator skill resource was read: %#v", methods)
+	}
+}
+
+func TestRuntimeRouterOrchestratorSkillCatalogCachesFailureLikeRust(t *testing.T) {
+	var requestMu sync.Mutex
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		requestMu.Lock()
+		requestCount++
+		requestMu.Unlock()
+		writeRuntimeRouterMCPError(t, w, request.ID, -32000, "temporary orchestrator failure", nil)
+	}))
+	defer server.Close()
+	router := NewRuntimeRouter(RuntimeServices{
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			mcp.RuntimeCodexAppsMCPServerName: {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+	})
+	first, firstWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	requestMu.Lock()
+	firstRequestCount := requestCount
+	requestMu.Unlock()
+	second, secondWarnings := router.orchestratorSkillMetadataForRuntime("thread-orchestrator-failure")
+	requestMu.Lock()
+	secondRequestCount := requestCount
+	requestMu.Unlock()
+	if len(first) != 0 || len(second) != 0 {
+		t.Fatalf("failure catalogs = %#v/%#v", first, second)
+	}
+	if len(firstWarnings) != 1 || !strings.Contains(firstWarnings[0], "orchestrator skills unavailable: failed to list orchestrator skill resources") {
+		t.Fatalf("first warnings = %#v", firstWarnings)
+	}
+	if len(secondWarnings) != 0 {
+		t.Fatalf("second warnings = %#v, want cached warning suppressed", secondWarnings)
+	}
+	if firstRequestCount == 0 || secondRequestCount != firstRequestCount {
+		t.Fatalf("request counts = %d then %d, want cached failure", firstRequestCount, secondRequestCount)
+	}
+}
+
+func TestRuntimeRouterCustomSkillProviderCatalogReadAndWarningLikeRust(t *testing.T) {
+	kind := skillprovider.CustomSourceKind("private")
+	authority := skillprovider.Authority{Kind: kind, ID: "tenant-1"}
+	visible := skillprovider.CatalogEntry{
+		PackageID:     "private/visible",
+		Authority:     authority,
+		Name:          "private-search",
+		Description:   "Search private data.",
+		MainResource:  "private/visible/SKILL.md",
+		DisplayPath:   "private://tenant-1/visible",
+		Enabled:       true,
+		PromptVisible: true,
+	}
+	hidden := skillprovider.CatalogEntry{
+		PackageID:    "private/hidden",
+		Authority:    authority,
+		Name:         "private-hidden",
+		Description:  "Hidden private workflow.",
+		MainResource: "private/hidden/SKILL.md",
+		DisplayPath:  "private://tenant-1/hidden",
+		Enabled:      true,
+		Dependencies: []skillprovider.ToolDependency{{
+			Type:      "mcp",
+			Value:     "private-docs",
+			Transport: "streamable_http",
+			URL:       "https://private.example.test/mcp",
+		}},
+	}
+	var listedTurnID string
+	var readRequest skillprovider.ReadRequest
+	registry := skillprovider.NewRegistry(skillprovider.Source{
+		Kind:  kind,
+		Label: "private",
+		Provider: skillprovider.ProviderFuncs{
+			ListFunc: func(_ context.Context, query skillprovider.ListQuery) (skillprovider.Catalog, error) {
+				listedTurnID = query.TurnID
+				return skillprovider.Catalog{Entries: []skillprovider.CatalogEntry{visible, hidden}, Warnings: []string{"private provider warning"}}, nil
+			},
+			ReadFunc: func(_ context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
+				readRequest = request
+				return skillprovider.ReadResult{Resource: request.Resource, Contents: "# Private\nUse the hidden private workflow."}, nil
+			},
+		},
+	})
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService(nil), CustomSkills: registry})
+	router.SetNotificationSink(sink)
+	dependencyPrompts := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		dependencyPrompts++
+		params := request.Params.(*ToolRequestUserInputParams)
+		if len(params.Questions) != 1 || !strings.Contains(params.Questions[0].Question, "private-docs") {
+			t.Errorf("custom dependency prompt = %#v", params)
+		}
+		response := &ToolRequestUserInputResponse{Answers: map[string]ToolRequestUserInputAnswer{
+			skillMCPDependencyPromptID: {Answers: []string{"Continue anyway"}},
+		}}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve() error = %v", err)
+		}
+	}))
+	instructions, items, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-custom", "turn-custom", &config.Config{Values: map[string]any{}}, &turn.TurnStartParams{
+		CWD:        t.TempDir(),
+		Originator: "codex_cli_rs",
+		Input: []turn.TurnUserInput{{
+			Type: "skill",
+			Name: hidden.Name,
+			Path: hidden.MainResource,
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("instructionsWithSkillsContextForTurn() error = %v", err)
+	}
+	if listedTurnID != "turn-custom" {
+		t.Fatalf("custom list turn id = %q", listedTurnID)
+	}
+	if !strings.Contains(instructions, "private-search: Search private data. (custom resource: private://tenant-1/visible)") || strings.Contains(instructions, "private-hidden") {
+		t.Fatalf("custom catalog instructions:\n%s", instructions)
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(items); err != nil {
+		t.Fatalf("Encode(items) error = %v", err)
+	}
+	if !strings.Contains(encoded.String(), "<name>private-hidden</name>") || !strings.Contains(encoded.String(), "Use the hidden private workflow.") {
+		t.Fatalf("custom explicit items = %s", encoded.String())
+	}
+	if readRequest.Authority != authority || readRequest.PackageID != hidden.PackageID || readRequest.Resource != hidden.MainResource {
+		t.Fatalf("custom read request = %#v", readRequest)
+	}
+	if dependencyPrompts != 1 {
+		t.Fatalf("custom dependency prompts = %d, want 1", dependencyPrompts)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || warnings[0].Message != "private provider warning" {
+		t.Fatalf("custom warnings = %#v", warnings)
+	}
+}
+
+func countString(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
+func writeSkillWithMCPDependencyForTest(t *testing.T, root string, name string) string {
+	return writeSkillWithMCPDependencyURLForTest(t, root, name, "https://docs.example.test/mcp")
+}
+
+func writeSkillWithMCPDependencyURLForTest(t *testing.T, root string, name string, serverURL string) string {
+	t.Helper()
+	skillDir := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: "+name+"\ndescription: dependency test\n---\nbody\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	metadata := "dependencies:\n  tools:\n    - type: mcp\n      value: docs\n      transport: streamable_http\n      url: " + serverURL + "\n"
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte(metadata), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	return skillPath
+}
+
+func TestRuntimeRouterTurnStartUsesSelectedCapabilitySkillRoots(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "cap-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: cap-skill\ndescription: Capability skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID: "cap-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "local",
+				Path:          capabilityRoot,
+			},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use capability skill",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "cap-skill") || !strings.Contains(request.Instructions, "Capability skill") {
+		t.Fatalf("instructions missing selected capability skill:\n%s", request.Instructions)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterMCPRootsIncludeLocalSelectedCapabilityRoots(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	capabilityRoot := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), DefaultCWD: workspaceRoot})
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: workspaceRoot,
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{
+			{ID: "local-cap", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+			{ID: "duplicate", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: workspaceRoot}},
+			{ID: "remote-cap", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "remote-missing", Path: "/remote/skills"}},
+		},
+	}))
+	if started.Error != nil {
+		t.Fatalf("thread start error: %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	paths := router.mcpRootPathsForThread(threadID)
+	if len(paths) != 2 || !slices.Contains(paths, workspaceRoot) || !slices.Contains(paths, capabilityRoot) {
+		t.Fatalf("MCP roots = %#v", paths)
+	}
+}
+
+func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "lint-fix")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: lint-fix\ndescription: Fix lint errors.\n---\n\nROOT_QUALIFIED_EXECUTOR_SKILL\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	normalizedSkillPath := strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
+	rootALocator := "skill://root-a/" + normalizedSkillPath
+	rootBLocator := "skill://root-b/" + normalizedSkillPath
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{
+			{ID: "root-a", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+			{ID: "root-b", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
+		},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use [$lint-fix](" + rootBLocator + ")",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, locator := range []string{rootALocator, rootBLocator} {
+		if !strings.Contains(request.Instructions, "(environment resource: "+locator+")") {
+			t.Fatalf("instructions missing selected-root locator %q:\n%s", locator, request.Instructions)
+		}
+	}
+	if !agentRequestInputItemsContain(request, rootBLocator) || !agentRequestInputItemsContain(request, "ROOT_QUALIFIED_EXECUTOR_SKILL") {
+		t.Fatalf("explicit root-b skill fragment missing: %#v", request.InputItems)
+	}
+	if agentRequestInputItemsContain(request, rootALocator) {
+		t.Fatalf("explicit root-b selection also injected root-a: %#v", request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSelectedExecutorCatalogReusesThreadCacheLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "stable-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: stable-skill\ndescription: Original executor description.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "stable-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect skills"}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn error: %+v", firstTurn.Error)
+	}
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(firstRequest.Instructions, "Original executor description.") {
+		t.Fatalf("first instructions missing original executor skill:\n%s", firstRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	if err := os.WriteFile(skillPath, []byte("---\nname: stable-skill\ndescription: Mutated executor description.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(mutated skill) error = %v", err)
+	}
+	newSkillDir := filepath.Join(capabilityRoot, "new-skill")
+	if err := os.MkdirAll(newSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(new skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(newSkillDir, SkillFilename), []byte("---\nname: new-skill\ndescription: Added after cache.\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(new skill) error = %v", err)
+	}
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "inspect skills again"}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn error: %+v", secondTurn.Error)
+	}
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(secondRequest.Instructions, "Original executor description.") || strings.Contains(secondRequest.Instructions, "Mutated executor description.") || strings.Contains(secondRequest.Instructions, "new-skill") {
+		t.Fatalf("selected executor catalog did not reuse its thread cache:\n%s", secondRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterExecutorCatalogUsesExtensionByteBudgetWithoutCoreWarningLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	for index := 0; index < 10; index++ {
+		skillDir := filepath.Join(capabilityRoot, fmt.Sprintf("executor-%02d", index))
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(skill) error = %v", err)
+		}
+		contents := fmt.Sprintf("---\nname: executor-%02d\ndescription: %s\n---\n", index, strings.Repeat("x", 1024))
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(skill) error = %v", err)
+		}
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "executor-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect executor catalog",
+		Config:   map[string]any{"model_context_window": 1},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "additional skills omitted from this bounded skills list") {
+		t.Fatalf("executor bounded omission line missing:\n%s", request.Instructions)
+	}
+	for _, warning := range warningNotificationsForTest(sink) {
+		if strings.Contains(warning.Message, "Exceeded skills context budget") {
+			t.Fatalf("executor catalog emitted core budget warning: %+v", warning)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplicitExecutorSkillLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, SkillFilename)
+	if err := os.WriteFile(skillPath, []byte("---\nname: deploy\ndescription: Hidden executor catalog entry.\n---\n\nEXPLICIT_EXECUTOR_SKILL_BODY\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	locator := "skill://deploy-root/" + strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Config:       configService,
+		Skills:       NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID:       "deploy-root",
+			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use [$deploy](" + locator + ")",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "## Skills") || strings.Contains(request.Instructions, "Hidden executor catalog entry.") || strings.Contains(request.Instructions, locator) {
+		t.Fatalf("skills catalog was visible while include_instructions=false:\n%s", request.Instructions)
+	}
+	for _, want := range []string{"<name>deploy</name>", locator, "EXPLICIT_EXECUTOR_SKILL_BODY"} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("explicit executor skill missing %q: %#v", want, request.InputItems)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSkipsUnavailableSelectedEnvironmentSkillRootsLikeRust(t *testing.T) {
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: deploy\ndescription: Deploy through the selected executor.\n---\n\nSELECTED_EXECUTOR_SKILL_BODY\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		Environment:  NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, ""),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID: "executor-demo@1",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "executor-1",
+				Path:          capabilityRoot,
+			},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect selected executor capabilities",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, forbidden := range []string{"Deploy through the selected executor.", "SELECTED_EXECUTOR_SKILL_BODY", "executor-demo:deploy"} {
+		if strings.Contains(request.Instructions, forbidden) || agentRequestInputItemsContain(request, forbidden) {
+			t.Fatalf("request exposed unavailable selected environment skill %q:\ninstructions=%s\ninputItems=%#v", forbidden, request.Instructions, request.InputItems)
+		}
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartUsesRemoteEnvironmentSkillRoot(t *testing.T) {
+	rootURI := "file:///remote/skills"
+	skillURI := "file:///remote/skills/remote-skill/SKILL.md"
+	metadataURI := "file:///remote/skills/remote-skill/agents/openai.yaml"
+	execServerURL, done := newRemoteSkillsExecServerForTest(t, rootURI, map[string]string{
+		skillURI: "---\nname: remote-skill\ndescription: Remote capability skill\n---\n",
+		metadataURI: `
+interface:
+  display_name: Remote Skill
+  icon_small: assets/icon.png
+policy:
+  allow_implicit_invocation: true
+`,
+	})
+	environment := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "")
+	if _, err := environment.Add(&EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: execServerURL}); err != nil {
+		t.Fatalf("environment Add() error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		Environment:  environment,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID: "remote-cap-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "remote",
+				Path:          rootURI,
+			},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	remoteDisplayPath := "skill://remote-cap-root/remote/skills/remote-skill/SKILL.md"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use [$remote-skill](" + remoteDisplayPath + ")",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "remote-skill") || !strings.Contains(request.Instructions, "Remote capability skill") || !strings.Contains(request.Instructions, "(environment resource: "+remoteDisplayPath+")") {
+		t.Fatalf("instructions missing remote selected capability skill:\n%s", request.Instructions)
+	}
+	for _, want := range []string{"<skill>", "<name>remote-skill</name>", remoteDisplayPath, "Remote capability skill"} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("input items missing remote explicit skill fragment %q: %#v", want, request.InputItems)
+		}
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	waitEnvironmentInfoExecServerForTest(t, done)
+}
+
+func TestRuntimeRouterTurnStartWarnsAndSkipsInvalidRemoteEnvironmentSkillLikeRust(t *testing.T) {
+	rootURI := "file:///remote/skills"
+	skillURI := "file:///remote/skills/legacy/SKILL.md"
+	execServerURL, done := newRemoteSkillsExecServerForTest(t, rootURI, map[string]string{
+		skillURI: "# Legacy remote skill\nbody\n",
+	})
+	environment := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "")
+	if _, err := environment.Add(&EnvironmentAddParams{EnvironmentID: "remote", ExecServerURL: execServerURL}); err != nil {
+		t.Fatalf("environment Add() error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		Skills:       NewSkillsService(nil),
+		Environment:  environment,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
+			ID: "remote-cap-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "remote",
+				Path:          rootURI,
+			},
+		}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect selected remote capabilities",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, forbidden := range []string{"Legacy remote skill", "legacy"} {
+		if strings.Contains(request.Instructions, forbidden) || agentRequestInputItemsContain(request, forbidden) {
+			t.Fatalf("request exposed invalid remote skill %q:\ninstructions=%s\ninputItems=%#v", forbidden, request.Instructions, request.InputItems)
+		}
+	}
+	warnings := warningNotificationsForTest(sink)
+	found := false
+	for _, warning := range warnings {
+		if warning.ThreadID != nil &&
+			*warning.ThreadID == threadID &&
+			strings.Contains(warning.Message, "Failed to load environment skill at "+skillURI+": missing YAML frontmatter delimited by ---") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %+v, want invalid remote environment skill warning", warnings)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	waitEnvironmentInfoExecServerForTest(t, done)
+}
+
+func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "compact soon",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{
+		Extra: map[string]any{"auto_compact_token_limit": 1},
+	}, true); err != nil {
+		t.Fatalf("UpdateMetadata() error = %v", err)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "trigger auto compact",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
+	compacted, ok := notification.Params.(*ContextCompactedNotification)
+	if !ok || compacted.ThreadID != threadID || compacted.TurnID != turnID || compacted.Summary == "" {
+		t.Fatalf("compacted notification = %#v", notification.Params)
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_trigger"] != string(compact.TriggerAuto) || record.Metadata.Extra["compaction_summary"] == "" {
+		t.Fatalf("compaction metadata = %#v", record.Metadata.Extra)
+	}
+	if len(record.Items) == 0 || record.Items[len(record.Items)-1].Metadata["compact"] != true {
+		t.Fatalf("compacted items = %#v", record.Items)
+	}
+}
+
+func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportStdio,
+	})
+	router.SetNotificationSink(sink)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-auto-compact-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "compact soon",
+	})
+	threadStart.ConnectionID = "conn-auto-compact-analytics"
+	threadResponse := router.Handle(threadStart)
+	if threadResponse.Error != nil {
+		t.Fatalf("thread start error: %+v", threadResponse.Error)
+	}
+	threadID := threadResponse.Result.(*ThreadStartResponse).Thread.ID
+	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{
+		Extra: map[string]any{"auto_compact_token_limit": 1},
+	}, true); err != nil {
+		t.Fatalf("UpdateMetadata() error = %v", err)
+	}
+
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "trigger auto compact",
+	})
+	turnStart.ConnectionID = "conn-auto-compact-analytics"
+	turnResponse := router.Handle(turnStart)
+	if turnResponse.Error != nil {
+		t.Fatalf("turn start error: %+v", turnResponse.Error)
+	}
+	turnID := turnResponse.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	event := waitForCodexCompactionEvent(t, analyticsSink, threadID)
+	params := event.EventParams
+	if params.TurnID != turnID ||
+		params.Trigger != telemetry.CompactionTriggerAuto ||
+		params.Reason != telemetry.CompactionReasonContextLimit ||
+		params.Phase != telemetry.CompactionPhaseMidTurn ||
+		params.Status != telemetry.CompactionStatusCompleted ||
+		params.Implementation != telemetry.CompactionImplementationResponses {
+		t.Fatalf("auto compaction event = %#v", event)
+	}
+	if params.ActiveContextTokensBefore != 5 || params.ActiveContextTokensAfter <= 0 {
+		t.Fatalf("context token fields = %d/%d", params.ActiveContextTokensBefore, params.ActiveContextTokensAfter)
+	}
+	if params.AppServerClient.ProductClientID != "codex-tui" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.RPCTransport != telemetry.AppServerRPCTransportStdio {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+}
+
+func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+		DynamicTools: []json.RawMessage{
+			json.RawMessage(`{"type":"namespace","name":"codex_app","description":"Demo namespace tools","tools":[{"type":"function","name":"demo_tool","description":"Demo dynamic tool","inputSchema":{"type":"object"}}]}`),
+		},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use dynamic tool",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if len(request.Tools) == 0 {
+		t.Fatalf("agent tools empty")
+	}
+	found := false
+	for _, rawTool := range request.Tools {
+		toolMap, ok := rawTool.(map[string]any)
+		if ok && toolMap["type"] == "namespace" && toolMap["name"] == "codex_app" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dynamic namespace missing from tools: %#v", request.Tools)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartRestoresSessionHistory(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	now := fixedTime()
+	if err := store.Save(&session.Record{
+		ID:        "thread-history",
+		SessionID: "thread-history",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:            t.TempDir(),
+			LastResponseID: "resp-prev",
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "older user message", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "older assistant message", CreatedAt: now.Add(time.Second)},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-history",
+		Prompt:   "new prompt",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.PreviousResponseID != "resp-prev" || request.Store {
+		t.Fatalf("agent request previous/store = %q/%v", request.PreviousResponseID, request.Store)
+	}
+	if len(request.InputItems) < 2 {
+		t.Fatalf("input items = %#v", request.InputItems)
+	}
+	data, _ := json.Marshal(request.InputItems)
+	if !strings.Contains(string(data), "older user message") || !strings.Contains(string(data), "older assistant message") {
+		t.Fatalf("input items json = %s", data)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartRepairsRolloutOnlyThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:     store.Root(),
+		SessionID:     "session-rollout-runtime",
+		ThreadID:      "thread-rollout-runtime",
+		Source:        "cli",
+		CWD:           "D:/rollout-runtime",
+		Model:         "gpt-rollout",
+		ModelProvider: "openai",
+		HistoryMode:   "paginated",
+		Extra:         map[string]any{"last_response_id": "resp-rollout-prev"},
+		Now:           fixedTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	for _, item := range []rollout.Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "rollout older user", Metadata: map[string]any{"turnId": "turn-old"}},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "rollout older assistant", Metadata: map[string]any{"turnId": "turn-old"}},
+	} {
+		if err := recorder.AppendItem(item); err != nil {
+			t.Fatalf("AppendItem() error = %v", err)
+		}
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-rollout-runtime",
+		Prompt:   "new prompt",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "gpt-rollout" || request.ProviderID != "openai" {
+		t.Fatalf("agent request model/provider = %q/%q", request.Model, request.ProviderID)
+	}
+	if request.PreviousResponseID != "resp-rollout-prev" || request.Store {
+		t.Fatalf("agent request previous/store = %q/%v", request.PreviousResponseID, request.Store)
+	}
+	data, _ := json.Marshal(request.InputItems)
+	if !strings.Contains(string(data), "rollout older user") || !strings.Contains(string(data), "rollout older assistant") {
+		t.Fatalf("input items json = %s", data)
+	}
+	record := waitForSessionItem(t, store, "thread-rollout-runtime", "agent_message")
+	if len(record.Items) < 3 {
+		t.Fatalf("record items = %#v", record.Items)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	runConfig, err := router.appTurnModelProviderConfig(&config.Config{Values: map[string]any{
+		"model_provider": "azure",
+		"model_providers": map[string]any{
+			"azure": map[string]any{
+				"name":     "Azure",
+				"base_url": "https://example.openai.azure.com/openai",
+				"wire_api": "responses",
+			},
+		},
+	}}, &turn.TurnStartParams{})
+	if err != nil {
+		t.Fatalf("appTurnModelProviderConfig() error = %v", err)
+	}
+	if !runConfig.Store {
+		t.Fatalf("Azure responses provider Store = false, want true")
+	}
+
+	runConfig, err = router.appTurnModelProviderConfig(&config.Config{Values: map[string]any{
+		"model_provider": "openai",
+	}}, &turn.TurnStartParams{})
+	if err != nil {
+		t.Fatalf("appTurnModelProviderConfig(openai) error = %v", err)
+	}
+	if runConfig.Store {
+		t.Fatalf("OpenAI provider Store = true, want false")
+	}
+}
+
+func TestRuntimeRouterTurnStartInjectsAdditionalContext(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello context",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use context",
+		AdditionalContext: map[string]turn.AdditionalContextEntry{
+			"app":  {Value: "developer-only context", Kind: turn.AdditionalContextApplication},
+			"user": {Value: "untrusted context", Kind: turn.AdditionalContextUntrusted},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "developer-only context") || !strings.Contains(request.Instructions, "<additional_context>") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	inputText := inputItemText(request.InputItems)
+	if !strings.Contains(inputText, "untrusted context") || !strings.Contains(inputText, "<additional_context>") {
+		t.Fatalf("input items = %#v", request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterSessionStartHookInjectsAdditionalContextOnce(t *testing.T) {
+	cwd := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	hooks := NewHookRegistry()
+	hook := hookRunnerMetadata("session-start-clear", HookEventSessionStart, "clear", 0)
+	command := hookRunnerOutputCommand(`{"hookSpecificOutput":{"additionalContext":"clear hook context"}}`, "")
+	hook.Command = &command
+	if err := hooks.Add(cwd, hook); err != nil {
+		t.Fatalf("Hooks.Add() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Hooks:        hooks,
+		HookRunner:   NewHookRunner(),
+	})
+	router.SetNotificationSink(sink)
+
+	clearSource := string(SessionStartSourceClear)
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:                cwd,
+		SessionStartSource: &clearSource,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read start record error = %v", err)
+	}
+	if got := stringFromMap(record.Metadata.Extra, pendingSessionStartSourceExtraKey); got != string(SessionStartSourceClear) {
+		t.Fatalf("pending session start source = %q, want clear", got)
+	}
+
+	firstTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "first",
+	}))
+	if firstTurn.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurn.Error)
+	}
+	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	firstRequest := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(firstRequest.Instructions, "clear hook context") {
+		t.Fatalf("first request instructions = %q", firstRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+	record, err = store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read consumed record error = %v", err)
+	}
+	if got := stringFromMap(record.Metadata.Extra, pendingSessionStartSourceExtraKey); got != "" {
+		t.Fatalf("pending session start source after first turn = %q", got)
+	}
+	hookCompletedCount := func() int {
+		count := 0
+		for _, notification := range sink.List() {
+			if notification.Method == NotificationHookCompleted {
+				count++
+			}
+		}
+		return count
+	}
+	if count := hookCompletedCount(); count != 1 {
+		t.Fatalf("hook completed count after first turn = %d, want 1", count)
+	}
+
+	secondTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "second",
+	}))
+	if secondTurn.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurn.Error)
+	}
+	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
+	secondRequest := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(secondRequest.Instructions, "clear hook context") {
+		t.Fatalf("second request should not include session hook context: %q", secondRequest.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+	if count := hookCompletedCount(); count != 1 {
+		t.Fatalf("hook completed count after second turn = %d, want 1", count)
+	}
+}
+
+func TestRuntimeRouterRequestUserInputToolUsesServerRequest(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newUserInputToolAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestToolUserInput {
+			return
+		}
+		params, ok := request.Params.(*ToolRequestUserInputParams)
+		if !ok || params == nil {
+			t.Errorf("request params = %#v", request.Params)
+			return
+		}
+		if params.ThreadID == "" || params.TurnID == "" || len(params.Questions) != 1 || params.Questions[0].ID != "choice" {
+			t.Errorf("user input params = %#v", params)
+			return
+		}
+		if !params.Questions[0].IsOther || !params.Questions[0].IsSecret {
+			t.Errorf("user input flags = %#v", params.Questions[0])
+			return
+		}
+		response := &ToolRequestUserInputResponse{
+			Answers: map[string]ToolRequestUserInputAnswer{
+				"choice": {Answers: []string{"Blue"}},
+			},
+		}
+		if _, err := router.requireServerRequests().Resolve(OK(request.ID, response)); err != nil {
+			t.Errorf("Resolve user input response error = %v", err)
+		}
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "ask",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "ask user",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if completed.ThreadID != threadID {
+		t.Fatalf("completed thread id = %q, want %q", completed.ThreadID, threadID)
+	}
+	if agent.answer != "Blue" {
+		t.Fatalf("agent answer = %q", agent.answer)
+	}
+	resolved := waitForNotificationMethod(t, sink, NotificationServerRequestResolved)
+	resolvedParams, ok := resolved.Params.(*ServerRequestResolvedNotification)
+	if !ok || resolvedParams.ThreadID != threadID || resolvedParams.RequestID.IsZero() {
+		t.Fatalf("serverRequest/resolved params = %#v", resolved.Params)
+	}
+	if !sinkHasThreadStatusFlag(sink, threadID, ThreadActiveFlagWaitingOnUserInput) {
+		t.Fatalf("missing waitingOnUserInput status in %#v", sink.List())
+	}
+	if got := router.services.ThreadStatus.LoadedStatusForThread(threadID); got.Type != "idle" {
+		t.Fatalf("thread status = %#v", got)
+	}
+}
+
+func TestRuntimeRouterTurnStartInjectsExternalCurrentTimeReminder(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	projectTrust := strings.ReplaceAll(filepath.Clean(project), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile user config returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	}
+	projectConfig := `instructions = "project instructions"
+
+[features.current_time_reminder]
+enabled = true
+clock_source = "external"
+`
+	if err := os.WriteFile(config.ProjectConfigPath(project), []byte(projectConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	agent := newRecordingRuntimeAgent("ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestCurrentTimeRead {
+			t.Errorf("server request method = %s", request.Method)
+		}
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
+		}()
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    project,
+		Prompt: "hello time",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello time",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !strings.Contains(request.Instructions, "project instructions") || strings.Contains(request.Instructions, "It is 2026-06-17 17:34:15 UTC.") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	developerTexts := messageInputTextsForRole(request.InputItems, "developer")
+	if !slicesContainString(developerTexts, "It is 2026-06-17 17:34:15 UTC.") {
+		t.Fatalf("developer input texts = %#v", developerTexts)
+	}
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal tools error = %v", err)
+	}
+	if !modelToolsContainNamespaceTool(request.Tools, "clock", "curr_time") {
+		t.Fatalf("clock current-time tool missing: %s", toolsJSON)
+	}
+	if modelToolsContainNamespaceTool(request.Tools, "clock", "sleep") {
+		t.Fatalf("clock sleep tool should follow sleep_tool=false: %s", toolsJSON)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterCurrentTimeReadAddsDeveloperInputLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-current-time"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-current-time","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-current-time","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-current-time","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[features.current_time_reminder]
+enabled = true
+reminder_interval_seconds = 1
+clock_source = "external"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	var threadID string
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestCurrentTimeRead {
+			t.Errorf("server request method = %s", request.Method)
+		}
+		params, ok := request.Params.(*CurrentTimeReadParams)
+		if !ok || params.ThreadID != threadID {
+			t.Errorf("currentTime/read params = %#v, want thread %q", request.Params, threadID)
+		}
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
+		}()
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID = threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Text: "What time is it?"}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	developerTexts := messageInputTextsForRole(bodies[0], "developer")
+	if !slicesContainString(developerTexts, "It is 2026-06-17 17:34:15 UTC.") {
+		t.Fatalf("developer input texts = %#v; body=%#v", developerTexts, bodies[0])
+	}
+	if instructions, _ := bodies[0]["instructions"].(string); strings.Contains(instructions, "2026-06-17 17:34:15 UTC") {
+		t.Fatalf("instructions include current time reminder: %q", instructions)
+	}
+	userTexts := messageInputTextsForRole(bodies[0], "user")
+	if !slicesContainString(userTexts, "What time is it?") {
+		t.Fatalf("user input texts = %#v; body=%#v", userTexts, bodies[0])
+	}
+}
+
+func TestRuntimeRouterCurrentTimeRemindersFollowIntervalAndPersistInHistoryLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		call := len(bodies) + 1
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		responseID := fmt.Sprintf("resp-current-time-interval-%d", call)
+		messageID := fmt.Sprintf("msg-current-time-interval-%d", call)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, responseID),
+			fmt.Sprintf(`{"type":"response.output_item.added","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, responseID),
+		)))
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[features.current_time_reminder]
+enabled = true
+reminder_interval_seconds = 120
+clock_source = "external"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(&currentTimeSequenceSink{
+		router: router,
+		values: []int64{1781717655, 1781717715, 1781717775},
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	for i, prompt := range []string{"first turn", "second turn", "third turn"} {
+		response := router.Handle(requestWithParams(t, IntID(int64(i+2)), MethodTurnStart, turn.TurnStartParams{
+			ThreadID: threadID,
+			Input:    []turn.TurnUserInput{{Text: prompt}},
+		}))
+		if response.Error != nil {
+			t.Fatalf("turn %d start error: %+v", i+1, response.Error)
+		}
+		waitForTurnCompletedStatus(t, sink, response.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	}
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 3 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	got := [][]string{
+		currentTimeReminderTextsFromBody(bodies[0]),
+		currentTimeReminderTextsFromBody(bodies[1]),
+		currentTimeReminderTextsFromBody(bodies[2]),
+	}
+	want := [][]string{
+		{"It is 2026-06-17 17:34:15 UTC."},
+		{"It is 2026-06-17 17:34:15 UTC."},
+		{"It is 2026-06-17 17:34:15 UTC.", "It is 2026-06-17 17:36:15 UTC."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("current time reminders = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeRouterZeroCurrentTimeReminderIntervalDeliversWhenTimeMovesBackwardLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		call := len(bodies) + 1
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		responseID := fmt.Sprintf("resp-current-time-zero-%d", call)
+		messageID := fmt.Sprintf("msg-current-time-zero-%d", call)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, responseID),
+			fmt.Sprintf(`{"type":"response.output_item.added","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":%q,"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`, messageID),
+			fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, responseID),
+		)))
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[features.current_time_reminder]
+enabled = true
+reminder_interval_seconds = 0
+clock_source = "external"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(&currentTimeSequenceSink{
+		router: router,
+		values: []int64{1781717655, 1781717595},
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	for i, prompt := range []string{"first turn", "second turn"} {
+		response := router.Handle(requestWithParams(t, IntID(int64(i+2)), MethodTurnStart, turn.TurnStartParams{
+			ThreadID: threadID,
+			Input:    []turn.TurnUserInput{{Text: prompt}},
+		}))
+		if response.Error != nil {
+			t.Fatalf("turn %d start error: %+v", i+1, response.Error)
+		}
+		waitForTurnCompletedStatus(t, sink, response.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	}
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	got := [][]string{
+		currentTimeReminderTextsFromBody(bodies[0]),
+		currentTimeReminderTextsFromBody(bodies[1]),
+	}
+	want := [][]string{
+		{"It is 2026-06-17 17:34:15 UTC."},
+		{"It is 2026-06-17 17:34:15 UTC.", "It is 2026-06-17 17:33:15 UTC."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("current time reminders = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeRouterCurrentTimeToolReturnsLatestTimeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		call := len(bodies) + 1
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch call {
+		case 1:
+			_, _ = w.Write([]byte(modelResponsesSSE(
+				`{"type":"response.created","response":{"id":"resp-current-time-tool-1"}}`,
+				`{"type":"response.output_item.done","item":{"id":"fc-current-time","type":"function_call","namespace":"clock","call_id":"current-time","name":"curr_time","arguments":"{}"}}`,
+				`{"type":"response.completed","response":{"id":"resp-current-time-tool-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			)))
+		default:
+			_, _ = w.Write([]byte(modelResponsesSSE(
+				`{"type":"response.created","response":{"id":"resp-current-time-tool-2"}}`,
+				`{"type":"response.output_item.added","item":{"id":"msg-current-time-tool","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+				`{"type":"response.output_item.done","item":{"id":"msg-current-time-tool","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`,
+				`{"type":"response.completed","response":{"id":"resp-current-time-tool-2","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			)))
+		}
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[features.current_time_reminder]
+enabled = true
+reminder_interval_seconds = 3000
+clock_source = "external"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(&currentTimeSequenceSink{
+		router: router,
+		values: []int64{1781717655, 1781717715},
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	response := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Text: "check the current time"}},
+	}))
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, response.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	firstBodyJSON, err := json.Marshal(bodies[0])
+	if err != nil {
+		t.Fatalf("Marshal first body error = %v", err)
+	}
+	if !strings.Contains(string(firstBodyJSON), `"name":"clock"`) || !strings.Contains(string(firstBodyJSON), `"name":"curr_time"`) {
+		t.Fatalf("first request missing clock.curr_time tool: %s", firstBodyJSON)
+	}
+	secondBodyJSON, err := json.Marshal(bodies[1])
+	if err != nil {
+		t.Fatalf("Marshal second body error = %v", err)
+	}
+	for _, want := range []string{`"type":"function_call_output"`, `"call_id":"current-time"`, `"output":"It is 2026-06-17 17:35:15 UTC."`} {
+		if !strings.Contains(string(secondBodyJSON), want) {
+			t.Fatalf("second request missing %s: %s", want, secondBodyJSON)
+		}
+	}
+}
+
+func TestRuntimeRouterCurrentTimeReminderFollowsToolOutputDeliveryModeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var bodiesMu sync.Mutex
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		bodiesMu.Lock()
+		call := len(bodies) + 1
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch call {
+		case 1:
+			_, _ = w.Write([]byte(modelResponsesSSE(
+				`{"type":"response.created","response":{"id":"resp-current-time-tool-output-1"}}`,
+				`{"type":"response.output_item.done","item":{"id":"fc-context","type":"function_call","call_id":"context-remaining","name":"get_context_remaining","arguments":"{}"}}`,
+				`{"type":"response.completed","response":{"id":"resp-current-time-tool-output-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			)))
+		default:
+			_, _ = w.Write([]byte(modelResponsesSSE(
+				`{"type":"response.created","response":{"id":"resp-current-time-tool-output-2"}}`,
+				`{"type":"response.output_item.added","item":{"id":"msg-current-time-tool-output","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+				`{"type":"response.output_item.done","item":{"id":"msg-current-time-tool-output","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}`,
+				`{"type":"response.completed","response":{"id":"resp-current-time-tool-output-2","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			)))
+		}
+	}))
+	defer server.Close()
+	configBody := fmt.Sprintf(`
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[features.current_time_reminder]
+enabled = true
+reminder_interval_seconds = 0
+clock_source = "external"
+delivery_mode = "after_user_or_tool_output"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "%s/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+`, server.URL)
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(&currentTimeSequenceSink{
+		router: router,
+		values: []int64{1781717655, 1781717715},
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	response := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input:    []turn.TurnUserInput{{Text: "use a tool"}},
+	}))
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, response.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	bodiesMu.Lock()
+	defer bodiesMu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("recorded bodies = %#v", bodies)
+	}
+	got := [][]string{
+		currentTimeReminderTextsFromBody(bodies[0]),
+		currentTimeReminderTextsFromBody(bodies[1]),
+	}
+	want := [][]string{
+		{"It is 2026-06-17 17:34:15 UTC."},
+		{"It is 2026-06-17 17:34:15 UTC.", "It is 2026-06-17 17:35:15 UTC."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("current time reminders = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeRouterExternalClockSleepEmitsSleepItemsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[features.current_time_reminder]
+enabled = true
+clock_source = "external"
+sleep_tool = true
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	agent := &clockSleepRuntimeAgent{}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(&currentTimeSequenceSink{
+		router: router,
+		values: []int64{1781717655, 1781717655, 1781717657, 1781717657},
+	})
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello sleep",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "sleep briefly",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	started := waitForItemStarted(t, sink, "sleep-1")
+	if started.Item["type"] != "sleep" || int64FromNotificationValue(started.Item["durationMs"]) != 2000 {
+		t.Fatalf("sleep started item = %#v", started.Item)
+	}
+	completed := waitForItemCompleted(t, sink, "sleep-1")
+	if completed.Item["type"] != "sleep" || int64FromNotificationValue(completed.Item["durationMs"]) != 2000 {
+		t.Fatalf("sleep completed item = %#v", completed.Item)
+	}
+	if completed.CompletedAtMS < started.StartedAtMS {
+		t.Fatalf("sleep completed before started: started=%d completed=%d", started.StartedAtMS, completed.CompletedAtMS)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartPassesResponsesAPIClientMetadata(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[responsesapi_client_metadata]
+workspace_kind = "git"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	agent := newRecordingRuntimeAgent("ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadSource := ThreadSource("automation")
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		Prompt:       "hello metadata",
+		ThreadSource: &threadSource,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello metadata",
+		ResponsesAPIMetadata: map[string]string{
+			"workspace_kind":           "projectless",
+			"x-codex-installation-id":  "bad",
+			"x-codex-parent-thread-id": "bad",
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.PromptCacheKey != threadID {
+		t.Fatalf("PromptCacheKey = %q, want %q", request.PromptCacheKey, threadID)
+	}
+	if request.ClientMetadata["workspace_kind"] != "" {
+		t.Fatalf("workspace_kind should not be top-level client metadata: %#v", request.ClientMetadata)
+	}
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(request.ClientMetadata["x-codex-turn-metadata"]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v metadata=%#v", err, request.ClientMetadata)
+	}
+	if turnMetadata["workspace_kind"] != "projectless" || turnMetadata["thread_id"] != threadID || turnMetadata["turn_id"] == "" || turnMetadata["thread_source"] != "automation" {
+		t.Fatalf("turn metadata = %#v client=%#v", turnMetadata, request.ClientMetadata)
+	}
+	if turnMetadata["x-codex-installation-id"] != nil || turnMetadata["x-codex-parent-thread-id"] != nil {
+		t.Fatalf("reserved metadata leaked: %#v", turnMetadata)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSendsForkLineageInClientMetadataLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	agent := newRecordingRuntimeAgent("ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "source",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	sourceID := start.Result.(*ThreadStartResponse).Thread.ID
+	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+		ThreadID: sourceID,
+	}))
+	if fork.Error != nil {
+		t.Fatalf("thread fork error: %+v", fork.Error)
+	}
+	forkID := fork.Result.(*ThreadForkResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: forkID,
+		Prompt:   "continue fork",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(request.ClientMetadata["x-codex-turn-metadata"]), &metadata); err != nil {
+		t.Fatalf("turn metadata json error = %v metadata=%#v", err, request.ClientMetadata)
+	}
+	if metadata["forked_from_thread_id"] != sourceID || metadata["thread_id"] != forkID || metadata["turn_id"] != turnID {
+		t.Fatalf("fork lineage metadata = %#v", metadata)
+	}
+	if metadata["parent_thread_id"] != nil {
+		t.Fatalf("ordinary fork should not send parent_thread_id in turn metadata: %#v", metadata)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartSendsSubagentLineageAfterColdResumeLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:             "thread-subagent",
+		SessionID:      "thread-root",
+		ParentThreadID: "thread-parent",
+		Preview:        "subagent preview",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		RecencyAt:      now,
+		Metadata: session.Metadata{
+			CWD:    t.TempDir(),
+			Source: "subagent_guardian",
+		},
+		Items: []session.Item{{
+			ID:        "item-subagent",
+			Type:      "message",
+			Role:      "user",
+			Text:      "Saved subagent message",
+			CreatedAt: now,
+			Metadata:  map[string]any{"turnId": "turn-subagent"},
+		}},
+	}); err != nil {
+		t.Fatalf("Create subagent record error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	resume := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{
+		ThreadID: "thread-subagent",
+	}))
+	if resume.Error != nil {
+		t.Fatalf("thread resume error: %+v", resume.Error)
+	}
+	resumed := resume.Result.(*ThreadResumeResponse).Thread
+	if resumed.SessionID != "thread-root" || resumed.ParentThreadID == nil || *resumed.ParentThreadID != "thread-parent" {
+		t.Fatalf("resumed subagent thread = %+v", resumed)
+	}
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-subagent",
+		Prompt:   "continue subagent",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.ClientMetadata["x-openai-subagent"] != "guardian" || request.ClientMetadata["x-codex-parent-thread-id"] != "thread-parent" {
+		t.Fatalf("subagent compatibility metadata = %#v", request.ClientMetadata)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(request.ClientMetadata["x-codex-turn-metadata"]), &metadata); err != nil {
+		t.Fatalf("turn metadata json error = %v metadata=%#v", err, request.ClientMetadata)
+	}
+	if metadata["parent_thread_id"] != "thread-parent" || metadata["subagent_kind"] != "guardian" || metadata["session_id"] != "thread-root" || metadata["thread_id"] != "thread-subagent" || metadata["turn_id"] != turnID {
+		t.Fatalf("subagent lineage metadata = %#v", metadata)
+	}
+	if metadata["forked_from_thread_id"] != nil {
+		t.Fatalf("cold resumed subagent should not send forked_from_thread_id: %#v", metadata)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestCompactTokenStatusFromMetadata(t *testing.T) {
+	left := 12
+	status := compactTokenStatusFromMetadata(map[string]any{"token_status": map[string]any{
+		"activeContextTokens":      20,
+		"autoCompactScopeTokens":   20,
+		"autoCompactScopeLimit":    32,
+		"tokensUntilCompaction":    left,
+		"shouldCompact":            false,
+		"reason":                   "",
+		"newContextWindowRequired": false,
+	}})
+	if status.ActiveContextTokens != 20 || status.TokensUntilCompaction == nil || *status.TokensUntilCompaction != 12 {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestRuntimeRouterTurnStartPreservesThreadOriginator(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-originator",
+		SessionID: "thread-originator",
+		Preview:   "hello",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:        t.TempDir(),
+			Originator: "codex_vscode",
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-originator",
+		Prompt:   "hello",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Originator != "codex_vscode" {
+		t.Fatalf("originator = %q", request.Originator)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartEmitsCodexTurnAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+model = "gpt-5"
+approval_policy = "never"
+approvals_reviewer = "auto_review"
+
+[responsesapi_client_metadata]
+workspace_kind = "projectless"
+`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-analytics",
+		SessionID: "session-analytics",
+		Preview:   "hello",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:          t.TempDir(),
+			ThreadSource: "automation",
+			Originator:   "codex_vscode",
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("analytics ok")
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	effort := "high"
+	summary := "detailed"
+	personality := "pragmatic"
+	turnStart := requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:          "thread-analytics",
+		Prompt:            "hello analytics",
+		Effort:            &effort,
+		Summary:           &summary,
+		Personality:       &personality,
+		CollaborationMode: map[string]any{"mode": string(ModeKindPlan)},
+		Input: []turn.TurnUserInput{{
+			Path: filepath.Join(t.TempDir(), "image.png"),
+		}},
+	})
+	turnStart.ConnectionID = "conn-analytics"
+	response := router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForCodexTurnEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if event.EventType != telemetry.CodexTurnEventType {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if params.ThreadID != "thread-analytics" || params.SessionID != "session-analytics" || params.TurnID != turnID {
+		t.Fatalf("turn ids = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex_vscode" {
+		t.Fatalf("product_client_id = %q", params.AppServerClient.ProductClientID)
+	}
+	if params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.RPCTransport != telemetry.AppServerRPCTransportInProcess ||
+		params.AppServerClient.ExperimentalAPIEnable == nil || !*params.AppServerClient.ExperimentalAPIEnable {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.ThreadSource == nil || *params.ThreadSource != "automation" || params.WorkspaceKind == nil || *params.WorkspaceKind != "projectless" {
+		t.Fatalf("thread/workspace metadata = %#v", params)
+	}
+	if params.Model == nil || *params.Model != "gpt-5" || params.ModelProvider != model.OpenAIProviderID {
+		t.Fatalf("model/provider = %#v/%q", params.Model, params.ModelProvider)
+	}
+	if params.ApprovalPolicy != string(sandbox.ApprovalNever) || params.ApprovalsReviewer != "auto_review" {
+		t.Fatalf("approval fields = %q/%q", params.ApprovalPolicy, params.ApprovalsReviewer)
+	}
+	if params.CollaborationMode == nil || *params.CollaborationMode != "plan" ||
+		params.Personality == nil || *params.Personality != "pragmatic" ||
+		params.ReasoningEffort == nil || *params.ReasoningEffort != "high" ||
+		params.ReasoningSummary == nil || *params.ReasoningSummary != "detailed" {
+		t.Fatalf("mode/personality/reasoning = %#v", params)
+	}
+	if params.ServiceTier != "default" || params.NumInputImages != 1 || !params.IsFirstTurn || params.Status == nil || *params.Status != string(TurnStatusCompleted) {
+		t.Fatalf("turn metadata = %#v", params)
+	}
+	if params.InputTokens == nil || *params.InputTokens != 2 ||
+		params.CachedInputTokens == nil || *params.CachedInputTokens != 1 ||
+		params.OutputTokens == nil || *params.OutputTokens != 3 ||
+		params.ReasoningOutputTokens == nil || *params.ReasoningOutputTokens != 1 ||
+		params.TotalTokens == nil || *params.TotalTokens != 5 {
+		t.Fatalf("token usage = %#v", params)
+	}
+	if params.TotalToolCallCount == nil || *params.TotalToolCallCount != 0 || params.SteerCount == nil || *params.SteerCount != 0 {
+		t.Fatalf("counts = total:%#v steer:%#v", params.TotalToolCallCount, params.SteerCount)
+	}
+	if params.DurationMS == nil || params.StartedAt == nil || params.CompletedAt == nil {
+		t.Fatalf("timing pointers = duration:%#v started:%#v completed:%#v", params.DurationMS, params.StartedAt, params.CompletedAt)
+	}
+	if params.Runtime.CodexRSVersion == "" || params.Runtime.RuntimeOS == "" || params.Runtime.RuntimeArch == "" {
+		t.Fatalf("runtime metadata = %#v", params.Runtime)
+	}
+}
+
+func TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	cwd := t.TempDir()
+	var expectedRepoHash *string
+	if _, err := osexec.LookPath("git"); err == nil {
+		initCmd := osexec.Command("git", "init")
+		initCmd.Dir = cwd
+		if output, err := initCmd.CombinedOutput(); err != nil {
+			t.Logf("git init failed, skipping repo_hash assertion: %v: %s", err, output)
+		} else {
+			remoteCmd := osexec.Command("git", "remote", "add", "origin", "git@github.com:OpenAI/Codex.git")
+			remoteCmd.Dir = cwd
+			if output, err := remoteCmd.CombinedOutput(); err != nil {
+				t.Logf("git remote add failed, skipping repo_hash assertion: %v: %s", err, output)
+			} else {
+				expectedRepoHash = acceptedLineRepoHashFromRemoteURL("git@github.com:OpenAI/Codex.git")
+			}
+		}
+	}
+	agent := &applyPatchRuntimeAgent{
+		patch: `*** Begin Patch
+*** Add File: accepted.txt
++first accepted line
++}
+*** End Patch`,
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Analytics:    analyticsSink,
+		DefaultCWD:   cwd,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    cwd,
+		Prompt: "patch turn",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "apply patch",
+		CWD:      cwd,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnDiffUpdated(t, sink, turnID)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForAcceptedLineFingerprintsEvent(t, analyticsSink, turnID)
+	if event.EventType != "codex_accepted_line_fingerprints" {
+		t.Fatalf("event_type = %q", event.EventType)
+	}
+	params := event.Params
+	if params.EventType != "codex.accepted_line_fingerprints" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("accepted-line ids = %#v", params)
+	}
+	if params.ProductSurface == nil || *params.ProductSurface != "codex" {
+		t.Fatalf("product_surface = %#v", params.ProductSurface)
+	}
+	if params.ModelSlug == nil || *params.ModelSlug != "gpt-5" {
+		t.Fatalf("model_slug = %#v", params.ModelSlug)
+	}
+	if params.AcceptedAddedLines != 2 || params.AcceptedDeletedLines != 0 {
+		t.Fatalf("accepted-line counts = %#v", params)
+	}
+	if params.LineFingerprints == nil || len(params.LineFingerprints) != 0 {
+		t.Fatalf("line_fingerprints should be uploaded empty: %#v", params.LineFingerprints)
+	}
+	if expectedRepoHash != nil {
+		if params.RepoHash == nil || *params.RepoHash != *expectedRepoHash {
+			t.Fatalf("repo_hash = %#v, want %q", params.RepoHash, *expectedRepoHash)
+		}
+	}
+	if params.CompletedAt == 0 {
+		t.Fatalf("completed_at = 0")
+	}
+}
+
+func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &shellCommandRuntimeAgent{callIDs: []string{"cmd-analytics"}, command: "echo analytics-ok"},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-command-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-command-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run command analytics",
+		ApprovalPolicy: sandbox.ApprovalNever,
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+	})
+	turnStart.ConnectionID = "conn-command-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForItemCompleted(t, sink, "cmd-analytics")
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if event.EventType != telemetry.CodexCommandExecutionEventType {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "cmd-analytics" {
+		t.Fatalf("command analytics ids = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex-tui" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.ExperimentalAPIEnable == nil || !*params.AppServerClient.ExperimentalAPIEnable {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.ThreadSource == nil || *params.ThreadSource != string(ThreadSourceUser) || params.ToolName != "shell" {
+		t.Fatalf("lineage/tool = %#v", params)
+	}
+	if params.CommandExecutionSource != "agent" || params.ExitCode == nil || *params.ExitCode != 0 {
+		t.Fatalf("source/exit = %q/%#v", params.CommandExecutionSource, params.ExitCode)
+	}
+	if params.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted || params.FailureKind != nil || params.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("outcome = status:%q failure:%#v approval:%q", params.TerminalStatus, params.FailureKind, params.FinalApprovalOutcome)
+	}
+	if params.CommandTotalActionCount != 1 || params.CommandUnknownActionCount != 1 ||
+		params.CommandReadActionCount != 0 || params.CommandListFilesActionCount != 0 || params.CommandSearchActionCount != 0 {
+		t.Fatalf("action counts = %#v", params)
+	}
+	if params.StartedAtMS == 0 || params.CompletedAtMS == 0 || params.DurationMS == nil || params.ExecutionDurationMS == nil {
+		t.Fatalf("timing = started:%d completed:%d duration:%#v execution:%#v", params.StartedAtMS, params.CompletedAtMS, params.DurationMS, params.ExecutionDurationMS)
+	}
+}
+
+func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &applyPatchRuntimeAgent{callID: "patch-analytics", patch: "*** Begin Patch\n*** Add File: file_analytics.txt\n+hello file change\n*** End Patch"},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-file-change-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-file-change-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply patch analytics",
+		CWD:            cwd,
+		ApprovalPolicy: sandbox.ApprovalNever,
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+	})
+	turnStart.ConnectionID = "conn-file-change-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForItemCompleted(t, sink, "patch-analytics")
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForFileChangeAnalyticsEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if event.EventType != telemetry.CodexFileChangeEventType {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "patch-analytics" {
+		t.Fatalf("file-change analytics ids = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex-tui" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.ExperimentalAPIEnable == nil || !*params.AppServerClient.ExperimentalAPIEnable {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.ThreadSource == nil || *params.ThreadSource != string(ThreadSourceUser) || params.ToolName != "apply_patch" {
+		t.Fatalf("lineage/tool = %#v", params)
+	}
+	if params.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted || params.FailureKind != nil || params.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("outcome = status:%q failure:%#v approval:%q", params.TerminalStatus, params.FailureKind, params.FinalApprovalOutcome)
+	}
+	if params.FileChangeCount != 1 || params.FileAddCount != 1 || params.FileUpdateCount != 0 ||
+		params.FileDeleteCount != 0 || params.FileMoveCount != 0 {
+		t.Fatalf("file-change counts = %#v", params)
+	}
+	if params.StartedAtMS == 0 || params.CompletedAtMS == 0 || params.DurationMS == nil || params.ExecutionDurationMS != nil {
+		t.Fatalf("timing = started:%d completed:%d duration:%#v execution:%#v", params.StartedAtMS, params.CompletedAtMS, params.DurationMS, params.ExecutionDurationMS)
+	}
+}
+
+func TestRuntimeRouterCommandExecutionAnalyticsIncludesUserReviewSummaryLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &shellCommandRuntimeAgent{callIDs: []string{"cmd-review"}, command: "echo review-ok"},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-command-review-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-command-review-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run reviewed command",
+		CWD:            cwd,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	})
+	turnStart.ConnectionID = "conn-command-review-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ItemID != "cmd-review" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalAcceptForSession})); err != nil || !ok {
+		t.Fatalf("resolve acceptForSession ok=%v err=%v", ok, err)
+	}
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "user:"+pending.ID.String())
+	reviewParams := reviewEvent.EventParams
+	if reviewEvent.EventType != telemetry.CodexReviewEventType ||
+		reviewParams.ThreadID != threadID || reviewParams.TurnID != turnID ||
+		reviewParams.ItemID == nil || *reviewParams.ItemID != "cmd-review" {
+		t.Fatalf("review event ids = %#v", reviewEvent)
+	}
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindCommandExecution ||
+		reviewParams.SubjectName != "command_execution" ||
+		reviewParams.Reviewer != telemetry.ReviewerUser ||
+		reviewParams.Trigger != telemetry.ReviewTriggerInitial ||
+		reviewParams.Status != telemetry.ReviewStatusApproved ||
+		reviewParams.Resolution != telemetry.ReviewResolutionSessionApproval {
+		t.Fatalf("review classification = %#v", reviewParams)
+	}
+	if reviewParams.AppServerClient.ProductClientID != "codex-tui" ||
+		reviewParams.ThreadSource == nil || *reviewParams.ThreadSource != string(ThreadSourceUser) ||
+		reviewParams.StartedAtMS == 0 || reviewParams.CompletedAtMS == 0 || reviewParams.DurationMS == nil {
+		t.Fatalf("review metadata = %#v", reviewParams)
+	}
+	waitForItemCompleted(t, sink, "cmd-review")
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if eventParams.ReviewCount != 1 || eventParams.UserReviewCount != 1 || eventParams.GuardianReviewCount != 0 {
+		t.Fatalf("review counts = %#v", eventParams)
+	}
+	if eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUserApprovedForSession {
+		t.Fatalf("final approval outcome = %q", eventParams.FinalApprovalOutcome)
+	}
+	if eventParams.RequestedAdditionalPermissions || eventParams.RequestedNetworkAccess {
+		t.Fatalf("requested permission flags = additional:%v network:%v", eventParams.RequestedAdditionalPermissions, eventParams.RequestedNetworkAccess)
+	}
+}
+
+func TestRuntimeRouterCommandApprovalExecPolicyAmendmentRunsAndEmitsReviewAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent: &shellCommandRuntimeAgent{
+			callIDs:     []string{"cmd-amend"},
+			command:     "echo amendment-ok",
+			prefixRules: [][]string{{"echo", "amendment-ok"}},
+		},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-command-amendment-review"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-command-amendment-review"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run amended command",
+		CWD:            cwd,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	})
+	turnStart.ConnectionID = "conn-command-amendment-review"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ItemID != "cmd-amend" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("approval params = %#v", pending.Params)
+	}
+	amendment := stringSliceFromAny(params.ProposedExecPolicyAmendment)
+	if !reflect.DeepEqual(amendment, []string{"echo", "amendment-ok"}) {
+		t.Fatalf("proposed execpolicy amendment = %#v", params.ProposedExecPolicyAmendment)
+	}
+	decision := map[string]any{
+		string(CommandExecutionApprovalAcceptWithExecpolicyAmendment): map[string]any{
+			"execpolicy_amendment": []string{"echo", "amendment-ok"},
+		},
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &CommandExecutionRequestApprovalResponse{Decision: decision})); err != nil || !ok {
+		t.Fatalf("resolve execpolicy amendment ok=%v err=%v", ok, err)
+	}
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "user:"+pending.ID.String())
+	reviewParams := reviewEvent.EventParams
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindCommandExecution ||
+		reviewParams.Trigger != telemetry.ReviewTriggerInitial ||
+		reviewParams.Status != telemetry.ReviewStatusApproved ||
+		reviewParams.Resolution != telemetry.ReviewResolutionExecPolicyAmendment {
+		t.Fatalf("review classification = %#v", reviewParams)
+	}
+	completed := waitForItemCompleted(t, sink, "cmd-amend")
+	if completed.Item["status"] != string(CommandExecutionCompleted) {
+		t.Fatalf("completed command item = %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if eventParams.ReviewCount != 1 || eventParams.UserReviewCount != 1 || eventParams.GuardianReviewCount != 0 {
+		t.Fatalf("review counts = %#v", eventParams)
+	}
+	if eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUserApproved {
+		t.Fatalf("final approval outcome = %q", eventParams.FinalApprovalOutcome)
+	}
+}
+
+func TestRuntimeRouterCommandNetworkPolicyAmendmentReviewAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-network-amendment-review"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-network-amendment-review"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold active turn for network review",
+	})
+	turnStart.ConnectionID = "conn-network-amendment-review"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	requestDone := make(chan error, 1)
+	startedAtMS := uint64(time.Now().UTC().Add(-10 * time.Millisecond).UnixMilli())
+	command := "curl https://example.test"
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var approvalResponse CommandExecutionRequestApprovalResponse
+		requestDone <- broker.Request(ctx, ServerRequestCommandExecutionApproval, &CommandExecutionRequestApprovalParams{
+			ThreadID:               threadID,
+			TurnID:                 turnID,
+			ItemID:                 "network-review",
+			StartedAtMS:            startedAtMS,
+			Command:                &command,
+			NetworkApprovalContext: &NetworkApprovalContext{Host: "example.test", Protocol: NetworkApprovalHTTPS},
+		}, &approvalResponse)
+	}()
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	params, ok := pending.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "network-review" {
+		t.Fatalf("network approval params = %#v", pending.Params)
+	}
+	decision := map[string]any{
+		string(CommandExecutionApprovalApplyNetworkPolicyAmendment): map[string]any{
+			"network_policy_amendment": map[string]any{
+				"host":   "example.test",
+				"action": string(NetworkPolicyRuleDeny),
+			},
+		},
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &CommandExecutionRequestApprovalResponse{Decision: decision})); err != nil || !ok {
+		t.Fatalf("resolve network amendment ok=%v err=%v", ok, err)
+	}
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatalf("network approval request error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for network approval request")
+	}
+
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "user:"+pending.ID.String())
+	reviewParams := reviewEvent.EventParams
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindNetworkAccess ||
+		reviewParams.SubjectName != "network_access" ||
+		reviewParams.Trigger != telemetry.ReviewTriggerNetworkPolicyDenial ||
+		reviewParams.Status != telemetry.ReviewStatusDenied ||
+		reviewParams.Resolution != telemetry.ReviewResolutionNetworkPolicyAmendment {
+		t.Fatalf("review classification = %#v", reviewParams)
+	}
+	summary := router.toolItemReviewSummary(threadID, turnID, "network-review")
+	if summary.ReviewCount != 0 || summary.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("network access review should not denormalize to tool item summary: %#v", summary)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-guardian-review"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-guardian-review"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold active turn for guardian review",
+	})
+	turnStart.ConnectionID = "conn-guardian-review"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	commandItemID := "guardian-command"
+	startedAtMS := uint64(time.Now().UTC().Add(-20 * time.Millisecond).UnixMilli())
+	completedAtMS := uint64(time.Now().UTC().UnixMilli())
+	router.notify(NotificationItemGuardianApprovalReviewCompleted, &ItemGuardianApprovalReviewCompletedNotification{
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		StartedAtMS:   startedAtMS,
+		CompletedAtMS: completedAtMS,
+		ReviewID:      "guardian-review-command",
+		TargetItemID:  &commandItemID,
+		Review:        GuardianApprovalReview{Status: GuardianApprovalReviewDenied},
+		Action: GuardianApprovalReviewAction{
+			Type:    "command",
+			Source:  GuardianCommandSourceShell,
+			Command: "rm -rf build",
+			CWD:     t.TempDir(),
+		},
+	})
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "guardian-review-command")
+	reviewParams := reviewEvent.EventParams
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindCommandExecution ||
+		reviewParams.SubjectName != "command_execution" ||
+		reviewParams.Reviewer != telemetry.ReviewerGuardian ||
+		reviewParams.Trigger != telemetry.ReviewTriggerInitial ||
+		reviewParams.Status != telemetry.ReviewStatusDenied ||
+		reviewParams.Resolution != telemetry.ReviewResolutionNone {
+		t.Fatalf("guardian command review classification = %#v", reviewParams)
+	}
+	if reviewParams.StartedAtMS != startedAtMS || reviewParams.CompletedAtMS != completedAtMS || reviewParams.DurationMS == nil {
+		t.Fatalf("guardian command review timing = %#v", reviewParams)
+	}
+	summary := router.toolItemReviewSummary(threadID, turnID, commandItemID)
+	if summary.ReviewCount != 1 ||
+		summary.GuardianReviewCount != 1 ||
+		summary.UserReviewCount != 0 ||
+		summary.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeGuardianDenied ||
+		summary.RequestedAdditionalPermissions ||
+		summary.RequestedNetworkAccess {
+		t.Fatalf("guardian command summary = %#v", summary)
+	}
+
+	networkItemID := "guardian-network"
+	router.notify(NotificationItemGuardianApprovalReviewCompleted, &ItemGuardianApprovalReviewCompletedNotification{
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		StartedAtMS:   startedAtMS,
+		CompletedAtMS: completedAtMS,
+		ReviewID:      "guardian-review-network",
+		TargetItemID:  &networkItemID,
+		Review:        GuardianApprovalReview{Status: GuardianApprovalReviewApproved},
+		Action: GuardianApprovalReviewAction{
+			Type:     "networkAccess",
+			Target:   "https://example.test",
+			Host:     "example.test",
+			Protocol: NetworkApprovalHTTPS,
+			Port:     443,
+		},
+	})
+	networkReviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "guardian-review-network")
+	networkReviewParams := networkReviewEvent.EventParams
+	if networkReviewParams.SubjectKind != telemetry.ReviewSubjectKindNetworkAccess ||
+		networkReviewParams.SubjectName != "network_access" ||
+		networkReviewParams.Reviewer != telemetry.ReviewerGuardian ||
+		networkReviewParams.Trigger != telemetry.ReviewTriggerNetworkPolicyDenial ||
+		networkReviewParams.Status != telemetry.ReviewStatusApproved ||
+		networkReviewParams.Resolution != telemetry.ReviewResolutionNone {
+		t.Fatalf("guardian network review classification = %#v", networkReviewParams)
+	}
+	networkSummary := router.toolItemReviewSummary(threadID, turnID, networkItemID)
+	if networkSummary.ReviewCount != 0 || networkSummary.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("guardian network review should not denormalize to tool item summary: %#v", networkSummary)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &applyPatchRuntimeAgent{callID: "patch-review", patch: "*** Begin Patch\n*** Add File: reviewed_patch.txt\n+reviewed\n*** End Patch"},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-file-review-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-file-review-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "review patch",
+		CWD:            cwd,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	})
+	turnStart.ConnectionID = "conn-file-review-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestFileChangeApproval)
+	params, ok := pending.Params.(*FileChangeRequestApprovalParams)
+	if !ok || params.ItemID != "patch-review" || params.ThreadID != threadID || params.TurnID != turnID {
+		t.Fatalf("approval params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &FileChangeRequestApprovalResponse{Decision: FileChangeApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve decline ok=%v err=%v", ok, err)
+	}
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "user:"+pending.ID.String())
+	reviewParams := reviewEvent.EventParams
+	if reviewEvent.EventType != telemetry.CodexReviewEventType ||
+		reviewParams.ThreadID != threadID || reviewParams.TurnID != turnID ||
+		reviewParams.ItemID == nil || *reviewParams.ItemID != "patch-review" {
+		t.Fatalf("review event ids = %#v", reviewEvent)
+	}
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindFileChange ||
+		reviewParams.SubjectName != "apply_patch" ||
+		reviewParams.Reviewer != telemetry.ReviewerUser ||
+		reviewParams.Trigger != telemetry.ReviewTriggerInitial ||
+		reviewParams.Status != telemetry.ReviewStatusDenied ||
+		reviewParams.Resolution != telemetry.ReviewResolutionNone {
+		t.Fatalf("review classification = %#v", reviewParams)
+	}
+	completed := waitForItemCompleted(t, sink, "patch-review")
+	if completed.Item["status"] != string(PatchApplyDeclined) {
+		t.Fatalf("completed file change item = %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForFileChangeAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusRejected ||
+		eventParams.FailureKind == nil || *eventParams.FailureKind != telemetry.ToolItemFailureKindApprovalDenied {
+		t.Fatalf("outcome = status:%q failure:%#v", eventParams.TerminalStatus, eventParams.FailureKind)
+	}
+	if eventParams.ReviewCount != 1 || eventParams.UserReviewCount != 1 || eventParams.GuardianReviewCount != 0 {
+		t.Fatalf("review counts = %#v", eventParams)
+	}
+	if eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUserDenied {
+		t.Fatalf("final approval outcome = %q", eventParams.FinalApprovalOutcome)
+	}
+	if eventParams.RequestedAdditionalPermissions || eventParams.RequestedNetworkAccess {
+		t.Fatalf("requested permission flags = additional:%v network:%v", eventParams.RequestedAdditionalPermissions, eventParams.RequestedNetworkAccess)
+	}
+}
+
+func TestRuntimeRouterPermissionsApprovalEmitsReviewAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-permissions-review-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-permissions-review-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold active turn for permissions review",
+	})
+	turnStart.ConnectionID = "conn-permissions-review-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	requestDone := make(chan error, 1)
+	permissionsStartedAt := uint64(time.Now().UTC().Add(-10 * time.Millisecond).UnixMilli())
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var permissionsResponse PermissionsRequestApprovalResponse
+		requestDone <- broker.Request(ctx, ServerRequestPermissionsApproval, &PermissionsRequestApprovalParams{
+			ThreadID:    threadID,
+			TurnID:      turnID,
+			ItemID:      "permissions-review",
+			StartedAtMS: permissionsStartedAt,
+			CWD:         t.TempDir(),
+			Permissions: map[string]any{
+				"network": map[string]any{"enabled": true},
+			},
+		}, &permissionsResponse)
+	}()
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestPermissionsApproval)
+	params, ok := pending.Params.(*PermissionsRequestApprovalParams)
+	if !ok || params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "permissions-review" {
+		t.Fatalf("permissions approval params = %#v", pending.Params)
+	}
+	networkAllowed := true
+	if ok, err := broker.Resolve(OK(pending.ID, &PermissionsRequestApprovalResponse{
+		Permissions: &GrantedPermissionProfile{
+			Network: &AdditionalNetworkPermissions{Enabled: &networkAllowed},
+		},
+		Scope: PermissionGrantScopeSession,
+	})); err != nil || !ok {
+		t.Fatalf("resolve permissions approval ok=%v err=%v", ok, err)
+	}
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatalf("permissions request error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for permissions request")
+	}
+
+	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "user:"+pending.ID.String())
+	reviewParams := reviewEvent.EventParams
+	if reviewEvent.EventType != telemetry.CodexReviewEventType ||
+		reviewParams.ThreadID != threadID || reviewParams.TurnID != turnID ||
+		reviewParams.ItemID == nil || *reviewParams.ItemID != "permissions-review" {
+		t.Fatalf("review event ids = %#v", reviewEvent)
+	}
+	if reviewParams.SubjectKind != telemetry.ReviewSubjectKindPermissions ||
+		reviewParams.SubjectName != "permissions" ||
+		reviewParams.Reviewer != telemetry.ReviewerUser ||
+		reviewParams.Trigger != telemetry.ReviewTriggerNetworkPolicyDenial ||
+		reviewParams.Status != telemetry.ReviewStatusApproved ||
+		reviewParams.Resolution != telemetry.ReviewResolutionSessionApproval {
+		t.Fatalf("review classification = %#v", reviewParams)
+	}
+	if reviewParams.StartedAtMS != permissionsStartedAt ||
+		reviewParams.CompletedAtMS == 0 ||
+		reviewParams.DurationMS == nil ||
+		reviewParams.ThreadSource == nil ||
+		*reviewParams.ThreadSource != string(ThreadSourceUser) {
+		t.Fatalf("review metadata = %#v", reviewParams)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterDynamicToolCallEmitsAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 1)
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &dynamicToolRuntimeAgent{},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		ServerRequests:        broker,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-dynamic-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-dynamic-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "call dynamic tool",
+		CWD:      cwd,
+		DynamicTools: []turn.DynamicToolSpec{{
+			Type: "namespace",
+			Namespace: &turn.DynamicToolNamespaceSpec{
+				Name:        "codex_app",
+				Description: "Demo namespace tools",
+				Tools: []turn.DynamicToolFunctionSpec{{
+					Name:        "demo_tool",
+					Description: "Demo dynamic tool",
+					InputSchema: map[string]any{"type": "object"},
+				}},
+			},
+		}},
+	})
+	turnStart.ConnectionID = "conn-dynamic-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	pending := waitForServerRequestFromChannel(t, requests, ServerRequestDynamicToolCall)
+	params, ok := pending.Params.(*turn.DynamicToolCallParams)
+	if !ok || params.CallID != "dynamic-analytics" || params.ThreadID != threadID || params.TurnID != turnID || params.Tool != "demo_tool" {
+		t.Fatalf("dynamic params = %#v", pending.Params)
+	}
+	if ok, err := broker.Resolve(OK(pending.ID, &DynamicToolCallResponse{
+		Success: true,
+		ContentItems: []DynamicToolCallOutputContent{
+			{Type: "inputText", Text: "dynamic-ok"},
+			{Type: "inputImage", ImageURL: "data:image/png;base64,AAAA"},
+		},
+	})); err != nil || !ok {
+		t.Fatalf("resolve dynamic tool ok=%v err=%v", ok, err)
+	}
+	dynamicItemID := "tool-output-" + safeIdentifier(turnID) + "-dynamic-analytics"
+	waitForItemCompleted(t, sink, dynamicItemID)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForDynamicToolCallAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if event.EventType != telemetry.CodexDynamicToolCallEventType ||
+		eventParams.ThreadID != threadID || eventParams.TurnID != turnID || eventParams.ItemID != dynamicItemID {
+		t.Fatalf("dynamic analytics ids = %#v", event)
+	}
+	if eventParams.DynamicToolName != "demo_tool" || eventParams.ToolName != "demo_tool" ||
+		eventParams.Success == nil || !*eventParams.Success {
+		t.Fatalf("dynamic tool fields = %#v", eventParams)
+	}
+	if eventParams.OutputContentItemCount == nil || *eventParams.OutputContentItemCount != 2 ||
+		eventParams.OutputTextItemCount == nil || *eventParams.OutputTextItemCount != 1 ||
+		eventParams.OutputImageItemCount == nil || *eventParams.OutputImageItemCount != 1 {
+		t.Fatalf("dynamic content counts = %#v", eventParams)
+	}
+	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
+		eventParams.FailureKind != nil ||
+		eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("dynamic outcome = %#v", eventParams)
+	}
+	if eventParams.StartedAtMS == 0 || eventParams.CompletedAtMS == 0 ||
+		eventParams.DurationMS == nil || eventParams.ExecutionDurationMS == nil {
+		t.Fatalf("dynamic timing = %#v", eventParams)
+	}
+}
+
+func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
+	var toolCallParams map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode MCP request error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "session-mcp-analytics")
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "sdk", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"tools": []map[string]any{{
+				"name":        "echo",
+				"description": "Echo a message",
+				"inputSchema": map[string]any{"type": "object"},
+			}}})
+		case "resources/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resources": []any{}})
+		case "resources/templates/list":
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{"resourceTemplates": []any{}})
+		case "tools/call":
+			if err := json.Unmarshal(request.Params, &toolCallParams); err != nil {
+				t.Fatalf("Unmarshal MCP tools/call params error = %v", err)
+			}
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{
+				"content": []map[string]string{{"type": "text", "text": "mcp analytics ok"}},
+				"isError": false,
+			})
+		default:
+			writeRuntimeRouterMCPResponse(t, w, request.ID, map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 &mcpToolRuntimeAgent{},
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            cwd,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+		MCP: mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+			"sdk": {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
+		}}),
+	})
+	router.SetNotificationSink(sink)
+
+	connectionID := "conn-mcp-analytics"
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          cwd,
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = connectionID
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "call mcp tool",
+		CWD:      cwd,
+	})
+	turnStart.ConnectionID = connectionID
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	mcpItemID := "mcp-analytics"
+	completed := waitForItemCompleted(t, sink, mcpItemID)
+	if completed.Item["type"] != "mcpToolCall" || completed.Item["server"] != "sdk" || completed.Item["tool"] != "echo" {
+		t.Fatalf("completed MCP item = %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	if toolCallParams["name"] != "echo" {
+		t.Fatalf("MCP tools/call params = %#v", toolCallParams)
+	}
+	event := waitForMCPToolCallAnalyticsEvent(t, analyticsSink, turnID)
+	eventParams := event.EventParams
+	if event.EventType != telemetry.CodexMCPToolCallEventType ||
+		eventParams.ThreadID != threadID ||
+		eventParams.TurnID != turnID ||
+		eventParams.ItemID != mcpItemID {
+		t.Fatalf("MCP analytics ids = %#v", event)
+	}
+	if eventParams.ToolName != "echo" ||
+		eventParams.MCPServerName != "sdk" ||
+		eventParams.MCPToolName != "echo" ||
+		eventParams.MCPErrorPresent ||
+		eventParams.PluginID != nil {
+		t.Fatalf("MCP analytics fields = %#v", eventParams)
+	}
+	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
+		eventParams.FailureKind != nil ||
+		eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("MCP analytics outcome = %#v", eventParams)
+	}
+	if eventParams.StartedAtMS == 0 || eventParams.CompletedAtMS == 0 ||
+		eventParams.DurationMS == nil || eventParams.ExecutionDurationMS == nil {
+		t.Fatalf("MCP analytics timing = %#v", eventParams)
+	}
+}
+
+func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 model.NewLocalAgentRunner(),
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	connectionID := "conn-collab-image-analytics"
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = connectionID
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = connectionID
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnID := "turn-collab-image-analytics"
+	startedAtMS := int64(1700000000000)
+	completedAtMS := int64(1700000000450)
+
+	collabItem := ThreadItem{
+		ID:        "collab-analytics",
+		Type:      "collabAgentToolCall",
+		CreatedAt: completedAtMS,
+		Data: map[string]any{
+			"tool":              string(CollabAgentToolSpawnAgent),
+			"status":            string(CollabAgentToolCallCompleted),
+			"senderThreadId":    threadID,
+			"receiverThreadIds": []string{"child-1", "child-2"},
+			"model":             "gpt-5",
+			"reasoningEffort":   "high",
+			"agentsStates": map[string]any{
+				"child-1": map[string]any{"status": string(CollabAgentStatusCompleted)},
+				"child-2": map[string]any{"status": string(CollabAgentStatusErrored)},
+			},
+			"startedAtMs":   startedAtMS,
+			"completedAtMs": completedAtMS,
+		},
+	}
+	router.emitCollabAgentToolCallAnalyticsEvent(context.Background(), connectionID, threadID, turnID, &collabItem, &appTurnRunConfig{})
+	collabEvent := waitForCollabAgentToolCallAnalyticsEvent(t, analyticsSink, turnID)
+	collabParams := collabEvent.EventParams
+	if collabEvent.EventType != telemetry.CodexCollabAgentToolCallEventType ||
+		collabParams.ToolName != "spawn_agent" ||
+		collabParams.SenderThreadID != threadID ||
+		collabParams.ReceiverThreadCount != 2 ||
+		len(collabParams.ReceiverThreadIDs) != 2 {
+		t.Fatalf("collab analytics fields = %#v", collabEvent)
+	}
+	if collabParams.RequestedModel == nil || *collabParams.RequestedModel != "gpt-5" ||
+		collabParams.RequestedReasoningEffort == nil || *collabParams.RequestedReasoningEffort != "high" ||
+		collabParams.AgentStateCount == nil || *collabParams.AgentStateCount != 2 ||
+		collabParams.CompletedAgentCount == nil || *collabParams.CompletedAgentCount != 1 ||
+		collabParams.FailedAgentCount == nil || *collabParams.FailedAgentCount != 1 {
+		t.Fatalf("collab analytics counts = %#v", collabParams)
+	}
+	if collabParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
+		collabParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("collab analytics outcome = %#v", collabParams)
+	}
+
+	imageItem := ThreadItem{
+		ID:        "image-analytics",
+		Type:      "imageGeneration",
+		Status:    "failed",
+		CreatedAt: completedAtMS,
+		Data: map[string]any{
+			"status":        "failed",
+			"revisedPrompt": "a sharper prompt",
+			"savedPath":     filepath.Join(home, "generated.png"),
+			"startedAtMs":   startedAtMS,
+			"completedAtMs": completedAtMS,
+		},
+	}
+	router.emitImageGenerationAnalyticsEvent(context.Background(), connectionID, threadID, turnID, &imageItem, &appTurnRunConfig{})
+	imageEvent := waitForImageGenerationAnalyticsEvent(t, analyticsSink, turnID)
+	imageParams := imageEvent.EventParams
+	if imageEvent.EventType != telemetry.CodexImageGenerationEventType ||
+		imageParams.ToolName != "image_generation" ||
+		!imageParams.RevisedPromptPresent ||
+		!imageParams.SavedPathPresent {
+		t.Fatalf("image analytics fields = %#v", imageEvent)
+	}
+	if imageParams.TerminalStatus != telemetry.ToolItemTerminalStatusFailed ||
+		imageParams.FailureKind == nil || *imageParams.FailureKind != telemetry.ToolItemFailureKindToolError ||
+		imageParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
+		t.Fatalf("image analytics outcome = %#v", imageParams)
+	}
+	if imageParams.StartedAtMS != uint64(startedAtMS) ||
+		imageParams.CompletedAtMS != uint64(completedAtMS) ||
+		imageParams.DurationMS == nil || *imageParams.DurationMS != uint64(completedAtMS-startedAtMS) {
+		t.Fatalf("image analytics timing = %#v", imageParams)
+	}
+}
+
+func TestRuntimeRouterTurnStartFailedEmitsCodexTurnAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        &failThenOKRuntimeAgent{},
+		ThreadStatus: NewThreadStatusManager(),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-failed-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "fail analytics",
+	})
+	turnStart.ConnectionID = "conn-failed-analytics"
+	response := router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusFailed)
+	if completed.Turn.Error == nil {
+		t.Fatalf("failed turn error missing")
+	}
+	if completed.Turn.Error.CodexErrorInfo != "other" {
+		t.Fatalf("failed turn codexErrorInfo = %#v, want other", completed.Turn.Error.CodexErrorInfo)
+	}
+
+	event := waitForCodexTurnEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if params.Status == nil || *params.Status != string(TurnStatusFailed) {
+		t.Fatalf("analytics failed status = %#v", params.Status)
+	}
+	if params.TurnError != "other" ||
+		params.CodexErrorKind == nil || *params.CodexErrorKind != "timeout" ||
+		params.CodexErrorHTTPStatusCode != nil {
+		t.Fatalf("deadline failure analytics error fields = error:%#v kind:%#v http:%#v", params.TurnError, params.CodexErrorKind, params.CodexErrorHTTPStatusCode)
+	}
+	if params.DurationMS == nil || params.CompletedAt == nil || params.StartedAt == nil {
+		t.Fatalf("failed analytics timing = duration:%#v started:%#v completed:%#v", params.DurationMS, params.StartedAt, params.CompletedAt)
+	}
+}
+
+func TestRuntimeRouterTurnStartFailedAnalyticsClassifiesCodexAPIErrorLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent: &apiErrorRuntimeAgent{err: &codexapi.APIError{
+			Kind:    codexapi.ErrorInvalidRequest,
+			Status:  http.StatusBadRequest,
+			Message: "bad prompt",
+		}},
+		ThreadStatus: NewThreadStatusManager(),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-api-error-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "api error analytics",
+	})
+	turnStart.ConnectionID = "conn-api-error-analytics"
+	response := router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusFailed)
+	if completed.Turn.Error == nil {
+		t.Fatalf("failed turn error missing")
+	}
+	if completed.Turn.Error.CodexErrorInfo != "badRequest" {
+		t.Fatalf("failed turn codexErrorInfo = %#v, want badRequest", completed.Turn.Error.CodexErrorInfo)
+	}
+
+	event := waitForCodexTurnEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if params.Status == nil || *params.Status != string(TurnStatusFailed) {
+		t.Fatalf("analytics failed status = %#v", params.Status)
+	}
+	if params.TurnError != "badRequest" ||
+		params.CodexErrorKind == nil || *params.CodexErrorKind != "invalid_request" ||
+		params.CodexErrorHTTPStatusCode == nil || *params.CodexErrorHTTPStatusCode != http.StatusBadRequest {
+		t.Fatalf("api failure analytics error fields = error:%#v kind:%#v http:%#v", params.TurnError, params.CodexErrorKind, params.CodexErrorHTTPStatusCode)
+	}
+	if params.DurationMS == nil || params.CompletedAt == nil || params.StartedAt == nil {
+		t.Fatalf("failed analytics timing = duration:%#v started:%#v completed:%#v", params.DurationMS, params.StartedAt, params.CompletedAt)
+	}
+}
+
+func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       *codexapi.APIError
+		wantError string
+		wantKind  string
+		wantHTTP  uint16
+	}{
+		{
+			name:      "retry limit",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorRetryable, Status: http.StatusTooManyRequests, Message: "retry exhausted"},
+			wantError: `{"responseTooManyFailedAttempts":{"httpStatusCode":429}}`,
+			wantKind:  "retry_limit",
+			wantHTTP:  http.StatusTooManyRequests,
+		},
+		{
+			name:      "transport",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorTransport, Status: http.StatusUnauthorized, Message: "dial failed"},
+			wantError: `{"httpConnectionFailed":{"httpStatusCode":401}}`,
+			wantKind:  "connection_failed",
+			wantHTTP:  http.StatusUnauthorized,
+		},
+		{
+			name:      "stream",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorStream, Status: http.StatusServiceUnavailable, Message: "stream failed"},
+			wantError: `{"responseStreamConnectionFailed":{"httpStatusCode":503}}`,
+			wantKind:  "response_stream_failed",
+			wantHTTP:  http.StatusServiceUnavailable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := turnAnalyticsErrorFieldsFromAPIError(tc.err)
+			data, err := json.Marshal(fields.TurnError)
+			if err != nil {
+				t.Fatalf("marshal turn error: %v", err)
+			}
+			if string(data) != tc.wantError {
+				t.Fatalf("turn error JSON = %s, want %s", data, tc.wantError)
+			}
+			if fields.CodexErrorKind == nil || *fields.CodexErrorKind != tc.wantKind {
+				t.Fatalf("codex error kind = %#v, want %q", fields.CodexErrorKind, tc.wantKind)
+			}
+			if fields.HTTPStatusCode == nil || *fields.HTTPStatusCode != tc.wantHTTP {
+				t.Fatalf("http status = %#v, want %d", fields.HTTPStatusCode, tc.wantHTTP)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterTurnInterruptedEmitsCodexTurnAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-interrupted-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "interrupt analytics",
+	})
+	turnStart.ConnectionID = "conn-interrupted-analytics"
+	response := router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+
+	event := waitForCodexTurnEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if params.Status == nil || *params.Status != string(TurnStatusInterrupted) {
+		t.Fatalf("analytics interrupted status = %#v", params.Status)
+	}
+	if params.TurnError != nil || params.CodexErrorKind != nil || params.CodexErrorHTTPStatusCode != nil {
+		t.Fatalf("interrupted analytics error fields = error:%#v kind:%#v http:%#v", params.TurnError, params.CodexErrorKind, params.CodexErrorHTTPStatusCode)
+	}
+	if params.DurationMS == nil || params.CompletedAt == nil || params.StartedAt == nil {
+		t.Fatalf("interrupted analytics timing = duration:%#v started:%#v completed:%#v", params.DurationMS, params.StartedAt, params.CompletedAt)
+	}
+}
+
+func TestRuntimeRouterTurnAnalyticsCountsAcceptedSteersLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newSteerAwareToolAgent()
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ToolRouter:   tool.NewRouter(registry),
+		ThreadStatus: NewThreadStatusManager(),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-steer-count-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	})
+	threadStart.ConnectionID = "conn-steer-count-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "start steer count",
+	})
+	turnStart.ConnectionID = "conn-steer-count-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForSteerAwareFirstRequest(t, agent)
+
+	for index, text := range []string{"first steer", "second steer"} {
+		steer := router.Handle(requestWithParams(t, IntID(int64(4+index)), MethodTurnSteer, turn.TurnSteerParams{
+			ThreadID:       threadID,
+			ExpectedTurnID: turnID,
+			Input: []turn.TurnUserInput{{
+				Text: text,
+			}},
+		}))
+		if steer.Error != nil {
+			t.Fatalf("turn/steer %d error: %+v", index+1, steer.Error)
+		}
+	}
+	agent.releaseFirstResponse()
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForCodexTurnEvent(t, analyticsSink, turnID)
+	if event.EventParams.SteerCount == nil || *event.EventParams.SteerCount != 2 {
+		t.Fatalf("steer_count = %#v, want 2", event.EventParams.SteerCount)
+	}
+}
+
+func TestRuntimeRouterTurnSteerEmitsAcceptedAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-turn-steer-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-turn-steer-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold for steer analytics",
+	})
+	turnStart.ConnectionID = "conn-turn-steer-analytics"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	steer := requestWithParams(t, IntID(4), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Input: []turn.TurnUserInput{{
+			Type: "localImage",
+			Path: filepath.Join(t.TempDir(), "image.png"),
+		}},
+	})
+	steer.ConnectionID = "conn-turn-steer-analytics"
+	response = router.Handle(steer)
+	if response.Error != nil {
+		t.Fatalf("turn/steer error: %+v", response.Error)
+	}
+
+	event := waitForCodexTurnSteerEvent(t, analyticsSink, turnID)
+	params := event.EventParams
+	if event.EventType != telemetry.CodexTurnSteerEventType {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if params.ThreadID != threadID || params.SessionID != threadID {
+		t.Fatalf("steer ids = %#v", params)
+	}
+	if params.ExpectedTurnID == nil || *params.ExpectedTurnID != turnID || params.AcceptedTurnID == nil || *params.AcceptedTurnID != turnID {
+		t.Fatalf("steer turn ids = expected:%#v accepted:%#v", params.ExpectedTurnID, params.AcceptedTurnID)
+	}
+	if params.AppServerClient.ProductClientID != "codex-tui" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.RPCTransport != telemetry.AppServerRPCTransportInProcess {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.ThreadSource == nil || *params.ThreadSource != string(ThreadSourceUser) || params.SubagentSource != nil || params.ParentThreadID != nil {
+		t.Fatalf("thread lineage = %#v", params)
+	}
+	if params.NumInputImages != 1 || params.Result != telemetry.TurnSteerResultAccepted || params.RejectionReason != nil {
+		t.Fatalf("steer result fields = %#v", params)
+	}
+	if params.CreatedAt == 0 || params.Runtime.CodexRSVersion == "" || params.Runtime.RuntimeOS == "" || params.Runtime.RuntimeArch == "" {
+		t.Fatalf("runtime/timing = %#v", params)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(5), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterTurnSteerRejectedEmitsAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Turns:                 turn.NewTurnService(),
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		DefaultCWD:            t.TempDir(),
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+	})
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-turn-steer-rejected-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		ThreadSource: threadSourcePtr(string(ThreadSourceUser)),
+	})
+	threadStart.ConnectionID = "conn-turn-steer-rejected-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	expectedTurnID := "turn-does-not-exist"
+	steer := requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: expectedTurnID,
+		Prompt:         "steer",
+	})
+	steer.ConnectionID = "conn-turn-steer-rejected-analytics"
+	response = router.Handle(steer)
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "no active turn to steer" {
+		t.Fatalf("turn/steer error = %+v", response.Error)
+	}
+
+	event := waitForCodexTurnSteerEvent(t, analyticsSink, expectedTurnID)
+	params := event.EventParams
+	if params.ThreadID != threadID || params.SessionID != threadID {
+		t.Fatalf("steer ids = %#v", params)
+	}
+	if params.ExpectedTurnID == nil || *params.ExpectedTurnID != expectedTurnID || params.AcceptedTurnID != nil {
+		t.Fatalf("steer turn ids = expected:%#v accepted:%#v", params.ExpectedTurnID, params.AcceptedTurnID)
+	}
+	if params.Result != telemetry.TurnSteerResultRejected ||
+		params.RejectionReason == nil || *params.RejectionReason != telemetry.TurnSteerRejectionNoActiveTurn {
+		t.Fatalf("rejection fields = result:%q reason:%#v", params.Result, params.RejectionReason)
+	}
+	if params.AppServerClient.ProductClientID != "codex-tui" || params.ThreadSource == nil || *params.ThreadSource != string(ThreadSourceUser) {
+		t.Fatalf("metadata = %#v", params)
+	}
+}
+
+func TestTurnSteerAnalyticsRejectionReasonMatchesRust(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "no active", err: turn.ErrNoActiveTurnToSteer, want: telemetry.TurnSteerRejectionNoActiveTurn},
+		{name: "mismatch", err: fmt.Errorf("%w: stale turn", turn.ErrExpectedTurnMismatch), want: telemetry.TurnSteerRejectionExpectedMismatch},
+		{name: "empty input", err: turn.ErrEmptyTurnSteerInput, want: telemetry.TurnSteerRejectionEmptyInput},
+		{name: "too large", err: &turn.InputTooLargeError{MaxChars: turn.MaxUserInputTextChars, ActualChars: turn.MaxUserInputTextChars + 1}, want: telemetry.TurnSteerRejectionInputTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := turnSteerAnalyticsRejectionReason(tc.err)
+			if got == nil || *got != tc.want {
+				t.Fatalf("rejection reason = %#v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterThreadStartEmitsThreadInitializedAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Config:                config.NewConfigService(home),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportStdio,
+		DefaultCWD:            t.TempDir(),
+	})
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-thread-start-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	source := ThreadSourceUser
+	serviceName := "codex_work_desktop"
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:          t.TempDir(),
+		Model:        "mock-model",
+		ThreadSource: &source,
+		ServiceName:  &serviceName,
+	})
+	threadStart.ConnectionID = "conn-thread-start-analytics"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	thread := response.Result.(*ThreadStartResponse).Thread
+
+	event := waitForCodexThreadInitializedEvent(t, analyticsSink, thread.ID)
+	params := event.EventParams
+	if event.EventType != telemetry.CodexThreadInitializedEventType {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if params.ThreadID != thread.ID || params.SessionID != thread.SessionID || params.InitializationMode != "new" {
+		t.Fatalf("thread initialized ids/mode = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex_work_desktop" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.RPCTransport != telemetry.AppServerRPCTransportStdio ||
+		params.AppServerClient.ExperimentalAPIEnable == nil || !*params.AppServerClient.ExperimentalAPIEnable {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.Model != "mock-model" || params.Ephemeral || params.ThreadSource == nil || *params.ThreadSource != "user" {
+		t.Fatalf("thread initialized metadata = %#v", params)
+	}
+	if params.SubagentSource != nil || params.ParentThreadID != nil || params.ForkedFromThreadID != nil || params.CreatedAt == 0 {
+		t.Fatalf("unexpected lineage/created_at = %#v", params)
+	}
+}
+
+func TestRuntimeRouterThreadResumeEmitsThreadInitializedAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-resume-analytics",
+		SessionID: "session-resume-analytics",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:          t.TempDir(),
+			Model:        "gpt-5.3-codex",
+			Source:       string(SessionSourceAppServer),
+			ThreadSource: "user",
+			Originator:   "codex_work_desktop",
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-thread-resume-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	resume := requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID: "thread-resume-analytics",
+	})
+	resume.ConnectionID = "conn-thread-resume-analytics"
+	response := router.Handle(resume)
+	if response.Error != nil {
+		t.Fatalf("thread/resume error: %+v", response.Error)
+	}
+	thread := response.Result.(*ThreadResumeResponse).Thread
+
+	event := waitForCodexThreadInitializedEvent(t, analyticsSink, thread.ID)
+	params := event.EventParams
+	if params.ThreadID != thread.ID || params.SessionID != "session-resume-analytics" || params.InitializationMode != "resumed" {
+		t.Fatalf("thread initialized ids/mode = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex_work_desktop" {
+		t.Fatalf("product_client_id = %q", params.AppServerClient.ProductClientID)
+	}
+	if params.Model != "gpt-5.3-codex" || params.ThreadSource == nil || *params.ThreadSource != "user" || params.CreatedAt == 0 {
+		t.Fatalf("thread initialized metadata = %#v", params)
+	}
+}
+
+func TestRuntimeRouterThreadForkEmitsThreadInitializedAnalyticsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-fork-source",
+		SessionID: "session-fork-source",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:          t.TempDir(),
+			Model:        "mock-model",
+			Source:       string(SessionSourceAppServer),
+			ThreadSource: "user",
+			Originator:   "codex",
+		},
+		Items: []session.Item{{
+			ID:        "item-fork-source",
+			Type:      "message",
+			Role:      "user",
+			Text:      "source",
+			CreatedAt: now,
+		}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Analytics:    analyticsSink,
+		DefaultCWD:   t.TempDir(),
+	})
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-thread-fork-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	source := ThreadSourceUser
+	fork := requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+		ThreadID:     "thread-fork-source",
+		ThreadSource: &source,
+	})
+	fork.ConnectionID = "conn-thread-fork-analytics"
+	response := router.Handle(fork)
+	if response.Error != nil {
+		t.Fatalf("thread/fork error: %+v", response.Error)
+	}
+	thread := response.Result.(*ThreadForkResponse).Thread
+
+	event := waitForCodexThreadInitializedEvent(t, analyticsSink, thread.ID)
+	params := event.EventParams
+	if params.ThreadID != thread.ID || params.InitializationMode != "forked" {
+		t.Fatalf("thread initialized ids/mode = %#v", params)
+	}
+	if params.AppServerClient.ProductClientID != "codex" || params.Model != "mock-model" {
+		t.Fatalf("product/model = %q/%q", params.AppServerClient.ProductClientID, params.Model)
+	}
+	if params.ForkedFromThreadID == nil || *params.ForkedFromThreadID != "thread-fork-source" {
+		t.Fatalf("forked_from_thread_id = %#v", params.ForkedFromThreadID)
+	}
+	if params.ParentThreadID != nil {
+		t.Fatalf("parent_thread_id = %#v, want nil for fork analytics", params.ParentThreadID)
+	}
+}
+
+func TestRuntimeRouterConfiguredAnalyticsPostsRustTrackEventsRequest(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	type analyticsRequest struct {
+		Authorization string
+		AccountID     string
+		ContentType   string
+		Payload       telemetry.TrackEventsRequest
+	}
+	requests := make(chan analyticsRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload telemetry.TrackEventsRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode analytics payload error = %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		requests <- analyticsRequest{
+			Authorization: r.Header.Get("Authorization"),
+			AccountID:     r.Header.Get("ChatGPT-Account-ID"),
+			ContentType:   r.Header.Get("Content-Type"),
+			Payload:       payload,
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf(`
+chatgpt_base_url = %q
+model = "gpt-5"
+
+[analytics]
+enabled = true
+`, server.URL)), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", nil)); err != nil {
+		t.Fatalf("save auth error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        "thread-http-analytics",
+		SessionID: "session-http-analytics",
+		Preview:   "hello",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	agent := newRecordingRuntimeAgent("analytics ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+		DefaultCWD:   t.TempDir(),
+	})
+	router.configureAnalyticsFromConfig(home, nil)
+	defer router.Close()
+	if router.services.Analytics == nil {
+		t.Fatal("analytics sink not configured")
+	}
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+	})
+	initialize.ConnectionID = "conn-http-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	turnStart := requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: "thread-http-analytics",
+		Prompt:   "hello analytics",
+	})
+	turnStart.ConnectionID = "conn-http-analytics"
+	response := router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	var request analyticsRequest
+	select {
+	case request = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for analytics HTTP request")
+	}
+	if request.Authorization != "Bearer chatgpt-token" || request.AccountID != "account-123" {
+		t.Fatalf("analytics auth headers = auth:%q account:%q", request.Authorization, request.AccountID)
+	}
+	if request.ContentType != "application/json" {
+		t.Fatalf("Content-Type = %q", request.ContentType)
+	}
+	if len(request.Payload.Events) != 1 {
+		t.Fatalf("analytics events = %#v", request.Payload.Events)
+	}
+	var event telemetry.CodexTurnEventRequest
+	if err := json.Unmarshal(request.Payload.Events[0], &event); err != nil {
+		t.Fatalf("decode analytics event error = %v", err)
+	}
+	if event.EventType != telemetry.CodexTurnEventType || event.EventParams.TurnID != turnID || event.EventParams.ThreadID != "thread-http-analytics" {
+		t.Fatalf("analytics event = %#v", event)
+	}
+	if event.EventParams.AppServerClient.ClientName == nil || *event.EventParams.AppServerClient.ClientName != "codex-tui" {
+		t.Fatalf("analytics app_server_client = %#v", event.EventParams.AppServerClient)
+	}
+}
+
+func TestRuntimeRouterThreadStartUsesConnectionClientInfoOriginator(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.1.0"},
+	})
+	initialize.ConnectionID = "conn-originator"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	startRequest := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{})
+	startRequest.ConnectionID = "conn-originator"
+	threadStart := router.Handle(startRequest)
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello originator",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Originator != "codex_vscode" {
+		t.Fatalf("originator = %q", request.Originator)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadGoalPersistsInThreadStoreAndNotifies(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	createRecord(t, store, "thread-goal", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	router.SetNotificationSink(sink)
+
+	budget := int64(10)
+	objective := "persist the goal"
+	setGoal := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-goal", Objective: &objective, TokenBudget: &budget,
+	}))
+	if setGoal.Error != nil {
+		t.Fatalf("goal set error: %+v", setGoal.Error)
+	}
+	if setGoal.Result.(*GoalSetResponse).Goal.CreatedAt != fixedTime().Unix() {
+		t.Fatalf("goal = %#v", setGoal.Result.(*GoalSetResponse).Goal)
+	}
+	if !sinkHasMethod(sink, NotificationThreadGoalUpdated) {
+		t.Fatalf("goal update notification missing: %#v", sink.List())
+	}
+
+	reloaded := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	getGoal := reloaded.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-goal"}))
+	if getGoal.Error != nil || getGoal.Result.(*GoalGetResponse).Goal == nil || getGoal.Result.(*GoalGetResponse).Goal.Objective != objective {
+		t.Fatalf("goal get = %+v", getGoal)
+	}
+
+	blocked := GoalBlocked
+	updateStatus := reloaded.Handle(requestWithParams(t, IntID(3), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-goal", Status: &blocked,
+	}))
+	if updateStatus.Error != nil || updateStatus.Result.(*GoalSetResponse).Goal.Status != GoalBlocked {
+		t.Fatalf("goal status update = %+v", updateStatus)
+	}
+
+	clearGoal := reloaded.Handle(requestWithParams(t, IntID(4), MethodThreadGoalClear, GoalClearParams{ThreadID: "thread-goal"}))
+	if clearGoal.Error != nil || !clearGoal.Result.(*GoalClearResponse).Cleared {
+		t.Fatalf("goal clear = %+v", clearGoal)
+	}
+	record, err := store.Read("thread-goal", true, true)
+	if err != nil {
+		t.Fatalf("read thread after clear: %v", err)
+	}
+	if len(record.Items) == 0 {
+		t.Fatalf("thread items were lost after clearing goal")
+	}
+	missing := reloaded.Handle(requestWithParams(t, IntID(5), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-goal"}))
+	if missing.Error != nil || missing.Result.(*GoalGetResponse).Goal != nil {
+		t.Fatalf("goal after clear = %+v", missing)
+	}
+}
+
+func TestRuntimeRouterThreadGoalSetAndClearEmitGoalAnalyticsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Save(&session.Record{
+		ID:        "thread-goal-analytics",
+		SessionID: "session-goal-analytics",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			ThreadSource: "user",
+			Originator:   "codex_work_desktop",
+			CWD:          "D:/repo",
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "goal analytics"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	analyticsSink := newRecordingTurnEventSink()
+	sink := NewNotificationBuffer()
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: routerStore,
+		Analytics:    analyticsSink,
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex_vscode", Version: "0.9.0"},
+	})
+	initialize.ConnectionID = "conn-goal-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	budget := int64(100)
+	objective := "do not serialize this objective"
+	setRequest := requestWithParams(t, IntID(2), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-goal-analytics", Objective: &objective, TokenBudget: &budget,
+	})
+	setRequest.ConnectionID = "conn-goal-analytics"
+	setResponse := router.Handle(setRequest)
+	if setResponse.Error != nil {
+		t.Fatalf("goal set error: %+v", setResponse.Error)
+	}
+	created := waitForCodexGoalEvent(t, analyticsSink, "thread-goal-analytics", telemetry.GoalEventKindCreated)
+	createdParams := created.EventParams
+	if created.EventType != telemetry.CodexGoalEventType ||
+		createdParams.SessionID != "session-goal-analytics" ||
+		createdParams.TurnID != nil ||
+		createdParams.GoalID == "" ||
+		createdParams.GoalStatus != "active" ||
+		!createdParams.HasTokenBudget ||
+		createdParams.CumulativeTokensAccounted != nil ||
+		createdParams.CumulativeTimeAccountedSeconds != nil {
+		t.Fatalf("created goal event = %#v", created)
+	}
+	if createdParams.AppServerClient.ProductClientID != "codex_work_desktop" ||
+		createdParams.AppServerClient.ClientName == nil ||
+		*createdParams.AppServerClient.ClientName != "codex_vscode" {
+		t.Fatalf("created app_server_client = %#v", createdParams.AppServerClient)
+	}
+	if createdParams.ThreadSource == nil || *createdParams.ThreadSource != "user" {
+		t.Fatalf("created thread_source = %#v", createdParams.ThreadSource)
+	}
+	eventJSON, err := json.Marshal(created)
+	if err != nil {
+		t.Fatalf("Marshal(created) error = %v", err)
+	}
+	var eventMap map[string]any
+	if err := json.Unmarshal(eventJSON, &eventMap); err != nil {
+		t.Fatalf("Unmarshal(created) error = %v", err)
+	}
+	eventParams := eventMap["event_params"].(map[string]any)
+	if _, ok := eventParams["objective"]; ok {
+		t.Fatalf("goal analytics serialized objective: %s", eventJSON)
+	}
+	if _, ok := eventParams["token_budget"]; ok {
+		t.Fatalf("goal analytics serialized token_budget: %s", eventJSON)
+	}
+	responseJSON, err := json.Marshal(setResponse.Result)
+	if err != nil {
+		t.Fatalf("Marshal(goal response) error = %v", err)
+	}
+	if strings.Contains(string(responseJSON), "goalId") {
+		t.Fatalf("goal response exposed internal goalId: %s", responseJSON)
+	}
+
+	blocked := GoalBlocked
+	statusRequest := requestWithParams(t, IntID(3), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-goal-analytics", Status: &blocked,
+	})
+	statusRequest.ConnectionID = "conn-goal-analytics"
+	statusResponse := router.Handle(statusRequest)
+	if statusResponse.Error != nil {
+		t.Fatalf("goal status update error: %+v", statusResponse.Error)
+	}
+	statusEvent := waitForCodexGoalEvent(t, analyticsSink, "thread-goal-analytics", telemetry.GoalEventKindStatusChanged)
+	if statusEvent.EventParams.GoalID != createdParams.GoalID ||
+		statusEvent.EventParams.GoalStatus != "blocked" ||
+		statusEvent.EventParams.TurnID != nil ||
+		statusEvent.EventParams.CumulativeTokensAccounted != nil ||
+		statusEvent.EventParams.CumulativeTimeAccountedSeconds != nil {
+		t.Fatalf("status goal event = %#v", statusEvent)
+	}
+
+	clearRequest := requestWithParams(t, IntID(4), MethodThreadGoalClear, GoalClearParams{ThreadID: "thread-goal-analytics"})
+	clearRequest.ConnectionID = "conn-goal-analytics"
+	clearResponse := router.Handle(clearRequest)
+	if clearResponse.Error != nil || !clearResponse.Result.(*GoalClearResponse).Cleared {
+		t.Fatalf("goal clear = %+v", clearResponse)
+	}
+	cleared := waitForCodexGoalEvent(t, analyticsSink, "thread-goal-analytics", telemetry.GoalEventKindCleared)
+	if cleared.EventParams.GoalID != createdParams.GoalID ||
+		cleared.EventParams.GoalStatus != "blocked" ||
+		cleared.EventParams.TurnID != nil {
+		t.Fatalf("cleared goal event = %#v", cleared)
+	}
+}
+
+func TestRuntimeRouterThreadGoalRepairsRolloutOnlyThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: store.Root(),
+		SessionID: "session-rollout-goal",
+		ThreadID:  "thread-rollout-goal",
+		Source:    "cli",
+		CWD:       "D:/repo",
+		Now:       fixedTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendItem(rollout.Item{ID: "u1", Type: "message", Role: "user", Text: "from rollout goal"}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	router.SetNotificationSink(sink)
+
+	objective := "persist goal on rollout-only thread"
+	setGoal := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{
+		ThreadID: "thread-rollout-goal", Objective: &objective,
+	}))
+	if setGoal.Error != nil {
+		t.Fatalf("goal set error: %+v", setGoal.Error)
+	}
+	if !sinkHasMethod(sink, NotificationThreadGoalUpdated) {
+		t.Fatalf("goal update notification missing: %#v", sink.List())
+	}
+	record, err := store.Read("thread-rollout-goal", true, true)
+	if err != nil {
+		t.Fatalf("read repaired thread: %v", err)
+	}
+	if len(record.Items) != 1 || record.Items[0].Text != "from rollout goal" {
+		t.Fatalf("repaired items = %#v", record.Items)
+	}
+
+	reloaded := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	getGoal := reloaded.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-rollout-goal"}))
+	if getGoal.Error != nil || getGoal.Result.(*GoalGetResponse).Goal == nil || getGoal.Result.(*GoalGetResponse).Goal.Objective != objective {
+		t.Fatalf("goal get = %+v", getGoal)
+	}
+	clearGoal := reloaded.Handle(requestWithParams(t, IntID(3), MethodThreadGoalClear, GoalClearParams{ThreadID: "thread-rollout-goal"}))
+	if clearGoal.Error != nil || !clearGoal.Result.(*GoalClearResponse).Cleared {
+		t.Fatalf("goal clear = %+v", clearGoal)
+	}
+}
+
+func TestRuntimeRouterThreadCompactStartNotifies(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Save(&session.Record{
+		ID: "thread-compact",
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact"},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "ok"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-compact", false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-compact"}))
+	if response.Error != nil {
+		t.Fatalf("compact error: %+v", response.Error)
+	}
+	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
+	compacted, ok := notification.Params.(*ContextCompactedNotification)
+	if !ok || compacted.Summary == "" || compacted.ItemCount == 0 {
+		t.Fatalf("notification = %#v", notification.Params)
+	}
+}
+
+func TestRuntimeRouterThreadCompactStartEmitsCompactionAnalyticsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Save(&session.Record{
+		ID:        "thread-compact-analytics",
+		SessionID: "session-compact-analytics",
+		Metadata: session.Metadata{
+			ThreadSource: "user",
+			Originator:   "codex_work_desktop",
+			Extra: map[string]any{
+				"token_status": map[string]any{"activeContextTokens": 120000},
+			},
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact analytics", Metadata: map[string]any{"kind": "user_message"}},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "lots of context that should become smaller"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportStdio,
+	})
+	router.requireThreadStatus().UpsertThread("thread-compact-analytics", false)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{
+			ExperimentalAPI: true,
+		},
+	})
+	initialize.ConnectionID = "conn-compact-analytics"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	request := requestWithParams(t, IntID(2), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-compact-analytics"})
+	request.ConnectionID = "conn-compact-analytics"
+	response := router.Handle(request)
+	if response.Error != nil {
+		t.Fatalf("compact error: %+v", response.Error)
+	}
+	event := waitForCodexCompactionEvent(t, analyticsSink, "thread-compact-analytics")
+	params := event.EventParams
+	if event.EventType != telemetry.CodexCompactionEventType ||
+		params.SessionID != "session-compact-analytics" ||
+		params.TurnID != "" ||
+		params.Trigger != telemetry.CompactionTriggerManual ||
+		params.Reason != telemetry.CompactionReasonUserRequested ||
+		params.Implementation != telemetry.CompactionImplementationResponses ||
+		params.Phase != telemetry.CompactionPhaseStandaloneTurn ||
+		params.Strategy != telemetry.CompactionStrategyMemento ||
+		params.Status != telemetry.CompactionStatusCompleted {
+		t.Fatalf("compaction event = %#v", event)
+	}
+	if params.AppServerClient.ProductClientID != "codex_work_desktop" ||
+		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
+		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
+		params.AppServerClient.RPCTransport != telemetry.AppServerRPCTransportStdio ||
+		params.AppServerClient.ExperimentalAPIEnable == nil || !*params.AppServerClient.ExperimentalAPIEnable {
+		t.Fatalf("app_server_client = %#v", params.AppServerClient)
+	}
+	if params.ThreadSource == nil || *params.ThreadSource != "user" || params.SubagentSource != nil || params.ParentThreadID != nil {
+		t.Fatalf("lineage = thread_source:%#v subagent:%#v parent:%#v", params.ThreadSource, params.SubagentSource, params.ParentThreadID)
+	}
+	if params.CodexErrorKind != nil || params.CodexErrorHTTPStatusCode != nil {
+		t.Fatalf("error fields = %#v/%#v", params.CodexErrorKind, params.CodexErrorHTTPStatusCode)
+	}
+	if params.ActiveContextTokensBefore != 120000 || params.ActiveContextTokensAfter <= 0 || params.ActiveContextTokensAfter >= params.ActiveContextTokensBefore {
+		t.Fatalf("context tokens before/after = %d/%d", params.ActiveContextTokensBefore, params.ActiveContextTokensAfter)
+	}
+	if params.RetainedImageCount != nil || params.CompactionSummaryTokens != nil || params.CachedInputTokens != nil {
+		t.Fatalf("optional compact fields = retained:%#v summary:%#v cached:%#v", params.RetainedImageCount, params.CompactionSummaryTokens, params.CachedInputTokens)
+	}
+	if params.StartedAt == 0 || params.CompletedAt == 0 || params.DurationMS == nil {
+		t.Fatalf("timing fields = %#v", params)
+	}
+}
+
+func TestRuntimeRouterThreadCompactStartRejectsNotLoadedThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Save(&session.Record{
+		ID: "thread-cold-compact",
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact"},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "ok"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-cold-compact"}))
+	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "thread not found: thread-cold-compact" {
+		t.Fatalf("compact response = %+v", response)
+	}
+	record, err := store.Read("thread-cold-compact", true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(record.Items) != 2 || record.Metadata.Extra["compaction_summary"] != nil {
+		t.Fatalf("record was mutated by rejected compact: %+v", record)
+	}
+	if notifications := sink.List(); len(notifications) != 0 {
+		t.Fatalf("notifications = %+v", notifications)
+	}
+}
+
+func TestRuntimeRouterThreadCompactStartUsesRemoteRunner(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Save(&session.Record{
+		ID: "thread-remote-compact",
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact remotely", Metadata: map[string]any{"kind": "user_message"}},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "remote context"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	runner := &recordingCompactRunner{summary: "remote compact summary"}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:  NewRouter(store),
+		CompactRunner: runner,
+	})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-remote-compact", false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-remote-compact"}))
+	if response.Error != nil {
+		t.Fatalf("compact error: %+v", response.Error)
+	}
+	if runner.request == nil || runner.request.ThreadID != "thread-remote-compact" {
+		t.Fatalf("remote request = %#v", runner.request)
+	}
+	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
+	compacted := notification.Params.(*ContextCompactedNotification)
+	if compacted.Summary != "remote compact summary" {
+		t.Fatalf("notification summary = %q", compacted.Summary)
+	}
+	if compacted.Source != string(compact.SourceRemote) || compacted.ResponseID != "resp-compact" || compacted.Model != "gpt-compact" {
+		t.Fatalf("notification metadata = %#v", compacted)
+	}
+	record, err := store.Read("thread-remote-compact", true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_summary"] != "remote compact summary" {
+		t.Fatalf("metadata = %#v", record.Metadata.Extra)
+	}
+	if record.Metadata.Extra["compaction_response_id"] != "resp-compact" || record.Metadata.Extra["compaction_source"] != string(compact.SourceRemote) {
+		t.Fatalf("metadata = %#v", record.Metadata.Extra)
+	}
+}
+
+func TestRuntimeRouterThreadCompactStartRunsHooks(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	cwd := t.TempDir()
+	if err := store.Save(&session.Record{
+		ID: "thread-hook-compact",
+		Metadata: session.Metadata{
+			CWD:   cwd,
+			Model: "gpt-hook",
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact with hooks", Metadata: map[string]any{"kind": "user_message"}},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "ok"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	hooks := NewHookRegistry()
+	pre := hookRunnerMetadata("pre-compact", HookEventPreCompact, "manual", 0)
+	preCommand := hookRunnerOutputCommand(`{"hookSpecificOutput":{"additionalContext":"pre compact context"}}`, "")
+	pre.Command = &preCommand
+	if err := hooks.Add(cwd, pre); err != nil {
+		t.Fatalf("Add pre hook error = %v", err)
+	}
+	post := hookRunnerMetadata("post-compact", HookEventPostCompact, "manual", 1)
+	postCommand := hookRunnerOutputCommand(`{"systemMessage":"post compact ran"}`, "")
+	post.Command = &postCommand
+	if err := hooks.Add(cwd, post); err != nil {
+		t.Fatalf("Add post hook error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Hooks:        hooks,
+		HookRunner:   NewHookRunner(),
+		DefaultCWD:   cwd,
+	})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-hook-compact", false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-hook-compact"}))
+	if response.Error != nil {
+		t.Fatalf("compact error: %+v", response.Error)
+	}
+	record, err := store.Read("thread-hook-compact", true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(record.Items) < 2 || record.Items[0].Text != "pre compact context" {
+		t.Fatalf("compacted items = %#v", record.Items)
+	}
+	notifications := sink.List()
+	if !notificationsContainHook(notifications, HookEventPreCompact) || !notificationsContainHook(notifications, HookEventPostCompact) {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+}
+
+func TestRuntimeRouterPreCompactStoppedEmitsInterruptedCompactionAnalyticsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	cwd := t.TempDir()
+	if err := store.Save(&session.Record{
+		ID:        "thread-pre-compact-stopped",
+		SessionID: "session-pre-compact-stopped",
+		Metadata: session.Metadata{
+			CWD:          cwd,
+			ThreadSource: "user",
+			Extra: map[string]any{
+				"token_status": map[string]any{"activeContextTokens": 42},
+			},
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "please compact with stop", Metadata: map[string]any{"kind": "user_message"}},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "ok"},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	hooks := NewHookRegistry()
+	pre := hookRunnerMetadata("pre-compact-stop", HookEventPreCompact, "manual", 0)
+	preCommand := hookRunnerOutputCommand(`{"continue":false,"stopReason":"policy asked compact to stop"}`, "")
+	pre.Command = &preCommand
+	if err := hooks.Add(cwd, pre); err != nil {
+		t.Fatalf("Add pre hook error = %v", err)
+	}
+	analyticsSink := newRecordingTurnEventSink()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Hooks:                 hooks,
+		HookRunner:            NewHookRunner(),
+		DefaultCWD:            cwd,
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportStdio,
+	})
+	router.requireThreadStatus().UpsertThread("thread-pre-compact-stopped", false)
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-pre-compact-stopped"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	request := requestWithParams(t, IntID(2), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "thread-pre-compact-stopped"})
+	request.ConnectionID = "conn-pre-compact-stopped"
+	response := router.Handle(request)
+	if response.Error == nil || !strings.Contains(response.Error.Message, "PreCompact hook stopped execution") {
+		t.Fatalf("compact response = %+v", response)
+	}
+	event := waitForCodexCompactionEvent(t, analyticsSink, "thread-pre-compact-stopped")
+	params := event.EventParams
+	if params.Status != telemetry.CompactionStatusInterrupted ||
+		params.CodexErrorKind == nil || *params.CodexErrorKind != "turn_aborted" ||
+		params.CodexErrorHTTPStatusCode != nil ||
+		params.Trigger != telemetry.CompactionTriggerManual ||
+		params.Reason != telemetry.CompactionReasonUserRequested ||
+		params.Phase != telemetry.CompactionPhaseStandaloneTurn ||
+		params.ActiveContextTokensBefore != 42 ||
+		params.ActiveContextTokensAfter != 42 {
+		t.Fatalf("compaction analytics event = %#v", event)
+	}
+	record, err := store.Read(session.ThreadID("thread-pre-compact-stopped"), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_summary"] != nil {
+		t.Fatalf("stopped compact mutated metadata = %#v", record.Metadata.Extra)
+	}
+}
+
+func TestRuntimeRouterConversationSummaryUsesThreadStore(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Save(&session.Record{
+		ID:        "thread-summary",
+		SessionID: "thread-summary",
+		Preview:   "preview fallback",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           "/repo",
+			ModelProvider: "openai",
+			Source:        "cli",
+			CLIVersion:    "0.1.0",
+			Git:           map[string]string{"sha": "abc123", "branch": "main", "origin_url": "https://example.test/repo.git"},
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "user asks for a migration plan", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "assistant proposes stage six", CreatedAt: now.Add(time.Second)},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetConversationSummary, ConversationSummaryParams{ConversationID: "thread-summary"}))
+	if response.Error != nil {
+		t.Fatalf("summary error: %+v", response.Error)
+	}
+	summary := response.Result.(*ConversationSummaryResponse).Summary
+	if !strings.Contains(summary, "user asks for a migration plan") || !strings.Contains(summary, "assistant proposes stage six") {
+		t.Fatalf("summary = %q", summary)
+	}
+	data, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal(summary response) error = %v", err)
+	}
+	timestamp := now.UTC().Format("2006-01-02T15:04:05.000Z")
+	for _, want := range []string{
+		`"conversationId":"thread-summary"`,
+		`"preview":"preview fallback"`,
+		`"timestamp":"` + timestamp + `"`,
+		`"updatedAt":"` + timestamp + `"`,
+		`"modelProvider":"openai"`,
+		`"cwd":"/repo"`,
+		`"cliVersion":"0.1.0"`,
+		`"source":"cli"`,
+		`"origin_url":"https://example.test/repo.git"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("summary response JSON missing %s: %s", want, data)
+		}
+	}
+}
+
+func TestRuntimeRouterConversationSummaryRepairsRolloutOnlyThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: store.Root(),
+		SessionID: "session-rollout-summary",
+		ThreadID:  "thread-rollout-summary",
+		Source:    "cli",
+		CWD:       "D:/repo",
+		Now:       fixedTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	for _, item := range []rollout.Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "rollout asks for summary"},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "rollout assistant summary answer"},
+	} {
+		if err := recorder.AppendItem(item); err != nil {
+			t.Fatalf("AppendItem() error = %v", err)
+		}
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetConversationSummary, ConversationSummaryParams{ThreadID: "thread-rollout-summary"}))
+	if response.Error != nil {
+		t.Fatalf("summary error: %+v", response.Error)
+	}
+	summary := response.Result.(*ConversationSummaryResponse).Summary
+	if !strings.Contains(summary, "rollout asks for summary") || !strings.Contains(summary, "rollout assistant summary answer") {
+		t.Fatalf("summary = %q", summary)
+	}
+	if _, err := store.Read("thread-rollout-summary", true, true); err != nil {
+		t.Fatalf("read repaired thread: %v", err)
+	}
+}
+
+func TestRuntimeRouterConversationSummaryReadsRelativeRolloutPath(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:     store.Root(),
+		SessionID:     "session-relative-summary",
+		ThreadID:      "thread-relative-summary",
+		Source:        "cli",
+		CWD:           "/repo",
+		ModelProvider: "openai",
+		CLIVersion:    "0.1.0",
+		Git:           map[string]string{"branch": "main"},
+		Now:           fixedTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	for _, item := range []rollout.Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "relative rollout asks for summary"},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "relative rollout answer"},
+	} {
+		if err := recorder.AppendItem(item); err != nil {
+			t.Fatalf("AppendItem() error = %v", err)
+		}
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	relativePath, err := filepath.Rel(store.Root(), recorder.Path())
+	if err != nil {
+		t.Fatalf("Rel() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetConversationSummary, ConversationSummaryParams{
+		ConversationID: "wrong-thread",
+		RolloutPath:    relativePath,
+	}))
+	if response.Error != nil {
+		t.Fatalf("summary error: %+v", response.Error)
+	}
+	result := response.Result.(*ConversationSummaryResponse)
+	if !strings.Contains(result.Summary, "relative rollout asks for summary") || !strings.Contains(result.Summary, "relative rollout answer") {
+		t.Fatalf("summary = %q", result.Summary)
+	}
+	if result.SummaryData == nil || result.SummaryData.ConversationID != "thread-relative-summary" || result.SummaryData.Path == "" || !filepath.IsAbs(result.SummaryData.Path) {
+		t.Fatalf("summary data = %#v", result.SummaryData)
+	}
+	if result.SummaryData.ModelProvider != "openai" || result.SummaryData.CWD != "/repo" || result.SummaryData.Source != SessionSourceCli || result.SummaryData.GitInfo == nil || result.SummaryData.GitInfo.Branch == nil || *result.SummaryData.GitInfo.Branch != "main" {
+		t.Fatalf("summary data metadata = %#v", result.SummaryData)
+	}
+	if _, err := store.Read("thread-relative-summary", true, true); err != nil {
+		t.Fatalf("read repaired relative rollout thread: %v", err)
+	}
+}
+
+func TestRuntimeRouterConversationSummaryPrefersCompactionSummary(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Save(&session.Record{
+		ID:        "thread-compacted-summary",
+		SessionID: "thread-compacted-summary",
+		Preview:   "preview fallback",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{Extra: map[string]any{
+			"compaction_summary": "persisted compact summary",
+		}},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "older raw history", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetConversationSummary, ConversationSummaryParams{ThreadID: "thread-compacted-summary"}))
+	if response.Error != nil {
+		t.Fatalf("summary error: %+v", response.Error)
+	}
+	if got := response.Result.(*ConversationSummaryResponse).Summary; got != "persisted compact summary" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
+func TestRuntimeRouterThreadLifecycleNotifications(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-a", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	setName := router.Handle(requestWithParams(t, IntID(1), MethodThreadSetName, ThreadSetNameParams{ThreadID: "thread-a", Name: "Renamed"}))
+	if setName.Error != nil {
+		t.Fatalf("set name error: %+v", setName.Error)
+	}
+	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: "thread-a"}))
+	if archive.Error != nil {
+		t.Fatalf("archive error: %+v", archive.Error)
+	}
+	deleted := router.Handle(requestWithParams(t, IntID(3), MethodThreadDelete, ThreadDeleteParams{ThreadID: "thread-a"}))
+	if deleted.Error != nil {
+		t.Fatalf("delete error: %+v", deleted.Error)
+	}
+	if !sinkHasMethod(sink, NotificationThreadNameUpdated) || !sinkHasMethod(sink, NotificationThreadArchived) || !sinkHasMethod(sink, NotificationThreadDeleted) {
+		t.Fatalf("notifications = %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterThreadRollbackEmitsDeprecationNotice(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-a", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+	router.requireThreadStatus().UpsertThread("thread-a", false)
+
+	rollback := router.Handle(requestWithParams(t, IntID(1), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "thread-a",
+		NumTurns: 1,
+	}))
+	if rollback.Error != nil {
+		t.Fatalf("rollback error: %+v", rollback.Error)
+	}
+	notifications := sink.List()
+	if len(notifications) == 0 || notifications[0].Method != NotificationDeprecationNotice {
+		t.Fatalf("notifications = %+v", notifications)
+	}
+	notice, ok := notifications[0].Params.(*DeprecationNoticeNotification)
+	if !ok || notice.Summary != "thread/rollback is deprecated and will be removed soon" {
+		t.Fatalf("notice = %#v", notifications[0].Params)
+	}
+}
+
+func TestRuntimeRouterThreadRollbackRejectsNotLoadedThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-a", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	rollback := router.Handle(requestWithParams(t, IntID(1), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "thread-a",
+		NumTurns: 1,
+	}))
+	if rollback.Error == nil || rollback.Error.Code != -32600 || rollback.Error.Message != "thread not found: thread-a" {
+		t.Fatalf("rollback response = %+v", rollback)
+	}
+	record, err := store.Read("thread-a", true, true)
+	if err != nil {
+		t.Fatalf("read thread: %v", err)
+	}
+	if len(record.Items) != 2 {
+		t.Fatalf("record items were mutated by rejected rollback: %+v", record.Items)
+	}
+	notifications := sink.List()
+	if len(notifications) == 0 || notifications[0].Method != NotificationDeprecationNotice {
+		t.Fatalf("notifications = %+v", notifications)
+	}
+}
+
+func TestRuntimeRouterThreadRollbackSuppressesDeprecationNoticeForCodexTUI(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: "codex-tui", Version: "0.1.0"},
+	})
+	initialize.ConnectionID = "conn-tui"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	rollback := requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "missing-thread",
+		NumTurns: 1,
+	})
+	rollback.ConnectionID = "conn-tui"
+	response := router.Handle(rollback)
+	if response.Error == nil {
+		t.Fatalf("rollback response = %+v, want error", response)
+	}
+	if sinkHasMethod(sink, NotificationDeprecationNotice) {
+		t.Fatalf("notifications = %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterThreadRollbackDeprecationNoticeUsesExactCodexTUIName(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo: ClientInfo{Name: " codex-tui ", Version: "0.1.0"},
+	})
+	initialize.ConnectionID = "conn-padded-tui"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+
+	rollback := requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "missing-thread",
+		NumTurns: 1,
+	})
+	rollback.ConnectionID = "conn-padded-tui"
+	response := router.Handle(rollback)
+	if response.Error == nil {
+		t.Fatalf("rollback response = %+v, want error", response)
+	}
+	if !sinkHasMethod(sink, NotificationDeprecationNotice) {
+		t.Fatalf("notifications = %+v", sink.List())
+	}
+}
+
+func TestRuntimeRouterThreadLifecycleSubtreeNotifications(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	createRecord(t, store, "parent", now)
+	createRecord(t, store, "child", now)
+	createRecord(t, store, "grandchild", now)
+	child, err := store.Read("child", true, true)
+	if err != nil {
+		t.Fatalf("read child: %v", err)
+	}
+	child.ParentThreadID = "parent"
+	if err := store.Save(child); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+	grandchild, err := store.Read("grandchild", true, true)
+	if err != nil {
+		t.Fatalf("read grandchild: %v", err)
+	}
+	grandchild.ParentThreadID = "child"
+	if err := store.Save(grandchild); err != nil {
+		t.Fatalf("save grandchild: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	archive := router.Handle(requestWithParams(t, IntID(1), MethodThreadArchive, ThreadArchiveParams{ThreadID: "parent"}))
+	if archive.Error != nil {
+		t.Fatalf("archive error: %+v", archive.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadArchived); !equalStrings(got, []string{"parent", "grandchild", "child"}) {
+		t.Fatalf("archived ids = %#v", got)
+	}
+	for _, id := range []session.ThreadID{"parent", "child", "grandchild"} {
+		record, err := store.Read(id, true, false)
+		if err != nil {
+			t.Fatalf("read archived %s: %v", id, err)
+		}
+		if !record.Archived {
+			t.Fatalf("%s was not archived", id)
+		}
+	}
+
+	delete := router.Handle(requestWithParams(t, IntID(2), MethodThreadDelete, ThreadDeleteParams{ThreadID: "parent"}))
+	if delete.Error != nil {
+		t.Fatalf("delete error: %+v", delete.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadDeleted); !equalStrings(got, []string{"grandchild", "child", "parent"}) {
+		t.Fatalf("deleted ids = %#v", got)
+	}
+}
+
+func TestRuntimeRouterThreadLifecycleUsesSpawnGraphDescendants(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	createRecord(t, store, "parent", now)
+	createRecord(t, store, "child", now)
+	createRecord(t, store, "grandchild", now)
+	graph := agent.NewMemoryStore()
+	if err := graph.UpsertThreadSpawnEdge("parent", "child", agent.ThreadSpawnEdgeClosed); err != nil {
+		t.Fatalf("upsert child edge: %v", err)
+	}
+	if err := graph.UpsertThreadSpawnEdge("child", "grandchild", agent.ThreadSpawnEdgeOpen); err != nil {
+		t.Fatalf("upsert grandchild edge: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), SpawnGraph: graph})
+	router.SetNotificationSink(sink)
+
+	archive := router.Handle(requestWithParams(t, IntID(1), MethodThreadArchive, ThreadArchiveParams{ThreadID: "parent"}))
+	if archive.Error != nil {
+		t.Fatalf("archive error: %+v", archive.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadArchived); !equalStrings(got, []string{"parent", "grandchild", "child"}) {
+		t.Fatalf("archived ids = %#v", got)
+	}
+	for _, id := range []session.ThreadID{"parent", "child", "grandchild"} {
+		record, err := store.Read(id, true, false)
+		if err != nil {
+			t.Fatalf("read archived %s: %v", id, err)
+		}
+		if !record.Archived {
+			t.Fatalf("%s was not archived", id)
+		}
+	}
+
+	delete := router.Handle(requestWithParams(t, IntID(2), MethodThreadDelete, ThreadDeleteParams{ThreadID: "parent"}))
+	if delete.Error != nil {
+		t.Fatalf("delete error: %+v", delete.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadDeleted); !equalStrings(got, []string{"grandchild", "child", "parent"}) {
+		t.Fatalf("deleted ids = %#v", got)
+	}
+}
+
+func TestRuntimeRouterThreadArchiveSkipsSpawnedDescendantWhenRolloutArchiveFails(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	now := fixedTime()
+	for _, id := range []session.ThreadID{"parent", "child", "grandchild"} {
+		createRecord(t, store, id, now)
+		record, err := store.Read(id, true, true)
+		if err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		if err := threadRouter.createThreadRollout(record, now); err != nil {
+			t.Fatalf("create rollout %s: %v", id, err)
+		}
+	}
+	graph := agent.NewMemoryStore()
+	if err := graph.UpsertThreadSpawnEdge("parent", "child", agent.ThreadSpawnEdgeClosed); err != nil {
+		t.Fatalf("upsert child edge: %v", err)
+	}
+	if err := graph.UpsertThreadSpawnEdge("child", "grandchild", agent.ThreadSpawnEdgeOpen); err != nil {
+		t.Fatalf("upsert grandchild edge: %v", err)
+	}
+	childPath, err := rollout.FindThreadPath(store.Root(), "child", false)
+	if err != nil {
+		t.Fatalf("child rollout path: %v", err)
+	}
+	conflictPath := filepath.Join(store.Root(), rollout.ArchivedSessionsSubdir, filepath.Base(childPath))
+	if err := os.MkdirAll(conflictPath, 0o755); err != nil {
+		t.Fatalf("create archive conflict: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, SpawnGraph: graph})
+	router.SetNotificationSink(sink)
+
+	archive := router.Handle(requestWithParams(t, IntID(1), MethodThreadArchive, ThreadArchiveParams{ThreadID: "parent"}))
+	if archive.Error != nil {
+		t.Fatalf("archive error: %+v", archive.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadArchived); !equalStrings(got, []string{"parent", "grandchild"}) {
+		t.Fatalf("archived ids = %#v", got)
+	}
+	for _, id := range []session.ThreadID{"parent", "grandchild"} {
+		record, err := store.Read(id, true, false)
+		if err != nil {
+			t.Fatalf("read archived %s: %v", id, err)
+		}
+		if !record.Archived {
+			t.Fatalf("%s was not archived", id)
+		}
+	}
+	child, err := store.Read("child", true, false)
+	if err != nil {
+		t.Fatalf("read child: %v", err)
+	}
+	if child.Archived {
+		t.Fatalf("child should remain active after rollout archive failure")
+	}
+	if _, err := os.Stat(childPath); err != nil {
+		t.Fatalf("child rollout should remain active: %v", err)
+	}
+	if info, err := os.Stat(conflictPath); err != nil || !info.IsDir() {
+		t.Fatalf("archive conflict path = info:%+v err:%v, want directory", info, err)
+	}
+}
+
+func TestRuntimeRouterThreadDeleteAllowsMissingRootWithSpawnGraphDescendants(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "child", fixedTime())
+	graph := agent.NewMemoryStore()
+	if err := graph.UpsertThreadSpawnEdge("missing-parent", "child", agent.ThreadSpawnEdgeOpen); err != nil {
+		t.Fatalf("upsert edge: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), SpawnGraph: graph})
+	router.SetNotificationSink(sink)
+
+	deleted := router.Handle(requestWithParams(t, IntID(1), MethodThreadDelete, ThreadDeleteParams{ThreadID: "missing-parent"}))
+	if deleted.Error != nil {
+		t.Fatalf("delete error: %+v", deleted.Error)
+	}
+	if got := notificationThreadIDs(sink, NotificationThreadDeleted); !equalStrings(got, []string{"child", "missing-parent"}) {
+		t.Fatalf("deleted ids = %#v", got)
+	}
+	if _, err := store.Read("child", true, false); !errors.Is(err, session.ErrThreadNotFound) {
+		t.Fatalf("child read after delete error = %v, want ErrThreadNotFound", err)
+	}
+}
+
+func TestRuntimeRouterThreadDeleteMissingRootWithoutDescendantsReturnsInvalidRequest(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(session.NewStore(t.TempDir()))})
+
+	deleted := router.Handle(requestWithParams(t, IntID(1), MethodThreadDelete, ThreadDeleteParams{ThreadID: "missing-parent"}))
+	if deleted.Error == nil || deleted.Error.Code != -32600 || deleted.Error.Message != "thread not found: missing-parent" {
+		t.Fatalf("delete missing root error = %+v", deleted.Error)
+	}
+}
+
+func TestRuntimeRouterThreadForkStartedNotificationOmitsCopiedTurns(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-a", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	fork := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: "thread-a"}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	notifications := sink.List()
+	if len(notifications) == 0 {
+		t.Fatal("missing notifications")
+	}
+	var started *ThreadStartedNotification
+	for _, notification := range notifications {
+		if notification.Method == NotificationThreadStarted {
+			if payload, ok := notification.Params.(*ThreadStartedNotification); ok {
+				started = payload
+			}
+		}
+	}
+	if started == nil || started.Thread == nil || started.Thread.ID != forked.ID {
+		t.Fatalf("thread/started notification = %+v", notifications)
+	}
+	if forked.Name != nil || started.Thread.Name != nil {
+		t.Fatalf("fork names = response:%+v started:%+v, want nil", forked.Name, started.Thread.Name)
+	}
+	if len(forked.Turns) == 0 {
+		t.Fatalf("fork response should include copied turns: %+v", forked)
+	}
+	if len(started.Thread.Turns) != 0 {
+		t.Fatalf("thread/started copied turns = %+v", started.Thread.Turns)
+	}
+	if started.Thread.Path == nil || !strings.HasSuffix(*started.Thread.Path, ".jsonl") {
+		t.Fatalf("thread/started path = %+v, want rollout jsonl path", started.Thread.Path)
+	}
+}
+
+func TestRuntimeRouterThreadForkRestoredTokenUsagePrecedesStarted(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	createRecord(t, store, "thread-a", fixedTime())
+	record, err := store.Read("thread-a", true, true)
+	if err != nil {
+		t.Fatalf("Read source error: %v", err)
+	}
+	record.Metadata.Extra = map[string]any{
+		"token_usage_turn_id": "turn-2",
+		"token_usage_info": map[string]any{
+			"total_token_usage": map[string]any{
+				"input_tokens":            float64(180),
+				"cached_input_tokens":     float64(40),
+				"output_tokens":           float64(50),
+				"reasoning_output_tokens": float64(15),
+				"total_tokens":            float64(230),
+			},
+			"last_token_usage": map[string]any{
+				"input_tokens":            float64(90),
+				"cached_input_tokens":     float64(30),
+				"output_tokens":           float64(40),
+				"reasoning_output_tokens": float64(12),
+				"total_tokens":            float64(130),
+			},
+			"model_context_window": float64(200000),
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save source error: %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	fork := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: "thread-a"}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	usageIndex, startedIndex := -1, -1
+	for i, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationThreadTokenUsageUpdated:
+			payload, _ := notification.Params.(*ThreadTokenUsageUpdatedNotification)
+			if payload != nil && payload.ThreadID == forked.ID && payload.TurnID == "turn-2" {
+				usageIndex = i
+			}
+		case NotificationThreadStarted:
+			payload, _ := notification.Params.(*ThreadStartedNotification)
+			if payload != nil && payload.Thread != nil && payload.Thread.ID == forked.ID {
+				startedIndex = i
+			}
+		}
+	}
+	if usageIndex < 0 || startedIndex < 0 || usageIndex > startedIndex {
+		t.Fatalf("notification order usage=%d started=%d notifications=%+v", usageIndex, startedIndex, sink.List())
+	}
+}
+
+func TestRuntimeRouterThreadForkActiveTurnAddsInterruptedMarker(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime().Add(10 * time.Second)
+	startedAt := now.Add(-2 * time.Second)
+	createRecord(t, store, "thread-active-fork", fixedTime())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	if err := router.registerActiveRuntimeTurn("thread-active-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
+		ThreadID: "thread-active-fork",
+		Prompt:   "active prompt",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: "thread-active-fork"}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if forked == nil {
+		t.Fatal("forked thread is nil")
+	}
+	if forked.Source != SessionSourceCli {
+		t.Fatalf("fork source = %q", forked.Source)
+	}
+	if forked.Name != nil {
+		t.Fatalf("active fork name = %+v, want nil", forked.Name)
+	}
+	if forked.Status.Type != "idle" {
+		t.Fatalf("fork status = %#v", forked.Status)
+	}
+	activeTurn := turnByID(forked.Turns, "turn-active")
+	if activeTurn == nil || activeTurn.Status != TurnStatusInterrupted {
+		t.Fatalf("active turn = %+v in %+v", activeTurn, forked.Turns)
+	}
+	if !turnHasItemText(activeTurn, "active prompt") || !turnHasItemText(activeTurn, "<turn_aborted>") {
+		t.Fatalf("active turn items = %+v", activeTurn.Items)
+	}
+
+	source, err := store.Read("thread-active-fork", true, true)
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if sessionItemByID(source.Items, runtimeUserPromptSessionItemID("turn-active")) != nil || sessionItemByID(source.Items, "turn-aborted-turn-active") != nil {
+		t.Fatalf("source was mutated with active fork items: %+v", source.Items)
+	}
+	forkRecord, err := store.Read(session.ThreadID(forked.ID), true, true)
+	if err != nil {
+		t.Fatalf("read fork: %v", err)
+	}
+	if forkRecord.Title != "" {
+		t.Fatalf("active fork record title = %q, want empty", forkRecord.Title)
+	}
+	if sessionItemByID(forkRecord.Items, runtimeUserPromptSessionItemID("turn-active")) == nil || sessionItemByID(forkRecord.Items, "turn-aborted-turn-active") == nil {
+		t.Fatalf("fork record items = %+v", forkRecord.Items)
+	}
+	rolloutRecord := rolloutRecordForThread(t, store, forked.ID)
+	rolloutActive := turnByID(BuildThread(rolloutRecord, "", true).Turns, "turn-active")
+	if rolloutActive == nil || rolloutActive.Status != TurnStatusInterrupted || !turnHasItemText(rolloutActive, "<turn_aborted>") {
+		t.Fatalf("rollout active turn = %+v", rolloutActive)
+	}
+}
+
+func TestRuntimeRouterEphemeralForkRejectsArchivedSourceByIDAndPath(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "archive me",
+	}))
+	if start.Error != nil {
+		t.Fatalf("start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}))
+	if archive.Error != nil {
+		t.Fatalf("archive error: %+v", archive.Error)
+	}
+	archivedPath, err := rollout.FindThreadPath(store.Root(), threadID, true)
+	if err != nil {
+		t.Fatalf("archived rollout path error: %v", err)
+	}
+	want := "session " + threadID + " is archived. Run `codex unarchive " + threadID + "` to unarchive it first."
+	assertArchived := func(t *testing.T, response *Response) {
+		t.Helper()
+		if response.Error == nil || response.Error.Code != -32600 {
+			t.Fatalf("response = %+v", response)
+		}
+		if response.Error.Message != want {
+			t.Fatalf("error = %q, want %q", response.Error.Message, want)
+		}
+	}
+
+	forkByID := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{
+		ThreadID:  threadID,
+		Ephemeral: true,
+	}))
+	assertArchived(t, forkByID)
+
+	forkByPath := router.Handle(requestWithParams(t, IntID(4), MethodThreadFork, ThreadForkParams{
+		ThreadID:  "ignored-thread-id",
+		Path:      &archivedPath,
+		Ephemeral: true,
+	}))
+	assertArchived(t, forkByPath)
+}
+
+func TestRuntimeRouterNotifyRestoredTokenUsageFromRecord(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	record := &session.Record{
+		ID:        "thread-a",
+		SessionID: "thread-a",
+		CreatedAt: fixedTime(),
+		UpdatedAt: fixedTime(),
+		RecencyAt: fixedTime(),
+		Metadata: session.Metadata{
+			Extra: map[string]any{
+				"token_usage_turn_id": "turn-2",
+				"token_usage_info": map[string]any{
+					"total_token_usage": map[string]any{
+						"input_tokens":            float64(180),
+						"cached_input_tokens":     float64(40),
+						"output_tokens":           float64(50),
+						"reasoning_output_tokens": float64(15),
+						"total_tokens":            float64(230),
+					},
+					"last_token_usage": map[string]any{
+						"input_tokens":            float64(90),
+						"cached_input_tokens":     float64(30),
+						"output_tokens":           float64(40),
+						"reasoning_output_tokens": float64(12),
+						"total_tokens":            float64(130),
+					},
+					"model_context_window": float64(200000),
+				},
+			},
+			RolloutTurns: []session.TurnSnapshot{
+				{ID: "turn-1", Status: string(TurnStatusCompleted)},
+				{ID: "turn-2", Status: string(TurnStatusInterrupted)},
+			},
+		},
+		Items: []session.Item{
+			{ID: "item-1", Type: "message", Role: "user", Text: "first", Metadata: map[string]any{"turnId": "turn-1"}, CreatedAt: fixedTime()},
+			{ID: "item-2", Type: "agent_message", Role: "assistant", Text: "second", Metadata: map[string]any{"turnId": "turn-2"}, CreatedAt: fixedTime().Add(time.Second)},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.SetNotificationSink(sink)
+
+	router.notifyRestoredTokenUsage(&ThreadResumeResponse{Thread: BuildThread(record, "", true)})
+
+	usage := waitForTokenUsageUpdated(t, sink, "turn-2")
+	if usage.TokenUsage.Total == nil || usage.TokenUsage.Total.TotalTokens != 230 || usage.TokenUsage.Last == nil || usage.TokenUsage.Last.TotalTokens != 130 {
+		t.Fatalf("usage = %+v", usage.TokenUsage)
+	}
+	if usage.TokenUsage.ModelContextWindow == nil || *usage.TokenUsage.ModelContextWindow != 200000 {
+		t.Fatalf("modelContextWindow = %#v", usage.TokenUsage.ModelContextWindow)
+	}
+
+	metadataOnlySink := NewNotificationBuffer()
+	metadataOnlyRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	metadataOnlyRouter.SetNotificationSink(metadataOnlySink)
+	metadataOnlyRouter.notifyRestoredTokenUsage(&ThreadResumeResponse{Thread: BuildThread(record, "", false)})
+	if notifications := metadataOnlySink.List(); len(notifications) != 0 {
+		t.Fatalf("metadata-only resume token usage notifications = %+v, want none", notifications)
+	}
+
+	record.Metadata.Extra["token_usage_turn_id"] = "stale-tail-turn"
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save(stale token usage turn) error = %v", err)
+	}
+	staleSink := NewNotificationBuffer()
+	staleRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	staleRouter.SetNotificationSink(staleSink)
+	staleRouter.notifyRestoredTokenUsage(&ThreadResumeResponse{Thread: BuildThread(record, "", true)})
+	staleNotifications := staleSink.List()
+	if len(staleNotifications) != 1 || staleNotifications[0].Method != NotificationThreadTokenUsageUpdated {
+		t.Fatalf("stale token usage notifications = %+v", staleNotifications)
+	}
+	staleUsage, ok := staleNotifications[0].Params.(*ThreadTokenUsageUpdatedNotification)
+	if !ok || staleUsage == nil || staleUsage.TurnID != "turn-1" {
+		t.Fatalf("stale token usage payload = %+v, want fallback to completed turn-1", staleNotifications[0].Params)
+	}
+}
+
+func TestRuntimeRouterThreadTurnsListMergesActiveTurn(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := "thread-active-turns"
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Title:     "active",
+		Preview:   "active",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			ModelProvider: "openai",
+			Source:        "cli",
+			HistoryMode:   "paginated",
+		},
+		Items: []session.Item{},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	turnStart := router.Handle(requestWithParams(t, IntID(1), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "live prompt",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	list := router.Handle(requestWithParams(t, IntID(2), MethodThreadTurnsList, ThreadTurnsListParams{
+		ThreadID:      threadID,
+		ItemsView:     TurnItemsFull,
+		SortDirection: SortAsc,
+	}))
+	if list.Error != nil {
+		t.Fatalf("turns list error: %+v", list.Error)
+	}
+	page := list.Result.(*TurnsPage)
+	if len(page.Data) != 1 {
+		t.Fatalf("turns page = %+v", page.Data)
+	}
+	activeTurn := page.Data[0]
+	if activeTurn.ID != turnID || activeTurn.Status != TurnStatusInProgress || activeTurn.ItemsView != TurnItemsFull {
+		t.Fatalf("active turn = %+v", activeTurn)
+	}
+	if len(activeTurn.Items) != 1 || normalizeThreadItemType(activeTurn.Items[0].Type) != "userMessage" || activeTurn.Items[0].Text != "live prompt" {
+		t.Fatalf("active turn items = %+v", activeTurn.Items)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterThreadResumeDefersUpdatedAtUntilTurnStartLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	old := fixedTime()
+	threadID := "thread-resume-defers-updated"
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Title:     "resume defers updated",
+		Preview:   "seed",
+		CreatedAt: old,
+		UpdatedAt: old,
+		RecencyAt: old,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			ModelProvider: "openai",
+			Source:        "cli",
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+		Items: []session.Item{{
+			ID:        "seed",
+			Type:      "message",
+			Role:      "user",
+			Text:      "seed",
+			CreatedAt: old,
+			Metadata:  map[string]any{"turnId": "turn-seed"},
+		}},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	resume := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	resumed := resume.Result.(*ThreadResumeResponse).Thread
+	if resumed.UpdatedAt != old.Unix() || resumed.RecencyAt == nil || *resumed.RecencyAt != old.Unix() {
+		t.Fatalf("resumed timestamps = updated:%d recency:%v, want %d", resumed.UpdatedAt, resumed.RecencyAt, old.Unix())
+	}
+	afterResume, err := store.Read(session.ThreadID(threadID), true, false)
+	if err != nil {
+		t.Fatalf("Read(after resume) error = %v", err)
+	}
+	if !afterResume.UpdatedAt.Equal(old) || !afterResume.RecencyAt.Equal(old) {
+		t.Fatalf("after resume record timestamps = updated:%s recency:%s, want %s", afterResume.UpdatedAt, afterResume.RecencyAt, old)
+	}
+
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "refresh recency",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn/start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+	afterTurnStart, err := store.Read(session.ThreadID(threadID), true, false)
+	if err != nil {
+		t.Fatalf("Read(after turn/start) error = %v", err)
+	}
+	if !afterTurnStart.UpdatedAt.After(old) || !afterTurnStart.RecencyAt.After(old) {
+		t.Fatalf("after turn/start timestamps = updated:%s recency:%s, want after %s", afterTurnStart.UpdatedAt, afterTurnStart.RecencyAt, old)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(3), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+func TestRuntimeRouterThreadResumeReplaysPendingServerRequestApprovalLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := "thread-pending-approval"
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Preview:   "seed",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			ModelProvider: "openai",
+			Source:        "cli",
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+		Items: []session.Item{{
+			ID:        "seed",
+			Type:      "message",
+			Role:      "user",
+			Text:      "seed",
+			CreatedAt: now,
+			Metadata:  map[string]any{"turnId": "turn-seed"},
+		}},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 2)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		ServerRequests: broker,
+		ThreadStatus:   NewThreadStatusManager(),
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+	if err := router.registerActiveRuntimeTurn(threadID, "turn-running", func() {}, now.UnixMilli(), &turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "needs approval",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		var response CommandExecutionRequestApprovalResponse
+		command := "echo ok"
+		done <- broker.Request(ctx, ServerRequestCommandExecutionApproval, &CommandExecutionRequestApprovalParams{
+			ThreadID:    threadID,
+			TurnID:      "turn-running",
+			ItemID:      "call-1",
+			StartedAtMS: uint64(now.UnixMilli()),
+			Command:     &command,
+		}, &response)
+	}()
+
+	readPending := func(label string) *ServerRequest {
+		t.Helper()
+		select {
+		case request := <-requests:
+			return request
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %s server request", label)
+			return nil
+		}
+	}
+	original := readPending("original")
+	if original.Method != ServerRequestCommandExecutionApproval || serverRequestThreadID(original) != threadID {
+		t.Fatalf("original request = %+v", original)
+	}
+
+	resume := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	replayed := readPending("replayed")
+	if !reflect.DeepEqual(replayed, original) {
+		t.Fatalf("replayed request = %+v, want %+v", replayed, original)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("broker request error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for broker request to exit")
+	}
+}
+
+func TestRuntimeRouterThreadTurnsListPreservesRolloutSnapshotsAfterRepair(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	path := filepath.Join(store.Root(), rollout.SessionsSubdir, "2026", "06", "29", "rollout-2026-06-29T01-02-03-thread-rollout-events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-rollout-events","timestamp":"2026-06-29T01:02:03Z","source":"cli","model_provider":"openai","cwd":"/repo"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":1700000000}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"user_message","message":"hello repaired rollout"}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted","completed_at":1700000005,"duration_ms":5000}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		response := router.Handle(requestWithParams(t, IntID(int64(attempt)), MethodThreadTurnsList, ThreadTurnsListParams{
+			ThreadID:      "thread-rollout-events",
+			SortDirection: SortAsc,
+			ItemsView:     TurnItemsFull,
+		}))
+		if response.Error != nil {
+			t.Fatalf("turns attempt %d error: %+v", attempt, response.Error)
+		}
+		page := response.Result.(*TurnsPage)
+		if len(page.Data) != 1 {
+			t.Fatalf("turns attempt %d = %+v", attempt, page.Data)
+		}
+		turn := page.Data[0]
+		if turn.ID != "turn-1" || turn.Status != TurnStatusInterrupted || len(turn.Items) != 1 || turn.Items[0].Text != "hello repaired rollout" {
+			t.Fatalf("turn attempt %d = %+v", attempt, turn)
+		}
+		if turn.StartedAt == nil || *turn.StartedAt != 1700000000 || turn.CompletedAt == nil || *turn.CompletedAt != 1700000005 || turn.DurationMS == nil || *turn.DurationMS != 5000 {
+			t.Fatalf("turn attempt %d timing = %+v", attempt, turn)
+		}
+	}
+}
+
+func TestRuntimeRouterTurnInterruptCancelsActiveRuntimeAndRejectsConcurrentStart(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello blocking runtime",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hold",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	concurrentStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "second",
+	}))
+	if concurrentStart.Error == nil || concurrentStart.Error.Code != -32009 {
+		t.Fatalf("expected active thread conflict, got %+v", concurrentStart.Error)
+	}
+
+	interrupt := router.Handle(requestWithParams(t, IntID(4), MethodTurnInterrupt, turn.TurnInterruptParams{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	}))
+	if interrupt.Error != nil {
+		t.Fatalf("interrupt error: %+v", interrupt.Error)
+	}
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+	if completed.ThreadID != threadID {
+		t.Fatalf("completed thread id = %q, want %q", completed.ThreadID, threadID)
+	}
+	if got := router.services.ThreadStatus.LoadedStatusForThread(threadID); got.Type != "idle" {
+		t.Fatalf("thread status = %#v", got)
+	}
+}
+
+func TestRuntimeRouterTurnFailureClearsActiveStateAndAllowsNextTurn(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := &failThenOKRuntimeAgent{}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello failing runtime",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	failedStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "fail once",
+	}))
+	if failedStart.Error != nil {
+		t.Fatalf("failed turn start error: %+v", failedStart.Error)
+	}
+	failedTurnID := failedStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, failedTurnID, TurnStatusFailed)
+	if got := router.services.ThreadStatus.LoadedStatusForThread(threadID); got.Type != "systemError" {
+		t.Fatalf("thread status after failure = %#v", got)
+	}
+	failedRead := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: threadID}))
+	if failedRead.Error != nil {
+		t.Fatalf("failed thread read error: %+v", failedRead.Error)
+	}
+	if got := failedRead.Result.(*ThreadReadResponse).Thread.Status.Type; got != "systemError" {
+		t.Fatalf("thread/read status after failure = %q", got)
+	}
+
+	nextStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "recover",
+	}))
+	if nextStart.Error != nil {
+		t.Fatalf("next turn start error: %+v", nextStart.Error)
+	}
+	nextTurnID := nextStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, nextTurnID, TurnStatusCompleted)
+	if got := router.services.ThreadStatus.LoadedStatusForThread(threadID); got.Type != "idle" {
+		t.Fatalf("thread status after recovery = %#v", got)
+	}
+	recoveredRead := router.Handle(requestWithParams(t, IntID(5), MethodThreadRead, ThreadReadParams{ThreadID: threadID}))
+	if recoveredRead.Error != nil {
+		t.Fatalf("recovered thread read error: %+v", recoveredRead.Error)
+	}
+	if got := recoveredRead.Result.(*ThreadReadResponse).Thread.Status.Type; got != "idle" {
+		t.Fatalf("thread/read status after recovery = %q", got)
+	}
+}
+
+func TestRuntimeRouterThreadStatusChangedEmitsActiveThenIdle(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("done")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello status",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "collect status updates",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	statuses := threadStatusChangedStatuses(sink, threadID)
+	if len(statuses) < 2 {
+		t.Fatalf("thread/status/changed statuses = %#v", statuses)
+	}
+	sawActive := false
+	sawIdleAfterActive := false
+	for _, status := range statuses {
+		if status.Type == ActiveStatus().Type {
+			sawActive = true
+			continue
+		}
+		if sawActive && status.Type == IdleStatus().Type {
+			sawIdleAfterActive = true
+			break
+		}
+	}
+	if !sawActive || !sawIdleAfterActive {
+		t.Fatalf("thread/status/changed statuses = %#v, want active followed by idle", statuses)
+	}
+}
+
+func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.metadata","metadata":{"model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"category":"cyber"},"safety_buffering":{"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}}`,
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"hello "}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"stream"}`,
+			`{"type":"response.output_item.added","item":{"id":"call-1","type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":""}}`,
+			`{"type":"response.custom_tool_call_input.delta","item_id":"call-1","call_id":"call-1","delta":"*** Begin Patch\n*** Add File: streamed.txt\n+streamed\n*** End Patch"}`,
+			`{"type":"response.output_item.added","item":{"id":"reasoning-1","type":"reasoning","summary":[],"content":[],"encrypted_content":null}}`,
+			`{"type":"response.reasoning_summary_text.delta","summary_index":0,"delta":"thinking "}`,
+			`{"type":"response.reasoning_summary_part.added","summary_index":1}`,
+			`{"type":"response.reasoning_text.delta","content_index":0,"delta":"raw thought"}`,
+			`{"type":"response.output_item.done","item":{"id":"reasoning-1","type":"reasoning","summary":[{"type":"summary_text","text":"thinking done"}],"content":[{"type":"reasoning_text","text":"raw thought"}],"encrypted_content":null}}`,
+			`{"type":"response.plan.delta","item_id":"plan-1","delta":"- inspect stream notifications\n"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"hello stream"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	agent := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:                   t.TempDir(),
+		Prompt:                "hello streaming runtime",
+		ExperimentalRawEvents: true,
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello streaming runtime",
+		Model:    "gpt-test",
+		Config: map[string]any{
+			"features": map[string]any{"apply_patch_streaming_events": true},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	messageStarted := waitForItemStarted(t, sink, "msg-1")
+	if messageStarted.Item["responseId"] != "resp-1" {
+		t.Fatalf("message started response id = %#v", messageStarted.Item)
+	}
+	waitForAgentDelta(t, sink, turnID, "hello ")
+	waitForAgentDelta(t, sink, turnID, "stream")
+	waitForFileChangePatchUpdated(t, sink, turnID, "streamed.txt")
+	reasoningSummary := waitForReasoningSummaryDelta(t, sink, turnID, "thinking ")
+	if reasoningSummary.ItemID != "reasoning-1" || reasoningSummary.SummaryIndex != 0 {
+		t.Fatalf("reasoning summary delta = %+v", reasoningSummary)
+	}
+	reasoningPart := waitForReasoningPartAdded(t, sink, turnID, "reasoning-1")
+	if reasoningPart.SummaryIndex != 1 {
+		t.Fatalf("reasoning summary part = %+v", reasoningPart)
+	}
+	reasoningText := waitForReasoningTextDelta(t, sink, turnID, "raw thought")
+	if reasoningText.ItemID != "reasoning-1" || reasoningText.ContentIndex != 0 {
+		t.Fatalf("reasoning text delta = %+v", reasoningText)
+	}
+	planDelta := waitForPlanDelta(t, sink, turnID, "- inspect stream notifications\n")
+	if planDelta.ItemID != "plan-1" {
+		t.Fatalf("plan delta = %+v", planDelta)
+	}
+	rawReasoning := waitForRawResponseItemCompleted(t, sink, turnID, "reasoning-1")
+	if rawReasoning["type"] != "reasoning" {
+		t.Fatalf("raw reasoning item = %#v", rawReasoning)
+	}
+	rawMessage := waitForRawResponseItemCompleted(t, sink, turnID, "msg-1")
+	if rawMessage["type"] != "message" {
+		t.Fatalf("raw message item = %#v", rawMessage)
+	}
+	rerouted := waitForModelRerouted(t, sink, turnID)
+	if rerouted.FromModel != "gpt-test" || rerouted.ToModel != "gpt-safe" || rerouted.Reason != string(ModelRerouteReasonHighRiskCyberActivity) {
+		t.Fatalf("model/rerouted = %+v", rerouted)
+	}
+	verification := waitForModelVerification(t, sink, turnID)
+	if len(verification.Verifications) != 1 || verification.Verifications[0] != ModelVerificationTrustedAccessForCyber {
+		t.Fatalf("model/verification = %+v", verification)
+	}
+	if moderation := waitForTurnModerationMetadata(t, sink, turnID); moderation.Metadata == nil {
+		t.Fatalf("turn/moderationMetadata = %+v", moderation)
+	}
+	usage := waitForTokenUsageUpdated(t, sink, turnID)
+	if usage.TokenUsage.InputTokens != 1 || usage.TokenUsage.OutputTokens != 2 || usage.TokenUsage.TotalTokens != 3 {
+		t.Fatalf("usage = %+v", usage.TokenUsage)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	assertNoModelSafetyBufferingNotification(t, sink, turnID)
+}
+
+func TestRuntimeRouterResponsesStreamingSkipsApplyPatchPatchUpdatedWithoutFeatureLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-no-patch-stream"}}`,
+			`{"type":"response.output_item.added","item":{"id":"call-no-stream","type":"custom_tool_call","call_id":"call-no-stream","name":"apply_patch","input":""}}`,
+			`{"type":"response.custom_tool_call_input.delta","item_id":"call-no-stream","call_id":"call-no-stream","delta":"*** Begin Patch\n*** Add File: no_stream.txt\n+no stream\n*** End Patch"}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-no-stream","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-no-stream","delta":"done"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-no-stream","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-no-patch-stream","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	agent := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello no patch stream",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "apply patch without feature",
+		Model:    "gpt-test",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationFileChangePatchUpdated {
+			t.Fatalf("patchUpdated emitted without feature: %+v", notification.Params)
+		}
+	}
+}
+
+func TestRuntimeRouterResponsesStreamingSuppressesRawResponseItemsByDefault(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-default-raw"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-default-raw","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-default-raw","delta":"hidden raw"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-default-raw","type":"message","role":"assistant","content":[{"type":"output_text","text":"hidden raw"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-default-raw","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	agent := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "hello default raw suppression",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "hello default raw suppression",
+		Model:    "gpt-test",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationRawResponseItemCompleted {
+			t.Fatalf("unexpected rawResponseItem/completed notification by default: %+v", notification.Params)
+		}
+	}
+}
+
+func TestRuntimeRouterPlanModeStreamsProposedPlanItem(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	fullMessage := "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-plan"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-plan","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-plan","delta":"Intro\n<proposed"}`,
+			`{"type":"response.output_text.delta","item_id":"msg-plan","delta":"_plan>\n- Step 1\n"}`,
+			`{"type":"response.output_text.delta","item_id":"msg-plan","delta":"</proposed_plan>\nOutro"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-plan","type":"message","role":"assistant","content":[{"type":"output_text","text":`+strconv.Quote(fullMessage)+`}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-plan","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	agent := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "plan",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:          threadID,
+		Prompt:            "plan",
+		Model:             "gpt-test",
+		CollaborationMode: map[string]any{"mode": "plan"},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	planItemID := safeIdentifier(turnID) + "-plan"
+
+	waitForAgentDelta(t, sink, turnID, "Intro\n")
+	waitForAgentDelta(t, sink, turnID, "Outro")
+	planStarted := waitForItemStarted(t, sink, planItemID)
+	if planStarted.Item["type"] != "plan" || planStarted.Item["responseId"] != "resp-plan" {
+		t.Fatalf("plan started item = %#v", planStarted.Item)
+	}
+	planDelta := waitForPlanDelta(t, sink, turnID, "- Step 1\n")
+	if planDelta.ItemID != planItemID {
+		t.Fatalf("plan delta = %+v", planDelta)
+	}
+	planCompleted := waitForItemCompleted(t, sink, planItemID)
+	if planCompleted.Item["type"] != "plan" || planCompleted.Item["text"] != "- Step 1\n" {
+		t.Fatalf("plan completed item = %#v", planCompleted.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if sinkHasAgentDeltaContaining(sink, "proposed_plan") {
+		t.Fatalf("agent deltas leaked proposed_plan tags: %#v", sink.List())
+	}
+}
+
+func TestRuntimeRouterApplyPatchEmitsTurnDiffUpdated(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	cwd := t.TempDir()
+	agent := &applyPatchRuntimeAgent{
+		patch: `*** Begin Patch
+*** Add File: diff.txt
++hello diff
+*** End Patch`,
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    cwd,
+		Prompt: "patch turn",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "apply patch",
+		CWD:      cwd,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	diff := waitForTurnDiffUpdated(t, sink, turnID)
+	if diff.ThreadID != threadID || !strings.Contains(diff.Diff, "diff.txt") || !strings.Contains(diff.Diff, "+hello diff") {
+		t.Fatalf("turn diff notification = %+v", diff)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterUpdatePlanEmitsTurnPlanUpdated(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        &updatePlanRuntimeAgent{},
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "plan turn",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "make a plan",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+
+	updated := waitForTurnPlanUpdated(t, sink, turnID)
+	if updated.ThreadID != threadID || updated.Explanation == nil || *updated.Explanation != "next steps" {
+		t.Fatalf("turn/plan/updated = %+v", updated)
+	}
+	if len(updated.Plan) != 2 || updated.Plan[0].Status != TurnPlanStepInProgress || updated.Plan[1].Status != TurnPlanStepPending {
+		t.Fatalf("turn plan = %+v", updated.Plan)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-appserver")); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var recordedAuth string
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		recordedAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-runtime"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"from configured responses"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"from configured responses"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-runtime","model":"gpt-app","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-app\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.configureMCPFromConfig()
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "configured runtime",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "call configured responses",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if recordedAuth != "Bearer sk-appserver" {
+		t.Fatalf("Authorization = %q", recordedAuth)
+	}
+	if recordedBody["model"] != "gpt-app" {
+		t.Fatalf("body = %#v", recordedBody)
+	}
+	if recordedBody["stream"] != true {
+		t.Fatalf("body stream = %#v", recordedBody)
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if record.Metadata.LastResponseID != "resp-runtime" {
+		t.Fatalf("last response id = %q", record.Metadata.LastResponseID)
+	}
+}
+
+func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "imagegen")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: imagegen\ndescription: Generate images\n---\nUse the built-in image generation path before shell fallbacks.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		Skills:       NewSkillsService([]string{skillsRoot}),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	skillTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "$imagegen",
+	}))
+	if skillTurn.Error != nil {
+		t.Fatalf("skill turn start error: %+v", skillTurn.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, skillTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", tools)
+	}
+	if modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", tools)
+	}
+	inputText := inputItemText(recordedBody["input"])
+	for _, want := range []string{"<name>imagegen</name>", "Use the built-in image generation path before shell fallbacks."} {
+		if !strings.Contains(inputText, want) {
+			t.Fatalf("input missing imagegen skill context %q:\n%s", want, inputText)
+		}
+	}
+	instructions, _ := recordedBody["instructions"].(string)
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions missing skills protocol %q:\n%s", want, instructions)
+		}
+	}
+}
+
+func TestRuntimeRouterAPIKeyOpenAIProviderIncludesHostedImageGeneration(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nname = \"OpenAI\"\nbase_url = \"" + server.URL + "/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n[features]\napps = false\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("api-key OpenAI provider tools missing hosted image_generation: %#v", tools)
+	}
+	if modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("default non-lite API key request should use hosted image_generation, not standalone namespace: %#v", tools)
+	}
+}
+
+func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationWhenImageGenerationEnabled(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image-tools"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"ready"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-image-tools","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\nimage_generation = true\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.configureMCPFromConfig()
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "$imagegen",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	tools, ok := recordedBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", recordedBody["tools"])
+	}
+	if !modelToolsContainNamespaceTool(tools, turn.ImageGenerationNamespace, turn.ImageGenerationToolName) {
+		t.Fatalf("tools missing standalone image generation namespace: %#v", tools)
+	}
+	if modelToolsContainHostedImageGeneration(tools) {
+		t.Fatalf("standalone image generation should suppress hosted image_generation: %#v", tools)
+	}
+}
+
+func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-image"}}`,
+			`{"type":"response.output_item.done","item":{"id":"ig_123","type":"image_generation_call","status":"generating","revised_prompt":"Einstein portrait","result":"aW1hZ2U="}}`,
+			`{"type":"response.completed","response":{"id":"resp-image","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	configBody := "model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nopenai_base_url = \"" + server.URL + "/v1\"\n\n[features]\napps = false\nenable_request_compression = false\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("Write config error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   server.Client(),
+	})
+	router.configureMCPFromConfig()
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "$imagegen",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "draw a portrait",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var imageItem *session.Item
+	var instructionsItem *session.Item
+	for i := range record.Items {
+		switch {
+		case record.Items[i].Type == "imageGeneration":
+			imageItem = &record.Items[i]
+		case sessionItemIsImageGenerationInstructions(&record.Items[i]):
+			instructionsItem = &record.Items[i]
+		}
+	}
+	if imageItem == nil {
+		t.Fatalf("record missing imageGeneration item: %#v", record.Items)
+	}
+	if imageItem.Status != "completed" || stringFromMap(imageItem.Data, "status") != "completed" {
+		t.Fatalf("image item status not normalized: status=%q data=%#v", imageItem.Status, imageItem.Data)
+	}
+	savedPath := firstNonEmpty(stringFromMap(imageItem.Data, "savedPath"), stringFromMap(imageItem.Data, "saved_path"))
+	if savedPath == "" {
+		t.Fatalf("image item missing savedPath: %#v", imageItem.Data)
+	}
+	if _, err := os.Stat(savedPath); err != nil {
+		t.Fatalf("generated image not saved at %q: %v", savedPath, err)
+	}
+	if instructionsItem == nil {
+		t.Fatalf("record missing image generation instructions item: %#v", record.Items)
+	}
+	if instructionsItem.Role != "developer" ||
+		!strings.Contains(instructionsItem.Text, "Generated images are saved to "+filepath.Dir(savedPath)) ||
+		!strings.Contains(instructionsItem.Text, "<image_id>.png") {
+		t.Fatalf("instructions item = %+v", instructionsItem)
+	}
+	itemsResponse, err := BuildItemsResponse(record, &ThreadItemsListParams{ThreadID: threadID})
+	if err != nil {
+		t.Fatalf("BuildItemsResponse() error = %v", err)
+	}
+	for _, item := range itemsResponse.Data {
+		if item.ID == instructionsItem.ID {
+			t.Fatalf("visible thread items leaked image generation instructions: %#v", itemsResponse.Data)
+		}
+	}
+}
+
+func TestRuntimeRouterValidationErrors(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodProcessSpawn, ProcessSpawnParams{}))
+	if response.Error == nil || response.Error.Code != -32602 {
+		t.Fatalf("expected invalid process spawn, got %+v", response.Error)
+	}
+	response = router.Handle(&Request{ID: IntID(2), Method: Method("missing/method"), Params: []byte(`{}`)})
+	if response.Error == nil || response.Error.Code != -32601 {
+		t.Fatalf("expected unknown method, got %+v", response.Error)
+	}
+}
+
+func waitForSessionItem(t *testing.T, store *session.Store, threadID string, itemType string) *session.Record {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last *session.Record
+	for time.Now().Before(deadline) {
+		record, err := store.Read(session.ThreadID(threadID), true, true)
+		if err == nil {
+			last = record
+			for i := range record.Items {
+				if record.Items[i].Type == itemType {
+					return record
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s in record %#v", itemType, last)
+	return nil
+}
+
+func waitForNotificationMethod(t *testing.T, sink *NotificationBuffer, method NotificationMethod) *Notification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method == method {
+				return notification
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for notification %s in %#v", method, last)
+	return nil
+}
+
+func waitForServerRequestFromChannel(t *testing.T, requests <-chan *ServerRequest, method ServerRequestMethod) *ServerRequest {
+	t.Helper()
+	select {
+	case request := <-requests:
+		if request == nil || request.Method != method {
+			t.Fatalf("server request = %+v, want %s", request, method)
+		}
+		return request
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for server request %s", method)
+		return nil
+	}
+}
+
+func waitForItemStarted(t *testing.T, sink *NotificationBuffer, itemID string) *ItemStartedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationItemStarted {
+				continue
+			}
+			payload, ok := notification.Params.(*ItemStartedNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.Item["id"] == itemID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for started item %s in %s", itemID, notificationsDebugJSON(last))
+	return nil
+}
+
+func waitForCommandExecutionStartedBySource(t *testing.T, sink *NotificationBuffer, source CommandExecutionSource) *ItemStartedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationItemStarted {
+				continue
+			}
+			payload, ok := notification.Params.(*ItemStartedNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			item := notificationItemMap(t, payload.Item)
+			if item["type"] == "commandExecution" && item["source"] == string(source) {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for commandExecution started from %s in %#v", source, last)
+	return nil
+}
+
+func notificationsContainHook(notifications []*Notification, event HookEventName) bool {
+	for _, notification := range notifications {
+		if notification == nil || notification.Method != NotificationHookCompleted {
+			continue
+		}
+		completed, ok := notification.Params.(*HookRunCompletedNotification)
+		if ok && completed.Run.EventName == event {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForItemCompleted(t *testing.T, sink *NotificationBuffer, itemID string) *ItemCompletedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationItemCompleted {
+				continue
+			}
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.Item["id"] == itemID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for completed item %s in %s", itemID, notificationsDebugJSON(last))
+	return nil
+}
+
+func waitForItemCompletedType(t *testing.T, sink *NotificationBuffer, itemID string, itemType string) *ItemCompletedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationItemCompleted {
+				continue
+			}
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if !ok || payload == nil || payload.Item["id"] != itemID {
+				continue
+			}
+			item := notificationItemMap(t, payload.Item)
+			if item["type"] == itemType {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for completed %s item %s in %s", itemType, itemID, notificationsDebugJSON(last))
+	return nil
+}
+
+func assertNoItemNotification(t *testing.T, sink *NotificationBuffer, itemID string) {
+	t.Helper()
+	for _, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationItemStarted:
+			payload, ok := notification.Params.(*ItemStartedNotification)
+			if ok && payload != nil && payload.Item["id"] == itemID {
+				t.Fatalf("unexpected item/started for %s: %#v", itemID, payload.Item)
+			}
+		case NotificationItemCompleted:
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if ok && payload != nil && payload.Item["id"] == itemID {
+				t.Fatalf("unexpected item/completed for %s: %#v", itemID, payload.Item)
+			}
+		}
+	}
+}
+
+func notificationsDebugJSON(notifications []*Notification) string {
+	data, err := json.Marshal(notifications)
+	if err != nil {
+		return fmt.Sprintf("%#v", notifications)
+	}
+	return string(data)
+}
+
+func int64FromNotificationValue(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func waitForAgentDelta(t *testing.T, sink *NotificationBuffer, turnID string, delta string) *AgentMessageDeltaNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationAgentMessageDelta {
+				continue
+			}
+			payload, ok := notification.Params.(*AgentMessageDeltaNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.Delta == delta {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s delta %q in %#v", turnID, delta, last)
+	return nil
+}
+
+func waitForCommandExecutionOutputDeltaContaining(t *testing.T, sink *NotificationBuffer, turnID string, itemID string, text string) *CommandExecutionOutputDeltaNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationCommandExecutionOutputDelta {
+				continue
+			}
+			payload, ok := notification.Params.(*CommandExecutionOutputDeltaNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.ItemID == itemID && strings.Contains(payload.Delta, text) {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for commandExecution output delta containing %q in %#v", text, last)
+	return nil
+}
+
+func waitForPlanDelta(t *testing.T, sink *NotificationBuffer, turnID string, delta string) *PlanDeltaNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationPlanDelta {
+				continue
+			}
+			payload, ok := notification.Params.(*PlanDeltaNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.Delta == delta {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s plan delta %q in %#v", turnID, delta, last)
+	return nil
+}
+
+func waitForReasoningSummaryDelta(t *testing.T, sink *NotificationBuffer, turnID string, delta string) *ReasoningSummaryTextDeltaNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationReasoningSummaryTextDelta {
+				continue
+			}
+			payload, ok := notification.Params.(*ReasoningSummaryTextDeltaNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.Delta == delta {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s reasoning summary delta %q in %#v", turnID, delta, last)
+	return nil
+}
+
+func waitForReasoningTextDelta(t *testing.T, sink *NotificationBuffer, turnID string, delta string) *ReasoningTextDeltaNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationReasoningTextDelta {
+				continue
+			}
+			payload, ok := notification.Params.(*ReasoningTextDeltaNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.Delta == delta {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s reasoning text delta %q in %#v", turnID, delta, last)
+	return nil
+}
+
+func waitForReasoningPartAdded(t *testing.T, sink *NotificationBuffer, turnID string, itemID string) *ReasoningSummaryPartAddedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationReasoningSummaryPartAdded {
+				continue
+			}
+			payload, ok := notification.Params.(*ReasoningSummaryPartAddedNotification)
+			if !ok || payload == nil {
+				continue
+			}
+			if payload.TurnID == turnID && payload.ItemID == itemID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s reasoning part item %s in %#v", turnID, itemID, last)
+	return nil
+}
+
+func waitForRawResponseItemCompleted(t *testing.T, sink *NotificationBuffer, turnID string, itemID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationRawResponseItemCompleted {
+				continue
+			}
+			payload, ok := notification.Params.(*RawResponseItemCompletedNotification)
+			if !ok || payload == nil || payload.TurnID != turnID {
+				continue
+			}
+			item := notificationItemMap(t, payload.Item)
+			if item["id"] == itemID {
+				return item
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s raw response item %s in %#v", turnID, itemID, last)
+	return nil
+}
+
+func notificationItemMap(t *testing.T, item any) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal notification item error = %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal notification item error = %v", err)
+	}
+	return out
+}
+
+func sinkHasAgentDeltaContaining(sink *NotificationBuffer, needle string) bool {
+	for _, notification := range sink.List() {
+		if notification == nil || notification.Method != NotificationAgentMessageDelta {
+			continue
+		}
+		payload, ok := notification.Params.(*AgentMessageDeltaNotification)
+		if ok && payload != nil && strings.Contains(payload.Delta, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForFileChangePatchUpdated(t *testing.T, sink *NotificationBuffer, turnID string, path string) *FileChangePatchUpdatedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationFileChangePatchUpdated {
+				continue
+			}
+			payload, ok := notification.Params.(*FileChangePatchUpdatedNotification)
+			if !ok || payload == nil || payload.TurnID != turnID {
+				continue
+			}
+			for _, change := range payload.Changes {
+				data, ok := change.(map[string]any)
+				if ok && data["path"] == path {
+					return payload
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for fileChange patchUpdated %q in %#v", path, last)
+	return nil
+}
+
+func waitForTurnDiffUpdated(t *testing.T, sink *NotificationBuffer, turnID string) *TurnDiffUpdatedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnDiffUpdated {
+				continue
+			}
+			payload, ok := notification.Params.(*TurnDiffUpdatedNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn diff update for turn %s in %#v", turnID, last)
+	return nil
+}
+
+func waitForTurnPlanUpdated(t *testing.T, sink *NotificationBuffer, turnID string) *TurnPlanUpdatedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnPlanUpdated {
+				continue
+			}
+			payload, ok := notification.Params.(*TurnPlanUpdatedNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn plan update for turn %s in %#v", turnID, last)
+	return nil
+}
+
+func waitForModelRerouted(t *testing.T, sink *NotificationBuffer, turnID string) *ModelReroutedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationModelRerouted {
+				continue
+			}
+			payload, ok := notification.Params.(*ModelReroutedNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for model/rerouted for turn %s in %#v", turnID, last)
+	return nil
+}
+
+func waitForModelVerification(t *testing.T, sink *NotificationBuffer, turnID string) *ModelVerificationNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationModelVerification {
+				continue
+			}
+			payload, ok := notification.Params.(*ModelVerificationNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for model/verification for turn %s in %#v", turnID, last)
+	return nil
+}
+
+func waitForTurnModerationMetadata(t *testing.T, sink *NotificationBuffer, turnID string) *TurnModerationMetadataNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnModerationMetadata {
+				continue
+			}
+			payload, ok := notification.Params.(*TurnModerationMetadataNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn/moderationMetadata for turn %s in %#v", turnID, last)
+	return nil
+}
+
+func assertNoModelSafetyBufferingNotification(t *testing.T, sink *NotificationBuffer, turnID string) {
+	t.Helper()
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationMethod("model/safetyBuffering/updated") {
+			continue
+		}
+		if params, ok := notification.Params.(map[string]any); ok && params["turnId"] == turnID {
+			t.Fatalf("non-Rust model/safetyBuffering notification emitted: %+v", params)
+		}
+		t.Fatalf("non-Rust model/safetyBuffering notification emitted: %+v", notification.Params)
+	}
+}
+
+func waitForTokenUsageUpdated(t *testing.T, sink *NotificationBuffer, turnID string) *ThreadTokenUsageUpdatedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationThreadTokenUsageUpdated {
+				continue
+			}
+			payload, ok := notification.Params.(*ThreadTokenUsageUpdatedNotification)
+			if ok && payload != nil && payload.TurnID == turnID {
+				return payload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for token usage update for turn %s in %#v", turnID, last)
+	return nil
+}
+
+type blockingAgent struct {
+	started chan struct{}
+}
+
+func newBlockingAgent() *blockingAgent {
+	return &blockingAgent{started: make(chan struct{})}
+}
+
+func (a *blockingAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	select {
+	case <-a.started:
+	default:
+		close(a.started)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type approvalRequestRuntimeAgent struct {
+	broker *ServerRequestBroker
+	done   chan error
+}
+
+func newApprovalRequestRuntimeAgent(broker *ServerRequestBroker) *approvalRequestRuntimeAgent {
+	return &approvalRequestRuntimeAgent{broker: broker, done: make(chan error, 1)}
+}
+
+func (a *approvalRequestRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	command := "echo ok"
+	var response CommandExecutionRequestApprovalResponse
+	err := a.broker.Request(ctx, ServerRequestCommandExecutionApproval, &CommandExecutionRequestApprovalParams{
+		ThreadID:    request.ThreadID,
+		TurnID:      request.TurnID,
+		ItemID:      "call_sleep_approval",
+		StartedAtMS: uint64(time.Now().UnixMilli()),
+		Command:     &command,
+	}, &response)
+	a.done <- err
+	return nil, err
+}
+
+type shellCommandRuntimeAgent struct {
+	mu          sync.Mutex
+	calls       int
+	callIDs     []string
+	command     string
+	commands    []string
+	prefixRules [][]string
+}
+
+func (a *shellCommandRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call%2 == 1 {
+		index := call / 2
+		callID := fmt.Sprintf("call-%d", index+1)
+		if index >= 0 && index < len(a.callIDs) && strings.TrimSpace(a.callIDs[index]) != "" {
+			callID = a.callIDs[index]
+		}
+		command := firstNonEmpty(a.command, "echo ok")
+		if index >= 0 && index < len(a.commands) && strings.TrimSpace(a.commands[index]) != "" {
+			command = strings.TrimSpace(a.commands[index])
+		}
+		args := map[string]any{"cmd": command}
+		if index >= 0 && index < len(a.prefixRules) && len(a.prefixRules[index]) > 0 {
+			args["prefix_rule"] = append([]string(nil), a.prefixRules[index]...)
+		}
+		arguments, err := json.Marshal(args)
+		if err != nil {
+			return nil, err
+		}
+		return &model.AgentResponse{
+			ResponseID: fmt.Sprintf("resp-shell-%d", index+1),
+			Items: []model.AgentItem{{
+				ID:        callID,
+				Type:      "function_call",
+				Name:      tool.DefaultExecCommandToolName,
+				CallID:    callID,
+				Arguments: string(arguments),
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "done",
+		Items: []model.AgentItem{{
+			ID:   "msg-" + safeIdentifier(request.TurnID),
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+type secondTurnShellCommandRuntimeAgent struct {
+	mu      sync.Mutex
+	calls   int
+	callID  string
+	command string
+}
+
+func (a *secondTurnShellCommandRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 2 {
+		callID := firstNonEmpty(a.callID, "call-second")
+		command := firstNonEmpty(a.command, "echo second turn")
+		return &model.AgentResponse{
+			ResponseID: "resp-shell-second",
+			Items: []model.AgentItem{{
+				ID:        callID,
+				Type:      "function_call",
+				Name:      tool.DefaultExecCommandToolName,
+				CallID:    callID,
+				Arguments: fmt.Sprintf(`{"cmd":%q}`, command),
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "done",
+		Items: []model.AgentItem{{
+			ID:   "msg-" + safeIdentifier(request.TurnID),
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+type applyPatchRuntimeAgent struct {
+	patch  string
+	callID string
+	calls  int
+}
+
+func (a *applyPatchRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		callID := firstNonEmpty(a.callID, "patch-call-1")
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:     callID,
+				Type:   "custom_tool_call",
+				Name:   "apply_patch",
+				CallID: callID,
+				Input:  a.patch,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "patched",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-patch",
+			Type: "agent_message",
+			Text: "patched",
+		}},
+	}, nil
+}
+
+type applyPatchSequenceRuntimeAgent struct {
+	patches []string
+	callIDs []string
+	calls   int
+}
+
+func (a *applyPatchSequenceRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls%2 == 1 {
+		index := a.calls / 2
+		if index < len(a.patches) {
+			callID := fmt.Sprintf("patch-call-%d", index+1)
+			if index < len(a.callIDs) && strings.TrimSpace(a.callIDs[index]) != "" {
+				callID = strings.TrimSpace(a.callIDs[index])
+			}
+			return &model.AgentResponse{
+				Items: []model.AgentItem{{
+					ID:     callID,
+					Type:   "custom_tool_call",
+					Name:   "apply_patch",
+					CallID: callID,
+					Input:  a.patches[index],
+				}},
+			}, nil
+		}
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "patched",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-patch-" + safeIdentifier(request.TurnID),
+			Type: "agent_message",
+			Text: "patched",
+		}},
+	}, nil
+}
+
+type dynamicToolRuntimeAgent struct {
+	calls int
+}
+
+type mcpToolRuntimeAgent struct {
+	calls int
+}
+
+func (a *dynamicToolRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:        "dynamic-analytics",
+				Type:      "function_call",
+				Name:      "demo_tool",
+				Namespace: "codex_app",
+				CallID:    "dynamic-analytics",
+				Arguments: `{"city":"Paris"}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "dynamic done",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-dynamic",
+			Type: "agent_message",
+			Text: "dynamic done",
+		}},
+	}, nil
+}
+
+func (a *mcpToolRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:        "mcp-analytics",
+				Type:      "function_call",
+				Name:      "echo",
+				Namespace: "sdk",
+				CallID:    "mcp-analytics",
+				Arguments: `{"message":"hello from mcp"}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "mcp done",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-mcp",
+			Type: "agent_message",
+			Text: "mcp done",
+		}},
+	}, nil
+}
+
+type updatePlanRuntimeAgent struct {
+	calls int
+}
+
+func (a *updatePlanRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:        "plan-call-1",
+				Type:      "function_call",
+				Name:      "update_plan",
+				CallID:    "plan-call-1",
+				Arguments: `{"explanation":"next steps","plan":[{"step":"write code","status":"in_progress"},{"step":"verify","status":"pending"}]}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "planned",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-plan",
+			Type: "agent_message",
+			Text: "planned",
+		}},
+	}, nil
+}
+
+type clockSleepRuntimeAgent struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (a *clockSleepRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-sleep-call",
+			Items: []model.AgentItem{{
+				ID:        "sleep-1",
+				Type:      "function_call",
+				Name:      "sleep",
+				Namespace: "clock",
+				CallID:    "sleep-1",
+				Arguments: `{"duration_ms":2000}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-after-sleep",
+		Message:    "done",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-sleep",
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+type steerAwareToolAgent struct {
+	firstRequest           chan struct{}
+	releaseFirstResponseCh chan struct{}
+	releaseOnce            sync.Once
+	mu                     sync.Mutex
+	requests               []model.AgentRequest
+}
+
+func newSteerAwareToolAgent() *steerAwareToolAgent {
+	return &steerAwareToolAgent{
+		firstRequest:           make(chan struct{}),
+		releaseFirstResponseCh: make(chan struct{}),
+	}
+}
+
+func (a *steerAwareToolAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.requests = append(a.requests, *request)
+	callCount := len(a.requests)
+	a.mu.Unlock()
+	if callCount == 1 {
+		close(a.firstRequest)
+		select {
+		case <-a.releaseFirstResponseCh:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:        "echo-call-1",
+				Type:      "function_call",
+				Name:      "echo",
+				CallID:    "echo-call-1",
+				Arguments: `{"text":"hello"}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    "done",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-steer",
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+func (a *steerAwareToolAgent) releaseFirstResponse() {
+	a.releaseOnce.Do(func() {
+		close(a.releaseFirstResponseCh)
+	})
+}
+
+func (a *steerAwareToolAgent) sawSteerText(text string) bool {
+	for _, request := range a.snapshotRequests() {
+		for _, raw := range request.InputItems {
+			item, ok := raw.(map[string]any)
+			if !ok || item["role"] != "user" {
+				continue
+			}
+			if appserverContentHasInputText(item["content"], text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *steerAwareToolAgent) snapshotRequests() []model.AgentRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]model.AgentRequest(nil), a.requests...)
+}
+
+func waitForSteerAwareFirstRequest(t *testing.T, agent *steerAwareToolAgent) {
+	t.Helper()
+	select {
+	case <-agent.firstRequest:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first steer-aware request")
+	}
+}
+
+func appserverContentHasInputText(raw any, text string) bool {
+	content, ok := raw.([]map[string]any)
+	if !ok {
+		return false
+	}
+	for i := range content {
+		if content[i]["type"] == "input_text" && content[i]["text"] == text {
+			return true
+		}
+	}
+	return false
+}
+
+type recordingRuntimeAgent struct {
+	message  string
+	requests chan model.AgentRequest
+}
+
+type blockingReviewRuntimeAgent struct {
+	requests chan model.AgentRequest
+}
+
+type recordingTurnEventSink struct {
+	events            chan telemetry.CodexTurnEventRequest
+	threadInitialized chan telemetry.CodexThreadInitializedEventRequest
+	turnSteer         chan telemetry.CodexTurnSteerEventRequest
+	compaction        chan telemetry.CodexCompactionEventRequest
+	goal              chan telemetry.CodexGoalEventRequest
+	pluginInstalled   chan telemetry.CodexPluginEventRequest
+	pluginUninstalled chan telemetry.CodexPluginEventRequest
+	pluginEnabled     chan telemetry.CodexPluginEventRequest
+	pluginDisabled    chan telemetry.CodexPluginEventRequest
+	pluginFailed      chan telemetry.CodexPluginInstallFailedEventRequest
+	importComplete    chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest
+	importFailure     chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest
+	hookRun           chan telemetry.CodexHookRunEventRequest
+	acceptedLines     chan telemetry.CodexAcceptedLineFingerprintsEventRequest
+	commandExecution  chan telemetry.CodexCommandExecutionEventRequest
+	fileChange        chan telemetry.CodexFileChangeEventRequest
+	review            chan telemetry.CodexReviewEventRequest
+	mcpToolCall       chan telemetry.CodexMCPToolCallEventRequest
+	dynamicToolCall   chan telemetry.CodexDynamicToolCallEventRequest
+	collabToolCall    chan telemetry.CodexCollabAgentToolCallEventRequest
+	webSearch         chan telemetry.CodexWebSearchEventRequest
+	imageGeneration   chan telemetry.CodexImageGenerationEventRequest
+	skillInvocation   chan telemetry.SkillInvocationEventRequest
+}
+
+type standaloneWebSearchRuntimeAgent struct {
+	mu       sync.Mutex
+	calls    int
+	requests chan model.AgentRequest
+}
+
+type failThenOKRuntimeAgent struct {
+	mu    sync.Mutex
+	calls int
+}
+
+type apiErrorRuntimeAgent struct {
+	err error
+}
+
+func (a *failThenOKRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		return nil, context.DeadlineExceeded
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-recovered",
+		Message:    "recovered",
+		Items: []model.AgentItem{{
+			ID:   "msg-recovered",
+			Type: "agent_message",
+			Text: "recovered",
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 1},
+	}, nil
+}
+
+func (a *apiErrorRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if a == nil || a.err == nil {
+		return nil, fmt.Errorf("api error runtime agent missing error")
+	}
+	return nil, a.err
+}
+
+func newRecordingRuntimeAgent(message string) *recordingRuntimeAgent {
+	return &recordingRuntimeAgent{message: message, requests: make(chan model.AgentRequest, 1)}
+}
+
+func newBlockingReviewRuntimeAgent() *blockingReviewRuntimeAgent {
+	return &blockingReviewRuntimeAgent{requests: make(chan model.AgentRequest, 1)}
+}
+
+func newRecordingTurnEventSink() *recordingTurnEventSink {
+	return &recordingTurnEventSink{
+		events:            make(chan telemetry.CodexTurnEventRequest, 8),
+		threadInitialized: make(chan telemetry.CodexThreadInitializedEventRequest, 8),
+		turnSteer:         make(chan telemetry.CodexTurnSteerEventRequest, 8),
+		compaction:        make(chan telemetry.CodexCompactionEventRequest, 8),
+		goal:              make(chan telemetry.CodexGoalEventRequest, 8),
+		pluginInstalled:   make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginUninstalled: make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginEnabled:     make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginDisabled:    make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginFailed:      make(chan telemetry.CodexPluginInstallFailedEventRequest, 8),
+		importComplete:    make(chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest, 8),
+		importFailure:     make(chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest, 8),
+		hookRun:           make(chan telemetry.CodexHookRunEventRequest, 8),
+		acceptedLines:     make(chan telemetry.CodexAcceptedLineFingerprintsEventRequest, 8),
+		commandExecution:  make(chan telemetry.CodexCommandExecutionEventRequest, 8),
+		fileChange:        make(chan telemetry.CodexFileChangeEventRequest, 8),
+		review:            make(chan telemetry.CodexReviewEventRequest, 8),
+		mcpToolCall:       make(chan telemetry.CodexMCPToolCallEventRequest, 8),
+		dynamicToolCall:   make(chan telemetry.CodexDynamicToolCallEventRequest, 8),
+		collabToolCall:    make(chan telemetry.CodexCollabAgentToolCallEventRequest, 8),
+		webSearch:         make(chan telemetry.CodexWebSearchEventRequest, 8),
+		imageGeneration:   make(chan telemetry.CodexImageGenerationEventRequest, 8),
+		skillInvocation:   make(chan telemetry.SkillInvocationEventRequest, 8),
+	}
+}
+
+func (s *recordingTurnEventSink) TrackCodexTurnEvent(ctx context.Context, event telemetry.CodexTurnEventRequest) {
+	if s == nil {
+		return
+	}
+	s.events <- event
+}
+
+func (s *recordingTurnEventSink) TrackSkillInvocationEvent(ctx context.Context, event telemetry.SkillInvocationEventRequest) {
+	if s == nil {
+		return
+	}
+	s.skillInvocation <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexThreadInitializedEvent(ctx context.Context, event telemetry.CodexThreadInitializedEventRequest) {
+	if s == nil {
+		return
+	}
+	s.threadInitialized <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexTurnSteerEvent(ctx context.Context, event telemetry.CodexTurnSteerEventRequest) {
+	if s == nil {
+		return
+	}
+	s.turnSteer <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexCompactionEvent(ctx context.Context, event telemetry.CodexCompactionEventRequest) {
+	if s == nil {
+		return
+	}
+	s.compaction <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexGoalEvent(ctx context.Context, event telemetry.CodexGoalEventRequest) {
+	if s == nil {
+		return
+	}
+	s.goal <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginInstalledEvent(ctx context.Context, event telemetry.CodexPluginEventRequest) {
+	if s == nil {
+		return
+	}
+	s.pluginInstalled <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginUninstalledEvent(ctx context.Context, event telemetry.CodexPluginEventRequest) {
+	if s == nil {
+		return
+	}
+	s.pluginUninstalled <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginEnabledEvent(ctx context.Context, event telemetry.CodexPluginEventRequest) {
+	if s == nil {
+		return
+	}
+	s.pluginEnabled <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginDisabledEvent(ctx context.Context, event telemetry.CodexPluginEventRequest) {
+	if s == nil {
+		return
+	}
+	s.pluginDisabled <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginInstallFailedEvent(ctx context.Context, event telemetry.CodexPluginInstallFailedEventRequest) {
+	if s == nil {
+		return
+	}
+	s.pluginFailed <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest) {
+	if s == nil {
+		return
+	}
+	s.importComplete <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexOnboardingExternalAgentImportFailureEvent(ctx context.Context, event telemetry.CodexOnboardingExternalAgentImportFailureEventRequest) {
+	if s == nil {
+		return
+	}
+	s.importFailure <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexHookRunEvent(ctx context.Context, event telemetry.CodexHookRunEventRequest) {
+	if s == nil {
+		return
+	}
+	s.hookRun <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexAcceptedLineFingerprintsEvent(ctx context.Context, event telemetry.CodexAcceptedLineFingerprintsEventRequest) {
+	if s == nil {
+		return
+	}
+	s.acceptedLines <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexCommandExecutionEvent(ctx context.Context, event telemetry.CodexCommandExecutionEventRequest) {
+	if s == nil {
+		return
+	}
+	s.commandExecution <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexFileChangeEvent(ctx context.Context, event telemetry.CodexFileChangeEventRequest) {
+	if s == nil {
+		return
+	}
+	s.fileChange <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexReviewEvent(ctx context.Context, event telemetry.CodexReviewEventRequest) {
+	if s == nil {
+		return
+	}
+	s.review <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexMCPToolCallEvent(ctx context.Context, event telemetry.CodexMCPToolCallEventRequest) {
+	if s == nil {
+		return
+	}
+	s.mcpToolCall <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexDynamicToolCallEvent(ctx context.Context, event telemetry.CodexDynamicToolCallEventRequest) {
+	if s == nil {
+		return
+	}
+	s.dynamicToolCall <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexCollabAgentToolCallEvent(ctx context.Context, event telemetry.CodexCollabAgentToolCallEventRequest) {
+	if s == nil {
+		return
+	}
+	s.collabToolCall <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexWebSearchEvent(ctx context.Context, event telemetry.CodexWebSearchEventRequest) {
+	if s == nil {
+		return
+	}
+	s.webSearch <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexImageGenerationEvent(ctx context.Context, event telemetry.CodexImageGenerationEventRequest) {
+	if s == nil {
+		return
+	}
+	s.imageGeneration <- event
+}
+
+func newStandaloneWebSearchRuntimeAgent() *standaloneWebSearchRuntimeAgent {
+	return &standaloneWebSearchRuntimeAgent{requests: make(chan model.AgentRequest, 2)}
+}
+
+func (a *recordingRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests <- *request
+	message := firstNonEmpty(a.message, "ok")
+	return &model.AgentResponse{
+		ResponseID: "resp-" + request.TurnID,
+		Message:    message,
+		Usage:      model.AgentUsage{InputTokens: 2, CachedInputTokens: 1, OutputTokens: 3, ReasoningOutputTokens: 1},
+		Items: []model.AgentItem{{
+			ID:   "msg-1",
+			Type: "agent_message",
+			Text: message,
+		}},
+		Model:      request.Model,
+		ProviderID: request.ProviderID,
+	}, nil
+}
+
+func (a *blockingReviewRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests <- *request
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (a *standaloneWebSearchRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	a.requests <- *request
+	if call == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-web-search-first",
+			Items: []model.AgentItem{{
+				ID:        "call_web_run",
+				Type:      "function_call",
+				Namespace: "web",
+				Name:      "run",
+				CallID:    "call_web_run",
+				Arguments: `{"search_query":[{"q":"standalone web search"}]}`,
+			}},
+			Model:      request.Model,
+			ProviderID: request.ProviderID,
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-web-search-final",
+		Message:    "Done",
+		Items: []model.AgentItem{{
+			ID:   "msg-web-search-final",
+			Type: "agent_message",
+			Text: "Done",
+		}},
+		Model:      request.Model,
+		ProviderID: request.ProviderID,
+	}, nil
+}
+
+func waitForStandaloneWebSearchRuntimeAgentRequest(t *testing.T, agent *standaloneWebSearchRuntimeAgent) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-agent.requests:
+		return request
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for standalone web search agent request")
+	}
+	return model.AgentRequest{}
+}
+
+func modelToolsContainWebRun(tools []any) bool {
+	for _, item := range tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if !ok || toolMap["type"] != "namespace" || toolMap["name"] != "web" {
+			continue
+		}
+		namespaceTools, ok := sliceAnyFromValue(toolMap["tools"])
+		if !ok {
+			continue
+		}
+		for _, namespaceTool := range namespaceTools {
+			functionTool, ok := mapAnyFromValue(namespaceTool)
+			if !ok || functionTool["type"] != "function" || functionTool["name"] != "run" {
+				continue
+			}
+			parameters, ok := mapAnyFromValue(functionTool["parameters"])
+			if !ok {
+				return false
+			}
+			properties, ok := mapAnyFromValue(parameters["properties"])
+			if !ok {
+				return false
+			}
+			timeSchema, ok := mapAnyFromValue(properties["time"])
+			return ok && timeSchema["description"] == "Get time for the given UTC offsets."
+		}
+	}
+	return false
+}
+
+func modelToolsContainNamespaceTool(tools []any, namespace string, name string) bool {
+	for _, item := range tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if !ok || toolMap["type"] != "namespace" || toolMap["name"] != namespace {
+			continue
+		}
+		namespaceTools, ok := sliceAnyFromValue(toolMap["tools"])
+		if !ok {
+			continue
+		}
+		for _, namespaceTool := range namespaceTools {
+			functionTool, ok := mapAnyFromValue(namespaceTool)
+			if ok && functionTool["type"] == "function" && functionTool["name"] == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func modelToolsContainHostedWebSearch(tools []any) bool {
+	for _, item := range tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if ok && toolMap["type"] == "web_search" {
+			return true
+		}
+	}
+	return false
+}
+
+func modelToolsContainHostedImageGeneration(tools []any) bool {
+	for _, item := range tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if ok && toolMap["type"] == "image_generation" {
+			return true
+		}
+	}
+	return false
+}
+
+func assertStandaloneWebSearchBody(t *testing.T, body map[string]any) {
+	t.Helper()
+	if body["model"] != "mock-model" {
+		t.Fatalf("search model = %#v body=%#v", body["model"], body)
+	}
+	commands, ok := mapAnyFromValue(body["commands"])
+	if !ok {
+		t.Fatalf("commands = %#v", body["commands"])
+	}
+	searchQueries, ok := sliceAnyFromValue(commands["search_query"])
+	if !ok || len(searchQueries) != 1 {
+		t.Fatalf("search_query = %#v", commands["search_query"])
+	}
+	searchQuery, ok := mapAnyFromValue(searchQueries[0])
+	if !ok || searchQuery["q"] != "standalone web search" {
+		t.Fatalf("search query = %#v", searchQueries[0])
+	}
+	settings, ok := mapAnyFromValue(body["settings"])
+	if !ok {
+		t.Fatalf("settings = %#v", body["settings"])
+	}
+	allowedCallers, ok := sliceAnyFromValue(settings["allowed_callers"])
+	if !ok || len(allowedCallers) != 1 || allowedCallers[0] != "direct" {
+		t.Fatalf("allowed_callers = %#v", settings["allowed_callers"])
+	}
+	input, ok := sliceAnyFromValue(body["input"])
+	if !ok || len(input) == 0 {
+		t.Fatalf("input = %#v", body["input"])
+	}
+	last, ok := mapAnyFromValue(input[len(input)-1])
+	if !ok || last["type"] != "message" || last["role"] != "user" {
+		t.Fatalf("input last = %#v", input[len(input)-1])
+	}
+	content, ok := sliceAnyFromValue(last["content"])
+	if !ok || len(content) != 1 {
+		t.Fatalf("input content = %#v", last["content"])
+	}
+	text, ok := mapAnyFromValue(content[0])
+	if !ok || text["type"] != "input_text" || text["text"] != "Search the web" {
+		t.Fatalf("input text = %#v", content[0])
+	}
+}
+
+func mapAnyFromValue(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, false
+		}
+		var out map[string]any
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, false
+		}
+		return out, true
+	}
+}
+
+func sliceAnyFromValue(value any) ([]any, bool) {
+	switch typed := value.(type) {
+	case []any:
+		return typed, true
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, false
+		}
+		var out []any
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, false
+		}
+		return out, true
+	}
+}
+
+type implicitSkillRuntimeAgent struct {
+	mu       sync.Mutex
+	requests []model.AgentRequest
+}
+
+func newImplicitSkillRuntimeAgent() *implicitSkillRuntimeAgent {
+	return &implicitSkillRuntimeAgent{}
+}
+
+func (a *implicitSkillRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.requests = append(a.requests, *request)
+	callCount := len(a.requests)
+	a.mu.Unlock()
+	if callCount == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-shell-call",
+			Items: []model.AgentItem{{
+				ID:        "shell-call-1",
+				Type:      "function_call",
+				Name:      tool.DefaultExecCommandToolName,
+				CallID:    "shell-call-1",
+				Arguments: `{"cmd":"python3 scripts/build.py"}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-after-shell",
+		Message:    "done",
+		Items: []model.AgentItem{{
+			ID:   "msg-after-shell",
+			Type: "agent_message",
+			Text: "done",
+		}},
+	}, nil
+}
+
+func waitForImplicitSkillAgentRequest(t *testing.T, agent *implicitSkillRuntimeAgent, count int) model.AgentRequest {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		if len(agent.requests) >= count {
+			request := agent.requests[count-1]
+			agent.mu.Unlock()
+			return request
+		}
+		agent.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	t.Fatalf("timed out waiting for agent request %d in %#v", count, agent.requests)
+	return model.AgentRequest{}
+}
+
+func waitForRuntimeAgentRequest(t *testing.T, agent *recordingRuntimeAgent) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-agent.requests:
+		return request
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime agent request")
+	}
+	return model.AgentRequest{}
+}
+
+func waitForBlockingReviewRuntimeAgentRequest(t *testing.T, agent *blockingReviewRuntimeAgent) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-agent.requests:
+		return request
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocking review runtime agent request")
+	}
+	return model.AgentRequest{}
+}
+
+func waitForCodexTurnEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexTurnEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.events:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_turn_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForCodexThreadInitializedEvent(t *testing.T, sink *recordingTurnEventSink, threadID string) telemetry.CodexThreadInitializedEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.threadInitialized:
+			if event.EventParams.ThreadID == threadID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_thread_initialized for thread %s", threadID)
+		}
+	}
+}
+
+func waitForCodexTurnSteerEvent(t *testing.T, sink *recordingTurnEventSink, expectedTurnID string) telemetry.CodexTurnSteerEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.turnSteer:
+			if event.EventParams.ExpectedTurnID != nil && *event.EventParams.ExpectedTurnID == expectedTurnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_turn_steer_event for expected turn %s", expectedTurnID)
+		}
+	}
+}
+
+func waitForCodexCompactionEvent(t *testing.T, sink *recordingTurnEventSink, threadID string) telemetry.CodexCompactionEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.compaction:
+			if event.EventParams.ThreadID == threadID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_compaction_event for thread %s", threadID)
+		}
+	}
+}
+
+func waitForCodexGoalEvent(t *testing.T, sink *recordingTurnEventSink, threadID string, eventKind string) telemetry.CodexGoalEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.goal:
+			if event.EventParams.ThreadID == threadID && event.EventParams.EventKind == eventKind {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_goal_event %s for thread %s", eventKind, threadID)
+		}
+	}
+}
+
+func waitForPluginStateAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, eventType string, pluginID string) telemetry.CodexPluginEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	var events <-chan telemetry.CodexPluginEventRequest
+	switch eventType {
+	case telemetry.CodexPluginInstalledEventType:
+		events = sink.pluginInstalled
+	case telemetry.CodexPluginUninstalledEventType:
+		events = sink.pluginUninstalled
+	case telemetry.CodexPluginEnabledEventType:
+		events = sink.pluginEnabled
+	case telemetry.CodexPluginDisabledEventType:
+		events = sink.pluginDisabled
+	default:
+		t.Fatalf("unsupported plugin state event type %q", eventType)
+	}
+	for {
+		select {
+		case event := <-events:
+			if event.EventParams.PluginID != nil && *event.EventParams.PluginID == pluginID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s for plugin %s", eventType, pluginID)
+		}
+	}
+}
+
+func waitForPluginInstallFailedAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, pluginID string) telemetry.CodexPluginInstallFailedEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.pluginFailed:
+			if event.EventParams.PluginID != nil && *event.EventParams.PluginID == pluginID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_plugin_install_failed for plugin %s", pluginID)
+		}
+	}
+}
+
+func waitForExternalAgentImportCompleteEvent(t *testing.T, sink *recordingTurnEventSink, importID string, itemType string) telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.importComplete:
+			if event.EventParams.ImportID == importID && event.EventParams.ItemType == itemType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for external agent import complete %s/%s", importID, itemType)
+		}
+	}
+}
+
+func waitForExternalAgentImportFailureEvent(t *testing.T, sink *recordingTurnEventSink, importID string, itemType string) telemetry.CodexOnboardingExternalAgentImportFailureEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.importFailure:
+			if event.EventParams.ImportID == importID && event.EventParams.ItemType == itemType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for external agent import failure %s/%s", importID, itemType)
+		}
+	}
+}
+
+func waitForCodexHookRunEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexHookRunEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.hookRun:
+			if event.EventParams.TurnID != nil && *event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_hook_run for turn %s", turnID)
+		}
+	}
+}
+
+func stringValueForTest(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}
+
+func boolValueForTest(value *bool) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return strconv.FormatBool(*value)
+}
+
+func intValueForTest(value *int) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return strconv.Itoa(*value)
+}
+
+func waitForAcceptedLineFingerprintsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexAcceptedLineFingerprintsEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.acceptedLines:
+			if event.Params.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_accepted_line_fingerprints for turn %s", turnID)
+		}
+	}
+}
+
+func waitForCommandExecutionAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexCommandExecutionEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.commandExecution:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_command_execution_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForFileChangeAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexFileChangeEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.fileChange:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_file_change_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForReviewAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, reviewID string) telemetry.CodexReviewEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.review:
+			if event.EventParams.ReviewID == reviewID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_review_event %s", reviewID)
+		}
+	}
+}
+
+func waitForMCPToolCallAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexMCPToolCallEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.mcpToolCall:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_mcp_tool_call_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForDynamicToolCallAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexDynamicToolCallEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.dynamicToolCall:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_dynamic_tool_call_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForCollabAgentToolCallAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexCollabAgentToolCallEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.collabToolCall:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_collab_agent_tool_call_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForWebSearchAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexWebSearchEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.webSearch:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_web_search_event for turn %s", turnID)
+		}
+	}
+}
+
+func waitForImageGenerationAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, turnID string) telemetry.CodexImageGenerationEventRequest {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-sink.imageGeneration:
+			if event.EventParams.TurnID == turnID {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for codex_image_generation_event for turn %s", turnID)
+		}
+	}
+}
+
+func writeRuntimeRouterPersonalityMigrationRollout(t *testing.T, home string) {
+	t.Helper()
+	root := filepath.Join(home, rollout.SessionsSubdir, "2025", "01", "01")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll rollout root error = %v", err)
+	}
+	path := filepath.Join(root, "rollout-2025-01-01T00-00-00-thread-personality.jsonl")
+	lines := []string{
+		`{"timestamp":"2025-01-01T00:00:00Z","type":"session_meta","payload":{"id":"thread-personality","timestamp":"2025-01-01T00:00:00Z","source":"cli","model_provider":"openai","cwd":"."}}`,
+		`{"timestamp":"2025-01-01T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"hello"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write rollout error = %v", err)
+	}
+}
+
+func modelWithServiceTierForRuntimeTest(t *testing.T) (string, string) {
+	t.Helper()
+	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	for _, info := range manager.RawModelCatalog(model.RefreshOffline).Models {
+		modelID := strings.TrimSpace(info.Slug)
+		if modelID == "" {
+			continue
+		}
+		for _, tier := range info.ServiceTiers {
+			tier = strings.TrimSpace(tier)
+			if tier != "" && tier != model.ServiceTierDefaultRequestValue {
+				return modelID, tier
+			}
+		}
+	}
+	t.Fatal("bundled model catalog does not include a non-default service tier")
+	return "", ""
+}
+
+func personalityModelServiceForRuntimeTest() *model.ModelService {
+	return model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug:             "personality-model",
+		DisplayName:      "personality-model",
+		Visibility:       model.VisibilityVisible,
+		SupportedInAPI:   true,
+		BaseInstructions: "Base default instructions",
+		ModelMessages: &model.ModelMessages{
+			InstructionsTemplate: "Base {{ personality }}",
+			PersonalityDefault:   "default personality",
+			PersonalityFriendly:  "friendly personality",
+			PersonalityPragmatic: "pragmatic personality",
+		},
+	}}}))
+}
+
+func agentRequestInputItemsContain(request model.AgentRequest, want string) bool {
+	return strings.Contains(inputItemText(request.InputItems), want)
+}
+
+func slicesContainString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func messageInputTextsForRole(value any, role string) []string {
+	switch v := value.(type) {
+	case []any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, messageInputTextsForRole(item, role)...)
+		}
+		return out
+	case []map[string]any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, messageInputTextsForRole(item, role)...)
+		}
+		return out
+	case map[string]any:
+		out := []string{}
+		if v["type"] == "message" && stringValue(v["role"]) == role {
+			out = append(out, inputTextSpans(v["content"])...)
+		}
+		if input, ok := v["input"]; ok {
+			out = append(out, messageInputTextsForRole(input, role)...)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func currentTimeReminderTextsFromBody(body map[string]any) []string {
+	texts := messageInputTextsForRole(body, "developer")
+	out := []string{}
+	for _, text := range texts {
+		if strings.HasPrefix(text, "It is ") {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func inputTextSpans(value any) []string {
+	switch v := value.(type) {
+	case []any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, inputTextSpans(item)...)
+		}
+		return out
+	case []map[string]any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, inputTextSpans(item)...)
+		}
+		return out
+	case map[string]any:
+		if v["type"] == "input_text" {
+			return []string{stringValue(v["text"])}
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func inputImageDetails(value any) []string {
+	return inputImageFieldValues(value, "detail")
+}
+
+func inputImageURLs(value any) []string {
+	return inputImageFieldValues(value, "image_url")
+}
+
+func inputImageFieldValues(value any, field string) []string {
+	switch v := value.(type) {
+	case []any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, inputImageFieldValues(item, field)...)
+		}
+		return out
+	case []map[string]any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, inputImageFieldValues(item, field)...)
+		}
+		return out
+	case map[string]any:
+		out := []string{}
+		if v["type"] == "input_image" {
+			out = append(out, stringValue(v[field]))
+		}
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			out = append(out, inputImageFieldValues(v[key], field)...)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func inputItemText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case model.AgentItem:
+		return v.Text
+	case *model.AgentItem:
+		if v == nil {
+			return ""
+		}
+		return v.Text
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			parts = append(parts, inputItemText(item))
+		}
+		return strings.Join(parts, "\n")
+	case []map[string]any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			parts = append(parts, inputItemText(item))
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, inputItemText(v[key]))
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return inputItemTextReflect(reflect.ValueOf(value))
+	}
+}
+
+func inputItemTextReflect(value reflect.Value) string {
+	if !value.IsValid() {
+		return ""
+	}
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return ""
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return value.String()
+	case reflect.Slice, reflect.Array:
+		parts := make([]string, 0, value.Len())
+		for i := 0; i < value.Len(); i++ {
+			parts = append(parts, inputItemTextReflect(value.Index(i)))
+		}
+		return strings.Join(parts, "\n")
+	case reflect.Map:
+		parts := make([]string, 0, value.Len())
+		for _, key := range value.MapKeys() {
+			parts = append(parts, inputItemTextReflect(value.MapIndex(key)))
+		}
+		return strings.Join(parts, "\n")
+	case reflect.Struct:
+		if field := value.FieldByName("Text"); field.IsValid() && field.Kind() == reflect.String {
+			if text := field.String(); text != "" {
+				return text
+			}
+		}
+		if field := value.FieldByName("Content"); field.IsValid() {
+			return inputItemTextReflect(field)
+		}
+	}
+	return ""
+}
+
+type recordingCompactRunner struct {
+	summary string
+	request *compact.Request
+}
+
+func (r *recordingCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	copied := *request
+	r.request = &copied
+	summary := firstNonEmpty(r.summary, "remote compact summary")
+	return &compact.Result{
+		Status:  compact.StatusCompleted,
+		Request: copied,
+		Summary: summary,
+		NewHistory: compact.BuildCompactedHistory(nil, []compact.Item{{
+			ID:   "u-remote",
+			Type: "message",
+			Role: "user",
+			Kind: "user_message",
+			Text: "latest user",
+		}}, summary),
+		CompletedAt: time.Now().UTC(),
+		Source:      compact.SourceRemote,
+		ResponseID:  "resp-compact",
+		Model:       "gpt-compact",
+		ProviderID:  "openai",
+		Usage:       &compact.Usage{InputTokens: 3, CachedInputTokens: 1, OutputTokens: 2, ReasoningOutputTokens: 1},
+	}, nil
+}
+
+type userInputToolAgent struct {
+	calls  int
+	answer string
+}
+
+func newUserInputToolAgent() *userInputToolAgent {
+	return &userInputToolAgent{}
+}
+
+func (a *userInputToolAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		return &model.AgentResponse{
+			Items: []model.AgentItem{{
+				ID:        "input-call-1",
+				Type:      "function_call",
+				Name:      "request_user_input",
+				CallID:    "input-call-1",
+				Arguments: `{"questions":[{"header":"Choice","id":"choice","question":"Pick one?","isOther":true,"isSecret":true,"options":[{"label":"Blue","description":"Use blue"},{"label":"Green","description":"Use green"}]}],"autoResolutionMs":60000}`,
+			}},
+		}, nil
+	}
+	a.answer = userInputAnswerFromAgentRequest(request, "choice")
+	return &model.AgentResponse{
+		Message: "answer: " + a.answer,
+		Items: []model.AgentItem{{
+			ID:   "msg-after-input",
+			Type: "agent_message",
+			Text: "answer: " + a.answer,
+		}},
+		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 1},
+	}, nil
+}
+
+func userInputAnswerFromAgentRequest(request *model.AgentRequest, questionID string) string {
+	if request == nil {
+		return ""
+	}
+	for _, raw := range request.InputItems {
+		item, ok := raw.(*turn.ToolResponseItem)
+		if !ok || item == nil || item.Output == nil {
+			continue
+		}
+		var response tool.UserInputResponse
+		if err := json.Unmarshal([]byte(item.Output.Text()), &response); err != nil {
+			continue
+		}
+		if answer := strings.TrimSpace(response.Answers[questionID]); answer != "" {
+			return answer
+		}
+	}
+	return ""
+}
+
+func waitForBlockingAgentStart(t *testing.T, agent *blockingAgent) {
+	t.Helper()
+	select {
+	case <-agent.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocking agent start")
+	}
+}
+
+func rolloutTurnSnapshotsForThread(t *testing.T, store *session.Store, threadID string) []session.TurnSnapshot {
+	t.Helper()
+	return rolloutRecordForThread(t, store, threadID).Metadata.RolloutTurns
+}
+
+func rolloutRecordForThread(t *testing.T, store *session.Store, threadID string) *session.Record {
+	t.Helper()
+	path, err := rollout.FindThreadPath(store.Root(), threadID, false)
+	if err != nil {
+		t.Fatalf("rollout path error: %v", err)
+	}
+	record, err := rollout.RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("rollout record error: %v", err)
+	}
+	return record
+}
+
+func waitForTurnStartedStatus(t *testing.T, sink *NotificationBuffer, turnID string, status TurnStatus) *TurnStartedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnStarted {
+				continue
+			}
+			started, ok := notification.Params.(*TurnStartedNotification)
+			if !ok || started == nil {
+				continue
+			}
+			if started.Turn.ID == turnID && started.Turn.Status == status {
+				return started
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s started status %s in notifications %#v", turnID, status, last)
+	return nil
+}
+
+func waitForTurnCompletedStatus(t *testing.T, sink *NotificationBuffer, turnID string, status TurnStatus) *TurnCompletedNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnCompleted {
+				continue
+			}
+			completed, ok := notification.Params.(*TurnCompletedNotification)
+			if !ok || completed == nil {
+				continue
+			}
+			if completed.Turn.ID == turnID && completed.Turn.Status == status {
+				return completed
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s status %s in notifications %#v", turnID, status, last)
+	return nil
+}
+
+func sinkHasMethod(sink *NotificationBuffer, method NotificationMethod) bool {
+	for _, notification := range sink.List() {
+		if notification.Method == method {
+			return true
+		}
+	}
+	return false
+}
+
+func latestNotificationPayload[T any](t *testing.T, sink *NotificationBuffer, method NotificationMethod) T {
+	t.Helper()
+	var zero T
+	notifications := sink.List()
+	for i := len(notifications) - 1; i >= 0; i-- {
+		if notifications[i].Method != method {
+			continue
+		}
+		payload, ok := notifications[i].Params.(T)
+		if !ok {
+			t.Fatalf("notification %s payload = %#v, want %T", method, notifications[i].Params, zero)
+		}
+		return payload
+	}
+	t.Fatalf("notification %s missing: %#v", method, notifications)
+	return zero
+}
+
+func remoteControlStatusChangedNotifications(sink *NotificationBuffer) []*RemoteControlStatusChangedNotification {
+	var out []*RemoteControlStatusChangedNotification
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationRemoteControlStatusChanged {
+			continue
+		}
+		if payload, ok := notification.Params.(*RemoteControlStatusChangedNotification); ok && payload != nil {
+			out = append(out, payload)
+		}
+	}
+	return out
+}
+
+func threadStatusChangedStatuses(sink *NotificationBuffer, threadID string) []ThreadStatus {
+	var out []ThreadStatus
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationThreadStatusChanged {
+			continue
+		}
+		payload, ok := notification.Params.(*ThreadStatusChangedNotification)
+		if !ok || payload == nil || payload.ThreadID != threadID {
+			continue
+		}
+		out = append(out, payload.Status)
+	}
+	return out
+}
+
+func realtimeNotification[T any](t *testing.T, sink *NotificationBuffer, method NotificationMethod) T {
+	t.Helper()
+	var zero T
+	for _, notification := range sink.List() {
+		if notification.Method != method {
+			continue
+		}
+		payload, ok := notification.Params.(T)
+		if !ok {
+			t.Fatalf("notification %s params = %#v", method, notification.Params)
+		}
+		return payload
+	}
+	t.Fatalf("notification %s missing in %#v", method, sink.List())
+	return zero
+}
+
+func threadSettingsNotification(t *testing.T, sink *NotificationBuffer, threadID string) *SettingsUpdatedNotification {
+	t.Helper()
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationThreadSettingsUpdated {
+			continue
+		}
+		payload, ok := notification.Params.(*SettingsUpdatedNotification)
+		if ok && payload != nil && payload.ThreadID == threadID {
+			return payload
+		}
+	}
+	t.Fatalf("thread/settings/updated missing in %#v", sink.List())
+	return nil
+}
+
+func lastThreadSettingsNotification(t *testing.T, sink *NotificationBuffer, threadID string) *SettingsUpdatedNotification {
+	t.Helper()
+	notifications := sink.List()
+	for i := len(notifications) - 1; i >= 0; i-- {
+		notification := notifications[i]
+		if notification.Method != NotificationThreadSettingsUpdated {
+			continue
+		}
+		payload, ok := notification.Params.(*SettingsUpdatedNotification)
+		if ok && payload != nil && payload.ThreadID == threadID {
+			return payload
+		}
+	}
+	t.Fatalf("thread/settings/updated missing in %#v", notifications)
+	return nil
+}
+
+func notificationThreadIDs(sink *NotificationBuffer, method NotificationMethod) []string {
+	out := []string{}
+	for _, notification := range sink.List() {
+		if notification.Method != method {
+			continue
+		}
+		payload, ok := notification.Params.(*ThreadIDNotification)
+		if !ok || payload == nil {
+			continue
+		}
+		out = append(out, payload.ThreadID)
+	}
+	return out
+}
+
+func equalStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sinkHasThreadStatusFlag(sink *NotificationBuffer, threadID string, flag ThreadActiveFlag) bool {
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationThreadStatusChanged {
+			continue
+		}
+		payload, ok := notification.Params.(*ThreadStatusChangedNotification)
+		if !ok || payload == nil || payload.ThreadID != threadID {
+			continue
+		}
+		for _, activeFlag := range payload.Status.ActiveFlags {
+			if activeFlag == flag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func modelResponsesSSE(payloads ...string) string {
+	var builder strings.Builder
+	for _, payload := range payloads {
+		eventType := modelResponseSSEType(payload)
+		if eventType != "" {
+			builder.WriteString("event: ")
+			builder.WriteString(eventType)
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("data: ")
+		builder.WriteString(payload)
+		builder.WriteString("\n\n")
+	}
+	return builder.String()
+}
+
+func modelResponseSSEType(payload string) string {
+	var value map[string]any
+	if err := json.Unmarshal([]byte(payload), &value); err != nil {
+		return ""
+	}
+	eventType, _ := value["type"].(string)
+	return eventType
+}
+
+func fakeJWTAppserver(claims map[string]any) string {
+	header, _ := json.Marshal(map[string]any{"alg": "none"})
+	payload, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
+}
+
+func clearAuthEnvAppserver(t *testing.T) {
+	t.Helper()
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	t.Setenv(auth.CodexAPIKeyEnv, "")
+	t.Setenv(auth.CodexAccessTokenEnv, "")
+}

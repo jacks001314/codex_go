@@ -1,0 +1,570 @@
+package turn
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"codex_go/model"
+	"codex_go/tool"
+)
+
+type ToolDispatcherOptions struct {
+	Router             *tool.Router
+	Hooks              tool.HookRunner
+	Now                func() time.Time
+	PostToolInputItems ToolPostExecutionInputItems
+	OnToolStarted      ToolStartedCallback
+	ThreadID           string
+	TurnID             string
+}
+
+type ToolDispatcher struct {
+	router             *tool.Router
+	hooks              tool.HookRunner
+	now                func() time.Time
+	postToolInputItems ToolPostExecutionInputItems
+	onToolStarted      ToolStartedCallback
+	threadID           string
+	turnID             string
+	clockMu            sync.Mutex
+}
+
+type ToolExecutionResult struct {
+	Invocation *tool.Invocation
+	Output     *tool.Output
+	Response   *ToolResponseItem
+	InputItems []any
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
+
+type ToolStartedCallback func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time)
+
+type ToolResponseItem struct {
+	Type      string                     `json:"type"`
+	CallID    string                     `json:"call_id,omitempty"`
+	Name      string                     `json:"name,omitempty"`
+	Status    string                     `json:"status,omitempty"`
+	Execution string                     `json:"execution,omitempty"`
+	Output    *FunctionCallOutputPayload `json:"output,omitempty"`
+	Tools     []any                      `json:"tools,omitempty"`
+}
+
+func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
+	if i == nil {
+		return []byte("null"), nil
+	}
+	switch i.Type {
+	case "tool_search_output":
+		tools := append([]any(nil), i.Tools...)
+		if tools == nil {
+			tools = []any{}
+		}
+		return json.Marshal(struct {
+			Type      string  `json:"type"`
+			CallID    *string `json:"call_id"`
+			Status    string  `json:"status"`
+			Execution string  `json:"execution"`
+			Tools     []any   `json:"tools"`
+		}{
+			Type:      "tool_search_output",
+			CallID:    optionalTurnString(i.CallID),
+			Status:    firstNonEmptyTurnString(i.Status, "completed"),
+			Execution: firstNonEmptyTurnString(i.Execution, "client"),
+			Tools:     tools,
+		})
+	case "custom_tool_call_output":
+		return json.Marshal(struct {
+			Type   string                     `json:"type"`
+			CallID string                     `json:"call_id"`
+			Name   string                     `json:"name,omitempty"`
+			Output *FunctionCallOutputPayload `json:"output"`
+		}{
+			Type:   "custom_tool_call_output",
+			CallID: i.CallID,
+			Name:   i.Name,
+			Output: functionCallOutputPayloadForJSON(i.Output),
+		})
+	default:
+		return json.Marshal(struct {
+			Type   string                     `json:"type"`
+			CallID string                     `json:"call_id"`
+			Output *FunctionCallOutputPayload `json:"output"`
+		}{
+			Type:   firstNonEmptyTurnString(i.Type, "function_call_output"),
+			CallID: i.CallID,
+			Output: functionCallOutputPayloadForJSON(i.Output),
+		})
+	}
+}
+
+type FunctionCallOutputPayload struct {
+	Body    any   `json:"-"`
+	Success *bool `json:"-"`
+}
+
+func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
+	if options == nil {
+		options = &ToolDispatcherOptions{}
+	}
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &ToolDispatcher{
+		router:             options.Router,
+		hooks:              options.Hooks,
+		now:                now,
+		postToolInputItems: options.PostToolInputItems,
+		onToolStarted:      options.OnToolStarted,
+		threadID:           strings.TrimSpace(options.ThreadID),
+		turnID:             strings.TrimSpace(options.TurnID),
+	}
+}
+
+func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.AgentItem) ([]ToolExecutionResult, error) {
+	if d == nil || d.router == nil {
+		return nil, fmt.Errorf("%w: tool router is nil", tool.ErrToolInvalidCall)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	invocations := make([]*tool.Invocation, 0, len(items))
+	for i := range items {
+		responseItem, ok := responseItemFromAgentItem(&items[i])
+		if !ok {
+			continue
+		}
+		invocation, ok, err := d.router.BuildToolCall(*responseItem)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		d.addInvocationContext(invocation)
+		invocations = append(invocations, invocation)
+	}
+	if len(invocations) == 0 {
+		return nil, nil
+	}
+	if len(invocations) == 1 {
+		result, err := d.executeToolInvocation(ctx, invocations[0])
+		if err != nil {
+			return nil, err
+		}
+		return []ToolExecutionResult{*result}, nil
+	}
+	return d.executeToolInvocations(ctx, invocations)
+}
+
+func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
+	if d == nil || invocation == nil {
+		return
+	}
+	if invocation.Context == nil {
+		invocation.Context = map[string]any{}
+	}
+	if d.threadID != "" {
+		invocation.Context["thread_id"] = d.threadID
+		invocation.Context["threadId"] = d.threadID
+	}
+	if d.turnID != "" {
+		invocation.Context["turn_id"] = d.turnID
+		invocation.Context["turnId"] = d.turnID
+	}
+}
+
+func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {
+	results := make([]ToolExecutionResult, len(invocations))
+	index := 0
+	for index < len(invocations) {
+		if !d.router.SupportsParallel(invocations[index].ToolName) {
+			result, err := d.executeToolInvocation(ctx, invocations[index])
+			if err != nil {
+				return nil, err
+			}
+			results[index] = *result
+			index++
+			continue
+		}
+		start := index
+		for index < len(invocations) && d.router.SupportsParallel(invocations[index].ToolName) {
+			index++
+		}
+		groupResults, err := d.executeParallelToolInvocations(ctx, invocations[start:index])
+		if err != nil {
+			return nil, err
+		}
+		copy(results[start:index], groupResults)
+	}
+	return results, nil
+}
+
+func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {
+	if len(invocations) == 1 {
+		result, err := d.executeToolInvocation(ctx, invocations[0])
+		if err != nil {
+			return nil, err
+		}
+		return []ToolExecutionResult{*result}, nil
+	}
+	results := make([]ToolExecutionResult, len(invocations))
+	var errorLock sync.Mutex
+	var firstErr error
+	var wg sync.WaitGroup
+	setError := func(err error) {
+		if err == nil {
+			return
+		}
+		errorLock.Lock()
+		defer errorLock.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	for i := range invocations {
+		index := i
+		invocation := invocations[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := d.executeToolInvocation(ctx, invocation)
+			if err != nil {
+				setError(err)
+				return
+			}
+			results[index] = *result
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
+	toolCtx, cancel := context.WithCancelCause(ctx)
+	invocation.Cancel = cancel
+	defer func() {
+		invocation.Cancel = nil
+		cancel(nil)
+	}()
+	startedAt := d.nowUTC()
+	if d.onToolStarted != nil {
+		d.onToolStarted(toolCtx, invocation, startedAt)
+	}
+	output, dispatchErr := d.router.DispatchWithHooks(toolCtx, invocation, d.hooks)
+	if dispatchErr != nil {
+		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			dispatchErr = cause
+		}
+		callErr := toolCallErrorForModel(dispatchErr)
+		if callErr.IsFatal() {
+			return nil, dispatchErr
+		}
+		output = &tool.Output{
+			CallID:      invocation.CallID,
+			ToolName:    invocation.ToolName,
+			Success:     false,
+			Body:        callErr.ModelMessage(),
+			Error:       callErr.ModelMessage(),
+			CompletedAt: d.nowUTC(),
+		}
+	}
+	if output == nil {
+		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, CompletedAt: d.nowUTC()}
+	}
+	finishedAt := output.CompletedAt
+	if finishedAt.IsZero() {
+		finishedAt = d.nowUTC()
+	}
+	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
+	return &ToolExecutionResult{
+		Invocation: invocation,
+		Output:     output,
+		Response:   ToolResponseFromOutput(invocation, output),
+		InputItems: inputItems,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}, nil
+}
+
+func toolCallErrorForModel(err error) *tool.FunctionCallError {
+	if err == nil {
+		return nil
+	}
+	var callErr *tool.FunctionCallError
+	if errors.As(err, &callErr) {
+		return callErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, tool.ErrToolCancelled) {
+		return tool.Fatal(err.Error())
+	}
+	if errors.Is(err, tool.ErrToolNotFound) || errors.Is(err, tool.ErrToolInvalidCall) {
+		return tool.RespondToModel(err.Error())
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return tool.RespondToModel(err.Error())
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return tool.RespondToModel(err.Error())
+	}
+	return tool.Fatal(err.Error())
+}
+
+func (d *ToolDispatcher) nowUTC() time.Time {
+	if d == nil || d.now == nil {
+		return time.Now().UTC()
+	}
+	d.clockMu.Lock()
+	defer d.clockMu.Unlock()
+	return d.now().UTC()
+}
+
+func (d *ToolDispatcher) postExecutionInputItems(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any {
+	if d == nil || d.postToolInputItems == nil {
+		return nil
+	}
+	items := d.postToolInputItems(ctx, invocation, output)
+	if len(items) == 0 {
+		return nil
+	}
+	return append([]any(nil), items...)
+}
+
+func ToolResponseFromOutput(invocation *tool.Invocation, output *tool.Output) *ToolResponseItem {
+	if invocation == nil {
+		return nil
+	}
+	if output == nil {
+		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true}
+	}
+	switch invocation.Payload.Kind {
+	case tool.PayloadToolSearch:
+		return &ToolResponseItem{
+			Type:      "tool_search_output",
+			CallID:    firstNonEmptyTurnString(output.CallID, invocation.CallID),
+			Status:    "completed",
+			Execution: "client",
+			Tools:     outputTools(output),
+		}
+	case tool.PayloadCustom:
+		return &ToolResponseItem{
+			Type:   "custom_tool_call_output",
+			CallID: firstNonEmptyTurnString(output.CallID, invocation.CallID),
+			Output: NewFunctionCallOutputPayload(outputBody(output), boolPtr(output.Success)),
+		}
+	default:
+		return &ToolResponseItem{
+			Type:   "function_call_output",
+			CallID: firstNonEmptyTurnString(output.CallID, invocation.CallID),
+			Output: NewFunctionCallOutputPayload(outputBody(output), boolPtr(output.Success)),
+		}
+	}
+}
+
+func NewFunctionCallOutputPayload(body any, success *bool) *FunctionCallOutputPayload {
+	if body == nil {
+		body = ""
+	}
+	return &FunctionCallOutputPayload{Body: body, Success: success}
+}
+
+func functionCallOutputPayloadForJSON(payload *FunctionCallOutputPayload) *FunctionCallOutputPayload {
+	if payload == nil {
+		return NewFunctionCallOutputPayload("", nil)
+	}
+	return payload
+}
+
+func (p *FunctionCallOutputPayload) MarshalJSON() ([]byte, error) {
+	if p == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(p.Body)
+}
+
+func (p *FunctionCallOutputPayload) Text() string {
+	if p == nil || p.Body == nil {
+		return ""
+	}
+	switch body := p.Body.(type) {
+	case string:
+		return body
+	case []FunctionCallOutputContentItem:
+		return FunctionCallOutputContentItemsText(body)
+	case []any:
+		return functionCallOutputAnyItemsText(body)
+	default:
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Sprint(body)
+		}
+		return string(data)
+	}
+}
+
+type FunctionCallOutputContentItem struct {
+	Type     string  `json:"type"`
+	Text     string  `json:"text,omitempty"`
+	ImageURL string  `json:"image_url,omitempty"`
+	Detail   *string `json:"detail,omitempty"`
+}
+
+func FunctionCallOutputContentItemsText(items []FunctionCallOutputContentItem) string {
+	parts := make([]string, 0, len(items))
+	for i := range items {
+		if items[i].Type != "input_text" && items[i].Type != "" {
+			continue
+		}
+		if strings.TrimSpace(items[i].Text) != "" {
+			parts = append(parts, items[i].Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool) {
+	if item == nil {
+		return nil, false
+	}
+	switch item.Type {
+	case "function_call":
+		return &tool.ResponseItem{
+			Type:      item.Type,
+			Namespace: item.Namespace,
+			Name:      item.Name,
+			CallID:    firstNonEmptyTurnString(item.CallID, item.ID),
+			Arguments: item.Arguments,
+		}, true
+	case "custom_tool_call":
+		return &tool.ResponseItem{
+			Type:      item.Type,
+			Namespace: item.Namespace,
+			Name:      item.Name,
+			CallID:    firstNonEmptyTurnString(item.CallID, item.ID),
+			Input:     item.Input,
+		}, true
+	case "tool_search_call":
+		return &tool.ResponseItem{
+			Type:      item.Type,
+			CallID:    firstNonEmptyTurnString(item.CallID, item.ID),
+			Execution: item.Execution,
+			Search:    toolSearchMapFromAgentItem(item),
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func outputBody(output *tool.Output) any {
+	if output == nil {
+		return ""
+	}
+	if output.Data != nil {
+		if value, ok := output.Data["content_items"]; ok {
+			return value
+		}
+		if value, ok := output.Data["output"]; ok {
+			return value
+		}
+	}
+	if strings.TrimSpace(output.Body) != "" {
+		return output.Body
+	}
+	if strings.TrimSpace(output.Error) != "" {
+		return output.Error
+	}
+	data, err := json.Marshal(map[string]any{"success": output.Success})
+	if err != nil {
+		return fmt.Sprintf("success=%v", output.Success)
+	}
+	return string(data)
+}
+
+func outputTools(output *tool.Output) []any {
+	if output == nil || output.Data == nil {
+		return nil
+	}
+	if tools, ok := model.ResponsesLoadableToolsFromValue(output.Data["tools"]); ok {
+		return tools
+	}
+	return nil
+}
+
+func toolSearchMapFromAgentItem(item *model.AgentItem) map[string]any {
+	if item == nil {
+		return nil
+	}
+	if item.Search != nil {
+		out := make(map[string]any, len(item.Search))
+		for key, value := range item.Search {
+			out[key] = value
+		}
+		return out
+	}
+	if strings.TrimSpace(item.Arguments) == "" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(item.Arguments), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func functionCallOutputAnyItemsText(items []any) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		itemType, _ := entry["type"].(string)
+		if itemType != "input_text" && itemType != "" {
+			continue
+		}
+		text, _ := entry["text"].(string)
+		if strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func firstNonEmptyTurnString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func optionalTurnString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func IsRespondToModelError(err error) bool {
+	var callErr *tool.FunctionCallError
+	return errors.As(err, &callErr) && callErr.RespondsToModel()
+}

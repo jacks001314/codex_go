@@ -27,40 +27,40 @@ Go 基线提交：`70a536f`（2026-07-15）
 
 | 上游更新 | 上游提交 | Go 当前判断 | Go 主要位置 | 状态 |
 | --- | --- | --- | --- | --- |
-| `apps/read` app-server API | `726b6378d2` | 协议、生产 provider、缓存和 Rust-shaped fixtures 已实现 | `internal/appserver`, `internal/apps`, `internal/chatgptapi` | 完成 |
-| 统一 `[agents]` 多 Agent 配置 | `03bb3b1236` | 配置、角色解析、生产 spawn、reload/resume 和持久化 metadata 已实现 | `internal/config`, `internal/agent`, `internal/appserver` | 完成 |
-| 自动压缩前 fallback 阶段 | `768330dd6c`, `8aae858958` | fallback 配置、token budget phase、metadata 和 analytics 已实现 | `internal/config`, `internal/compact`, `internal/turn`, `internal/appserver` | 完成 |
-| Amazon Bedrock 自定义 transport | `315195492c` | transport overrides、AWS profile/region、签名和 account response 语义已实现 | `internal/model`, `internal/config`, `internal/appserver` | 完成 |
-| raw response cache-write tokens | `1d941253e9`, `2edad72de3` | 已实现 | `internal/model`, `internal/appserver`, `internal/telemetry` | 完成 |
+| `apps/read` app-server API | `726b6378d2` | 协议、生产 provider、缓存和 Rust-shaped fixtures 已实现 | `appserver`, `apps`, `chatgptapi` | 完成 |
+| 统一 `[agents]` 多 Agent 配置 | `03bb3b1236` | 配置、角色解析、生产 spawn、reload/resume 和持久化 metadata 已实现 | `config`, `agent`, `appserver` | 完成 |
+| 自动压缩前 fallback 阶段 | `768330dd6c`, `8aae858958` | fallback 配置、token budget phase、metadata 和 analytics 已实现 | `config`, `compact`, `turn`, `appserver` | 完成 |
+| Amazon Bedrock 自定义 transport | `315195492c` | transport overrides、AWS profile/region、签名和 account response 语义已实现 | `model`, `config`, `appserver` | 完成 |
+| raw response cache-write tokens | `1d941253e9`, `2edad72de3` | 已实现 | `model`, `appserver`, `telemetry` | 完成 |
 
 ### P1：Agent、工具和 Skill
 
 | 上游更新 | 上游提交 | Go 当前判断 | Go 主要位置 | 状态 |
 | --- | --- | --- | --- | --- |
-| 不同 terminal session 并发 `write_stdin` | `f64233d142` | 已实现跨 session 并发、同 session 串行和交互期间防裁剪；Windows race 已通过 | `internal/tool`, `internal/execserver`, `internal/appserver` | 完成 |
-| MCP tool output 保留 encrypted content | `cbc83d961e` | 已保留 MCP wire item 并序列化为 Responses content items | `internal/mcp`, `internal/model`, `internal/protocol` | 完成 |
-| 子 Agent reload 时恢复角色 | `b7983c2a07` | reload/resume 从持久化 thread metadata 恢复 role/nickname 并重建 spawn graph | `internal/agent`, `internal/session`, `internal/appserver` | 完成 |
-| spawn role 后校验 reasoning effort | `8a7c854bff` | spawn 后应用并校验角色 reasoning effort | `internal/agent`, `internal/model`, `internal/config` | 完成 |
-| spawned agent 使用配置模型默认值 | `21c37fb374` | 未指定角色模型时使用配置默认模型 | `internal/agent`, `internal/model`, `internal/turn` | 完成 |
-| 仅在配置角色时暴露 Agent 类型 | `9ff47868eb` | 未配置角色时不暴露 Agent 类型 | `internal/agent`, `internal/turn` | 完成 |
-| imported memory 保留 scope/provenance | `693b8c2ba4` | 部分实现 | `internal/config`, `internal/memories`, `internal/session` | 待同步 |
-| Skill character n-gram 选择器 | `c983a53f20` | bounded 算法、shadow metrics 和 opt-in production selection 已接入 turn | `internal/appserver`, `internal/prompt` | 完成 |
-| Skill fielded BM25 选择器 | `a47c661ea9` | field weighting、IDF 与上游 fixture 已实现并纳入选择链路 | `internal/appserver`, `internal/prompt` | 完成 |
-| Skill multi-query lexical 选择器 | `0f44bca915` | weighted lexical、query views 与合并排序已实现并可通过配置启用 | `internal/appserver`, `internal/prompt` | 完成 |
+| 不同 terminal session 并发 `write_stdin` | `f64233d142` | 已实现跨 session 并发、同 session 串行和交互期间防裁剪；Windows race 已通过 | `tool`, `execserver`, `appserver` | 完成 |
+| MCP tool output 保留 encrypted content | `cbc83d961e` | 已保留 MCP wire item 并序列化为 Responses content items | `mcp`, `model`, `protocol` | 完成 |
+| 子 Agent reload 时恢复角色 | `b7983c2a07` | reload/resume 从持久化 thread metadata 恢复 role/nickname 并重建 spawn graph | `agent`, `session`, `appserver` | 完成 |
+| spawn role 后校验 reasoning effort | `8a7c854bff` | spawn 后应用并校验角色 reasoning effort | `agent`, `model`, `config` | 完成 |
+| spawned agent 使用配置模型默认值 | `21c37fb374` | 未指定角色模型时使用配置默认模型 | `agent`, `model`, `turn` | 完成 |
+| 仅在配置角色时暴露 Agent 类型 | `9ff47868eb` | 未配置角色时不暴露 Agent 类型 | `agent`, `turn` | 完成 |
+| imported memory 保留 scope/provenance | `693b8c2ba4` | 部分实现 | `config`, `memories`, `session` | 待同步 |
+| Skill character n-gram 选择器 | `c983a53f20` | bounded 算法、shadow metrics 和 opt-in production selection 已接入 turn | `appserver`, `prompt` | 完成 |
+| Skill fielded BM25 选择器 | `a47c661ea9` | field weighting、IDF 与上游 fixture 已实现并纳入选择链路 | `appserver`, `prompt` | 完成 |
+| Skill multi-query lexical 选择器 | `0f44bca915` | weighted lexical、query views 与合并排序已实现并可通过配置启用 | `appserver`, `prompt` | 完成 |
 
 ### P2：会话、环境和 TUI
 
 | 上游更新 | 上游提交 | Go 当前判断 | Go 主要位置 | 状态 |
 | --- | --- | --- | --- | --- |
-| app-server 分页 thread history | `da61f7d8e1` | start/read/resume/review/rollback fixture 已覆盖 | `internal/appserver`, `internal/session`, `internal/rollout` | 完成 |
-| 编辑旧 prompt 时分叉 conversation | `469ce0db51` | `thread/fork.beforeTurnId`、首条 prompt fresh thread 和失败恢复已覆盖 | `internal/tui`, `internal/appserver`, `internal/session` | 完成 |
-| retry/edit 保留 thread context | `d88db19144` | session context、in-flight turn/request、composer input 和 originator 已保留 | `internal/turn`, `internal/session`, `internal/tui` | 完成 |
-| interrupted prompt 保留在历史中 | `70a0b1eef8` | 中断 prompt 写入 conversation history，并由 Tea history fixture 覆盖 | `internal/tui`, `internal/session`, `internal/rollout` | 完成 |
-| safety-buffer retry 使用 forked thread | `9cddda7556` | safety-buffer retry 在 forked thread 上执行并覆盖 fork-point 校验 | `internal/tui`, `internal/appserver` | 完成 |
-| active-turn environment 在设置更新时保持稳定 | `c4ce0493dc` | active turn 使用深拷贝 environment snapshot，后续 turn 使用新设置 | `internal/appserver`, `internal/turn`, `internal/execserver` | 完成 |
-| 所有 session 刷新 step world state | `71448a29e7` | 每个 turn 按捕获 CWD 重建 run config/AGENTS 指令并覆盖跨 CWD fixture | `internal/appserver`, `internal/turn`, `internal/plugin` | 完成 |
-| standalone extension 转发 thread originator | `78ba047bda` | thread originator 贯通 model request header 与 telemetry product client id | `internal/appserver`, `internal/model`, `internal/telemetry` | 完成 |
-| `environment/status` app-server/exec-server API | upstream v2 fixture | 四态 response、exec-server ready、unknown/disconnected/pending 语义和 schema surface 已实现 | `internal/appserver`, `internal/execserver` | 完成 |
+| app-server 分页 thread history | `da61f7d8e1` | start/read/resume/review/rollback fixture 已覆盖 | `appserver`, `session`, `rollout` | 完成 |
+| 编辑旧 prompt 时分叉 conversation | `469ce0db51` | `thread/fork.beforeTurnId`、首条 prompt fresh thread 和失败恢复已覆盖 | `tui`, `appserver`, `session` | 完成 |
+| retry/edit 保留 thread context | `d88db19144` | session context、in-flight turn/request、composer input 和 originator 已保留 | `turn`, `session`, `tui` | 完成 |
+| interrupted prompt 保留在历史中 | `70a0b1eef8` | 中断 prompt 写入 conversation history，并由 Tea history fixture 覆盖 | `tui`, `session`, `rollout` | 完成 |
+| safety-buffer retry 使用 forked thread | `9cddda7556` | safety-buffer retry 在 forked thread 上执行并覆盖 fork-point 校验 | `tui`, `appserver` | 完成 |
+| active-turn environment 在设置更新时保持稳定 | `c4ce0493dc` | active turn 使用深拷贝 environment snapshot，后续 turn 使用新设置 | `appserver`, `turn`, `execserver` | 完成 |
+| 所有 session 刷新 step world state | `71448a29e7` | 每个 turn 按捕获 CWD 重建 run config/AGENTS 指令并覆盖跨 CWD fixture | `appserver`, `turn`, `plugin` | 完成 |
+| standalone extension 转发 thread originator | `78ba047bda` | thread originator 贯通 model request header 与 telemetry product client id | `appserver`, `model`, `telemetry` | 完成 |
+| `environment/status` app-server/exec-server API | upstream v2 fixture | 四态 response、exec-server ready、unknown/disconnected/pending 语义和 schema surface 已实现 | `appserver`, `execserver` | 完成 |
 
 ### P3：性能、清理和非运行时事项
 
@@ -77,7 +77,7 @@ Go 基线提交：`70a536f`（2026-07-15）
 
 目标：后续同步可以重复执行，避免依赖人工比对。
 
-- [x] 将 `internal/parity` 的 Rust workspace、关键文件 hash 和 fixture manifest 更新到 `315195492c`。
+- [x] 将 `parity` 的 Rust workspace、关键文件 hash 和 fixture manifest 更新到 `315195492c`。
 - [x] 将默认上游路径切换为 `D:\qax\reagent\dev\git\codex\codex-rs`，同时保留 `CODEX_RUST_ROOT` 覆盖。
 - [x] 修正 app-server method 漂移解析，使其能识别 Rust macro 中的显式 wire method。
 - [x] 增加 feature key、ConfigToml 顶层字段和 tool discovery surface 漂移测试。
@@ -102,7 +102,7 @@ Go 基线提交：`70a536f`（2026-07-15）
 验收：
 
 ```powershell
-go test ./internal/parity ./internal/features ./internal/cli -count=1
+go test ./parity ./features ./cli -count=1
 ```
 
 ### Batch 1：app-server 和 raw response 协议
@@ -127,7 +127,7 @@ go test ./internal/parity ./internal/features ./internal/cli -count=1
 验收：
 
 ```powershell
-go test ./internal/appserver ./internal/apps ./internal/chatgptapi ./internal/model -count=1
+go test ./appserver ./apps ./chatgptapi ./model -count=1
 ```
 
 完成标准：新增 Batch 1 协议已通过 Rust schema validation；全量 schema 树仍由 parity 测试持续监控。
@@ -149,7 +149,7 @@ go test ./internal/appserver ./internal/apps ./internal/chatgptapi ./internal/mo
 验收：
 
 ```powershell
-go test ./internal/config ./internal/agent ./internal/model ./internal/appserver -count=1
+go test ./config ./agent ./model ./appserver -count=1
 ```
 
 ### Batch 3：token budget 与自动压缩 fallback
@@ -168,7 +168,7 @@ go test ./internal/config ./internal/agent ./internal/model ./internal/appserver
 验收：
 
 ```powershell
-go test ./internal/config ./internal/compact ./internal/turn ./internal/appserver -count=1
+go test ./config ./compact ./turn ./appserver -count=1
 ```
 
 ### Batch 4：Unified Exec、MCP 与并发
@@ -179,7 +179,7 @@ go test ./internal/config ./internal/compact ./internal/turn ./internal/appserve
 - [x] 允许不同 terminal session 并发写入。
 - [x] 同一 session 内仍保证输入顺序、退出清理和事件顺序。
 - [x] 增加跨 session 并行、同 session 串行和交互期间防裁剪 fixture。
-- [x] 在安装 GCC 兼容 C 工具链后运行 race detector；Windows 使用 MSYS2 UCRT64 GCC 16.1.0，`CGO_ENABLED=1`、`CC=gcc`，`go test -race ./internal/tool ./internal/execserver ./internal/mcp ./internal/appserver -count=1` 已通过。
+- [x] 在安装 GCC 兼容 C 工具链后运行 race detector；Windows 使用 MSYS2 UCRT64 GCC 16.1.0，`CGO_ENABLED=1`、`CC=gcc`，`go test -race ./tool ./execserver ./mcp ./appserver -count=1` 已通过。
 - [x] MCP tool output 完整保留 encrypted content，不降级为字符串或丢弃字段。
 - [x] 对齐 MCP metadata 中已移除的 template ID。
 - [x] 保持 terminal call ID、原始 exec call ID 和 analytics attribution 正确；并行 session 完成顺序反转时元数据仍互不串线。
@@ -187,8 +187,8 @@ go test ./internal/config ./internal/compact ./internal/turn ./internal/appserve
 验收：
 
 ```powershell
-go test ./internal/tool ./internal/execserver ./internal/mcp ./internal/protocol ./internal/appserver -count=1
-go test -race ./internal/tool ./internal/execserver ./internal/mcp ./internal/appserver -count=1
+go test ./tool ./execserver ./mcp ./protocol ./appserver -count=1
+go test -race ./tool ./execserver ./mcp ./appserver -count=1
 ```
 
 本轮补验还通过了完整 race：`go test -race ./... -count=1`。
@@ -208,7 +208,7 @@ go test -race ./internal/tool ./internal/execserver ./internal/mcp ./internal/ap
 验收：
 
 ```powershell
-go test ./internal/appserver ./internal/prompt ./internal/features -count=1
+go test ./appserver ./prompt ./features -count=1
 ```
 
 ### Batch 6：会话历史、环境和 TUI
@@ -229,8 +229,8 @@ go test ./internal/appserver ./internal/prompt ./internal/features -count=1
 验收：
 
 ```powershell
-go test ./internal/session ./internal/rollout ./internal/appserver ./internal/tui/... -count=1
-go test ./internal/appserver ./internal/execserver -run "EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads" -count=1
+go test ./session ./rollout ./appserver ./tui/... -count=1
+go test ./appserver ./execserver -run "EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads" -count=1
 ```
 
 ### Batch 7：跨平台发布门禁
@@ -260,7 +260,7 @@ go vet ./...
 - `go test ./... -count=1` 通过。
 - `go test -race ./... -count=1` 通过。
 - `go vet ./...` 通过。
-- `internal/sandbox/windowssandbox/elevated`、`internal/network`、`internal/appserver` PTY 相关测试均包含在上述完整测试与 race 覆盖中。
+- `sandbox/windowssandbox/elevated`、`network`、`appserver` PTY 相关测试均包含在上述完整测试与 race 覆盖中。
 
 ## 4. 推荐执行顺序与里程碑
 

@@ -205,7 +205,7 @@ function runGoConPTYHarness() {
   };
   const result = spawnSync(
     "go",
-    ["test", "./internal/tui/tea", "-run", "TestSystemCodexSlashParityWithConPTY", "-count=1", "-v"],
+    ["test", "./tui/tea", "-run", "TestSystemCodexSlashParityWithConPTY", "-count=1", "-v"],
     {
       cwd: root,
       env,

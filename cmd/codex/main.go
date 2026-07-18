@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"codex_go/internal/app"
-	"codex_go/internal/applypatch"
-	"codex_go/internal/auth"
-	"codex_go/internal/cli"
-	"codex_go/internal/execserver"
-	"codex_go/internal/sandbox"
-	"codex_go/internal/sandbox/windowssandbox"
-	commandrunner "codex_go/internal/sandbox/windowssandbox/bin/command_runner"
-	setupmain "codex_go/internal/sandbox/windowssandbox/bin/setup_main"
+	"codex_go/app"
+	"codex_go/applypatch"
+	"codex_go/auth"
+	"codex_go/cli"
+	"codex_go/execserver"
+	"codex_go/sandbox"
+	"codex_go/sandbox/windowssandbox"
+	commandrunner "codex_go/sandbox/windowssandbox/bin/command_runner"
+	setupmain "codex_go/sandbox/windowssandbox/bin/setup_main"
 )
 
 func main() {
