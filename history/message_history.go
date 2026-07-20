@@ -168,35 +168,51 @@ func MessageHistoryMetadata(config *MessageHistoryConfig) (uint64, int) {
 }
 
 func LookupMessageHistoryEntry(logID uint64, offset int, config *MessageHistoryConfig) (*MessageHistoryEntry, bool) {
-	if offset < 0 {
-		return nil, false
+	entries := LookupMessageHistoryEntries(logID, []int{offset}, config)
+	entry, ok := entries[offset]
+	return entry, ok
+}
+
+func LookupMessageHistoryEntries(logID uint64, offsets []int, config *MessageHistoryConfig) map[int]*MessageHistoryEntry {
+	out := make(map[int]*MessageHistoryEntry)
+	wanted := make(map[int]bool, len(offsets))
+	for _, offset := range offsets {
+		if offset >= 0 {
+			wanted[offset] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return out
 	}
 	path := config.HistoryPath()
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, false
+		return out
 	}
 	if logID != 0 && logIdentity(info) != logID {
-		return nil, false
+		return out
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false
+		return out
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	index := 0
 	for scanner.Scan() {
-		if index == offset {
+		if wanted[index] {
 			var entry MessageHistoryEntry
-			if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-				return nil, false
+			if err := json.Unmarshal(scanner.Bytes(), &entry); err == nil {
+				value := entry
+				out[index] = &value
 			}
-			return &entry, true
+			if len(out) == len(wanted) {
+				break
+			}
 		}
 		index++
 	}
-	return nil, false
+	return out
 }
 
 func logIdentity(info os.FileInfo) uint64 {

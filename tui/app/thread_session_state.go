@@ -22,6 +22,16 @@ type ThreadSessionState struct {
 	NetworkProxy            any
 	RolloutPath             *string
 	Originator              string
+	ParentOwned             bool
+}
+
+func (s ThreadSessionState) IsReadOnly() bool { return s.ParentOwned }
+
+func (s ThreadSessionState) MutationError() string {
+	if s.ParentOwned {
+		return "This sub-agent thread is owned by its parent and is read-only."
+	}
+	return ""
 }
 
 type ThreadPermissionSettings struct {

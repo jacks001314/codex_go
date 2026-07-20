@@ -12,6 +12,37 @@ import (
 var ansiSequenceRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func TestModelTerminalSnapshots(t *testing.T) {
+	t.Run("wide region chrome", func(t *testing.T) {
+		state := codextui.NewState(&codextui.Options{
+			Model:           "gpt-5",
+			ApprovalPolicy:  "on-request",
+			Sandbox:         "workspace-write",
+			ReasoningEffort: "high",
+		})
+		state.SetThreadID("thread-wide")
+		state.AddMessage(codextui.RoleUser, "inspect the workspace")
+		state.AddMessage(codextui.RoleAssistant, "I am checking the files.")
+		model := NewModel(state, Options{Width: 104, Height: 20})
+
+		got := normalizeTerminalSnapshot(model.View())
+		for _, want := range []string{
+			"Thread: thread-wide",
+			" ACTIVITY ─────────",
+			"╭────────────────",
+			"│ > Ask Codex",
+			"╰────────────────",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("wide snapshot missing %q:\n%s", want, got)
+			}
+		}
+		for _, line := range strings.Split(got, "\n") {
+			if len([]rune(line)) > 104 {
+				t.Fatalf("wide snapshot line exceeds terminal width: %d: %q", len([]rune(line)), line)
+			}
+		}
+	})
+
 	t.Run("main view", func(t *testing.T) {
 		state := codextui.NewState(&codextui.Options{
 			Model:           "gpt-5",

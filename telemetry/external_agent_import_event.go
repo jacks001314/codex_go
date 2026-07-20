@@ -37,6 +37,7 @@ type CodexOnboardingExternalAgentImportFailureMetadata struct {
 	ItemType        string  `json:"type"`
 	FailureStage    string  `json:"failure_stage"`
 	ErrorType       string  `json:"error_type"`
+	SubErrorType    *string `json:"sub_error_type,omitempty"`
 	ProductClientID *string `json:"product_client_id"`
 }
 

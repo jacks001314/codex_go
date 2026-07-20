@@ -1,0 +1,34 @@
+package session
+
+import "encoding/json"
+
+type WorldState struct {
+	CollaborationMode      json.RawMessage `json:"collaborationMode,omitempty"`
+	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
+	RealtimeConversation   json.RawMessage `json:"realtimeConversation,omitempty"`
+}
+
+func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
+	if len(raw) == 0 {
+		return &WorldState{}, nil
+	}
+	var state WorldState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
+	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
+	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
+	return &state, nil
+}
+
+func EncodeWorldState(state *WorldState) (json.RawMessage, error) {
+	if state == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}

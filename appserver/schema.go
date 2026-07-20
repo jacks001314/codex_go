@@ -145,6 +145,7 @@ func baseClientRequestMethods() []ProtocolMethod {
 	return []ProtocolMethod{
 		{Method: string(MethodAppList)},
 		{Method: string(MethodAppRead)},
+		{Method: string(MethodAppInstalled)},
 		{Method: string(MethodCancelLoginAccount)},
 		{Method: string(MethodCommandExec)},
 		{Method: string(MethodCommandExecResize)},
@@ -270,6 +271,7 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadRealtimeStart), Experimental: true},
 		{Method: string(MethodThreadRealtimeStop), Experimental: true},
 		{Method: string(MethodThreadSearch), Experimental: true},
+		{Method: string(MethodThreadSearchOccurrences), Experimental: true},
 		{Method: string(MethodThreadSettingsUpdate), Experimental: true},
 		{Method: string(MethodThreadTurnsList), Experimental: true},
 	}
@@ -433,6 +435,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodAccountSessionsSwitch):                  {Params: "AccountSessionsSwitchParams", Result: "AccountSessionsResponse"},
 		string(MethodAppList):                                {Params: "AppsListParams", Result: "AppsListResponse"},
 		string(MethodAppRead):                                {Params: "AppsReadParams", Result: "AppsReadResponse"},
+		string(MethodAppInstalled):                           {Params: "AppsInstalledParams", Result: "AppsInstalledResponse"},
 		string(MethodCancelLoginAccount):                     {Params: "CancelLoginAccountParams", Result: "CancelLoginAccountResponse"},
 		string(MethodCollaborationModeList):                  {Params: "CollaborationModeListParams", Result: "CollaborationModeListResponse"},
 		string(MethodCommandExec):                            {Params: "CommandExecParams", Result: "CommandExecResponse"},
@@ -551,6 +554,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodThreadResume):                           {Params: "ThreadResumeParams", Result: "ThreadResumeResponse"},
 		string(MethodThreadRollback):                         {Params: "ThreadRollbackParams", Result: "ThreadRollbackResponse"},
 		string(MethodThreadSearch):                           {Params: "ThreadSearchParams", Result: "ThreadSearchResponse"},
+		string(MethodThreadSearchOccurrences):                {Params: "ThreadSearchOccurrencesParams", Result: "ThreadSearchOccurrencesResponse"},
 		string(MethodThreadSetName):                          {Params: "ThreadSetNameParams", Result: "ThreadSetNameResponse"},
 		string(MethodThreadSettingsUpdate):                   {Params: "ThreadSettingsUpdateParams", Result: "ThreadSettingsUpdateResponse"},
 		string(MethodThreadShellCommand):                     {Params: "ThreadShellCommandParams", Result: "ThreadShellCommandResponse"},

@@ -63,6 +63,7 @@ type ContentPart struct {
 	Type     string  `json:"type"`
 	Text     string  `json:"text,omitempty"`
 	ImageURL string  `json:"image_url,omitempty"`
+	AudioURL string  `json:"audio_url,omitempty"`
 	Detail   *string `json:"detail,omitempty"`
 }
 
@@ -186,6 +187,65 @@ type Page struct {
 	Records         []Record
 	NextCursor      string
 	BackwardsCursor string
+}
+
+type MessageOccurrence struct {
+	TurnID string
+	ItemID string
+	Text   string
+	Start  int
+	End    int
+}
+
+func (s *Store) SearchMessageOccurrences(threadID ThreadID, searchTerm string) ([]MessageOccurrence, error) {
+	record, err := s.Read(threadID, true, true)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(searchTerm))
+	if needle == "" {
+		return []MessageOccurrence{}, nil
+	}
+	out := make([]MessageOccurrence, 0)
+	for _, item := range record.Items {
+		role := strings.ToLower(strings.TrimSpace(item.Role))
+		itemType := strings.ToLower(strings.TrimSpace(item.Type))
+		if role != "user" && role != "assistant" && itemType != "user_message" && itemType != "assistant_message" && itemType != "agent_message" {
+			continue
+		}
+		if role == "assistant" {
+			phase, _ := item.Data["phase"].(string)
+			if strings.TrimSpace(phase) != "final_answer" {
+				continue
+			}
+		}
+		text := item.Text
+		if text == "" {
+			parts := make([]string, 0, len(item.Content))
+			for _, part := range item.Content {
+				if strings.TrimSpace(part.Text) != "" {
+					parts = append(parts, part.Text)
+				}
+			}
+			text = strings.Join(parts, "\n")
+		}
+		lower := strings.ToLower(text)
+		for from := 0; from <= len(lower); {
+			rel := strings.Index(lower[from:], needle)
+			if rel < 0 {
+				break
+			}
+			start := from + rel
+			end := start + len(needle)
+			turnID, _ := item.Data["turn_id"].(string)
+			if turnID == "" {
+				turnID, _ = item.Data["turnId"].(string)
+			}
+			out = append(out, MessageOccurrence{TurnID: turnID, ItemID: item.ID, Text: text, Start: start, End: end})
+			from = end
+		}
+	}
+	return out, nil
 }
 
 type ForkOptions struct {

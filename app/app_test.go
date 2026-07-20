@@ -939,7 +939,7 @@ func TestInteractiveTurnCommandUsesTUIStateAndResume(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{
 		Model:           "gpt-tui",
 		ReasoningEffort: "high",
-		ApprovalPolicy:  "never",
+		ApprovalPolicy:  "on-request",
 		Sandbox:         "workspace-write",
 		Search:          true,
 		NoAltScreen:     true,
@@ -986,7 +986,7 @@ func TestInteractiveTurnCommandUsesTUIStateAndResume(t *testing.T) {
 	}
 	if captured.Exec.Shared.Model != "gpt-tui" ||
 		captured.Exec.Shared.ModelReasoningEffort != "high" ||
-		captured.Exec.Shared.ApprovalPolicy != "never" ||
+		captured.Exec.Shared.ApprovalPolicy != "on-request" ||
 		captured.Exec.Shared.Sandbox != "workspace-write" ||
 		!captured.Exec.Shared.Search ||
 		!captured.Exec.Shared.NoAltScreen {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -84,6 +85,18 @@ const (
 	RoleAssistant TextRole = "assistant"
 )
 
+type CodexResponseHandoffMode string
+
+const (
+	HandoffModeThinking CodexResponseHandoffMode = "thinking"
+	HandoffModeBemTags  CodexResponseHandoffMode = "bemTags"
+)
+
+type InitialTextItem struct {
+	Role TextRole `json:"role"`
+	Text string   `json:"text"`
+}
+
 type AudioChunk struct {
 	Data              string  `json:"data"`
 	SampleRate        uint32  `json:"sampleRate"`
@@ -142,19 +155,21 @@ func (t *StartTransport) Validate() error {
 }
 
 type StartParams struct {
-	ThreadID                   string          `json:"threadId"`
-	ClientManagedHandoffs      *bool           `json:"clientManagedHandoffs,omitempty"`
-	CodexResponsesAsItems      *bool           `json:"codexResponsesAsItems,omitempty"`
-	CodexResponseItemPrefix    *string         `json:"codexResponseItemPrefix,omitempty"`
-	CodexResponseHandoffPrefix *string         `json:"codexResponseHandoffPrefix,omitempty"`
-	Model                      *string         `json:"model,omitempty"`
-	OutputModality             OutputModality  `json:"outputModality"`
-	IncludeStartupContext      *bool           `json:"includeStartupContext,omitempty"`
-	Prompt                     OptionalString  `json:"prompt,omitempty"`
-	RealtimeSessionID          *string         `json:"realtimeSessionId,omitempty"`
-	Transport                  *StartTransport `json:"transport,omitempty"`
-	Version                    *Version        `json:"version,omitempty"`
-	Voice                      *Voice          `json:"voice,omitempty"`
+	ThreadID                   string                    `json:"threadId"`
+	ClientManagedHandoffs      *bool                     `json:"clientManagedHandoffs,omitempty"`
+	CodexResponsesAsItems      *bool                     `json:"codexResponsesAsItems,omitempty"`
+	CodexResponseItemPrefix    *string                   `json:"codexResponseItemPrefix,omitempty"`
+	CodexResponseHandoffPrefix *string                   `json:"codexResponseHandoffPrefix,omitempty"`
+	CodexResponseHandoffMode   *CodexResponseHandoffMode `json:"codexResponseHandoffMode,omitempty"`
+	Model                      *string                   `json:"model,omitempty"`
+	OutputModality             OutputModality            `json:"outputModality"`
+	IncludeStartupContext      *bool                     `json:"includeStartupContext,omitempty"`
+	InitialItems               []InitialTextItem         `json:"initialItems,omitempty"`
+	Prompt                     OptionalString            `json:"prompt,omitempty"`
+	RealtimeSessionID          *string                   `json:"realtimeSessionId,omitempty"`
+	Transport                  *StartTransport           `json:"transport,omitempty"`
+	Version                    *Version                  `json:"version,omitempty"`
+	Voice                      *Voice                    `json:"voice,omitempty"`
 }
 
 func (p *StartParams) Validate() error {
@@ -173,6 +188,22 @@ func (p *StartParams) Validate() error {
 	}
 	if err := p.Transport.Validate(); err != nil {
 		return err
+	}
+	if len(p.InitialItems) > 128 {
+		return fmt.Errorf("%w: initialItems must contain at most 128 items", ErrInvalidRealtimeRequest)
+	}
+	totalBytes := 0
+	for _, item := range p.InitialItems {
+		if item.Role != RoleUser && item.Role != RoleDeveloper && item.Role != RoleAssistant {
+			return fmt.Errorf("%w: unsupported initial item role %q", ErrInvalidRealtimeRequest, item.Role)
+		}
+		if strings.TrimSpace(item.Text) == "" {
+			return fmt.Errorf("%w: initial item text is required", ErrInvalidRealtimeRequest)
+		}
+		totalBytes += len(item.Text)
+	}
+	if totalBytes > 8192*4 {
+		return fmt.Errorf("%w: initialItems text exceeds limit", ErrInvalidRealtimeRequest)
 	}
 	return nil
 }
@@ -231,7 +262,16 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		CodexResponsesAsItems:      codexResponsesAsItems,
 		CodexResponseItemPrefix:    stringValue(p.CodexResponseItemPrefix),
 		CodexResponseHandoffPrefix: stringValue(p.CodexResponseHandoffPrefix),
+		CodexResponseHandoffMode:   handoffModeValue(p.CodexResponseHandoffMode),
+		InitialItems:               append([]InitialTextItem(nil), p.InitialItems...),
 	}, nil
+}
+
+func handoffModeValue(value *CodexResponseHandoffMode) CodexResponseHandoffMode {
+	if value == nil || *value == "" {
+		return HandoffModeThinking
+	}
+	return *value
 }
 
 type OptionalString struct {
@@ -403,6 +443,8 @@ type SessionConfig struct {
 	CodexResponsesAsItems      bool
 	CodexResponseItemPrefix    string
 	CodexResponseHandoffPrefix string
+	CodexResponseHandoffMode   CodexResponseHandoffMode
+	InitialItems               []InitialTextItem
 }
 
 type SessionState struct {
@@ -419,14 +461,148 @@ type SessionState struct {
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*SessionState
+	streams  map[string]*codexOutputStream
 	now      func() time.Time
+}
+
+const (
+	codexOutputByteLimit        = 4000
+	codexOutputHeadLimit        = 2000
+	codexOutputTailLimit        = 1978
+	codexOutputTruncationMarker = "\n…output truncated…\n"
+	agentFinalMessagePrefix     = "\"Agent Final Message\":\n\n"
+)
+
+const codexOutputTruncationText = "\n…output truncated…\n"
+
+type codexOutputStream struct {
+	ThreadID  string
+	ItemID    string
+	Phase     string
+	Sent      int
+	Tail      string
+	Truncated bool
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		sessions: map[string]*SessionState{},
+		streams:  map[string]*codexOutputStream{},
 		now:      time.Now,
 	}
+}
+
+func (m *Manager) BeginCodexOutput(threadID string, itemID string, phase string) {
+	if m == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(itemID) == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLocked()
+	state, ok := m.sessions[threadID]
+	if !ok || state.ClosedAt != nil || state.Config.ClientManagedHandoffs || state.Config.CodexResponsesAsItems {
+		return
+	}
+	m.streams[threadID+"\x00"+itemID] = &codexOutputStream{ThreadID: threadID, ItemID: itemID, Phase: strings.TrimSpace(phase)}
+}
+
+func (m *Manager) StreamCodexOutput(threadID string, itemID string, delta string) []Notification {
+	if m == nil || delta == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLocked()
+	key := threadID + "\x00" + itemID
+	stream := m.streams[key]
+	if stream == nil {
+		state, ok := m.sessions[threadID]
+		if !ok || state.ClosedAt != nil || state.Config.ClientManagedHandoffs || state.Config.CodexResponsesAsItems {
+			return nil
+		}
+		stream = &codexOutputStream{ThreadID: threadID, ItemID: itemID}
+		m.streams[key] = stream
+	}
+	if stream.Truncated {
+		stream.Tail = takeLastUTF8Bytes(stream.Tail+delta, codexOutputTailLimit)
+		return nil
+	}
+	prefix := ""
+	if stream.Sent == 0 && stream.Phase != "commentary" {
+		prefix = agentFinalMessagePrefix
+	}
+	remaining := codexOutputByteLimit - stream.Sent - len(prefix)
+	if len(delta) <= remaining {
+		text := prefix + delta
+		stream.Sent += len(text)
+		return []Notification{codexHandoffNotification(threadID, itemID, stream.Phase, text, false)}
+	}
+	headBudget := codexOutputHeadLimit - stream.Sent - len(prefix)
+	if headBudget < 0 {
+		headBudget = 0
+	}
+	head := takeFirstUTF8Bytes(delta, headBudget)
+	stream.Tail = takeLastUTF8Bytes(delta[len(head):], codexOutputTailLimit)
+	stream.Truncated = true
+	if head == "" {
+		return nil
+	}
+	text := prefix + head
+	stream.Sent += len(text)
+	return []Notification{codexHandoffNotification(threadID, itemID, stream.Phase, text, false)}
+}
+
+func (m *Manager) FinishCodexOutput(threadID string, itemID string) []Notification {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := threadID + "\x00" + itemID
+	stream := m.streams[key]
+	delete(m.streams, key)
+	if stream == nil || !stream.Truncated {
+		return nil
+	}
+	return []Notification{codexHandoffNotification(threadID, itemID, stream.Phase, codexOutputTruncationText+stream.Tail, true)}
+}
+
+func codexHandoffNotification(threadID, itemID, phase, text string, final bool) Notification {
+	channel := "thinking"
+	if phase == "final_answer" {
+		channel = "final"
+	}
+	return Notification{Method: NotificationItemAdded, Params: ItemAddedNotification{ThreadID: threadID, Item: map[string]any{
+		"type": "handoff_append", "handoffId": "codex", "itemId": itemID, "phase": phase, "channel": channel, "text": text, "final": final,
+	}}}
+}
+
+func takeFirstUTF8Bytes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(text) <= max {
+		return text
+	}
+	end := max
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	return text[:end]
+}
+
+func takeLastUTF8Bytes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(text) <= max {
+		return text
+	}
+	start := len(text) - max
+	for start < len(text) && !utf8.ValidString(text[start:]) {
+		start++
+	}
+	return text[start:]
 }
 
 func (m *Manager) SetClock(clock func() time.Time) {
@@ -462,6 +638,14 @@ func (m *Manager) Start(params *StartParams) (*SessionState, []Notification, err
 	m.sessions[config.ThreadID] = state
 	notifications := []Notification{
 		NewStartedNotification(config.ThreadID, config.RealtimeSessionID, config.Version),
+	}
+	for index, item := range config.InitialItems {
+		notifications = append(notifications, Notification{
+			Method: NotificationItemAdded,
+			Params: ItemAddedNotification{ThreadID: config.ThreadID, Item: map[string]any{
+				"type": "message", "itemId": fmt.Sprintf("initial-%d", index+1), "role": string(item.Role), "text": item.Text,
+			}},
+		})
 	}
 	if config.Transport.Type == "webrtc" {
 		notifications = append(notifications, NewSDPNotification(config.ThreadID, "answer:"+config.Transport.SDP))
@@ -557,6 +741,9 @@ func (m *Manager) ensureLocked() {
 	}
 	if m.now == nil {
 		m.now = time.Now
+	}
+	if m.streams == nil {
+		m.streams = map[string]*codexOutputStream{}
 	}
 }
 

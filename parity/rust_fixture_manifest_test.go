@@ -57,7 +57,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests",
-			Files: 18,
+			Files: 19,
 			Owner: "exec, app",
 			Focus: "exec JSON output, prompt/stdin, output schema, resume, sandbox, hooks",
 			Required: []string{
@@ -68,7 +68,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests/suite",
-			Files: 15,
+			Files: 16,
 			Owner: "exec",
 			Focus: "codex exec end-to-end suite cases",
 			Required: []string{
@@ -79,7 +79,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "app-server/tests/suite/v2",
-			Files: 88,
+			Files: 90,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{

@@ -2,6 +2,13 @@ package app
 
 import "testing"
 
+func TestParentOwnedThreadSessionIsReadOnly(t *testing.T) {
+	state := ThreadSessionState{ThreadID: "child", ParentOwned: true}
+	if !state.IsReadOnly() || state.MutationError() != "This sub-agent thread is owned by its parent and is read-only." {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
 func TestSyncActiveThreadServiceTierToCachedSessionMatchRust(t *testing.T) {
 	fast := "flex"
 	primary := ThreadSessionState{ThreadID: "thread-1", ServiceTier: &fast}

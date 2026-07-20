@@ -697,6 +697,7 @@ type ManagedHooksRequirements struct {
 	PreCompact        []ConfiguredHookGroup `json:"PreCompact"`
 	PostCompact       []ConfiguredHookGroup `json:"PostCompact"`
 	SessionStart      []ConfiguredHookGroup `json:"SessionStart"`
+	SessionEnd        []ConfiguredHookGroup `json:"SessionEnd"`
 	UserPromptSubmit  []ConfiguredHookGroup `json:"UserPromptSubmit"`
 	SubagentStart     []ConfiguredHookGroup `json:"SubagentStart"`
 	SubagentStop      []ConfiguredHookGroup `json:"SubagentStop"`
@@ -713,6 +714,7 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 		PreCompact        []ConfiguredHookGroup `json:"PreCompact"`
 		PostCompact       []ConfiguredHookGroup `json:"PostCompact"`
 		SessionStart      []ConfiguredHookGroup `json:"SessionStart"`
+		SessionEnd        []ConfiguredHookGroup `json:"SessionEnd"`
 		UserPromptSubmit  []ConfiguredHookGroup `json:"UserPromptSubmit"`
 		SubagentStart     []ConfiguredHookGroup `json:"SubagentStart"`
 		SubagentStop      []ConfiguredHookGroup `json:"SubagentStop"`
@@ -726,6 +728,7 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 		PreCompact:        hookGroupsForJSON(r.PreCompact),
 		PostCompact:       hookGroupsForJSON(r.PostCompact),
 		SessionStart:      hookGroupsForJSON(r.SessionStart),
+		SessionEnd:        hookGroupsForJSON(r.SessionEnd),
 		UserPromptSubmit:  hookGroupsForJSON(r.UserPromptSubmit),
 		SubagentStart:     hookGroupsForJSON(r.SubagentStart),
 		SubagentStop:      hookGroupsForJSON(r.SubagentStop),
@@ -786,36 +789,48 @@ const (
 	MigrationSubagents       MigrationItemType = "SUBAGENTS"
 	MigrationHooks           MigrationItemType = "HOOKS"
 	MigrationCommands        MigrationItemType = "COMMANDS"
+	MigrationMemory          MigrationItemType = "MEMORY"
 	MigrationSessions        MigrationItemType = "SESSIONS"
 )
 
+type MemoryFileMigration struct {
+	ProjectKey    string  `json:"projectKey"`
+	CWD           *string `json:"cwd"`
+	SourcePath    string  `json:"sourcePath"`
+	SourceFile    string  `json:"sourceFile"`
+	ContentSHA256 string  `json:"contentSha256"`
+}
+
 type MigrationDetails struct {
-	Plugins    []PluginMigration  `json:"plugins"`
-	Skills     []NamedMigration   `json:"skills"`
-	Sessions   []SessionMigration `json:"sessions"`
-	MCPServers []NamedMigration   `json:"mcpServers"`
-	Hooks      []NamedMigration   `json:"hooks"`
-	Subagents  []NamedMigration   `json:"subagents"`
-	Commands   []NamedMigration   `json:"commands"`
+	Plugins     []PluginMigration     `json:"plugins"`
+	Skills      []NamedMigration      `json:"skills"`
+	Sessions    []SessionMigration    `json:"sessions"`
+	MCPServers  []NamedMigration      `json:"mcpServers"`
+	Hooks       []NamedMigration      `json:"hooks"`
+	Subagents   []NamedMigration      `json:"subagents"`
+	Commands    []NamedMigration      `json:"commands"`
+	MemoryFiles []MemoryFileMigration `json:"memoryFiles"`
 }
 
 func (d *MigrationDetails) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Plugins    []PluginMigration  `json:"plugins"`
-		Skills     []NamedMigration   `json:"skills"`
-		Sessions   []SessionMigration `json:"sessions"`
-		MCPServers []NamedMigration   `json:"mcpServers"`
-		Hooks      []NamedMigration   `json:"hooks"`
-		Subagents  []NamedMigration   `json:"subagents"`
-		Commands   []NamedMigration   `json:"commands"`
+		Plugins     []PluginMigration     `json:"plugins"`
+		Skills      []NamedMigration      `json:"skills"`
+		Sessions    []SessionMigration    `json:"sessions"`
+		MCPServers  []NamedMigration      `json:"mcpServers"`
+		Hooks       []NamedMigration      `json:"hooks"`
+		Subagents   []NamedMigration      `json:"subagents"`
+		Commands    []NamedMigration      `json:"commands"`
+		MemoryFiles []MemoryFileMigration `json:"memoryFiles"`
 	}{
-		Plugins:    pluginMigrationsForJSON(d.Plugins),
-		Skills:     namedMigrationsForJSON(d.Skills),
-		Sessions:   sessionMigrationsForJSON(d.Sessions),
-		MCPServers: namedMigrationsForJSON(d.MCPServers),
-		Hooks:      namedMigrationsForJSON(d.Hooks),
-		Subagents:  namedMigrationsForJSON(d.Subagents),
-		Commands:   namedMigrationsForJSON(d.Commands),
+		Plugins:     pluginMigrationsForJSON(d.Plugins),
+		Skills:      namedMigrationsForJSON(d.Skills),
+		Sessions:    sessionMigrationsForJSON(d.Sessions),
+		MCPServers:  namedMigrationsForJSON(d.MCPServers),
+		Hooks:       namedMigrationsForJSON(d.Hooks),
+		Subagents:   namedMigrationsForJSON(d.Subagents),
+		Commands:    namedMigrationsForJSON(d.Commands),
+		MemoryFiles: memoryFileMigrationsForJSON(d.MemoryFiles),
 	})
 }
 
@@ -859,8 +874,9 @@ func (r *ExternalAgentConfigDetectResponse) MarshalJSON() ([]byte, error) {
 }
 
 type ExternalAgentConfigImportParams struct {
-	MigrationItems []ExternalAgentConfigMigrationItem `json:"migrationItems"`
-	Source         *string                            `json:"source"`
+	MigrationItems  []ExternalAgentConfigMigrationItem `json:"migrationItems"`
+	Source          *string                            `json:"source"`
+	MigrationSource *string                            `json:"migrationSource,omitempty"`
 }
 
 type ExternalAgentConfigImportResponse struct {
@@ -877,6 +893,7 @@ type ExternalAgentConfigImportItemTypeSuccess struct {
 type ExternalAgentConfigImportItemTypeFailure struct {
 	ItemType     MigrationItemType `json:"itemType"`
 	ErrorType    *string           `json:"errorType"`
+	SubErrorType *string           `json:"subErrorType"`
 	FailureStage string            `json:"failureStage"`
 	Message      string            `json:"message"`
 	CWD          *string           `json:"cwd"`
@@ -1003,13 +1020,14 @@ func (n *ConfigWarningNotification) MarshalJSON() ([]byte, error) {
 
 func NewMigrationDetails() *MigrationDetails {
 	return &MigrationDetails{
-		Plugins:    []PluginMigration{},
-		Skills:     []NamedMigration{},
-		Sessions:   []SessionMigration{},
-		MCPServers: []NamedMigration{},
-		Hooks:      []NamedMigration{},
-		Subagents:  []NamedMigration{},
-		Commands:   []NamedMigration{},
+		Plugins:     []PluginMigration{},
+		Skills:      []NamedMigration{},
+		Sessions:    []SessionMigration{},
+		MCPServers:  []NamedMigration{},
+		Hooks:       []NamedMigration{},
+		Subagents:   []NamedMigration{},
+		Commands:    []NamedMigration{},
+		MemoryFiles: []MemoryFileMigration{},
 	}
 }
 
@@ -1041,8 +1059,10 @@ func ExternalAgentMigrationItemOrder(itemType MigrationItemType) int {
 		return 6
 	case MigrationCommands:
 		return 7
-	case MigrationSessions:
+	case MigrationMemory:
 		return 8
+	case MigrationSessions:
+		return 9
 	default:
 		return 100
 	}
@@ -1073,6 +1093,7 @@ func CloneMigrationDetails(details *MigrationDetails) *MigrationDetails {
 	out.Hooks = cloneNamedMigrations(details.Hooks)
 	out.Subagents = cloneNamedMigrations(details.Subagents)
 	out.Commands = cloneNamedMigrations(details.Commands)
+	out.MemoryFiles = cloneMemoryFileMigrations(details.MemoryFiles)
 	return out
 }
 
@@ -1130,6 +1151,7 @@ func ValidatePendingSessionImports(items []ExternalAgentConfigMigrationItem) (se
 			if path == "" {
 				result.Failures = append(result.Failures, ExternalAgentConfigImportItemTypeFailure{
 					ItemType:     MigrationSessions,
+					SubErrorType: stringPtrIfNotEmpty("session_not_detected"),
 					FailureStage: "session_missing",
 					Message:      "external agent session path is required",
 					CWD:          cloneStringPtr(items[i].CWD),
@@ -1242,29 +1264,38 @@ func migrationDetailsHasEntries(item *ExternalAgentConfigMigrationItem) bool {
 		return len(item.Details.Subagents) > 0
 	case MigrationCommands:
 		return len(item.Details.Commands) > 0
+	case MigrationMemory:
+		return len(item.Details.MemoryFiles) > 0
 	default:
 		return false
 	}
 }
 
 type ConfigService struct {
-	mu              sync.Mutex
-	codexHome       string
-	profile         string
-	userConfig      string
-	requirements    *ConfigRequirements
-	warnings        []ConfigWarningNotification
-	managedLayers   []Layer
-	featureDefaults map[string]bool
-	importHistory   []ExternalAgentConfigImportHistory
-	now             func() time.Time
+	mu                sync.Mutex
+	codexHome         string
+	profile           string
+	userConfig        string
+	requirements      *ConfigRequirements
+	warnings          []ConfigWarningNotification
+	managedLayers     []Layer
+	featureDefaults   map[string]bool
+	importHistory     []ExternalAgentConfigImportHistory
+	externalAgentHome string
+	now               func() time.Time
 }
 
 func NewConfigService(codexHome string) *ConfigService {
-	service := &ConfigService{codexHome: codexHome, now: time.Now}
+	service := &ConfigService{codexHome: codexHome, externalAgentHome: defaultExternalAgentHome(), now: time.Now}
 	service.loadRequirementsFromHome()
 	service.loadManagedConfigLayerFromEnv()
 	return service
+}
+
+func (s *ConfigService) SetExternalAgentHome(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.externalAgentHome = strings.TrimSpace(path)
 }
 
 func NewProfileConfigService(codexHome string, profile string) *ConfigService {
@@ -1811,6 +1842,11 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 			Details:     NewMigrationDetails(),
 		})
 	}
+	if params.IncludeHome {
+		if item, ok := s.detectExternalMemoryMigration(params.CWDs); ok {
+			items = append(items, item)
+		}
+	}
 	return &ExternalAgentConfigDetectResponse{Items: items}
 }
 
@@ -1825,6 +1861,12 @@ func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImp
 	var typeResults []ExternalAgentConfigImportTypeResult
 	for i := range params.MigrationItems {
 		item := params.MigrationItems[i]
+		if item.ItemType == MigrationMemory {
+			result := s.importExternalMemory(&item, params.Source)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
 		itemSuccesses := ExternalAgentImportSuccessesForItem(&item, params.Source)
 		successes = append(successes, itemSuccesses...)
 		typeResults = append(typeResults, ExternalAgentConfigImportTypeResult{
@@ -2682,6 +2724,23 @@ func cloneNamedMigrations(values []NamedMigration) []NamedMigration {
 	return out
 }
 
+func cloneMemoryFileMigrations(values []MemoryFileMigration) []MemoryFileMigration {
+	out := make([]MemoryFileMigration, len(values))
+	for i := range values {
+		out[i] = values[i]
+		out[i].CWD = cloneStringPtr(values[i].CWD)
+	}
+	return out
+}
+
+func memoryFileMigrationsForJSON(values []MemoryFileMigration) []MemoryFileMigration {
+	out := cloneMemoryFileMigrations(values)
+	if out == nil {
+		return []MemoryFileMigration{}
+	}
+	return out
+}
+
 func pluginMigrationsForJSON(values []PluginMigration) []PluginMigration {
 	if values == nil {
 		return []PluginMigration{}
@@ -2824,6 +2883,7 @@ func cloneImportFailures(values []ExternalAgentConfigImportItemTypeFailure) []Ex
 		out[i] = ExternalAgentConfigImportItemTypeFailure{
 			ItemType:     values[i].ItemType,
 			ErrorType:    cloneStringPtr(values[i].ErrorType),
+			SubErrorType: cloneStringPtr(values[i].SubErrorType),
 			FailureStage: values[i].FailureStage,
 			Message:      values[i].Message,
 			CWD:          cloneStringPtr(values[i].CWD),

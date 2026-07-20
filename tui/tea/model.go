@@ -34,6 +34,7 @@ const (
 	defaultComposerHeight = 3
 	minTranscriptHeight   = 3
 	maxBottomLines        = 6
+	regionChromeMinWidth  = 100
 	footerHelpText        = "Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands"
 	mcpStartupFinishLag   = 4 * time.Second
 )
@@ -412,10 +413,11 @@ type Options struct {
 type Model struct {
 	State *codextui.State
 
-	transcript viewport.Model
-	composer   textarea.Model
-	overlay    *chatwidget.TranscriptOverlay
-	slashPopup slashCommandPopup
+	transcript     viewport.Model
+	composer       textarea.Model
+	activityFollow bool
+	overlay        *chatwidget.TranscriptOverlay
+	slashPopup     slashCommandPopup
 
 	width             int
 	height            int
@@ -592,11 +594,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model := &Model{
 		State:                          state,
 		transcript:                     transcript,
+		activityFollow:                 true,
 		composer:                       composer,
 		noAltScreen:                    options.NoAltScreen,
 		terminalFocused:                true,
 		statusStyle:                    lipgloss.NewStyle().Bold(true),
-		footerStyle:                    lipgloss.NewStyle(),
+		footerStyle:                    lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		bottomStyle:                    lipgloss.NewStyle(),
 		modelPickerOpts:                append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
 		sessionItems:                   append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
@@ -1001,6 +1004,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 
 	var cmd bubbletea.Cmd
 	m.transcript, cmd = m.transcript.Update(message)
+	if _, mouse := message.(bubbletea.MouseMsg); mouse {
+		m.activityFollow = m.transcript.AtBottom()
+	}
 	var composerCmd bubbletea.Cmd
 	m.composer, composerCmd = m.composer.Update(message)
 	m.refreshSlashPopup()
@@ -1021,10 +1027,14 @@ func (m *Model) View() string {
 	}
 	m.refreshTranscript()
 
-	sections := []string{
-		m.statusStyle.Render(fitTerminalLine(m.renderStatusHeader(), m.width)),
-		m.transcript.View(),
+	chrome := m.regionChromeEnabled()
+	status := m.statusStyle.Render(fitTerminalLine(m.renderStatusHeader(), m.width))
+	transcript := m.transcript.View()
+	if chrome {
+		status = m.renderStatusRegion(status)
+		transcript = m.renderActivityRegion(transcript)
 	}
+	sections := []string{status, transcript}
 	if bottom := m.renderBottomPane(); bottom != "" {
 		sections = append(sections, m.bottomStyle.Render(bottom))
 	}
@@ -1038,7 +1048,11 @@ func (m *Model) View() string {
 		if working := m.renderWorkingIndicator(); working != "" {
 			sections = append(sections, m.bottomStyle.Render(working))
 		}
-		sections = append(sections, m.composer.View())
+		composer := m.composer.View()
+		if chrome {
+			composer = m.renderComposerRegion(composer)
+		}
+		sections = append(sections, composer)
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
 		}
@@ -1057,6 +1071,34 @@ func (m *Model) View() string {
 	}
 	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerHelpText, m.width)))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m *Model) regionChromeEnabled() bool {
+	return m != nil && m.width >= regionChromeMinWidth && m.height >= 16
+}
+
+func (m *Model) renderStatusRegion(status string) string {
+	return lipgloss.NewStyle().
+		Width(max(m.width-2, 1)).
+		Padding(0, 1).
+		Background(lipgloss.Color("236")).
+		Render(status)
+}
+
+func (m *Model) renderActivityRegion(content string) string {
+	label := " ACTIVITY "
+	lineWidth := max(m.width-lipgloss.Width(label), 0)
+	header := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(label + strings.Repeat("─", lineWidth))
+	return lipgloss.JoinVertical(lipgloss.Left, header, content)
+}
+
+func (m *Model) renderComposerRegion(content string) string {
+	return lipgloss.NewStyle().
+		Width(max(m.width-4, 1)).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Render(content)
 }
 
 func fitTerminalLine(line string, width int) string {
@@ -2982,12 +3024,20 @@ func (m *Model) resize(width int, height int) {
 	m.height = firstPositive(height, defaultHeight)
 	composerHeight := defaultComposerHeight
 	transcriptHeight := m.height - composerHeight - 3
+	if m.regionChromeEnabled() {
+		// The activity heading and composer border use three additional rows.
+		transcriptHeight -= 3
+	}
 	if transcriptHeight < minTranscriptHeight {
 		transcriptHeight = minTranscriptHeight
 	}
 	m.transcript.Width = m.width
 	m.transcript.Height = transcriptHeight
-	m.composer.SetWidth(m.width)
+	composerWidth := m.width
+	if m.regionChromeEnabled() {
+		composerWidth = max(m.width-6, 1)
+	}
+	m.composer.SetWidth(composerWidth)
 	m.composer.SetHeight(composerHeight)
 	m.refreshTranscript()
 }
@@ -2996,7 +3046,7 @@ func (m *Model) refreshTranscript() {
 	if m == nil {
 		return
 	}
-	wasAtBottom := m.transcript.AtBottom()
+	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset
 	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width, m.activeTUITheme()))
 	if wasAtBottom {
@@ -3261,6 +3311,7 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	default:
 		return false
 	}
+	m.activityFollow = m.transcript.AtBottom()
 	return true
 }
 

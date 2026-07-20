@@ -133,6 +133,7 @@ func managedHooksRequirementsFromMap(values map[string]any) *ManagedHooksRequire
 	out.PreCompact = hookGroupsAnyKey(values, "PreCompact", "pre_compact", "preCompact")
 	out.PostCompact = hookGroupsAnyKey(values, "PostCompact", "post_compact", "postCompact")
 	out.SessionStart = hookGroupsAnyKey(values, "SessionStart", "session_start", "sessionStart")
+	out.SessionEnd = hookGroupsAnyKey(values, "SessionEnd", "session_end", "sessionEnd")
 	out.UserPromptSubmit = hookGroupsAnyKey(values, "UserPromptSubmit", "user_prompt_submit", "userPromptSubmit")
 	out.SubagentStart = hookGroupsAnyKey(values, "SubagentStart", "subagent_start", "subagentStart")
 	out.SubagentStop = hookGroupsAnyKey(values, "SubagentStop", "subagent_stop", "subagentStop")

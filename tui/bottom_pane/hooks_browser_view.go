@@ -557,6 +557,8 @@ func HookEventLabel(event appserver.HookEventName) string {
 		return "PostCompact"
 	case appserver.HookEventSessionStart:
 		return "SessionStart"
+	case appserver.HookEventSessionEnd:
+		return "SessionEnd"
 	case appserver.HookEventUserPromptSubmit:
 		return "UserPromptSubmit"
 	case appserver.HookEventSubagentStart:
@@ -584,6 +586,8 @@ func HookEventDescription(event appserver.HookEventName) string {
 		return "After context compaction"
 	case appserver.HookEventSessionStart:
 		return "When a new session starts"
+	case appserver.HookEventSessionEnd:
+		return "When a session ends"
 	case appserver.HookEventUserPromptSubmit:
 		return "When the user submits a prompt"
 	case appserver.HookEventSubagentStart:
@@ -657,6 +661,7 @@ func AllHookEventNames() []appserver.HookEventName {
 		appserver.HookEventPreCompact,
 		appserver.HookEventPostCompact,
 		appserver.HookEventSessionStart,
+		appserver.HookEventSessionEnd,
 		appserver.HookEventUserPromptSubmit,
 		appserver.HookEventSubagentStart,
 		appserver.HookEventSubagentStop,

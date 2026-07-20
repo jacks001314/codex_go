@@ -19,6 +19,8 @@ const (
 	SubmittedInputText        SubmittedInputKind = "text"
 	SubmittedInputLocalImage  SubmittedInputKind = "local_image"
 	SubmittedInputRemoteImage SubmittedInputKind = "remote_image"
+	SubmittedInputLocalAudio  SubmittedInputKind = "local_audio"
+	SubmittedInputRemoteAudio SubmittedInputKind = "remote_audio"
 	SubmittedInputSkill       SubmittedInputKind = "skill"
 	SubmittedInputPlugin      SubmittedInputKind = "plugin"
 	SubmittedInputApp         SubmittedInputKind = "app"
@@ -42,6 +44,7 @@ type SubmissionMentionCatalog struct {
 type SubmissionOptions struct {
 	SessionConfigured     bool
 	CurrentModelHasImages bool
+	CurrentModelHasAudio  bool
 	AgentTurnRunning      bool
 	ShellEscapePolicy     ShellEscapePolicy
 	EffectiveModel        string
@@ -56,6 +59,7 @@ type SubmissionDecision struct {
 	QueueDrain              QueueDrain
 	ShellCommand            string
 	RestoreBlockedImages    bool
+	RestoreBlockedAudio     bool
 	RestoreUnavailableModel bool
 	ErrorMessage            string
 	Items                   []SubmittedInputItem
@@ -86,6 +90,9 @@ func DecideUserMessageSubmission(message UserMessage, record UserMessageHistoryR
 			HistoryRecord:        recordOrText(record),
 		}
 	}
+	if (len(message.LocalAudio) > 0 || len(message.RemoteAudioURLs) > 0) && !options.CurrentModelHasAudio {
+		return SubmissionDecision{QueueDrain: QueueDrainContinue, RestoreBlockedAudio: true, HistoryRecord: recordOrText(record)}
+	}
 	if options.ShellEscapePolicy == "" {
 		options.ShellEscapePolicy = ShellEscapeAllow
 	}
@@ -109,7 +116,7 @@ func DecideUserMessageSubmission(message UserMessage, record UserMessageHistoryR
 		}
 	}
 
-	items := make([]SubmittedInputItem, 0, len(message.RemoteImageURLs)+len(message.LocalImages)+1)
+	items := make([]SubmittedInputItem, 0, len(message.RemoteImageURLs)+len(message.LocalImages)+len(message.RemoteAudioURLs)+len(message.LocalAudio)+1)
 	for _, url := range message.RemoteImageURLs {
 		if strings.TrimSpace(url) != "" {
 			items = append(items, SubmittedInputItem{Kind: SubmittedInputRemoteImage, URL: strings.TrimSpace(url)})
@@ -118,6 +125,16 @@ func DecideUserMessageSubmission(message UserMessage, record UserMessageHistoryR
 	for _, path := range message.LocalImages {
 		if strings.TrimSpace(path) != "" {
 			items = append(items, SubmittedInputItem{Kind: SubmittedInputLocalImage, Path: strings.TrimSpace(path)})
+		}
+	}
+	for _, url := range message.RemoteAudioURLs {
+		if strings.TrimSpace(url) != "" {
+			items = append(items, SubmittedInputItem{Kind: SubmittedInputRemoteAudio, URL: strings.TrimSpace(url)})
+		}
+	}
+	for _, path := range message.LocalAudio {
+		if strings.TrimSpace(path) != "" {
+			items = append(items, SubmittedInputItem{Kind: SubmittedInputLocalAudio, Path: strings.TrimSpace(path)})
 		}
 	}
 	if text != "" {
@@ -352,6 +369,8 @@ func cloneUserMessage(message UserMessage) UserMessage {
 		Text:            message.Text,
 		LocalImages:     append([]string(nil), message.LocalImages...),
 		RemoteImageURLs: append([]string(nil), message.RemoteImageURLs...),
+		LocalAudio:      append([]string(nil), message.LocalAudio...),
+		RemoteAudioURLs: append([]string(nil), message.RemoteAudioURLs...),
 		TextElements:    cloneTextElements(message.TextElements),
 		MentionBindings: append([]string(nil), message.MentionBindings...),
 	}

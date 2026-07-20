@@ -733,6 +733,20 @@ func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, err
 	return &response, nil
 }
 
+func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDiscoveryParams) (*CapabilityDiscoveryResponse, error) {
+	var response CapabilityDiscoveryResponse
+	if err := c.call(ctx, MethodCapabilitiesDiscover, params, &response); err != nil {
+		return nil, err
+	}
+	if response.Manifests == nil {
+		response.Manifests = []CapabilityManifest{}
+	}
+	if response.Errors == nil {
+		response.Errors = []CapabilityDiscoveryError{}
+	}
+	return &response, nil
+}
+
 func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
 	normalized, err := normalizeFSReadFileParams(params)
 	if err != nil {

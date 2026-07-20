@@ -89,6 +89,7 @@ type responsesStreamNotificationState struct {
 	planParser                map[string]*proposedPlanStreamParser
 	planStarted               bool
 	startedAgentItems         map[string]bool
+	agentItemPhases           map[string]string
 	experimentalRawEvents     bool
 	applyPatchStreamingEvents bool
 }
@@ -102,6 +103,7 @@ func newResponsesStreamNotificationState(planMode bool, turnID string) *response
 		planItemID:        safeIdentifier(turnID) + "-plan",
 		planParser:        map[string]*proposedPlanStreamParser{},
 		startedAgentItems: map[string]bool{},
+		agentItemPhases:   map[string]string{},
 	}
 }
 
@@ -335,6 +337,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		if item.ID == "" {
 			return
 		}
+		if item.Type == "agent_message" {
+			phase := streamAgentMessagePhase(event.Item)
+			state.agentItemPhases[item.ID] = phase
+			r.requireRealtime().BeginCodexOutput(threadID, item.ID, phase)
+		}
 		if state.planMode && item.Type == "agent_message" {
 			if event.Item != nil && event.Item.Text != "" {
 				r.notifyPlanModeAgentDelta(threadID, turnID, item.ID, event.Item.Text, state)
@@ -349,6 +356,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		})
 	case model.ResponsesStreamEventOutputDone:
 		state.rememberOutputItem(event)
+		if event.Item != nil && (event.Item.Type == "message" || event.Item.Type == "agent_message") {
+			itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID))
+			r.notifyRealtime(r.requireRealtime().FinishCodexOutput(threadID, itemID))
+			delete(state.agentItemPhases, itemID)
+		}
 		if len(event.RawItem) == 0 {
 			return
 		}
@@ -372,6 +384,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			r.notifyPlanModeAgentDelta(threadID, turnID, itemID, event.Delta, state)
 			return
 		}
+		r.notifyRealtime(r.requireRealtime().StreamCodexOutput(threadID, itemID, event.Delta))
 		r.notify(NotificationAgentMessageDelta, &AgentMessageDeltaNotification{
 			ThreadID: threadID,
 			TurnID:   turnID,
@@ -478,6 +491,17 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			Usage:      usage,
 		})
 	}
+}
+
+func streamAgentMessagePhase(item *model.AgentItem) string {
+	if item == nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(
+		stringFromMap(item.Data, "phase"),
+		stringFromMap(item.Data, "messagePhase"),
+		stringFromMap(item.Data, "message_phase"),
+	))
 }
 
 func (s *responsesStreamNotificationState) rememberTool(event *model.ResponsesStreamEvent) {
@@ -4808,7 +4832,7 @@ func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string
 		return nil, ""
 	}
 	previousResponseID := firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID)
-	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true})
+	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(record.Metadata.CWD)})
 	return items, previousResponseID
 }
 
@@ -6857,6 +6881,14 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			imageIndex++
 			content = append(content, localImageInputContentBlocks(path, inputDetail(input), imageIndex)...)
+			continue
+		}
+		if audioURL := strings.TrimSpace(input.URL); audioURL != "" && strings.EqualFold(inputType, "audio") {
+			content = append(content, map[string]any{"type": "input_audio", "audio_url": audioURL})
+			continue
+		}
+		if path := strings.TrimSpace(input.Path); path != "" && strings.EqualFold(inputType, "localAudio") {
+			content = append(content, localAudioInputContentBlocks(path)...)
 		}
 	}
 	return content
@@ -6889,6 +6921,14 @@ func localImageInputContentBlocks(path string, detail string, imageIndex int) []
 		inputImageContentBlock(dataURLFromBytes(data), detail),
 		{"type": "input_text", "text": "</image>"},
 	}
+}
+
+func localAudioInputContentBlocks(path string) []map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("Codex could not read the local audio at `%s`: %v", path, err)}}
+	}
+	return []map[string]any{{"type": "input_audio", "audio_url": dataURLFromBytes(data)}}
 }
 
 func dataURLFromBytes(data []byte) string {
@@ -6942,6 +6982,10 @@ func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.Con
 				inputType = "localImage"
 			}
 			content = append(content, session.ContentPart{Type: inputType, ImageURL: strings.TrimSpace(input.Path), Detail: cloneString(input.Detail)})
+		case strings.TrimSpace(input.URL) != "" && strings.EqualFold(inputType, "audio"):
+			content = append(content, session.ContentPart{Type: "audio", AudioURL: strings.TrimSpace(input.URL)})
+		case strings.TrimSpace(input.Path) != "" && strings.EqualFold(inputType, "localAudio"):
+			content = append(content, session.ContentPart{Type: "localAudio", AudioURL: strings.TrimSpace(input.Path)})
 		}
 	}
 	return content

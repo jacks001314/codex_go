@@ -58,6 +58,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodCommandExec), "CommandExecParams", "CommandExecResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodAppList), "AppsListParams", "AppsListResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodAppRead), "AppsReadParams", "AppsReadResponse")
+	requireProtocolSignature(t, stable.ClientRequests, string(MethodAppInstalled), "AppsInstalledParams", "AppsInstalledResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConsumeAccountRateLimitResetCredit), "ConsumeAccountRateLimitResetCreditParams", "ConsumeAccountRateLimitResetCreditResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodGetWorkspaceMessages), "", "GetWorkspaceMessagesResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConfigRequirementsRead), "", "ConfigRequirementsReadResponse")
@@ -86,6 +87,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolMethod(t, stable.Notifications, string(NotificationTurnModerationMetadata), false)
 
 	experimental := BuildProtocolSchema(true, false)
+	requireProtocolSignature(t, experimental.ClientRequests, string(MethodThreadSearchOccurrences), "ThreadSearchOccurrencesParams", "ThreadSearchOccurrencesResponse")
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodThreadIncrementElicitation), true)
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodThreadRealtimeStart), true)
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodProcessSpawn), true)
@@ -210,6 +212,10 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadTokenUsageUpdatedNotification", &ThreadTokenUsageUpdatedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", TokenUsage: TokenUsage{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 5, ReasoningOutputTokens: 1, ModelContextWindow: &contextWindow}}},
 		{"AppsReadParams", &apps.AppsReadParams{AppIDs: []string{"calendar"}, IncludeTools: true}},
 		{"AppsReadResponse", &apps.AppsReadResponse{Apps: []apps.ConnectorMetadata{{ID: "calendar", Name: "Calendar", ToolSummaries: []apps.AppToolSummary{{Name: "search", Description: "Search events"}}, ToolsRequested: true}}, MissingAppIDs: []string{"missing"}}},
+		{"AppsInstalledParams", &apps.AppsInstalledParams{ForceRefresh: true}},
+		{"AppsInstalledResponse", &apps.AppsInstalledResponse{Apps: []apps.InstalledApp{{ID: "calendar", Enabled: true, Callable: true}}}},
+		{"ThreadSearchOccurrencesParams", &ThreadSearchOccurrencesParams{ThreadID: "thread-1", SearchTerm: "needle"}},
+		{"ThreadSearchOccurrencesResponse", &ThreadSearchOccurrencesResponse{Data: []ThreadSearchOccurrence{{TurnID: "turn-1", ItemID: "item-1", Snippet: "needle", SnippetMatchRange: ThreadSearchTextRange{Start: 0, End: 6}, TurnCursor: "0"}}}},
 		{"EnvironmentStatusParams", &EnvironmentStatusParams{EnvironmentID: "environment-schema"}},
 		{"EnvironmentStatusResponse", &EnvironmentStatusResponse{Status: EnvironmentStatusDisconnected, Error: stringPtr("connection closed")}},
 		{"RawResponseCompletedNotification", &RawResponseCompletedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", ResponseID: "resp-schema", Usage: &TokenUsageBreakdown{TotalTokens: 15, InputTokens: 10, CachedInputTokens: 2, CacheWriteInputTokens: 3, OutputTokens: 5, ReasoningOutputTokens: 1}}},

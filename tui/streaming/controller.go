@@ -25,6 +25,7 @@ type streamCore struct {
 	emittedStableLen  int
 	holdbackScanner   *TableHoldbackScanner
 	now               func() time.Time
+	hasVisualization  bool
 }
 
 func newStreamCore(width int) streamCore {
@@ -45,8 +46,9 @@ func (c *streamCore) pushDelta(delta string) bool {
 		return false
 	}
 	c.rawSource += committed
+	c.hasVisualization = c.hasVisualization || strings.Contains(committed, tui.InlineVisualizationDirectivePrefix)
 	c.holdbackScanner.PushSourceChunk(committed)
-	c.renderedLines = renderSourceLines(c.rawSource, c.width)
+	c.renderedLines = c.renderSourceLines(c.rawSource)
 	return c.syncStableQueue()
 }
 
@@ -67,7 +69,7 @@ func (c *streamCore) finalizeRemaining() []string {
 		c.rawSource += remainder
 		c.holdbackScanner.PushSourceChunk(remainder)
 	}
-	rendered := renderSourceLines(c.rawSource, c.width)
+	rendered := c.renderSourceLines(c.rawSource)
 	if c.emittedStableLen >= len(rendered) {
 		return nil
 	}
@@ -125,7 +127,7 @@ func (c *streamCore) setWidth(width int) {
 	if c.rawSource == "" {
 		return
 	}
-	c.renderedLines = renderSourceLines(c.rawSource, c.width)
+	c.renderedLines = c.renderSourceLines(c.rawSource)
 	c.emittedStableLen = min(c.emittedStableLen, len(c.renderedLines))
 	if hadPendingQueue && c.emittedStableLen == len(c.renderedLines) && c.emittedStableLen > 0 {
 		c.emittedStableLen--
@@ -164,12 +166,22 @@ func (c *streamCore) syncStableQueue() bool {
 }
 
 func (c *streamCore) computeTargetStableLen() int {
+	if c.hasVisualization {
+		return max(len(c.renderedLines), c.emittedStableLen)
+	}
 	state := c.holdbackScanner.State()
 	if state.Kind == TableHoldbackNone {
 		return max(len(c.renderedLines), c.emittedStableLen)
 	}
 	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart, c.width)
 	return max(prefixLen, c.emittedStableLen)
+}
+
+func (c *streamCore) renderSourceLines(source string) []string {
+	if c.hasVisualization || strings.Contains(source, tui.InlineVisualizationDirectivePrefix) {
+		source, _ = tui.RewriteInlineVisualizations(source, nil)
+	}
+	return renderSourceLines(source, c.width)
 }
 
 func (c *streamCore) rebuildStableQueueFromRender() {

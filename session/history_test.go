@@ -2,6 +2,10 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -226,18 +230,23 @@ func TestInputItemsFromRecordToolSearchOutputNormalizesInternalToolSpecs(t *test
 
 func TestInputItemsFromRecordNormalizesImageContentForResponses(t *testing.T) {
 	detail := "high"
+	cwd := t.TempDir()
+	localImage := filepath.Join(cwd, "a.png")
+	if err := os.WriteFile(localImage, sessionMinimalPNGBytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile local image: %v", err)
+	}
 	record := &Record{Items: []Item{{
 		ID:   "u1",
 		Type: "message",
 		Role: "user",
 		Content: []ContentPart{
 			{Type: "image", ImageURL: "https://example.test/a.png", Detail: &detail},
-			{Type: "localImage", ImageURL: "D:/repo/a.png"},
+			{Type: "localImage", ImageURL: "a.png"},
 			{ImageURL: "https://example.test/b.png"},
 		},
 	}}}
 
-	items := InputItemsFromRecord(record, &HistoryBuildOptions{})
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{CWD: cwd})
 
 	if len(items) != 1 {
 		t.Fatalf("items len = %d, want 1", len(items))
@@ -254,5 +263,39 @@ func TestInputItemsFromRecordNormalizesImageContentForResponses(t *testing.T) {
 	}
 	if content[0]["detail"] != "high" {
 		t.Fatalf("detail = %#v", content[0]["detail"])
+	}
+	if !strings.HasPrefix(fmt.Sprint(content[1]["image_url"]), "data:image/png;base64,") {
+		t.Fatalf("local image replay URL = %#v", content[1]["image_url"])
+	}
+}
+
+func TestInputItemsFromRecordDoesNotReplayLocalPathAsImageURL(t *testing.T) {
+	record := &Record{Items: []Item{{
+		Type:    "message",
+		Role:    "user",
+		Content: []ContentPart{{Type: "localImage", ImageURL: `D:\missing\image.png`}},
+	}}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{})
+	message := items[0].(map[string]any)
+	content := message["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_text" {
+		t.Fatalf("content = %#v", content)
+	}
+	if _, exists := content[0]["image_url"]; exists {
+		t.Fatalf("missing local image path leaked as image_url: %#v", content[0])
+	}
+}
+
+func sessionMinimalPNGBytes() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f,
+		0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d,
+		0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+		0xae, 0x42, 0x60, 0x82,
 	}
 }

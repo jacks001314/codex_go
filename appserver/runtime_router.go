@@ -172,6 +172,8 @@ type RuntimeRouter struct {
 	managedNetworksMu      sync.Mutex
 	managedNetworks        map[string]*network.PreparedProxyManagedNetwork
 	managedNetworkInputs   map[string]managedNetworkReloadInput
+	sessionEndMu           sync.Mutex
+	sessionEnded           map[string]struct{}
 	agentRegistry          *agent.Registry
 }
 
@@ -798,6 +800,7 @@ func (r *RuntimeRouter) Close() error {
 		return nil
 	}
 	r.cancelAllAccountLoginRuntimes()
+	r.runLoadedSessionEndHooks()
 	if r.services.Account != nil {
 		r.services.Account.CancelActiveLogins()
 	}
@@ -832,6 +835,19 @@ func (r *RuntimeRouter) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (r *RuntimeRouter) runLoadedSessionEndHooks() {
+	if r == nil {
+		return
+	}
+	for _, threadID := range r.requireThreadStatus().LoadedThreadIDs() {
+		record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+		if err != nil || record == nil {
+			continue
+		}
+		r.runSessionEndHookOnce(cloneRuntimeSessionRecord(record), "other")
+	}
 }
 
 func (r *RuntimeRouter) rememberConnectionClientInfo(connectionID string, info ClientInfo) bool {
@@ -1358,6 +1374,11 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 		}
 		if request.Method == MethodThreadResume {
+			updated, updateErr := r.applyConfiguredResumeCWD(request)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			request = updated
 			if err := r.rejectRunningThreadResumeHistory(request); err != nil {
 				return nil, err
 			}
@@ -1404,6 +1425,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleAppList(request)
 	case MethodAppRead:
 		return r.handleAppRead(request)
+	case MethodAppInstalled:
+		return r.handleAppInstalled(request)
 	case MethodGetAuthStatus:
 		return r.handleGetAuthStatus(request)
 	case MethodGetConversationSummary:
@@ -1579,6 +1602,37 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
 	}
+}
+
+func (r *RuntimeRouter) applyConfiguredResumeCWD(request *Request) (*Request, error) {
+	if r == nil || request == nil || r.services.Config == nil {
+		return request, nil
+	}
+	var params ThreadResumeParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.CWD != nil {
+		return request, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), true, false)
+	if err != nil {
+		return request, nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{CWD: stringPtrIfNotEmpty(record.Metadata.CWD)})
+	if err != nil {
+		return nil, err
+	}
+	mode, err := (&config.Config{Values: read.Config}).ResumeCWDMode()
+	if err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	if mode == "" {
+		return request, nil
+	}
+	cwd := config.ResolveResumeCWD(mode, r.services.DefaultCWD, record.Metadata.CWD)
+	params.CWD = stringPtrIfNotEmpty(cwd)
+	return requestWithRuntimeParams(request, &params)
 }
 
 func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*ThreadCompactStartResponse, error) {
@@ -2046,6 +2100,7 @@ func requestWithRuntimeParams(request *Request, params any) (*Request, error) {
 
 func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, error) {
 	lifecycleIDs := r.lifecycleSubtreeIDs(request)
+	lifecycleRecords := r.lifecycleRecordSnapshots(lifecycleIDsWithFallback(request, lifecycleIDs))
 	var result any
 	var err error
 	if request.Method == MethodThreadStart {
@@ -2122,6 +2177,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			archivedIDs = response.archivedThreadIDs
 		}
 		for _, threadID := range session.ArchiveNotificationOrder(archivedIDs) {
+			r.runSessionEndHookOnce(lifecycleRecords[string(threadID)], "archive")
 			r.markThreadUnloaded(string(threadID))
 			r.notify(NotificationThreadArchived, &ThreadIDNotification{ThreadID: string(threadID)})
 		}
@@ -2131,6 +2187,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 	case MethodThreadDelete:
 		for _, threadID := range session.DeleteOrderForSubtree(lifecycleIDsWithFallback(request, lifecycleIDs)) {
+			r.runSessionEndHookOnce(lifecycleRecords[string(threadID)], "delete")
 			r.markThreadUnloaded(string(threadID))
 			r.notify(NotificationThreadDeleted, &ThreadIDNotification{ThreadID: string(threadID)})
 		}
@@ -2140,6 +2197,54 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 	}
 	return result, nil
+}
+
+func (r *RuntimeRouter) lifecycleRecordSnapshots(ids []session.ThreadID) map[string]*session.Record {
+	out := make(map[string]*session.Record, len(ids))
+	for _, id := range ids {
+		record, err := r.threadRecord(id, true, true)
+		if err == nil && record != nil {
+			out[string(id)] = cloneRuntimeSessionRecord(record)
+		}
+	}
+	return out
+}
+
+func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason string) {
+	if r == nil || record == nil || strings.TrimSpace(string(record.ID)) == "" {
+		return
+	}
+	threadID := string(record.ID)
+	r.sessionEndMu.Lock()
+	if r.sessionEnded == nil {
+		r.sessionEnded = map[string]struct{}{}
+	}
+	if _, ok := r.sessionEnded[threadID]; ok {
+		r.sessionEndMu.Unlock()
+		return
+	}
+	r.sessionEnded[threadID] = struct{}{}
+	r.sessionEndMu.Unlock()
+	hooks := r.hooksForCWD(record.Metadata.CWD)
+	if len(hooks) == 0 {
+		return
+	}
+	path := ""
+	if r.services.ThreadRouter != nil {
+		path = r.services.ThreadRouter.threadRolloutPath(record)
+	}
+	var transcriptPath *string
+	if strings.TrimSpace(path) != "" {
+		transcriptPath = &path
+	}
+	_, err := r.requireHookRunner().RunSessionEnd(context.Background(), &HookSessionEndRequest{
+		ThreadID: threadID, CWD: record.Metadata.CWD, TranscriptPath: transcriptPath,
+		Model: record.Metadata.Model, PermissionMode: record.Metadata.ApprovalPolicy,
+		Reason: reason, Hooks: hooks,
+	})
+	if err != nil {
+		slog.Warn("session end hook failed", "thread_id", threadID, "reason", reason, "error", err)
+	}
 }
 
 func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*ThreadStartResponse, bool, error) {
@@ -4891,6 +4996,27 @@ func (r *RuntimeRouter) handleAppRead(request *Request) (*apps.AppsReadResponse,
 			return nil, fmt.Errorf("%w: %s", ErrInvalidRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidAppRequest.Error()+": "))
 		}
 		return nil, fmt.Errorf("failed to read app metadata: %w", err)
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) handleAppInstalled(request *Request) (*apps.AppsInstalledResponse, error) {
+	var params apps.AppsInstalledParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	configValues, err := r.appListConfigValues(&apps.AppListParams{ThreadID: params.ThreadID})
+	if err != nil {
+		return nil, err
+	}
+	if !features.Enabled((&config.Config{Values: configValues}).FeatureSettings(), "apps") {
+		return &apps.AppsInstalledResponse{Apps: []apps.InstalledApp{}}, nil
+	}
+	service := r.requireApps()
+	service.SetConfigValues(configValues)
+	response, err := service.Installed(&params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read installed app runtime state: %w", err)
 	}
 	return response, nil
 }

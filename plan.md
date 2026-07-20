@@ -1,11 +1,13 @@
 # Codex Go 上游功能同步计划
 
-更新日期：2026-07-18
+更新日期：2026-07-21
 Go 仓库：`D:\qax\reagent\dev\codex_go`
 上游仓库：`D:\qax\reagent\dev\git\codex`
-上游基线提交：`315195492c`（2026-07-16，`Support custom transports for Amazon Bedrock`）
-上游版本基线：`rust-v0.145.0-alpha.20`
-Go 基线提交：`70a536f`（2026-07-15）
+上一轮上游基线：`315195492c`（2026-07-16，`Support custom transports for Amazon Bedrock`）
+本轮目标基线：`1e20272fa5`（2026-07-20，`Avoid cloning thread history for token usage replay`）
+本轮提交范围：`315195492c..1e20272fa5`，共 81 个提交、571 个变更文件（+27262/-4697）
+最近可达 Rust tag：`rust-v0.143.0-alpha.10`；本轮以 commit 固定基线，不以滞后 tag 代替 commit
+Go 比对基线：`eeacecb`（2026-07-18）；工作区另有未提交修改，执行同步时不得覆盖
 
 ## 1. 目标
 
@@ -20,6 +22,100 @@ Go 基线提交：`70a536f`（2026-07-15）
 - Windows、Linux、macOS 的平台安全与沙箱语义。
 
 本计划不以文件数量或主观百分比作为完成依据。每项功能必须由上游源码、schema、fixture、snapshot 或集成测试证明。
+
+## 1.1 本轮差异结论（2026-07-20）
+
+对 `315195492c..1e20272fa5` 的提交、schema 和关键运行时源码完成首轮分类。必须同步的外部行为包括：
+
+- app-server 新增 `app/installed` 与实验性 `thread/searchOccurrences`，并扩展 thread/turn/realtime schema。
+- 用户输入协议新增远程音频与本地音频；动态工具和 code mode 输出新增音频内容项。
+- 插件安装响应新增 interstitial requirements，share update discoverability 增加发布语义。
+- 配置新增 `resume_cwd`、`SessionEnd` hooks 与 `executor_capability_discovery`，world state 开始显式跟踪 collaboration mode、permissions 和 realtime 状态。
+- 分页 thread history 增加 legacy view、继承 prefix、持久化名称和 occurrence search；不支持的 history mode 必须明确拒绝。
+- exec policy 增加旧 allow rules 迁移；远程 executor 增加 managed network proxy 与批量 capability discovery。
+- TUI 新增恢复目录选择、只读父级 Agent thread、批量历史搜索、音频输入、inline visualization 和有界流式命令预览。
+
+2026-07-21 完成审计补充：SessionEnd 已覆盖 RuntimeRouter graceful shutdown；external-agent session import 已传播稳定 `subErrorType`；external-agent memory 已支持项目检测、SHA-256 校验、scope/provenance metadata、路径隔离和过期资源清理；realtime V3 已增加 `initialItems`、`codexResponseHandoffMode` 和 appserver 流式 Codex handoff 路由，支持 commentary/final 通道、最终消息前缀、UTF-8 安全截断及 client-managed/codexResponsesAsItems 跳过；inline visualization 已改为 Rust 的 `::codex-inline-vis{file="..."}` 指令并使用受限 viewer；compressed rollout doctor inventory 已支持 `.jsonl.zst` canonical path、普通文件优先和损坏压缩文件诊断；active-turn completion backfill 已确认为 Go direct-agent exec 架构差异。本轮 README、候选版本追踪和发布说明已收口；剩余的是 Linux/macOS 原生发布门禁。
+
+当前自动漂移检查结果：
+
+- `go test ./parity -count=1` 在新 Rust HEAD 上失败，已确认 Rust exec fixture `18 -> 19`、TUI snapshot `576 -> 599`、`Cargo.toml` hash 漂移。
+- feature surface 出现 `executor_capability_discovery` 差异：Go 已提前声明该 key，Rust 新基线现已正式加入，因此需要刷新 parity 预期，而不是删除 Go feature。
+- Go 顶层目录 inventory 还报告本地 `bin`、`deliverables`；这是仓库清单维护问题，不能混入 Rust 功能缺口统计。
+
+纯 Rust 内部的 clone/缓存/布局优化、无用户行为变化的 helper 清理、Bazel/发布元数据变化不逐文件移植；只有可复现的性能、内存上限或交互行为才进入 Go 验收。
+
+## 1.2 本轮同步批次
+
+### Batch 8：固定新基线并恢复漂移门禁（P0，0.5-1 天）
+
+- [x] 将 parity baseline、关键文件 hash、workspace/fixture/TUI snapshot manifest 更新到 `1e20272fa5`。
+- [x] 更新 app-server method/schema、feature、ConfigToml 和 CLI surface 探测，先输出真实 missing/partial 清单。
+- [x] 将 `bin`、`deliverables` 明确标记为 Go 本地产物目录或移出 inventory，避免污染上游差异。
+- [x] 更新 `parity.json` 的 baseline、生成时间、证据和状态；禁止在功能未实现前批量标记 `done`。
+
+验收：`go test ./parity ./features ./cli -count=1`
+
+### Batch 9：app-server 与输入/输出协议（P0，3-5 天）
+
+- [x] 实现 `app/installed`：force refresh、已安装 runtime state、runtime name、工具策略投影及上游错误语义。
+- [x] 实现实验性 `thread/searchOccurrences`：分页大小、opaque cursor、可见消息过滤和时间顺序。
+- [x] 对齐 audio/localAudio 用户输入、模型 input modalities、Responses 转换与历史过滤。
+- [x] 对齐动态工具/code mode 音频输出 content item、事件映射、序列化和 app-server 通知。
+- [x] 对齐 plugin interstitial requirements、share publish discoverability 及 nullable/required 规则。
+- [x] 用新 Rust schema 全量验证 method、params、response、notification 和错误码。
+
+验收：`go test ./appserver ./protocol ./model ./codemode ./plugin ./apps -count=1`
+
+### Batch 10：会话、分页历史与持久化（P0/P1，3-5 天）
+
+- [x] 支持 paginated thread legacy view，并保持 read/resume/list/fork/rollback 的 cursor 与可见历史一致。
+- [x] 保存并恢复 inherited rollout prefix 与 thread name，覆盖 SQLite、rollout、thread store 和远程 thread store。
+- [x] 批量读取 message history，供 reverse search 使用；实现 occurrence search 的持久层查询。
+- [x] 加载 rollout 时拒绝不支持的 history mode，错误必须可区分且不产生部分恢复状态。
+- [x] 优化 token usage replay 时不得复制完整历史，并用大历史 fixture 验证有界内存行为。
+
+验收：`go test ./history ./session ./rollout ./state ./appserver ./tui/... -count=1`
+
+### Batch 11：配置、world state 与生命周期（P1，2-4 天）
+
+- [x] 增加 `resume_cwd = current|session`，覆盖 resume/fork、本地/远程 session、记忆选择和持久化失败回退。
+- [x] 增加 `SessionEnd` hook，在正常结束、归档、进程退出和失败清理时只执行一次，并发送 started/completed 通知。
+- [x] 将 collaboration mode、permission instructions、realtime conversation state 纳入 world state diff/replay，保证 fork/resume 首轮上下文一致。
+- [x] 补齐 external agent session import 的详细错误类型和来源标记。
+
+验收：`go test ./config ./context ./session ./appserver ./tui/... -count=1`
+
+### Batch 12：执行器、网络代理与安全迁移（P1，3-5 天）
+
+- [x] 实现 batched executor capability discovery，一次发现选定 roots 的 plugin/skill manifest，并与现有单项发现兼容。
+- [x] 在 remote executor 启动和回收 managed network proxy，保持认证、作用域、端口和失败清理语义。
+- [x] 迁移旧 exec policy allow rules；迁移需幂等、可审计，不能扩大权限或覆盖显式新规则。
+- [x] 覆盖多 exec-server workspace write isolation、zsh tied PATH snapshot 和 code-mode yield grace period。
+
+验收：`go test ./execpolicy ./execserver ./network ./sandbox/... ./tool ./appserver -count=1`
+
+### Batch 13：TUI 行为同步（P1/P2，4-7 天）
+
+- [x] 父级拥有的 sub-agent thread 在 TUI 中只读，输入、设置快捷键和审批入口均需拒绝且提示一致。
+- [x] 恢复/分叉时实现 CWD 选择与 remembered mode；path-backed Agent 可在 picker 中选择并正确恢复。
+- [x] 历史搜索使用 bounded batch lookup；大历史、空结果、并发切换 thread 时不阻塞或串线。
+- [x] 支持音频附件的提交、恢复、模型能力过滤和 unsupported media 提示。
+- [x] 支持 inline visualization directive 的流式跟踪、最终链接和 overlay viewer；终端不支持时保留文字内容。
+- [x] 流式 Markdown 增量渲染和命令输出预览必须有界；最终 transcript 不得因预览裁剪丢失完整结果。
+- [ ] TUI bootstrap 请求并行化、重绘/缓存优化只以无竞态、无错序和可测性能收益为验收标准（Go 启动阶段没有 Rust 对应的双远程请求；已记录为 intentional difference，仍需补启动链路证据）。
+
+验收：`go test ./tui/... -count=1`，并补充大输出、窄终端和快速切换 session 的 PTY/snapshot 测试。
+
+### Batch 14：收口、平台验证与发布（P2，2-4 天，不含平台排队）
+
+- [x] 更新 Rust fixture/TUI snapshot 证据并清空所有未解释 parity failure。
+- [x] Windows 执行全量、race、ConPTY、WFP/ACL 与远程 executor 回归。
+- [x] Linux 执行 Landlock/bwrap、Unix socket、network proxy 与 zsh 回归；native Kali runner evidence recorded below.
+- [ ] macOS 执行 seatbelt、native trust roots、Unix socket 与 desktop app 回归；Go seatbelt backend、Unix socket allowlist 和 workflow 已实现，需在 macOS runner 执行并保存 artifact 后勾选。
+- [x] 更新 README、版本追踪、`parity.json` 和发布说明；候选版本使用 `go-1e20272fa5-parity.1`，不沿用旧 `v0.145.0-alpha.20` 候选名。
+
+验收：`go test ./... -count=1`；支持 race 的平台执行 `go test -race ./... -count=1`。
 
 ## 2. 同步范围与状态
 
@@ -43,7 +139,7 @@ Go 基线提交：`70a536f`（2026-07-15）
 | spawn role 后校验 reasoning effort | `8a7c854bff` | spawn 后应用并校验角色 reasoning effort | `agent`, `model`, `config` | 完成 |
 | spawned agent 使用配置模型默认值 | `21c37fb374` | 未指定角色模型时使用配置默认模型 | `agent`, `model`, `turn` | 完成 |
 | 仅在配置角色时暴露 Agent 类型 | `9ff47868eb` | 未配置角色时不暴露 Agent 类型 | `agent`, `turn` | 完成 |
-| imported memory 保留 scope/provenance | `693b8c2ba4` | 部分实现 | `config`, `memories`, `session` | 待同步 |
+| imported memory 保留 scope/provenance | `693b8c2ba4` | 项目 memory 检测、hash、scope.json、source/project/cwd metadata 和资源清理已实现 | `config`, `memories`, `session` | 完成 |
 | Skill character n-gram 选择器 | `c983a53f20` | bounded 算法、shadow metrics 和 opt-in production selection 已接入 turn | `appserver`, `prompt` | 完成 |
 | Skill fielded BM25 选择器 | `a47c661ea9` | field weighting、IDF 与上游 fixture 已实现并纳入选择链路 | `appserver`, `prompt` | 完成 |
 | Skill multi-query lexical 选择器 | `0f44bca915` | weighted lexical、query views 与合并排序已实现并可通过配置启用 | `appserver`, `prompt` | 完成 |
@@ -95,7 +191,7 @@ Go 基线提交：`70a536f`（2026-07-15）
 - TUI snapshot：539 -> 576。
 - unified exec 新增 `write_stdin_calls_run_in_parallel_across_sessions`。
 - 已确认 app-server method 缺口：无；`app/read` 与 `environment/status` 已同步并由 Rust surface/schema 测试覆盖。
-- 已确认 feature key surface 已与 Rust 对齐；`imagegenext` 已降级为 `image_generation` legacy alias；`external_agent_memory_import` 行为仍仅部分同步（memory detect/import 与 imported memory scope/provenance 未完成）。
+- 已确认 feature key surface 已与 Rust 对齐；`imagegenext` 已降级为 `image_generation` legacy alias；`external_agent_memory_import` 的项目 memory detect/import、scope/provenance 和资源生命周期已同步。
 - Rust `ConfigToml` 当前有 96 个顶层字段；已锁定 `agents`、自动压缩、provider 和 tools 等关键配置字段。
 - Rust tool discovery 的 `tool_search`、`list_available_plugins_to_install`、`request_plugin_install` 均已由 Go registry 覆盖。
 
@@ -241,7 +337,7 @@ go test ./appserver ./execserver -run "EnvironmentStatus|EnvironmentInfo|RustPro
 - [x] Linux：原生 Landlock、bwrap、permission profile、managed network。
   - 已在 Kali Linux 6.18.12 上验证：`/usr/bin/bwrap` 可用，`codex-linux-sandbox` helper 与 `execserver` sandbox 路径通过。
   - `appserver` 侧 Rust schema fixture 对照仍缺少 `AppsReadParams`、`AppsReadResponse`、`EnvironmentStatusParams`、`EnvironmentStatusResponse`、`RawResponseCompletedNotification` 这些单文件 fixture；这属于上游基线/fixture 缺口，不是 Linux 沙箱本身失效。
-- [ ] macOS：原生 seatbelt、Unix socket、native trust roots。
+- [ ] macOS：原生 seatbelt、Unix socket、native trust roots；Go 已生成参数化 SBPL、保护工作区元数据并限制网络，Darwin packages 交叉编译通过，仍需原生 smoke report。
 - [ ] 三个平台分别验证 CLI help、sandbox exposure 和 unsupported 错误。
 - [ ] 对无法跨平台执行的 fixture 使用明确的 build tag 和理由，不允许静默跳过。
 
@@ -254,7 +350,7 @@ go test -race ./... -count=1
 go vet ./...
 ```
 
-当前 Windows 本机验证（2026-07-18）：
+当前 Windows 本机验证（2026-07-20，Rust 基线 `1e20272fa5`）：
 
 - `go list -buildvcs=false ./...` 通过。
 - `go test ./... -count=1` 通过。
@@ -277,18 +373,20 @@ go vet ./...
 
 ## 5. 发布策略
 
-候选版本：`go-v0.145.0-alpha.20-parity.1`。
+候选版本追踪名：`go-1e20272fa5-parity.1`，不得沿用上一轮 `go-v0.145.0-alpha.20-parity.1`。
 
 发布必须满足：
 
-- [x] P0 全部完成。
-- [ ] P1 不存在协议、持久化或安全语义缺口（剩余 `external_agent_memory_import` / imported memory scope-provenance 需要迁移或产品差异说明）。
-- [x] app-server v2 schema 无未解释差异。
+- [x] 本轮 P0（Batch 8-10）全部完成。
+- [x] P1 不存在已知协议、持久化或安全语义缺口；realtime V3 Codex handoff 已完成 appserver 流式路由和有界输出验证。
+- [x] app-server v2 schema 在 `1e20272fa5` 基线上无未解释差异。
 - [x] 默认生产路径不使用 synthetic/local stub。
-- [ ] 上游新增 fixture 已迁移，或有书面的平台/语言差异说明。
+- [x] 上游新增 fixture 已迁移，或已有书面的平台/语言差异说明。
 - [ ] Windows、Linux、macOS 平台报告完整（Linux 已验证，macOS 待原生 runner）。
-- [x] 全局验收命令全部通过（当前 Windows 本机，2026-07-18）。
+- [x] 全局 Go 验收命令在新基线上全部通过；原生平台发布门禁单独跟踪，不以 Windows 结果替代。
 - [x] README 中 Go 版本要求与 `go.mod` 一致。
+
+当前结论：不能宣称 Rust `1e20272fa5` 的 Batch 8-14 已全面完成；Windows 代码与测试验证已完成，但上列 partial 行为和原生平台验证仍阻止发布门禁关闭。
 
 ## 6. 风险与约束
 
@@ -311,4 +409,7 @@ go vet ./...
 
 ## 8. 下一步
 
-继续收口发布门禁：Linux Landlock/bwrap 原生报告已在 Kali Linux 上验证通过；macOS seatbelt/native trust roots 仍待原生报告；`external_agent_memory_import` 已接受 feature key，但 memory detect/import 与 imported memory scope-provenance 仍需迁移或形成产品差异说明。
+1. 先执行 Batch 8，只刷新基线证据和差异清单，不在同一提交中实现业务功能。
+2. 按 Batch 9 优先同步 app-server schema、`app/installed`、`thread/searchOccurrences` 和音频 content item，解除客户端协议阻塞。
+3. Batch 10-12 完成持久化、world state、exec policy 与远程执行器语义后，再进入 TUI 大规模同步。
+4. 旧发布门禁继续保留：macOS seatbelt/native trust roots 仍需原生报告；Linux/macOS 的最终发布报告不能由 Windows 测试替代。

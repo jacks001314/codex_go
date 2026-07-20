@@ -21,6 +21,7 @@ const (
 	HookEventPreCompact        HookEventName = "preCompact"
 	HookEventPostCompact       HookEventName = "postCompact"
 	HookEventSessionStart      HookEventName = "sessionStart"
+	HookEventSessionEnd        HookEventName = "sessionEnd"
 	HookEventUserPromptSubmit  HookEventName = "userPromptSubmit"
 	HookEventSubagentStart     HookEventName = "subagentStart"
 	HookEventSubagentStop      HookEventName = "subagentStop"

@@ -15,6 +15,8 @@ const (
 	AttachmentFile        AttachmentKind = "file"
 	AttachmentImage       AttachmentKind = "image"
 	AttachmentRemoteImage AttachmentKind = "remote_image"
+	AttachmentAudio       AttachmentKind = "audio"
+	AttachmentRemoteAudio AttachmentKind = "remote_audio"
 )
 
 type ComposerAttachment struct {

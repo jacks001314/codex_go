@@ -267,7 +267,7 @@ func hookMatches(event HookEventName, matcher *string, matcherInputs []string) b
 			}
 		}
 		return false
-	case HookEventUserPromptSubmit, HookEventStop:
+	case HookEventUserPromptSubmit, HookEventStop, HookEventSessionEnd:
 		return true
 	default:
 		return false

@@ -188,6 +188,8 @@ func (s *InputQueueState) DrainPendingMessagesForRestore(composer ThreadComposer
 		Text:            composer.Text,
 		LocalImages:     append([]string(nil), composer.LocalImages...),
 		RemoteImageURLs: append([]string(nil), composer.RemoteImageURLs...),
+		LocalAudio:      append([]string(nil), composer.LocalAudio...),
+		RemoteAudioURLs: append([]string(nil), composer.RemoteAudioURLs...),
 		TextElements:    cloneTextElements(composer.TextElements),
 		MentionBindings: append([]string(nil), composer.MentionBindings...),
 	}
@@ -262,6 +264,8 @@ func ComposerStateFromUserMessage(message UserMessage, pendingPastes [][2]string
 		Text:            message.Text,
 		LocalImages:     append([]string(nil), message.LocalImages...),
 		RemoteImageURLs: append([]string(nil), message.RemoteImageURLs...),
+		LocalAudio:      append([]string(nil), message.LocalAudio...),
+		RemoteAudioURLs: append([]string(nil), message.RemoteAudioURLs...),
 		TextElements:    cloneTextElements(message.TextElements),
 		MentionBindings: append([]string(nil), message.MentionBindings...),
 		PendingPastes:   append([][2]string(nil), pendingPastes...),
@@ -276,5 +280,5 @@ func historyRecordValueAt(records []UserMessageHistoryRecord, index int) UserMes
 }
 
 func composerHasRestoreContent(composer ThreadComposerState) bool {
-	return composer.Text != "" || len(composer.LocalImages) > 0 || len(composer.RemoteImageURLs) > 0
+	return composer.Text != "" || len(composer.LocalImages) > 0 || len(composer.RemoteImageURLs) > 0 || len(composer.LocalAudio) > 0 || len(composer.RemoteAudioURLs) > 0
 }

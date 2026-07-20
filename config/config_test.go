@@ -8,6 +8,27 @@ import (
 	"testing"
 )
 
+func TestResumeCWDModeAndResolution(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		mode  ResumeCWDMode
+	}{{"current", ResumeCWDCurrent}, {"session", ResumeCWDSession}} {
+		mode, err := (&Config{Values: map[string]any{"resume_cwd": tc.value}}).ResumeCWDMode()
+		if err != nil || mode != tc.mode {
+			t.Fatalf("mode(%q) = %q, %v", tc.value, mode, err)
+		}
+	}
+	if _, err := (&Config{Values: map[string]any{"resume_cwd": "future"}}).ResumeCWDMode(); err == nil {
+		t.Fatal("expected invalid resume_cwd error")
+	}
+	if got := ResolveResumeCWD(ResumeCWDCurrent, "/current", "/session"); got != "/current" {
+		t.Fatalf("current = %q", got)
+	}
+	if got := ResolveResumeCWD(ResumeCWDSession, "/current", "/session"); got != "/session" {
+		t.Fatalf("session = %q", got)
+	}
+}
+
 func TestLoadParsesSimpleConfig(t *testing.T) {
 	dir := t.TempDir()
 	body := `

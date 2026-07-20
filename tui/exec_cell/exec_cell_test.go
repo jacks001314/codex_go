@@ -8,6 +8,18 @@ import (
 	"codex_go/utils"
 )
 
+func TestAppendOutputKeepsBoundedTail(t *testing.T) {
+	cell := NewExecCell(ExecCall{CallID: "call"}, false)
+	chunk := strings.Repeat("x", MaxLiveOutputBytes+32)
+	if !cell.AppendOutput("call", chunk) {
+		t.Fatal("append failed")
+	}
+	output := cell.Calls[0].Output
+	if len(output.AggregatedOutput) != MaxLiveOutputBytes || !output.LiveOutputTruncated {
+		t.Fatalf("output len=%d truncated=%v", len(output.AggregatedOutput), output.LiveOutputTruncated)
+	}
+}
+
 func TestExecCellModelLifecycle(t *testing.T) {
 	start := time.Unix(0, 0)
 	cell := NewExecCell(ExecCall{

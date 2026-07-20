@@ -133,6 +133,16 @@ func (i *TurnUserInput) MarshalJSON() ([]byte, error) {
 			Detail: cloneStringPtr(i.Detail),
 			Path:   i.Path,
 		})
+	case "audio":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		}{Type: "audio", URL: i.URL})
+	case "localAudio":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		}{Type: "localAudio", Path: i.Path})
 	case "skill", "mention":
 		return json.Marshal(struct {
 			Type string `json:"type"`

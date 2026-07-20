@@ -43,6 +43,35 @@ func TestModelViewRendersState(t *testing.T) {
 	}
 }
 
+func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{
+		Model:          "gpt-test",
+		ApprovalPolicy: "on-request",
+		Sandbox:        "workspace-write",
+	})
+	state.SetThreadID("thread-wide")
+	state.AddMessage(codextui.RoleAssistant, "Working through the repository.")
+	model := NewModel(state, Options{Width: 120, Height: 28})
+
+	view := utils.StripANSI(model.View())
+	for _, want := range []string{" ACTIVITY ─", "╭", "╰", "Ask Codex"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("wide view missing region chrome %q:\n%s", want, view)
+		}
+	}
+	if got := model.composer.Width(); got >= model.width {
+		t.Fatalf("composer width = %d, want room for border within terminal width %d", got, model.width)
+	}
+}
+
+func TestModelViewKeepsNarrowTerminalCompact(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 82, Height: 18})
+	view := utils.StripANSI(model.View())
+	if strings.Contains(view, " ACTIVITY ─") || strings.Contains(view, "╭") {
+		t.Fatalf("narrow view should not spend rows or columns on region chrome:\n%s", view)
+	}
+}
+
 func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{
 		Model:           "gpt-5.5",
@@ -712,6 +741,39 @@ func TestModelTranscriptNavigationPreservesScrollPosition(t *testing.T) {
 	_ = model.View()
 	if !model.transcript.AtBottom() {
 		t.Fatalf("bottom transcript did not follow new content; offset=%d", model.transcript.YOffset)
+	}
+}
+
+func TestModelActivityFollowTracksRunningEventsUntilUserScrolls(t *testing.T) {
+	state := codextui.NewState(nil)
+	for i := 0; i < 30; i++ {
+		state.AddMessage(codextui.RoleSystem, fmt.Sprintf("initial event %02d", i))
+	}
+	model := NewModel(state, Options{Width: 72, Height: 10})
+	if !model.activityFollow || !model.transcript.AtBottom() {
+		t.Fatalf("initial activity follow=%v atBottom=%v", model.activityFollow, model.transcript.AtBottom())
+	}
+
+	state.AddMessage(codextui.RoleSystem, "running event follows")
+	model.refreshTranscript()
+	if !model.transcript.AtBottom() {
+		t.Fatalf("running event did not follow to bottom; offset=%d", model.transcript.YOffset)
+	}
+
+	model.Update(key(bubbletea.KeyPgUp))
+	if model.activityFollow {
+		t.Fatal("PageUp should pause activity follow")
+	}
+	offset := model.transcript.YOffset
+	state.AddMessage(codextui.RoleSystem, "running event while reading history")
+	model.refreshTranscript()
+	if model.transcript.YOffset != offset {
+		t.Fatalf("history reading offset changed from %d to %d", offset, model.transcript.YOffset)
+	}
+
+	model.Update(key(bubbletea.KeyEnd))
+	if !model.activityFollow || !model.transcript.AtBottom() {
+		t.Fatalf("End should resume activity follow; follow=%v offset=%d", model.activityFollow, model.transcript.YOffset)
 	}
 }
 

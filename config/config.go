@@ -47,6 +47,43 @@ type CurrentTimeReminderConfig struct {
 	SleepTool               bool
 }
 
+type ResumeCWDMode string
+
+const (
+	ResumeCWDCurrent ResumeCWDMode = "current"
+	ResumeCWDSession ResumeCWDMode = "session"
+)
+
+func (c *Config) ResumeCWDMode() (ResumeCWDMode, error) {
+	if c == nil || c.Values == nil {
+		return "", nil
+	}
+	raw, ok := c.Values["resume_cwd"]
+	if !ok || raw == nil {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid resume_cwd: expected string")
+	}
+	value = strings.TrimSpace(value)
+	switch ResumeCWDMode(value) {
+	case "":
+		return "", nil
+	case ResumeCWDCurrent, ResumeCWDSession:
+		return ResumeCWDMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid resume_cwd %q: expected current or session", value)
+	}
+}
+
+func ResolveResumeCWD(mode ResumeCWDMode, currentCWD, sessionCWD string) string {
+	if mode == ResumeCWDCurrent && strings.TrimSpace(currentCWD) != "" {
+		return strings.TrimSpace(currentCWD)
+	}
+	return strings.TrimSpace(sessionCWD)
+}
+
 const DefaultChatGPTBaseURL = "https://chatgpt.com/backend-api/"
 
 type LoadOptions struct {
@@ -209,6 +246,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"profiles":                             {},
 	"responsesapi_client_metadata":         {},
 	"review_model":                         {},
+	"resume_cwd":                           {},
 	"requirements":                         {},
 	"sandbox_mode":                         {},
 	"sandbox_workspace_write":              {},

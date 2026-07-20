@@ -42,6 +42,7 @@ func TestCodexOnboardingExternalAgentImportFailureEventSerializesExpectedRustSha
 		ItemType:        "SESSIONS",
 		FailureStage:    "session_missing",
 		ErrorType:       "session_missing",
+		SubErrorType:    stringPtrTelemetry("session_not_detected"),
 		ProductClientID: stringPtrTelemetry("codex_cli_rs"),
 	})
 
@@ -60,6 +61,7 @@ func TestCodexOnboardingExternalAgentImportFailureEventSerializesExpectedRustSha
 		params["type"] != "SESSIONS" ||
 		params["failure_stage"] != "session_missing" ||
 		params["error_type"] != "session_missing" ||
+		params["sub_error_type"] != "session_not_detected" ||
 		params["product_client_id"] != "codex_cli_rs" {
 		t.Fatalf("payload = %s", data)
 	}

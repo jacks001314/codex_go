@@ -38,3 +38,17 @@ func TestTrimTargetBytes(t *testing.T) {
 		t.Fatalf("MessageHistoryTrimTargetBytes(newest) = %d", got)
 	}
 }
+
+func TestLookupMessageHistoryEntriesReadsOffsetsInOneBatch(t *testing.T) {
+	config := NewMessageHistoryConfig(t.TempDir(), MessageHistoryPersistenceSaveAll, nil)
+	for _, text := range []string{"zero", "one", "two", "three"} {
+		if err := AppendMessageHistoryEntry(text, "session", config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logID, _ := MessageHistoryMetadata(config)
+	entries := LookupMessageHistoryEntries(logID, []int{3, 1, 3, -1, 99}, config)
+	if len(entries) != 2 || entries[1].Text != "one" || entries[3].Text != "three" {
+		t.Fatalf("entries = %#v", entries)
+	}
+}

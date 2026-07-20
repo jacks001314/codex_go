@@ -450,7 +450,7 @@ func TestRunStructuredInputItemsAndSessionContent(t *testing.T) {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
 	imagePath := filepath.Join(t.TempDir(), "diagram.png")
-	if err := os.WriteFile(imagePath, []byte("fake image bytes"), 0o600); err != nil {
+	if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile image returned error: %v", err)
 	}
 	agent := &recordingAgent{message: "done"}
@@ -516,6 +516,57 @@ func TestRunStructuredInputItemsAndSessionContent(t *testing.T) {
 	}
 	if record.Items[0].Content[2].Type != "input_text" || record.Items[0].Content[2].Text != "review these" {
 		t.Fatalf("session text = %#v", record.Items[0].Content[2])
+	}
+}
+
+func TestLocalImageInputResolvesRelativePathFromRequestCWD(t *testing.T) {
+	cwd := t.TempDir()
+	imageDir := filepath.Join(filepath.Dir(cwd), "outside-images")
+	if err := os.MkdirAll(imageDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll image dir: %v", err)
+	}
+	imagePath := filepath.Join(imageDir, "diagram.png")
+	if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile image: %v", err)
+	}
+	relativePath, err := filepath.Rel(cwd, imagePath)
+	if err != nil {
+		t.Fatalf("Rel image path: %v", err)
+	}
+
+	content := localImageInputContentBlocks(relativePath, cwd, "high", 1)
+	if len(content) != 3 || content[1]["type"] != "input_image" {
+		t.Fatalf("content = %#v", content)
+	}
+	imageURL := fmt.Sprint(content[1]["image_url"])
+	if !strings.HasPrefix(imageURL, "data:image/png;base64,") {
+		t.Fatalf("image URL = %q", imageURL)
+	}
+}
+
+func TestLocalImageInputRejectsInvalidImageBeforeRequest(t *testing.T) {
+	cwd := t.TempDir()
+	path := filepath.Join(cwd, "invalid.png")
+	if err := os.WriteFile(path, []byte("not an image"), 0o600); err != nil {
+		t.Fatalf("WriteFile invalid image: %v", err)
+	}
+	content := localImageInputContentBlocks("invalid.png", cwd, "high", 1)
+	if len(content) != 1 || content[0]["type"] != "input_text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "could not decode") {
+		t.Fatalf("content = %#v", content)
+	}
+}
+
+func minimalPNGBytes() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f,
+		0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d,
+		0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+		0xae, 0x42, 0x60, 0x82,
 	}
 }
 
@@ -1533,10 +1584,10 @@ func TestRunExecResumeAcceptsImagesAfterSubcommandLikeRust(t *testing.T) {
 	imageDir := t.TempDir()
 	imageA := filepath.Join(imageDir, "resume-a.png")
 	imageB := filepath.Join(imageDir, "resume-b.png")
-	if err := os.WriteFile(imageA, []byte("fake image a"), 0o600); err != nil {
+	if err := os.WriteFile(imageA, minimalPNGBytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile imageA returned error: %v", err)
 	}
-	if err := os.WriteFile(imageB, []byte("fake image b"), 0o600); err != nil {
+	if err := os.WriteFile(imageB, minimalPNGBytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile imageB returned error: %v", err)
 	}
 	now := fixedExecTime()
@@ -1829,6 +1880,20 @@ func TestEffectiveExecApprovalPolicyMatchesRustHeadless(t *testing.T) {
 	}
 }
 
+func TestEffectiveExecApprovalPolicyHonorsExplicitInteractivePolicy(t *testing.T) {
+	req := &Request{
+		Root: cli.RootOptions{Shared: cli.SharedOptions{ApprovalPolicy: string(sandbox.ApprovalOnRequest)}},
+	}
+	if got := effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req); got != sandbox.ApprovalOnRequest {
+		t.Fatalf("explicit root approval policy = %q, want on-request", got)
+	}
+
+	req.Exec.Shared.ApprovalPolicy = string(sandbox.ApprovalNever)
+	if got := effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req); got != sandbox.ApprovalNever {
+		t.Fatalf("explicit exec approval policy = %q, want never", got)
+	}
+}
+
 func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	runner := NewLocalRunner(t.TempDir())
 	req := &Request{Exec: cli.ExecOptions{Prompt: "hello"}}
@@ -1865,6 +1930,43 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	}
 	if output == nil || output.Success || output.Data["approval_required"] != true {
 		t.Fatalf("auto-review output = %#v, want approval request", output)
+	}
+}
+
+func TestInteractiveExplicitOnRequestReachesShellApproval(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	req := &Request{
+		Root: cli.RootOptions{Shared: cli.SharedOptions{ApprovalPolicy: string(sandbox.ApprovalOnRequest)}},
+		Exec: cli.ExecOptions{Prompt: "hello"},
+	}
+	policy := effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req)
+	if policy != sandbox.ApprovalOnRequest {
+		t.Fatalf("effective approval policy = %q, want on-request", policy)
+	}
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{ApprovalPolicy: policy})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest returned error: %v", err)
+	}
+	output, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "call-additional-permissions",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{
+			Kind: tool.PayloadFunction,
+			Arguments: `{
+				"cmd":"mkdir ../test",
+				"sandbox_permissions":"with_additional_permissions",
+				"additional_permissions":{"file_system":{"write":["../test"]}}
+			}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch returned error: %v", err)
+	}
+	if output == nil || output.Success || output.Data["approval_required"] != true {
+		t.Fatalf("output = %#v, want approval request", output)
+	}
+	if output.Data["sandbox_permissions"] != sandbox.SandboxPermissionsWithAdditionalPermissions {
+		t.Fatalf("sandbox permissions = %#v", output.Data["sandbox_permissions"])
 	}
 }
 

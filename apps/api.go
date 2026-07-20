@@ -24,6 +24,32 @@ type AppsReadParams struct {
 	IncludeTools bool     `json:"includeTools,omitempty"`
 }
 
+type AppsInstalledParams struct {
+	ThreadID     *string `json:"threadId"`
+	ForceRefresh bool    `json:"forceRefresh,omitempty"`
+}
+
+type InstalledApp struct {
+	ID          string  `json:"id"`
+	RuntimeName *string `json:"runtimeName"`
+	Enabled     bool    `json:"enabled"`
+	Callable    bool    `json:"callable"`
+}
+
+type AppsInstalledResponse struct {
+	Apps []InstalledApp `json:"apps"`
+}
+
+func (r *AppsInstalledResponse) MarshalJSON() ([]byte, error) {
+	values := append([]InstalledApp(nil), r.Apps...)
+	if values == nil {
+		values = []InstalledApp{}
+	}
+	return json.Marshal(struct {
+		Apps []InstalledApp `json:"apps"`
+	}{Apps: values})
+}
+
 type AppToolSummary struct {
 	Name        string  `json:"name"`
 	Title       *string `json:"title"`
@@ -563,6 +589,34 @@ func (s *AppService) List(params *AppListParams) (*AppListResponse, error) {
 		return nil, err
 	}
 	return &AppListResponse{Data: page, NextCursor: nextCursor, Apps: page, AllApps: cloneApps(apps)}, nil
+}
+
+func (s *AppService) Installed(params *AppsInstalledParams) (*AppsInstalledResponse, error) {
+	if params == nil {
+		params = &AppsInstalledParams{}
+	}
+	list, err := s.List(&AppListParams{ThreadID: params.ThreadID, ForceRefetch: params.ForceRefresh})
+	if err != nil {
+		return nil, err
+	}
+	values := make([]InstalledApp, 0, len(list.AllApps))
+	for _, app := range list.AllApps {
+		if !app.IsAccessible {
+			continue
+		}
+		var runtimeName *string
+		if name := strings.TrimSpace(app.Name); name != "" {
+			runtimeName = &name
+		}
+		values = append(values, InstalledApp{
+			ID:          app.ID,
+			RuntimeName: runtimeName,
+			Enabled:     app.IsEnabled,
+			Callable:    app.IsEnabled && app.IsAccessible,
+		})
+	}
+	sort.SliceStable(values, func(i, j int) bool { return values[i].ID < values[j].ID })
+	return &AppsInstalledResponse{Apps: values}, nil
 }
 
 func (s *AppService) CachedListForNotification() []AppEntry {

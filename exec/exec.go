@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
@@ -9,8 +10,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -186,7 +190,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
 	inputItems = append(inputItems, req.AdditionalInputItems...)
 	if len(requestInputs) > 0 {
-		if item := userMessageInputItemFromTurnInputs(prompt, requestInputs); item != nil {
+		if item := userMessageInputItemFromTurnInputs(prompt, requestInputs, requestCWD(req)); item != nil {
 			inputItems = append(inputItems, item)
 		}
 		if _, local := agent.(*model.LocalAgentRunner); local {
@@ -852,6 +856,14 @@ func effectiveExecApprovalPolicy(cfg *config.Config, req *Request) sandbox.AskFo
 		req.Exec.RemovedFullAuto) {
 		return sandbox.ApprovalNever
 	}
+	if req != nil {
+		for _, value := range []string{req.Exec.Shared.ApprovalPolicy, req.Root.Shared.ApprovalPolicy} {
+			switch policy := sandbox.AskForApproval(strings.TrimSpace(value)); policy {
+			case sandbox.ApprovalUnlessTrusted, sandbox.ApprovalOnRequest, sandbox.ApprovalGranular, sandbox.ApprovalNever:
+				return policy
+			}
+		}
+	}
 	if strings.EqualFold(stringConfigValue(cfg, "approvals_reviewer"), string(config.ApprovalsReviewerAutoReview)) {
 		if value := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); value != "" {
 			switch sandbox.AskForApproval(value) {
@@ -927,7 +939,7 @@ func resumeInputItems(ctx *execResumeContext) []any {
 	if ctx == nil || ctx.Record == nil {
 		return nil
 	}
-	return session.InputItemsFromRecord(ctx.Record, &session.HistoryBuildOptions{IncludeToolOutputs: true})
+	return session.InputItemsFromRecord(ctx.Record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(ctx.Record.Metadata.CWD)})
 }
 
 func resumePreviousResponseID(ctx *execResumeContext) string {
@@ -1016,8 +1028,8 @@ func cloneTurnUserInputs(values []turn.TurnUserInput) []turn.TurnUserInput {
 	return out
 }
 
-func userMessageInputItemFromTurnInputs(prompt string, inputs []turn.TurnUserInput) any {
-	content := inputContentBlocksFromTurnInputs(prompt, inputs)
+func userMessageInputItemFromTurnInputs(prompt string, inputs []turn.TurnUserInput, cwd string) any {
+	content := inputContentBlocksFromTurnInputs(prompt, inputs, cwd)
 	if len(content) == 0 {
 		return nil
 	}
@@ -1028,7 +1040,7 @@ func userMessageInputItemFromTurnInputs(prompt string, inputs []turn.TurnUserInp
 	}
 }
 
-func inputContentBlocksFromTurnInputs(prompt string, inputs []turn.TurnUserInput) []map[string]any {
+func inputContentBlocksFromTurnInputs(prompt string, inputs []turn.TurnUserInput, cwd string) []map[string]any {
 	content := []map[string]any{}
 	if text := strings.TrimSpace(prompt); text != "" {
 		content = append(content, map[string]any{"type": "input_text", "text": text})
@@ -1048,7 +1060,7 @@ func inputContentBlocksFromTurnInputs(prompt string, inputs []turn.TurnUserInput
 		}
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			imageIndex++
-			content = append(content, localImageInputContentBlocks(path, inputDetail(input), imageIndex)...)
+			content = append(content, localImageInputContentBlocks(path, cwd, inputDetail(input), imageIndex)...)
 		}
 	}
 	return content
@@ -1068,26 +1080,54 @@ func inputDetail(input turn.TurnUserInput) string {
 	return "high"
 }
 
-func localImageInputContentBlocks(path string, detail string, imageIndex int) []map[string]any {
-	data, err := os.ReadFile(path)
+func localImageInputContentBlocks(path string, cwd string, detail string, imageIndex int) []map[string]any {
+	resolvedPath := path
+	if !filepath.IsAbs(resolvedPath) && strings.TrimSpace(cwd) != "" {
+		resolvedPath = filepath.Join(cwd, resolvedPath)
+	}
+	resolvedPath = filepath.Clean(resolvedPath)
+	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		return []map[string]any{{
 			"type": "input_text",
 			"text": fmt.Sprintf("Codex could not read the local image at `%s`: %v", path, err),
 		}}
 	}
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return []map[string]any{{
+			"type": "input_text",
+			"text": fmt.Sprintf("Codex could not decode the local image at `%s`: %v", path, err),
+		}}
+	}
+	mimeType := imageFormatMIME(format)
+	if mimeType == "" {
+		return []map[string]any{{
+			"type": "input_text",
+			"text": fmt.Sprintf("Codex does not support the local image format at `%s`: %s", path, format),
+		}}
+	}
 	return []map[string]any{
 		{"type": "input_text", "text": fmt.Sprintf("<image name=[Image #%d] path=\"%s\">", imageIndex, path)},
-		inputImageContentBlock(dataURLFromBytes(data), detail),
+		inputImageContentBlock(dataURLFromBytes(mimeType, data), detail),
 		{"type": "input_text", "text": "</image>"},
 	}
 }
 
-func dataURLFromBytes(data []byte) string {
-	mimeType := http.DetectContentType(data)
-	if strings.TrimSpace(mimeType) == "" {
-		mimeType = "application/octet-stream"
+func imageFormatMIME(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "png":
+		return "image/png"
+	case "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
 	}
+}
+
+func dataURLFromBytes(mimeType string, data []byte) string {
 	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 

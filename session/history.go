@@ -1,7 +1,17 @@
 package session
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"codex_go/model"
@@ -9,6 +19,7 @@ import (
 
 type HistoryBuildOptions struct {
 	IncludeToolOutputs bool
+	CWD                string
 }
 
 func InputItemsFromRecord(record *Record, options *HistoryBuildOptions) []any {
@@ -43,7 +54,7 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 	}
 	switch item.Type {
 	case "message", "user_message", "agent_message", "assistant_message":
-		return messageInputItem(item)
+		return messageInputItem(item, options)
 	case "imageGeneration", "image_generation", "image_generation_call":
 		return imageGenerationInputItem(item)
 	case "function_call", "custom_tool_call", "tool_search_call":
@@ -57,7 +68,7 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		if strings.TrimSpace(item.Text) == "" {
 			return nil
 		}
-		return messageInputItem(item)
+		return messageInputItem(item, options)
 	}
 }
 
@@ -76,9 +87,9 @@ func imageGenerationInputItem(item *Item) map[string]any {
 	return out
 }
 
-func messageInputItem(item *Item) map[string]any {
+func messageInputItem(item *Item, options *HistoryBuildOptions) map[string]any {
 	role := firstNonEmpty(item.Role, roleForSessionItemType(item.Type), "user")
-	content := contentBlocksFromSessionItem(item, role)
+	content := contentBlocksFromSessionItem(item, role, options)
 	if len(content) == 0 {
 		return nil
 	}
@@ -213,10 +224,18 @@ func toolOutputInputItem(item *Item) map[string]any {
 	return out
 }
 
-func contentBlocksFromSessionItem(item *Item, role string) []map[string]any {
+func contentBlocksFromSessionItem(item *Item, role string, options *HistoryBuildOptions) []map[string]any {
 	if len(item.Content) > 0 {
 		blocks := make([]map[string]any, 0, len(item.Content))
 		for i := range item.Content {
+			if isLocalImageContentType(item.Content[i].Type) {
+				blocks = append(blocks, localImageHistoryBlocks(item.Content[i], options)...)
+				continue
+			}
+			if isLocalAudioContentType(item.Content[i].Type) {
+				blocks = append(blocks, localAudioHistoryBlocks(item.Content[i], options)...)
+				continue
+			}
 			contentType := historyContentType(item.Content[i].Type, role, item.Content[i].ImageURL)
 			block := map[string]any{"type": contentType}
 			if item.Content[i].Text != "" {
@@ -224,6 +243,9 @@ func contentBlocksFromSessionItem(item *Item, role string) []map[string]any {
 			}
 			if item.Content[i].ImageURL != "" {
 				block["image_url"] = item.Content[i].ImageURL
+			}
+			if item.Content[i].AudioURL != "" {
+				block["audio_url"] = item.Content[i].AudioURL
 			}
 			if item.Content[i].Detail != nil {
 				block["detail"] = *item.Content[i].Detail
@@ -242,6 +264,69 @@ func contentBlocksFromSessionItem(item *Item, role string) []map[string]any {
 	}}
 }
 
+func isLocalImageContentType(value string) bool {
+	return value == "localImage" || value == "local_image"
+}
+
+func isLocalAudioContentType(value string) bool {
+	return value == "localAudio" || value == "local_audio"
+}
+
+func localAudioHistoryBlocks(part ContentPart, options *HistoryBuildOptions) []map[string]any {
+	path := strings.TrimSpace(part.AudioURL)
+	resolved := path
+	if !filepath.IsAbs(resolved) && options != nil && strings.TrimSpace(options.CWD) != "" {
+		resolved = filepath.Join(options.CWD, resolved)
+	}
+	data, err := os.ReadFile(filepath.Clean(resolved))
+	if err != nil {
+		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("[Local audio unavailable: %s]", path)}}
+	}
+	mime := http.DetectContentType(data)
+	return []map[string]any{{"type": "input_audio", "audio_url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)}}
+}
+
+func localImageHistoryBlocks(part ContentPart, options *HistoryBuildOptions) []map[string]any {
+	path := strings.TrimSpace(part.ImageURL)
+	resolved := path
+	if !filepath.IsAbs(resolved) && options != nil && strings.TrimSpace(options.CWD) != "" {
+		resolved = filepath.Join(options.CWD, resolved)
+	}
+	data, err := os.ReadFile(filepath.Clean(resolved))
+	if err != nil {
+		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("[Local image unavailable: %s]", path)}}
+	}
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("[Local image could not be decoded: %s]", path)}}
+	}
+	mime := historyImageMIME(format)
+	if mime == "" {
+		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("[Unsupported local image: %s]", path)}}
+	}
+	block := map[string]any{
+		"type":      "input_image",
+		"image_url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+	}
+	if part.Detail != nil {
+		block["detail"] = *part.Detail
+	}
+	return []map[string]any{block}
+}
+
+func historyImageMIME(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "png":
+		return "image/png"
+	case "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
 func roleForSessionItemType(itemType string) string {
 	switch itemType {
 	case "agent_message", "assistant_message":
@@ -258,6 +343,8 @@ func historyContentType(value string, role string, imageURL string) string {
 	switch value {
 	case "image", "inputImage", "input_image", "localImage", "local_image":
 		return "input_image"
+	case "audio", "inputAudio", "input_audio", "localAudio", "local_audio":
+		return "input_audio"
 	case "":
 		if strings.TrimSpace(imageURL) != "" {
 			return "input_image"

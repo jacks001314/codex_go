@@ -15,6 +15,18 @@ import (
 	"codex_go/tool"
 )
 
+func TestDynamicToolPreservesInlineAudioContent(t *testing.T) {
+	items, ok := normalizeDynamicToolContentItems([]DynamicToolCallOutputContentItem{{Type: "inputAudio", AudioURL: "data:audio/wav;base64,YXVkaW8="}})
+	if !ok || len(items) != 1 || items[0].Type != "inputAudio" {
+		t.Fatalf("items = %#v ok=%v", items, ok)
+	}
+	modelItems := dynamicToolModelContentItemsAny(items)
+	item := modelItems[0].(map[string]any)
+	if item["type"] != "input_audio" || item["audio_url"] != "data:audio/wav;base64,YXVkaW8=" {
+		t.Fatalf("model item = %#v", item)
+	}
+}
+
 type fakeDynamicToolCaller struct {
 	method string
 	params *DynamicToolCallParams

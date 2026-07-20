@@ -649,6 +649,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadList(request)
 	case MethodThreadSearch:
 		return r.handleThreadSearch(request)
+	case MethodThreadSearchOccurrences:
+		return r.handleThreadSearchOccurrences(request)
 	case MethodThreadLoadedList:
 		return r.handleThreadLoadedList(request)
 	case MethodThreadItemsList:
@@ -2172,6 +2174,27 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 		backwards = &page.BackwardsCursor
 	}
 	return &ThreadSearchResponse{Data: data, NextCursor: next, BackwardsCursor: backwards}, nil
+}
+
+func (r *Router) handleThreadSearchOccurrences(request *Request) (*ThreadSearchOccurrencesResponse, error) {
+	var params ThreadSearchOccurrencesParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	record, err := r.store.Read(session.ThreadID(strings.TrimSpace(params.ThreadID)), true, true)
+	if err != nil {
+		if !errors.Is(err, session.ErrThreadNotFound) {
+			return nil, err
+		}
+		record, err = r.repairThreadRecordFromRollout(session.ThreadID(strings.TrimSpace(params.ThreadID)))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buildThreadSearchOccurrences(record, &params)
 }
 
 func (r *Router) handleThreadLoadedList(request *Request) (*ThreadLoadedListResponse, error) {

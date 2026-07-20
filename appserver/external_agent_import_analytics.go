@@ -39,6 +39,7 @@ func (r *RuntimeRouter) emitExternalAgentConfigImportAnalytics(ctx context.Conte
 				ItemType:        itemType,
 				FailureStage:    strings.TrimSpace(failure.FailureStage),
 				ErrorType:       externalAgentImportFailureErrorType(failure),
+				SubErrorType:    trimmedStringPtr(failure.SubErrorType),
 				ProductClientID: productClientID,
 			})
 			sink.TrackCodexOnboardingExternalAgentImportFailureEvent(ctx, failureEvent)
@@ -46,11 +47,25 @@ func (r *RuntimeRouter) emitExternalAgentConfigImportAnalytics(ctx context.Conte
 	}
 }
 
-func externalAgentImportAnalyticsSource(params *config.ExternalAgentConfigImportParams) string {
-	if params == nil || params.Source == nil {
-		return ""
+func trimmedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
 	}
-	return strings.TrimSpace(*params.Source)
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func externalAgentImportAnalyticsSource(params *config.ExternalAgentConfigImportParams) string {
+	if params == nil {
+		return "cli"
+	}
+	if params.Source != nil && strings.TrimSpace(*params.Source) != "" {
+		return strings.TrimSpace(*params.Source)
+	}
+	return "cli"
 }
 
 func externalAgentImportFailureErrorType(failure config.ExternalAgentConfigImportItemTypeFailure) string {

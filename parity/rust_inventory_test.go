@@ -34,9 +34,11 @@ func goTopLevelDirectories(t *testing.T, root string) []string {
 	t.Helper()
 	dirs := collectTopLevelDirectories(t, root)
 	ignored := map[string]bool{
-		"cmd":     true,
-		"docs":    true,
-		"scripts": true,
+		"bin":          true,
+		"cmd":          true,
+		"deliverables": true,
+		"docs":         true,
+		"scripts":      true,
 	}
 	packages := dirs[:0]
 	for _, dir := range dirs {

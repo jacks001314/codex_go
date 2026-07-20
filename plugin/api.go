@@ -44,6 +44,13 @@ const (
 	InstallInstalledByDefault PluginInstallPolicy = "INSTALLED_BY_DEFAULT"
 )
 
+type PluginInstallPolicySource string
+
+const (
+	PluginInstallPolicySourceWorkspaceSetting     PluginInstallPolicySource = "WORKSPACE_SETTING"
+	PluginInstallPolicySourceImplicitCanonicalApp PluginInstallPolicySource = "IMPLICIT_CANONICAL_APP"
+)
+
 type PluginAuthPolicy string
 
 const (
@@ -338,27 +345,30 @@ func (s *PluginSource) MarshalJSON() ([]byte, error) {
 }
 
 type PluginSummary struct {
-	ID                   string              `json:"id"`
-	Name                 string              `json:"name"`
-	DisplayName          string              `json:"displayName"`
-	Description          string              `json:"description,omitempty"`
-	MarketplaceName      string              `json:"marketplaceName,omitempty"`
-	RemotePluginID       string              `json:"remotePluginId,omitempty"`
-	LocalVersion         *string             `json:"localVersion"`
-	ShareContext         *PluginShareContext `json:"shareContext"`
-	Availability         PluginAvailability  `json:"availability"`
-	InstallPolicy        PluginInstallPolicy `json:"installPolicy"`
-	AuthPolicy           PluginAuthPolicy    `json:"authPolicy"`
-	Interface            *PluginInterface    `json:"interface,omitempty"`
-	Source               PluginSource        `json:"source"`
-	HasSkills            bool                `json:"hasSkills"`
-	MCPServers           []string            `json:"mcpServers,omitempty"`
-	AppConnectors        []string            `json:"appConnectors,omitempty"`
-	Installed            bool                `json:"installed"`
-	Enabled              bool                `json:"enabled"`
-	InstallSuggestion    bool                `json:"installSuggestion,omitempty"`
-	PluginDisplayNameTag string              `json:"pluginDisplayNameTag,omitempty"`
-	Keywords             []string            `json:"keywords"`
+	ID                               string                     `json:"id"`
+	Name                             string                     `json:"name"`
+	DisplayName                      string                     `json:"displayName"`
+	Description                      string                     `json:"description,omitempty"`
+	MarketplaceName                  string                     `json:"marketplaceName,omitempty"`
+	RemotePluginID                   string                     `json:"remotePluginId,omitempty"`
+	Version                          *string                    `json:"version"`
+	LocalVersion                     *string                    `json:"localVersion"`
+	ShareContext                     *PluginShareContext        `json:"shareContext"`
+	Availability                     PluginAvailability         `json:"availability"`
+	InstallPolicy                    PluginInstallPolicy        `json:"installPolicy"`
+	InstallPolicySource              *PluginInstallPolicySource `json:"installPolicySource"`
+	MustShowInstallationInterstitial *bool                      `json:"mustShowInstallationInterstitial"`
+	AuthPolicy                       PluginAuthPolicy           `json:"authPolicy"`
+	Interface                        *PluginInterface           `json:"interface,omitempty"`
+	Source                           PluginSource               `json:"source"`
+	HasSkills                        bool                       `json:"hasSkills"`
+	MCPServers                       []string                   `json:"mcpServers,omitempty"`
+	AppConnectors                    []string                   `json:"appConnectors,omitempty"`
+	Installed                        bool                       `json:"installed"`
+	Enabled                          bool                       `json:"enabled"`
+	InstallSuggestion                bool                       `json:"installSuggestion,omitempty"`
+	PluginDisplayNameTag             string                     `json:"pluginDisplayNameTag,omitempty"`
+	Keywords                         []string                   `json:"keywords"`
 }
 
 func (s PluginSummary) MarshalJSON() ([]byte, error) {
@@ -367,33 +377,39 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		keywords = []string{}
 	}
 	return json.Marshal(struct {
-		ID             string              `json:"id"`
-		Name           string              `json:"name"`
-		RemotePluginID *string             `json:"remotePluginId"`
-		LocalVersion   *string             `json:"localVersion"`
-		ShareContext   *PluginShareContext `json:"shareContext"`
-		Availability   PluginAvailability  `json:"availability"`
-		InstallPolicy  PluginInstallPolicy `json:"installPolicy"`
-		AuthPolicy     PluginAuthPolicy    `json:"authPolicy"`
-		Interface      *PluginInterface    `json:"interface"`
-		Source         PluginSource        `json:"source"`
-		Installed      bool                `json:"installed"`
-		Enabled        bool                `json:"enabled"`
-		Keywords       []string            `json:"keywords"`
+		ID                               string                     `json:"id"`
+		Name                             string                     `json:"name"`
+		RemotePluginID                   *string                    `json:"remotePluginId"`
+		Version                          *string                    `json:"version"`
+		LocalVersion                     *string                    `json:"localVersion"`
+		ShareContext                     *PluginShareContext        `json:"shareContext"`
+		Availability                     PluginAvailability         `json:"availability"`
+		InstallPolicy                    PluginInstallPolicy        `json:"installPolicy"`
+		InstallPolicySource              *PluginInstallPolicySource `json:"installPolicySource"`
+		MustShowInstallationInterstitial *bool                      `json:"mustShowInstallationInterstitial"`
+		AuthPolicy                       PluginAuthPolicy           `json:"authPolicy"`
+		Interface                        *PluginInterface           `json:"interface"`
+		Source                           PluginSource               `json:"source"`
+		Installed                        bool                       `json:"installed"`
+		Enabled                          bool                       `json:"enabled"`
+		Keywords                         []string                   `json:"keywords"`
 	}{
-		ID:             s.ID,
-		Name:           s.Name,
-		RemotePluginID: stringPtrIfNotEmpty(s.RemotePluginID),
-		LocalVersion:   cloneStringPtr(s.LocalVersion),
-		ShareContext:   cloneSharePtr(s.ShareContext),
-		Availability:   s.Availability,
-		InstallPolicy:  s.InstallPolicy,
-		AuthPolicy:     s.AuthPolicy,
-		Interface:      clonePluginInterfacePtr(s.Interface),
-		Source:         clonePluginSource(s.Source),
-		Installed:      s.Installed,
-		Enabled:        s.Enabled,
-		Keywords:       keywords,
+		ID:                               s.ID,
+		Name:                             s.Name,
+		RemotePluginID:                   stringPtrIfNotEmpty(s.RemotePluginID),
+		Version:                          cloneStringPtr(s.Version),
+		LocalVersion:                     cloneStringPtr(s.LocalVersion),
+		ShareContext:                     cloneSharePtr(s.ShareContext),
+		Availability:                     s.Availability,
+		InstallPolicy:                    s.InstallPolicy,
+		InstallPolicySource:              clonePluginInstallPolicySourcePtr(s.InstallPolicySource),
+		MustShowInstallationInterstitial: cloneBoolPtr(s.MustShowInstallationInterstitial),
+		AuthPolicy:                       s.AuthPolicy,
+		Interface:                        clonePluginInterfacePtr(s.Interface),
+		Source:                           clonePluginSource(s.Source),
+		Installed:                        s.Installed,
+		Enabled:                          s.Enabled,
+		Keywords:                         keywords,
 	})
 }
 
@@ -1012,6 +1028,7 @@ type PluginShareUpdateDiscoverability string
 const (
 	PluginShareUpdateDiscoverabilityUnlisted PluginShareUpdateDiscoverability = "UNLISTED"
 	PluginShareUpdateDiscoverabilityPrivate  PluginShareUpdateDiscoverability = "PRIVATE"
+	PluginShareUpdateDiscoverabilityListed   PluginShareUpdateDiscoverability = "LISTED"
 )
 
 type PluginSharePrincipalType string
@@ -3011,6 +3028,12 @@ func cloneSummary(summary PluginSummary) PluginSummary {
 		value := *summary.LocalVersion
 		summary.LocalVersion = &value
 	}
+	if summary.Version != nil {
+		value := *summary.Version
+		summary.Version = &value
+	}
+	summary.InstallPolicySource = clonePluginInstallPolicySourcePtr(summary.InstallPolicySource)
+	summary.MustShowInstallationInterstitial = cloneBoolPtr(summary.MustShowInstallationInterstitial)
 	if summary.ShareContext != nil {
 		value := cloneShare(*summary.ShareContext)
 		summary.ShareContext = &value
@@ -3415,6 +3438,22 @@ func cloneStringPtr(value *string) *string {
 	}
 	clone := *value
 	return &clone
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func clonePluginInstallPolicySourcePtr(value *PluginInstallPolicySource) *PluginInstallPolicySource {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func firstNonEmpty(values ...string) string {

@@ -9,6 +9,18 @@ import (
 	pluginapi "codex_go/plugin"
 )
 
+func TestAudioSubmissionRequiresAudioModelAndBuildsItems(t *testing.T) {
+	message := UserMessage{LocalAudio: []string{"sample.wav"}, RemoteAudioURLs: []string{"data:audio/wav;base64,YQ=="}}
+	blocked := DecideUserMessageSubmission(message, UserMessageTextHistoryRecord(), SubmissionOptions{SessionConfigured: true})
+	if blocked.Accepted || !blocked.RestoreBlockedAudio {
+		t.Fatalf("blocked = %#v", blocked)
+	}
+	accepted := DecideUserMessageSubmission(message, UserMessageTextHistoryRecord(), SubmissionOptions{SessionConfigured: true, CurrentModelHasAudio: true})
+	if !accepted.Accepted || len(accepted.Items) != 2 || accepted.Items[0].Kind != SubmittedInputRemoteAudio || accepted.Items[1].Kind != SubmittedInputLocalAudio {
+		t.Fatalf("accepted = %#v", accepted)
+	}
+}
+
 func TestInputSubmissionMentionItemsOrderMatchesRust(t *testing.T) {
 	message := UserMessage{
 		Text:            "Use $writer [$reader](skill://skills/reader/SKILL.md) and $google-drive",

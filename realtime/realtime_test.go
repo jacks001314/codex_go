@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,6 +51,32 @@ func TestStartParamsNormalizeDefaultsAndPrompt(t *testing.T) {
 	}
 	if config.Transport.Type != "webrtc" || config.Transport.SDP != "offer" {
 		t.Fatalf("transport = %+v", config.Transport)
+	}
+}
+
+func TestStartParamsValidateV3InitialItemsAndHandoffMode(t *testing.T) {
+	mode := HandoffModeBemTags
+	params := StartParams{ThreadID: "thread-v3", OutputModality: OutputText, Version: func() *Version { value := VersionV2; return &value }(), CodexResponseHandoffMode: &mode, InitialItems: []InitialTextItem{{Role: RoleDeveloper, Text: "Remember this."}, {Role: RoleAssistant, Text: "Understood."}}}
+	config, err := params.Normalized("model", VersionV2, VoiceMarin)
+	if err != nil {
+		t.Fatalf("normalize v3 params: %v", err)
+	}
+	if config.CodexResponseHandoffMode != HandoffModeBemTags || len(config.InitialItems) != 2 || config.InitialItems[0].Role != RoleDeveloper {
+		t.Fatalf("config = %#v", config)
+	}
+	manager := NewManager()
+	state, notifications, err := manager.Start(&params)
+	if err != nil || state == nil || len(notifications) != 3 {
+		t.Fatalf("initial item notifications state=%#v notifications=%#v err=%v", state, notifications, err)
+	}
+	first := notifications[1].Params.(ItemAddedNotification)
+	if first.Item["role"] != string(RoleDeveloper) || first.Item["text"] != "Remember this." {
+		t.Fatalf("first initial item = %#v", first.Item)
+	}
+	tooMany := params
+	tooMany.InitialItems = make([]InitialTextItem, 129)
+	if err := tooMany.Validate(); !errors.Is(err, ErrInvalidRealtimeRequest) {
+		t.Fatalf("expected initial item limit error, got %v", err)
 	}
 }
 
@@ -154,6 +181,85 @@ func TestManagerZeroValueIsUsable(t *testing.T) {
 	}
 	if closed.ClosedAt == nil || notification.Method != NotificationClosed {
 		t.Fatalf("closed = %+v notification=%+v", closed, notification)
+	}
+}
+
+func TestManagerStreamsCodexHandoffByPhase(t *testing.T) {
+	manager := NewManager()
+	if _, _, err := manager.Start(&StartParams{ThreadID: "thread-a", OutputModality: OutputText}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	manager.BeginCodexOutput("thread-a", "commentary", "commentary")
+	assertHandoffText(t, manager.StreamCodexOutput("thread-a", "commentary", "working"), "thinking", "working", false)
+
+	manager.BeginCodexOutput("thread-a", "final", "final_answer")
+	assertHandoffText(t, manager.StreamCodexOutput("thread-a", "final", "done"), "final", agentFinalMessagePrefix+"done", false)
+	if notifications := manager.FinishCodexOutput("thread-a", "final"); len(notifications) != 0 {
+		t.Fatalf("unexpected final notifications = %#v", notifications)
+	}
+	if notifications := manager.FinishCodexOutput("thread-a", "final"); len(notifications) != 0 {
+		t.Fatalf("finished stream should only be removed once: %#v", notifications)
+	}
+}
+
+func TestManagerBoundsCodexHandoffAndPreservesUTF8(t *testing.T) {
+	manager := NewManager()
+	if _, _, err := manager.Start(&StartParams{ThreadID: "thread-a", OutputModality: OutputText}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	manager.BeginCodexOutput("thread-a", "item-a", "commentary")
+	input := strings.Repeat("界", 2000)
+	first := manager.StreamCodexOutput("thread-a", "item-a", input)
+	if len(first) != 1 {
+		t.Fatalf("first notifications = %#v", first)
+	}
+	firstText := first[0].Params.(ItemAddedNotification).Item["text"].(string)
+	if len(firstText) > codexOutputHeadLimit || !strings.HasPrefix(input, firstText) {
+		t.Fatalf("first text bytes=%d valid prefix=%v", len(firstText), strings.HasPrefix(input, firstText))
+	}
+	finished := manager.FinishCodexOutput("thread-a", "item-a")
+	if len(finished) != 1 {
+		t.Fatalf("finish notifications = %#v", finished)
+	}
+	finishText := finished[0].Params.(ItemAddedNotification).Item["text"].(string)
+	if !strings.HasPrefix(finishText, codexOutputTruncationText) || len(finishText) > len(codexOutputTruncationText)+codexOutputTailLimit {
+		t.Fatalf("finish text bytes=%d", len(finishText))
+	}
+	if !strings.HasSuffix(input, strings.TrimPrefix(finishText, codexOutputTruncationText)) {
+		t.Fatal("finish text does not preserve UTF-8 tail")
+	}
+}
+
+func TestManagerSkipsAutomaticCodexHandoffModes(t *testing.T) {
+	for _, field := range []string{"clientManagedHandoffs", "codexResponsesAsItems"} {
+		t.Run(field, func(t *testing.T) {
+			value := true
+			params := &StartParams{ThreadID: field, OutputModality: OutputText}
+			if field == "clientManagedHandoffs" {
+				params.ClientManagedHandoffs = &value
+			} else {
+				params.CodexResponsesAsItems = &value
+			}
+			manager := NewManager()
+			if _, _, err := manager.Start(params); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			manager.BeginCodexOutput(field, "item", "final_answer")
+			if notifications := manager.StreamCodexOutput(field, "item", "ignored"); len(notifications) != 0 {
+				t.Fatalf("notifications = %#v", notifications)
+			}
+		})
+	}
+}
+
+func assertHandoffText(t *testing.T, notifications []Notification, channel string, text string, final bool) {
+	t.Helper()
+	if len(notifications) != 1 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	params := notifications[0].Params.(ItemAddedNotification)
+	if params.Item["type"] != "handoff_append" || params.Item["channel"] != channel || params.Item["text"] != text || params.Item["final"] != final {
+		t.Fatalf("handoff item = %#v", params.Item)
 	}
 }
 

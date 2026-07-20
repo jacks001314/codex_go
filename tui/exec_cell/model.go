@@ -2,6 +2,8 @@ package execcell
 
 import "time"
 
+const MaxLiveOutputBytes = 1024 * 1024
+
 // Rust parity: codex-rs/tui/src/exec_cell/model.rs.
 
 type ExecCommandSource int
@@ -30,9 +32,10 @@ type ParsedCommand struct {
 }
 
 type CommandOutput struct {
-	ExitCode         int
-	AggregatedOutput string
-	FormattedOutput  string
+	ExitCode            int
+	AggregatedOutput    string
+	FormattedOutput     string
+	LiveOutputTruncated bool
 }
 
 type ExecCall struct {
@@ -155,6 +158,11 @@ func (c *ExecCell) AppendOutput(callID string, chunk string) bool {
 			c.Calls[i].Output = &CommandOutput{}
 		}
 		c.Calls[i].Output.AggregatedOutput += chunk
+		if len(c.Calls[i].Output.AggregatedOutput) > MaxLiveOutputBytes {
+			value := c.Calls[i].Output.AggregatedOutput
+			c.Calls[i].Output.AggregatedOutput = value[len(value)-MaxLiveOutputBytes:]
+			c.Calls[i].Output.LiveOutputTruncated = true
+		}
 		return true
 	}
 	return false

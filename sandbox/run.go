@@ -172,7 +172,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 	if !platformSupportsPermissionProfileSandbox() && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled && !permissionUnsupportedAdded {
 		unsupported = append(unsupported, "sandbox state")
 	}
-	if len(req.AllowUnixSockets) > 0 {
+	if len(req.AllowUnixSockets) > 0 && runtime.GOOS != "darwin" {
 		unsupported = append(unsupported, "unix socket allowlist")
 	}
 	if req.LogDenials {
@@ -201,12 +201,18 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			return nil, err
 		}
 		plan.Command = wrapped
+	} else if runtime.GOOS == "darwin" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
+		wrapped, err := createSeatbeltCommandArgs(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets)
+		if err != nil {
+			return nil, err
+		}
+		plan.Command = wrapped
 	}
 	return plan, nil
 }
 
 func platformSupportsPermissionProfileSandbox() bool {
-	return runtime.GOOS == "linux" || runtime.GOOS == "windows"
+	return runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 }
 
 func parseSandboxStateJSON(raw string) (*SandboxState, error) {

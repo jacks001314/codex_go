@@ -837,6 +837,7 @@ func orderedHookJSONEventNames() []string {
 		"PreCompact",
 		"PostCompact",
 		"SessionStart",
+		"SessionEnd",
 		"UserPromptSubmit",
 		"SubagentStart",
 		"SubagentStop",
@@ -858,6 +859,8 @@ func hookEventFromJSONName(value string) HookEventName {
 		return HookEventPostCompact
 	case "SessionStart":
 		return HookEventSessionStart
+	case "SessionEnd":
+		return HookEventSessionEnd
 	case "UserPromptSubmit":
 		return HookEventUserPromptSubmit
 	case "SubagentStart":
@@ -885,6 +888,8 @@ func hookEventKeyLabel(event HookEventName) string {
 		return "post_compact"
 	case HookEventSessionStart:
 		return "session_start"
+	case HookEventSessionEnd:
+		return "session_end"
 	case HookEventUserPromptSubmit:
 		return "user_prompt_submit"
 	case HookEventSubagentStart:
@@ -906,7 +911,7 @@ func normalizedHookMatcher(event HookEventName, matcher *string) *string {
 	if matcher == nil {
 		return nil
 	}
-	if event == HookEventStop || event == HookEventUserPromptSubmit {
+	if event == HookEventStop || event == HookEventSessionEnd || event == HookEventUserPromptSubmit {
 		return nil
 	}
 	value := strings.TrimSpace(*matcher)

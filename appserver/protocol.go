@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +49,7 @@ const (
 	MethodThreadRollback                     Method = "thread/rollback"
 	MethodThreadList                         Method = "thread/list"
 	MethodThreadSearch                       Method = "thread/search"
+	MethodThreadSearchOccurrences            Method = "thread/searchOccurrences"
 	MethodThreadLoadedList                   Method = "thread/loaded/list"
 	MethodThreadRead                         Method = "thread/read"
 	MethodThreadItemsList                    Method = "thread/items/list"
@@ -68,6 +70,7 @@ const (
 	MethodExperimentalFeatureSet                 Method = "experimentalFeature/enablement/set"
 	MethodAppList                                Method = "app/list"
 	MethodAppRead                                Method = "app/read"
+	MethodAppInstalled                           Method = "app/installed"
 	MethodGetAuthStatus                          Method = "getAuthStatus"
 	MethodGetConversationSummary                 Method = "getConversationSummary"
 	MethodGitDiffToRemote                        Method = "gitDiffToRemote"
@@ -1094,6 +1097,7 @@ type ThreadItemContent struct {
 	Type     string  `json:"type"`
 	Text     string  `json:"text,omitempty"`
 	ImageURL string  `json:"imageUrl,omitempty"`
+	AudioURL string  `json:"audioUrl,omitempty"`
 	Detail   *string `json:"detail,omitempty"`
 }
 
@@ -2071,6 +2075,150 @@ type ThreadSearchParams struct {
 	SearchTerm    string             `json:"searchTerm"`
 }
 
+type ThreadSearchOccurrencesParams struct {
+	ThreadID   string  `json:"threadId"`
+	SearchTerm string  `json:"searchTerm"`
+	Cursor     *string `json:"cursor"`
+	Limit      *uint32 `json:"limit"`
+}
+
+func (p *ThreadSearchOccurrencesParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return jsonRPCInvalidRequest("threadId is required")
+	}
+	if strings.TrimSpace(p.SearchTerm) == "" {
+		return jsonRPCInvalidRequest("searchTerm is required")
+	}
+	if p.Limit != nil && (*p.Limit == 0 || *p.Limit > 100) {
+		return jsonRPCInvalidRequest("limit must be between 1 and 100")
+	}
+	return nil
+}
+
+type ThreadSearchTextRange struct {
+	Start uint32 `json:"start"`
+	End   uint32 `json:"end"`
+}
+
+type ThreadSearchOccurrence struct {
+	TurnID            string                `json:"turnId"`
+	ItemID            string                `json:"itemId"`
+	Snippet           string                `json:"snippet"`
+	SnippetMatchRange ThreadSearchTextRange `json:"snippetMatchRange"`
+	TurnCursor        string                `json:"turnCursor"`
+}
+
+type ThreadSearchOccurrencesResponse struct {
+	Data       []ThreadSearchOccurrence `json:"data"`
+	NextCursor *string                  `json:"nextCursor"`
+}
+
+func (r *ThreadSearchOccurrencesResponse) MarshalJSON() ([]byte, error) {
+	data := append([]ThreadSearchOccurrence(nil), r.Data...)
+	if data == nil {
+		data = []ThreadSearchOccurrence{}
+	}
+	return json.Marshal(struct {
+		Data       []ThreadSearchOccurrence `json:"data"`
+		NextCursor *string                  `json:"nextCursor"`
+	}{Data: data, NextCursor: cloneStringPtrAppserver(r.NextCursor)})
+}
+
+func buildThreadSearchOccurrences(record *session.Record, params *ThreadSearchOccurrencesParams) (*ThreadSearchOccurrencesResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	start, err := decodeOccurrenceCursor(params.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(params.SearchTerm))
+	all := make([]ThreadSearchOccurrence, 0)
+	turns := turnsFromRecord(record)
+	for turnIndex, turn := range turns {
+		for _, item := range summarizeTurnItems(turn.Items, turn.Status) {
+			text := visibleOccurrenceText(item)
+			lower := strings.ToLower(text)
+			searchFrom := 0
+			for searchFrom <= len(lower) {
+				rel := strings.Index(lower[searchFrom:], needle)
+				if rel < 0 {
+					break
+				}
+				byteStart := searchFrom + rel
+				byteEnd := byteStart + len(needle)
+				all = append(all, ThreadSearchOccurrence{
+					TurnID: turn.ID, ItemID: item.ID, Snippet: text,
+					SnippetMatchRange: ThreadSearchTextRange{Start: utf16Offset(text[:byteStart]), End: utf16Offset(text[:byteEnd])},
+					TurnCursor:        strconv.Itoa(turnIndex),
+				})
+				searchFrom = byteEnd
+			}
+		}
+	}
+	if start > len(all) {
+		return nil, jsonRPCInvalidRequest("invalid cursor")
+	}
+	limit := 50
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	var next *string
+	if end < len(all) {
+		value := base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(end)))
+		next = &value
+	}
+	return &ThreadSearchOccurrencesResponse{Data: append([]ThreadSearchOccurrence(nil), all[start:end]...), NextCursor: next}, nil
+}
+
+func decodeOccurrenceCursor(cursor *string) (int, error) {
+	if cursor == nil || strings.TrimSpace(*cursor) == "" {
+		return 0, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(*cursor))
+	if err != nil {
+		return 0, jsonRPCInvalidRequest("invalid cursor")
+	}
+	value, err := strconv.Atoi(string(data))
+	if err != nil || value < 0 {
+		return 0, jsonRPCInvalidRequest("invalid cursor")
+	}
+	return value, nil
+}
+
+func visibleOccurrenceText(item ThreadItem) string {
+	if threadItemIsUserMessage(item) {
+		if strings.TrimSpace(item.Text) != "" {
+			return item.Text
+		}
+		parts := threadItemUserInputContent(&item)
+		texts := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if text, _ := part["text"].(string); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return item.Text
+}
+
+func utf16Offset(value string) uint32 {
+	var count uint32
+	for _, r := range value {
+		if r > 0xffff {
+			count += 2
+		} else {
+			count++
+		}
+	}
+	return count
+}
+
 func (p *ThreadSearchParams) Validate() error {
 	if p == nil || strings.TrimSpace(p.SearchTerm) == "" {
 		return jsonRPCInvalidRequest("thread/search requires a non-empty searchTerm")
@@ -2972,6 +3120,7 @@ func threadItemContentFromSession(content []session.ContentPart) []ThreadItemCon
 			Type:     content[i].Type,
 			Text:     content[i].Text,
 			ImageURL: content[i].ImageURL,
+			AudioURL: content[i].AudioURL,
 			Detail:   cloneString(content[i].Detail),
 		}
 	}
@@ -4118,6 +4267,9 @@ func threadItemDynamicContentItem(value any) any {
 		if itemType == "inputImage" || itemType == "input_image" || itemType == "image" {
 			return map[string]any{"type": "inputImage", "imageUrl": threadItemStringFromAnyMap(typed, "imageUrl", "image_url", "url")}
 		}
+		if itemType == "inputAudio" || itemType == "input_audio" || itemType == "audio" {
+			return map[string]any{"type": "inputAudio", "audioUrl": threadItemStringFromAnyMap(typed, "audioUrl", "audio_url", "url")}
+		}
 		return map[string]any{"type": "inputText", "text": threadItemStringFromAnyMap(typed, "text", "input_text", "inputText")}
 	case *DynamicToolCallOutputContent:
 		if typed == nil {
@@ -4126,10 +4278,16 @@ func threadItemDynamicContentItem(value any) any {
 		if typed.Type == "inputImage" || typed.Type == "input_image" {
 			return map[string]any{"type": "inputImage", "imageUrl": typed.ImageURL}
 		}
+		if typed.Type == "inputAudio" || typed.Type == "input_audio" {
+			return map[string]any{"type": "inputAudio", "audioUrl": typed.AudioURL}
+		}
 		return map[string]any{"type": "inputText", "text": typed.Text}
 	case DynamicToolCallOutputContent:
 		if typed.Type == "inputImage" || typed.Type == "input_image" {
 			return map[string]any{"type": "inputImage", "imageUrl": typed.ImageURL}
+		}
+		if typed.Type == "inputAudio" || typed.Type == "input_audio" {
+			return map[string]any{"type": "inputAudio", "audioUrl": typed.AudioURL}
 		}
 		return map[string]any{"type": "inputText", "text": typed.Text}
 	default:
@@ -5047,6 +5205,10 @@ func sessionContentPartsFromResponseContent(value any, role string) []session.Co
 		case "localImage", "local_image":
 			detail := stringPtrIfNotEmpty(stringFromMap(part, "detail"))
 			parts = append(parts, session.ContentPart{Type: "local_image", ImageURL: stringFromMap(part, "path"), Detail: detail})
+		case "input_audio", "audio":
+			parts = append(parts, session.ContentPart{Type: "input_audio", AudioURL: firstNonEmpty(stringFromMap(part, "audio_url"), stringFromMap(part, "url"))})
+		case "localAudio", "local_audio":
+			parts = append(parts, session.ContentPart{Type: "local_audio", AudioURL: stringFromMap(part, "path")})
 		default:
 			text := firstNonEmpty(stringFromMap(part, "text"), stringFromMap(part, "input_text"), stringFromMap(part, "output_text"))
 			if text == "" {

@@ -148,6 +148,16 @@ type HookUserPromptSubmitRequest struct {
 	Hooks          []HookMetadata
 }
 
+type HookSessionEndRequest struct {
+	ThreadID       string
+	CWD            string
+	TranscriptPath *string
+	Model          string
+	PermissionMode string
+	Reason         string
+	Hooks          []HookMetadata
+}
+
 func (r *HookRunner) RunSessionStart(ctx context.Context, request *HookSessionStartRequest) (*HookRunResult, error) {
 	if request == nil {
 		return nil, fmt.Errorf("%w: session start hook request is nil", ErrInvalidHook)
@@ -173,6 +183,21 @@ func (r *HookRunner) RunSessionStart(ctx context.Context, request *HookSessionSt
 		InputJSON:     inputJSON,
 		Hooks:         request.Hooks,
 	})
+}
+
+func (r *HookRunner) RunSessionEnd(ctx context.Context, request *HookSessionEndRequest) (*HookRunResult, error) {
+	if request == nil {
+		return nil, fmt.Errorf("%w: session end hook request is nil", ErrInvalidHook)
+	}
+	inputJSON, err := hookInputJSON(map[string]any{
+		"session_id": request.ThreadID, "transcript_path": nullableStringValue(request.TranscriptPath),
+		"cwd": request.CWD, "hook_event_name": "SessionEnd", "model": request.Model,
+		"permission_mode": request.PermissionMode, "reason": request.Reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.Run(ctx, &HookRunRequest{ThreadID: request.ThreadID, CWD: request.CWD, EventName: HookEventSessionEnd, InputJSON: inputJSON, Hooks: request.Hooks})
 }
 
 func (r *HookRunner) RunSubagentStart(ctx context.Context, request *HookSubagentStartRequest) (*HookRunResult, error) {

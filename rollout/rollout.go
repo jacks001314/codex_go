@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -490,9 +493,18 @@ func Load(path string) ([]Line, int, error) {
 		return nil, 0, err
 	}
 	defer file.Close()
+	var reader io.Reader = file
+	if strings.HasSuffix(strings.ToLower(path), ".zst") {
+		decoder, decodeErr := zstd.NewReader(file)
+		if decodeErr != nil {
+			return nil, 0, decodeErr
+		}
+		defer decoder.Close()
+		reader = decoder
+	}
 	var lines []Line
 	parseErrors := 0
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		var line Line
 		if err := unmarshalLine(scanner.Bytes(), &line); err != nil {
@@ -505,6 +517,14 @@ func Load(path string) ([]Line, int, error) {
 		return lines, parseErrors, err
 	}
 	return lines, parseErrors, nil
+}
+
+// PlainRolloutPath returns the canonical state-DB path for either a plain or compressed rollout.
+func PlainRolloutPath(path string) string {
+	if strings.HasSuffix(strings.ToLower(path), ".jsonl.zst") {
+		return strings.TrimSuffix(path, filepath.Ext(path))
+	}
+	return path
 }
 
 func unmarshalLine(data []byte, line *Line) error {

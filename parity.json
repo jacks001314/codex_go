@@ -1,7 +1,7 @@
 {
-  "rustBaseline": "315195492c",
-  "rustTag": "rust-v0.145.0-alpha.20",
-  "generatedAt": "2026-07-18",
+  "rustBaseline": "1e20272fa5",
+  "rustTag": "rust-v0.143.0-alpha.10+81",
+  "generatedAt": "2026-07-20",
   "items": [
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},
     {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./config ./agent ./appserver"},
@@ -9,9 +9,21 @@
     {"id":"unified-exec-race","status":"done","area":"unified_exec","test":"go test -race ./tool ./execserver ./mcp ./appserver -count=1"},
     {"id":"skill-selection","status":"done","area":"skills","test":"go test ./prompt ./appserver -run \"SkillSelection|SkillShadow|SkillsContext|ExplicitSkill|selection\" -count=1"},
     {"id":"environment-status","status":"done","area":"appserver","test":"go test ./appserver ./execserver -run \"EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads\" -count=1"},
+    {"id":"apps-installed","status":"done","area":"appserver","test":"go test ./appserver ./apps -run \"AppsInstalled|InstalledApp\" -count=1"},
+    {"id":"thread-search-occurrences","status":"done","area":"appserver","test":"go test ./appserver ./session -run \"SearchOccurrences|OccurrenceSearch\" -count=1"},
+    {"id":"audio-content-items","status":"done","area":"protocol","test":"go test ./appserver ./model ./codemode ./turn ./session -run Audio -count=1"},
+    {"id":"session-end-hooks","status":"done","area":"hooks","test":"go test ./appserver ./config ./tui/... -run SessionEnd -count=1"},
+    {"id":"resume-cwd","status":"done","area":"session","test":"go test ./config ./session ./appserver ./tui/... -run ResumeCWD -count=1"},
+    {"id":"executor-capability-discovery","status":"done","area":"execserver","test":"go test ./execserver ./plugin ./skillprovider -run Capability -count=1"},
+    {"id":"paginated-history-v2","status":"done","area":"history","test":"go test ./appserver ./session ./rollout ./state ./history -run \"Paginated|Occurrence|ThreadName|HistoryMode|MessageHistory\" -count=1"},
+    {"id":"tui-2026-07-20","status":"done","area":"tui","test":"go test ./tui/... -count=1"},
     {"id":"tui-session-history","status":"done","area":"tui","test":"go test ./tui/... ./session ./appserver"},
-    {"id":"external-agent-memory-import","status":"partial","area":"memory","reason":"Feature key external_agent_memory_import is accepted; memory item detection/import behavior and imported memory scope/provenance semantics remain pending in Go.","test":"go test ./parity ./memories ./session -count=1"},
+    {"id":"realtime-v3-handoff-initial-items","status":"done","area":"realtime","reason":"Go validates and emits ordered initialItems notifications, stores codexResponseHandoffMode, and routes streamed assistant output from appserver turns into bounded realtime handoff_append itemAdded notifications. Commentary/final channels, final-message prefix, UTF-8-safe head/tail truncation, and client-managed/codexResponsesAsItems skips are covered.","test":"go test ./realtime ./appserver -run 'Realtime|Handoff|ResponsesStreaming' -count=1"},
+    {"id":"doctor-compressed-rollout-inventory","status":"done","area":"doctor","reason":"Go rollout loading and doctor inventory now accept .jsonl.zst, map compressed siblings to canonical .jsonl state-DB keys, prefer plain rollouts, and report corrupt compressed files without false stale rows.","test":"go test ./rollout ./doctor -run 'Compressed|Rollout|ThreadInventory' -count=1"},
+    {"id":"exec-completion-backfill-active-turn","status":"intentional_difference","area":"exec","reason":"Rust codex exec consumes app-server notifications and conditionally backfills turn/completed items. Go exec runs the agent directly and emits completed items from the active AgentLoopResult, so there is no cross-thread notification/backfill stage to filter.","userImpact":"Only the active direct exec result can produce Go exec completion items; background app-server thread notifications are not part of this execution path and cannot pollute stdout.","test":"go test ./exec -run 'RunJSONSuppressesResponsesDeltasUntilFinalEvents|WriteStdinCompletionMapsToOriginalCommandExecution' -count=1"},
+    {"id":"tui-bootstrap-parallel-requests","status":"intentional_difference","area":"tui","reason":"Go TUI startup receives locally prepared model metadata and permission requirements; it has no equivalent pair of remote model/list and configRequirements/read requests to parallelize. This is an architecture difference, not an unimplemented Go request scheduler.","userImpact":"No additional startup round trips are introduced in the Go path; model and permission data are already available locally or from the existing settings load.","test":"go test ./tui/tea ./app -run Bootstrap -count=1"},
+    {"id":"external-agent-memory-import","status":"done","area":"memory","reason":"Go detects external project Markdown memory, verifies SHA-256 content, imports under extension-scoped resources with scope.json and source/project/cwd/hash metadata, rejects path/hash failures, and removes resources for disappeared projects without inventing rollout provenance.","test":"go test ./config -run ExternalAgentMemory -count=1"},
     {"id":"realtime-webrtc-crate-removal","status":"intentional_difference","area":"realtime","reason":"The Rust crate removal is repository-structure cleanup, not a wire-protocol removal.","userImpact":"Go retains its existing realtime capability; external protocol behavior is unchanged.","test":"go test ./appserver ./model"},
-    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap verified on a native Kali runner; macOS seatbelt/native-root reports still require a native runner.","test":"go test ./..."}
+    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap is verified on a native Kali runner. Go now has a parameterized macOS seatbelt backend with workspace metadata protection, network restriction, Unix-socket allowlists, and CODEX_SANDBOX propagation; Darwin packages cross-compile. Native macOS seatbelt/root/desktop artifacts are still required.","test":"go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"}
   ]
 }

@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 576 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 576", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 599 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 599", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -97,7 +97,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/bottom_pane/snapshots",
-			Files:    167,
+			Files:    169,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -111,7 +111,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/snapshots",
-			Files:    202,
+			Files:    209,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -130,6 +130,16 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Required: []string{
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_modal_exec.snap",
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_history_decision_approved_short.snap",
+			},
+		},
+		{
+			Path:     "tui/src/exec_cell/snapshots",
+			Files:    1,
+			Owner:    "tui/exec_cell",
+			Focus:    "bounded live command output preview and final transcript rendering",
+			Priority: []string{"history-cell", "unified-exec"},
+			Required: []string{
+				"tui/src/exec_cell/snapshots/codex_tui__exec_cell__render__tests__truncated_live_output_preview_and_transcript.snap",
 			},
 		},
 		{
@@ -166,7 +176,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    107,
+			Files:    117,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -178,7 +188,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/status/snapshots",
-			Files:    18,
+			Files:    19,
 			Owner:    "tui/status, tui/chatwidget",
 			Focus:    "status command snapshots for account, limits, reasoning, profiles, fork metadata, stale data, and narrow layouts",
 			Priority: []string{"status"},
@@ -186,6 +196,16 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/status/snapshots/codex_tui__status__tests__status_snapshot_includes_credits_and_limits.snap",
 				"tui/src/status/snapshots/codex_tui__status__tests__status_snapshot_truncates_in_narrow_terminal.snap",
 				"tui/src/status/snapshots/codex_tui__status__tests__status_snapshot_shows_auto_review_permissions.snap",
+			},
+		},
+		{
+			Path:     "tui/src/streaming/snapshots",
+			Files:    2,
+			Owner:    "tui/streaming",
+			Focus:    "incremental Markdown rendering equivalence and visualization context",
+			Priority: []string{"markdown", "history-cell"},
+			Required: []string{
+				"tui/src/streaming/snapshots/codex_tui__streaming__render__tests__incremental_render_representative_stream.snap",
 			},
 		},
 	}

@@ -185,6 +185,7 @@ type InputModality string
 const (
 	InputModalityText  InputModality = "text"
 	InputModalityImage InputModality = "image"
+	InputModalityAudio InputModality = "audio"
 )
 
 type MessagePhase string

@@ -12,6 +12,8 @@ type UserMessage struct {
 	Text            string
 	LocalImages     []string
 	RemoteImageURLs []string
+	LocalAudio      []string
+	RemoteAudioURLs []string
 	TextElements    []turn.TextElement
 	MentionBindings []string
 }
@@ -24,6 +26,7 @@ func (m UserMessage) HasContent() bool {
 	return m.Text != "" ||
 		len(m.LocalImages) > 0 ||
 		len(m.RemoteImageURLs) > 0 ||
+		len(m.LocalAudio) > 0 || len(m.RemoteAudioURLs) > 0 ||
 		len(m.TextElements) > 0 ||
 		len(m.MentionBindings) > 0
 }
@@ -111,6 +114,8 @@ type ThreadComposerState struct {
 	Text            string
 	LocalImages     []string
 	RemoteImageURLs []string
+	LocalAudio      []string
+	RemoteAudioURLs []string
 	TextElements    []turn.TextElement
 	MentionBindings []string
 	PendingPastes   [][2]string
@@ -120,6 +125,7 @@ func (s ThreadComposerState) HasContent() bool {
 	return s.Text != "" ||
 		len(s.LocalImages) > 0 ||
 		len(s.RemoteImageURLs) > 0 ||
+		len(s.LocalAudio) > 0 || len(s.RemoteAudioURLs) > 0 ||
 		len(s.TextElements) > 0 ||
 		len(s.MentionBindings) > 0 ||
 		len(s.PendingPastes) > 0
@@ -146,6 +152,8 @@ type UserMessageDisplay struct {
 	Message         string
 	LocalImages     []string
 	RemoteImageURLs []string
+	LocalAudio      []string
+	RemoteAudioURLs []string
 	TextElements    []turn.TextElement
 }
 
@@ -269,6 +277,8 @@ func UserMessageDisplayFromParts(message UserMessage) UserMessageDisplay {
 		Message:         visibleMessage,
 		LocalImages:     append([]string(nil), message.LocalImages...),
 		RemoteImageURLs: append([]string(nil), message.RemoteImageURLs...),
+		LocalAudio:      append([]string(nil), message.LocalAudio...),
+		RemoteAudioURLs: append([]string(nil), message.RemoteAudioURLs...),
 		TextElements:    cloneTextElements(textElements),
 	}
 }
@@ -310,6 +320,14 @@ func UserMessageDisplayFromInputs(items []turn.TurnUserInput) UserMessageDisplay
 		case "localImage":
 			if item.Path != "" {
 				message.LocalImages = append(message.LocalImages, item.Path)
+			}
+		case "audio":
+			if item.URL != "" {
+				message.RemoteAudioURLs = append(message.RemoteAudioURLs, item.URL)
+			}
+		case "localAudio":
+			if item.Path != "" {
+				message.LocalAudio = append(message.LocalAudio, item.Path)
 			}
 		case "skill", "mention":
 			continue
@@ -389,6 +407,8 @@ func mergeRemappedUserMessages(messages []UserMessage) UserMessage {
 		appendTextWithRebasedElementsString(&combined.Text, &combined.TextElements, message.Text, message.TextElements)
 		combined.LocalImages = append(combined.LocalImages, message.LocalImages...)
 		combined.RemoteImageURLs = append(combined.RemoteImageURLs, message.RemoteImageURLs...)
+		combined.LocalAudio = append(combined.LocalAudio, message.LocalAudio...)
+		combined.RemoteAudioURLs = append(combined.RemoteAudioURLs, message.RemoteAudioURLs...)
 		combined.MentionBindings = append(combined.MentionBindings, message.MentionBindings...)
 	}
 	return combined

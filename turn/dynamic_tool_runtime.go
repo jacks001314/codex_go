@@ -44,6 +44,7 @@ type DynamicToolCallOutputContentItem struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"imageUrl,omitempty"`
+	AudioURL string `json:"audioUrl,omitempty"`
 }
 
 func RegisterDynamicToolHandlers(registry *tool.Registry, options *DynamicToolRegistryOptions) error {
@@ -279,6 +280,11 @@ func normalizeDynamicToolContentItems(items []DynamicToolCallOutputContentItem) 
 			if isRemoteImageURL(item.ImageURL) {
 				return []DynamicToolCallOutputContentItem{{Type: "inputText", Text: remoteImageURLError}}, false
 			}
+		case "inputAudio", "input_audio":
+			item.Type = "inputAudio"
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.AudioURL)), "data:audio/") {
+				return []DynamicToolCallOutputContentItem{{Type: "inputText", Text: "audio output must use an inline data:audio URL"}}, false
+			}
 		default:
 			item.Type = "inputText"
 		}
@@ -310,6 +316,10 @@ func dynamicToolContentItemsAny(items []DynamicToolCallOutputContentItem) []any 
 			out = append(out, map[string]any{"type": "inputImage", "imageUrl": items[i].ImageURL})
 			continue
 		}
+		if items[i].Type == "inputAudio" {
+			out = append(out, map[string]any{"type": "inputAudio", "audioUrl": items[i].AudioURL})
+			continue
+		}
 		out = append(out, map[string]any{"type": "inputText", "text": items[i].Text})
 	}
 	return out
@@ -320,6 +330,10 @@ func dynamicToolModelContentItemsAny(items []DynamicToolCallOutputContentItem) [
 	for i := range items {
 		if items[i].Type == "inputImage" {
 			out = append(out, map[string]any{"type": "input_image", "image_url": items[i].ImageURL, "detail": "auto"})
+			continue
+		}
+		if items[i].Type == "inputAudio" {
+			out = append(out, map[string]any{"type": "input_audio", "audio_url": items[i].AudioURL})
 			continue
 		}
 		out = append(out, map[string]any{"type": "input_text", "text": items[i].Text})

@@ -789,6 +789,27 @@ func TestExternalAgentConfigDetectAndImport(t *testing.T) {
 	}
 }
 
+func TestExternalAgentSessionImportFailureKeepsStableSubErrorType(t *testing.T) {
+	service := NewConfigService(t.TempDir())
+	details := NewMigrationDetails()
+	details.Sessions = []SessionMigration{{Path: ""}}
+	_, notification := service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{
+		MigrationItems: []ExternalAgentConfigMigrationItem{{ItemType: MigrationSessions, Details: details}},
+	})
+	if len(notification.ItemTypeResults) != 1 || len(notification.ItemTypeResults[0].Failures) != 1 {
+		t.Fatalf("notification = %#v", notification)
+	}
+	failure := notification.ItemTypeResults[0].Failures[0]
+	if failure.SubErrorType == nil || *failure.SubErrorType != "session_not_detected" {
+		t.Fatalf("failure sub error type = %#v", failure.SubErrorType)
+	}
+	histories := service.ImportHistories()
+	if len(histories.Data) != 1 || len(histories.Data[0].Failures) != 1 || histories.Data[0].Failures[0].SubErrorType == nil || *histories.Data[0].Failures[0].SubErrorType != "session_not_detected" {
+		t.Fatalf("histories = %#v", histories.Data)
+	}
+}
+
+
 func writeConfig(t *testing.T, home string, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {

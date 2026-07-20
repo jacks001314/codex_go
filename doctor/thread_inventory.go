@@ -234,6 +234,12 @@ func scanRolloutParityRoot(root string, archived bool, scan *rolloutParityScan) 
 		if !isRolloutParityFileName(entry.Name()) {
 			return nil
 		}
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl.zst") {
+			plain := strings.TrimSuffix(path, filepath.Ext(path))
+			if isRegularFileForRolloutParity(plain) {
+				return nil
+			}
+		}
 		item, ok := rollout.BuildThreadItem(path, archived)
 		if !ok || strings.TrimSpace(item.ThreadID) == "" {
 			scan.recordMalformed(path)
@@ -326,7 +332,7 @@ func rolloutParityRecordsFromStateDB(path string) ([]*rolloutParityRecord, error
 }
 
 func isRolloutParityFileName(name string) bool {
-	return strings.HasPrefix(name, "rollout-") && filepath.Ext(name) == ".jsonl"
+	return strings.HasPrefix(name, "rollout-") && (filepath.Ext(name) == ".jsonl" || strings.HasSuffix(name, ".jsonl.zst"))
 }
 
 func rolloutParityFileCount(files []*rolloutParityFile, archived bool) int {
@@ -623,7 +629,7 @@ func rolloutParityPathKey(path string) string {
 	if raw == "" {
 		return ""
 	}
-	normalized, err := utils.NormalizeForPathComparison(raw)
+	normalized, err := utils.NormalizeForPathComparison(rollout.PlainRolloutPath(raw))
 	if err != nil {
 		return raw
 	}
@@ -632,6 +638,11 @@ func rolloutParityPathKey(path string) string {
 
 func isRegularFileForRolloutParity(path string) bool {
 	info, err := os.Stat(path)
+	if err == nil && info.Mode().IsRegular() {
+		return true
+	}
+	compressed := path + ".zst"
+	info, err = os.Stat(compressed)
 	return err == nil && info.Mode().IsRegular()
 }
 

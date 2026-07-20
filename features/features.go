@@ -91,6 +91,7 @@ var Registry = []Spec{
 	{Key: "unavailable_dummy_tools", Stage: StageRemoved},
 	{Key: "tool_suggest", Stage: StageStable, DefaultEnabled: true},
 	{Key: "plugins", Stage: StageStable, DefaultEnabled: true},
+	{Key: "executor_capability_discovery", Stage: StageUnderDevelopment},
 	{Key: "plugin_hooks", Stage: StageRemoved},
 	{Key: "in_app_browser", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use", Stage: StageStable, DefaultEnabled: true},

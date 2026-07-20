@@ -11,6 +11,26 @@ import (
 	"time"
 )
 
+func TestSearchMessageOccurrencesFiltersAssistantCommentary(t *testing.T) {
+	store := NewStore(t.TempDir())
+	now := time.Now().UTC()
+	record := &Record{ID: "thread-search", CreatedAt: now, UpdatedAt: now, Items: []Item{
+		{ID: "user", Type: "user_message", Role: "user", Text: "Needle user", Data: map[string]any{"turn_id": "turn-1"}},
+		{ID: "commentary", Type: "assistant_message", Role: "assistant", Text: "Needle hidden", Data: map[string]any{"turn_id": "turn-1", "phase": "commentary"}},
+		{ID: "final", Type: "assistant_message", Role: "assistant", Text: "Needle final", Data: map[string]any{"turn_id": "turn-1", "phase": "final_answer"}},
+	}}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.SearchMessageOccurrences(record.ID, "needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ItemID != "user" || got[1].ItemID != "final" {
+		t.Fatalf("occurrences = %#v", got)
+	}
+}
+
 func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()

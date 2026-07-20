@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+func TestInputAudioJSONShape(t *testing.T) {
+	data, err := json.Marshal(InputAudio("data:audio/wav;base64,YXVkaW8="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"type":"input_audio","audio_url":"data:audio/wav;base64,YXVkaW8="}` {
+		t.Fatalf("audio json = %s", data)
+	}
+}
+
 func TestRuntimeResponseAndWaitOutcomeJSON(t *testing.T) {
 	detail := ImageDetailHigh
 	response := Yielded(NewCellID("cell-1"), []ContentItem{

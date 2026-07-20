@@ -73,6 +73,7 @@ type ContentItem struct {
 	Type     string       `json:"type"`
 	Text     string       `json:"text,omitempty"`
 	ImageURL string       `json:"image_url,omitempty"`
+	AudioURL string       `json:"audio_url,omitempty"`
 	Detail   *ImageDetail `json:"detail,omitempty"`
 }
 
@@ -82,6 +83,10 @@ func InputText(text string) ContentItem {
 
 func InputImage(imageURL string, detail *ImageDetail) ContentItem {
 	return ContentItem{Type: "input_image", ImageURL: imageURL, Detail: detail}
+}
+
+func InputAudio(audioURL string) ContentItem {
+	return ContentItem{Type: "input_audio", AudioURL: audioURL}
 }
 
 type ExecuteRequest struct {

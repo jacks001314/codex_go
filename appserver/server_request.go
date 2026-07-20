@@ -552,6 +552,7 @@ type DynamicToolCallOutputContent struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"imageUrl,omitempty"`
+	AudioURL string `json:"audioUrl,omitempty"`
 }
 
 func (c *DynamicToolCallOutputContent) MarshalJSON() ([]byte, error) {
@@ -571,6 +572,12 @@ func (c *DynamicToolCallOutputContent) MarshalJSON() ([]byte, error) {
 			Type:     contentType,
 			ImageURL: c.ImageURL,
 		})
+	}
+	if contentType == "inputAudio" {
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			AudioURL string `json:"audioUrl"`
+		}{Type: contentType, AudioURL: c.AudioURL})
 	}
 	return json.Marshal(struct {
 		Type string `json:"type"`

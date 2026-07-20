@@ -8,6 +8,16 @@ import (
 	"codex_go/applypatch"
 )
 
+func TestDynamicToolAudioContentJSON(t *testing.T) {
+	data, err := json.Marshal(&DynamicToolCallOutputContent{Type: "inputAudio", AudioURL: "data:audio/wav;base64,YXVkaW8="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"type":"inputAudio","audioUrl":"data:audio/wav;base64,YXVkaW8="}` {
+		t.Fatalf("audio content json = %s", data)
+	}
+}
+
 func TestTokenUsageNotificationMarshalComputesTotal(t *testing.T) {
 	contextWindow := int64(128000)
 	data, err := json.Marshal(&ThreadTokenUsageUpdatedNotification{

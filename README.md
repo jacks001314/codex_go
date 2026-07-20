@@ -1,5 +1,8 @@
 # Codex Go
 
+Parity candidate for Rust baseline `1e20272fa5`: `go-1e20272fa5-parity.1`.
+See [release notes](./docs/release_notes_1e20272fa5.md) and [sync plan](./plan.md).
+
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。
 
 当前仓库是迁移中的工程版本。开发时以 Rust 版本为行为基线，进度和待办以 [plan.md](./plan.md) 为准。

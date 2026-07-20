@@ -52,6 +52,7 @@ const (
 	MethodFSRemove             = "fs/remove"
 	MethodFSCopy               = "fs/copy"
 	MethodHTTPRequest          = "http/request"
+	MethodCapabilitiesDiscover = "capabilities/discover"
 	MethodHTTPRequestBodyDelta = "http/request/bodyDelta"
 )
 
@@ -205,6 +206,31 @@ type processState struct {
 }
 
 type processNotifier func(method string, params any)
+
+type CapabilityDiscoveryRoot struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
+type CapabilityDiscoveryParams struct {
+	Roots []CapabilityDiscoveryRoot `json:"roots"`
+}
+
+type CapabilityManifest struct {
+	RootID string `json:"rootId"`
+	Kind   string `json:"kind"`
+	Path   string `json:"path"`
+}
+
+type CapabilityDiscoveryError struct {
+	RootID  string `json:"rootId"`
+	Message string `json:"message"`
+}
+
+type CapabilityDiscoveryResponse struct {
+	Manifests []CapabilityManifest       `json:"manifests"`
+	Errors    []CapabilityDiscoveryError `json:"errors"`
+}
 
 type startedExecServerSandboxProcess struct {
 	stdin     io.WriteCloser
@@ -1047,6 +1073,12 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		return localEnvironmentInfo(), nil
 	case MethodEnvironmentStatus:
 		return EnvironmentStatus{Status: EnvironmentStatusReady}, nil
+	case MethodCapabilitiesDiscover:
+		var params CapabilityDiscoveryParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return discoverCapabilities(&params)
 	case MethodProcessStart:
 		var params ExecParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1214,6 +1246,8 @@ func execServerMethodFamily(method string) string {
 		return "environment info"
 	case MethodEnvironmentStatus:
 		return "environment status"
+	case MethodCapabilitiesDiscover:
+		return "capability discovery"
 	case MethodProcessStart, MethodProcessRead, MethodProcessWrite, MethodProcessTerminate, MethodProcessSignal:
 		return "exec"
 	case MethodHTTPRequest:

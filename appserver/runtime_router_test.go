@@ -90,6 +90,44 @@ func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterCloseRunsSessionEndForAllLoadedThreadsOnce(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	cwd := t.TempDir()
+	hooks := NewHookRegistry()
+	hook := hookRunnerMetadata("session-end-close", HookEventSessionEnd, "", 0)
+	if err := hooks.Add(cwd, hook); err != nil {
+		t.Fatalf("Hooks.Add() error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Hooks: hooks, HookRunner: NewHookRunner()})
+	router.SetNotificationSink(sink)
+	for i := 0; i < 2; i++ {
+		response := router.Handle(requestWithParams(t, IntID(int64(i+1)), MethodThreadStart, ThreadStartParams{CWD: cwd, Prompt: "loaded"}))
+		if response.Error != nil {
+			t.Fatalf("thread start %d = %#v", i, response.Error)
+		}
+	}
+	if err := router.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	started := 0
+	completed := 0
+	for _, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationHookStarted:
+			started++
+		case NotificationHookCompleted:
+			completed++
+		}
+	}
+	if started != 2 || completed != 2 {
+		t.Fatalf("SessionEnd notifications started=%d completed=%d", started, completed)
+	}
+}
+
 func TestRuntimeRouterFSGetMetadataReturnsOnlyUsedFieldsLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{FS: NewFSService()})
 	path := filepath.Join(t.TempDir(), "note.txt")
@@ -5768,7 +5806,9 @@ func TestRuntimeRouterExternalAgentConfigImportEmitsAnalyticsLikeRust(t *testing
 		len(completed.ItemTypeResults) != 1 ||
 		completed.ItemTypeResults[0].ItemType != config.MigrationSessions ||
 		len(completed.ItemTypeResults[0].Successes) != 0 ||
-		len(completed.ItemTypeResults[0].Failures) != 1 {
+		len(completed.ItemTypeResults[0].Failures) != 1 ||
+		completed.ItemTypeResults[0].Failures[0].SubErrorType == nil ||
+		*completed.ItemTypeResults[0].Failures[0].SubErrorType != "session_not_detected" {
 		t.Fatalf("completed notification = %#v", completed)
 	}
 
@@ -5786,6 +5826,8 @@ func TestRuntimeRouterExternalAgentConfigImportEmitsAnalyticsLikeRust(t *testing
 		failure.EventParams.Source != source ||
 		failure.EventParams.FailureStage != "session_missing" ||
 		failure.EventParams.ErrorType != "session_missing" ||
+		failure.EventParams.SubErrorType == nil ||
+		*failure.EventParams.SubErrorType != "session_not_detected" ||
 		failure.EventParams.ProductClientID == nil ||
 		*failure.EventParams.ProductClientID != expectedProductClientID {
 		t.Fatalf("failure event = %#v", failure)
@@ -19477,6 +19519,12 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	realtimeStart := router.Handle(requestWithParams(t, IntID(3), MethodThreadRealtimeStart, map[string]any{
+		"threadId": threadID, "outputModality": "text",
+	}))
+	if realtimeStart.Error != nil {
+		t.Fatalf("realtime start error: %+v", realtimeStart.Error)
+	}
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   "hello streaming runtime",
@@ -19496,6 +19544,10 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 	}
 	waitForAgentDelta(t, sink, turnID, "hello ")
 	waitForAgentDelta(t, sink, turnID, "stream")
+	handoff := waitForRealtimeHandoffAppend(t, sink, threadID, "msg-1")
+	if handoff["channel"] != "thinking" || handoff["text"] != "\"Agent Final Message\":\n\nhello " {
+		t.Fatalf("realtime handoff = %#v", handoff)
+	}
 	waitForFileChangePatchUpdated(t, sink, turnID, "streamed.txt")
 	reasoningSummary := waitForReasoningSummaryDelta(t, sink, turnID, "thinking ")
 	if reasoningSummary.ItemID != "reasoning-1" || reasoningSummary.SummaryIndex != 0 {
@@ -22656,6 +22708,30 @@ func realtimeNotification[T any](t *testing.T, sink *NotificationBuffer, method 
 	}
 	t.Fatalf("notification %s missing in %#v", method, sink.List())
 	return zero
+}
+
+func waitForRealtimeHandoffAppend(t *testing.T, sink *NotificationBuffer, threadID string, itemID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, notification := range sink.List() {
+			if notification.Method != NotificationThreadRealtimeItemAdded {
+				continue
+			}
+			payload, ok := notification.Params.(*ThreadRealtimeItemAddedNotification)
+			if !ok || payload == nil || payload.ThreadID != threadID {
+				continue
+			}
+			item, ok := payload.Item.(map[string]any)
+			if !ok || item["type"] != "handoff_append" || item["itemId"] != itemID {
+				continue
+			}
+			return item
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("realtime handoff append missing for thread=%q item=%q", threadID, itemID)
+	return nil
 }
 
 func threadSettingsNotification(t *testing.T, sink *NotificationBuffer, threadID string) *SettingsUpdatedNotification {
