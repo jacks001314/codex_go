@@ -3274,6 +3274,44 @@ func TestExecStreamEventCollectorPreservesCommentaryBeforeToolStart(t *testing.T
 	}
 }
 
+func TestExecStreamEventCollectorPreservesWhitespaceOnlyAssistantDeltas(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	for _, delta := range []string{"first line", "\n\n", "second line"} {
+		collector.Handle(&model.ResponsesStreamEvent{
+			Kind:   model.ResponsesStreamEventOutputText,
+			ItemID: "msg-1",
+			Delta:  delta,
+		})
+	}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventOutputDone,
+		ItemID: "msg-1",
+		Item: &model.AgentItem{
+			ID:   "msg-1",
+			Type: "agent_message",
+			Text: "first line\n\nsecond line",
+		},
+	})
+
+	events := collector.Events()
+	if len(events) != 4 {
+		t.Fatalf("events = %#v, want three deltas and one completed event", events)
+	}
+	var streamed strings.Builder
+	for _, event := range events[:3] {
+		if event.Type != "item.delta" || event.Delta == nil {
+			t.Fatalf("stream event = %#v, want item.delta", event)
+		}
+		streamed.WriteString(event.Delta.Text)
+	}
+	if got, want := streamed.String(), "first line\n\nsecond line"; got != want {
+		t.Fatalf("streamed text = %q, want %q", got, want)
+	}
+	if event := events[3]; event.Type != "item.completed" || event.Item == nil || event.Item.Text != streamed.String() {
+		t.Fatalf("completed event = %#v, want final text matching streamed text", event)
+	}
+}
+
 func TestExecStreamEventCollectorCompletesMessageWithoutTextDeltas(t *testing.T) {
 	collector := &execStreamEventCollector{streamAssistantDeltas: true}
 	collector.Handle(&model.ResponsesStreamEvent{

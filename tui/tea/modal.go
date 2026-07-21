@@ -998,7 +998,7 @@ func (m *Model) renderSessionPickerModal() string {
 	if len(rows) > 0 {
 		builder.WriteString("\n")
 	}
-	for _, row := range picker.FooterLines(contentWidth, true) {
+	for _, row := range picker.FooterLines(contentWidth+1, true) {
 		builder.WriteString(row)
 		builder.WriteString("\n")
 	}

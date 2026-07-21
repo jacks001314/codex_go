@@ -21,11 +21,14 @@ import (
 	"codex_go/protocol"
 	"codex_go/review"
 	codextui "codex_go/tui"
+	"codex_go/tui/anim"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	execcell "codex_go/tui/exec_cell"
 	historycell "codex_go/tui/history_cell"
 	"codex_go/tui/markdown"
+	"codex_go/tui/overlay"
+	"codex_go/tui/styles"
 )
 
 const (
@@ -418,10 +421,26 @@ type Options struct {
 	HideRateLimitModelNudge        *bool
 	TUITheme                       string
 	TUIPet                         string
+	TUIThemeStyles                 *styles.Styles
 }
 
 type Model struct {
 	State *codextui.State
+
+	// Styles is the centralized theme configuration.
+	Styles styles.Styles
+
+	// Sub-components (new architecture — being incrementally adopted).
+	Transcript TranscriptComponent
+	Composer   ComposerComponent
+	StatusBar  StatusBarComponent
+
+	// Animation
+	spinner    *anim.Spinner
+	animEngine *anim.Engine
+
+	// Overlay stack (new architecture)
+	overlays *overlay.Overlay
 
 	transcript     viewport.Model
 	composer       textarea.Model
@@ -612,6 +631,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 
 	model := &Model{
 		State:                          state,
+		Styles:                         resolveStyles(options.TUIThemeStyles),
+		Transcript:                     newTranscriptComponent(),
+		Composer:                       newComposerComponent(options.Placeholder),
+		StatusBar:                      newStatusBarComponent(),
 		transcript:                     transcript,
 		activityFollow:                 true,
 		composer:                       composer,
@@ -697,6 +720,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		state.Personality = string(model.personality)
 	}
 	model.syncTaskRunningTimer()
+	model.animEngine = anim.NewEngine(20)
+	model.spinner = anim.NewSpinner(anim.SpinnerConfig{Label: "Thinking", Mode: anim.SpinnerDots}, model.animEngine)
+	model.overlays = overlay.NewOverlay(true)
 	model.statusControls = chatwidget.NewStatusControlsState(model.statusControlsRuntime())
 	if options.StatusLineItems != nil {
 		model.statusControls.StatusLineConfigured = true
@@ -746,8 +772,17 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	return model, nil
 }
 
+func resolveStyles(custom *styles.Styles) styles.Styles {
+	if custom != nil {
+		return *custom
+	}
+	return styles.DefaultDark()
+}
 func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}
+	if m.spinner != nil {
+		commands = append(commands, m.spinner.InitCmd())
+	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
 	}
@@ -758,7 +793,18 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
 	}
+	// Route through overlay when dialog is active
+	if m.overlays != nil && m.overlays.Active() {
+		if _, ok := message.(bubbletea.KeyMsg); ok {
+			return m, m.overlays.Update(message)
+		}
+	}
 	switch msg := message.(type) {
+	case anim.TickMsg:
+		if m.spinner != nil {
+			return m, m.spinner.Update(msg)
+		}
+		return m, nil
 	case bubbletea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -1325,9 +1371,9 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	}
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
-	m.lastTurnError = ""
-	m.needsFinalMessageSeparator = false
-	m.activeAssistantDeltaItemID = ""
+	m.Transcript.lastTurnError = ""
+	m.Transcript.needsFinalMessageSeparator = false
+	m.Transcript.activeAssistantDeltaItemID = ""
 	m.State.AddMessage(codextui.RoleUser, displayPrompt)
 	if m.onSubmit == nil && m.onSubmitRequest == nil {
 		m.setStatus("pending")
@@ -1506,6 +1552,9 @@ func (m *Model) renderWorkingIndicator() string {
 	}
 	lines[0] = "\u2022 " + lines[0]
 	lines[0] = fitTerminalLine(lines[0], m.width)
+	if m.spinner != nil && !m.mcpStartupActive {
+		lines = append(lines, m.spinner.View())
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -1524,84 +1573,42 @@ func (m *Model) markThreadStarted(threadID string) {
 	if m == nil {
 		return
 	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return
-	}
-	if m.startedThreadIDs == nil {
-		m.startedThreadIDs = map[string]bool{}
-	}
-	m.startedThreadIDs[threadID] = true
+	m.Transcript.markThreadStarted(threadID)
 }
 
 func (m *Model) markThreadCompleted(threadID string) {
 	if m == nil {
 		return
 	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return
-	}
-	if m.completedThreadIDs == nil {
-		m.completedThreadIDs = map[string]bool{}
-	}
-	m.completedThreadIDs[threadID] = true
+	m.Transcript.markThreadCompleted(threadID)
 }
 
 func (m *Model) clearCurrentThreadAfterFailure(message string) {
 	if m == nil || m.State == nil {
 		return
 	}
-	threadID := strings.TrimSpace(m.State.ThreadID)
-	if threadID == "" {
-		return
-	}
-	lower := strings.ToLower(strings.TrimSpace(message))
-	if strings.Contains(lower, "thread not found") || (m.startedThreadIDs[threadID] && !m.completedThreadIDs[threadID]) {
-		m.State.SetThreadID("")
-	}
+	m.Transcript.clearCurrentThreadAfterFailure(m.State, message)
 }
 
 func (m *Model) addErrorHistoryMessage(message string) {
 	if m == nil || m.State == nil {
 		return
 	}
-	message = normalizedErrorHistoryMessage(message)
-	m.addHistoryCell(historycell.NewErrorEvent(message))
+	m.Transcript.addErrorHistoryMessage(m.State, message, m.width)
 }
 
 func (m *Model) addTurnErrorHistoryMessage(message string) {
 	if m == nil || m.State == nil {
 		return
 	}
-	message = normalizedErrorHistoryMessage(message)
-	if message == m.lastTurnError {
-		return
-	}
-	m.lastTurnError = message
-	m.addHistoryCell(historycell.NewErrorEvent(message))
-}
-
-func normalizedErrorHistoryMessage(message string) string {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "Unknown error"
-	}
-	if !strings.HasPrefix(strings.ToLower(message), "error:") {
-		message = "Error: " + message
-	}
-	return message
+	m.Transcript.addTurnErrorHistoryMessage(m.State, message, m.width)
 }
 
 func (m *Model) addInfoHistoryMessage(message string) {
 	if m == nil || m.State == nil {
 		return
 	}
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return
-	}
-	m.addHistoryCell(historycell.NewInfoEvent(message, ""))
+	m.Transcript.addInfoHistoryMessage(m.State, message, m.width)
 }
 
 func (m *Model) addHistoryCell(cell historycell.HistoryCell) {
@@ -1647,7 +1654,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
 	m.setStatus("idle")
-	m.lastTurnError = ""
+	m.Transcript.lastTurnError = ""
 	m.notice = ""
 	m.refreshTranscript()
 	if len(m.queued) > 0 || (m.currentGoal != nil && m.currentGoal.Status == appserver.GoalActive) {
@@ -1705,7 +1712,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.markThreadStarted(event.ThreadID)
 	case "turn.started":
 		m.setStatus("running")
-		m.lastTurnError = ""
+		m.Transcript.lastTurnError = ""
 	case "item.started":
 		m.applyItemStarted(event.Item)
 	case "item.completed":
@@ -1715,7 +1722,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "turn.completed":
 		m.setStatus("idle")
 		m.markThreadCompleted(m.State.ThreadID)
-		m.lastTurnError = ""
+		m.Transcript.lastTurnError = ""
 	case "turn.failed", "error":
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
@@ -1952,7 +1959,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	cell := execcell.NewExecCell(call, false)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if state.Completed {
-		m.needsFinalMessageSeparator = true
+		m.Transcript.needsFinalMessageSeparator = true
 	}
 }
 
@@ -1985,7 +1992,7 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 	var cell historycell.McpToolCallCell
 	if completed || !mcpToolCallInProgress(item.Status) {
 		cell = historycell.NewMcpToolCall(id, state.Invocation, mcpToolResultFromProtocolItem(item))
-		m.needsFinalMessageSeparator = true
+		m.Transcript.needsFinalMessageSeparator = true
 	} else {
 		cell = historycell.NewActiveMcpToolCall(id, state.Invocation)
 	}
@@ -3146,11 +3153,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 		m.overlayTranscript = true
 		m.syncTranscriptOverlay()
 	}
-	if m.noAltScreen && !m.overlayAltScreen {
-		m.overlayAltScreen = true
-		return bubbletea.EnterAltScreen
-	}
-	return nil
+	return m.openPagerTerminalMode()
 }
 
 func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
@@ -3159,11 +3162,24 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.overlay = nil
 	m.overlayTranscript = false
+	commands := []bubbletea.Cmd{bubbletea.DisableMouse}
 	if m.overlayAltScreen {
 		m.overlayAltScreen = false
-		return bubbletea.ExitAltScreen
+		commands = append(commands, bubbletea.ExitAltScreen)
 	}
-	return nil
+	return bubbletea.Batch(commands...)
+}
+
+func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	commands := []bubbletea.Cmd{bubbletea.EnableMouseCellMotion}
+	if m.noAltScreen && !m.overlayAltScreen {
+		m.overlayAltScreen = true
+		commands = append(commands, bubbletea.EnterAltScreen)
+	}
+	return bubbletea.Batch(commands...)
 }
 
 func (m *Model) syncTranscriptOverlay() {
@@ -3340,11 +3356,7 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	m.ensureSize()
 	m.overlay = chatwidget.NewTranscriptOverlayWithTitle(m.width, m.height, text, "D I F F")
 	m.overlayTranscript = false
-	if m.noAltScreen && !m.overlayAltScreen {
-		m.overlayAltScreen = true
-		return bubbletea.EnterAltScreen
-	}
-	return nil
+	return m.openPagerTerminalMode()
 }
 
 func defaultGitDiffReader(cwd string) (string, bool, error) {
@@ -3444,92 +3456,21 @@ func (m *Model) appendAssistantDelta(itemID string, delta string) {
 	if m == nil || delta == "" {
 		return
 	}
-	m.insertFinalMessageSeparatorIfNeeded()
-	itemID = strings.TrimSpace(itemID)
-	if itemID != "" && m.activeAssistantDeltaItemID != "" && itemID != m.activeAssistantDeltaItemID {
-		m.State.Messages = append(m.State.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
-		m.activeAssistantDeltaItemID = itemID
-		return
-	}
-	m.State.Messages = appendAssistantDeltaToMessages(m.State.Messages, delta)
-	if itemID != "" {
-		m.activeAssistantDeltaItemID = itemID
-	}
+	m.Transcript.appendAssistantDelta(m.State, itemID, delta, m.width)
 }
 
 func (m *Model) mergeAssistantFinal(text string) {
 	if m == nil {
 		return
 	}
-	if strings.TrimSpace(text) != "" {
-		m.insertFinalMessageSeparatorIfNeeded()
-	}
-	m.State.Messages = mergeAssistantFinalToMessages(m.State.Messages, text)
+	m.Transcript.mergeAssistantFinal(m.State, text, m.width)
 }
 
 func (m *Model) insertFinalMessageSeparatorIfNeeded() {
-	if m == nil || m.State == nil || !m.needsFinalMessageSeparator {
+	if m == nil || m.State == nil {
 		return
 	}
-	if index := len(m.State.Messages) - 1; index >= 0 && m.State.Messages[index].Role == codextui.RoleAssistant {
-		return
-	}
-	width := m.width
-	if width < 20 {
-		width = 20
-	}
-	cell := historycell.NewFinalMessageSeparator(nil, nil)
-	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
-	m.needsFinalMessageSeparator = false
-}
-
-func appendAssistantDeltaToMessages(messages []codextui.Message, delta string) []codextui.Message {
-	if delta == "" {
-		return messages
-	}
-	index := len(messages) - 1
-	if index >= 0 && messages[index].Role == codextui.RoleAssistant {
-		messages[index].Text += delta
-		return messages
-	}
-	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
-}
-
-func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []codextui.Message {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return messages
-	}
-	index := len(messages) - 1
-	if index >= 0 && messages[index].Role == codextui.RoleAssistant {
-		current := strings.TrimSpace(messages[index].Text)
-		switch {
-		case current == text:
-			return messages
-		case strings.Contains(text, current):
-			messages[index].Text = text
-			return messages
-		}
-	}
-	if assistantFinalExistsInCurrentTurn(messages, text) {
-		return messages
-	}
-	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: text})
-}
-
-func assistantFinalExistsInCurrentTurn(messages []codextui.Message, text string) bool {
-	for i := len(messages) - 1; i >= 0; i-- {
-		message := messages[i]
-		switch message.Role {
-		case codextui.RoleUser:
-			return false
-		case codextui.RoleAssistant:
-			if strings.TrimSpace(message.Text) == text {
-				return true
-			}
-		}
-	}
-	return false
+	m.Transcript.insertFinalMessageSeparatorIfNeeded(m.State, m.width)
 }
 
 func (m *Model) addBottomLine(line string) {

@@ -89,8 +89,10 @@ type TodoItem struct {
 }
 
 type FileChange struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path     string `json:"path"`
+	Kind     string `json:"kind"`
+	Diff     string `json:"diff,omitempty"`
+	MovePath string `json:"move_path,omitempty"`
 }
 
 type MCPToolResult struct {

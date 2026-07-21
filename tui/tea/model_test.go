@@ -784,7 +784,7 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	}
 	model := NewModel(state, Options{Width: 60, Height: 10})
 
-	updated, _ := model.Update(key(bubbletea.KeyCtrlT))
+	updated, openCmd := model.Update(key(bubbletea.KeyCtrlT))
 	model = updated.(*Model)
 	if model.overlay == nil {
 		t.Fatal("Ctrl+T did not open transcript overlay")
@@ -798,6 +798,15 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	}
 	if !model.overlay.AtBottom() || model.overlay.YOffset() <= 0 {
 		t.Fatalf("overlay initial offset=%d atBottom=%v, want scrollable bottom", model.overlay.YOffset(), model.overlay.AtBottom())
+	}
+	if !batchContainsMessageType(openCmd, bubbletea.EnableMouseCellMotion()) {
+		t.Fatal("opening transcript overlay did not enable mouse tracking")
+	}
+
+	beforeWheel := model.overlay.YOffset()
+	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	if got := model.overlay.YOffset(); got >= beforeWheel {
+		t.Fatalf("mouse wheel offset = %d, want less than %d", got, beforeWheel)
 	}
 
 	model.Update(key(bubbletea.KeyHome))
@@ -819,6 +828,9 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 			t.Fatal("Ctrl+C inside transcript overlay should not quit")
 		}
 	}
+	if !batchContainsMessageType(cmd, bubbletea.DisableMouse()) {
+		t.Fatal("closing transcript overlay did not disable mouse tracking")
+	}
 
 	updated, _ = model.Update(key(bubbletea.KeyCtrlT))
 	model = updated.(*Model)
@@ -827,6 +839,26 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	if model.overlay != nil {
 		t.Fatal("q did not close transcript overlay")
 	}
+}
+
+func batchContainsMessageType(cmd bubbletea.Cmd, want bubbletea.Msg) bool {
+	if cmd == nil {
+		return false
+	}
+	message := cmd()
+	if fmt.Sprintf("%T", message) == fmt.Sprintf("%T", want) {
+		return true
+	}
+	batch, ok := message.(bubbletea.BatchMsg)
+	if !ok {
+		return false
+	}
+	for _, child := range batch {
+		if child != nil && fmt.Sprintf("%T", child()) == fmt.Sprintf("%T", want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestModelTranscriptOverlayPreservesScrollAndFollowsTail(t *testing.T) {
@@ -2919,15 +2951,6 @@ func TestModelInputHistoryUpDownRestoresDraft(t *testing.T) {
 	model.Update(key(bubbletea.KeyDown))
 	if got := model.ComposerValue(); got != "draft" {
 		t.Fatalf("restored draft = %q", got)
-	}
-}
-
-func TestModelIgnoresMouseLikeRustToPreserveTerminalSelection(t *testing.T) {
-	model := NewModel(codextui.NewState(nil), Options{})
-	model.activityFollow = true
-	model.Update(bubbletea.MouseMsg{X: 10, Y: 5, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
-	if !model.activityFollow {
-		t.Fatal("ignored mouse event changed model state")
 	}
 }
 

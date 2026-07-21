@@ -409,7 +409,7 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		if !c.streamAssistantDeltas && c.sink != nil && c.sink.encoder != nil {
 			return
 		}
-		if strings.TrimSpace(event.Delta) == "" {
+		if event.Delta == "" {
 			return
 		}
 		if c.streamedAgentText == nil {
@@ -2752,7 +2752,14 @@ func fileChangeFromMap(item map[string]any) (protocol.FileChange, bool) {
 	if path == "" || kind == "" {
 		return protocol.FileChange{}, false
 	}
-	return protocol.FileChange{Path: path, Kind: kind}, true
+	movePath := ""
+	if kindData, ok := item["kind"].(map[string]any); ok {
+		movePath = execStringFromAny(kindData["move_path"])
+		if movePath == "" {
+			movePath = execStringFromAny(kindData["movePath"])
+		}
+	}
+	return protocol.FileChange{Path: path, Kind: kind, Diff: execStringFromAny(item["diff"]), MovePath: movePath}, true
 }
 
 func fileChangeKindFromAny(value any) string {
