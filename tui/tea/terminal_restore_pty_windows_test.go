@@ -95,7 +95,7 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 		t.Fatalf("read ConPTY output: %v", err)
 	}
 
-	entered, exitCode, exited, err := waitForOutputContainsOrExit(created, &output, "\x1b[?1049h", 3*time.Second)
+	entered, exitCode, exited, err := waitForOutputContainsOrExit(created, &output, "OpenAI Codex", 3*time.Second)
 	if err != nil {
 		_ = windowssandbox.TerminateCreatedProcess(created, 1)
 		t.Fatalf("wait for ConPTY child output: %v", err)
@@ -103,10 +103,10 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 	if !entered {
 		if exited {
 			skipIfWindowsConPTYHostDLLInitFailed(t, exitCode, output.String())
-			t.Fatalf("ConPTY child exited before entering alternate screen with code %d; output=%q", exitCode, output.String())
+			t.Fatalf("ConPTY child exited before rendering inline TUI with code %d; output=%q", exitCode, output.String())
 		}
 		_ = windowssandbox.TerminateCreatedProcess(created, 1)
-		t.Fatalf("ConPTY child did not enter alternate screen; output=%q", output.String())
+		t.Fatalf("ConPTY child did not render inline TUI; output=%q", output.String())
 	}
 	inputWrite := windows.Handle(instance.TakeInputWrite())
 	var written uint32
@@ -140,11 +140,8 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 		t.Fatal("timed out waiting for ConPTY output drain")
 	}
 	text := output.String()
-	if !strings.Contains(text, "\x1b[?1049h") {
-		t.Fatalf("ConPTY output did not enter alternate screen; output=%q", text)
-	}
-	if !strings.Contains(text, "\x1b[?1049l") {
-		t.Fatalf("ConPTY output did not leave alternate screen; output=%q", text)
+	if strings.Contains(text, "\x1b[?1049h") {
+		t.Fatalf("normal chat unexpectedly entered alternate screen; output=%q", text)
 	}
 }
 

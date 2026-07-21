@@ -1,12 +1,11 @@
 package tea
 
 import (
+	codextui "codex_go/tui"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	codextui "codex_go/tui"
 )
 
 func TestVirtualTerminalAppliesVT100CursorAndClear(t *testing.T) {

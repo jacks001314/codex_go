@@ -17,6 +17,7 @@ import (
 var ErrInvalidMCPRequest = errors.New("invalid mcp request")
 
 const mcpToolThreadIDMetaKey = "threadId"
+const mcpSandboxStateMetaCapability = "codex/sandbox-state-meta"
 
 type invalidMCPRequestError struct {
 	message string
@@ -434,6 +435,13 @@ type MCPToolCallParams struct {
 	ToolName   string `json:"toolName,omitempty"`
 	Arguments  any    `json:"arguments,omitempty"`
 	Meta       any    `json:"_meta,omitempty"`
+
+	PermissionProfile       string `json:"-"`
+	SandboxCWD              string `json:"-"`
+	CodexLinuxSandboxExe    string `json:"-"`
+	UseLegacyLandlock       bool   `json:"-"`
+	ServerEnvironmentID     string `json:"-"`
+	SupportsSandboxStateMeta bool  `json:"-"`
 }
 
 func (p MCPToolCallParams) MarshalJSON() ([]byte, error) {
@@ -1226,7 +1234,7 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	if err := s.requiredServerAvailable(server); err != nil {
 		return nil, err
 	}
-	meta := mcpToolCallMetaWithThreadID(params.Meta, params.ThreadID)
+	meta := s.augmentToolCallMeta(params)
 	roots := s.rootsForThread(params.ThreadID)
 	if config, ok := s.serverConfig(server); ok {
 		if strings.TrimSpace(config.URL) != "" {
@@ -1241,6 +1249,48 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 		return nil, err
 	}
 	return &MCPToolCallResponse{Content: []MCPToolCallContent{{Type: "text", Text: string(encoded)}}}, nil
+}
+
+func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
+	meta := mcpToolCallMetaWithThreadID(params.Meta, params.ThreadID)
+	if !params.SupportsSandboxStateMeta {
+		return meta
+	}
+	if strings.TrimSpace(params.SandboxCWD) == "" {
+		return meta
+	}
+	var useLegacyLandlock *bool
+	if params.UseLegacyLandlock {
+		val := true
+		useLegacyLandlock = &val
+	}
+	sandboxState := &SandboxState{
+		PermissionProfile:    params.PermissionProfile,
+		SandboxCWD:           params.SandboxCWD,
+		CodexLinuxSandboxExe: params.CodexLinuxSandboxExe,
+		UseLegacyLandlock:    useLegacyLandlock,
+	}
+	stateValue, err := json.Marshal(sandboxState)
+	if err != nil {
+		return meta
+	}
+	var stateMap map[string]any
+	if err := json.Unmarshal(stateValue, &stateMap); err != nil {
+		return meta
+	}
+	if meta == nil {
+		return map[string]any{mcpSandboxStateMetaCapability: stateMap}
+	}
+	metaMap, ok := meta.(map[string]any)
+	if !ok {
+		return meta
+	}
+	out := cloneAnyMap(metaMap)
+	if out == nil {
+		out = map[string]any{}
+	}
+	out[mcpSandboxStateMetaCapability] = stateMap
+	return out
 }
 
 func mcpToolCallMetaWithThreadID(meta any, threadID string) any {

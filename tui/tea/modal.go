@@ -32,6 +32,7 @@ const (
 	ModalKindAgent           ModalKind = "agent"
 	ModalKindTheme           ModalKind = "theme"
 	ModalKindPets            ModalKind = "pets"
+	ModalKindMemories        ModalKind = "memories"
 	ModalKindGeneric         ModalKind = "generic"
 )
 
@@ -577,6 +578,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyPetsModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindMemories {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyMemoriesModalOption(response.OptionID)
 	}
 	if modal.kind == ModalKindStatusLine && modal.statusLineSetup != nil {
 		m.modal = nil

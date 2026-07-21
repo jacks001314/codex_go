@@ -3196,7 +3196,7 @@ func TestEmitFinalEventsMapsMultipleUpdatePlansToTodoListLifecycleLikeRust(t *te
 }
 
 func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T) {
-	collector := &execStreamEventCollector{}
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
 	collector.Handle(&model.ResponsesStreamEvent{
 		Kind: model.ResponsesStreamEventOutputAdded,
 		Item: &model.AgentItem{ID: "msg-1", Type: "agent_message"},
@@ -3229,8 +3229,8 @@ func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T)
 		},
 	})
 	events := collector.Events()
-	if len(events) != 0 {
-		t.Fatalf("model output-added should not create a generic exec cell: %#v", events)
+	if len(events) != 1 || events[0].Type != "item.delta" || events[0].Delta == nil || events[0].Delta.Text != "hello " {
+		t.Fatalf("assistant stream event = %#v", events)
 	}
 
 	collector.ToolStarted(context.Background(), &tool.Invocation{
@@ -3242,11 +3242,55 @@ func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T)
 		},
 	}, time.Now())
 	events = collector.Events()
-	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil {
+	if len(events) != 2 || events[1].Type != "item.started" || events[1].Item == nil {
 		t.Fatalf("tool start event = %#v", events)
 	}
-	if events[0].Item.Type != "command_execution" || events[0].Item.ID != "call-1" || events[0].Item.Command != "date" {
-		t.Fatalf("command start item = %#v", events[0].Item)
+	if events[1].Item.Type != "command_execution" || events[1].Item.ID != "call-1" || events[1].Item.Command != "date" {
+		t.Fatalf("command start item = %#v", events[1].Item)
+	}
+}
+
+func TestExecStreamEventCollectorPreservesCommentaryBeforeToolStart(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventOutputText,
+		ItemID: "msg-commentary",
+		Delta:  "我查询一下天气。",
+	})
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "call-weather",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"curl weather"}`},
+	}, time.Now())
+	events := collector.Events()
+	if len(events) != 2 || events[0].Type != "item.delta" || events[1].Type != "item.started" {
+		t.Fatalf("event order = %#v", events)
+	}
+	if events[0].Delta == nil || events[0].Delta.Text != "我查询一下天气。" {
+		t.Fatalf("commentary event = %#v", events[0])
+	}
+	if events[1].Item == nil || events[1].Item.Type != "command_execution" {
+		t.Fatalf("tool event = %#v", events[1])
+	}
+}
+
+func TestExecStreamEventCollectorCompletesMessageWithoutTextDeltas(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventOutputDone,
+		ItemID: "msg-commentary",
+		Item: &model.AgentItem{
+			ID:   "msg-commentary",
+			Type: "agent_message",
+			Text: "我查询一下天气。",
+		},
+	})
+	events := collector.Events()
+	if len(events) != 2 || events[0].Type != "item.delta" || events[1].Type != "item.completed" {
+		t.Fatalf("completed-only events = %#v", events)
+	}
+	if events[0].Delta == nil || events[0].Delta.Text != "我查询一下天气。" {
+		t.Fatalf("completed-only delta = %#v", events[0])
 	}
 }
 
@@ -3278,6 +3322,38 @@ func TestExecStreamEventCollectorDefersMCPUntilToolStarted(t *testing.T) {
 	}
 	if events[0].Item.ID != "call-mcp" || events[0].Item.Server != "geogebra" || events[0].Item.Tool != "geogebra_create_point" {
 		t.Fatalf("MCP start item = %#v", events[0].Item)
+	}
+}
+
+func TestExecStreamEventCollectorEmitsWebSearchStartedOnToolStarted(t *testing.T) {
+	collector := &execStreamEventCollector{}
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "call-web-search",
+		ToolName: tool.NamespacedName(turn.WebSearchNamespace, turn.WebSearchRunTool),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"search_query":[{"q":"rust"}]}`},
+	}, time.Now())
+	events := collector.Events()
+	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil {
+		t.Fatalf("web search start event = %#v", events)
+	}
+	if events[0].Item.Type != "web_search" || events[0].Item.ID != "call-web-search" {
+		t.Fatalf("web search start item = %#v", events[0].Item)
+	}
+}
+
+func TestExecStreamEventCollectorEmitsImageGenerationStartedOnToolStarted(t *testing.T) {
+	collector := &execStreamEventCollector{}
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "call-image-gen",
+		ToolName: tool.NamespacedName(turn.ImageGenerationNamespace, turn.ImageGenerationToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"prompt":"a red cube"}`},
+	}, time.Now())
+	events := collector.Events()
+	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil {
+		t.Fatalf("image generation start event = %#v", events)
+	}
+	if events[0].Item.Type != "imageGeneration" || events[0].Item.ID != "call-image-gen" || events[0].Item.Status != "in_progress" {
+		t.Fatalf("image generation start item = %#v", events[0].Item)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,14 @@ func TestBuildAvailableModelsPreservesReasoningFields(t *testing.T) {
 	}
 	if len(got.SupportedReasoningLevels) != 3 || got.SupportedReasoningLevels[2] != "high" {
 		t.Fatalf("supported reasoning = %#v", got.SupportedReasoningLevels)
+	}
+}
+
+func TestDefaultBaseInstructionsRequirePreambleBeforeTools(t *testing.T) {
+	for _, want := range []string{"Before making tool calls", "brief preamble", "immediately about to happen", "Progress updates"} {
+		if !strings.Contains(BaseInstructions, want) {
+			t.Fatalf("BaseInstructions missing %q", want)
+		}
 	}
 }
 

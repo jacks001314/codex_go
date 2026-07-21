@@ -347,6 +347,46 @@ func TestParseExecOutputFlags(t *testing.T) {
 	}
 }
 
+func TestParseExecColorFlag(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  string
+	}{
+		{"always", "always"},
+		{"never", "never"},
+		{"auto", "auto"},
+		{"Always", "always"},
+	} {
+		parsed, err := Parse([]string{"exec", "--color", tc.value, "hello"})
+		if err != nil {
+			t.Fatalf("Parse(--color %s) returned error: %v", tc.value, err)
+		}
+		if parsed.Exec.Color != tc.want {
+			t.Fatalf("Exec.Color = %q, want %q", parsed.Exec.Color, tc.want)
+		}
+	}
+
+	parsed, err := Parse([]string{"exec", "--color=never", "hello"})
+	if err != nil {
+		t.Fatalf("Parse(--color=never) returned error: %v", err)
+	}
+	if parsed.Exec.Color != "never" {
+		t.Fatalf("Exec.Color = %q, want never", parsed.Exec.Color)
+	}
+
+	if _, err := Parse([]string{"exec", "--color", "rainbow", "hello"}); err == nil {
+		t.Fatal("Parse(--color rainbow) returned nil error, want validation failure")
+	} else if !strings.Contains(err.Error(), "--color must be one of always, never, auto") {
+		t.Fatalf("Parse(--color rainbow) error = %q", err.Error())
+	}
+
+	if _, err := Parse([]string{"exec", "resume", "--last", "--color", "bogus", "hello"}); err == nil {
+		t.Fatal("Parse(resume --color bogus) returned nil error, want validation failure")
+	} else if !strings.Contains(err.Error(), "--color must be one of always, never, auto") {
+		t.Fatalf("Parse(resume --color bogus) error = %q", err.Error())
+	}
+}
+
 func TestParseExecRejectsFullAutoWithDangerousBypass(t *testing.T) {
 	for _, args := range [][]string{
 		{"exec", "--full-auto", "--dangerously-bypass-approvals-and-sandbox", "hello"},

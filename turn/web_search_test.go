@@ -198,6 +198,49 @@ func TestWebSearchRecentInputKeepsOnlyTextFromUserMessagesLikeRust(t *testing.T)
 	}
 }
 
+func TestWebSearchRecentInputClearsWhenNoUserMessageLikeRust(t *testing.T) {
+	items := []any{
+		searchTestMessage("system", "system"),
+		searchTestMessage("assistant", "assistant only"),
+	}
+	got := cloneSearchInputItems(items)
+	if got != nil {
+		t.Fatalf("recent input = %#v, want nil", got)
+	}
+}
+
+func TestWebSearchRecentInputSharesTokenBudgetAcrossAssistantMessagesLikeRust(t *testing.T) {
+	longAssistant := strings.Repeat("a", 16)
+	items := []any{
+		searchTestMessage("user", "previous user"),
+		searchTestMessage("assistant", longAssistant),
+		searchTestMessage("assistant", "after budget"),
+		searchTestMessage("user", "current user"),
+	}
+	got, ok := cloneSearchInputItems(items).([]any)
+	if !ok {
+		t.Fatalf("recent input = %#v", cloneSearchInputItems(items))
+	}
+	// Directly exercise the shared-budget truncation helper with a tiny
+	// budget, mirroring Rust's max_tokens=2 test case: the first assistant
+	// message is truncated to fit, and the second is dropped entirely once
+	// the budget is exhausted.
+	truncated := truncateAssistantSearchMessagesToTokenBudget(got, 2)
+	if len(truncated) != 3 {
+		t.Fatalf("truncated = %#v, want 3 items (previous user, truncated assistant, current user)", truncated)
+	}
+	if searchInputMessageText(truncated[0]) != "previous user" {
+		t.Fatalf("truncated[0] = %#v", truncated[0])
+	}
+	assistantText := searchInputMessageText(truncated[1])
+	if assistantText == longAssistant || assistantText == "" {
+		t.Fatalf("assistant text not truncated: %q", assistantText)
+	}
+	if searchInputMessageText(truncated[2]) != "current user" {
+		t.Fatalf("truncated[2] = %#v", truncated[2])
+	}
+}
+
 func TestWebSearchCommandActionReportsQueriesAndNavigationLikeRust(t *testing.T) {
 	cases := []struct {
 		arguments string

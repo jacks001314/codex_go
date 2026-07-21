@@ -156,15 +156,18 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Result:        firstAgentItemValue(stringValueFromAgentItemMap(i.Data, "result"), i.Text),
 		})
 	case "", "agent_message":
+		phase := stringValueFromAgentItemMap(i.Data, "phase", "messagePhase", "message_phase")
 		return json.Marshal(struct {
 			ID      string                       `json:"id,omitempty"`
 			Type    string                       `json:"type"`
 			Role    string                       `json:"role"`
+			Phase   string                       `json:"phase,omitempty"`
 			Content []responsesAgentContentBlock `json:"content"`
 		}{
-			ID:   i.ID,
-			Type: "message",
-			Role: "assistant",
+			ID:    i.ID,
+			Type:  "message",
+			Role:  "assistant",
+			Phase: phase,
 			Content: []responsesAgentContentBlock{{
 				Type: "output_text",
 				Text: i.Text,

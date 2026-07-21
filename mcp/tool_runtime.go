@@ -33,6 +33,7 @@ type RuntimeToolInfo struct {
 	ConnectorID          string      `json:"connectorId,omitempty"`
 	ConnectorName        string      `json:"connectorName,omitempty"`
 	PluginDisplayNames   []string    `json:"pluginDisplayNames,omitempty"`
+	ServerOrigin         string      `json:"serverOrigin,omitempty"`
 	Tool                 RuntimeTool `json:"tool"`
 }
 

@@ -45,6 +45,7 @@ type SubmitFunc func(prompt string) bubbletea.Cmd
 
 type SubmitRequest struct {
 	Prompt          string
+	ServiceTier     string
 	Attachments     []bottompane.ComposerAttachment
 	MentionBindings []string
 	MentionCatalog  chatwidget.SubmissionMentionCatalog
@@ -132,6 +133,10 @@ type SettingsWriteResult struct {
 type SettingsWriteFunc func(edits []SettingsEdit) (SettingsWriteResult, error)
 
 type WindowsSandboxSetupFunc func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error)
+type DesktopThreadOpenFunc func(threadID string) error
+type SandboxReadDirFunc func(path string) error
+type ExternalAgentImportFunc func(cwd string) (string, error)
+type RolloutPathReaderFunc func(threadID string) (string, error)
 
 type HooksListReaderFunc func(cwd string) ([]chatwidget.HookRun, error)
 
@@ -349,6 +354,7 @@ type Options struct {
 	NoAltScreen                   bool
 	Placeholder                   string
 	ModelPickerOptions            []codextui.ModelPickerOption
+	ServiceTierCommands           []bottompane.ServiceTierCommand
 	SessionPickerItems            []codextui.SessionSummary
 	SessionPickerCWD              string
 	SessionPickerView             string
@@ -380,6 +386,10 @@ type Options struct {
 	OnClearGoal                   GoalClearerFunc
 	OnWriteSettings               SettingsWriteFunc
 	OnStartWindowsSandboxSetup    WindowsSandboxSetupFunc
+	OnOpenDesktopThread           DesktopThreadOpenFunc
+	OnSandboxReadDir              SandboxReadDirFunc
+	OnImportExternalAgent         ExternalAgentImportFunc
+	OnReadRolloutPath             RolloutPathReaderFunc
 	OnReadHooks                   HooksListReaderFunc
 	OnReadPlugins                 PluginListReaderFunc
 	OnReadSkills                  SkillsListReaderFunc
@@ -454,6 +464,7 @@ type Model struct {
 	modal                            *modalState
 	skillPopup                       skillPopupState
 	modelPickerOpts                  []codextui.ModelPickerOption
+	serviceTierCommands              []bottompane.ServiceTierCommand
 	sessionItems                     []codextui.SessionSummary
 	sessionCWD                       string
 	sessionPickerDensity             codextui.SessionListDensity
@@ -500,6 +511,10 @@ type Model struct {
 	onClearGoal                      GoalClearerFunc
 	onWriteSettings                  SettingsWriteFunc
 	windowsSandboxSetup              WindowsSandboxSetupFunc
+	onOpenDesktopThread              DesktopThreadOpenFunc
+	onSandboxReadDir                 SandboxReadDirFunc
+	onImportExternalAgent            ExternalAgentImportFunc
+	onReadRolloutPath                RolloutPathReaderFunc
 	windowsSandboxSetupActive        bool
 	windowsSandboxSetupStatus        chatwidget.WindowsSandboxSetupStatus
 	onReadHooks                      HooksListReaderFunc
@@ -541,6 +556,10 @@ type Model struct {
 	nextSettingsRequestID            uint64
 	pendingSettingsRequestID         uint64
 	submitted                        []string
+	inputHistory                     []string
+	inputHistoryIndex                int
+	inputHistoryDraft                string
+	inputHistoryActive               bool
 	submitRequests                   []SubmitRequest
 	queued                           []queuedSubmission
 	editorActive                     bool
@@ -602,6 +621,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		footerStyle:                    lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		bottomStyle:                    lipgloss.NewStyle(),
 		modelPickerOpts:                append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
+		serviceTierCommands:            append([]bottompane.ServiceTierCommand(nil), options.ServiceTierCommands...),
 		sessionItems:                   append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                     strings.TrimSpace(options.SessionPickerCWD),
 		sessionPickerDensity:           normalizeSessionPickerDensityTea(options.SessionPickerView),
@@ -642,6 +662,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onClearGoal:                    options.OnClearGoal,
 		onWriteSettings:                options.OnWriteSettings,
 		windowsSandboxSetup:            options.OnStartWindowsSandboxSetup,
+		onOpenDesktopThread:            options.OnOpenDesktopThread,
+		onSandboxReadDir:               options.OnSandboxReadDir,
+		onImportExternalAgent:          options.OnImportExternalAgent,
+		onReadRolloutPath:              options.OnReadRolloutPath,
 		onReadHooks:                    options.OnReadHooks,
 		onReadPlugins:                  options.OnReadPlugins,
 		onReadSkills:                   options.OnReadSkills,
@@ -703,9 +727,10 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 		programOptions = append(programOptions, bubbletea.WithOutput(output))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
-	if !options.NoAltScreen {
-		programOptions = append(programOptions, bubbletea.WithAltScreen())
-	}
+	// Rust parity: normal chat runs in the terminal's inline buffer so finalized
+	// conversation rows remain in native scrollback. Alternate screen is reserved
+	// for temporary overlays; starting the whole chat there makes terminals map
+	// the mouse wheel to Up/Down keys, which incorrectly navigates composer history.
 	return bubbletea.NewProgram(model, programOptions...)
 }
 
@@ -950,6 +975,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.applyTranscriptNavigationKey(msg) {
 			return m, nil
 		}
+		if m.applyInputHistoryKey(msg) {
+			return m, nil
+		}
 		now := m.currentTime()
 		if msg.Type == bubbletea.KeyRunes {
 			m.noteComposerRunes(msg.Runes, now)
@@ -1000,6 +1028,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayMouse(msg)
 		}
+		// Rust parity: do not enable or consume terminal mouse tracking. Leaving
+		// mouse input to the terminal preserves scrollback, text selection/copy,
+		// and native paste behavior.
+		return m, nil
 	}
 
 	var cmd bubbletea.Cmd
@@ -1279,6 +1311,9 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		return nil
 	}
 	request = cloneSubmitRequest(request)
+	if request.ServiceTier == "" && m.State != nil {
+		request.ServiceTier = strings.TrimSpace(m.State.ServiceTier)
+	}
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	if request.Prompt == "" && len(request.Attachments) == 0 {
 		return nil
@@ -1300,6 +1335,10 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		m.setStatus("running")
 	}
 	m.submitted = append(m.submitted, displayPrompt)
+	if strings.TrimSpace(request.Prompt) != "" {
+		m.inputHistory = append(m.inputHistory, request.Prompt)
+	}
+	m.resetInputHistoryNavigation()
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
 	m.refreshTranscript()
 	if m.onSubmitRequest != nil {
@@ -2845,7 +2884,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandKeymap:
 		m.applyKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
-		m.State.AddMessage(codextui.RoleSystem, m.State.RenderStatusLine())
+		m.State.AddMessage(codextui.RoleSystem, m.State.RenderStatusCardWidth(max(44, m.width-2)))
 		m.notice = ""
 	case codextui.CommandUsage:
 		return m.applyUsageCommand(invocation.Args)
@@ -2866,8 +2905,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		m.State.AddMessage(codextui.RoleSystem, "Compaction requested.")
 		m.notice = "Compaction requested."
 	case codextui.CommandClear:
-		m.State.ClearMessages()
-		m.notice = "Cleared visible transcript."
+		m.State.ResetThread()
+		m.notice = "Started a fresh session."
 	case codextui.CommandCopy:
 		m.copyLastAgentResponse()
 	case codextui.CommandRaw:
@@ -2880,6 +2919,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyStopCommand()
 	case codextui.CommandModel:
 		m.applyModelSetting(invocation.Args)
+	case codextui.CommandFast:
+		return m.applyFastServiceTier()
 	case codextui.CommandPersonality:
 		return m.applyPersonalityCommand(invocation.Args)
 	case codextui.CommandPlan:
@@ -2945,25 +2986,62 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandAutoReview:
 		m.notice = "No recent auto-review denials in this thread."
 	case codextui.CommandMemories:
-		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"/memories", "", "Memory configuration requires app-server support."}))
-		m.notice = "Memories"
+		m.openMemoriesSettings()
 	case codextui.CommandFeedback:
 		m.notice = "Feedback flow requires app-server support."
 	case codextui.CommandApp:
-		m.notice = "Codex Desktop handoff requires a remote app session."
+		threadID := strings.TrimSpace(m.State.ThreadID)
+		if threadID == "" {
+			m.notice = "Session is still starting; try /app again in a moment."
+			break
+		}
+		if m.onOpenDesktopThread == nil {
+			m.notice = "Codex Desktop handoff is unavailable in this runtime."
+			break
+		}
+		if err := m.onOpenDesktopThread(threadID); err != nil {
+			m.notice = "Failed to open this session in Codex Desktop: " + err.Error()
+		} else {
+			m.notice = "Opened this session in Codex Desktop."
+		}
 	case codextui.CommandImport:
-		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"/import", "", "External agent config migration requires app-server support."}))
-		m.notice = "Import"
+		if m.onImportExternalAgent == nil {
+			m.notice = "External agent config migration is unavailable in this runtime."
+			break
+		}
+		result, err := m.onImportExternalAgent(m.State.CWD)
+		if err != nil {
+			m.notice = "Import failed: " + err.Error()
+		} else {
+			m.notice = result
+		}
 	case codextui.CommandElevateSandbox:
 		return m.applyWindowsSandboxSetupCommand(chatwidget.WindowsSandboxModeElevated)
 	case codextui.CommandSandboxReadRoot:
 		if strings.TrimSpace(invocation.Args) == "" {
 			m.notice = "Usage: /sandbox-add-read-dir <absolute-directory-path>"
+		} else if m.onSandboxReadDir == nil {
+			m.notice = "Sandbox read directory request is unavailable in this runtime."
+		} else if err := m.onSandboxReadDir(strings.TrimSpace(invocation.Args)); err != nil {
+			m.notice = "Failed to grant sandbox read access: " + err.Error()
 		} else {
-			m.notice = "Sandbox read directory request requires Windows sandbox runtime."
+			m.notice = "Sandbox read access granted: " + strings.TrimSpace(invocation.Args)
 		}
 	case codextui.CommandRollout:
-		m.notice = "Rollout path is not available yet."
+		path := ""
+		if m.onReadRolloutPath != nil {
+			var err error
+			path, err = m.onReadRolloutPath(m.State.ThreadID)
+			if err != nil {
+				m.notice = "Failed to read rollout path: " + err.Error()
+				break
+			}
+		}
+		if strings.TrimSpace(path) == "" {
+			m.notice = "Rollout path is not available yet."
+		} else {
+			m.notice = "Current rollout path: " + path
+		}
 	case codextui.CommandTestApproval:
 		m.openApprovalModal(ApprovalRequestMsg{
 			ID:      "test-approval",
@@ -3313,6 +3391,53 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	}
 	m.activityFollow = m.transcript.AtBottom()
 	return true
+}
+
+func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
+	if m == nil || len(m.inputHistory) == 0 || m.modal != nil || m.slashPopup.Active || m.skillPopup.Active {
+		return false
+	}
+	switch msg.Type {
+	case bubbletea.KeyUp:
+		if !m.inputHistoryActive {
+			m.inputHistoryDraft = m.composer.Value()
+			m.inputHistoryIndex = len(m.inputHistory)
+			m.inputHistoryActive = true
+		}
+		if m.inputHistoryIndex > 0 {
+			m.inputHistoryIndex--
+		}
+		m.composer.SetValue(m.inputHistory[m.inputHistoryIndex])
+		m.composer.SetCursor(len(m.composer.Value()))
+		return true
+	case bubbletea.KeyDown:
+		if !m.inputHistoryActive {
+			return false
+		}
+		if m.inputHistoryIndex < len(m.inputHistory)-1 {
+			m.inputHistoryIndex++
+			m.composer.SetValue(m.inputHistory[m.inputHistoryIndex])
+		} else {
+			m.composer.SetValue(m.inputHistoryDraft)
+			m.resetInputHistoryNavigation()
+		}
+		m.composer.SetCursor(len(m.composer.Value()))
+		return true
+	default:
+		if m.inputHistoryActive && msg.Type != bubbletea.KeyShiftTab {
+			m.resetInputHistoryNavigation()
+		}
+		return false
+	}
+}
+
+func (m *Model) resetInputHistoryNavigation() {
+	if m == nil {
+		return
+	}
+	m.inputHistoryActive = false
+	m.inputHistoryIndex = len(m.inputHistory)
+	m.inputHistoryDraft = ""
 }
 
 func (m *Model) appendAssistantDelta(itemID string, delta string) {

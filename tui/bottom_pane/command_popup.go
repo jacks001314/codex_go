@@ -6,11 +6,6 @@ import (
 
 // Rust parity: codex-rs/tui/src/bottom_pane/command_popup.rs.
 
-var aliasCommandsHiddenByDefault = map[string]bool{
-	"quit": true,
-	"btw":  true,
-}
-
 var commandPopupColumnWidth = NewColumnWidthConfig(ColumnWidthAutoAllRows, nil)
 
 type CommandPopupItem struct {
@@ -28,7 +23,7 @@ func FilterCommandPopupItems(items []CommandPopupItem, query string) []CommandPo
 	if query == "" {
 		out := make([]CommandPopupItem, 0, len(items))
 		for _, item := range items {
-			if aliasCommandsHiddenByDefault[item.Name] || item.IsAlias {
+			if item.IsAlias {
 				continue
 			}
 			item.MatchIndices = nil
@@ -86,9 +81,6 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 	items := make([]CommandPopupItem, 0, len(commands))
 	for _, command := range commands {
 		commandText := command.CommandText()
-		if command.Kind == SlashCommandItemBuiltin && (strings.HasPrefix(commandText, "debug") || commandText == "apps") {
-			continue
-		}
 		if command.IsAlias && commandText != "quit" && commandText != "btw" {
 			continue
 		}

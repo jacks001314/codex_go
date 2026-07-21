@@ -20,9 +20,15 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	state.AddHistoryLines([]string{"• MCP Tools", "  • docs"}, []string{"MCP Tools", "docs"})
 
 	welcome := state.RenderWelcome()
-	for _, want := range []string{"OpenAI Codex", "Model: gpt-test", "Approval: on-request", "Sandbox: workspace-write", `Directory: D:\repo`} {
+	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "on-request", "workspace-write", `Directory:`, `D:\repo`} {
 		if !strings.Contains(welcome, want) {
 			t.Fatalf("welcome = %q, missing %q", welcome, want)
+		}
+	}
+	card := state.RenderStatusCard()
+	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "Session:", "thread-1", "Context window:", "Limits:"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("status card = %q, missing %q", card, want)
 		}
 	}
 

@@ -38,8 +38,10 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "model", Command: CommandModel, Description: "choose what model and reasoning effort to use"},
 		{Name: "personality", Command: CommandPersonality, Description: "choose communication style"},
 		{Name: "plan", Command: CommandPlan, Description: "switch to Plan mode"},
-		{Name: "agent", Command: CommandAgent, Aliases: []string{"agents", "subagents"}, Description: "switch active agent thread"},
-		{Name: "side", Command: CommandSide, Aliases: []string{"btw"}, Description: "start a side conversation in an ephemeral fork"},
+		{Name: "agent", Command: CommandAgent, Aliases: []string{"agents"}, Description: "switch active agent thread"},
+		{Name: "multi-agents", Command: CommandAgent, Aliases: []string{"subagents"}, Description: "switch active agent thread"},
+		{Name: "side", Command: CommandSide, Description: "start a side conversation in an ephemeral fork"},
+		{Name: "btw", Command: CommandSide, Description: "start a side conversation in an ephemeral fork"},
 		{Name: "permissions", Command: CommandPermissions, Description: "choose what Codex is allowed to do"},
 		{Name: "approval", Command: CommandApproval, Description: "show or set approval policy"},
 		{Name: "sandbox", Command: CommandSandbox, Description: "show or set sandbox profile"},
@@ -78,6 +80,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "clear-attachments", Command: CommandClearAttachments, Description: "remove prompt attachments"},
 		{Name: "editor", Command: CommandEditor, Description: "edit current draft in external editor"},
 		{Name: "logout", Command: CommandLogout, Description: "log out of Codex"},
-		{Name: "exit", Command: CommandExit, Aliases: []string{"quit"}, Description: "quit"},
+		{Name: "quit", Command: CommandExit, Description: "exit Codex"},
+		{Name: "exit", Command: CommandExit, Description: "exit Codex"},
 	}
 }

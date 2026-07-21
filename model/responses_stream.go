@@ -1173,7 +1173,11 @@ func agentItemFromResponseOutput(output *responsesAgentOutputItem, rawItem json.
 	if id == "" {
 		id = fmt.Sprintf("agent-message-%d", index+1)
 	}
-	return &AgentItem{ID: id, Type: "agent_message", Text: text}, nil
+	data := map[string]any{}
+	if phase := strings.TrimSpace(output.Phase); phase != "" {
+		data["phase"] = phase
+	}
+	return &AgentItem{ID: id, Type: "agent_message", Text: text, Data: data}, nil
 }
 
 func rawResponseItemFromStreamEventData(data []byte) json.RawMessage {

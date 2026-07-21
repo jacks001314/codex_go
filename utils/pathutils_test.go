@@ -94,3 +94,51 @@ func TestWriteAtomically(t *testing.T) {
 		t.Fatalf("data = %q", string(data))
 	}
 }
+
+func TestProcVersionIndicatesWSL1(t *testing.T) {
+	tests := []struct {
+		name        string
+		procVersion string
+		wantWSL1    bool
+	}{
+		{
+			name:        "WSL1 detected with explicit version",
+			procVersion: "Linux version 4.4.0-22621-Microsoft",
+			wantWSL1:    true,
+		},
+		{
+			name:        "WSL1 with wsl1 marker",
+			procVersion: "Linux version 5.15.0-microsoft-standard-WSL1",
+			wantWSL1:    true,
+		},
+		{
+			name:        "WSL1 with lowercase wsl1 marker",
+			procVersion: "Linux version 5.15.0-wsl-microsoft-standard-WSL1",
+			wantWSL1:    true,
+		},
+		{
+			name:        "WSL2 not detected as WSL1",
+			procVersion: "Linux version 6.6.87.2-microsoft-standard-WSL2",
+			wantWSL1:    false,
+		},
+		{
+			name:        "microsoft-standard without WSL version is not WSL1",
+			procVersion: "Linux version 4.19.104-microsoft-standard",
+			wantWSL1:    false,
+		},
+		{
+			name:        "regular Linux kernel not WSL1",
+			procVersion: "Linux version 6.8.0",
+			wantWSL1:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := procVersionIndicatesWSL1(tt.procVersion)
+			if got != tt.wantWSL1 {
+				t.Errorf("procVersionIndicatesWSL1(%q) = %v, want %v", tt.procVersion, got, tt.wantWSL1)
+			}
+		})
+	}
+}

@@ -40,6 +40,8 @@ require (
 	github.com/things-go/go-socks5 v0.1.1
 	github.com/valyala/fasthttp v1.72.0
 	github.com/yuin/goldmark v1.7.13
+	golang.org/x/crypto v0.53.0
+	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.30.0
 	golang.org/x/sys v0.46.0
@@ -92,7 +94,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0 // indirect

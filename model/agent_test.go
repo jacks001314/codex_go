@@ -135,6 +135,16 @@ func TestAgentItemMarshalAgentMessageAsResponsesMessage(t *testing.T) {
 	}
 }
 
+func TestAgentItemMarshalPreservesCommentaryPhase(t *testing.T) {
+	data, err := json.Marshal(&AgentItem{ID: "msg-commentary", Type: "agent_message", Text: "I will check the weather.", Data: map[string]any{"phase": "commentary"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"phase":"commentary"`) {
+		t.Fatalf("json = %s", data)
+	}
+}
+
 func TestAgentItemMarshalImageGenerationCall(t *testing.T) {
 	item := &AgentItem{
 		ID:     "ig_123",

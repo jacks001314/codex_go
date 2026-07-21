@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 		MaxTurns:   3,
 	})
 
+	var commentary []string
 	result, err := loop.Run(context.Background(), &AgentLoopRequest{
 		Prompt:             "run echo",
 		Instructions:       "custom base instructions",
@@ -35,6 +37,14 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 		PromptCacheKey:     "cache-key",
 		ClientMetadata:     map[string]string{"thread_id": "thread-1"},
 		OutputSchema:       map[string]any{"type": "object"},
+		OnAssistantMessage: func(response *model.AgentResponse, iteration int, hasToolCalls bool) {
+			messages := ResponseAssistantMessages(response)
+			text := ""
+			if len(messages) > 0 {
+				text = messages[0].Text
+			}
+			commentary = append(commentary, text+":"+strconv.Itoa(iteration)+":"+strconv.FormatBool(hasToolCalls))
+		},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -42,13 +52,16 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	if result.Response.Message != "done" || result.Iterations != 2 || len(result.ToolExecutions) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
+	if len(commentary) != 2 || commentary[0] != "I will run the echo command.:0:true" || commentary[1] != "done:1:false" {
+		t.Fatalf("assistant callbacks = %#v", commentary)
+	}
 	if result.Usage.InputTokens != 11 || result.Usage.CachedInputTokens != 1 || result.Usage.OutputTokens != 7 || result.Usage.ReasoningOutputTokens != 2 || result.Usage.TotalTokens != 18 {
 		t.Fatalf("usage = %#v", result.Usage)
 	}
 	if result.TimingProfile == nil || result.TimingProfile.SamplingRequestCount != 2 {
 		t.Fatalf("timing profile = %#v", result.TimingProfile)
 	}
-	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 3 {
+	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 4 {
 		t.Fatalf("agent requests = %#v", agent.requests)
 	}
 	if !agent.requests[0].Store || agent.requests[0].Originator != "codex_app_server" || agent.requests[0].PreviousResponseID != "resp-prev" || agent.requests[0].ServiceTier != "priority" || agent.requests[0].PromptCacheKey != "cache-key" || agent.requests[0].ClientMetadata["thread_id"] != "thread-1" {
@@ -63,13 +76,51 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	if schema, ok := agent.requests[0].OutputSchema.(map[string]any); !ok || schema["type"] != "object" {
 		t.Fatalf("output schema = %#v", agent.requests[0].OutputSchema)
 	}
-	call, ok := agent.requests[1].InputItems[1].(*model.AgentItem)
+	commentaryItem, ok := agent.requests[1].InputItems[1].(*model.AgentItem)
+	if !ok || commentaryItem.Type != "agent_message" || commentaryItem.Text != "I will run the echo command." {
+		t.Fatalf("commentary input = %#v", agent.requests[1].InputItems[1])
+	}
+	call, ok := agent.requests[1].InputItems[2].(*model.AgentItem)
 	if !ok || call.Type != "function_call" || call.CallID != "call-1" {
 		t.Fatalf("tool call input = %#v", agent.requests[1].InputItems[1])
 	}
-	item, ok := agent.requests[1].InputItems[2].(*ToolResponseItem)
+	item, ok := agent.requests[1].InputItems[3].(*ToolResponseItem)
 	if !ok || item.Type != "function_call_output" || item.Output.Text() != "tool result" {
 		t.Fatalf("tool output input = %#v", agent.requests[1].InputItems[2])
+	}
+}
+
+func TestAgentLoopForwardsStreamEventsBeforeToolStarted(t *testing.T) {
+	agent := &streamBeforeToolLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	runtime := NewRuntime(&RuntimeOptions{
+		Agent:    agent,
+		Router:   tool.NewRouter(registry),
+		MaxTurns: 2,
+	})
+
+	var events []string
+	_, err := runtime.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo",
+		StreamHandler: func(event *model.ResponsesStreamEvent) {
+			if event != nil && event.Kind == model.ResponsesStreamEventOutputText {
+				events = append(events, "commentary:"+event.Delta)
+			}
+		},
+		OnToolStarted: func(context.Context, *tool.Invocation, time.Time) {
+			events = append(events, "tool-started")
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := strings.Join(events, ","), "commentary:I will run echo.,tool-started"; got != want {
+		t.Fatalf("event order = %q, want %q", got, want)
 	}
 }
 
@@ -346,6 +397,10 @@ type streamTimingLoopAgent struct {
 	advance func(time.Duration)
 }
 
+type streamBeforeToolLoopAgent struct {
+	requests int
+}
+
 type emptyInputLoopAgent struct {
 	requests []model.AgentRequest
 }
@@ -401,6 +456,40 @@ func (a *streamTimingLoopAgent) Run(ctx context.Context, request *model.AgentReq
 	}, nil
 }
 
+func (a *streamBeforeToolLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests++
+	if a.requests == 1 {
+		if request.StreamHandler != nil {
+			request.StreamHandler(&model.ResponsesStreamEvent{
+				Kind:   model.ResponsesStreamEventOutputAdded,
+				ItemID: "commentary-1",
+				Item: &model.AgentItem{
+					ID:   "commentary-1",
+					Type: "agent_message",
+					Data: map[string]any{"phase": "commentary"},
+				},
+			})
+			request.StreamHandler(&model.ResponsesStreamEvent{
+				Kind:   model.ResponsesStreamEventOutputText,
+				ItemID: "commentary-1",
+				Delta:  "I will run echo.",
+			})
+		}
+		return &model.AgentResponse{
+			ResponseID: "resp-tool",
+			Items: []model.AgentItem{
+				{ID: "commentary-1", Type: "agent_message", Text: "I will run echo.", Data: map[string]any{"phase": "commentary"}},
+				{ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{}`},
+			},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"}}},
+	}, nil
+}
+
 func (a *fakeLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	a.requests = append(a.requests, *request)
 	if a.enqueueSteerAfterFirstCall && a.steerMailbox != nil && len(a.requests) == 1 {
@@ -425,7 +514,7 @@ func (a *fakeLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*
 		return &model.AgentResponse{
 			ResponseID: "resp-tool",
 			Usage:      model.AgentUsage{InputTokens: 5, CachedInputTokens: 1, OutputTokens: 3, ReasoningOutputTokens: 1},
-			Items: []model.AgentItem{{
+			Items: []model.AgentItem{{ID: "commentary-1", Type: "agent_message", Text: "I will run the echo command."}, {
 				ID:        "call-1",
 				Type:      "function_call",
 				Name:      "echo",

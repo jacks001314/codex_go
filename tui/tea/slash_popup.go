@@ -6,7 +6,9 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"codex_go/features"
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 const slashPopupMaxRows = 8
@@ -107,9 +109,6 @@ func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashC
 func slashPopupCatalog() []slashCommandPopupItem {
 	frames := map[string]codextui.SlashCommandFrame{}
 	for _, frame := range codextui.SlashCommandFrames() {
-		if slashPopupHiddenCommand(frame.Name) {
-			continue
-		}
 		frames[frame.Name] = frame
 	}
 
@@ -124,7 +123,7 @@ func slashPopupCatalog() []slashCommandPopupItem {
 		seen[name] = true
 	}
 	for _, frame := range codextui.SlashCommandFrames() {
-		if seen[frame.Name] || slashPopupHiddenCommand(frame.Name) {
+		if seen[frame.Name] {
 			continue
 		}
 		out = append(out, slashPopupItemFromFrame(frame))
@@ -134,6 +133,14 @@ func slashPopupCatalog() []slashCommandPopupItem {
 
 func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 	items := slashPopupCatalog()
+	if fastTier := m.fastServiceTierCommand(); m != nil && features.Enabled(m.featureSettings, "fast_mode") && fastTier != nil {
+		fast := slashCommandPopupItem{Name: strings.ToLower(fastTier.Name), Description: fastTier.Description}
+		if len(items) > 0 && items[0].Name == "model" {
+			items = append(items[:1], append([]slashCommandPopupItem{fast}, items[1:]...)...)
+		} else {
+			items = append([]slashCommandPopupItem{fast}, items...)
+		}
+	}
 	if m == nil || !m.inSideConversation() {
 		return items
 	}
@@ -145,6 +152,19 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		}
 	}
 	return out
+}
+
+func (m *Model) fastServiceTierCommand() *bottompane.ServiceTierCommand {
+	if m == nil {
+		return nil
+	}
+	for _, tier := range m.serviceTierCommands {
+		if strings.EqualFold(strings.TrimSpace(tier.Name), "fast") {
+			copy := tier
+			return &copy
+		}
+	}
+	return nil
 }
 
 func slashPopupItemFromFrame(frame codextui.SlashCommandFrame) slashCommandPopupItem {
@@ -159,9 +179,7 @@ func slashPopupItemFromFrame(frame codextui.SlashCommandFrame) slashCommandPopup
 	}
 }
 
-func slashPopupHiddenCommand(name string) bool {
-	return name == "apps" || strings.HasPrefix(name, "debug")
-}
+func slashPopupHiddenCommand(string) bool { return false }
 
 var rustSlashPopupOrder = []string{
 	"model",
@@ -187,26 +205,38 @@ var rustSlashPopupOrder = []string{
 	"app",
 	"init",
 	"compact",
+	"plan",
+	"goal",
 	"agent",
 	"side",
+	"btw",
 	"copy",
 	"raw",
 	"diff",
 	"mention",
 	"status",
+	"usage",
+	"debug-config",
 	"title",
 	"statusline",
 	"theme",
 	"pets",
 	"mcp",
+	"apps",
+	"plugins",
 	"logout",
+	"quit",
 	"exit",
 	"feedback",
 	"rollout",
 	"ps",
 	"stop",
 	"clear",
+	"personality",
 	"test-approval",
+	"multi-agents",
+	"debug-m-drop",
+	"debug-m-update",
 }
 
 var rustSlashPopupDescriptions = map[string]string{

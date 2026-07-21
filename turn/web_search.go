@@ -14,6 +14,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 const (
@@ -235,6 +236,10 @@ func cloneSearchInputItems(items []any) any {
 	return out
 }
 
+// assistantContextTokenLimit mirrors Rust's ASSISTANT_CONTEXT_TOKEN_LIMIT: the
+// shared token budget for assistant text across the whole recent-input window.
+const assistantContextTokenLimit = 1000
+
 func recentSearchInputItems(items []any) []any {
 	messages := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -251,11 +256,11 @@ func recentSearchInputItems(items []any) []any {
 	}
 	out := make([]any, 0, end-start+1)
 	for i := start; i <= end; i++ {
-		message := cloneMapAnyTurn(messages[i])
-		if role, _ := message["role"].(string); role == "assistant" {
-			truncateAssistantSearchMessage(message, 4000)
-		}
-		out = append(out, message)
+		out = append(out, cloneMapAnyTurn(messages[i]))
+	}
+	out = truncateAssistantSearchMessagesToTokenBudget(out, assistantContextTokenLimit)
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -302,7 +307,14 @@ func visibleSearchMessage(item any) (map[string]any, bool) {
 	}
 }
 
+// recentSearchUserWindow mirrors Rust's retain_tail_from_last_n_user_messages:
+// it keeps items through the latest user message and back to the earliest of
+// the last userMessageCount user messages. If no user message is present, the
+// whole window is dropped (matching Rust's items.clear()).
 func recentSearchUserWindow(messages []map[string]any, userMessageCount int) (int, int) {
+	if userMessageCount == 0 {
+		return -1, -1
+	}
 	userIndexes := make([]int, 0, userMessageCount)
 	for i := range messages {
 		if role, _ := messages[i]["role"].(string); role == "user" {
@@ -310,7 +322,7 @@ func recentSearchUserWindow(messages []map[string]any, userMessageCount int) (in
 		}
 	}
 	if len(userIndexes) == 0 {
-		return 0, len(messages) - 1
+		return -1, -1
 	}
 	end := userIndexes[len(userIndexes)-1]
 	startIndex := len(userIndexes) - userMessageCount
@@ -350,24 +362,61 @@ func contextualSearchUserMessage(content []map[string]any) bool {
 	return strings.HasPrefix(text, "<environment_context>") && strings.Contains(text, "</environment_context>")
 }
 
-func truncateAssistantSearchMessage(message map[string]any, maxChars int) {
-	if maxChars <= 0 {
-		return
-	}
-	content, ok := sliceAnyTurn(message["content"])
-	if !ok {
-		return
-	}
-	for _, item := range content {
-		block, ok := mapAnyTurn(item)
+// truncateAssistantSearchMessagesToTokenBudget mirrors Rust's
+// truncate_assistant_output_text_to_token_budget: it shares a single token
+// budget across every assistant text block in the window, truncating (and
+// eventually dropping) content once the budget is exhausted, and drops any
+// assistant message left with no content.
+func truncateAssistantSearchMessagesToTokenBudget(messages []any, maxTokens int) []any {
+	remainingBudget := maxTokens
+	out := make([]any, 0, len(messages))
+	for _, item := range messages {
+		message, ok := item.(map[string]any)
 		if !ok {
+			out = append(out, item)
 			continue
 		}
-		text, _ := block["text"].(string)
-		if len(text) > maxChars {
-			block["text"] = text[:maxChars]
+		if role, _ := message["role"].(string); role != "assistant" {
+			out = append(out, item)
+			continue
 		}
+		content, ok := sliceAnyTurn(message["content"])
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		keptContent := make([]any, 0, len(content))
+		for _, block := range content {
+			entry, ok := mapAnyTurn(block)
+			if !ok {
+				keptContent = append(keptContent, block)
+				continue
+			}
+			if blockType, _ := entry["type"].(string); blockType != "output_text" {
+				keptContent = append(keptContent, entry)
+				continue
+			}
+			if remainingBudget == 0 {
+				continue
+			}
+			text, _ := entry["text"].(string)
+			tokenCount := utils.ApproxTokenCount(text)
+			if tokenCount <= remainingBudget {
+				remainingBudget -= tokenCount
+				keptContent = append(keptContent, entry)
+				continue
+			}
+			entry["text"] = utils.TruncateText(text, utils.TokensPolicy(remainingBudget))
+			remainingBudget = 0
+			keptContent = append(keptContent, entry)
+		}
+		if len(keptContent) == 0 {
+			continue
+		}
+		message["content"] = keptContent
+		out = append(out, message)
 	}
+	return out
 }
 
 func mapAnyTurn(value any) (map[string]any, bool) {

@@ -106,23 +106,24 @@ type RootOptions struct {
 }
 
 type ExecOptions struct {
-	StrictConfig     bool
-	Shared           SharedOptions
-	SkipGitRepoCheck bool
-	Ephemeral        bool
-	IgnoreUserConfig bool
-	IgnoreRules      bool
-	RemovedFullAuto  bool
-	OutputSchema     string
-	Color            string
-	JSON             bool
-	LastMessageFile  string
-	Prompt           string
-	ConfigOverrides  []string
-	Subcommand       string
-	SubArgs          []string
-	Review           ReviewOptions
-	Resume           ExecResumeOptions
+	StrictConfig          bool
+	Shared                SharedOptions
+	SkipGitRepoCheck      bool
+	Ephemeral             bool
+	IgnoreUserConfig      bool
+	IgnoreRules           bool
+	RemovedFullAuto       bool
+	OutputSchema          string
+	Color                 string
+	JSON                  bool
+	StreamAssistantDeltas bool
+	LastMessageFile       string
+	Prompt                string
+	ConfigOverrides       []string
+	Subcommand            string
+	SubArgs               []string
+	Review                ReviewOptions
+	Resume                ExecResumeOptions
 }
 
 type ExecResumeOptions struct {
@@ -703,10 +704,14 @@ func parseExec(args []string, exec *ExecOptions) error {
 			if err != nil {
 				return err
 			}
-			exec.Color = value
+			if err := setExecColor(exec, value); err != nil {
+				return err
+			}
 			i = next
 		case strings.HasPrefix(arg, "--color="):
-			exec.Color = strings.TrimPrefix(arg, "--color=")
+			if err := setExecColor(exec, strings.TrimPrefix(arg, "--color=")); err != nil {
+				return err
+			}
 		case arg == "--json" || arg == "--experimental-json":
 			exec.JSON = true
 		case arg == "--output-last-message" || arg == "-o":
@@ -794,10 +799,14 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			if err != nil {
 				return err
 			}
-			exec.Color = value
+			if err := setExecColor(exec, value); err != nil {
+				return err
+			}
 			i = next
 		case strings.HasPrefix(arg, "--color="):
-			exec.Color = strings.TrimPrefix(arg, "--color=")
+			if err := setExecColor(exec, strings.TrimPrefix(arg, "--color=")); err != nil {
+				return err
+			}
 		case arg == "-c" || arg == "--config":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2953,6 +2962,16 @@ func setApprovalPolicy(shared *SharedOptions, value string) error {
 		return nil
 	default:
 		return errors.New("--ask-for-approval must be one of untrusted, on-request, never")
+	}
+}
+
+func setExecColor(exec *ExecOptions, value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "always", "never", "auto":
+		exec.Color = strings.ToLower(strings.TrimSpace(value))
+		return nil
+	default:
+		return errors.New("--color must be one of always, never, auto")
 	}
 }
 

@@ -29,6 +29,7 @@ type SamplingFollowUpContext struct {
 }
 
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
+type AssistantMessageCallback func(response *model.AgentResponse, iteration int, hasToolCalls bool)
 
 type AgentLoop struct {
 	agent        model.AgentRunner
@@ -71,6 +72,8 @@ type AgentLoopRequest struct {
 	OnToolStarted                ToolStartedCallback
 	Timing                       *TimingState
 	SamplingFollowUp             SamplingFollowUp
+	OnAssistantMessage           AssistantMessageCallback
+	StreamHandler                model.ResponsesStreamHandler
 }
 
 type AgentLoopResult struct {
@@ -194,7 +197,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
-			StreamHandler:                timingStreamHandler(timing, l.now),
+			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
 		})
 		sampling.CloseAt(l.now())
 		if err != nil {
@@ -223,6 +226,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 
 		toolItems := toolAgentItems(response)
+		if request.OnAssistantMessage != nil && responseHasAssistantMessage(response) {
+			request.OnAssistantMessage(response, iteration, len(toolItems) > 0)
+		}
 		if len(toolItems) == 0 && request.SamplingFollowUp != nil {
 			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: len(toolItems) > 0})
 			if len(followUp) > 0 {
@@ -267,6 +273,57 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 	}
 	return nil, fmt.Errorf("agent tool loop exceeded %d iterations", l.maxTurns)
+}
+
+func combineResponsesStreamHandlers(handlers ...model.ResponsesStreamHandler) model.ResponsesStreamHandler {
+	active := make([]model.ResponsesStreamHandler, 0, len(handlers))
+	for _, handler := range handlers {
+		if handler != nil {
+			active = append(active, handler)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	return func(event *model.ResponsesStreamEvent) {
+		for _, handler := range active {
+			handler(event)
+		}
+	}
+}
+
+func responseHasAssistantMessage(response *model.AgentResponse) bool {
+	if response == nil {
+		return false
+	}
+	if strings.TrimSpace(response.Message) != "" {
+		return true
+	}
+	for i := range response.Items {
+		itemType := strings.TrimSpace(response.Items[i].Type)
+		if (itemType == "" || itemType == "message" || itemType == "agent_message") && strings.TrimSpace(response.Items[i].Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func ResponseAssistantMessages(response *model.AgentResponse) []model.AgentItem {
+	if response == nil {
+		return nil
+	}
+	out := []model.AgentItem{}
+	for i := range response.Items {
+		item := response.Items[i]
+		itemType := strings.TrimSpace(item.Type)
+		if (itemType == "" || itemType == "message" || itemType == "agent_message") && strings.TrimSpace(item.Text) != "" {
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 && strings.TrimSpace(response.Message) != "" {
+		out = append(out, model.AgentItem{Type: "agent_message", Text: response.Message})
+	}
+	return out
 }
 
 func recordResponseTiming(timing *TimingState, response *model.AgentResponse, now time.Time) {

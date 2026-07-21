@@ -9,6 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +33,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	codextui "codex_go/tui"
+	tuiapp "codex_go/tui/app"
 	chatwidget "codex_go/tui/chatwidget"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -296,6 +300,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnWriteSettings:         interactiveRemoteSettingsWriteHandler(ctx, endpoint),
 		FeatureSettings:         settings.FeatureSettings,
+		ServiceTierCommands:     interactiveServiceTierCommands(state.Model),
 		Personality:             settings.Personality,
 		Notifications:           settings.Notifications,
 		NotificationMethod:      settings.NotificationMethod,
@@ -339,6 +344,74 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 				setupCWD = interactiveSessionPickerCWD(root)
 			}
 			return interactiveRemoteStartWindowsSandboxSetup(ctx, endpoint, mode, setupCWD)
+		},
+		OnOpenDesktopThread: func(threadID string) error {
+			command := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", tuiapp.WindowsDesktopAppLaunchScript(tuiapp.DesktopThreadURL(threadID)))
+			if output, err := command.CombinedOutput(); err != nil {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+			}
+			return nil
+		},
+		OnReadRolloutPath: func(threadID string) (string, error) {
+			if strings.TrimSpace(threadID) == "" {
+				return "", nil
+			}
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return "", err
+			}
+			defer client.close()
+			thread, err := remoteTUIReadThread(ctx, client, threadID, false)
+			if err != nil {
+				return "", err
+			}
+			if thread.Path == nil {
+				return "", nil
+			}
+			return *thread.Path, nil
+		},
+		OnSandboxReadDir: func(path string) error {
+			absolute, err := filepath.Abs(strings.TrimSpace(path))
+			if err != nil {
+				return err
+			}
+			info, err := os.Stat(absolute)
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", absolute)
+			}
+			for _, current := range root.Shared.AddDirs {
+				if strings.EqualFold(filepath.Clean(current), filepath.Clean(absolute)) {
+					return nil
+				}
+			}
+			root.Shared.AddDirs = append(root.Shared.AddDirs, absolute)
+			return nil
+		},
+		OnImportExternalAgent: func(cwd string) (string, error) {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return "", err
+			}
+			defer client.close()
+			params := config.ExternalAgentConfigDetectParams{IncludeHome: true}
+			if strings.TrimSpace(cwd) != "" {
+				params.CWDs = []string{cwd}
+			}
+			var detected config.ExternalAgentConfigDetectResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodExternalAgentConfigDetect, params, &detected); err != nil {
+				return "", err
+			}
+			if len(detected.Items) == 0 {
+				return "No external agent configuration found.", nil
+			}
+			var imported config.ExternalAgentConfigImportResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodExternalAgentConfigImport, config.ExternalAgentConfigImportParams{MigrationItems: detected.Items}, &imported); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("External agent import started: %s", imported.ImportID), nil
 		},
 		OnReadHooks: func(cwd string) ([]chatwidget.HookRun, error) {
 			hooksCWD := strings.TrimSpace(cwd)
@@ -2904,6 +2977,11 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	}
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
+	}
+	if state != nil {
+		if tier := strings.TrimSpace(state.ServiceTier); tier != "" && tier != "default" {
+			params.ServiceTier = &tier
+		}
 	}
 	return params, nil
 }

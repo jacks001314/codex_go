@@ -193,6 +193,7 @@ type responsesAgentOutputItem struct {
 	ID        string                       `json:"id"`
 	Type      string                       `json:"type"`
 	Role      string                       `json:"role"`
+	Phase     string                       `json:"phase"`
 	Content   []responsesAgentContentBlock `json:"content"`
 	Name      string                       `json:"name"`
 	Namespace string                       `json:"namespace"`

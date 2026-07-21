@@ -13,7 +13,7 @@ func TestCommandPopupFiltersExactPrefixAndKeepsRustOrder(t *testing.T) {
 	popup.OnComposerTextChange("/m")
 
 	got := commandPopupItemNames(popup.FilteredItems())
-	want := []string{"model", "memories", "mention", "mcp"}
+	want := []string{"model", "memories", "mention", "mcp", "multi-agents"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filtered names = %#v, want %#v", got, want)
 	}
@@ -45,22 +45,24 @@ func TestCommandPopupServiceTierCommandUsesCatalogNameAndDescription(t *testing.
 	}
 }
 
-func TestCommandPopupAliasesHiddenByDefaultButShownForPrefix(t *testing.T) {
+func TestCommandPopupCanonicalCompanionsAndDispatchOnlyAliases(t *testing.T) {
 	popup := NewCommandPopup(CommandPopupFlags{}, nil)
 	popup.OnComposerTextChange("/")
 	names := commandPopupItemNames(popup.FilteredItems())
-	if containsString(names, "quit") || containsString(names, "btw") {
-		t.Fatalf("aliases should be hidden for empty filter, got %#v", names)
+	for _, name := range []string{"quit", "btw", "multi-agents"} {
+		if !containsString(names, name) {
+			t.Fatalf("canonical command %q missing for empty filter: %#v", name, names)
+		}
 	}
 
 	popup.OnComposerTextChange("/qu")
 	if selected, ok := popup.SelectedItem(); !ok || selected.Name != "quit" {
-		t.Fatalf("selected = %#v ok=%v, want quit alias", selected, ok)
+		t.Fatalf("selected = %#v ok=%v, want quit command", selected, ok)
 	}
 
 	popup.OnComposerTextChange("/bt")
 	if selected, ok := popup.SelectedItem(); !ok || selected.Name != "btw" {
-		t.Fatalf("selected = %#v ok=%v, want btw alias", selected, ok)
+		t.Fatalf("selected = %#v ok=%v, want btw command", selected, ok)
 	}
 
 	popup.OnComposerTextChange("/keys")
@@ -206,7 +208,21 @@ func TestSlashCommandHelpersMatchRustGatingAndAliases(t *testing.T) {
 		t.Fatalf("keymap dispatch alias = %#v ok=%v", command, ok)
 	}
 	if command, ok := FindBuiltinCommand("btw", flags); !ok || command.Command != tui.CommandSide || !command.SupportsInlineArgs() {
-		t.Fatalf("btw alias = %#v ok=%v", command, ok)
+		t.Fatalf("btw command = %#v ok=%v", command, ok)
+	}
+}
+
+func TestRustCanonicalCompanionCommandsRemainVisible(t *testing.T) {
+	flags := BuiltinCommandFlags{CollaborationModesEnabled: true, ConnectorsEnabled: true, PluginsCommandEnabled: true}
+	commands := CommandsForInput(flags, nil)
+	seen := map[string]bool{}
+	for _, command := range commands {
+		seen[command.Name] = true
+	}
+	for _, name := range []string{"btw", "multi-agents", "quit", "apps", "debug-config", "debug-m-drop", "debug-m-update"} {
+		if !seen[name] {
+			t.Fatalf("canonical Rust command %q missing from popup: %#v", name, commands)
+		}
 	}
 }
 

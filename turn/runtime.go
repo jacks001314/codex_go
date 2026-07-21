@@ -100,7 +100,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
-			StreamHandler:                timingStreamHandler(timing, r.now),
+			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, r.now)),
 		})
 		sampling.CloseAt(r.now())
 		if err != nil {

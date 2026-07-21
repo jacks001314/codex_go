@@ -16,7 +16,35 @@ const (
 	settingsWriteKindRateLimitModelNudge = "rate_limit_model_nudge"
 	settingsWriteKindTheme               = "theme"
 	settingsWriteKindPet                 = "pet"
+	settingsWriteKindServiceTier         = "service_tier"
 )
+
+func (m *Model) applyFastServiceTier() bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	fastTier := m.fastServiceTierCommand()
+	if !features.Enabled(m.featureSettings, "fast_mode") || fastTier == nil || strings.TrimSpace(fastTier.ID) == "" {
+		m.notice = "Fast mode is unavailable for the current model."
+		m.refreshTranscript()
+		return nil
+	}
+	next := strings.TrimSpace(fastTier.ID)
+	if strings.TrimSpace(m.State.ServiceTier) == next {
+		next = chatwidget.ServiceTierDefaultRequestValue
+	}
+	m.State.ServiceTier = next
+	if m.onWriteSettings == nil {
+		m.notice = "Service tier set to " + next
+		m.refreshTranscript()
+		return nil
+	}
+	configValue := next
+	if next == strings.TrimSpace(fastTier.ID) {
+		configValue = "fast"
+	}
+	return m.writeSettings(settingsWriteKindServiceTier, []SettingsEdit{{KeyPath: "service_tier", Value: configValue}})
+}
 
 func initialPersonality(state *codextui.State, configured chatwidget.Personality) chatwidget.Personality {
 	if strings.TrimSpace(string(configured)) != "" {
@@ -345,7 +373,11 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	m.pendingSettingsRequestID = 0
 	if msg.Err != nil {
-		m.notice = "Failed to save settings: " + msg.Err.Error()
+		if msg.Kind == settingsWriteKindServiceTier {
+			m.notice = "Failed to save default service tier: " + msg.Err.Error()
+		} else {
+			m.notice = "Failed to save settings: " + msg.Err.Error()
+		}
 		m.refreshTranscript()
 		return
 	}
@@ -401,6 +433,8 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			} else {
 				m.notice = "Pet set to " + petLabelTea(m.tuiPet) + ". Saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 			}
+		case settingsWriteKindServiceTier:
+			m.notice = "Service tier set to " + strings.TrimSpace(m.State.ServiceTier)
 		default:
 			m.notice = "Settings saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		}

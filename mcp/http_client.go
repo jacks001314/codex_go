@@ -57,21 +57,22 @@ func (e *mcpHTTPStatusError) IsStatus(statusCode int) bool {
 }
 
 type httpClient struct {
-	config      *ServerConfig
-	client      *http.Client
-	mu          sync.Mutex
-	nextID      atomic.Int64
-	initialized bool
-	sessionID   string
-	serverName  string
-	threadID    string
-	turnID      string
-	itemID      string
-	roots       []MCPRoot
-	elicitation MCPElicitationHandler
-	progress    MCPProgressHandler
-	openAIForm  bool
-	retrySleep  func(time.Duration)
+	config                             *ServerConfig
+	client                             *http.Client
+	mu                                 sync.Mutex
+	nextID                             atomic.Int64
+	initialized                        bool
+	sessionID                          string
+	serverName                         string
+	threadID                           string
+	turnID                             string
+	itemID                             string
+	roots                              []MCPRoot
+	elicitation                        MCPElicitationHandler
+	progress                           MCPProgressHandler
+	openAIForm                         bool
+	retrySleep                         func(time.Duration)
+	supportsSandboxStateMetaCapability bool
 }
 
 type httpClientCallOptions struct {
@@ -401,6 +402,7 @@ func (c *httpClient) initialize() (string, error) {
 	if rpc.Error != nil {
 		return "", newMCPRemoteError("initialize", rpc.Error)
 	}
+	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
@@ -844,4 +846,23 @@ func isPermanentMCPOAuthRefreshError(err error) bool {
 	default:
 		return false
 	}
+}
+
+func checkSandboxStateMetaCapability(result *json.RawMessage) bool {
+	if result == nil {
+		return false
+	}
+	var initResult struct {
+		Capabilities struct {
+			Experimental map[string]any `json:"experimental"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(*result, &initResult); err != nil {
+		return false
+	}
+	if initResult.Capabilities.Experimental == nil {
+		return false
+	}
+	_, ok := initResult.Capabilities.Experimental[mcpSandboxStateMetaCapability]
+	return ok
 }

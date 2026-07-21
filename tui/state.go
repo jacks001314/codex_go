@@ -29,6 +29,7 @@ type Options struct {
 	Provider                string
 	ApprovalPolicy          string
 	Sandbox                 string
+	ServiceTier             string
 	CWD                     string
 	Search                  bool
 	NoAltScreen             bool
@@ -44,6 +45,7 @@ type State struct {
 	Provider                string
 	ApprovalPolicy          string
 	Sandbox                 string
+	ServiceTier             string
 	CWD                     string
 	Search                  bool
 	NoAltScreen             bool
@@ -64,6 +66,7 @@ func NewState(options *Options) *State {
 		state.Provider = strings.TrimSpace(options.Provider)
 		state.ApprovalPolicy = strings.TrimSpace(options.ApprovalPolicy)
 		state.Sandbox = strings.TrimSpace(options.Sandbox)
+		state.ServiceTier = strings.TrimSpace(options.ServiceTier)
 		state.CWD = strings.TrimSpace(options.CWD)
 		state.Search = options.Search
 		state.NoAltScreen = options.NoAltScreen
@@ -122,8 +125,8 @@ func (s *State) ResetThread() {
 
 func (s *State) RenderWelcome() string {
 	var builder strings.Builder
-	builder.WriteString("OpenAI Codex\n")
-	builder.WriteString(s.RenderStatusLine())
+	builder.WriteString("OpenAI Codex (Go)\n")
+	builder.WriteString(s.RenderStatusCard())
 	builder.WriteString("\n")
 	if cwd := strings.TrimSpace(s.CWD); cwd != "" {
 		builder.WriteString("Directory: ")
@@ -132,6 +135,71 @@ func (s *State) RenderWelcome() string {
 	}
 	builder.WriteString("Type /help for commands or /exit to quit.\n")
 	return builder.String()
+}
+
+// RenderStatusCard mirrors the information density of the Rust CLI's /status
+// panel while keeping RenderStatusLine compact for the footer.
+func (s *State) RenderStatusCard() string {
+	return s.RenderStatusCardWidth(80)
+}
+
+func (s *State) RenderStatusCardWidth(width int) string {
+	if width < 44 {
+		width = 44
+	}
+	if width > 100 {
+		width = 100
+	}
+	inner := width - 2
+	if s == nil {
+		s = NewState(nil)
+	}
+	provider := displayValue(s.Provider, "default")
+	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
+	mode := "Default"
+	if s.PlanMode {
+		mode = "Plan"
+	}
+	permission := displayValue(s.Sandbox, "default") + ", " + displayValue(s.ApprovalPolicy, "default")
+	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
+	account := "API key configured (run codex login to use ChatGPT)"
+	rows := []string{
+		">_ OpenAI Codex (Go)", "",
+		"Visit https://chatgpt.com/codex/settings/usage for up-to-date",
+		"information on rate limits and credits", "",
+		statusField("Model", model),
+		statusField("Model provider", provider),
+		statusField("Directory", displayValue(s.CWD, "-")),
+		statusField("Permissions", "Custom ("+permission+")"),
+		statusField("Agents.md", "<none>"),
+		statusField("Account", account),
+		statusField("Collaboration mode", mode),
+		statusField("Session", displayValue(s.ThreadID, "new")), "",
+		statusField("Token usage", "0 total  (0 input + 0 output)"),
+		statusField("Context window", "100% left (0 used / unavailable)"),
+		statusField("Limits", "data not available yet"),
+	}
+	border := "+" + strings.Repeat("-", inner) + "+"
+	out := []string{border}
+	for _, row := range rows {
+		row = truncateStatusRow(row, inner-2)
+		out = append(out, "| "+row+strings.Repeat(" ", inner-2-len([]rune(row)))+" |")
+	}
+	out = append(out, border)
+	return strings.Join(out, "\n")
+}
+
+func statusField(label, value string) string { return fmt.Sprintf("%-20s %s", label+":", value) }
+
+func truncateStatusRow(value string, width int) string {
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
 }
 
 func (s *State) RenderPrompt() string {
@@ -227,7 +295,7 @@ func (s *State) RenderFrame() string {
 		}
 	}
 	builder.WriteString("----------------------------------------\n")
-	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /personality /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /agent /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /exit\n")
+	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /personality /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /multi-agents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
 	return builder.String()
 }
 
@@ -314,6 +382,7 @@ const (
 	CommandPs               Command = "ps"
 	CommandStop             Command = "stop"
 	CommandModel            Command = "model"
+	CommandFast             Command = "fast"
 	CommandPersonality      Command = "personality"
 	CommandPlan             Command = "plan"
 	CommandAgent            Command = "agent"
@@ -423,11 +492,13 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandStop, Args: args, Name: name}, true
 	case "/model":
 		return &CommandInvocation{Command: CommandModel, Args: args, Name: name}, true
+	case "/fast":
+		return &CommandInvocation{Command: CommandFast, Args: args, Name: name}, true
 	case "/personality":
 		return &CommandInvocation{Command: CommandPersonality, Args: args, Name: name}, true
 	case "/plan":
 		return &CommandInvocation{Command: CommandPlan, Args: args, Name: name}, true
-	case "/agent", "/agents", "/subagents":
+	case "/agent", "/agents", "/multi-agents", "/subagents":
 		return &CommandInvocation{Command: CommandAgent, Args: args, Name: name}, true
 	case "/side", "/btw":
 		return &CommandInvocation{Command: CommandSide, Args: args, Name: name}, true

@@ -25,22 +25,23 @@ type stdioInventory struct {
 }
 
 type stdioClient struct {
-	mu           sync.Mutex
-	writeMu      sync.Mutex
-	config       *ServerConfig
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	reader       *bufio.Reader
-	stderr       *stdioOutputBuffer
-	nextID       int64
-	started      bool
-	initialized  bool
-	initializing bool
-	initDone     chan struct{}
-	initErr      error
-	pending      map[int64]*stdioPendingCall
-	pendingOrder []int64
-	openAIForm   bool
+	mu                                 sync.Mutex
+	writeMu                            sync.Mutex
+	config                             *ServerConfig
+	cmd                                *exec.Cmd
+	stdin                              io.WriteCloser
+	reader                             *bufio.Reader
+	stderr                             *stdioOutputBuffer
+	nextID                             int64
+	started                            bool
+	initialized                        bool
+	initializing                       bool
+	initDone                           chan struct{}
+	initErr                            error
+	pending                            map[int64]*stdioPendingCall
+	pendingOrder                       []int64
+	openAIForm                         bool
+	supportsSandboxStateMetaCapability bool
 }
 
 // os/exec copies a child's output from background goroutines. Keep each
@@ -434,6 +435,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		_ = c.Close()
 		return decorateMCPStdioError(err, stderr)
 	}
+	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(response.Result)
 	if err := c.writeFrame(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "notifications/initialized",

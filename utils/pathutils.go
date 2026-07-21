@@ -27,6 +27,57 @@ func IsWSL() bool {
 	return strings.Contains(strings.ToLower(string(data)), "microsoft")
 }
 
+// IsWSL1 detects if running on WSL1 specifically (not WSL2).
+// Matches Rust's proc_version_indicates_wsl1 logic.
+func IsWSL1() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	return procVersionIndicatesWSL1(string(data))
+}
+
+// procVersionIndicatesWSL1 checks if /proc/version indicates WSL1.
+// It looks for "wsl" followed by digits equaling 1, or "microsoft" without "microsoft-standard".
+func procVersionIndicatesWSL1(procVersion string) bool {
+	lowerVersion := strings.ToLower(procVersion)
+	remaining := lowerVersion
+
+	// Search for "wsl" followed by a version number
+	for {
+		idx := strings.Index(remaining, "wsl")
+		if idx == -1 {
+			break
+		}
+
+		versionStart := idx + 3 // len("wsl")
+		if versionStart >= len(remaining) {
+			break
+		}
+
+		// Extract digits following "wsl"
+		versionEnd := versionStart
+		for versionEnd < len(remaining) && remaining[versionEnd] >= '0' && remaining[versionEnd] <= '9' {
+			versionEnd++
+		}
+
+		if versionEnd > versionStart {
+			versionStr := remaining[versionStart:versionEnd]
+			if versionStr == "1" {
+				return true
+			}
+		}
+
+		remaining = remaining[versionStart:]
+	}
+
+	// Legacy detection: "microsoft" but not "microsoft-standard"
+	return strings.Contains(lowerVersion, "microsoft") && !strings.Contains(lowerVersion, "microsoft-standard")
+}
+
 func NormalizeForPathComparison(path string) (string, error) {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {

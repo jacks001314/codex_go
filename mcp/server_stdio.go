@@ -59,6 +59,230 @@ type CodexToolRunner interface {
 	ReplyCodexTool(ctx context.Context, params *CodexToolReplyCall) (*CodexToolResult, error)
 }
 
+// ExecApprovalElicitRequestParams mirrors Rust's ExecApprovalElicitRequestParams.
+// It is sent as the params of an elicitation/create request to the MCP client.
+type ExecApprovalElicitRequestParams struct {
+	Message            string         `json:"message"`
+	RequestedSchema    any            `json:"requestedSchema"`
+	ThreadID           string         `json:"threadId"`
+	CodexElicitation   string         `json:"codex_elicitation"`
+	CodexMCPToolCallID string         `json:"codex_mcp_tool_call_id"`
+	CodexEventID       string         `json:"codex_event_id"`
+	CodexCallID        string         `json:"codex_call_id"`
+	CodexCommand       []string       `json:"codex_command"`
+	CodexCWD           string         `json:"codex_cwd"`
+	CodexParsedCmd     []any          `json:"codex_parsed_cmd"`
+}
+
+// ExecApprovalResponse mirrors Rust's ExecApprovalResponse.
+type ExecApprovalResponse struct {
+	Decision string `json:"decision"` // "approved" or "denied"
+}
+
+// PatchApprovalElicitRequestParams mirrors Rust's PatchApprovalElicitRequestParams.
+type PatchApprovalElicitRequestParams struct {
+	Message            string         `json:"message"`
+	RequestedSchema    any            `json:"requestedSchema"`
+	ThreadID           string         `json:"threadId"`
+	CodexElicitation   string         `json:"codex_elicitation"`
+	CodexMCPToolCallID string         `json:"codex_mcp_tool_call_id"`
+	CodexEventID       string         `json:"codex_event_id"`
+	CodexCallID        string         `json:"codex_call_id"`
+	CodexReason        string         `json:"codex_reason,omitempty"`
+	CodexGrantRoot     string         `json:"codex_grant_root,omitempty"`
+	CodexChanges       map[string]any `json:"codex_changes"`
+}
+
+// PatchApprovalResponse mirrors Rust's PatchApprovalResponse.
+type PatchApprovalResponse struct {
+	Decision string `json:"decision"` // "approved" or "denied"
+}
+
+// CodexApprovalHandler is the interface that CodexToolRunner implementations
+// can use to request exec/patch approval from the connected MCP client.
+// The server writes elicitation/create requests to stdout and reads the
+// client's response from stdin, routing it back through this handler.
+type CodexApprovalHandler interface {
+	// RequestExecApproval asks the MCP client to approve a shell command execution.
+	// It blocks until the client responds or the context is cancelled.
+	RequestExecApproval(ctx context.Context, params *ExecApprovalElicitRequestParams) (*ExecApprovalResponse, error)
+
+	// RequestPatchApproval asks the MCP client to approve a patch application.
+	// It blocks until the client responds or the context is cancelled.
+	RequestPatchApproval(ctx context.Context, params *PatchApprovalElicitRequestParams) (*PatchApprovalResponse, error)
+}
+
+// stdioApprovalHandler implements CodexApprovalHandler over a stdio connection.
+// It sends elicitation/create requests to the MCP client and waits for responses.
+type stdioApprovalHandler struct {
+	writeMu   *sync.Mutex
+	writer    io.Writer
+	responses map[string]chan json.RawMessage
+	mu        sync.Mutex
+	nextID    int64
+}
+
+func newStdioApprovalHandler(writer io.Writer, writeMu *sync.Mutex) *stdioApprovalHandler {
+	return &stdioApprovalHandler{
+		writer:    writer,
+		writeMu:   writeMu,
+		responses: make(map[string]chan json.RawMessage),
+		nextID:    1000000, // start at high range to avoid collision with client IDs
+	}
+}
+
+func (h *stdioApprovalHandler) nextRequestID() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.nextID++
+	return fmt.Sprintf("%d", h.nextID)
+}
+
+func (h *stdioApprovalHandler) registerResponse(id string) chan json.RawMessage {
+	ch := make(chan json.RawMessage, 1)
+	h.mu.Lock()
+	h.responses[id] = ch
+	h.mu.Unlock()
+	return ch
+}
+
+func (h *stdioApprovalHandler) unregisterResponse(id string) {
+	h.mu.Lock()
+	delete(h.responses, id)
+	h.mu.Unlock()
+}
+
+func (h *stdioApprovalHandler) deliverResponse(id string, result json.RawMessage) {
+	h.mu.Lock()
+	ch := h.responses[id]
+	h.mu.Unlock()
+	if ch != nil {
+		ch <- result
+	}
+}
+
+func (h *stdioApprovalHandler) RequestExecApproval(ctx context.Context, params *ExecApprovalElicitRequestParams) (*ExecApprovalResponse, error) {
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize ExecApprovalElicitRequestParams: %w", err)
+	}
+	result, err := h.sendElicitationRequest(ctx, paramsJSON)
+	if err != nil {
+		return &ExecApprovalResponse{Decision: "denied"}, nil
+	}
+	var response ExecApprovalResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return &ExecApprovalResponse{Decision: "denied"}, nil
+	}
+	if response.Decision != "approved" && response.Decision != "denied" {
+		response.Decision = "denied"
+	}
+	return &response, nil
+}
+
+func (h *stdioApprovalHandler) RequestPatchApproval(ctx context.Context, params *PatchApprovalElicitRequestParams) (*PatchApprovalResponse, error) {
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize PatchApprovalElicitRequestParams: %w", err)
+	}
+	result, err := h.sendElicitationRequest(ctx, paramsJSON)
+	if err != nil {
+		return &PatchApprovalResponse{Decision: "denied"}, nil
+	}
+	var response PatchApprovalResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return &PatchApprovalResponse{Decision: "denied"}, nil
+	}
+	if response.Decision != "approved" && response.Decision != "denied" {
+		response.Decision = "denied"
+	}
+	return &response, nil
+}
+
+func (h *stdioApprovalHandler) sendElicitationRequest(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+	id := h.nextRequestID()
+	responseCh := h.registerResponse(id)
+	defer h.unregisterResponse(id)
+
+	request := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "elicitation/create",
+		"params":  json.RawMessage(params),
+	}
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+
+	h.writeMu.Lock()
+	_, err = h.writer.Write(append(requestJSON, '\n'))
+	h.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case result := <-responseCh:
+		return result, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// NewApprovalCodexToolRunner wraps a CodexToolRunner with approval handling.
+// When the inner runner calls back for approval, it uses the handler to
+// elicit approval from the connected MCP client.
+func NewApprovalCodexToolRunner(inner CodexToolRunner, approval CodexApprovalHandler) CodexToolRunner {
+	return &approvalCodexToolRunner{inner: inner, approval: approval}
+}
+
+type approvalCodexToolRunner struct {
+	inner    CodexToolRunner
+	approval CodexApprovalHandler
+}
+
+func (r *approvalCodexToolRunner) RunCodexTool(ctx context.Context, params *CodexToolCall) (*CodexToolResult, error) {
+	// Pass the approval handler via context so deeper layers can access it.
+	ctx = contextWithApprovalHandler(ctx, r.approval)
+	return r.inner.RunCodexTool(ctx, params)
+}
+
+func (r *approvalCodexToolRunner) ReplyCodexTool(ctx context.Context, params *CodexToolReplyCall) (*CodexToolResult, error) {
+	ctx = contextWithApprovalHandler(ctx, r.approval)
+	return r.inner.ReplyCodexTool(ctx, params)
+}
+
+type approvalHandlerContextKey struct{}
+
+func contextWithApprovalHandler(ctx context.Context, handler CodexApprovalHandler) context.Context {
+	return context.WithValue(ctx, approvalHandlerContextKey{}, handler)
+}
+
+// ApprovalHandlerFromContext retrieves the CodexApprovalHandler from a context.
+func ApprovalHandlerFromContext(ctx context.Context) CodexApprovalHandler {
+	if ctx == nil {
+		return nil
+	}
+	handler, _ := ctx.Value(approvalHandlerContextKey{}).(CodexApprovalHandler)
+	return handler
+}
+
+// BuildExecApprovalMessage mirrors Rust's exec approval message construction.
+func BuildExecApprovalMessage(command []string, cwd string) string {
+	escaped := strings.Join(command, " ")
+	return fmt.Sprintf("Allow Codex to run `%s` in `%s`?", escaped, cwd)
+}
+
+// BuildPatchApprovalMessage mirrors Rust's patch approval message construction.
+func BuildPatchApprovalMessage(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		return reason + "\nAllow Codex to apply proposed code changes?"
+	}
+	return "Allow Codex to apply proposed code changes?"
+}
+
 type unavailableCodexToolRunner struct{}
 
 func (unavailableCodexToolRunner) RunCodexTool(context.Context, *CodexToolCall) (*CodexToolResult, error) {
@@ -167,8 +391,9 @@ type stdioMCPServer struct {
 	userAgent string
 	runner    CodexToolRunner
 
-	initialized bool
-	shutdown    bool
+	initialized     bool
+	shutdown        bool
+	approvalHandler *stdioApprovalHandler
 }
 
 type stdioMCPRequest struct {
@@ -208,6 +433,13 @@ func ServeStdio(ctx context.Context, options *StdioServerOptions, stdin io.Reade
 		ctx = context.Background()
 	}
 	server := newStdioMCPServer(options)
+
+	// Create the approval handler upfront so the runner can be wrapped.
+	var writeMu sync.Mutex
+	approvalHandler := newStdioApprovalHandler(stdout, &writeMu)
+	server.approvalHandler = approvalHandler
+	server.runner = NewApprovalCodexToolRunner(server.runner, approvalHandler)
+
 	return server.Serve(ctx, stdin, stdout)
 }
 
@@ -238,6 +470,7 @@ func (s *stdioMCPServer) Serve(ctx context.Context, stdin io.Reader, stdout io.W
 	if stdout == nil {
 		return errors.New("mcp stdio stdout is nil")
 	}
+
 	reader := bufio.NewReader(stdin)
 	for {
 		select {
@@ -255,13 +488,42 @@ func (s *stdioMCPServer) Serve(ctx context.Context, stdin io.Reader, stdout io.W
 		if len(bytes.TrimSpace(data)) == 0 {
 			continue
 		}
+		// Check if this is a response to an outbound elicitation request.
+		if s.approvalHandler != nil {
+			var stdioResp struct {
+				JSONRPC string          `json:"jsonrpc"`
+				ID      string          `json:"id"`
+				Method  string          `json:"method,omitempty"`
+				Result  json.RawMessage `json:"result,omitempty"`
+				Error   json.RawMessage `json:"error,omitempty"`
+			}
+			if err := json.Unmarshal(data, &stdioResp); err == nil && stdioResp.ID != "" && stdioResp.Method == "" {
+				if len(stdioResp.Result) > 0 || len(stdioResp.Error) > 0 {
+					result := stdioResp.Result
+					if len(stdioResp.Error) > 0 {
+						result = stdioResp.Error
+					}
+					s.approvalHandler.deliverResponse(stdioResp.ID, result)
+					continue
+				}
+			}
+		}
 		response, exit, err := s.handleMessage(ctx, data)
 		if err != nil {
 			return err
 		}
 		if response != nil {
-			if err := writeMCPFrame(stdout, response); err != nil {
-				return err
+			if s.approvalHandler != nil {
+				s.approvalHandler.writeMu.Lock()
+				writeErr := writeMCPFrame(stdout, response)
+				s.approvalHandler.writeMu.Unlock()
+				if writeErr != nil {
+					return writeErr
+				}
+			} else {
+				if err := writeMCPFrame(stdout, response); err != nil {
+					return err
+				}
 			}
 		}
 		if exit {

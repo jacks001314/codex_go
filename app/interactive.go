@@ -591,6 +591,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnKeymapEdit:              interactiveKeymapEditHandler(root),
 		OnWriteSettings:           interactiveSettingsWriteHandler(root),
 		FeatureSettings:           settings.FeatureSettings,
+		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
 		Personality:               settings.Personality,
 		Notifications:             settings.Notifications,
 		NotificationMethod:        settings.NotificationMethod,
@@ -1744,6 +1745,11 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	prompt := strings.TrimSpace(request.Prompt)
 	turnRoot := *root
 	turnRoot.Shared = interactiveSharedOptionsFromState(turnRoot.Shared, state)
+	if state != nil {
+		if tier := strings.TrimSpace(state.ServiceTier); tier != "" {
+			turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "service_tier="+tier)
+		}
+	}
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
 	}
@@ -1762,10 +1768,11 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		prompt = ""
 	}
 	execOpts := cli.ExecOptions{
-		Prompt: strings.TrimSpace(prompt),
-		Shared: turnRoot.Shared,
-		Color:  "auto",
-		JSON:   true,
+		Prompt:                strings.TrimSpace(prompt),
+		Shared:                turnRoot.Shared,
+		Color:                 "auto",
+		JSON:                  true,
+		StreamAssistantDeltas: true,
 	}
 	if state != nil && strings.TrimSpace(state.ThreadID) != "" {
 		execOpts.Subcommand = "resume"
@@ -2074,6 +2081,7 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 		options.Provider = firstNonEmptyLocal(options.Provider, interactiveStringFromConfig(values, "model_provider"))
 		options.ApprovalPolicy = firstNonEmptyLocal(options.ApprovalPolicy, interactiveStringFromConfig(values, "approval_policy"))
 		options.Sandbox = firstNonEmptyLocal(options.Sandbox, interactiveStringFromConfig(values, "sandbox_mode"))
+		options.ServiceTier = firstNonEmptyLocal(options.ServiceTier, interactiveStringFromConfig(values, "service_tier"))
 	}
 	options.Model = firstNonEmptyLocal(options.Model, interactiveDefaultModel())
 	options.CWD = interactiveSessionPickerCWD(root)
@@ -2091,6 +2099,24 @@ func interactiveStringFromConfig(values map[string]any, key string) string {
 func interactiveDefaultModel() string {
 	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
 	return strings.TrimSpace(manager.GetDefaultModel("", true, modelpkg.RefreshOffline))
+}
+
+func interactiveServiceTierCommands(modelID string) []bottompane.ServiceTierCommand {
+	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	info := manager.GetModelInfo(strings.TrimSpace(modelID), nil)
+	commands := make([]bottompane.ServiceTierCommand, 0, len(info.ServiceTiers))
+	for _, id := range info.ServiceTiers {
+		id = strings.TrimSpace(id)
+		if id == "" || id == modelpkg.ServiceTierDefaultRequestValue {
+			continue
+		}
+		name := id
+		if id == chatwidget.ServiceTierFastRequestValue {
+			name = "fast"
+		}
+		commands = append(commands, bottompane.ServiceTierCommand{ID: id, Name: name, Description: "Fastest inference with increased plan usage"})
+	}
+	return commands
 }
 
 func interactiveFatalExit(stderr io.Writer, message string) error {
@@ -2344,8 +2370,9 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 		s.UI.ResetThread()
 		_, err = fmt.Fprintln(s.Stdout, "Started a new local thread.")
 	case codextui.CommandClear:
-		s.UI.ClearMessages()
-		_, err = fmt.Fprintln(s.Stdout, "Cleared visible transcript.")
+		s.ThreadID = ""
+		s.UI.ResetThread()
+		_, err = fmt.Fprintln(s.Stdout, "Started a fresh session.")
 	case codextui.CommandModel:
 		err = s.handleModelCommand(invocation.Args)
 	case codextui.CommandApproval:

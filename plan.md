@@ -98,6 +98,8 @@ Go 比对基线：`eeacecb`（2026-07-18）；工作区另有未提交修改，�
 ### Batch 13：TUI 行为同步（P1/P2，4-7 天）
 
 - [x] 父级拥有的 sub-agent thread 在 TUI 中只读，输入、设置快捷键和审批入口均需拒绝且提示一致。
+- [x] 对齐 Rust slash command popup：恢复 `/btw`、`/multi-agents`、`/quit` 的独立 canonical 项；`/fast` 仅在当前模型 catalog 声明 fast tier 时出现，使用实际 tier ID 与 default 切换、持久化 config alias，并传播到本地/远程 turn。
+- [x] 逐项审计并补齐 slash command dispatch：`/clear` 对齐 Rust `ClearUi`；`/app` 启动 Codex Desktop thread deep link，`/rollout` 读取活动 thread rollout path，`/sandbox-add-read-dir` 校验并加入 readable root，`/import` 调用 external-agent detect/import，`/memories` 提供真实设置 modal 和配置持久化。
 - [x] 恢复/分叉时实现 CWD 选择与 remembered mode；path-backed Agent 可在 picker 中选择并正确恢复。
 - [x] 历史搜索使用 bounded batch lookup；大历史、空结果、并发切换 thread 时不阻塞或串线。
 - [x] 支持音频附件的提交、恢复、模型能力过滤和 unsupported media 提示。

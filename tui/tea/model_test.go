@@ -2861,6 +2861,8 @@ func TestModelModalBlocksComposerInput(t *testing.T) {
 
 func TestModelSlashCommands(t *testing.T) {
 	state := codextui.NewState(nil)
+	state.SetThreadID("thread-before-clear")
+	state.SetStatus("running")
 	state.AddMessage(codextui.RoleUser, "old")
 	model := NewModel(state, Options{})
 
@@ -2887,8 +2889,45 @@ func TestModelSlashCommands(t *testing.T) {
 	if len(state.Messages) != 0 {
 		t.Fatalf("Messages len = %d, want 0", len(state.Messages))
 	}
+	if state.ThreadID != "" || state.Status != "idle" {
+		t.Fatalf("clear state = thread %q status %q, want fresh idle session", state.ThreadID, state.Status)
+	}
 	if !strings.Contains(model.View(), "No messages yet.") {
 		t.Fatalf("View() missing empty transcript:\n%s", model.View())
+	}
+}
+
+func TestModelInputHistoryUpDownRestoresDraft(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	for _, prompt := range []string{"first prompt", "second prompt"} {
+		typeText(t, model, prompt)
+		model.Update(key(bubbletea.KeyEnter))
+	}
+	typeText(t, model, "draft")
+	model.Update(key(bubbletea.KeyUp))
+	if got := model.ComposerValue(); got != "second prompt" {
+		t.Fatalf("first up = %q", got)
+	}
+	model.Update(key(bubbletea.KeyUp))
+	if got := model.ComposerValue(); got != "first prompt" {
+		t.Fatalf("second up = %q", got)
+	}
+	model.Update(key(bubbletea.KeyDown))
+	if got := model.ComposerValue(); got != "second prompt" {
+		t.Fatalf("first down = %q", got)
+	}
+	model.Update(key(bubbletea.KeyDown))
+	if got := model.ComposerValue(); got != "draft" {
+		t.Fatalf("restored draft = %q", got)
+	}
+}
+
+func TestModelIgnoresMouseLikeRustToPreserveTerminalSelection(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	model.activityFollow = true
+	model.Update(bubbletea.MouseMsg{X: 10, Y: 5, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	if !model.activityFollow {
+		t.Fatal("ignored mouse event changed model state")
 	}
 }
 
@@ -2900,6 +2939,7 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 
 	skip := map[string]bool{
 		"exit": true,
+		"quit": true,
 	}
 	for _, frame := range codextui.SlashCommandFrames() {
 		if slashPopupHiddenCommand(frame.Name) || skip[frame.Name] {
@@ -2984,6 +3024,57 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	}
 	if view := model.View(); !strings.Contains(view, "Select Model") {
 		t.Fatalf("Enter on /model should open model picker:\n%s", view)
+	}
+}
+
+func TestModelFastSlashCommandTogglesAndPropagatesServiceTier(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{FeatureSettings: map[string]bool{"fast_mode": true}, ServiceTierCommands: []bottompane.ServiceTierCommand{{ID: "priority", Name: "fast", Description: "Fastest inference"}}})
+
+	typeText(t, model, "/fast")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ServiceTier != chatwidget.ServiceTierFastRequestValue || !strings.Contains(model.View(), "Service tier set to priority") {
+		t.Fatalf("fast enable state=%q view=%s", state.ServiceTier, model.View())
+	}
+	typeText(t, model, "hello")
+	model.Update(key(bubbletea.KeyEnter))
+	requests := model.SubmittedRequests()
+	if len(requests) != 1 || requests[0].ServiceTier != chatwidget.ServiceTierFastRequestValue {
+		t.Fatalf("submitted requests = %#v", requests)
+	}
+}
+
+func TestModelFastSlashCommandUsesCatalogTierAndHidesWithoutSupport(t *testing.T) {
+	unsupported := NewModel(codextui.NewState(nil), Options{FeatureSettings: map[string]bool{"fast_mode": true}})
+	for _, item := range unsupported.slashPopupCatalog() {
+		if item.Name == "fast" {
+			t.Fatal("fast command visible without a catalog tier")
+		}
+	}
+
+	state := codextui.NewState(nil)
+	var writes [][]SettingsEdit
+	model := NewModel(state, Options{
+		FeatureSettings:     map[string]bool{"fast_mode": true},
+		ServiceTierCommands: []bottompane.ServiceTierCommand{{ID: "turbo-id", Name: "fast", Description: "Catalog description"}},
+		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+			writes = append(writes, append([]SettingsEdit(nil), edits...))
+			return SettingsWriteResult{FilePath: "config.toml"}, nil
+		},
+	})
+	typeText(t, model, "/fast")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if state.ServiceTier != "turbo-id" || cmd == nil {
+		t.Fatalf("state tier=%q cmd=%v", state.ServiceTier, cmd)
+	}
+	if msg := cmd(); msg != nil {
+		model.Update(msg)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "service_tier" || writes[0][0].Value != "fast" {
+		t.Fatalf("writes = %#v", writes)
+	}
+	if !strings.Contains(model.View(), "Service tier set to turbo-id") {
+		t.Fatalf("view = %s", model.View())
 	}
 }
 
@@ -3552,6 +3643,47 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 	}
 	if got := model.SubmittedRequests(); len(got) != 1 || got[0].Prompt != "investigate architecture" {
 		t.Fatalf("plan prompt requests = %#v", got)
+	}
+}
+
+func TestModelRuntimeBackedSlashCommands(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
+	state.SetThreadID("thread-runtime")
+	opened := ""
+	granted := ""
+	imported := ""
+	model := NewModel(state, Options{
+		OnOpenDesktopThread: func(threadID string) error { opened = threadID; return nil },
+		OnReadRolloutPath:   func(threadID string) (string, error) { return `D:\rollouts\thread-runtime.jsonl`, nil },
+		OnSandboxReadDir:    func(path string) error { granted = path; return nil },
+		OnImportExternalAgent: func(cwd string) (string, error) {
+			imported = cwd
+			return "External agent import started: import-1", nil
+		},
+		FeatureSettings: map[string]bool{"memories": true, "memory_generation": false},
+	})
+
+	for _, command := range []string{"/app", "/rollout", `/sandbox-add-read-dir D:\data`, "/import", "/memories"} {
+		invocation, ok := codextui.ParseCommand(command)
+		if !ok {
+			t.Fatalf("ParseCommand(%q) failed", command)
+		}
+		_ = model.applyCommand(invocation)
+	}
+	if opened != "thread-runtime" {
+		t.Fatalf("opened thread = %q", opened)
+	}
+	if granted != `D:\data` {
+		t.Fatalf("granted path = %q", granted)
+	}
+	if imported != `D:\repo` {
+		t.Fatalf("import cwd = %q", imported)
+	}
+	if model.modal == nil || model.modal.kind != ModalKindMemories {
+		t.Fatalf("memories modal = %#v", model.modal)
+	}
+	if !strings.Contains(model.View(), "Memories") {
+		t.Fatalf("view missing memories popup:\n%s", model.View())
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"codex_go/apps"
 )
 
 const (
@@ -19,28 +21,36 @@ const (
 )
 
 type ServerConfig struct {
-	Command           string                            `json:"command,omitempty"`
-	Args              []string                          `json:"args,omitempty"`
-	Env               map[string]string                 `json:"env,omitempty"`
-	EnvVars           []EnvVar                          `json:"env_vars,omitempty"`
-	CWD               string                            `json:"cwd,omitempty"`
-	URL               string                            `json:"url,omitempty"`
-	BearerTokenEnvVar string                            `json:"bearer_token_env_var,omitempty"`
-	HTTPHeaders       map[string]string                 `json:"http_headers,omitempty"`
-	EnvHTTPHeaders    map[string]string                 `json:"env_http_headers,omitempty"`
-	OAuthClientID     string                            `json:"oauth_client_id,omitempty"`
-	OAuthResource     string                            `json:"oauth_resource,omitempty"`
-	Scopes            []string                          `json:"scopes,omitempty"`
-	ScopesConfigured  bool                              `json:"-"`
-	OAuthServerName   string                            `json:"-"`
-	CodexHome         string                            `json:"-"`
-	Enabled           bool                              `json:"enabled"`
-	DisabledReason    string                            `json:"disabled_reason,omitempty"`
-	Required          bool                              `json:"required,omitempty"`
-	EnvironmentID     string                            `json:"environment_id,omitempty"`
-	StartupTimeout    time.Duration                     `json:"-"`
-	ToolTimeout       time.Duration                     `json:"-"`
-	ApplyHTTPRequest  func(*http.Request, []byte) error `json:"-"`
+	Command                  string                            `json:"command,omitempty"`
+	Args                     []string                          `json:"args,omitempty"`
+	Env                      map[string]string                 `json:"env,omitempty"`
+	EnvVars                  []EnvVar                          `json:"env_vars,omitempty"`
+	CWD                      string                            `json:"cwd,omitempty"`
+	URL                      string                            `json:"url,omitempty"`
+	BearerTokenEnvVar        string                            `json:"bearer_token_env_var,omitempty"`
+	HTTPHeaders              map[string]string                 `json:"http_headers,omitempty"`
+	EnvHTTPHeaders           map[string]string                 `json:"env_http_headers,omitempty"`
+	OAuthClientID            string                            `json:"oauth_client_id,omitempty"`
+	OAuthResource            string                            `json:"oauth_resource,omitempty"`
+	Scopes                   []string                          `json:"scopes,omitempty"`
+	ScopesConfigured         bool                              `json:"-"`
+	OAuthServerName          string                            `json:"-"`
+	CodexHome                string                            `json:"-"`
+	Enabled                  bool                              `json:"enabled"`
+	DisabledReason           string                            `json:"disabled_reason,omitempty"`
+	Required                 bool                              `json:"required,omitempty"`
+	EnabledTools             []string                          `json:"enabled_tools,omitempty"`
+	DisabledTools            []string                          `json:"disabled_tools,omitempty"`
+	DefaultToolsApprovalMode *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
+	Tools                    map[string]ToolConfig             `json:"tools,omitempty"`
+	EnvironmentID            string                            `json:"environment_id,omitempty"`
+	StartupTimeout           time.Duration                     `json:"-"`
+	ToolTimeout              time.Duration                     `json:"-"`
+	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
+}
+
+type ToolConfig struct {
+	ApprovalMode *apps.AppToolApproval `json:"approval_mode,omitempty"`
 }
 
 type EnvVar struct {
@@ -199,6 +209,10 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	server.EnvironmentID = runtimeConfigStringAny(values, "environment_id", "environmentId")
 	server.StartupTimeout = runtimeConfigDurationAny(values, "startup_timeout_sec", "startupTimeoutSec", "startup_timeout_ms", "startupTimeoutMs")
 	server.ToolTimeout = runtimeConfigDurationAny(values, "tool_timeout_sec", "toolTimeoutSec", "tool_timeout_ms", "toolTimeoutMs")
+	server.EnabledTools = runtimeConfigStringSliceAny(values, "enabled_tools", "enabledTools")
+	server.DisabledTools = runtimeConfigStringSliceAny(values, "disabled_tools", "disabledTools")
+	server.DefaultToolsApprovalMode = runtimeConfigAppToolApproval(values, "default_tools_approval_mode", "defaultToolsApprovalMode")
+	server.Tools = runtimeConfigToolsMap(values, "tools")
 	if url := runtimeConfigString(values, "url"); url != "" {
 		server.URL = url
 		server.BearerTokenEnvVar = runtimeConfigStringAny(values, "bearer_token_env_var", "bearerTokenEnvVar")
@@ -392,6 +406,69 @@ func runtimeConfigStringMap(values map[string]any, key string) map[string]string
 		}
 	default:
 		return nil
+	}
+	return out
+}
+
+func runtimeConfigAppToolApproval(values map[string]any, keys ...string) *apps.AppToolApproval {
+	for _, key := range keys {
+		if values == nil {
+			continue
+		}
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		var approval apps.AppToolApproval
+		switch text {
+		case "auto":
+			approval = apps.AppToolApprovalAuto
+		case "prompt":
+			approval = apps.AppToolApprovalPrompt
+		case "approve":
+			approval = apps.AppToolApprovalApprove
+		default:
+			continue
+		}
+		return &approval
+	}
+	return nil
+}
+
+func runtimeConfigToolsMap(values map[string]any, key string) map[string]ToolConfig {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values[key]
+	if !ok {
+		return nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]ToolConfig, len(table))
+	for toolName, toolRaw := range table {
+		toolName = strings.TrimSpace(toolName)
+		if toolName == "" {
+			continue
+		}
+		toolTable, ok := toolRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		toolConfig := ToolConfig{
+			ApprovalMode: runtimeConfigAppToolApproval(toolTable, "approval_mode", "approvalMode"),
+		}
+		out[toolName] = toolConfig
 	}
 	return out
 }
@@ -780,6 +857,12 @@ func cloneServerConfig(config *ServerConfig) ServerConfig {
 		cloned.EnvHTTPHeaders = make(map[string]string, len(config.EnvHTTPHeaders))
 		for key, value := range config.EnvHTTPHeaders {
 			cloned.EnvHTTPHeaders[key] = value
+		}
+	}
+	if config.Tools != nil {
+		cloned.Tools = make(map[string]ToolConfig, len(config.Tools))
+		for key, value := range config.Tools {
+			cloned.Tools[key] = value
 		}
 	}
 	return cloned

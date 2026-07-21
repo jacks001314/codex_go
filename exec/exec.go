@@ -203,6 +203,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
 	}
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
+	if !req.Exec.JSON && stderr != nil {
+		eventSink.human = newExecHumanRenderer(stderr, execColorFlagValue(req.Exec))
+	}
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
 		return nil, err
 	}
@@ -210,6 +213,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink}
+	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var imageGenerationOptions *turn.ImageGenerationOptions
 	var hostedTools []any
@@ -367,8 +371,11 @@ type agentRunConfig struct {
 }
 
 type execStreamEventCollector struct {
-	sink   *execEventSink
-	events []protocol.ThreadEvent
+	sink                  *execEventSink
+	events                []protocol.ThreadEvent
+	streamAssistantDeltas bool
+	streamedAgentText     map[string]string
+	completedAgentItems   map[string]bool
 }
 
 func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
@@ -398,6 +405,47 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		if item.ID != "" {
 			c.emit(protocol.ItemStarted(item))
 		}
+	case model.ResponsesStreamEventOutputText:
+		if !c.streamAssistantDeltas && c.sink != nil && c.sink.encoder != nil {
+			return
+		}
+		if strings.TrimSpace(event.Delta) == "" {
+			return
+		}
+		if c.streamedAgentText == nil {
+			c.streamedAgentText = map[string]string{}
+		}
+		itemID := firstNonEmpty(event.ItemID, "agent-message")
+		c.streamedAgentText[itemID] += event.Delta
+		c.emit(protocol.AgentMessageDelta(itemID, event.Delta))
+	case model.ResponsesStreamEventOutputDone:
+		if !c.streamAssistantDeltas && c.sink != nil && c.sink.encoder != nil {
+			return
+		}
+		if event.Item == nil || (event.Item.Type != "message" && event.Item.Type != "agent_message") {
+			return
+		}
+		itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message")
+		if text := event.Item.Text; strings.TrimSpace(text) != "" {
+			streamed := c.streamedAgentText[itemID]
+			if streamed == "" {
+				if c.streamedAgentText == nil {
+					c.streamedAgentText = map[string]string{}
+				}
+				c.streamedAgentText[itemID] = text
+				c.emit(protocol.AgentMessageDelta(itemID, text))
+			} else if strings.HasPrefix(text, streamed) && len(text) > len(streamed) {
+				c.streamedAgentText[itemID] = text
+				c.emit(protocol.AgentMessageDelta(itemID, text[len(streamed):]))
+			}
+		}
+		if c.completedAgentItems == nil {
+			c.completedAgentItems = map[string]bool{}
+		}
+		if !c.completedAgentItems[itemID] {
+			c.completedAgentItems[itemID] = true
+			c.emit(protocol.ItemCompleted(protocol.AgentMessageItem(itemID, event.Item.Text)))
+		}
 	case model.ResponsesStreamEventModelReroute:
 		if message := modelRerouteErrorMessage(event.Reroute); message != "" {
 			c.emit(protocol.ItemCompleted(protocol.ErrorItem("model-reroute", message)))
@@ -411,6 +459,23 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 	}
 	if invocationLooksLikeMCP(invocation) {
 		c.emit(protocol.ItemStarted(mcpToolCallProtocolItem(&turn.ToolExecutionResult{Invocation: invocation}, "in_progress")))
+		return
+	}
+	if isExecWebSearchInvocation(invocation) {
+		c.emit(protocol.ItemStarted(protocol.WebSearchItem(
+			firstNonEmpty(invocation.CallID, "web-search"),
+			"",
+			map[string]any{"type": "other"},
+		)))
+		return
+	}
+	if isExecImageGenerationInvocation(invocation) {
+		c.emit(protocol.ItemStarted(protocol.ImageGenerationItem(
+			firstNonEmpty(invocation.CallID, "image-generation"),
+			"in_progress",
+			"",
+			"",
+		)))
 		return
 	}
 	if invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
@@ -427,6 +492,18 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 		nil,
 		"in_progress",
 	)))
+}
+
+func isExecWebSearchInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil &&
+		invocation.ToolName.Namespace == turn.WebSearchNamespace &&
+		invocation.ToolName.Name == turn.WebSearchRunTool
+}
+
+func isExecImageGenerationInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil &&
+		invocation.ToolName.Namespace == turn.ImageGenerationNamespace &&
+		invocation.ToolName.Name == turn.ImageGenerationToolName
 }
 
 func (c *execStreamEventCollector) emit(event protocol.ThreadEvent) {
@@ -496,6 +573,7 @@ type execEventSink struct {
 	mu      sync.Mutex
 	events  []protocol.ThreadEvent
 	encoder *json.Encoder
+	human   *execHumanRenderer
 	err     error
 }
 
@@ -514,7 +592,7 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if event.Type == "item.started" && event.Item != nil {
+	if (event.Type == "item.started" || event.Type == "item.completed") && event.Item != nil {
 		for i := range s.events {
 			previous := s.events[i]
 			if previous.Type == event.Type && previous.Item != nil && previous.Item.ID == event.Item.ID && previous.Item.Type == event.Item.Type {
@@ -531,6 +609,9 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 			s.err = err
 			return err
 		}
+	}
+	if s.human != nil {
+		s.human.HandleEvent(event)
 	}
 	return nil
 }
