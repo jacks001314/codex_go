@@ -279,6 +279,16 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			Error:       callErr.ModelMessage(),
 			CompletedAt: d.nowUTC(),
 		}
+		if invocation.ToolName.Key() == tool.DefaultApplyPatchToolName {
+			changes := tool.ApplyPatchChanges(invocation, "")
+			output.Data = map[string]any{
+				"fileChange": true,
+				"status":     "failed",
+				"changes":    changes,
+				"stdout":     "",
+				"stderr":     callErr.ModelMessage(),
+			}
+		}
 	}
 	if output == nil {
 		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, CompletedAt: d.nowUTC()}

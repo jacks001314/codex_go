@@ -1359,3 +1359,14 @@ func socks5UDPAssociate(t *testing.T, address string) (net.Conn, *net.UDPAddr) {
 	}
 	return conn, relay
 }
+
+func TestNonPublicTargetsBypassInheritedUpstreamProxy(t *testing.T) {
+	for _, address := range []string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080", "10.0.0.2:80"} {
+		if !proxyAddressTargetsNonPublic(address) {
+			t.Fatalf("%s should be non-public", address)
+		}
+	}
+	if proxyAddressTargetsNonPublic("api.example.com:443") {
+		t.Fatal("public hostname classified non-public")
+	}
+}

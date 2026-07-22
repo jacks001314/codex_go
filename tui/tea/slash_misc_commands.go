@@ -10,6 +10,21 @@ import (
 	historycell "codex_go/tui/history_cell"
 )
 
+func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
+	if m == nil || m.State == nil {
+		return
+	}
+	name := strings.TrimSpace(args)
+	m.State.ResetThread()
+	m.State.SetThreadName(name)
+	if name == "" {
+		m.notice = defaultNotice
+	} else {
+		m.notice = "Started a new session named " + name + "."
+	}
+	m.refreshTranscript()
+}
+
 func (m *Model) applyPlanCommand(args string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil

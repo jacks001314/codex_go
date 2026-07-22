@@ -28,6 +28,8 @@ const proxySocketDirPrefix = "codex-linux-sandbox-proxy-"
 var proxyEnvKeys = map[string]bool{
 	"HTTP_PROXY":             true,
 	"HTTPS_PROXY":            true,
+	"WS_PROXY":               true,
+	"WSS_PROXY":              true,
 	"ALL_PROXY":              true,
 	"FTP_PROXY":              true,
 	"YARN_HTTP_PROXY":        true,
@@ -1078,15 +1080,16 @@ func rewriteProxyEnvValue(proxyURL string, localPort uint16) (string, error) {
 
 func createProxySocketDir() (string, error) {
 	parent := proxySocketParentDir()
-	if err := os.MkdirAll(parent, 0o700); err != nil {
+	if err := os.MkdirAll(parent, 0o711); err != nil {
 		return "", err
 	}
-	_ = os.Chmod(parent, 0o700)
+	_ = os.Chmod(parent, 0o711)
 	pid := os.Getpid()
 	uid := os.Geteuid()
 	for attempt := 0; attempt < 128; attempt++ {
 		candidate := filepath.Join(parent, fmt.Sprintf("%s%d-%d-%d", proxySocketDirPrefix, pid, uid, attempt))
-		if err := os.Mkdir(candidate, 0o700); err == nil {
+		if err := os.Mkdir(candidate, 0o711); err == nil {
+			_ = os.Chmod(candidate, 0o711)
 			return candidate, nil
 		} else if !os.IsExist(err) {
 			return "", err

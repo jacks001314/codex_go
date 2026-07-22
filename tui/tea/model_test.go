@@ -1235,6 +1235,23 @@ func TestModelAppliesThreadEvents(t *testing.T) {
 	}
 }
 
+func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `C:\work`})
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	changes := []protocol.FileChange{{Path: `C:\work\a.txt`, Kind: "update", Diff: "@@\n-old\n+new"}}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.FileChangeItem("patch-1", changes, "in_progress"))})
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "a.txt") {
+		t.Fatalf("started file change missing summary:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItemWithOutput("patch-1", changes, "failed", "", "apply_patch verification failed: bad context"))})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Failed to apply patch") || !strings.Contains(view, "apply_patch verification failed: bad context") {
+		t.Fatalf("failed file change missing Rust-style failure cell:\n%s", view)
+	}
+}
+
 func TestModelStreamsToolInputIntoHistoryCell(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
@@ -2926,6 +2943,23 @@ func TestModelSlashCommands(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "No messages yet.") {
 		t.Fatalf("View() missing empty transcript:\n%s", model.View())
+	}
+
+	state.SetThreadID("thread-before-named-clear")
+	state.AddMessage(codextui.RoleUser, "old again")
+	typeText(t, model, "/clear Release triage")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ThreadID != "" || state.ThreadName != "Release triage" || len(state.Messages) != 0 {
+		t.Fatalf("named clear state = thread %q name %q messages %d", state.ThreadID, state.ThreadName, len(state.Messages))
+	}
+	if !strings.Contains(model.View(), "Started a new session named Release triage.") {
+		t.Fatalf("View() missing named clear notice:\n%s", model.View())
+	}
+
+	typeText(t, model, "/new Follow-up")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ThreadName != "Follow-up" {
+		t.Fatalf("named new ThreadName = %q, want Follow-up", state.ThreadName)
 	}
 }
 

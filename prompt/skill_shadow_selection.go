@@ -26,6 +26,7 @@ func RunSkillShadowSelection(query string, documents []SkillSelectionDocument) [
 		{"fielded_bm25_v1", SelectSkillsFieldedBM25},
 		{"character_ngram_v1", SelectSkillsCharacterNgram},
 		{"multi_query_lexical_v1", SelectSkillsMultiQueryLexical},
+		{"routing_card_exact_v1", SelectSkillsRoutingCardLexical},
 	}
 	out := make([]SkillShadowSelectionObservation, 0, len(selectors))
 	for _, selector := range selectors {

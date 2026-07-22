@@ -287,6 +287,9 @@ func TestDefaultSkillMetadataBudget(t *testing.T) {
 	if got := DefaultSkillMetadataBudget(200000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 4000 {
 		t.Fatalf("DefaultSkillMetadataBudget(200000) = %#v", got)
 	}
+	if got := DefaultSkillMetadataBudget(1000000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 4000 {
+		t.Fatalf("DefaultSkillMetadataBudget cap = %#v", got)
+	}
 	if got := DefaultSkillMetadataBudget(0); got.Kind != SkillMetadataBudgetCharacters || got.Limit != DefaultSkillMetadataCharBudget {
 		t.Fatalf("DefaultSkillMetadataBudget(0) = %#v", got)
 	}

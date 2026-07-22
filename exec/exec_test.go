@@ -2634,7 +2634,7 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	}
 }
 
-func TestEmitFinalEventsMapsDeclinedFileChangeToFailedLikeRust(t *testing.T) {
+func TestEmitFinalEventsPreservesDeclinedFileChangeLikeRust(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Response: &model.AgentResponse{},
 		ToolExecutions: []turn.ToolExecutionResult{{
@@ -2667,8 +2667,8 @@ func TestEmitFinalEventsMapsDeclinedFileChangeToFailedLikeRust(t *testing.T) {
 	if fileChangeIndex < 0 {
 		t.Fatalf("file_change event missing: %#v", events)
 	}
-	if got := events[fileChangeIndex].Item.Status; got != "failed" {
-		t.Fatalf("file_change status = %q, want failed", got)
+	if got := events[fileChangeIndex].Item.Status; got != "declined" {
+		t.Fatalf("file_change status = %q, want declined", got)
 	}
 }
 
@@ -3247,6 +3247,31 @@ func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T)
 	}
 	if events[1].Item.Type != "command_execution" || events[1].Item.ID != "call-1" || events[1].Item.Command != "date" {
 		t.Fatalf("command start item = %#v", events[1].Item)
+	}
+}
+
+func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBegin(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	patch := "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{ID: "patch-1", Type: "custom_tool_call", Name: tool.DefaultApplyPatchToolName, CallID: "patch-1", Input: patch},
+	})
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("generic apply_patch events = %#v, want none", events)
+	}
+
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID:   "patch-1",
+		ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadCustom, Input: patch},
+	}, time.Now())
+	events := collector.Events()
+	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil || events[0].Item.Type != "file_change" {
+		t.Fatalf("apply_patch start events = %#v", events)
+	}
+	if events[0].Item.ID != "patch-1" || events[0].Item.Status != "in_progress" || len(events[0].Item.Changes) != 1 {
+		t.Fatalf("apply_patch start item = %#v", events[0].Item)
 	}
 }
 

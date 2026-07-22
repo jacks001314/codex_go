@@ -24,6 +24,7 @@ type ToolExecutorOptions struct {
 	ThreadID    string
 	TurnID      string
 	RequestMeta map[string]any
+	Binding     *Binding
 }
 
 type ToolExecutor struct {
@@ -35,6 +36,7 @@ type ToolExecutor struct {
 	threadID    string
 	turnID      string
 	requestMeta map[string]any
+	binding     *Binding
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -58,6 +60,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.threadID = strings.TrimSpace(options.ThreadID)
 	executor.turnID = strings.TrimSpace(options.TurnID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
+	executor.binding = options.Binding
 	return executor
 }
 
@@ -102,7 +105,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
 	meta := e.requestMetaForCall(invocation.CallID)
-	response, err := e.mcpService().CallTool(&MCPToolCallParams{
+	callParams := &MCPToolCallParams{
 		ServerName: e.resolvedServerName(),
 		ToolName:   e.resolvedRemoteToolName(),
 		Arguments:  arguments,
@@ -110,7 +113,14 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		TurnID:     e.turnID,
 		ItemID:     invocation.CallID,
 		Meta:       meta,
-	})
+	}
+	var response *MCPToolCallResponse
+	var err error
+	if e.binding != nil {
+		response, err = e.binding.CallTool(callParams)
+	} else {
+		response, err = e.mcpService().CallTool(callParams)
+	}
 	if err != nil {
 		return nil, err
 	}

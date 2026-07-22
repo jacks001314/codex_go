@@ -37,6 +37,7 @@ type Options struct {
 
 type State struct {
 	ThreadID                string
+	ThreadName              string
 	Model                   string
 	ReasoningEffort         string
 	PlanMode                bool
@@ -80,6 +81,12 @@ func (s *State) SetThreadID(threadID string) {
 	}
 }
 
+func (s *State) SetThreadName(threadName string) {
+	if s != nil {
+		s.ThreadName = strings.TrimSpace(threadName)
+	}
+}
+
 func (s *State) SetStatus(status string) {
 	if s != nil {
 		s.Status = firstNonEmpty(status, "idle")
@@ -118,6 +125,7 @@ func (s *State) ClearMessages() {
 func (s *State) ResetThread() {
 	if s != nil {
 		s.ThreadID = ""
+		s.ThreadName = ""
 		s.Messages = nil
 		s.Status = "idle"
 	}

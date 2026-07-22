@@ -84,3 +84,16 @@ func containsSkillID(ids []int, want int) bool {
 	}
 	return false
 }
+
+func TestRoutingCardExactSkillSelectorMatchesRustPriorities(t *testing.T) {
+	docs := []SkillSelectionDocument{{ID: 1, Name: "deploy", ShortDescription: "release app", Dependencies: "terraform"}, {ID: 2, Name: "review", Description: "review source"}, {ID: 3, Name: "the", Description: "stop word name"}}
+	if got := SelectSkillsRoutingCardLexical("terraform", docs, 10).CandidateIDs; !reflect.DeepEqual(got, []int{1}) {
+		t.Fatalf("dependencies=%v", got)
+	}
+	if got := SelectSkillsRoutingCardLexical("review", docs, 10).CandidateIDs; !reflect.DeepEqual(got, []int{2}) {
+		t.Fatalf("name=%v", got)
+	}
+	if got := SelectSkillsRoutingCardLexical("the", docs, 10).CandidateIDs; !reflect.DeepEqual(got, []int{3}) {
+		t.Fatalf("exact stop word name=%v", got)
+	}
+}

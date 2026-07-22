@@ -2,6 +2,7 @@ package historycell
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"codex_go/tui"
@@ -31,13 +32,33 @@ func (c PatchHistoryCell) RawLines() []string {
 }
 
 func NewPatchApplyFailure(stderr string) PlainHistoryCell {
-	lines := []string{"\u2718 Failed to apply patch"}
-	for _, line := range truncateToolResultLines(stderr, 120) {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, "| "+line)
-		}
+	return NewPlainHistoryCell(patchApplyFailureLines(stderr, 5))
+}
+
+func patchApplyFailureLines(stderr string, lineLimit int) []string {
+	lines := strings.Split(strings.ReplaceAll(stderr, "\r\n", "\n"), "\n")
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
-	return NewPlainHistoryCell(lines)
+	if lineLimit < 1 {
+		lineLimit = 1
+	}
+	selected := lines
+	if len(lines) > lineLimit*2 {
+		omitted := len(lines) - lineLimit*2
+		selected = append([]string(nil), lines[:lineLimit]...)
+		selected = append(selected, "… +"+strconv.Itoa(omitted)+" lines (ctrl + t to view transcript)")
+		selected = append(selected, lines[len(lines)-lineLimit:]...)
+	}
+	out := []string{"\u2718 Failed to apply patch"}
+	for _, line := range selected {
+		prefix := "  "
+		if len(out) == 1 {
+			prefix = "| "
+		}
+		out = append(out, prefix+line)
+	}
+	return out
 }
 
 func NewViewImageToolCall(path string, cwd string) PlainHistoryCell {

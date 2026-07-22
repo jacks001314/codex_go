@@ -32,6 +32,7 @@ type SkillSelectionDocument struct {
 	Name             string
 	ShortDescription string
 	Description      string
+	Dependencies     string
 }
 
 type CheapSkillSelection struct {
@@ -45,6 +46,60 @@ type scoredSkill struct {
 	score float64
 	id    int
 	name  string
+}
+
+// SelectSkillsRoutingCardLexical ranks exact normalized terms from routing cards.
+// Routing fields have stronger weights than generic descriptions, matching Rust's
+// bounded routing_card_exact_v1 shadow selector.
+func SelectSkillsRoutingCardLexical(query string, documents []SkillSelectionDocument, limit int) CheapSkillSelection {
+	query, truncated := boundedSkillSelectorString(query, skillSelectorMaxQueryBytes)
+	terms, termsTruncated := skillSelectorQueryTerms(skillSelectorNormalizePhrase(query))
+	result := CheapSkillSelection{QueryTermCount: len(terms), QueryTruncated: truncated || termsTruncated, CandidateSetTruncated: len(documents) > skillSelectorMaxCandidates}
+	if limit <= 0 {
+		return result
+	}
+	normalizedQuery := skillSelectorNormalizePhrase(query)
+	scored := make([]scoredSkill, 0)
+	for _, doc := range documents[:min(len(documents), skillSelectorMaxCandidates)] {
+		name := skillSelectorNormalizePhrase(doc.Name)
+		short := skillSelectorNormalizePhrase(doc.ShortDescription)
+		description := skillSelectorNormalizePhrase(doc.Description)
+		score := 0
+		// Exact skill name remains selectable for stop-word-only names.
+		if normalizedQuery != "" && name == normalizedQuery {
+			score += 10000
+		}
+		for _, term := range terms {
+			if term == "" {
+				continue
+			}
+			if containsExactSkillTerm(name, term) {
+				score += 1000
+			}
+			if containsExactSkillTerm(doc.Dependencies, term) {
+				score += 400
+			}
+			if containsExactSkillTerm(short, term) {
+				score += 200
+			}
+			if containsExactSkillTerm(description, term) {
+				score += 50
+			}
+		}
+		if score > 0 {
+			scored = append(scored, scoredSkill{score: float64(score), id: doc.ID, name: doc.Name})
+		}
+	}
+	result.CandidateIDs = rankedSkillIDs(scored, limit)
+	return result
+}
+func containsExactSkillTerm(value, term string) bool {
+	for _, candidate := range strings.Fields(skillSelectorNormalizePhrase(value)) {
+		if candidate == term {
+			return true
+		}
+	}
+	return false
 }
 
 func SelectSkillsWeightedLexical(query string, documents []SkillSelectionDocument, limit int) CheapSkillSelection {

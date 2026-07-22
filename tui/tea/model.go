@@ -1753,6 +1753,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		m.renderMCPToolCallItem(item, false)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
+	case "file_change":
+		m.renderFileChangeItem(item, false)
 	case "agent_message":
 		// Streaming deltas create the visible assistant message.
 	case "imageGeneration":
@@ -1781,10 +1783,41 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		m.completeToolOutput(item)
 	case "todo_list":
 		m.applyPlanUpdateItem(item)
+	case "file_change":
+		m.renderFileChangeItem(item, true)
 	case "imageGeneration":
 		m.applyImageGenerationItem(item)
 	}
 	return nil
+}
+
+func (m *Model) renderFileChangeItem(item *protocol.ThreadItem, completed bool) {
+	if m == nil || item == nil {
+		return
+	}
+	changes := make(map[string]codextui.FileChange, len(item.Changes))
+	for _, change := range item.Changes {
+		switch change.Kind {
+		case "add":
+			changes[change.Path] = codextui.NewAddFileChange(change.Diff)
+		case "delete":
+			changes[change.Path] = codextui.NewDeleteFileChange(change.Diff)
+		case "update":
+			changes[change.Path] = codextui.NewUpdateFileChange(change.Diff, change.MovePath)
+		}
+	}
+	if completed && strings.EqualFold(item.Status, "failed") {
+		message := firstNonEmpty(strings.TrimSpace(item.Stderr), strings.TrimSpace(item.Stdout), "Patch application failed.")
+		m.applyHistoryCell(historycell.NewPatchApplyFailure(message))
+		m.Transcript.needsFinalMessageSeparator = true
+		return
+	}
+	if len(changes) > 0 {
+		m.applyHistoryCell(historycell.NewPatchEvent(changes, m.State.CWD))
+		if completed {
+			m.Transcript.needsFinalMessageSeparator = true
+		}
+	}
 }
 
 func (m *Model) applyImageGenerationItem(item *protocol.ThreadItem) {
@@ -2904,16 +2937,14 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandDebugConfig:
 		return m.applyDebugConfigCommand()
 	case codextui.CommandNew:
-		m.State.ResetThread()
-		m.notice = "Started a new local thread."
+		m.startFreshNamedSession(invocation.Args, "Started a new local thread.")
 	case codextui.CommandInit:
 		return m.submitRequest(SubmitRequest{Prompt: initCommandPrompt()}, false)
 	case codextui.CommandCompact:
 		m.State.AddMessage(codextui.RoleSystem, "Compaction requested.")
 		m.notice = "Compaction requested."
 	case codextui.CommandClear:
-		m.State.ResetThread()
-		m.notice = "Started a fresh session."
+		m.startFreshNamedSession(invocation.Args, "Started a fresh session.")
 	case codextui.CommandCopy:
 		m.copyLastAgentResponse()
 	case codextui.CommandRaw:

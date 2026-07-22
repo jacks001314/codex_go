@@ -62,8 +62,8 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 	router.runSkillShadowSelection(cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
 
 	records := metrics.Records()
-	if len(records) != 24 {
-		t.Fatalf("metric records = %d, want 24", len(records))
+	if len(records) != 30 {
+		t.Fatalf("metric records = %d, want 30", len(records))
 	}
 	methods := map[string]bool{}
 	for _, record := range records {
@@ -80,7 +80,7 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 			t.Fatalf("catalog metric = %#v", record)
 		}
 	}
-	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "multi_query_lexical_v1"} {
+	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "multi_query_lexical_v1", "routing_card_exact_v1"} {
 		if !methods[method] {
 			t.Fatalf("missing method %q in %#v", method, methods)
 		}

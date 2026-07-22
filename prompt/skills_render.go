@@ -117,6 +117,9 @@ func DefaultSkillMetadataBudget(contextWindow int64) SkillMetadataBudget {
 		if limit < 1 {
 			limit = 1
 		}
+		if limit > 4000 {
+			limit = 4000
+		}
 		return SkillMetadataBudget{Kind: SkillMetadataBudgetTokens, Limit: limit}
 	}
 	return SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}

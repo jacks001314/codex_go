@@ -785,6 +785,7 @@ type PluginListParams struct {
 	CWDs             []string `json:"cwds,omitempty"`
 	MarketplaceKinds []string `json:"marketplaceKinds,omitempty"`
 	IncludeInstalled bool     `json:"includeInstalled,omitempty"`
+	ForceRefetch     bool     `json:"forceRefetch,omitempty"`
 }
 
 func (p *PluginListParams) MarshalJSON() ([]byte, error) {
@@ -795,10 +796,12 @@ func (p *PluginListParams) MarshalJSON() ([]byte, error) {
 		CWDs             []string `json:"cwds,omitempty"`
 		MarketplaceKinds []string `json:"marketplaceKinds,omitempty"`
 		IncludeInstalled bool     `json:"includeInstalled,omitempty"`
+		ForceRefetch     bool     `json:"forceRefetch,omitempty"`
 	}{
 		CWDs:             optionalStringSliceForJSON(p.CWDs),
 		MarketplaceKinds: optionalStringSliceForJSON(p.MarketplaceKinds),
 		IncludeInstalled: p.IncludeInstalled,
+		ForceRefetch:     p.ForceRefetch,
 	})
 }
 

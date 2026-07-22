@@ -397,7 +397,7 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 	upstreamProxy := proxyUpstreamFunc(true, baseEnv)
 	proxy.Tr = &http.Transport{
 		Proxy: func(request *http.Request) (*url.URL, error) {
-			if !s.runtimePolicy().settings.AllowUpstreamProxy {
+			if !s.runtimePolicy().settings.AllowUpstreamProxy || proxyRequestTargetsNonPublic(request) {
 				return nil, nil
 			}
 			return upstreamProxy(request)
@@ -412,7 +412,7 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 		upstreamConnectDial = proxy.NewConnectDialToProxy(upstream.Raw)
 	}
 	proxy.ConnectDialWithReq = func(request *http.Request, networkName, address string) (net.Conn, error) {
-		if s.runtimePolicy().settings.AllowUpstreamProxy && upstreamConnectDial != nil {
+		if s.runtimePolicy().settings.AllowUpstreamProxy && upstreamConnectDial != nil && !proxyAddressTargetsNonPublic(address) {
 			return upstreamConnectDial(networkName, address)
 		}
 		return s.dialCheckedTarget(request.Context(), networkName, address)
@@ -420,6 +420,26 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 	proxy.OnRequest().HandleConnectFunc(s.handleHTTPConnect)
 	proxy.OnRequest().DoFunc(s.handleHTTPRequest)
 	return proxy, nil
+}
+
+func proxyRequestTargetsNonPublic(request *http.Request) bool {
+	if request == nil || request.URL == nil {
+		return false
+	}
+	return proxyAddressTargetsNonPublic(request.URL.Host)
+}
+
+func proxyAddressTargetsNonPublic(address string) bool {
+	host := address
+	if parsed, _, err := net.SplitHostPort(address); err == nil {
+		host = parsed
+	}
+	normalized := NormalizeProxyHost(host)
+	parsed, _ := ParseProxyHost(normalized)
+	if IsLoopbackProxyHost(parsed) || IsNonPublicProxyIP(proxyIPLiteral(normalized)) {
+		return true
+	}
+	return false
 }
 
 func proxyUpstreamRootCAs(env map[string]string) (*x509.CertPool, error) {

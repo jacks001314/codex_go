@@ -147,3 +147,40 @@ func containsArgWindow(args []string, window []string) bool {
 	}
 	return false
 }
+
+func TestManagedProxyRoutesWebsocketEnvAndSocketDirsAreSearchable(t *testing.T) {
+	oldWS, hadWS := os.LookupEnv("WSS_PROXY")
+	defer func() {
+		if hadWS {
+			_ = os.Setenv("WSS_PROXY", oldWS)
+		} else {
+			_ = os.Unsetenv("WSS_PROXY")
+		}
+	}()
+	_ = os.Setenv("WSS_PROXY", "http://127.0.0.1:8765")
+	routes, configured := planProxyRoutesFromEnv()
+	if !configured {
+		t.Fatal("proxy not configured")
+	}
+	found := false
+	for _, route := range routes {
+		if strings.EqualFold(route.EnvKey, "WSS_PROXY") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("routes=%#v", routes)
+	}
+	dir, err := createProxySocketDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("mode=%o", info.Mode().Perm())
+	}
+}

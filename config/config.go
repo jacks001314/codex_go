@@ -284,6 +284,9 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if err := validateKnownAgentsFields(values["agents"]); err != nil {
 		return err
 	}
+	if err := ValidateShellEnvironmentPolicy(values["shell_environment_policy"]); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1092,6 +1095,13 @@ func legacyProfileValues(values map[string]any, profile string) (map[string]any,
 
 func mergeConfigMaps(dst map[string]any, src map[string]any) {
 	for key, value := range src {
+		if key == "shell_environment_policy" {
+			if srcPolicy, ok := value.(map[string]any); ok {
+				basePolicy, _ := dst[key].(map[string]any)
+				dst[key] = mergeShellEnvironmentPolicy(basePolicy, srcPolicy)
+				continue
+			}
+		}
 		srcMap, srcIsMap := value.(map[string]any)
 		dstMap, dstIsMap := dst[key].(map[string]any)
 		if srcIsMap && dstIsMap {

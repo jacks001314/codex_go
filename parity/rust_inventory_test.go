@@ -39,6 +39,7 @@ func goTopLevelDirectories(t *testing.T, root string) []string {
 		"deliverables": true,
 		"docs":         true,
 		"scripts":      true,
+		"update":       true,
 	}
 	packages := dirs[:0]
 	for _, dir := range dirs {

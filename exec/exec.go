@@ -387,6 +387,10 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		if event.Item == nil || event.Item.Type == "" || event.Item.Type == "agent_message" || event.Item.Type == "reasoning" {
 			return
 		}
+		if event.Item.Name == tool.DefaultApplyPatchToolName {
+			// Rust renders apply_patch exclusively through the FileChange lifecycle.
+			return
+		}
 		if event.Item.Type == "tool_search_call" {
 			return
 		}
@@ -476,6 +480,16 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 			"",
 			"",
 		)))
+		return
+	}
+	if invocation.ToolName.Key() == tool.DefaultApplyPatchToolName {
+		changes := fileChangesFromAny(tool.ApplyPatchChanges(invocation, ""))
+		if len(changes) > 0 {
+			item := protocol.FileChangeItem(firstNonEmpty(invocation.CallID, "apply_patch"), changes, "in_progress")
+			autoApproved := true
+			item.AutoApproved = &autoApproved
+			c.emit(protocol.ItemStarted(item))
+		}
 		return
 	}
 	if invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
@@ -2053,7 +2067,13 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	if isFileChangeExecution(execution) {
 		changes := fileChangesFromToolOutput(execution.Output)
 		status := fileChangeStatusFromToolOutput(execution.Output)
-		return protocol.ItemCompleted(protocol.FileChangeItem("file-change-"+safeSessionItemID(execution.Invocation.CallID), changes, status)), true
+		return protocol.ItemCompleted(protocol.FileChangeItemWithOutput(
+			"file-change-"+safeSessionItemID(execution.Invocation.CallID),
+			changes,
+			status,
+			execStringFromAny(execution.Output.Data["stdout"]),
+			firstNonEmpty(execStringFromAny(execution.Output.Data["stderr"]), execution.Output.Error),
+		)), true
 	}
 	if isCollabExecution(execution) {
 		return protocol.ItemCompleted(collabToolCallProtocolItem(execution, collabToolCallStatusFromOutput(execution.Output))), true
@@ -2791,7 +2811,7 @@ func fileChangeStatusFromToolOutput(output *tool.Output) string {
 	case "completed", "in_progress":
 		return status
 	case "failed", "declined":
-		return "failed"
+		return status
 	}
 	if output.Success {
 		return "completed"

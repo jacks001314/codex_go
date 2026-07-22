@@ -6,7 +6,7 @@ func TestRunSkillShadowSelectionDoesNotMutateCatalogAndMatchesRustMethods(t *tes
 	documents := []SkillSelectionDocument{{ID: 7, Name: "slides", Description: "Create presentations."}, {ID: 9, Name: "sheets", Description: "Analyze tabular data."}}
 	before := append([]SkillSelectionDocument(nil), documents...)
 	observations := RunSkillShadowSelection("create slides", documents)
-	wantMethods := []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "multi_query_lexical_v1"}
+	wantMethods := []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "multi_query_lexical_v1", "routing_card_exact_v1"}
 	if len(observations) != len(wantMethods) {
 		t.Fatalf("observations = %#v", observations)
 	}

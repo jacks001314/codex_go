@@ -90,7 +90,7 @@ func TestApplyPatchExecutorRejectsInvalidPatchWithGrammarError(t *testing.T) {
 		ToolName: PlainName(DefaultApplyPatchToolName),
 		Payload:  Payload{Kind: PayloadCustom, Input: `*** Begin Patch`},
 	})
-	if err == nil || !strings.Contains(err.Error(), "apply_patch grammar error") {
+	if err == nil || !strings.Contains(err.Error(), "apply_patch verification failed") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -116,7 +116,7 @@ func TestApplyPatchExecutorReportsApplyError(t *testing.T) {
 *** Delete File: missing.txt
 *** End Patch`},
 	})
-	if err == nil || !strings.Contains(err.Error(), "apply_patch apply error") {
+	if err == nil || !strings.Contains(err.Error(), "apply_patch verification failed") {
 		t.Fatalf("error = %v", err)
 	}
 }

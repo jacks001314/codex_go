@@ -88,12 +88,11 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	}
 	action, err := applypatch.Parse(patch)
 	if err != nil {
-		message := applyPatchErrorMessage(err)
-		return nil, RespondToModel(message)
+		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd()}
 	if err := action.FillDeleteContent(applyOptions); err != nil {
-		return nil, RespondToModel(applyPatchErrorMessage(err))
+		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	changes := applyPatchFileChanges(action, e.cwd())
 	if e.approval != nil {
@@ -126,7 +125,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	}
 	result, err := action.Apply(applyOptions)
 	if err != nil {
-		return nil, RespondToModel(applyPatchErrorMessage(err))
+		return nil, RespondToModel("apply_patch failed: " + applypatch.FormatError(err))
 	}
 	body := result.Summary()
 	return &Output{
@@ -135,6 +134,18 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		Data:       applyPatchResultData(result, action, e.cwd()),
 		LogPreview: shellLogPreview(body),
 	}, nil
+}
+
+func ApplyPatchChanges(invocation *Invocation, cwd string) []map[string]any {
+	patch, ok := applyPatchPayloadCommand(invocation)
+	if !ok || strings.TrimSpace(patch) == "" {
+		return nil
+	}
+	action, err := applypatch.Parse(patch)
+	if err != nil {
+		return nil
+	}
+	return applyPatchFileChanges(action, cwd)
 }
 
 func (e *ApplyPatchExecutor) cwd() string {
@@ -213,6 +224,8 @@ func applyPatchResultData(result *applypatch.ApplyResult, action *applypatch.Act
 	data["changes"] = applyPatchFileChanges(action, cwd)
 	data["appliedChanges"] = applyPatchAppliedChanges(result)
 	data["hook_response"] = summary
+	data["stdout"] = summary
+	data["stderr"] = ""
 	return data
 }
 
@@ -222,6 +235,7 @@ func applyPatchApprovalData(status string, changes []map[string]any) map[string]
 		"fileChange":    true,
 		"status":        status,
 		"changes":       changes,
+		"stdout":        "",
 	}
 }
 

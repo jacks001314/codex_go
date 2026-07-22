@@ -76,6 +76,9 @@ type ThreadItem struct {
 	AggregatedOutput  *string                      `json:"aggregated_output,omitempty"`
 	ExitCode          *int                         `json:"exit_code,omitempty"`
 	Status            string                       `json:"status,omitempty"`
+	Stdout            string                       `json:"stdout,omitempty"`
+	Stderr            string                       `json:"stderr,omitempty"`
+	AutoApproved      *bool                        `json:"auto_approved,omitempty"`
 	RevisedPrompt     string                       `json:"revised_prompt,omitempty"`
 	SavedPath         string                       `json:"saved_path,omitempty"`
 	Success           *bool                        `json:"success,omitempty"`
@@ -259,6 +262,13 @@ func FileChangeItem(id string, changes []FileChange, status string) ThreadItem {
 		Changes: copied,
 		Status:  status,
 	}
+}
+
+func FileChangeItemWithOutput(id string, changes []FileChange, status string, stdout string, stderr string) ThreadItem {
+	item := FileChangeItem(id, changes, status)
+	item.Stdout = stdout
+	item.Stderr = stderr
+	return item
 }
 
 func WebSearchItem(id string, query string, action map[string]any) ThreadItem {

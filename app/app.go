@@ -506,6 +506,10 @@ func sandboxEnvPolicyFromConfig(cfg *config.Config, cwd string) *codexexec.EnvPo
 	}
 	policy.Exclude = sandboxEnvPatternsFromConfigValue(table["exclude"])
 	policy.IncludeOnly = sandboxEnvPatternsFromConfigValue(table["include_only"])
+	if include, exclude, err := config.ShellEnvironmentFilterPatterns(table); err == nil && table["filters"] != nil {
+		policy.IncludeOnly = sandboxEnvPatternsFromConfigValue(include)
+		policy.Exclude = sandboxEnvPatternsFromConfigValue(exclude)
+	}
 	policy.Set = stringMapFromAny(table["set"])
 	return policy
 }

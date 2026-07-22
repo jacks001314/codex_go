@@ -1,6 +1,7 @@
 package historycell
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -455,6 +456,22 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 	failure := NewPatchApplyFailure("bad patch\n")
 	if got := strings.Join(failure.DisplayLines(80), "\n"); !strings.Contains(got, "✘ Failed to apply patch") || !strings.Contains(got, "| bad patch") {
 		t.Fatalf("patch failure display:\n%s", got)
+	}
+
+	longFailureLines := make([]string, 20)
+	for i := range longFailureLines {
+		longFailureLines[i] = fmt.Sprintf("failure line %02d", i+1)
+	}
+	longFailure := NewPatchApplyFailure(strings.Join(longFailureLines, "\n"))
+	longDisplay := longFailure.DisplayLines(80)
+	if len(longDisplay) != 12 {
+		t.Fatalf("long patch failure line count = %d, want heading + 5 head + hint + 5 tail: %#v", len(longDisplay), longDisplay)
+	}
+	joinedLongDisplay := strings.Join(longDisplay, "\n")
+	for _, want := range []string{"failure line 01", "… +10 lines (ctrl + t to view transcript)", "failure line 20"} {
+		if !strings.Contains(joinedLongDisplay, want) {
+			t.Fatalf("long patch failure missing %q:\n%s", want, joinedLongDisplay)
+		}
 	}
 
 	image := NewImageGenerationCall("img-1", "completed", "a red cube", `D:\repo\out.png`)
