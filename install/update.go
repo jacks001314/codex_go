@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	DefaultGitHubLatestReleaseURL = "https://api.github.com/repos/openai/codex/releases/latest"
+	DefaultGitHubLatestReleaseURL = "https://api.github.com/repos/jacks001314/codex_go/releases/latest"
 	DefaultHomebrewCaskURL        = "https://formulae.brew.sh/api/cask/codex.json"
-	DefaultNPMRegistryURL         = "https://registry.npmjs.org/@openai%2fcodex"
+	DefaultNPMRegistryURL         = "https://registry.npmjs.org/@jacks001314%2fcodex-go"
+	NPMPackageName                = "@jacks001314/codex-go"
 )
 
 type UpdateActionKind string
@@ -113,9 +114,9 @@ func (a *UpdateAction) CommandArgs() (string, []string) {
 	}
 	switch a.Kind {
 	case UpdateActionNPMGlobalLatest:
-		return "npm", []string{"install", "-g", "@openai/codex"}
+		return "npm", []string{"install", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBunGlobalLatest:
-		return "bun", []string{"install", "-g", "@openai/codex"}
+		return "bun", []string{"install", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
 	case UpdateActionStandaloneUnix:
@@ -298,11 +299,13 @@ func FetchLatestVersion(ctx context.Context, opts *UpdateCheckOptions) (string, 
 }
 
 func ExtractVersionFromLatestTag(tag string) (string, error) {
-	version, ok := strings.CutPrefix(strings.TrimSpace(tag), "rust-v")
-	if !ok || strings.TrimSpace(version) == "" {
-		return "", fmt.Errorf("failed to parse latest tag name %q", tag)
+	trimmed := strings.TrimSpace(tag)
+	for _, prefix := range []string{"go-v", "v"} {
+		if version, ok := strings.CutPrefix(trimmed, prefix); ok && strings.TrimSpace(version) != "" {
+			return strings.TrimSpace(version), nil
+		}
 	}
-	return strings.TrimSpace(version), nil
+	return "", fmt.Errorf("failed to parse latest tag name %q", tag)
 }
 
 func IsNewerVersion(latest string, current string) *bool {

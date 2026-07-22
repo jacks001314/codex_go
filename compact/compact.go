@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -463,11 +464,38 @@ func EstimateTextTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return 0
+	tokens := 0
+	segmentRunes := 0
+	flushSegment := func() {
+		if segmentRunes == 0 {
+			return
+		}
+		if segmentRunes <= 12 {
+			tokens++
+		} else {
+			// Preserve the historical one-token-per-word estimate for ordinary
+			// Latin text, but do not let long unbroken content look artificially
+			// cheap (for example minified data or a base64-like payload).
+			tokens += (segmentRunes + 3) / 4
+		}
+		segmentRunes = 0
 	}
-	return len(fields)
+	for _, value := range text {
+		switch {
+		case unicode.IsSpace(value):
+			flushSegment()
+		case unicode.In(value, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
+			flushSegment()
+			tokens++
+		case unicode.IsPunct(value) || unicode.IsSymbol(value):
+			flushSegment()
+			tokens++
+		default:
+			segmentRunes++
+		}
+	}
+	flushSegment()
+	return tokens
 }
 
 func TrimHistoryToTokenBudget(items []Item, maxTokens int) []Item {
@@ -713,11 +741,21 @@ func truncateTextToTokens(text string, maxTokens int) string {
 	if maxTokens <= 0 {
 		return ""
 	}
-	fields := strings.Fields(text)
-	if len(fields) <= maxTokens {
-		return strings.Join(fields, " ")
+	text = strings.TrimSpace(text)
+	if EstimateTextTokens(text) <= maxTokens {
+		return text
 	}
-	return strings.Join(fields[:maxTokens], " ")
+	runes := []rune(text)
+	low, high := 0, len(runes)
+	for low < high {
+		mid := low + (high-low+1)/2
+		if EstimateTextTokens(string(runes[:mid])) <= maxTokens {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	return strings.TrimSpace(string(runes[:low]))
 }
 
 func defaultWindowID(threadID string, suffix any) string {

@@ -634,6 +634,7 @@ func sessionRecordFromAppServerThread(thread *appserver.Thread, archived bool) *
 			CWD:           strings.TrimSpace(thread.CWD),
 			ModelProvider: strings.TrimSpace(thread.ModelProvider),
 			Source:        string(thread.Source),
+			Extra:         cloneSessionExtra(thread.Extra),
 		},
 	}
 	if thread.ThreadSource != nil {
@@ -642,10 +643,31 @@ func sessionRecordFromAppServerThread(thread *appserver.Thread, archived bool) *
 	if thread.RecencyAt != nil && *thread.RecencyAt > 0 {
 		record.RecencyAt = time.Unix(*thread.RecencyAt, 0).UTC()
 	}
-	if len(thread.Turns) > 0 {
+	for _, turn := range thread.Turns {
+		for _, item := range turn.Items {
+			record.Items = append(record.Items, session.Item{
+				ID: item.ID, Type: item.Type, Role: item.Role, Text: item.Text,
+				CreatedAt: time.UnixMilli(item.CreatedAt).UTC(), Data: item.Data,
+			})
+		}
+	}
+	// Preserve the legacy summary item count for thread/read responses that
+	// intentionally omit turn items.
+	if len(record.Items) == 0 && len(thread.Turns) > 0 {
 		record.Items = make([]session.Item, len(thread.Turns))
 	}
 	return record
+}
+
+func cloneSessionExtra(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func sessionMutationSuccessMessage(action string, sessionID session.ThreadID, sessionName string) string {

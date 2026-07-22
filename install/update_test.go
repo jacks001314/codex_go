@@ -65,15 +65,18 @@ func TestUpdateActionCommandArgs(t *testing.T) {
 }
 
 func TestVersionParsingAndComparison(t *testing.T) {
-	version, err := ExtractVersionFromLatestTag("rust-v1.5.0")
+	version, err := ExtractVersionFromLatestTag("go-v1.5.0")
 	if err != nil {
 		t.Fatalf("ExtractVersionFromLatestTag() error = %v", err)
 	}
 	if version != "1.5.0" {
 		t.Fatalf("version = %q", version)
 	}
-	if _, err := ExtractVersionFromLatestTag("v1.5.0"); err == nil {
-		t.Fatal("latest tag without rust-v prefix returned nil error")
+	if version, err = ExtractVersionFromLatestTag("v1.6.0"); err != nil || version != "1.6.0" {
+		t.Fatalf("plain v tag = %q, %v", version, err)
+	}
+	if _, err := ExtractVersionFromLatestTag("rust-v1.5.0"); err == nil {
+		t.Fatal("Rust release tag returned nil error")
 	}
 	assertBoolPtr(t, IsNewerVersion("0.11.1", "0.11.0"), true)
 	assertBoolPtr(t, IsNewerVersion("0.11.0", "0.11.1"), false)
@@ -108,7 +111,7 @@ func TestFetchLatestVersionChecksNPMReadiness(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/github", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"rust-v1.2.3"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"go-v1.2.3"}`))
 	})
 	mux.HandleFunc("/npm", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -138,7 +141,7 @@ func TestFetchLatestVersionChecksNPMReadiness(t *testing.T) {
 func TestCheckForUpdateBuildsResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"rust-v1.2.4"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v1.2.4"}`))
 	}))
 	defer server.Close()
 
@@ -167,7 +170,7 @@ func TestRunUpdateUsesDetectedCommand(t *testing.T) {
 	if result.Status != UpdateStatusUpdated {
 		t.Fatalf("status = %s", result.Status)
 	}
-	if runner.Command != "bun" || len(runner.Args) != 3 || runner.Args[2] != "@openai/codex" {
+	if runner.Command != "bun" || len(runner.Args) != 3 || runner.Args[2] != "@jacks001314/codex-go@latest" {
 		t.Fatalf("runner = %#v", runner)
 	}
 }

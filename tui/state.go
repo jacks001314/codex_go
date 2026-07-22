@@ -52,6 +52,15 @@ type State struct {
 	NoAltScreen             bool
 	Status                  string
 	Messages                []Message
+	TotalTokenUsage         TokenUsage
+	LastTokenUsage          TokenUsage
+	ModelContextWindow      *int64
+	RateLimits              []RateLimitStatus
+}
+
+type RateLimitStatus struct {
+	Label       string
+	UsedPercent float64
 }
 
 func NewState(options *Options) *State {
@@ -128,6 +137,10 @@ func (s *State) ResetThread() {
 		s.ThreadName = ""
 		s.Messages = nil
 		s.Status = "idle"
+		s.TotalTokenUsage = TokenUsage{}
+		s.LastTokenUsage = TokenUsage{}
+		s.ModelContextWindow = nil
+		s.RateLimits = nil
 	}
 }
 
@@ -183,9 +196,24 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		statusField("Account", account),
 		statusField("Collaboration mode", mode),
 		statusField("Session", displayValue(s.ThreadID, "new")), "",
-		statusField("Token usage", "0 total  (0 input + 0 output)"),
-		statusField("Context window", "100% left (0 used / unavailable)"),
-		statusField("Limits", "data not available yet"),
+		statusField("Token usage", s.statusTokenUsage()),
+	}
+	if contextWindow := s.statusContextWindow(); contextWindow != "" {
+		rows = append(rows, statusField("Context window", contextWindow))
+	}
+	if len(s.RateLimits) == 0 {
+		rows = append(rows, statusField("Limits", "data not available yet"))
+	} else {
+		for _, limit := range s.RateLimits {
+			remaining := 100 - limit.UsedPercent
+			if remaining < 0 {
+				remaining = 0
+			}
+			if remaining > 100 {
+				remaining = 100
+			}
+			rows = append(rows, statusField("Limits", fmt.Sprintf("%s %.0f%% left", displayValue(limit.Label, "usage"), remaining)))
+		}
 	}
 	border := "+" + strings.Repeat("-", inner) + "+"
 	out := []string{border}
@@ -195,6 +223,19 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	out = append(out, border)
 	return strings.Join(out, "\n")
+}
+
+func (s *State) statusTokenUsage() string {
+	usage := s.TotalTokenUsage
+	return fmt.Sprintf("%s total  (%s input + %s output)", FormatInt(usage.BlendedTotal()), FormatInt(usage.NonCachedInput()), FormatInt(usage.OutputTokens))
+}
+
+func (s *State) statusContextWindow() string {
+	if s.ModelContextWindow == nil || *s.ModelContextWindow <= 0 {
+		return ""
+	}
+	used := s.LastTokenUsage.TokensInContextWindow()
+	return fmt.Sprintf("%d%% left (%s used / %s)", s.LastTokenUsage.PercentOfContextWindowRemaining(*s.ModelContextWindow), FormatInt(used), FormatInt(*s.ModelContextWindow))
 }
 
 func statusField(label, value string) string { return fmt.Sprintf("%-20s %s", label+":", value) }

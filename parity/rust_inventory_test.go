@@ -38,6 +38,8 @@ func goTopLevelDirectories(t *testing.T, root string) []string {
 		"cmd":          true,
 		"deliverables": true,
 		"docs":         true,
+		"dist":         true,
+		"npm":          true,
 		"scripts":      true,
 		"update":       true,
 	}

@@ -92,6 +92,7 @@ type responsesStreamNotificationState struct {
 	agentItemPhases           map[string]string
 	experimentalRawEvents     bool
 	applyPatchStreamingEvents bool
+	retrying                  bool
 }
 
 func newResponsesStreamNotificationState(planMode bool, turnID string) *responsesStreamNotificationState {
@@ -327,6 +328,21 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	}
 	state.rememberResponse(event)
 	switch event.Kind {
+	case model.ResponsesStreamEventRetrying:
+		state.retrying = true
+		attempt := event.RetryAttempt
+		message := fmt.Sprintf("Reconnecting... %d/%d", attempt, event.RetryMax)
+		details := strings.TrimSpace(event.RetryError)
+		r.notify(NotificationError, &ErrorNotification{
+			Error: TurnError{
+				Message:           message,
+				CodexErrorInfo:    codexErrorInfoWithHTTPStatus("responseStreamDisconnected", event.RetryHTTPStatus),
+				AdditionalDetails: stringPtrIfNotEmpty(details),
+			},
+			WillRetry: true,
+			ThreadID:  threadID,
+			TurnID:    turnID,
+		})
 	case model.ResponsesStreamEventOutputAdded:
 		state.rememberOutputItem(event)
 		state.rememberTool(event)
@@ -477,6 +493,9 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	case model.ResponsesStreamEventSafetyBuffer:
 		return
 	case model.ResponsesStreamEventCompleted:
+		if state.retrying {
+			state.retrying = false
+		}
 		if !state.experimentalRawEvents {
 			return
 		}
@@ -911,6 +930,30 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 		return
 	}
+	// Rust records a full context window and compacts before the next user turn.
+	// Do this before persisting/sending the new prompt so the prompt is retained
+	// and the sampling request sees the compacted history.
+	if status := r.compactTokenStatusForTurn(threadID, runConfig.Model, params); status.ShouldCompact {
+		notification, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
+			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
+			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
+			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+		})
+		if compactErr != nil {
+			r.clearActiveRuntimeTurn(threadID, turnID)
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
+			return
+		}
+		if notification != nil {
+			r.notify(NotificationContextCompacted, notification)
+		}
+		// appTurnConfig contains the session history; reload it after compaction.
+		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS); err != nil {
+			r.clearActiveRuntimeTurn(threadID, turnID)
+			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
+			return
+		}
+	}
 	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
@@ -957,6 +1000,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		if ctx.Err() != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			return
+		}
+		if isContextWindowExceededError(err) {
+			_ = r.persistContextWindowExceededStatus(threadID)
 		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
@@ -1035,8 +1081,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
-		usage.ModelContextWindow = r.modelContextWindowForModel(runConfig.Model)
-		status, statusErr := r.persistCompactTokenStatus(threadID, result.Usage)
+		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
+		lastUsage := lastAgentResponseUsage(result)
+		status, tokenInfo, statusErr := r.persistCompactTokenStatus(threadID, runConfig.Model, params, result.Usage, lastUsage)
+		if tokenInfo != nil {
+			usage.Total = tokenInfo.Total
+			usage.Last = tokenInfo.Last
+		}
 		r.notify(NotificationThreadTokenUsageUpdated, &ThreadTokenUsageUpdatedNotification{
 			ThreadID:   threadID,
 			TurnID:     turnID,
@@ -1063,6 +1114,14 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+func (r *RuntimeRouter) notifyCompactionActivity(threadID string, active bool) {
+	message := "Context compaction completed"
+	if active {
+		message = "Compacting context..."
+	}
+	r.notify(NotificationWarning, &WarningNotification{Message: message, ThreadID: stringPtrIfNotEmpty(threadID)})
 }
 
 func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnID string, result *turn.AgentLoopResult, status *compact.TokenStatus) error {
@@ -1222,7 +1281,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.unifiedExecPersistMu.Unlock()
 	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
-		usage.ModelContextWindow = r.modelContextWindowForModel(runConfig.Model)
+		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
 		r.notify(NotificationThreadTokenUsageUpdated, &ThreadTokenUsageUpdatedNotification{
 			ThreadID:   threadID,
 			TurnID:     turnID,
@@ -3346,35 +3405,204 @@ func (r *RuntimeRouter) persistLastResponseID(threadID string, result *turn.Agen
 	return err
 }
 
-func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, usage model.AgentUsage) (*compact.TokenStatus, error) {
+func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID string, params *turn.TurnStartParams, aggregateUsage model.AgentUsage, lastUsage model.AgentUsage) (*compact.TokenStatus, *TokenUsage, error) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	extra := cloneAnyMap(record.Metadata.Extra)
 	if extra == nil {
 		extra = map[string]any{}
 	}
-	status := compact.Evaluate(compact.Policy{
-		Enabled:              true,
-		TokenLimit:           compactTokenLimitFromMetadata(extra),
-		FallbackBufferTokens: intFromAny(extra["auto_compact_fallback_buffer_tokens"]),
-	}, int(model.AgentUsageTotalTokens(usage)))
+	policy := r.compactPolicyForTurn(modelID, params, extra)
+	status := compact.Evaluate(policy, int(model.AgentUsageTotalTokens(lastUsage)))
 	extra["token_status"] = compactTokenStatusMap(status)
-	extra["last_token_usage"] = tokenUsageMetadataMap(usage)
+	lastMap := tokenUsageMetadataMap(lastUsage)
+	total := tokenUsageBreakdownFromMetadata(extra["total_token_usage"])
+	if total == nil {
+		total = &TokenUsageBreakdown{}
+	}
+	// Rust records every completed model response. AgentLoopResult.Usage is the
+	// sum of those responses, while lastUsage represents the active context.
+	addAgentUsageToBreakdown(total, aggregateUsage)
+	totalMap := tokenUsageBreakdownMetadataMap(total)
+	window := r.effectiveModelContextWindowForModel(modelID, params)
+	extra["last_token_usage"] = lastMap
+	extra["total_token_usage"] = totalMap
+	extra["model_context_window"] = window
+	extra["token_usage_info"] = map[string]any{
+		"total_token_usage": totalMap, "last_token_usage": lastMap, "model_context_window": window,
+	}
+	info := &TokenUsage{Total: total, Last: tokenUsageBreakdownFromAgentUsage(lastUsage), ModelContextWindow: positiveInt64Ptr(window)}
 	if runtimeRecordEphemeral(record) {
 		record.Metadata.Extra = extra
 		r.saveEphemeralThreadRecord(record)
-		return &status, nil
+		return &status, info, nil
 	}
 	_, err = r.services.ThreadRouter.store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &status, nil
+	return &status, info, nil
+}
+
+func addAgentUsageToBreakdown(total *TokenUsageBreakdown, usage model.AgentUsage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens += usage.InputTokens
+	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteInputTokens += usage.CacheWriteInputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.ReasoningOutputTokens += usage.ReasoningOutputTokens
+	total.TotalTokens += model.AgentUsageTotalTokens(usage)
+}
+
+func tokenUsageBreakdownMetadataMap(usage *TokenUsageBreakdown) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	return map[string]any{
+		"inputTokens": usage.InputTokens, "cachedInputTokens": usage.CachedInputTokens,
+		"cacheWriteInputTokens": usage.CacheWriteInputTokens, "outputTokens": usage.OutputTokens,
+		"reasoningOutputTokens": usage.ReasoningOutputTokens, "totalTokens": usage.TotalTokens,
+	}
+}
+
+func positiveInt64Ptr(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func (r *RuntimeRouter) effectiveModelContextWindowForModel(modelID string, params *turn.TurnStartParams) int64 {
+	cfg, _ := r.effectiveConfigForTurn(params)
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if info == nil {
+		return 0
+	}
+	window := info.ContextWindow
+	if window <= 0 {
+		window = info.MaxContextWindow
+	}
+	percent := info.EffectiveContextWindowPercent
+	if percent <= 0 {
+		percent = 95
+	}
+	return window * int64(percent) / 100
+}
+
+func lastAgentResponseUsage(result *turn.AgentLoopResult) model.AgentUsage {
+	if result == nil {
+		return model.AgentUsage{}
+	}
+	for i := len(result.Responses) - 1; i >= 0; i-- {
+		if result.Responses[i] != nil {
+			return result.Responses[i].Usage
+		}
+	}
+	if result.Response != nil {
+		return result.Response.Usage
+	}
+	return result.Usage
+}
+
+func isContextWindowExceededError(err error) bool {
+	var apiErr *codexapi.APIError
+	return errors.As(err, &apiErr) && apiErr != nil && apiErr.Kind == codexapi.ErrorContextWindowExceeded
+}
+
+func (r *RuntimeRouter) compactTokenStatusForThread(threadID string) compact.TokenStatus {
+	if r == nil {
+		return compact.TokenStatus{}
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return compact.TokenStatus{}
+	}
+	return compactTokenStatusFromMetadata(record.Metadata.Extra)
+}
+
+func (r *RuntimeRouter) compactTokenStatusForTurn(threadID string, modelID string, params *turn.TurnStartParams) compact.TokenStatus {
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return compact.TokenStatus{}
+	}
+	extra := record.Metadata.Extra
+	stored := compactTokenStatusFromMetadata(extra)
+	active := stored.ActiveContextTokens
+	if usage, ok := extra["last_token_usage"].(map[string]any); ok {
+		active = intFromAny(usage["totalTokens"])
+	}
+	// Resumed threads may predate token usage persistence. Rust derives the
+	// current context from the loaded session, so estimate it from history
+	// instead of treating the resumed context as zero.
+	if active <= 0 {
+		active = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
+	}
+	return compact.Evaluate(r.compactPolicyForTurn(modelID, params, extra), active)
+}
+
+// compactPolicyForTurn mirrors Rust ModelInfo::auto_compact_token_limit and
+// TurnContext::model_context_window. Explicit config overrides the catalog
+// auto-compact limit; the model's resolved window still supplies the hard cap.
+func (r *RuntimeRouter) compactPolicyForTurn(modelID string, params *turn.TurnStartParams, extra map[string]any) compact.Policy {
+	cfg, _ := r.effectiveConfigForTurn(params)
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	policy := compact.Policy{Enabled: true, FallbackBufferTokens: intFromAny(extra["auto_compact_fallback_buffer_tokens"])}
+	if info == nil {
+		return policy
+	}
+	resolvedWindow := info.ContextWindow
+	if resolvedWindow <= 0 {
+		resolvedWindow = info.MaxContextWindow
+	}
+	if resolvedWindow > 0 {
+		percent := info.EffectiveContextWindowPercent
+		if percent <= 0 {
+			percent = 95
+		}
+		policy.WindowTokens = int(resolvedWindow * int64(percent) / 100)
+		policy.TokenLimit = int(resolvedWindow * 9 / 10)
+	}
+	if info.AutoCompactTokenLimit > 0 && (policy.TokenLimit == 0 || info.AutoCompactTokenLimit < int64(policy.TokenLimit)) {
+		policy.TokenLimit = int(info.AutoCompactTokenLimit)
+	}
+	if cfg != nil {
+		if limit := intFromAny(cfg.Values["model_auto_compact_token_limit"]); limit > 0 {
+			policy.TokenLimit = limit
+		}
+		if stringConfigValue(cfg, "model_auto_compact_token_limit_scope") == string(AutoCompactTokenLimitScopeBodyAfterPrefix) {
+			policy.Scope = compact.ScopeBodyAfterPrefix
+		}
+	}
+	return policy
+}
+
+func (r *RuntimeRouter) persistContextWindowExceededStatus(threadID string) error {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return err
+	}
+	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
+	status := compactTokenStatusFromMetadata(extra)
+	status.ShouldCompact = true
+	status.Reason = compact.ReasonContextWindowExceeded
+	status.NewContextWindowRequired = true
+	extra["token_status"] = compactTokenStatusMap(status)
+	record.Metadata.Extra = extra
+	if runtimeRecordEphemeral(record) {
+		r.saveEphemeralThreadRecord(record)
+		return nil
+	}
+	return r.services.ThreadRouter.store.Save(record)
 }
 
 func (r *RuntimeRouter) recordAutoCompactFallbackPrompt(threadID string, turnID string, status *compact.TokenStatus) (bool, error) {
@@ -3447,6 +3675,8 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	r.notifyCompactionActivity(params.ThreadID, true)
+	defer r.notifyCompactionActivity(params.ThreadID, false)
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil || record == nil {
 		return nil, err
@@ -3512,6 +3742,14 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	extra["compaction_trigger"] = string(request.Trigger)
 	extra["compaction_phase"] = string(request.Phase)
 	extra["compaction_status"] = string(compacted.Status)
+	// A successful pre-turn compaction satisfies the full-context requirement.
+	if request.Phase == compact.PhasePreTurn {
+		status := compactTokenStatusFromMetadata(extra)
+		status.ShouldCompact = false
+		status.NewContextWindowRequired = false
+		status.Reason = ""
+		extra["token_status"] = compactTokenStatusMap(status)
+	}
 	if compacted.Source != "" {
 		extra["compaction_source"] = string(compacted.Source)
 	}
@@ -6625,9 +6863,14 @@ func modelConfigForAppTurn(cfg *config.Config) *model.ModelsManagerConfig {
 	if cfg != nil {
 		settings = cfg.FeatureSettings()
 	}
-	return &model.ModelsManagerConfig{
+	out := &model.ModelsManagerConfig{
 		PersonalityEnabled: features.Enabled(settings, "personality"),
 	}
+	if cfg != nil {
+		out.ModelContextWindow = int64(intFromAny(cfg.Values["model_context_window"]))
+		out.ModelAutoCompactTokenLimit = int64(intFromAny(cfg.Values["model_auto_compact_token_limit"]))
+	}
+	return out
 }
 
 func appPersonalityForTurn(cfg *config.Config, params *turn.TurnStartParams) string {

@@ -1,0 +1,20 @@
+{
+  "name": "@jacks001314/codex-go",
+  "version": "0.0.0-dev",
+  "description": "Codex CLI implemented in Go",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "gcode": "bin/codex.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin/codex.js"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jacks001314/codex_go.git"
+  }
+}

@@ -10,9 +10,11 @@ import (
 const parityRustBaseline = "1e20272fa5"
 
 type parityManifest struct {
-	RustBaseline string               `json:"rustBaseline"`
-	RustTag      string               `json:"rustTag"`
-	Items        []parityManifestItem `json:"items"`
+	RustBaseline     string               `json:"rustBaseline"`
+	RustTag          string               `json:"rustTag"`
+	RustUpstreamHead string               `json:"rustUpstreamHead"`
+	RustUpstreamTag  string               `json:"rustUpstreamTag"`
+	Items            []parityManifestItem `json:"items"`
 }
 
 type parityManifestItem struct {
@@ -32,7 +34,7 @@ func TestParityManifestIsMachineReadableAndComplete(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("Unmarshal(parity.json): %v", err)
 	}
-	if manifest.RustBaseline != parityRustBaseline || manifest.RustTag == "" || len(manifest.Items) == 0 {
+	if manifest.RustBaseline != parityRustBaseline || manifest.RustTag == "" || manifest.RustUpstreamHead == "" || manifest.RustUpstreamTag == "" || len(manifest.Items) == 0 {
 		t.Fatalf("manifest header = %#v", manifest)
 	}
 	allowed := map[string]bool{"done": true, "partial": true, "missing": true, "intentional_difference": true}

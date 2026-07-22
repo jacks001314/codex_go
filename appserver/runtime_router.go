@@ -3071,7 +3071,7 @@ func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any) {
 }
 
 func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
-	if record == nil || len(record.Metadata.Extra) == 0 {
+	if record == nil {
 		return nil
 	}
 	extra := record.Metadata.Extra
@@ -3098,6 +3098,13 @@ func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
 	}
 	total := tokenUsageBreakdownFromMetadata(totalRaw)
 	last := tokenUsageBreakdownFromMetadata(lastRaw)
+	if total == nil && last == nil && len(record.Items) > 0 {
+		estimated := int64(compact.EstimateTokens(compactItemsFromSessionItems(record.Items)))
+		if estimated > 0 {
+			last = &TokenUsageBreakdown{TotalTokens: estimated}
+			total = &TokenUsageBreakdown{TotalTokens: estimated}
+		}
+	}
 	if total == nil && last == nil {
 		return nil
 	}
@@ -3116,8 +3123,37 @@ func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {
 	}
 	if window := int64FromAnyValue(windowRaw); window > 0 {
 		usage.ModelContextWindow = &window
+	} else if window := effectiveRestoredModelContextWindow(record.Metadata.Model); window > 0 {
+		usage.ModelContextWindow = &window
 	}
 	return usage
+}
+
+func effectiveRestoredModelContextWindow(modelID string) int64 {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return 0
+	}
+	info := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	window := info.ContextWindow
+	if window <= 0 {
+		window = info.MaxContextWindow
+	}
+	if window <= 0 {
+		return 0
+	}
+	percent := info.EffectiveContextWindowPercent
+	if percent <= 0 {
+		percent = 95
+	}
+	return window * int64(percent) / 100
+}
+
+// RestoredTokenUsageForRecord exposes the Rust-compatible restored token
+// snapshot to front-ends that resume through thread/read rather than
+// thread/resume.
+func RestoredTokenUsageForRecord(record *session.Record) *TokenUsage {
+	return restoredTokenUsageFromRecord(record)
 }
 
 func tokenUsageBreakdownFromMetadata(value any) *TokenUsageBreakdown {

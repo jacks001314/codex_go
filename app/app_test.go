@@ -997,6 +997,43 @@ func TestInteractiveTurnCommandUsesTUIStateAndResume(t *testing.T) {
 	}
 }
 
+func TestInteractiveTurnCommandAppliesExecTokenUsageToStatus(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5.4"})
+	window := int64(258400)
+	runner := interactiveTurnRunnerFunc(func(ctx context.Context, req *codexexec.Request, stdin io.Reader, stdout, stderr io.Writer) (*codexexec.Result, error) {
+		_ = json.NewEncoder(stdout).Encode(protocol.ThreadStarted("thread-usage"))
+		return &codexexec.Result{
+			ThreadID:    "thread-usage",
+			LastMessage: "2",
+			TokenUsage: &protocol.ThreadTokenUsage{
+				Total:              protocol.Usage{InputTokens: 5925, OutputTokens: 5, TotalTokens: 5930},
+				Last:               protocol.Usage{InputTokens: 5925, OutputTokens: 5, TotalTokens: 5930},
+				ModelContextWindow: &window,
+			},
+		}, nil
+	})
+
+	message := interactiveTurnCommand(context.Background(), &cli.RootOptions{}, runner, state, "1+1", nil, nil, nil)()
+	started, ok := message.(codextea.StreamStartedMsg)
+	if !ok {
+		t.Fatalf("message = %T, want StreamStartedMsg", message)
+	}
+	model := codextea.NewModel(state, codextea.Options{Width: 100, Height: 30})
+	for streamed := range started.Messages {
+		model.Update(streamed)
+	}
+	if state.TotalTokenUsage.TotalTokens != 5930 || state.LastTokenUsage.TotalTokens != 5930 {
+		t.Fatalf("token usage state = total %+v last %+v", state.TotalTokenUsage, state.LastTokenUsage)
+	}
+	if state.ModelContextWindow == nil || *state.ModelContextWindow != window {
+		t.Fatalf("model context window = %#v", state.ModelContextWindow)
+	}
+	card := state.RenderStatusCardWidth(100)
+	if strings.Contains(card, "Token usage:         0 total") || !strings.Contains(card, "Context window:") || !strings.Contains(card, "258,400") {
+		t.Fatalf("status card did not include runtime usage:\n%s", card)
+	}
+}
+
 func TestInteractiveTurnCommandUsesPlanModeReasoningOverride(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{
 		Model:                   "gpt-tui",
@@ -2280,6 +2317,88 @@ func TestRemoteNotificationForParentThreadUpdatesSideStatusOnly(t *testing.T) {
 	}
 }
 
+func TestRemoteTokenUsageNotificationRoundTripUpdatesTUIState(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-token")
+	messages := make(chan bubbletea.Msg, 2)
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	window := int64(258400)
+	payload, err := json.Marshal(appserver.ThreadTokenUsageUpdatedNotification{
+		ThreadID: "thread-token", TurnID: "turn-1",
+		TokenUsage: appserver.TokenUsage{
+			Total:              &appserver.TokenUsageBreakdown{InputTokens: 5631, OutputTokens: 5, TotalTokens: 5636},
+			Last:               &appserver.TokenUsageBreakdown{InputTokens: 5631, OutputTokens: 5, TotalTokens: 5636},
+			ModelContextWindow: &window,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{Method: string(appserver.NotificationThreadTokenUsageUpdated), Params: payload}); err != nil {
+		t.Fatal(err)
+	}
+	msg := <-messages
+	model := codextea.NewModel(state, codextea.Options{Width: 100, Height: 24})
+	model.Update(msg)
+	if state.TotalTokenUsage.TotalTokens != 5636 || state.LastTokenUsage.TotalTokens != 5636 || state.ModelContextWindow == nil || *state.ModelContextWindow != window {
+		t.Fatalf("payload=%s state total=%+v last=%+v window=%v msg=%#v", payload, state.TotalTokenUsage, state.LastTokenUsage, state.ModelContextWindow, msg)
+	}
+}
+
+func TestRemoteRetryErrorUpdatesActivityWithoutFailingTurn(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-retry")
+	messages := make(chan bubbletea.Msg, 2)
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	details := "stream closed"
+	payload, err := json.Marshal(appserver.ErrorNotification{
+		Error: appserver.TurnError{
+			Message:           "Reconnecting... 2/5",
+			AdditionalDetails: &details,
+		},
+		WillRetry: true,
+		ThreadID:  "thread-retry",
+		TurnID:    "turn-retry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{Method: string(appserver.NotificationError), Params: payload}); err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := (<-messages).(codextea.ModelRetryStatusMsg)
+	if !ok || !msg.Active || !strings.Contains(msg.Message, "Reconnecting... 2/5") || !strings.Contains(msg.Message, details) {
+		t.Fatalf("message = %#v", msg)
+	}
+	if state.Status == "error" {
+		t.Fatalf("retryable stream error marked turn failed: %#v", state)
+	}
+}
+
+func TestRemoteAgentDeltaClearsRetryBeforeOutput(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-retry")
+	messages := make(chan bubbletea.Msg, 3)
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	payload, err := json.Marshal(appserver.AgentMessageDeltaNotification{
+		ThreadID: "thread-retry", TurnID: "turn-retry", ItemID: "msg-1", Delta: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{Method: string(appserver.NotificationAgentMessageDelta), Params: payload}); err != nil {
+		t.Fatal(err)
+	}
+	clear, ok := (<-messages).(codextea.ModelRetryStatusMsg)
+	if !ok || clear.Active {
+		t.Fatalf("first message = %#v, want retry clear", clear)
+	}
+	delta, ok := (<-messages).(codextea.ThreadEventMsg)
+	if !ok || delta.Event.Type != "item.delta" || delta.Event.Delta == nil || delta.Event.Delta.Text != "hello" {
+		t.Fatalf("second message = %#v", delta)
+	}
+}
+
 func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -3388,6 +3507,7 @@ func TestRemoteServerRequestChatGPTAuthRefreshUsesLocalAuth(t *testing.T) {
 }
 
 func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
+	t.Setenv("CODEX_GO_VERSION", "9.8.7-test")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	requests := make(chan remoteTUITestRequest, 4)
@@ -3432,6 +3552,13 @@ func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
 	turnStart := remoteTUITestReadCapturedRequest(t, requests)
 	if initialize.Method != string(appserver.MethodInitialize) || threadStart.Method != string(appserver.MethodThreadStart) || turnStart.Method != string(appserver.MethodTurnStart) {
 		t.Fatalf("methods = %q, %q, %q", initialize.Method, threadStart.Method, turnStart.Method)
+	}
+	var initializeParams appserver.InitializeParams
+	if err := json.Unmarshal(initialize.Params, &initializeParams); err != nil {
+		t.Fatalf("initialize params: %v", err)
+	}
+	if initializeParams.ClientInfo.Version != "9.8.7-test" {
+		t.Fatalf("initialize client version = %q", initializeParams.ClientInfo.Version)
 	}
 	var sawCompleted bool
 	for {
@@ -3528,8 +3655,16 @@ func TestInteractiveResumeSessionHandlerReadsHistoryFromStore(t *testing.T) {
 		Preview: "hello prompt",
 		Metadata: session.Metadata{
 			CWD:           `D:\repo`,
+			Model:         "gpt-5.4",
 			ModelProvider: "openai",
 			Source:        "cli",
+			Extra: map[string]any{
+				"token_usage_info": map[string]any{
+					"total_token_usage":    map[string]any{"input_tokens": int64(100), "output_tokens": int64(20), "total_tokens": int64(120)},
+					"last_token_usage":     map[string]any{"input_tokens": int64(80), "output_tokens": int64(10), "total_tokens": int64(90)},
+					"model_context_window": int64(258400),
+				},
+			},
 		},
 		Items: []session.Item{
 			{Type: "user_message", Role: "user", Text: "hello prompt"},
@@ -3566,6 +3701,9 @@ func TestInteractiveResumeSessionHandlerReadsHistoryFromStore(t *testing.T) {
 	}
 	if response.Messages[3].Role != codextui.RoleHistory || !strings.Contains(response.Messages[3].Text, "ok") {
 		t.Fatalf("tool message = %#v", response.Messages[3])
+	}
+	if response.TokenUsage == nil || response.TokenUsage.Total.TotalTokens != 120 || response.TokenUsage.Last.TotalTokens != 90 || response.TokenUsage.ModelContextWindow == nil || *response.TokenUsage.ModelContextWindow != 258400 {
+		t.Fatalf("restored token usage = %#v", response.TokenUsage)
 	}
 }
 

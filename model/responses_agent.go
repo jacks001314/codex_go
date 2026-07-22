@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -2009,7 +2010,9 @@ func responsesRetryDelay(response *http.Response, attempt uint64) time.Duration 
 			return 5 * time.Second
 		}
 	}
-	return delay
+	// Match Rust's backoff jitter range so reconnecting clients do not retry in lockstep.
+	jitter := 0.9 + rand.Float64()*0.2
+	return time.Duration(float64(delay) * jitter)
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {

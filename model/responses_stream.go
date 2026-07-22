@@ -41,10 +41,16 @@ const (
 	ResponsesStreamEventReasoningTextDelta        ResponsesStreamEventKind = "response.reasoning_text.delta"
 	ResponsesStreamEventReasoningSummaryPartAdded ResponsesStreamEventKind = "response.reasoning_summary_part.added"
 	ResponsesStreamEventCompleted                 ResponsesStreamEventKind = "response.completed"
+	ResponsesStreamEventRetrying                  ResponsesStreamEventKind = "response.retrying"
 )
 
 type ResponsesStreamEvent struct {
 	Kind               ResponsesStreamEventKind
+	RetryAttempt       uint64
+	RetryMax           uint64
+	RetryError         string
+	RetryDelay         time.Duration
+	RetryHTTPStatus    *uint16
 	ResponseID         string
 	RequestID          string
 	Model              string
@@ -159,14 +165,40 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		if attempt >= maxRetries || !isRetryableResponsesStreamError(err) {
 			return nil, err
 		}
-		if err := sleepWithContext(ctx, responsesRetryDelay(nil, attempt+1)); err != nil {
+		delay := responsesRetryDelay(nil, attempt+1)
+		emitResponsesStreamEvent(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), &ResponsesStreamEvent{
+			Kind:            ResponsesStreamEventRetrying,
+			RetryAttempt:    attempt + 1,
+			RetryMax:        maxRetries,
+			RetryError:      err.Error(),
+			RetryDelay:      delay,
+			RetryHTTPStatus: responsesStreamErrorHTTPStatus(err),
+		})
+		if err := sleepWithContext(ctx, delay); err != nil {
 			return nil, err
 		}
 	}
 }
 
+func responsesStreamErrorHTTPStatus(err error) *uint16 {
+	var status int
+	var apiError *codexapi.APIError
+	if errors.As(err, &apiError) && apiError != nil {
+		status = apiError.Status
+	}
+	var responsesError *ResponsesAPIError
+	if status == 0 && errors.As(err, &responsesError) && responsesError != nil {
+		status = responsesError.StatusCode
+	}
+	if status <= 0 || status > 65535 {
+		return nil
+	}
+	value := uint16(status)
+	return &value
+}
+
 func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
-	httpResponse, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "text/event-stream", r.streamMaxRetries())
+	httpResponse, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "text/event-stream", r.requestMaxRetries())
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +223,12 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 func isRetryableResponsesStreamError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errResponsesStreamFailed) {
 		return false
+	}
+	var apiError *codexapi.APIError
+	if errors.As(err, &apiError) {
+		// Context exhaustion is deterministic for the current input. Retrying the
+		// same request cannot change the token count and only duplicates work.
+		return apiError.Kind != codexapi.ErrorContextWindowExceeded && apiError.Status >= http.StatusInternalServerError
 	}
 	var apiErr *ResponsesAPIError
 	if errors.As(err, &apiErr) {
@@ -1314,7 +1352,8 @@ func usageFromStreamEventData(data []byte) (AgentUsage, bool) {
 	if err := json.Unmarshal(data, &payload); err != nil || payload.Response.Usage == nil {
 		return AgentUsage{}, false
 	}
-	return usageFromResponses(payload.Response.Usage, ""), true
+	usage := usageFromResponses(payload.Response.Usage, "")
+	return usage, true
 }
 
 func responseIDFromEventData(data []byte) string {

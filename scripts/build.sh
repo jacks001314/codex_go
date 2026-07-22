@@ -78,7 +78,7 @@ case "$CGO_MODE" in
 esac
 export GOOS=$TARGET_GOOS GOARCH=$TARGET_GOARCH CGO_ENABLED
 
-set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION" -o "$OUTPUT"
+set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION" -o "$OUTPUT"
 [ "$RACE" -eq 1 ] && set -- "$@" -race
 [ "$REBUILD" -eq 1 ] && set -- "$@" -a
 set -- "$@" ./cmd/codex

@@ -239,26 +239,6 @@ func TestAgentLoopSamplingFollowUpAfterToolKeepsToolOutput(t *testing.T) {
 	}
 }
 
-func TestAgentLoopStopsAtIterationLimit(t *testing.T) {
-	agent := &fakeLoopAgent{alwaysTool: true}
-	registry := tool.NewRegistry()
-	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
-		return &tool.Output{Success: true, Body: "again"}, nil
-	})); err != nil {
-		t.Fatalf("register echo: %v", err)
-	}
-	loop := NewAgentLoop(&AgentLoopOptions{
-		Agent:      agent,
-		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
-		MaxTurns:   2,
-	})
-
-	_, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "loop"})
-	if err == nil {
-		t.Fatalf("Run() error = nil")
-	}
-}
-
 func TestAgentLoopDefaultAllowsLongToolChains(t *testing.T) {
 	agent := &countingToolLoopAgent{toolRounds: 12}
 	registry := tool.NewRegistry()

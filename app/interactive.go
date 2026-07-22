@@ -23,6 +23,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	contextfrag "codex_go/context"
+	"codex_go/doctor"
 	"codex_go/eventmap"
 	codexexec "codex_go/exec"
 	"codex_go/features"
@@ -584,7 +585,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SessionPickerCWD:          interactiveSessionPickerCWD(root),
 		SessionPickerView:         settings.SessionPickerView,
 		ShowSessionHeader:         true,
-		SessionHeaderVersion:      "dev",
+		SessionHeaderVersion:      doctor.Version(),
 		OnSessionAction:           interactiveSessionActionHandler(root),
 		OnResumeSession:           interactiveResumeSessionHandler(root),
 		KeymapConfig:              interactiveKeymapConfig(root),
@@ -1399,10 +1400,16 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		if interactiveRepairImageGenerationItems(record, auth.DefaultCodexHome()) {
 			_ = store.Save(record)
 		}
+		var tokenUsage *protocol.ThreadTokenUsage
+		if restored := appserver.RestoredTokenUsageForRecord(record); restored != nil {
+			value := remoteThreadTokenUsage(*restored)
+			tokenUsage = &value
+		}
 		return codextea.SessionResumeResponse{
-			Summary:  firstSessionSummary(store, record),
-			Messages: interactiveSessionMessagesFromRecord(record),
-			Status:   "idle",
+			Summary:    firstSessionSummary(store, record),
+			Messages:   interactiveSessionMessagesFromRecord(record),
+			Status:     "idle",
+			TokenUsage: tokenUsage,
 		}, nil
 	}
 }
@@ -1802,6 +1809,9 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	msg := codextea.TurnCompletedMsg{}
 	if result != nil {
 		msg.ThreadID = result.ThreadID
+		if result.TokenUsage != nil && !streamWriter.SawTokenUsage() {
+			send(codextea.ThreadEventMsg{Event: protocol.TokenUsageUpdated(*result.TokenUsage)})
+		}
 		if !streamWriter.SawAssistantOutput() {
 			msg.AssistantMessage = result.LastMessage
 		}
@@ -1977,6 +1987,7 @@ type interactiveStreamEventWriter struct {
 	buffer             []byte
 	send               func(bubbletea.Msg)
 	sawAssistantOutput bool
+	sawTokenUsage      bool
 }
 
 func newInteractiveStreamEventWriter(send func(bubbletea.Msg)) *interactiveStreamEventWriter {
@@ -2022,6 +2033,15 @@ func (w *interactiveStreamEventWriter) SawAssistantOutput() bool {
 	return w.sawAssistantOutput
 }
 
+func (w *interactiveStreamEventWriter) SawTokenUsage() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.sawTokenUsage
+}
+
 func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 	if len(line) == 0 || w.send == nil {
 		return
@@ -2033,6 +2053,9 @@ func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 	}
 	if interactiveThreadEventHasAssistantOutput(event) {
 		w.sawAssistantOutput = true
+	}
+	if event.Type == "thread.token_usage.updated" && event.TokenUsage != nil {
+		w.sawTokenUsage = true
 	}
 	w.send(codextea.ThreadEventMsg{Event: event})
 }

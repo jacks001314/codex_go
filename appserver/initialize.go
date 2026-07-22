@@ -14,6 +14,12 @@ const (
 	defaultCodexVersion         = "0.0.0"
 )
 
+// buildVersion is injected alongside doctor.buildVersion by release builds.
+// Keeping the app-server version on the same build metadata path is important:
+// VS Code clients learn the server version from initialize.userAgent, not from
+// the CLI --version output.
+var buildVersion = defaultCodexVersion
+
 type ClientInfo struct {
 	Name    string  `json:"name"`
 	Title   *string `json:"title,omitempty"`
@@ -86,6 +92,9 @@ func InitializeUserAgent(info ClientInfo) string {
 
 func appServerVersion() string {
 	if value := strings.TrimSpace(os.Getenv("CODEX_GO_VERSION")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(buildVersion); value != "" && value != defaultCodexVersion {
 		return value
 	}
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {

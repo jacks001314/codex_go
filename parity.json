@@ -1,6 +1,8 @@
 {
   "rustBaseline": "1e20272fa5",
   "rustTag": "rust-v0.143.0-alpha.10+81",
+  "rustUpstreamHead": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
+  "rustUpstreamTag": "rust-v0.145.0-alpha.20",
   "generatedAt": "2026-07-20",
   "items": [
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},

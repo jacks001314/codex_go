@@ -12694,6 +12694,38 @@ func warningNotificationsForTest(sink *NotificationBuffer) []*WarningNotificatio
 	return out
 }
 
+func TestResponsesStreamRetryUsesRustErrorNotificationShape(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+	state := newResponsesStreamNotificationState(false, "turn-retry")
+	status := uint16(http.StatusServiceUnavailable)
+
+	router.notifyResponsesStreamEvent("thread-retry", "turn-retry", &model.ResponsesStreamEvent{
+		Kind:            model.ResponsesStreamEventRetrying,
+		RetryAttempt:    2,
+		RetryMax:        5,
+		RetryError:      "stream closed",
+		RetryHTTPStatus: &status,
+	}, state)
+
+	notifications := sink.List()
+	if len(notifications) != 1 || notifications[0].Method != NotificationError {
+		t.Fatalf("notifications = %#v, want one error notification", notifications)
+	}
+	payload, ok := notifications[0].Params.(*ErrorNotification)
+	if !ok || !payload.WillRetry || payload.ThreadID != "thread-retry" || payload.TurnID != "turn-retry" {
+		t.Fatalf("payload = %#v", notifications[0].Params)
+	}
+	if payload.Error.Message != "Reconnecting... 2/5" || payload.Error.AdditionalDetails == nil || *payload.Error.AdditionalDetails != "stream closed" {
+		t.Fatalf("turn error = %#v", payload.Error)
+	}
+	info, ok := payload.Error.CodexErrorInfo.(map[string]any)
+	if !ok || info["responseStreamDisconnected"] == nil {
+		t.Fatalf("codexErrorInfo = %#v", payload.Error.CodexErrorInfo)
+	}
+}
+
 func TestRuntimeRouterSkillInstructionsInputItemTruncatesMainPromptLikeRust(t *testing.T) {
 	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{})
@@ -14007,15 +14039,10 @@ func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{
-		Extra: map[string]any{"auto_compact_token_limit": 1},
-	}, true); err != nil {
-		t.Fatalf("UpdateMetadata() error = %v", err)
-	}
-
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   "trigger auto compact",
+		Config:   map[string]any{"model_auto_compact_token_limit": 1},
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
@@ -14072,15 +14099,10 @@ func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.
 		t.Fatalf("thread start error: %+v", threadResponse.Error)
 	}
 	threadID := threadResponse.Result.(*ThreadStartResponse).Thread.ID
-	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{
-		Extra: map[string]any{"auto_compact_token_limit": 1},
-	}, true); err != nil {
-		t.Fatalf("UpdateMetadata() error = %v", err)
-	}
-
 	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   "trigger auto compact",
+		Config:   map[string]any{"model_auto_compact_token_limit": 1},
 	})
 	turnStart.ConnectionID = "conn-auto-compact-analytics"
 	turnResponse := router.Handle(turnStart)
@@ -14094,12 +14116,12 @@ func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.
 	if params.TurnID != turnID ||
 		params.Trigger != telemetry.CompactionTriggerAuto ||
 		params.Reason != telemetry.CompactionReasonContextLimit ||
-		params.Phase != telemetry.CompactionPhaseMidTurn ||
+		params.Phase != telemetry.CompactionPhasePreTurn ||
 		params.Status != telemetry.CompactionStatusCompleted ||
 		params.Implementation != telemetry.CompactionImplementationResponses {
 		t.Fatalf("auto compaction event = %#v", event)
 	}
-	if params.ActiveContextTokensBefore != 5 || params.ActiveContextTokensAfter <= 0 {
+	if params.ActiveContextTokensBefore <= 0 || params.ActiveContextTokensAfter <= 0 {
 		t.Fatalf("context token fields = %d/%d", params.ActiveContextTokensBefore, params.ActiveContextTokensAfter)
 	}
 	if params.AppServerClient.ProductClientID != "codex-tui" ||
@@ -15326,6 +15348,33 @@ func TestCompactTokenStatusFromMetadata(t *testing.T) {
 		"newContextWindowRequired": false,
 	}})
 	if status.ActiveContextTokens != 20 || status.TokensUntilCompaction == nil || *status.TokensUntilCompaction != 12 {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestPersistContextWindowExceededStatusPreservesUsageAndMarksPreTurnCompact(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID: "thread-context-overflow", SessionID: "thread-context-overflow",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Extra: map[string]any{"token_status": map[string]any{
+			"activeContextTokens": 1234, "autoCompactScopeTokens": 1200,
+			"autoCompactScopeLimit": 1000, "shouldCompact": false,
+		}}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	if err := router.persistContextWindowExceededStatus("thread-context-overflow"); err != nil {
+		t.Fatalf("persist context overflow status error = %v", err)
+	}
+	record, err := store.Read(session.ThreadID("thread-context-overflow"), true, true)
+	if err != nil {
+		t.Fatalf("Get record error = %v", err)
+	}
+	status := compactTokenStatusFromMetadata(record.Metadata.Extra)
+	if status.ActiveContextTokens != 1234 || !status.ShouldCompact || !status.NewContextWindowRequired || status.Reason != compact.ReasonContextWindowExceeded {
 		t.Fatalf("status = %#v", status)
 	}
 }
@@ -19008,6 +19057,19 @@ func TestRuntimeRouterNotifyRestoredTokenUsageFromRecord(t *testing.T) {
 	staleUsage, ok := staleNotifications[0].Params.(*ThreadTokenUsageUpdatedNotification)
 	if !ok || staleUsage == nil || staleUsage.TurnID != "turn-1" {
 		t.Fatalf("stale token usage payload = %+v, want fallback to completed turn-1", staleNotifications[0].Params)
+	}
+}
+
+func TestRestoredTokenUsageRecomputesEffectiveWindowForLegacyRecord(t *testing.T) {
+	record := &session.Record{
+		Metadata: session.Metadata{Model: "gpt-5.4", Extra: map[string]any{
+			"last_token_usage":  map[string]any{"totalTokens": int64(5930)},
+			"total_token_usage": map[string]any{"totalTokens": int64(5930)},
+		}},
+	}
+	usage := RestoredTokenUsageForRecord(record)
+	if usage == nil || usage.ModelContextWindow == nil || *usage.ModelContextWindow != 258400 {
+		t.Fatalf("restored usage = %#v", usage)
 	}
 }
 

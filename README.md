@@ -1,6 +1,7 @@
 # Codex Go
 
 Parity candidate for Rust baseline `1e20272fa5`: `go-1e20272fa5-parity.1`.
+The checked Rust upstream is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` (`rust-v0.145.0-alpha.20`); the baseline remains explicit until the corresponding Go parity work is complete.
 See [release notes](./docs/release_notes_1e20272fa5.md) and [sync plan](./plan.md).
 
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。
@@ -109,6 +110,30 @@ go fmt ./...
 ```
 
 ## 编译、安装与发布
+
+### npm 安装
+
+发布后的全局安装命令：
+
+```powershell
+npm install -g @jacks001314/codex-go
+gcode --version
+```
+
+npm 对外暴露的命令名为 `gcode`，避免与官方 `codex` 命令冲突；底层原生二进制仍名为 `codex`。主包会根据当前操作系统和 CPU 架构自动安装对应的原生二进制包。发布新版本时先构建七个 tarball，再按“六个平台包、主包”的顺序发布：
+
+```powershell
+node .\npm\scripts\build-packages.mjs --version 0.1.0
+node .\npm\scripts\publish-packages.mjs --directory .\dist\v0.1.0\npm
+```
+
+如果 npm 账号要求发布时进行双因素认证，请传入认证器当前生成的 OTP：
+
+```powershell
+node .\npm\scripts\publish-packages.mjs --directory .\dist\v0.1.0\npm --otp 123456
+```
+
+发布需要登录 npm 账号 `jacks001314`；预发布可追加 `--tag next`。CI 发布应使用启用了 `Bypass 2FA` 的 granular access token，避免交互式 OTP 过期。
 
 编译当前平台的开发版本：
 

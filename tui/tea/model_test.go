@@ -43,6 +43,22 @@ func TestModelViewRendersState(t *testing.T) {
 	}
 }
 
+func TestModelTokenUsageEventUpdatesStatusCard(t *testing.T) {
+	window := int64(200000)
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 100, Height: 24})
+	model.Update(ThreadEventMsg{Event: protocol.TokenUsageUpdated(protocol.ThreadTokenUsage{
+		Total: protocol.Usage{InputTokens: 50000, CachedInputTokens: 10000, OutputTokens: 5000, TotalTokens: 55000},
+		Last:  protocol.Usage{TotalTokens: 50000}, ModelContextWindow: &window,
+	})})
+	card := state.RenderStatusCardWidth(100)
+	for _, want := range []string{"45,000 total", "80% left (50,000 used / 200,000)"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("status card missing %q:\n%s", want, card)
+		}
+	}
+}
+
 func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{
 		Model:          "gpt-test",
@@ -1784,6 +1800,42 @@ func TestModelStatusWarningUsesWarningDisplayState(t *testing.T) {
 	model.Update(StatusMsg{Status: "warning: plain warning"})
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 3 {
 		t.Fatalf("plain warning count = %d, want 3; messages=%#v", got, state.Messages)
+	}
+}
+
+func TestModelRetryStatusIsSingleTransientActivityRow(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 2/5 (30s • esc to interrupt)\n└ Stream disconnected before completion: stream closed", Active: true})
+	if !strings.Contains(model.View(), "Reconnecting... 2/5") {
+		t.Fatalf("retry status missing from Activity:\n%s", model.View())
+	}
+	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 3/5 (30s • esc to interrupt)\n└ Stream disconnected before completion: stream closed", Active: true})
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
+		t.Fatalf("retry activity should update one row: %#v", state.Messages)
+	}
+	if !strings.Contains(state.Messages[0].RawText, "3/5") {
+		t.Fatalf("retry activity was not updated in place: %#v", state.Messages)
+	}
+
+	model.Update(ModelRetryStatusMsg{Active: false})
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
+		t.Fatalf("completed retry activity should be removed: %#v", state.Messages)
+	}
+}
+
+func TestModelCompactionStatusIsAnimatedActivity(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ModelCompactionStatusMsg{Message: "Compacting context...", Active: true})
+	if len(state.Messages) != 1 || !strings.Contains(state.Messages[0].Text, "Compacting context...") {
+		t.Fatalf("compaction activity missing: %#v", state.Messages)
+	}
+	model.Update(ModelCompactionStatusMsg{Active: false})
+	if len(state.Messages) != 0 {
+		t.Fatalf("compaction activity was not cleared: %#v", state.Messages)
 	}
 }
 

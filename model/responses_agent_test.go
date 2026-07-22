@@ -2095,6 +2095,7 @@ func TestResponsesAgentRunnerStreamsRetryAndIdleTimeout(t *testing.T) {
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
 		Provider: &APIProvider{
 			BaseURL:           server.URL + "/v1",
+			RequestMaxRetries: 1,
 			StreamMaxRetries:  1,
 			StreamIdleTimeout: 5 * time.Millisecond,
 		},

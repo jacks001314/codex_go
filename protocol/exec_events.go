@@ -3,17 +3,25 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 type ThreadEvent struct {
 	Type string `json:"type"`
 
-	ThreadID  string             `json:"thread_id,omitempty"`
-	Usage     *Usage             `json:"usage,omitempty"`
-	Error     *ThreadError       `json:"error,omitempty"`
-	Item      *ThreadItem        `json:"item,omitempty"`
-	Delta     *Delta             `json:"delta,omitempty"`
-	RateLimit *RateLimitSnapshot `json:"rateLimit,omitempty"`
+	ThreadID   string             `json:"thread_id,omitempty"`
+	Usage      *Usage             `json:"usage,omitempty"`
+	Error      *ThreadError       `json:"error,omitempty"`
+	Item       *ThreadItem        `json:"item,omitempty"`
+	Delta      *Delta             `json:"delta,omitempty"`
+	RateLimit  *RateLimitSnapshot `json:"rateLimit,omitempty"`
+	TokenUsage *ThreadTokenUsage  `json:"tokenUsage,omitempty"`
+}
+
+type ThreadTokenUsage struct {
+	Total              Usage  `json:"total"`
+	Last               Usage  `json:"last"`
+	ModelContextWindow *int64 `json:"modelContextWindow,omitempty"`
 }
 
 type Usage struct {
@@ -22,6 +30,28 @@ type Usage struct {
 	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+	TotalTokens           int64 `json:"total_tokens,omitempty"`
+}
+
+func TokenUsageUpdated(usage ThreadTokenUsage) ThreadEvent {
+	return ThreadEvent{Type: "thread.token_usage.updated", TokenUsage: &usage}
+}
+
+func Reconnecting(attempt, max uint64, message string) ThreadEvent {
+	title := fmt.Sprintf("Reconnecting... %d/%d", attempt, max)
+	return ThreadEvent{Type: "turn.reconnecting", Item: &ThreadItem{Type: "reconnecting", Message: title, Output: message}}
+}
+
+func Reconnected() ThreadEvent {
+	return ThreadEvent{Type: "turn.reconnected", Item: &ThreadItem{Type: "reconnecting"}}
+}
+
+func Compacting() ThreadEvent {
+	return ThreadEvent{Type: "turn.compacting", Item: &ThreadItem{Type: "compaction", Message: "Compacting context..."}}
+}
+
+func Compacted() ThreadEvent {
+	return ThreadEvent{Type: "turn.compacted", Item: &ThreadItem{Type: "compaction"}}
 }
 
 type RateLimitSnapshot struct {

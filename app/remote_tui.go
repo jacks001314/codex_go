@@ -27,6 +27,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/doctor"
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/review"
@@ -286,7 +287,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionPickerCWD:     interactiveSessionPickerCWD(root),
 		SessionPickerView:    settings.SessionPickerView,
 		ShowSessionHeader:    true,
-		SessionHeaderVersion: "dev",
+		SessionHeaderVersion: doctor.Version(),
 		OnSessionAction:      interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:      interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
@@ -1091,9 +1092,10 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			return codextea.SessionResumeResponse{}, err
 		}
 		return codextea.SessionResumeResponse{
-			Summary:  remoteTUISessionSummaryFromThread(thread, false),
-			Messages: remoteTUIThreadMessagesFromThread(thread),
-			Status:   remoteTUIStatusFromThread(thread),
+			Summary:    remoteTUISessionSummaryFromThread(thread, false),
+			Messages:   remoteTUIThreadMessagesFromThread(thread),
+			Status:     remoteTUIStatusFromThread(thread),
+			TokenUsage: remoteThreadTokenUsageFromThread(thread),
 		}, nil
 	}
 }
@@ -1661,7 +1663,7 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 	params := appserver.InitializeParams{
 		ClientInfo: appserver.ClientInfo{
 			Name:    "codex_go_tui",
-			Version: "0.0.0",
+			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{
 			ExperimentalAPI:                true,
@@ -2716,6 +2718,16 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+	case appserver.NotificationThreadTokenUsageUpdated:
+		var payload appserver.ThreadTokenUsageUpdatedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.noteNotificationThreadID(payload.ThreadID)
+		c.send(codextea.ThreadEventMsg{Event: protocol.TokenUsageUpdated(remoteThreadTokenUsage(payload.TokenUsage))})
 	case appserver.NotificationAgentMessageDelta:
 		var payload appserver.AgentMessageDeltaNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -2725,6 +2737,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.AgentMessageDelta(payload.ItemID, payload.Delta)})
 			return nil
 		}
+		c.send(codextea.ModelRetryStatusMsg{Active: false})
 		c.send(codextea.ThreadEventMsg{Event: protocol.AgentMessageDelta(payload.ItemID, payload.Delta)})
 	case appserver.NotificationItemStarted:
 		var payload appserver.ItemStartedNotification
@@ -2805,6 +2818,22 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
 			return err
 		}
+		if payload.WillRetry {
+			if !c.notificationThreadIsActive(payload.ThreadID) {
+				return nil
+			}
+			text := strings.TrimSpace(payload.Error.Message)
+			if text == "" {
+				text = "Reconnecting..."
+			}
+			if payload.Error.AdditionalDetails != nil {
+				if details := strings.TrimSpace(*payload.Error.AdditionalDetails); details != "" {
+					text += "\n└ " + details
+				}
+			}
+			c.send(codextea.ModelRetryStatusMsg{Message: text, Active: true})
+			return nil
+		}
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeSet, codextea.SideParentStatusFailed)
 		if !c.notificationThreadIsActive(payload.ThreadID) {
 			text := strings.TrimSpace(payload.Error.Message)
@@ -2828,7 +2857,16 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		if strings.TrimSpace(payload.Message) != "" {
-			c.send(codextea.StatusMsg{Status: "warning: " + strings.TrimSpace(payload.Message)})
+			message := strings.TrimSpace(payload.Message)
+			if strings.HasPrefix(message, "Reconnecting...") {
+				c.send(codextea.ModelRetryStatusMsg{Message: message, Active: true})
+			} else if message == "Compacting context..." {
+				c.send(codextea.ModelCompactionStatusMsg{Message: message, Active: true})
+			} else if message == "Context compaction completed" {
+				c.send(codextea.ModelCompactionStatusMsg{Active: false})
+			} else {
+				c.send(codextea.StatusMsg{Status: "warning: " + message})
+			}
 		}
 	case appserver.NotificationWindowsSandboxSetupCompleted:
 		var payload sandbox.WindowsSetupCompletedNotification
@@ -2845,6 +2883,30 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 	default:
 	}
 	return nil
+}
+
+func remoteThreadTokenUsage(usage appserver.TokenUsage) protocol.ThreadTokenUsage {
+	return protocol.ThreadTokenUsage{Total: remoteUsageBreakdown(usage.Total), Last: remoteUsageBreakdown(usage.Last), ModelContextWindow: usage.ModelContextWindow}
+}
+
+func remoteThreadTokenUsageFromThread(thread *appserver.Thread) *protocol.ThreadTokenUsage {
+	if thread == nil {
+		return nil
+	}
+	record := sessionRecordFromAppServerThread(thread, false)
+	usage := appserver.RestoredTokenUsageForRecord(record)
+	if usage == nil {
+		return nil
+	}
+	value := remoteThreadTokenUsage(*usage)
+	return &value
+}
+
+func remoteUsageBreakdown(usage *appserver.TokenUsageBreakdown) protocol.Usage {
+	if usage == nil {
+		return protocol.Usage{}
+	}
+	return protocol.Usage{InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens, CacheWriteInputTokens: usage.CacheWriteInputTokens, OutputTokens: usage.OutputTokens, ReasoningOutputTokens: usage.ReasoningOutputTokens, TotalTokens: usage.TotalTokens}
 }
 
 func remoteWindowsSandboxModeFromSandbox(mode sandbox.WindowsSetupMode) chatwidget.WindowsSandboxMode {

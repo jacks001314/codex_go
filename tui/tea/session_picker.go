@@ -269,6 +269,9 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	}
 	m.State.SetThreadID(threadID)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
+	if response.TokenUsage != nil {
+		m.applyTokenUsage(response.TokenUsage)
+	}
 	status := strings.TrimSpace(response.Status)
 	if status == "" {
 		status = "idle"

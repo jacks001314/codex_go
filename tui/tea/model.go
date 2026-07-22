@@ -77,9 +77,10 @@ type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.Sess
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
 type SessionResumeResponse struct {
-	Summary  *codextui.SessionSummary
-	Messages []codextui.Message
-	Status   string
+	Summary    *codextui.SessionSummary
+	Messages   []codextui.Message
+	Status     string
+	TokenUsage *protocol.ThreadTokenUsage
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -157,6 +158,18 @@ type ReviewCommitsReaderFunc func(cwd string, limit int) ([]chatwidget.ReviewCom
 
 type StatusMsg struct {
 	Status string
+}
+
+// ModelRetryStatusMsg is a transient model transport status. Unlike warnings,
+// it is an Activity row and must not be persisted in conversation history.
+type ModelRetryStatusMsg struct {
+	Message string
+	Active  bool
+}
+
+type ModelCompactionStatusMsg struct {
+	Message string
+	Active  bool
 }
 
 type TurnCompletedMsg struct {
@@ -477,6 +490,9 @@ type Model struct {
 	mcpStartupFinishPending          bool
 	initialMessages                  <-chan bubbletea.Msg
 	notice                           string
+	retryMessageIndex                int
+	retryActivityMessage             string
+	retryActivityActive              bool
 	bottom                           []string
 	attachments                      []bottompane.ComposerAttachment
 	composerMentionBindings          []string
@@ -637,6 +653,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		StatusBar:                      newStatusBarComponent(),
 		transcript:                     transcript,
 		activityFollow:                 true,
+		retryMessageIndex:              -1,
 		composer:                       composer,
 		noAltScreen:                    options.NoAltScreen,
 		terminalFocused:                true,
@@ -802,7 +819,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	switch msg := message.(type) {
 	case anim.TickMsg:
 		if m.spinner != nil {
-			return m, m.spinner.Update(msg)
+			cmd := m.spinner.Update(msg)
+			if m.retryActivityActive {
+				m.renderRetryActivity()
+			}
+			return m, cmd
 		}
 		return m, nil
 	case bubbletea.WindowSizeMsg:
@@ -823,6 +844,24 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.setStatus(msg.Status)
 		m.refreshTranscript()
 		return m, m.refreshStatusControlsCmd()
+	case ModelRetryStatusMsg:
+		if msg.Active {
+			m.retryActivityMessage = strings.TrimSpace(msg.Message)
+			m.retryActivityActive = m.retryActivityMessage != ""
+			m.renderRetryActivity()
+		} else {
+			m.clearRetryActivity()
+		}
+		return m, nil
+	case ModelCompactionStatusMsg:
+		if msg.Active {
+			m.retryActivityMessage = strings.TrimSpace(msg.Message)
+			m.retryActivityActive = m.retryActivityMessage != ""
+			m.renderRetryActivity()
+		} else {
+			m.clearRetryActivity()
+		}
+		return m, nil
 	case TurnCompletedMsg:
 		cmd := m.applyTurnCompleted(msg)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued())
@@ -1713,6 +1752,30 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "turn.started":
 		m.setStatus("running")
 		m.Transcript.lastTurnError = ""
+		m.retryMessageIndex = -1
+		m.retryActivityActive = false
+	case "turn.reconnecting":
+		if event.Item != nil {
+			message := event.Item.Message
+			if event.Item.Output != "" {
+				message += "\n└ " + event.Item.Output
+			}
+			m.retryActivityMessage = message
+			m.retryActivityActive = true
+			m.renderRetryActivity()
+		}
+	case "turn.reconnected":
+		m.clearRetryActivity()
+	case "turn.compacting":
+		message := "Compacting context..."
+		if event.Item != nil && strings.TrimSpace(event.Item.Message) != "" {
+			message = strings.TrimSpace(event.Item.Message)
+		}
+		m.retryActivityMessage = message
+		m.retryActivityActive = true
+		m.renderRetryActivity()
+	case "turn.compacted":
+		m.clearRetryActivity()
 	case "item.started":
 		m.applyItemStarted(event.Item)
 	case "item.completed":
@@ -1723,12 +1786,14 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.setStatus("idle")
 		m.markThreadCompleted(m.State.ThreadID)
 		m.Transcript.lastTurnError = ""
+		m.clearRetryActivity()
 	case "turn.failed", "error":
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
 			message = strings.TrimSpace(event.Error.Message)
 		}
 		m.setStatus("error")
+		m.clearRetryActivity()
 		m.markActiveToolCallsFailed(message)
 		m.clearCurrentThreadAfterFailure(message)
 		m.addTurnErrorHistoryMessage(message)
@@ -1737,9 +1802,29 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if event.RateLimit != nil {
 			cmd = m.applyRateLimitSnapshot(rateLimitSnapshotFromProtocol(event.RateLimit))
 		}
+	case "thread.token_usage.updated":
+		m.applyTokenUsage(event.TokenUsage)
 	}
 	m.refreshTranscript()
 	return cmd
+}
+
+func (m *Model) applyTokenUsage(info *protocol.ThreadTokenUsage) {
+	if m == nil || m.State == nil || info == nil {
+		return
+	}
+	m.State.TotalTokenUsage = tokenUsageFromProtocol(info.Total)
+	m.State.LastTokenUsage = tokenUsageFromProtocol(info.Last)
+	if info.ModelContextWindow == nil {
+		m.State.ModelContextWindow = nil
+	} else {
+		value := *info.ModelContextWindow
+		m.State.ModelContextWindow = &value
+	}
+}
+
+func tokenUsageFromProtocol(usage protocol.Usage) codextui.TokenUsage {
+	return codextui.TokenUsage{InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens, ReasoningOutputTokens: usage.ReasoningOutputTokens, TotalTokens: usage.TotalTokens}
 }
 
 func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
@@ -2779,6 +2864,41 @@ func (m *Model) applyWarningMessage(message string) {
 	m.refreshTranscript()
 }
 
+func (m *Model) renderRetryActivity() {
+	if m == nil {
+		return
+	}
+	message := strings.TrimSpace(m.retryActivityMessage)
+	if message == "" {
+		return
+	}
+	frames := []string{"◐", "◓", "◑", "◒"}
+	frame := frames[0]
+	if m.animEngine != nil {
+		frame = frames[m.animEngine.CurrentTick()%len(frames)]
+	}
+	message = frame + " " + message
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	cell := historycell.NewInfoEvent(message, "")
+	m.retryMessageIndex = m.upsertHistoryMessage(m.retryMessageIndex, cell.DisplayLines(width), cell.RawLines())
+	m.refreshTranscript()
+}
+
+func (m *Model) clearRetryActivity() {
+	if m == nil {
+		return
+	}
+	m.retryActivityActive = false
+	m.retryActivityMessage = ""
+	if m.State != nil && m.retryMessageIndex >= 0 && m.retryMessageIndex < len(m.State.Messages) {
+		m.State.Messages = append(m.State.Messages[:m.retryMessageIndex], m.State.Messages[m.retryMessageIndex+1:]...)
+	}
+	m.retryMessageIndex = -1
+}
+
 func warningMessageFromStatus(status string) (string, bool) {
 	status = strings.TrimSpace(status)
 	if len(status) < len("warning:") || !strings.EqualFold(status[:len("warning:")], "warning:") {
@@ -2805,6 +2925,7 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 		snapshot.PlanType = m.chatGPTPlanType
 	}
 	m.rateLimitSnapshots[limitID] = snapshot
+	m.syncStateRateLimits()
 	warnings := m.rateLimitWarnings.TakeWarnings(snapshot)
 	if len(warnings) > 0 {
 		width := m.width
@@ -2818,6 +2939,42 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 		m.refreshTranscript()
 	}
 	return m.maybeOpenRateLimitSwitchPrompt(snapshot)
+}
+
+func (m *Model) syncStateRateLimits() {
+	if m == nil || m.State == nil {
+		return
+	}
+	m.State.RateLimits = nil
+	snapshot, ok := m.rateLimitSnapshots["codex"]
+	if !ok {
+		snapshot, ok = m.rateLimitSnapshots[""]
+	}
+	if !ok {
+		return
+	}
+	if snapshot.Primary != nil {
+		m.State.RateLimits = append(m.State.RateLimits, codextui.RateLimitStatus{Label: rateLimitLabel(snapshot.Primary, "5h"), UsedPercent: snapshot.Primary.UsedPercent})
+	}
+	if snapshot.Secondary != nil {
+		m.State.RateLimits = append(m.State.RateLimits, codextui.RateLimitStatus{Label: rateLimitLabel(snapshot.Secondary, "weekly"), UsedPercent: snapshot.Secondary.UsedPercent})
+	}
+}
+
+func rateLimitLabel(window *chatwidget.RateLimitWindow, fallback string) string {
+	if window == nil || window.WindowDurationMins == nil {
+		return fallback
+	}
+	switch *window.WindowDurationMins {
+	case 300:
+		return "5h"
+	case 10080:
+		return "weekly"
+	case 43200, 43800, 44640:
+		return "monthly"
+	default:
+		return fallback
+	}
 }
 
 func rateLimitSnapshotFromProtocol(snapshot *protocol.RateLimitSnapshot) chatwidget.RateLimitSnapshot {

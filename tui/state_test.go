@@ -26,7 +26,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 		}
 	}
 	card := state.RenderStatusCard()
-	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "Session:", "thread-1", "Context window:", "Limits:"} {
+	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "Session:", "thread-1", "Limits:"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card = %q, missing %q", card, want)
 		}
@@ -40,6 +40,34 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	}
 	if strings.Contains(frame, "History:") {
 		t.Fatalf("frame rendered history role header:\n%s", frame)
+	}
+}
+
+func TestStateRenderStatusCardUsesRuntimeUsageAndLimits(t *testing.T) {
+	window := int64(200000)
+	state := NewState(nil)
+	state.TotalTokenUsage = TokenUsage{InputTokens: 50000, CachedInputTokens: 10000, OutputTokens: 5000, TotalTokens: 55000}
+	state.LastTokenUsage = TokenUsage{TotalTokens: 50000}
+	state.ModelContextWindow = &window
+	state.RateLimits = []RateLimitStatus{{Label: "5h", UsedPercent: 37}, {Label: "weekly", UsedPercent: 81}}
+	card := state.RenderStatusCardWidth(100)
+	for _, want := range []string{"45,000 total  (40,000 input + 5,000 output)", "80% left (50,000 used / 200,000)", "5h 63% left", "weekly 19% left"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("status card missing %q:\n%s", want, card)
+		}
+	}
+}
+
+func TestStateResetThreadClearsRuntimeUsage(t *testing.T) {
+	window := int64(200000)
+	state := NewState(nil)
+	state.TotalTokenUsage = TokenUsage{TotalTokens: 10}
+	state.LastTokenUsage = TokenUsage{TotalTokens: 10}
+	state.ModelContextWindow = &window
+	state.RateLimits = []RateLimitStatus{{Label: "5h", UsedPercent: 50}}
+	state.ResetThread()
+	if !state.TotalTokenUsage.IsZero() || !state.LastTokenUsage.IsZero() || state.ModelContextWindow != nil || len(state.RateLimits) != 0 {
+		t.Fatalf("ResetThread retained runtime usage: %+v", state)
 	}
 }
 

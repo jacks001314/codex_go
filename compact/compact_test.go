@@ -221,6 +221,29 @@ func TestCompactLocallyHonorsHistoryTokenBudget(t *testing.T) {
 	}
 }
 
+func TestEstimateTextTokensCountsCJKWithoutWhitespace(t *testing.T) {
+	text := strings.Repeat("这是一个很长的中文上下文", 100)
+	if got := EstimateTextTokens(text); got < 1000 {
+		t.Fatalf("EstimateTextTokens() = %d, want a CJK-aware estimate", got)
+	}
+}
+
+func TestEstimateTextTokensPreservesWordBasedEstimate(t *testing.T) {
+	if got := EstimateTextTokens("one two three four"); got != 4 {
+		t.Fatalf("EstimateTextTokens() = %d, want 4", got)
+	}
+}
+
+func TestEstimateTextTokensCountsLongUnbrokenText(t *testing.T) {
+	text := strings.Repeat("a", 100)
+	if got := EstimateTextTokens(text); got != 25 {
+		t.Fatalf("EstimateTextTokens() = %d, want 25", got)
+	}
+	if got := truncateTextToTokens(text, 5); EstimateTextTokens(got) > 5 || len(got) >= len(text) {
+		t.Fatalf("truncateTextToTokens() kept %d bytes with estimate %d", len(got), EstimateTextTokens(got))
+	}
+}
+
 func TestCompactRemotelyUsesRunnerAndProcessesHistory(t *testing.T) {
 	runner := remoteRunnerFunc(func(ctx context.Context, request *Request) (*Result, error) {
 		return &Result{

@@ -69,7 +69,7 @@ switch ($CGO) {
     }
 }
 
-$ldflags = "-s -w -X codex_go/doctor.buildVersion=$ResolvedVersion"
+$ldflags = "-s -w -X codex_go/doctor.buildVersion=$ResolvedVersion -X codex_go/appserver.buildVersion=$ResolvedVersion"
 $arguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $Output)
 if ($Race) { $arguments += "-race" }
 if ($Rebuild) { $arguments += "-a" }

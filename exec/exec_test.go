@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,8 @@ import (
 
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/codexapi"
+	"codex_go/compact"
 	"codex_go/config"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -84,6 +88,90 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	}
 	if record.Metadata.Source != "cli" || record.Metadata.ThreadSource != string(model.AgentTaskRegular) {
 		t.Fatalf("session metadata = %#v", record.Metadata)
+	}
+	if result.TokenUsage == nil || result.TokenUsage.Total.TotalTokens <= 0 || result.TokenUsage.Last.TotalTokens <= 0 || result.TokenUsage.ModelContextWindow == nil || *result.TokenUsage.ModelContextWindow <= 0 {
+		t.Fatalf("result token usage = %#v", result.TokenUsage)
+	}
+	stored := execStoredTokenUsage(record.Metadata.Extra)
+	if stored.Total.TotalTokens != result.TokenUsage.Total.TotalTokens || stored.Last.TotalTokens != result.TokenUsage.Last.TotalTokens || stored.ModelContextWindow == nil {
+		t.Fatalf("stored token usage = %#v, result = %#v", stored, result.TokenUsage)
+	}
+}
+
+func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-5.4\"\nmodel_auto_compact_token_limit = 1\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	record := &session.Record{
+		ID:        "thread-long",
+		SessionID: "thread-long",
+		CreatedAt: fixedExecTime(),
+		UpdatedAt: fixedExecTime(),
+		RecencyAt: fixedExecTime(),
+		Metadata:  session.Metadata{Model: "gpt-5.4", ModelProvider: model.OpenAIProviderID},
+		Items: []session.Item{
+			{ID: "user-old", Type: "message", Role: "user", Text: strings.Repeat("很长的历史上下文", 20), CreatedAt: fixedExecTime()},
+			{ID: "assistant-old", Type: "message", Role: "assistant", Text: "旧回复", CreatedAt: fixedExecTime()},
+		},
+	}
+	if err := session.NewStore(filepath.Join(home, "sessions")).Save(record); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	agent := &preTurnCompactAgent{}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	runner.Now = fixedExecTime
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{Exec: cli.ExecOptions{
+		Subcommand: "resume",
+		Resume:     cli.ExecResumeOptions{SessionID: "thread-long", Prompt: "继续"},
+		JSON:       true,
+	}}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	types := execEventTypes(events)
+	compacting := slices.Index(types, "turn.compacting")
+	compacted := slices.Index(types, "turn.compacted")
+	completed := slices.Index(types, "turn.completed")
+	if compacting < 0 || compacted <= compacting || completed <= compacted {
+		t.Fatalf("event order = %#v", types)
+	}
+	if len(agent.requests) != 2 || !agentRequestInputItemsContainText(&agent.requests[1], compact.SummaryPrefix) {
+		t.Fatalf("agent requests after compaction = %#v", agent.requests)
+	}
+	if result.TokenUsage == nil || result.TokenUsage.Total.TotalTokens <= result.TokenUsage.Last.TotalTokens {
+		t.Fatalf("token usage should include compaction and resumed turn: %#v", result.TokenUsage)
+	}
+	reloaded := loadSessionRecord(t, home, "thread-long")
+	if reloaded.Metadata.Extra["compaction_phase"] != string(compact.PhasePreTurn) {
+		t.Fatalf("compaction metadata = %#v", reloaded.Metadata.Extra)
+	}
+}
+
+func TestRunContextWindowExceededMarksResumeForNextPreTurnCompact(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	record := &session.Record{ID: "thread-overflow", SessionID: "thread-overflow", CreatedAt: fixedExecTime(), UpdatedAt: fixedExecTime(), RecencyAt: fixedExecTime(), Metadata: session.Metadata{Model: "gpt-5.4", ModelProvider: model.OpenAIProviderID}, Items: []session.Item{{ID: "u", Type: "message", Role: "user", Text: "history", CreatedAt: fixedExecTime()}}}
+	if err := session.NewStore(filepath.Join(home, "sessions")).Save(record); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &failingAgent{err: &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: http.StatusBadRequest}}
+	_, err := runner.Run(Request{Exec: cli.ExecOptions{Subcommand: "resume", Resume: cli.ExecResumeOptions{SessionID: "thread-overflow", Prompt: "continue"}}}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("Run returned nil error")
+	}
+	reloaded := loadSessionRecord(t, home, "thread-overflow")
+	if !execStoredContextWindowRequired(reloaded.Metadata.Extra) {
+		t.Fatalf("token status = %#v", reloaded.Metadata.Extra["token_status"])
 	}
 }
 
@@ -3250,6 +3338,17 @@ func TestExecStreamEventCollectorDefersExecCommandUntilToolStarted(t *testing.T)
 	}
 }
 
+func TestExecStreamEventCollectorClearsRetryBeforeRecoveredDelta(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	collector.Handle(&model.ResponsesStreamEvent{Kind: model.ResponsesStreamEventRetrying, RetryAttempt: 2, RetryMax: 5})
+	collector.Handle(&model.ResponsesStreamEvent{Kind: model.ResponsesStreamEventOutputText, ItemID: "msg-1", Delta: "recovered"})
+
+	events := collector.Events()
+	if len(events) != 3 || events[0].Type != "turn.reconnecting" || events[1].Type != "turn.reconnected" || events[2].Type != "item.delta" {
+		t.Fatalf("recovery event order = %#v", execEventTypes(events))
+	}
+}
+
 func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBegin(t *testing.T) {
 	collector := &execStreamEventCollector{streamAssistantDeltas: true}
 	patch := "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"
@@ -3807,6 +3906,21 @@ func (a *failingAgent) Run(ctx context.Context, request *model.AgentRequest) (*m
 
 type toolLoopRecordingAgent struct {
 	requests []model.AgentRequest
+}
+
+type preTurnCompactAgent struct {
+	requests []model.AgentRequest
+}
+
+func (a *preTurnCompactAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		return &model.AgentResponse{Message: "压缩摘要", Usage: model.AgentUsage{InputTokens: 100, OutputTokens: 10, TotalTokens: 110}, Model: request.Model, ProviderID: request.ProviderID}, nil
+	}
+	return &model.AgentResponse{Message: "继续完成", Items: []model.AgentItem{{ID: "msg", Type: "agent_message", Text: "继续完成"}}, Usage: model.AgentUsage{InputTokens: 40, OutputTokens: 5, TotalTokens: 45}, Model: request.Model, ProviderID: request.ProviderID}, nil
 }
 
 func (a *toolLoopRecordingAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

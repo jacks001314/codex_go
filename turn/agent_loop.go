@@ -3,15 +3,12 @@ package turn
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"codex_go/codexapi"
 	"codex_go/model"
 )
-
-const DefaultAgentLoopMaxIterations = 64
 
 type AgentLoopOptions struct {
 	Agent        model.AgentRunner
@@ -35,7 +32,6 @@ type AgentLoop struct {
 	agent        model.AgentRunner
 	dispatcher   *ToolDispatcher
 	steerMailbox *SteerMailbox
-	maxTurns     int
 	now          func() time.Time
 }
 
@@ -115,10 +111,6 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 	if options == nil {
 		options = &AgentLoopOptions{}
 	}
-	maxTurns := options.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = DefaultAgentLoopMaxIterations
-	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -127,7 +119,6 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 		agent:        options.Agent,
 		dispatcher:   options.Dispatcher,
 		steerMailbox: options.SteerMailbox,
-		maxTurns:     maxTurns,
 		now:          now,
 	}
 }
@@ -154,7 +145,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	promptAppended := false
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
 	clientMetadata := cloneStringMap(request.ClientMetadata)
-	for iteration := 0; iteration < l.maxTurns; iteration++ {
+	for iteration := 0; ; iteration++ {
 		if steer := drainSteer(l.steerMailbox, request); steer != nil {
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
@@ -272,7 +263,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 	}
-	return nil, fmt.Errorf("agent tool loop exceeded %d iterations", l.maxTurns)
 }
 
 func combineResponsesStreamHandlers(handlers ...model.ResponsesStreamHandler) model.ResponsesStreamHandler {

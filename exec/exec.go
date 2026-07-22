@@ -25,6 +25,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/codexapi"
+	"codex_go/compact"
 	"codex_go/config"
 	"codex_go/eventmap"
 	"codex_go/features"
@@ -59,6 +60,7 @@ type Result struct {
 	LastMessage string
 	Prompt      string
 	Events      []protocol.ThreadEvent
+	TokenUsage  *protocol.ThreadTokenUsage
 }
 
 type Runner struct {
@@ -185,6 +187,26 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	if !req.Exec.JSON && stderr != nil {
+		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
+	}
+	eventSink := newExecEventSink(stdout, req.Exec.JSON)
+	if !req.Exec.JSON && stderr != nil {
+		eventSink.human = newExecHumanRenderer(stderr, execColorFlagValue(req.Exec))
+	}
+	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
+		return nil, err
+	}
+	if err := eventSink.Emit(protocol.TurnStarted()); err != nil {
+		return nil, err
+	}
+	if resumeContext != nil && resumeContext.Record != nil {
+		if _, err := r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cfg, agent, eventSink); err != nil {
+			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+			return nil, err
+		}
+	}
 	runPrompt := prompt
 	inputItems := execStartupInputItems(req, permissionProfile, r.now())
 	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
@@ -198,19 +220,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		} else {
 			runPrompt = ""
 		}
-	}
-	if !req.Exec.JSON && stderr != nil {
-		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
-	}
-	eventSink := newExecEventSink(stdout, req.Exec.JSON)
-	if !req.Exec.JSON && stderr != nil {
-		eventSink.human = newExecHumanRenderer(stderr, execColorFlagValue(req.Exec))
-	}
-	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
-		return nil, err
-	}
-	if err := eventSink.Emit(protocol.TurnStarted()); err != nil {
-		return nil, err
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink}
 	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
@@ -278,6 +287,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		UnifiedExecEnabled:           features.Enabled(cfg.FeatureSettings(), "unified_exec"),
 	})
 	if err != nil {
+		if execIsContextWindowExceeded(err) && resumeContext != nil && resumeContext.Record != nil {
+			_ = r.persistExecContextWindowExceeded(resumeContext.Record)
+		}
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 		return nil, err
@@ -286,7 +298,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
-	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext)
+	tokenUsage := execTokenUsageForResult(resumeContext, turnResult, modelID, cfg)
+	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage)
 	if err != nil {
 		return nil, err
 	}
@@ -324,6 +337,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		LastMessage: lastMessage,
 		Prompt:      prompt,
 		Events:      events,
+		TokenUsage:  tokenUsage,
 	}, nil
 }
 
@@ -376,6 +390,7 @@ type execStreamEventCollector struct {
 	streamAssistantDeltas bool
 	streamedAgentText     map[string]string
 	completedAgentItems   map[string]bool
+	retrying              bool
 }
 
 func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
@@ -383,6 +398,11 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		return
 	}
 	switch event.Kind {
+	case model.ResponsesStreamEventRetrying:
+		// Rust renders the retry counter as the Activity header and the transport
+		// failure as transient details. The row is removed when output resumes.
+		c.retrying = true
+		c.emit(protocol.Reconnecting(event.RetryAttempt, event.RetryMax, event.RetryError))
 	case model.ResponsesStreamEventOutputAdded:
 		if event.Item == nil || event.Item.Type == "" || event.Item.Type == "agent_message" || event.Item.Type == "reasoning" {
 			return
@@ -415,6 +435,10 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		}
 		if event.Delta == "" {
 			return
+		}
+		if c.retrying {
+			c.retrying = false
+			c.emit(protocol.Reconnected())
 		}
 		if c.streamedAgentText == nil {
 			c.streamedAgentText = map[string]string{}
@@ -2870,7 +2894,7 @@ func todoItemFromPlanFields(step string, status string) (protocol.TodoItem, bool
 	}, true
 }
 
-func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext) (string, error) {
+func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext, tokenUsage *protocol.ThreadTokenUsage) (string, error) {
 	if req.Exec.Ephemeral {
 		return "", nil
 	}
@@ -2893,17 +2917,22 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 			return "", err
 		}
 		_ = r.appendExecRollout(resumeRecord.ID, items, updated, now)
+		extra := execTokenUsageMetadata(updated.Metadata.Extra, tokenUsage)
 		if updated.Metadata.Model == "" || updated.Metadata.ModelProvider == "" {
 			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{
 				Model:          stringPointerIfEmpty(updated.Metadata.Model, response.Model),
 				ModelProvider:  stringPointerIfEmpty(updated.Metadata.ModelProvider, response.ProviderID),
 				LastResponseID: stringPointerIfNotEmpty(response.ResponseID),
 				SessionPrefix:  stringPointerIfNotEmpty(session.PrefixForSessionID(updated.SessionID)),
+				Extra:          extra,
 			}, true)
 		} else if strings.TrimSpace(response.ResponseID) != "" {
 			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{
 				LastResponseID: stringPointerIfNotEmpty(response.ResponseID),
+				Extra:          extra,
 			}, true)
+		} else if extra != nil {
+			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{Extra: extra}, true)
 		}
 		return store.Path(resumeRecord.ID)
 	}
@@ -2923,6 +2952,7 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 			HistoryMode:    string(session.ForkAll),
 			LastResponseID: response.ResponseID,
 			SessionPrefix:  session.PrefixForSessionID(threadID),
+			Extra:          execTokenUsageMetadata(nil, tokenUsage),
 		},
 		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
 			CodexHome: r.CodexHome,
@@ -2938,6 +2968,491 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		return "", err
 	}
 	return path, nil
+}
+
+func execTokenUsageForResult(resumeContext *execResumeContext, result *turn.AgentLoopResult, modelID string, cfg *config.Config) *protocol.ThreadTokenUsage {
+	if result == nil {
+		return nil
+	}
+	last := lastExecAgentResponseUsage(result)
+	aggregate := result.Usage
+	if aggregate == (model.AgentUsage{}) {
+		aggregate = last
+	}
+	if aggregate == (model.AgentUsage{}) && last == (model.AgentUsage{}) {
+		return nil
+	}
+	total := protocol.Usage{}
+	if resumeContext != nil && resumeContext.Record != nil {
+		total = execStoredTokenUsage(resumeContext.Record.Metadata.Extra).Total
+		if total.TotalTokens == 0 {
+			total.TotalTokens = int64(compact.EstimateTokens(execCompactItemsFromSession(resumeContext.Record.Items)))
+		}
+	}
+	addProtocolUsage(&total, protocolUsageFromAgentUsage(aggregate))
+	return &protocol.ThreadTokenUsage{
+		Total:              total,
+		Last:               protocolUsageFromAgentUsage(last),
+		ModelContextWindow: effectiveExecModelContextWindow(modelID, cfg),
+	}
+}
+
+func lastExecAgentResponseUsage(result *turn.AgentLoopResult) model.AgentUsage {
+	if result == nil {
+		return model.AgentUsage{}
+	}
+	responses := result.ModelResponses()
+	for i := len(responses) - 1; i >= 0; i-- {
+		if responses[i] != nil {
+			return responses[i].Usage
+		}
+	}
+	return result.Usage
+}
+
+func protocolUsageFromAgentUsage(usage model.AgentUsage) protocol.Usage {
+	return protocol.Usage{
+		InputTokens:           usage.InputTokens,
+		CachedInputTokens:     usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningOutputTokens: usage.ReasoningOutputTokens,
+		TotalTokens:           model.AgentUsageTotalTokens(usage),
+	}
+}
+
+func addProtocolUsage(total *protocol.Usage, usage protocol.Usage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens += usage.InputTokens
+	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteInputTokens += usage.CacheWriteInputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.ReasoningOutputTokens += usage.ReasoningOutputTokens
+	total.TotalTokens += usage.TotalTokens
+}
+
+func effectiveExecModelContextWindow(modelID string, cfg *config.Config) *int64 {
+	info := execModelInfo(modelID, cfg)
+	window := info.ContextWindow
+	if window <= 0 {
+		window = info.MaxContextWindow
+	}
+	if window <= 0 {
+		return nil
+	}
+	percent := info.EffectiveContextWindowPercent
+	if percent <= 0 {
+		percent = 95
+	}
+	window = window * int64(percent) / 100
+	if window <= 0 {
+		return nil
+	}
+	return &window
+}
+
+func execModelInfo(modelID string, cfg *config.Config) model.ModelInfo {
+	modelConfig := &model.ModelsManagerConfig{}
+	if cfg != nil {
+		if value, ok := intFromAny(cfg.Values["model_context_window"]); ok && value > 0 {
+			modelConfig.ModelContextWindow = int64(value)
+		}
+		if value, ok := intFromAny(cfg.Values["model_auto_compact_token_limit"]); ok && value > 0 {
+			modelConfig.ModelAutoCompactTokenLimit = int64(value)
+		}
+	}
+	return model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, modelConfig)
+}
+
+func execTokenUsageMetadata(extra map[string]any, usage *protocol.ThreadTokenUsage) map[string]any {
+	if usage == nil {
+		return extra
+	}
+	out := cloneExecAnyMap(extra)
+	if out == nil {
+		out = map[string]any{}
+	}
+	total := execProtocolUsageMetadata(usage.Total)
+	last := execProtocolUsageMetadata(usage.Last)
+	out["total_token_usage"] = total
+	out["last_token_usage"] = last
+	if usage.ModelContextWindow != nil && *usage.ModelContextWindow > 0 {
+		out["model_context_window"] = *usage.ModelContextWindow
+	}
+	out["token_usage_info"] = map[string]any{
+		"total_token_usage":    total,
+		"last_token_usage":     last,
+		"model_context_window": execContextWindowMetadataValue(usage.ModelContextWindow),
+	}
+	return out
+}
+
+func execProtocolUsageMetadata(usage protocol.Usage) map[string]any {
+	return map[string]any{
+		"input_tokens":             usage.InputTokens,
+		"cached_input_tokens":      usage.CachedInputTokens,
+		"cache_write_input_tokens": usage.CacheWriteInputTokens,
+		"output_tokens":            usage.OutputTokens,
+		"reasoning_output_tokens":  usage.ReasoningOutputTokens,
+		"total_tokens":             usage.TotalTokens,
+	}
+}
+
+func execContextWindowMetadataValue(value *int64) any {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	return *value
+}
+
+func execStoredTokenUsage(extra map[string]any) protocol.ThreadTokenUsage {
+	if extra == nil {
+		return protocol.ThreadTokenUsage{}
+	}
+	info, _ := extra["token_usage_info"].(map[string]any)
+	totalRaw := execFirstMapValue(info, "total_token_usage", "totalTokenUsage", "total")
+	lastRaw := execFirstMapValue(info, "last_token_usage", "lastTokenUsage", "last")
+	windowRaw := execFirstMapValue(info, "model_context_window", "modelContextWindow")
+	if totalRaw == nil {
+		totalRaw = execFirstMapValue(extra, "total_token_usage", "totalTokenUsage", "total")
+	}
+	if lastRaw == nil {
+		lastRaw = execFirstMapValue(extra, "last_token_usage", "lastTokenUsage", "last")
+	}
+	if windowRaw == nil {
+		windowRaw = execFirstMapValue(extra, "model_context_window", "modelContextWindow")
+	}
+	usage := protocol.ThreadTokenUsage{Total: execProtocolUsageFromAny(totalRaw), Last: execProtocolUsageFromAny(lastRaw)}
+	if window := execInt64FromAny(windowRaw); window > 0 {
+		usage.ModelContextWindow = &window
+	}
+	return usage
+}
+
+func execProtocolUsageFromAny(value any) protocol.Usage {
+	values, _ := value.(map[string]any)
+	usage := protocol.Usage{
+		InputTokens:           execInt64FromAny(execFirstMapValue(values, "input_tokens", "inputTokens")),
+		CachedInputTokens:     execInt64FromAny(execFirstMapValue(values, "cached_input_tokens", "cachedInputTokens")),
+		CacheWriteInputTokens: execInt64FromAny(execFirstMapValue(values, "cache_write_input_tokens", "cacheWriteInputTokens")),
+		OutputTokens:          execInt64FromAny(execFirstMapValue(values, "output_tokens", "outputTokens")),
+		ReasoningOutputTokens: execInt64FromAny(execFirstMapValue(values, "reasoning_output_tokens", "reasoningOutputTokens")),
+		TotalTokens:           execInt64FromAny(execFirstMapValue(values, "total_tokens", "totalTokens")),
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	return usage
+}
+
+func execFirstMapValue(values map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func execInt64FromAny(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float32:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func cloneExecAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *execResumeContext, threadID string, turnID string, modelID string, providerID string, cfg *config.Config, agent model.AgentRunner, sink *execEventSink) (bool, error) {
+	if resumeContext == nil || resumeContext.Record == nil {
+		return false, nil
+	}
+	record := resumeContext.Record
+	status := execCompactStatus(record, modelID, cfg)
+	if !status.ShouldCompact {
+		return false, nil
+	}
+	if err := sink.Emit(protocol.Compacting()); err != nil {
+		return false, err
+	}
+	defer func() { _ = sink.Emit(protocol.Compacted()) }()
+	request := &compact.Request{
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		Trigger:   compact.TriggerAuto,
+		Reason:    status.Reason,
+		Phase:     compact.PhasePreTurn,
+		Prompt:    "Summarize the conversation so far, preserving user intent, decisions, file changes, commands, and unresolved work.",
+		History:   execCompactItemsFromSession(record.Items),
+		StartedAt: r.now().UTC(),
+	}
+	if request.Reason == "" {
+		request.Reason = compact.ReasonTokenLimit
+	}
+	var remoteRunner compact.RemoteRunner
+	if execProviderSupportsRemoteCompaction(cfg, providerID) {
+		remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID}
+	}
+	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
+		Runner:          remoteRunner,
+		MaxSummaryChars: 4000,
+		FallbackToLocal: true,
+	})
+	if err != nil {
+		return false, err
+	}
+	if compacted == nil || !compacted.Succeeded() {
+		return false, errors.New("context compaction did not complete")
+	}
+	now := r.now().UTC()
+	record.Items = execSessionItemsFromCompact(compacted.NewHistory, now)
+	record.UpdatedAt = now
+	record.RecencyAt = now
+	extra := cloneExecAnyMap(record.Metadata.Extra)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	extra["compacted_at"] = now.Format(time.RFC3339Nano)
+	extra["auto_compacted_at"] = now.Format(time.RFC3339Nano)
+	extra["compaction_summary"] = compacted.Summary
+	extra["compaction_reason"] = string(request.Reason)
+	extra["compaction_trigger"] = string(request.Trigger)
+	extra["compaction_phase"] = string(request.Phase)
+	extra["compaction_status"] = string(compacted.Status)
+	extra["compaction_source"] = string(compacted.Source)
+	extra["token_status"] = map[string]any{
+		"activeContextTokens":      compact.EstimateTokens(compacted.NewHistory),
+		"shouldCompact":            false,
+		"newContextWindowRequired": false,
+	}
+	usage := execStoredTokenUsage(extra)
+	if usage.Total.TotalTokens == 0 {
+		usage.Total.TotalTokens = int64(status.ActiveContextTokens)
+	}
+	if compacted.Usage != nil {
+		last := protocol.Usage{
+			InputTokens:           compacted.Usage.InputTokens,
+			CachedInputTokens:     compacted.Usage.CachedInputTokens,
+			CacheWriteInputTokens: compacted.Usage.CacheWriteInputTokens,
+			OutputTokens:          compacted.Usage.OutputTokens,
+			ReasoningOutputTokens: compacted.Usage.ReasoningOutputTokens,
+			TotalTokens:           compacted.Usage.InputTokens + compacted.Usage.OutputTokens,
+		}
+		addProtocolUsage(&usage.Total, last)
+		usage.Last = last
+	} else {
+		usage.Last = protocol.Usage{TotalTokens: int64(compact.EstimateTokens(compacted.NewHistory))}
+	}
+	usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
+	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
+	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func execProviderSupportsRemoteCompaction(cfg *config.Config, providerID string) bool {
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	return err == nil && provider != nil && provider.SupportsRemoteCompaction()
+}
+
+func execCompactStatus(record *session.Record, modelID string, cfg *config.Config) compact.TokenStatus {
+	if record == nil {
+		return compact.TokenStatus{}
+	}
+	info := execModelInfo(modelID, cfg)
+	resolvedWindow := info.ContextWindow
+	if resolvedWindow <= 0 {
+		resolvedWindow = info.MaxContextWindow
+	}
+	window := int64(0)
+	if effective := effectiveExecModelContextWindow(modelID, cfg); effective != nil {
+		window = *effective
+	}
+	limit := resolvedWindow * 9 / 10
+	if info.AutoCompactTokenLimit > 0 && (limit == 0 || info.AutoCompactTokenLimit < limit) {
+		limit = info.AutoCompactTokenLimit
+	}
+	stored := execStoredTokenUsage(record.Metadata.Extra)
+	active := stored.Last.TotalTokens
+	if active <= 0 {
+		active = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
+	}
+	status := compact.Evaluate(compact.Policy{Enabled: true, TokenLimit: int(limit), WindowTokens: int(window)}, int(active))
+	if execStoredContextWindowRequired(record.Metadata.Extra) {
+		status.ShouldCompact = true
+		status.Reason = compact.ReasonContextWindowExceeded
+		status.NewContextWindowRequired = true
+	}
+	return status
+}
+
+func execStoredContextWindowRequired(extra map[string]any) bool {
+	status, _ := extra["token_status"].(map[string]any)
+	for _, key := range []string{"newContextWindowRequired", "new_context_window_required"} {
+		if value, ok := status[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func execIsContextWindowExceeded(err error) bool {
+	var apiErr *codexapi.APIError
+	return errors.As(err, &apiErr) && apiErr != nil && apiErr.Kind == codexapi.ErrorContextWindowExceeded
+}
+
+func (r *Runner) persistExecContextWindowExceeded(record *session.Record) error {
+	if r == nil || record == nil {
+		return nil
+	}
+	extra := cloneExecAnyMap(record.Metadata.Extra)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	status, _ := extra["token_status"].(map[string]any)
+	status = cloneExecAnyMap(status)
+	if status == nil {
+		status = map[string]any{}
+	}
+	status["shouldCompact"] = true
+	status["reason"] = string(compact.ReasonContextWindowExceeded)
+	status["newContextWindowRequired"] = true
+	extra["token_status"] = status
+	record.Metadata.Extra = extra
+	return session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record)
+}
+
+type execAgentCompactRunner struct {
+	agent      model.AgentRunner
+	model      string
+	providerID string
+}
+
+func (r *execAgentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
+	if r == nil || r.agent == nil || request == nil {
+		return nil, nil
+	}
+	response, err := r.agent.Run(ctx, &model.AgentRequest{
+		Prompt:       strings.TrimSpace(request.Prompt),
+		Instructions: execRemoteCompactInstructions(),
+		InputItems:   session.InputItemsFromItems(execSessionItemsFromCompact(request.History, time.Now().UTC()), &session.HistoryBuildOptions{IncludeToolOutputs: true}),
+		Model:        r.model,
+		ProviderID:   r.providerID,
+		TaskKind:     model.AgentTaskRegular,
+		ThreadID:     request.ThreadID,
+		TurnID:       request.TurnID,
+		Store:        false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	summary := strings.TrimSpace(response.Message)
+	if summary == "" {
+		for i := range response.Items {
+			if text := strings.TrimSpace(response.Items[i].Text); text != "" {
+				summary = text
+				break
+			}
+		}
+	}
+	if summary == "" {
+		return nil, nil
+	}
+	return &compact.Result{
+		Status:      compact.StatusCompleted,
+		Summary:     summary,
+		NewHistory:  compact.BuildCompactedHistory(nil, execLastUserCompactItems(request.History, 1), summary),
+		CompletedAt: time.Now().UTC(),
+		Source:      compact.SourceRemote,
+		ResponseID:  response.ResponseID,
+		Model:       response.Model,
+		ProviderID:  response.ProviderID,
+		Usage: &compact.Usage{
+			InputTokens: response.Usage.InputTokens, CachedInputTokens: response.Usage.CachedInputTokens,
+			CacheWriteInputTokens: response.Usage.CacheWriteInputTokens, OutputTokens: response.Usage.OutputTokens,
+			ReasoningOutputTokens: response.Usage.ReasoningOutputTokens,
+		},
+	}, nil
+}
+
+func execRemoteCompactInstructions() string {
+	return strings.TrimSpace(`You are compacting a Codex conversation for future continuation.
+Write a concise but high-fidelity summary that preserves the user's objective, constraints, decisions, file changes, commands, unresolved work, and risks.
+Return only the summary.`)
+}
+
+func execCompactItemsFromSession(items []session.Item) []compact.Item {
+	out := make([]compact.Item, 0, len(items))
+	for i := range items {
+		item := items[i]
+		kind := item.Type
+		if item.Metadata != nil {
+			if value, ok := item.Metadata["kind"].(string); ok && strings.TrimSpace(value) != "" {
+				kind = strings.TrimSpace(value)
+			}
+		}
+		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Created: item.CreatedAt}
+		for j := range item.Content {
+			compactItem.Content = append(compactItem.Content, compact.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
+		}
+		out = append(out, compactItem)
+	}
+	return out
+}
+
+func execSessionItemsFromCompact(items []compact.Item, now time.Time) []session.Item {
+	out := make([]session.Item, 0, len(items))
+	for i := range items {
+		item := items[i]
+		created := item.Created
+		if created.IsZero() {
+			created = now
+		}
+		sessionItem := session.Item{ID: firstNonEmpty(item.ID, fmt.Sprintf("compact-%d", i)), Type: item.Type, Role: item.Role, Text: compact.ItemText(&item), CreatedAt: created, Data: cloneExecAnyMap(item.Data), Metadata: map[string]any{"compact": true, "kind": item.Kind}}
+		for j := range item.Content {
+			sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
+		}
+		out = append(out, sessionItem)
+	}
+	return out
+}
+
+func execLastUserCompactItems(items []compact.Item, count int) []compact.Item {
+	out := make([]compact.Item, 0, count)
+	for i := len(items) - 1; i >= 0 && len(out) < count; i-- {
+		if items[i].Role == "user" && items[i].Kind != "compaction_summary" {
+			out = append(out, items[i])
+		}
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out
 }
 
 func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) {
