@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -191,5 +192,137 @@ func TestRegisterApplyPatchHandler(t *testing.T) {
 	}
 	if spec.Freeform == nil || spec.Freeform.Syntax != "lark" || !strings.Contains(spec.Freeform.Definition, "*** Begin Patch") {
 		t.Fatalf("spec = %#v", spec)
+	}
+}
+
+func TestApplyPatchExecutorAcceptsFunctionWrappedPatchPayload(t *testing.T) {
+	for _, arguments := range []string{
+		`{"patch":"*** Begin Patch\n*** Add File: wrapped.txt\n+wrapped\n*** End Patch"}`,
+		`{"input":"*** Begin Patch\n*** Add File: wrapped.txt\n+wrapped\n*** End Patch"}`,
+		`{"command":"*** Begin Patch\n*** Add File: wrapped.txt\n+wrapped\n*** End Patch"}`,
+		`"*** Begin Patch\n*** Add File: wrapped.txt\n+wrapped\n*** End Patch"`,
+		`prefix *** Begin Patch
+*** Add File: wrapped.txt
++wrapped
+*** End Patch`,
+	} {
+		cwd := t.TempDir()
+		executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
+		output, err := executor.Execute(context.Background(), &Invocation{
+			CallID:   "call-wrapped",
+			ToolName: PlainName(DefaultApplyPatchToolName),
+			Payload:  Payload{Kind: PayloadFunction, Arguments: arguments},
+		})
+		if err != nil {
+			t.Fatalf("Execute(%s) error = %v", arguments, err)
+		}
+		if output == nil || !output.Success {
+			t.Fatalf("Execute(%s) output = %#v", arguments, output)
+		}
+		data, err := os.ReadFile(filepath.Join(cwd, "wrapped.txt"))
+		if err != nil || string(data) != "wrapped\n" {
+			t.Fatalf("wrapped file = %q, %v", data, err)
+		}
+	}
+}
+
+func TestApplyPatchExecutorComplexChangeMatrix(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "folder with spaces"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"modify.txt":                    "old\n",
+		"delete.txt":                    "remove me\n",
+		"folder with spaces/source.txt": "move old\n",
+		"unicode-涓枃.txt":               "unicode old\n",
+	} {
+		path := filepath.Join(cwd, filepath.FromSlash(name))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	patch := `*** Begin Patch
+*** Add File: added.txt
++added
+*** Update File: modify.txt
+@@
+-old
++new
+*** Delete File: delete.txt
+*** Update File: folder with spaces/source.txt
+*** Move to: folder with spaces/moved.txt
+@@
+-move old
++move new
+*** Update File: unicode-涓枃.txt
+@@
+-unicode old
++unicode new
+*** End Patch`
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID: "call-complex", ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload: Payload{Kind: PayloadFunction, Arguments: `{"patch":` + strconv.Quote(patch) + `}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("output = %#v", output)
+	}
+	assertApplyPatchFile(t, filepath.Join(cwd, "added.txt"), "added\n")
+	assertApplyPatchFile(t, filepath.Join(cwd, "modify.txt"), "new\n")
+	assertApplyPatchMissing(t, filepath.Join(cwd, "delete.txt"))
+	assertApplyPatchMissing(t, filepath.Join(cwd, "folder with spaces", "source.txt"))
+	assertApplyPatchFile(t, filepath.Join(cwd, "folder with spaces", "moved.txt"), "move new\n")
+	assertApplyPatchFile(t, filepath.Join(cwd, "unicode-涓枃.txt"), "unicode new\n")
+	changes, ok := output.Data["changes"].([]map[string]any)
+	if !ok || len(changes) != 5 {
+		t.Fatalf("changes = %#v", output.Data["changes"])
+	}
+	moveKind, _ := changes[3]["kind"].(map[string]any)
+	if moveKind["type"] != "update" || moveKind["move_path"] != filepath.Join(cwd, "folder with spaces", "moved.txt") {
+		t.Fatalf("move change = %#v", changes[3])
+	}
+}
+
+func TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace(t *testing.T) {
+	for name, patch := range map[string]string{
+		"missing_end":      "*** Begin Patch\n*** Add File: bad.txt\n+bad",
+		"delete_missing":   "*** Begin Patch\n*** Delete File: absent.txt\n*** End Patch",
+		"context_mismatch": "*** Begin Patch\n*** Update File: keep.txt\n@@\n-not-present\n+changed\n*** End Patch",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cwd := t.TempDir()
+			if err := os.WriteFile(filepath.Join(cwd, "keep.txt"), []byte("keep\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
+			_, err := executor.Execute(context.Background(), &Invocation{
+				CallID: "call-invalid", ToolName: PlainName(DefaultApplyPatchToolName),
+				Payload: Payload{Kind: PayloadCustom, Input: patch},
+			})
+			if err == nil {
+				t.Fatal("Execute() error = nil")
+			}
+			assertApplyPatchFile(t, filepath.Join(cwd, "keep.txt"), "keep\n")
+			assertApplyPatchMissing(t, filepath.Join(cwd, "bad.txt"))
+		})
+	}
+}
+
+func assertApplyPatchFile(t *testing.T, path string, expected string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != expected {
+		t.Fatalf("file %s = %q, %v; want %q", path, data, err, expected)
+	}
+}
+
+func assertApplyPatchMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("path %s exists or stat error = %v", path, err)
 	}
 }

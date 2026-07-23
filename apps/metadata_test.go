@@ -22,7 +22,7 @@ func TestChatGPTMetadataProviderRequestAndResponse(t *testing.T) {
 		if body["include_tools"] != true {
 			t.Fatalf("body = %#v", body)
 		}
-		_, _ = w.Write([]byte(`{"apps":[{"id":"alpha","name":"Alpha","description":"Alpha description","icon_url":"https://example.test/icon","tools":[{"name":"search","title":"Search","description":"Use search"}]}]}`))
+		_, _ = w.Write([]byte(`{"apps":[{"id":"alpha","name":"Alpha","description":"Alpha description","icon_url":"https://example.test/icon","tools":[{"name":"search","title":"Search","description":"Use search","is_enabled":false,"disabled_reason":"disabled_by_admin","is_read_only":true}]}]}`))
 	}))
 	defer server.Close()
 	provider := NewChatGPTMetadataProvider(&ChatGPTMetadataProviderOptions{
@@ -36,6 +36,18 @@ func TestChatGPTMetadataProviderRequestAndResponse(t *testing.T) {
 	}
 	if len(response.Apps) != 1 || response.Apps[0].ID != "alpha" || len(response.Apps[0].ToolSummaries) != 1 || len(response.MissingAppIDs) != 1 || response.MissingAppIDs[0] != "missing" {
 		t.Fatalf("response = %#v", response)
+	}
+	tool := response.Apps[0].ToolSummaries[0]
+	if tool.IsEnabled || tool.DisabledReason == nil || *tool.DisabledReason != "disabled_by_admin" || !tool.IsReadOnly {
+		t.Fatalf("tool summary = %#v", tool)
+	}
+}
+
+func TestChatGPTMetadataProviderDefaultsLegacyToolsEnabled(t *testing.T) {
+	legacy := metadataAppTool{Name: "search", Description: "Use search"}
+	metadata := (metadataApp{ID: "alpha", Name: "Alpha", Tools: []metadataAppTool{legacy}}).connectorMetadata(true)
+	if len(metadata.ToolSummaries) != 1 || !metadata.ToolSummaries[0].IsEnabled || metadata.ToolSummaries[0].IsReadOnly {
+		t.Fatalf("legacy tool summary = %#v", metadata.ToolSummaries)
 	}
 }
 

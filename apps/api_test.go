@@ -96,6 +96,24 @@ func TestAppsReadResponseJSONUsesRequiredArraysAndNullableTools(t *testing.T) {
 	}
 }
 
+func TestAppToolSummaryLegacyJSONDefaultsEnabledLikeRust(t *testing.T) {
+	var summary AppToolSummary
+	if err := json.Unmarshal([]byte(`{"name":"search","title":"Search","description":"Search Alpha"}`), &summary); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !summary.IsEnabled || summary.DisabledReason != nil || summary.IsReadOnly {
+		t.Fatalf("legacy summary = %#v", summary)
+	}
+	data, err := json.Marshal(&summary)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	want := `{"name":"search","title":"Search","description":"Search Alpha","isEnabled":true,"disabledReason":null,"isReadOnly":false}`
+	if string(data) != want {
+		t.Fatalf("Marshal() = %s, want %s", data, want)
+	}
+}
+
 func TestListSortsAndClonesApps(t *testing.T) {
 	service := NewAppService([]AppEntry{
 		{ID: "b", Name: "Beta", Labels: []string{"two"}},
@@ -217,8 +235,11 @@ func TestAppEntryMarshalNormalizesNestedRustShape(t *testing.T) {
 		}
 	}
 	metadata := payload["appMetadata"].(map[string]any)
-	if metadata["seoDescription"] != "Find Drive files" || metadata["versionId"] != "v1" || metadata["firstPartyType"] != "connector" {
+	if metadata["seoDescription"] != "Find Drive files" || metadata["versionId"] != "v1" {
 		t.Fatalf("metadata = %#v", metadata)
+	}
+	if _, ok := metadata["firstPartyType"]; ok {
+		t.Fatalf("metadata leaked removed firstPartyType: %#v", metadata)
 	}
 	if _, ok := metadata["unknown_extension"]; ok {
 		t.Fatalf("metadata leaked extension: %#v", metadata)

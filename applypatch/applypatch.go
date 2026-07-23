@@ -240,6 +240,13 @@ func (a *Action) Apply(options *ApplyOptions) (*ApplyResult, error) {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
+	if err := a.preflight(cwd); err != nil {
+		return nil, err
+	}
+	return a.applyCommitted(cwd)
+}
+
+func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
 	result := &ApplyResult{}
 	for _, change := range a.Hunks {
 		applied, err := applyChange(cwd, &change)
@@ -250,6 +257,47 @@ func (a *Action) Apply(options *ApplyOptions) (*ApplyResult, error) {
 		result.Changes = append(result.Changes, applied.Change)
 	}
 	return result, nil
+}
+
+func (a *Action) preflight(cwd string) error {
+	tempDir, err := os.MkdirTemp("", "codex-apply-patch-preflight-")
+	if err != nil {
+		return fmt.Errorf("failed to create apply_patch preflight workspace: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	for _, name := range a.FilePaths() {
+		source, sourceErr := resolveWorkspacePath(cwd, name)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		info, statErr := os.Stat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		target, targetErr := resolveWorkspacePath(tempDir, name)
+		if targetErr != nil {
+			return targetErr
+		}
+		data, readErr := os.ReadFile(source)
+		if readErr != nil {
+			return readErr
+		}
+		if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o755); mkdirErr != nil {
+			return mkdirErr
+		}
+		if writeErr := os.WriteFile(target, data, info.Mode().Perm()); writeErr != nil {
+			return writeErr
+		}
+	}
+	_, err = a.applyCommitted(tempDir)
+	return err
 }
 
 func Apply(input string, options *ApplyOptions) (*ApplyResult, error) {
@@ -413,7 +461,7 @@ func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file to update %s: %w", path, err)
 	}
-	updated, err := applyUnifiedDiffToContent(string(data), change.UnifiedDiff)
+	updated, err := applyUpdateDiffToContent(string(data), change)
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s", err, path)
 	}
@@ -467,6 +515,13 @@ func applyUnifiedDiffToContent(content string, diff string) (string, error) {
 		current = next
 	}
 	return current, nil
+}
+
+func applyUpdateDiffToContent(content string, change *Change) (string, error) {
+	if change != nil && change.MovePath != "" && strings.TrimSpace(change.UnifiedDiff) == "" {
+		return content, nil
+	}
+	return applyUnifiedDiffToContent(content, change.UnifiedDiff)
 }
 
 func replaceFirstChunk(content string, chunk *updateChunk) (string, bool) {
@@ -634,7 +689,7 @@ func parseUpdate(lines []string, start int) (int, Change, error) {
 	}
 	if chunks, err := parseUpdateChunks(diff.String()); err != nil {
 		return start, Change{}, err
-	} else if len(chunks) == 0 {
+	} else if len(chunks) == 0 && movePath == "" {
 		return start, Change{}, fmt.Errorf("%w: update file hunk for path %q is empty", ErrInvalidPatch, path)
 	}
 	return i, Change{Kind: ChangeUpdate, Path: path, MovePath: movePath, UnifiedDiff: diff.String()}, nil

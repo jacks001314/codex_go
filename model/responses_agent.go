@@ -597,6 +597,13 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 		case "error":
 			closeResponsesWebsocketSession(session, "response failed")
+			if websocketEventErrorCode(event) == "previous_response_not_found" && strings.TrimSpace(request.PreviousResponseID) != "" && !transportRetried {
+				clone := *request
+				clone.PreviousResponseID = ""
+				session.mu.Unlock()
+				locked = false
+				return r.runWebSocket(ctx, &clone, authRetried, true)
+			}
 			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
 		}
 		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, handler)
@@ -656,6 +663,13 @@ func websocketEventError(event map[string]any) string {
 		return firstAgentItemValue(responseToolString(value["message"]), responseToolString(value["code"]), "unknown error")
 	}
 	return firstAgentItemValue(responseToolString(event["message"]), "unknown error")
+}
+
+func websocketEventErrorCode(event map[string]any) string {
+	if value, ok := event["error"].(map[string]any); ok {
+		return strings.TrimSpace(responseToolString(value["code"]))
+	}
+	return strings.TrimSpace(responseToolString(event["code"]))
 }
 
 func websocketURLFromHTTP(value *url.URL) (string, error) {
@@ -934,6 +948,9 @@ func (r *ResponsesAgentRunner) shouldAddHostedImageGenerationTool(info *ModelInf
 
 func (r *ResponsesAgentRunner) imageGenerationAuthEnabled() bool {
 	if r == nil {
+		return false
+	}
+	if account := auth.AccountFromAuth(r.AuthSnapshot); account != nil && account.PlanType == auth.PlanFree {
 		return false
 	}
 	if r.providerUsesOpenAIActorAuthorization() {

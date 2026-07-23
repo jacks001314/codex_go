@@ -57,6 +57,46 @@ func TestParseAddDeleteUpdate(t *testing.T) {
 	}
 }
 
+func TestApplyPureMovePreservesContent(t *testing.T) {
+	dir := t.TempDir()
+	const content = "def format_name(first, last):\n    return first + \" \" + last\n"
+	writeApplyFile(t, dir, "legacy.py", content)
+
+	action, err := Parse(`*** Begin Patch
+*** Update File: legacy.py
+*** Move to: formatter.py
+*** End Patch`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	result, err := action.Apply(&ApplyOptions{CWD: dir})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].OldContent != content || result.Changes[0].NewContent != content {
+		t.Fatalf("move changes = %#v", result.Changes)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "legacy.py")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy.py still exists or stat failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "formatter.py"))
+	if err != nil {
+		t.Fatalf("ReadFile(formatter.py) error = %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("formatter.py = %q, want %q", data, content)
+	}
+}
+
+func TestParseRejectsEmptyUpdateWithoutMove(t *testing.T) {
+	_, err := Parse(`*** Begin Patch
+*** Update File: legacy.py
+*** End Patch`)
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("Parse() error = %v, want empty hunk error", err)
+	}
+}
+
 func TestParseEnvironmentID(t *testing.T) {
 	action, err := Parse(`*** Begin Patch
 *** Environment ID: env-1
@@ -241,6 +281,28 @@ func TestApplyRejectsMissingContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to find expected lines") {
 		t.Fatalf("error = %v", err)
+	}
+	if got := readApplyFile(t, dir, "target.txt"); got != "actual\n" {
+		t.Fatalf("target mutated = %q", got)
+	}
+}
+
+func TestApplyDoesNotPartiallyCommitWhenLaterHunkFails(t *testing.T) {
+	dir := t.TempDir()
+	writeApplyFile(t, dir, "target.txt", "actual\n")
+	_, err := Apply(`*** Begin Patch
+*** Add File: should-not-remain.txt
++temporary
+*** Update File: target.txt
+@@
+-missing
++new
+*** End Patch`, &ApplyOptions{CWD: dir})
+	if err == nil {
+		t.Fatal("Apply returned nil error, want failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "should-not-remain.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("earlier add was partially committed: %v", statErr)
 	}
 	if got := readApplyFile(t, dir, "target.txt"); got != "actual\n" {
 		t.Fatalf("target mutated = %q", got)

@@ -84,23 +84,24 @@ type ProviderAWSAuthInfo struct {
 }
 
 type ProviderInfo struct {
-	Name                      string               `json:"name,omitempty"`
-	BaseURL                   string               `json:"base_url,omitempty"`
-	EnvKey                    string               `json:"env_key,omitempty"`
-	EnvKeyInstructions        string               `json:"env_key_instructions,omitempty"`
-	ExperimentalBearerToken   string               `json:"experimental_bearer_token,omitempty"`
-	Auth                      *ProviderAuthInfo    `json:"auth,omitempty"`
-	AWS                       *ProviderAWSAuthInfo `json:"aws,omitempty"`
-	WireAPI                   WireAPI              `json:"wire_api,omitempty"`
-	QueryParams               map[string]string    `json:"query_params,omitempty"`
-	HTTPHeaders               map[string]string    `json:"http_headers,omitempty"`
-	EnvHTTPHeaders            map[string]string    `json:"env_http_headers,omitempty"`
-	RequestMaxRetries         *uint64              `json:"request_max_retries,omitempty"`
-	StreamMaxRetries          *uint64              `json:"stream_max_retries,omitempty"`
-	StreamIdleTimeoutMS       *uint64              `json:"stream_idle_timeout_ms,omitempty"`
-	WebsocketConnectTimeoutMS *uint64              `json:"websocket_connect_timeout_ms,omitempty"`
-	RequiresOpenAIAuth        bool                 `json:"requires_openai_auth,omitempty"`
-	SupportsWebsockets        bool                 `json:"supports_websockets,omitempty"`
+	Name                        string               `json:"name,omitempty"`
+	BaseURL                     string               `json:"base_url,omitempty"`
+	EnvKey                      string               `json:"env_key,omitempty"`
+	EnvKeyInstructions          string               `json:"env_key_instructions,omitempty"`
+	ExperimentalBearerToken     string               `json:"experimental_bearer_token,omitempty"`
+	Auth                        *ProviderAuthInfo    `json:"auth,omitempty"`
+	AWS                         *ProviderAWSAuthInfo `json:"aws,omitempty"`
+	WireAPI                     WireAPI              `json:"wire_api,omitempty"`
+	QueryParams                 map[string]string    `json:"query_params,omitempty"`
+	HTTPHeaders                 map[string]string    `json:"http_headers,omitempty"`
+	EnvHTTPHeaders              map[string]string    `json:"env_http_headers,omitempty"`
+	RequestMaxRetries           *uint64              `json:"request_max_retries,omitempty"`
+	StreamMaxRetries            *uint64              `json:"stream_max_retries,omitempty"`
+	StreamIdleTimeoutMS         *uint64              `json:"stream_idle_timeout_ms,omitempty"`
+	WebsocketConnectTimeoutMS   *uint64              `json:"websocket_connect_timeout_ms,omitempty"`
+	RequiresOpenAIAuth          bool                 `json:"requires_openai_auth,omitempty"`
+	SupportsWebsockets          bool                 `json:"supports_websockets,omitempty"`
+	SupportsStandaloneWebSearch bool                 `json:"supports_standalone_web_search,omitempty"`
 }
 
 type APIProvider struct {
@@ -316,13 +317,14 @@ func cloneProviderAuthInfo(info *ProviderAuthInfo) *ProviderAuthInfo {
 
 func CreateOpenAIProvider(baseURL string) ProviderInfo {
 	return ProviderInfo{
-		Name:               OpenAIProviderName,
-		BaseURL:            baseURL,
-		WireAPI:            WireAPIResponses,
-		HTTPHeaders:        map[string]string{"version": "go-port"},
-		EnvHTTPHeaders:     map[string]string{"OpenAI-Organization": "OPENAI_ORGANIZATION", "OpenAI-Project": "OPENAI_PROJECT"},
-		RequiresOpenAIAuth: true,
-		SupportsWebsockets: true,
+		Name:                        OpenAIProviderName,
+		BaseURL:                     baseURL,
+		WireAPI:                     WireAPIResponses,
+		HTTPHeaders:                 map[string]string{"version": "go-port"},
+		EnvHTTPHeaders:              map[string]string{"OpenAI-Organization": "OPENAI_ORGANIZATION", "OpenAI-Project": "OPENAI_PROJECT"},
+		RequiresOpenAIAuth:          true,
+		SupportsWebsockets:          true,
+		SupportsStandaloneWebSearch: true,
 	}
 }
 

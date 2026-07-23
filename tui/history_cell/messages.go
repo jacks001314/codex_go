@@ -109,7 +109,13 @@ type AgentMessageCell struct {
 }
 
 func NewAgentMessageCell(lines []string, isFirstLine bool) AgentMessageCell {
-	return AgentMessageCell{Lines: append([]string(nil), lines...), IsFirstLine: isFirstLine}
+	normalized := append([]string(nil), lines...)
+	for i := range normalized {
+		if strings.TrimSpace(normalized[i]) == "" {
+			normalized[i] = ""
+		}
+	}
+	return AgentMessageCell{Lines: normalized, IsFirstLine: isFirstLine}
 }
 
 func (c AgentMessageCell) DisplayLines(width int) []string {

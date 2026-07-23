@@ -874,7 +874,7 @@ func TestRuntimeRouterTurnStartEmptyInputRunsAgent(t *testing.T) {
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 	request := waitForRuntimeAgentRequest(t, agent)
-	if request.Prompt != "" || len(request.InputItems) != 0 {
+	if request.Prompt != "" || len(request.InputItems) != 1 {
 		t.Fatalf("agent request = %#v", request)
 	}
 }
@@ -5126,9 +5126,10 @@ func TestRuntimeRouterDispatchesCatalogAPIs(t *testing.T) {
 	})
 	sink := NewNotificationBuffer()
 	router.SetNotificationSink(sink)
-	skills := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{}))
-	if skills.Error != nil || len(skills.Result.(*SkillsListResponse).Skills) != 1 {
-		t.Fatalf("skills = %+v", skills)
+	skills := router.Handle(requestWithParams(t, IntID(1), MethodSkillsList, SkillsListParams{CWDs: []string{skillsRoot}}))
+	skillsResponse, ok := skills.Result.(*SkillsListResponse)
+	if skills.Error != nil || !ok || len(skillsResponse.Skills) != 1 {
+		t.Fatalf("skills response = %#v error = %+v", skillsResponse, skills.Error)
 	}
 	rootsSet := router.Handle(requestWithParams(t, IntID(20), MethodSkillsExtraRootsSet, SkillsExtraRootsSetParams{ExtraRoots: []string{t.TempDir()}}))
 	if rootsSet.Error != nil {
@@ -8955,8 +8956,8 @@ func TestRuntimeRouterTurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust
 			t.Fatalf("turn started notification = %#v, want notLoaded empty items for thread %s", started, threadID)
 		}
 		completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
-		if completed.ThreadID != threadID || completed.Turn.ItemsView != TurnItemsNotLoaded || len(completed.Turn.Items) != 0 {
-			t.Fatalf("turn completed notification = %#v, want notLoaded empty items for thread %s", completed, threadID)
+		if completed.ThreadID != threadID || completed.Turn.ItemsView != TurnItemsSummary || len(completed.Turn.Items) != 1 || completed.Turn.Items[0].Text != "Done" {
+			t.Fatalf("turn completed notification = %#v, want final agent message summary for thread %s", completed, threadID)
 		}
 		return turnID, request
 	}
@@ -11426,7 +11427,7 @@ func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *tes
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterTurnStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
+func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -11460,8 +11461,8 @@ func TestRuntimeRouterTurnStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
 	if request.Prompt != "hello" {
 		t.Fatalf("agent prompt = %q, want hello", request.Prompt)
 	}
-	if strings.Contains(request.Instructions, "Proactive multi-agent delegation is active.") {
-		t.Fatalf("deprecated multiAgentMode leaked into instructions: %q", request.Instructions)
+	if !strings.Contains(fmt.Sprintf("%v", request.InputItems), "Proactive multi-agent delegation is active.") {
+		t.Fatalf("multiAgentMode developer input missing: %#v", request.InputItems)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 	if sinkHasMethod(sink, NotificationThreadSettingsUpdated) {
@@ -11469,6 +11470,20 @@ func TestRuntimeRouterTurnStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
 	}
 	if settings := extras.Settings(threadID); settings != nil && settings.MultiAgentMode != "" {
 		t.Fatalf("deprecated multiAgentMode persisted to settings: %+v", settings)
+	}
+	record, err := store.Load(session.ThreadID(threadID))
+	if err != nil {
+		t.Fatalf("load thread: %v", err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatalf("decode world state: %v", err)
+	}
+	var persistedMode struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(state.MultiAgentMode, &persistedMode); err != nil || persistedMode.Mode != "proactive" {
+		t.Fatalf("multi-agent world state = %s, mode = %q, error = %v", state.MultiAgentMode, persistedMode.Mode, err)
 	}
 }
 
@@ -13759,8 +13774,8 @@ func TestRuntimeRouterExecutorCatalogUsesExtensionByteBudgetWithoutCoreWarningLi
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "additional skills omitted from this bounded skills list") {
-		t.Fatalf("executor bounded omission line missing:\n%s", request.Instructions)
+	if strings.Contains(request.Instructions, "additional skills omitted") || !strings.Contains(request.Instructions, "executor-00") || !strings.Contains(request.Instructions, "executor-09") {
+		t.Fatalf("executor entries were not preserved under metadata pressure:\n%s", request.Instructions)
 	}
 	for _, warning := range warningNotificationsForTest(sink) {
 		if strings.Contains(warning.Message, "Exceeded skills context budget") {

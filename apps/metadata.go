@@ -123,9 +123,12 @@ type metadataApp struct {
 }
 
 type metadataAppTool struct {
-	Name        string  `json:"name"`
-	Title       *string `json:"title"`
-	Description string  `json:"description"`
+	Name           string  `json:"name"`
+	Title          *string `json:"title"`
+	Description    string  `json:"description"`
+	IsEnabled      *bool   `json:"is_enabled"`
+	DisabledReason *string `json:"disabled_reason"`
+	IsReadOnly     bool    `json:"is_read_only"`
 }
 
 func (a metadataApp) connectorMetadata(includeTools bool) ConnectorMetadata {
@@ -133,7 +136,18 @@ func (a metadataApp) connectorMetadata(includeTools bool) ConnectorMetadata {
 	if includeTools {
 		metadata.ToolSummaries = make([]AppToolSummary, 0, len(a.Tools))
 		for _, tool := range a.Tools {
-			metadata.ToolSummaries = append(metadata.ToolSummaries, AppToolSummary{Name: tool.Name, Title: cloneStringPtr(tool.Title), Description: tool.Description})
+			enabled := true
+			if tool.IsEnabled != nil {
+				enabled = *tool.IsEnabled
+			}
+			metadata.ToolSummaries = append(metadata.ToolSummaries, AppToolSummary{
+				Name:           tool.Name,
+				Title:          cloneStringPtr(tool.Title),
+				Description:    tool.Description,
+				IsEnabled:      enabled,
+				DisabledReason: cloneStringPtr(tool.DisabledReason),
+				IsReadOnly:     tool.IsReadOnly,
+			})
 		}
 	}
 	return metadata

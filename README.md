@@ -1,8 +1,8 @@
 # Codex Go
 
-Parity candidate for Rust baseline `1e20272fa5`: `go-1e20272fa5-parity.1`.
-The checked Rust upstream is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` (`rust-v0.145.0-alpha.20`); the baseline remains explicit until the corresponding Go parity work is complete.
-See [release notes](./docs/release_notes_1e20272fa5.md) and [sync plan](./plan.md).
+The current parity baseline is Rust `main` at `9d823343026e600dab694e41865ed60613da31b6`.
+Source alignment is recorded in [the 2026-07-23 sync plan](./update/plan_2026_07_23.md). Real SDK differential testing uses the official `codex-cli 0.145.0` binary and the local SDK built from that Rust source checkout.
+See [parity.json](./parity.json) for the machine-readable baseline and verification inventory.
 
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。
 

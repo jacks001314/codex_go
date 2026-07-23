@@ -51,9 +51,39 @@ func (r *AppsInstalledResponse) MarshalJSON() ([]byte, error) {
 }
 
 type AppToolSummary struct {
-	Name        string  `json:"name"`
-	Title       *string `json:"title"`
-	Description string  `json:"description"`
+	Name           string  `json:"name"`
+	Title          *string `json:"title"`
+	Description    string  `json:"description"`
+	IsEnabled      bool    `json:"isEnabled"`
+	DisabledReason *string `json:"disabledReason"`
+	IsReadOnly     bool    `json:"isReadOnly"`
+}
+
+func (s *AppToolSummary) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Name           string  `json:"name"`
+		Title          *string `json:"title"`
+		Description    string  `json:"description"`
+		IsEnabled      *bool   `json:"isEnabled"`
+		DisabledReason *string `json:"disabledReason"`
+		IsReadOnly     bool    `json:"isReadOnly"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	enabled := true
+	if decoded.IsEnabled != nil {
+		enabled = *decoded.IsEnabled
+	}
+	*s = AppToolSummary{
+		Name:           decoded.Name,
+		Title:          cloneStringPtr(decoded.Title),
+		Description:    decoded.Description,
+		IsEnabled:      enabled,
+		DisabledReason: cloneStringPtr(decoded.DisabledReason),
+		IsReadOnly:     decoded.IsReadOnly,
+	}
+	return nil
 }
 
 type ConnectorMetadata struct {
@@ -212,7 +242,6 @@ type AppMetadata struct {
 	Version                    *string         `json:"version"`
 	VersionID                  *string         `json:"versionId"`
 	VersionNotes               *string         `json:"versionNotes"`
-	FirstPartyType             *string         `json:"firstPartyType"`
 	FirstPartyRequiresInstall  *bool           `json:"firstPartyRequiresInstall"`
 	ShowInComposerWhenUnlinked *bool           `json:"showInComposerWhenUnlinked"`
 }
@@ -560,6 +589,7 @@ func cloneConnectorMetadata(metadata ConnectorMetadata) ConnectorMetadata {
 	metadata.ToolSummaries = append([]AppToolSummary(nil), metadata.ToolSummaries...)
 	for i := range metadata.ToolSummaries {
 		metadata.ToolSummaries[i].Title = cloneStringPtr(metadata.ToolSummaries[i].Title)
+		metadata.ToolSummaries[i].DisabledReason = cloneStringPtr(metadata.ToolSummaries[i].DisabledReason)
 	}
 	return metadata
 }
@@ -983,7 +1013,6 @@ func appMetadataForJSON(value any) *AppMetadata {
 			Version:                    stringPtrFromAnyApps(typed["version"]),
 			VersionID:                  firstStringPtrFromAnyApps(typed["versionId"], typed["version_id"]),
 			VersionNotes:               firstStringPtrFromAnyApps(typed["versionNotes"], typed["version_notes"]),
-			FirstPartyType:             firstStringPtrFromAnyApps(typed["firstPartyType"], typed["first_party_type"]),
 			FirstPartyRequiresInstall:  firstBoolPtrFromAnyApps(typed["firstPartyRequiresInstall"], typed["first_party_requires_install"]),
 			ShowInComposerWhenUnlinked: firstBoolPtrFromAnyApps(typed["showInComposerWhenUnlinked"], typed["show_in_composer_when_unlinked"]),
 		}
@@ -1025,7 +1054,6 @@ func cloneAppMetadata(value *AppMetadata) *AppMetadata {
 		Version:                    cloneStringPtr(value.Version),
 		VersionID:                  cloneStringPtr(value.VersionID),
 		VersionNotes:               cloneStringPtr(value.VersionNotes),
-		FirstPartyType:             cloneStringPtr(value.FirstPartyType),
 		FirstPartyRequiresInstall:  cloneBoolPtr(value.FirstPartyRequiresInstall),
 		ShowInComposerWhenUnlinked: cloneBoolPtr(value.ShowInComposerWhenUnlinked),
 	}

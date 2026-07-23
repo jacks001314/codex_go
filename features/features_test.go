@@ -91,3 +91,46 @@ func TestResolveSettingsCanonicalizesLegacyAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestNoticeForLegacyFeatureUsageMatchesRust(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage LegacyFeatureUsage
+		want  LegacyFeatureNotice
+	}{
+		{
+			name:  "web search request",
+			usage: LegacyFeatureUsage{Alias: "features.web_search_request", Feature: "web_search_request"},
+			want: LegacyFeatureNotice{
+				Summary: "`[features].web_search_request` is deprecated because web search is enabled by default.",
+				Details: "Set `web_search` to `\"live\"`, `\"indexed\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it.",
+			},
+		},
+		{
+			name:  "legacy landlock",
+			usage: LegacyFeatureUsage{Alias: "features.use_legacy_landlock", Feature: "use_legacy_landlock"},
+			want: LegacyFeatureNotice{
+				Summary: "`[features].use_legacy_landlock` is deprecated and will be removed soon.",
+				Details: "Remove this setting to stop opting into the legacy Linux sandbox behavior.",
+			},
+		},
+		{
+			name:  "renamed feature",
+			usage: LegacyFeatureUsage{Alias: "codex_hooks", Feature: "hooks"},
+			want: LegacyFeatureNotice{
+				Summary: "`[features].codex_hooks` is deprecated. Use `[features].hooks` instead.",
+				Details: "Enable it with `--enable hooks` or `[features].hooks` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details.",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := NoticeForLegacyFeatureUsage(test.usage); got != test.want {
+				t.Fatalf("notice = %#v, want %#v", got, test.want)
+			}
+			if got := test.want.Message(); got != test.want.Summary+" ("+test.want.Details+")" {
+				t.Fatalf("message = %q", got)
+			}
+		})
+	}
+}

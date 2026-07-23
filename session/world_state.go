@@ -6,6 +6,7 @@ type WorldState struct {
 	CollaborationMode      json.RawMessage `json:"collaborationMode,omitempty"`
 	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
 	RealtimeConversation   json.RawMessage `json:"realtimeConversation,omitempty"`
+	MultiAgentMode         json.RawMessage `json:"multiAgentMode,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
@@ -19,6 +20,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
 	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
+	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
 	return &state, nil
 }
 

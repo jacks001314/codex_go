@@ -23,6 +23,9 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	if err != nil {
 		return nil, err
 	}
+	if !providerInfo.IsOpenAI() && !providerInfo.UsesOpenAIActorAuthorization() && !providerInfo.SupportsStandaloneWebSearch {
+		return nil, nil
+	}
 	var snapshot *auth.AuthDotJSON
 	if providerInfo.RequiresOpenAIAuth {
 		resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())

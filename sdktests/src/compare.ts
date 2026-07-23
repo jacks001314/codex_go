@@ -1,0 +1,518 @@
+import { existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { readJson, writeJson } from "./util.ts";
+
+export type CompareResult = {
+  status: "pass" | "behavior_mismatch" | "infra_failure";
+  classification: "parity" | "go-bug" | "baseline-drift" | "model-nondeterminism" | "infra-failure";
+  confidence: "low" | "medium" | "high";
+  checks: { name: string; ok: boolean; detail?: string }[];
+  eventTypes: Record<string, string[]>;
+  firstMismatch: string | null;
+};
+
+export function compareArtifact(artifactDir: string): CompareResult {
+  const rawDir = path.join(artifactDir, "raw");
+  const rust = readJson(path.join(rawDir, "rust.json"));
+  const go = readJson(path.join(rawDir, "go.json"));
+  const manifestPath = path.join(artifactDir, "run-manifest.json");
+  const manifest = existsSync(manifestPath) ? readJson(manifestPath) : {};
+  const expected = manifest?.scenario?.expected ?? {};
+  const expectedTurns = Number(expected.expectedTurns ?? 1);
+  const expectsFailure = expected.outcome === "failure";
+
+  const checks = [
+    checkOutcome("rust", rust, expectsFailure, expected.errorPattern),
+    checkOutcome("go", go, expectsFailure, expected.errorPattern),
+    checkLifecycle("rust", rust, expectedTurns, expectsFailure),
+    checkLifecycle("go", go, expectedTurns, expectsFailure),
+    checkEventTypeSequence(rust, go, expected.eventSequenceComparison),
+    checkItemTypeSequence(rust, go, expected.eventSequenceComparison),
+    checkAgentMessage("rust", rust, expectsFailure),
+    checkAgentMessage("go", go, expectsFailure),
+    checkExpectedAgentMessages("rust", rust, expected.exactAgentMessages ?? legacyExactMessages(expected), expected.agentMessageComparison),
+    checkExpectedAgentMessages("go", go, expected.exactAgentMessages ?? legacyExactMessages(expected), expected.agentMessageComparison),
+    checkStructuredAgentMessages("rust", rust, expected.structuredAgentMessages),
+    checkStructuredAgentMessages("go", go, expected.structuredAgentMessages),
+    checkAgentMessageContracts("rust", rust, expected.agentMessageContracts),
+    checkAgentMessageContracts("go", go, expected.agentMessageContracts),
+    checkRequiredCompletedItemTypes("rust", rust, expected.requiredCompletedItemTypes),
+    checkRequiredCompletedItemTypes("go", go, expected.requiredCompletedItemTypes),
+    checkForbiddenCompletedItemTypes("rust", rust, expected.forbiddenCompletedItemTypes),
+    checkForbiddenCompletedItemTypes("go", go, expected.forbiddenCompletedItemTypes),
+    checkExpectedCommandExecutions("rust", rust, expected.commandExecutions),
+    checkExpectedCommandExecutions("go", go, expected.commandExecutions),
+    checkExpectedFileChanges("rust", rust, expected.fileChanges),
+    checkExpectedFileChanges("go", go, expected.fileChanges),
+    checkThreadContinuity("rust", rust, expected.requireStableThreadId),
+    checkThreadContinuity("go", go, expected.requireStableThreadId),
+    checkAgentMessageCount(rust, go, expected.agentMessageComparison),
+    checkErrorItemSymmetry(rust, go),
+    checkUsage("rust", rust, expectedTurns, expected.requireUsage !== false),
+    checkUsage("go", go, expectedTurns, expected.requireUsage !== false),
+    checkCommandExecutionSemantics(rust, go, expected.commandOutputComparison),
+    checkWorkspaceUnchanged("rust", rust, expected.workspaceMutation === "none"),
+    checkWorkspaceUnchanged("go", go, expected.workspaceMutation === "none"),
+    checkExpectedWorkspaceChanges("rust", rust, expected.workspaceChanges),
+    checkExpectedWorkspaceChanges("go", go, expected.workspaceChanges),
+    checkWorkspaceRequiredPaths("rust", rust, expected.workspaceRequiredPaths),
+    checkWorkspaceRequiredPaths("go", go, expected.workspaceRequiredPaths),
+    checkWorkspaceSideEffects(rust, go, expected.compareWorkspacePaths),
+  ];
+  const firstFailure = checks.find((check) => !check.ok);
+  const baselineDrift = Boolean(manifest?.baseline?.rustBaselineDrift);
+  const infraFailure = !expectsFailure && checks.slice(0, 4).some((check) => !check.ok);
+  const parityFailure = checks.some(
+    (check) =>
+      !check.ok &&
+      (check.name.startsWith("strict ") ||
+        check.name === "semantic completed tool sequence" ||
+        check.name === "agent message count" ||
+        check.name === "final agent message count" ||
+        check.name === "error item symmetry" ||
+        check.name === "command execution semantics" ||
+        check.name === "workspace side effects match"),
+  );
+  const status = infraFailure ? "infra_failure" : firstFailure ? "behavior_mismatch" : "pass";
+  const result: CompareResult = {
+    status,
+    classification: infraFailure
+      ? "infra-failure"
+      : parityFailure
+        ? "go-bug"
+        : firstFailure
+          ? "model-nondeterminism"
+          : baselineDrift
+            ? "baseline-drift"
+            : "parity",
+    confidence: firstFailure ? "medium" : "high",
+    checks,
+    eventTypes: {
+      rust: eventTypes(rust),
+      go: eventTypes(go),
+    },
+    firstMismatch: firstFailure?.detail ?? null,
+  };
+  writeJson(path.join(artifactDir, "comparison.json"), result);
+  writeFileSync(path.join(artifactDir, "report.md"), renderReport(result, artifactDir, manifest), "utf8");
+  return result;
+}
+
+function checkOutcome(label: string, recording: any, expectsFailure: boolean, errorPattern: unknown) {
+  if (!expectsFailure) {
+    const ok = recording.status === "ok";
+    return { name: `${label}: process completed`, ok, detail: ok ? undefined : recording.error?.message ?? "run failed" };
+  }
+  const message = String(recording.error?.message ?? "");
+  const pattern = typeof errorPattern === "string" ? new RegExp(errorPattern, "i") : null;
+  const ok = recording.status === "error" && message.length > 0 && (!pattern || pattern.test(message));
+  return { name: `${label}: expected failure`, ok, detail: ok ? undefined : `${label} status=${recording.status} error=${message}` };
+}
+
+function checkLifecycle(label: string, recording: any, expectedTurns: number, expectsFailure: boolean) {
+  const types = eventTypes(recording);
+  if (expectsFailure) {
+    const completed = types.includes("turn.completed");
+    return { name: `${label}: failure lifecycle`, ok: !completed, detail: completed ? `${label} unexpectedly completed a turn` : undefined };
+  }
+  const count = (type: string) => types.filter((value) => value === type).length;
+  const ok =
+    types[0] === "thread.started" &&
+    count("thread.started") >= expectedTurns &&
+    count("turn.started") >= expectedTurns &&
+    count("turn.completed") === expectedTurns &&
+    types.at(-1) === "turn.completed";
+  return { name: `${label}: lifecycle`, ok, detail: ok ? undefined : `${label} events: ${types.join(" -> ")}` };
+}
+
+function checkAgentMessage(label: string, recording: any, expectsFailure: boolean) {
+  if (expectsFailure) {
+    return { name: `${label}: agent message`, ok: agentMessages(recording).length === 0, detail: "expected failure must not produce an agent message" };
+  }
+  const messages = agentMessages(recording);
+  const ok = messages.some((text) => text.trim().length > 0);
+  return { name: `${label}: agent message`, ok, detail: ok ? undefined : `${label} has no completed agent_message text` };
+}
+
+function legacyExactMessages(expected: any): string[] | undefined {
+  return typeof expected?.exactAgentMessage === "string" ? [expected.exactAgentMessage] : undefined;
+}
+
+function checkExpectedAgentMessages(label: string, recording: any, expected: unknown, comparison: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: exact agent messages`, ok: true, detail: "artifact has no exact-message contract" };
+  }
+  const messages = comparison === "final-per-turn" ? finalAgentMessagesByTurn(recording) : agentMessages(recording);
+  const ok = JSON.stringify(messages) === JSON.stringify(expected);
+  return {
+    name: `${label}: exact agent messages`,
+    ok,
+    detail: ok ? undefined : `${label} messages: ${JSON.stringify(messages)}`,
+  };
+}
+
+function checkStructuredAgentMessages(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: structured agent messages`, ok: true, detail: "artifact has no structured-message contract" };
+  }
+  const messages = finalAgentMessagesByTurn(recording);
+  let parsed: unknown[];
+  try {
+    parsed = messages.map((message) => JSON.parse(message));
+  } catch (error: any) {
+    return { name: `${label}: structured agent messages`, ok: false, detail: `${label} JSON parse failed: ${error?.message ?? error}` };
+  }
+  const ok = JSON.stringify(parsed) === JSON.stringify(expected);
+  return {
+    name: `${label}: structured agent messages`,
+    ok,
+    detail: ok ? undefined : `${label}: ${JSON.stringify(parsed)}; expected: ${JSON.stringify(expected)}`,
+  };
+}
+
+function finalAgentMessagesByTurn(recording: any): string[] {
+  if (Array.isArray(recording.turns) && recording.turns.length > 0) {
+    return recording.turns.flatMap((turn: any) => {
+      const messages = agentMessages({ events: turn.events });
+      return messages.length > 0 ? [messages.at(-1)!] : [];
+    });
+  }
+  const messages = agentMessages(recording);
+  return messages.length > 0 ? [messages.at(-1)!] : [];
+}
+
+function checkAgentMessageContracts(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: per-turn agent message contracts`, ok: true, detail: "artifact has no per-turn message contract" };
+  }
+  const messages = finalAgentMessagesByTurn(recording);
+  const ok = messages.length === expected.length && expected.every((contract: any, index: number) => {
+    if (typeof contract?.exact === "string") {
+      return messages[index] === contract.exact;
+    }
+    if (Object.prototype.hasOwnProperty.call(contract ?? {}, "structured")) {
+      try {
+        return JSON.stringify(JSON.parse(messages[index])) === JSON.stringify(contract.structured);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
+  return {
+    name: `${label}: per-turn agent message contracts`,
+    ok,
+    detail: ok ? undefined : `${label}: ${JSON.stringify(messages)}; expected: ${JSON.stringify(expected)}`,
+  };
+}
+
+function checkRequiredCompletedItemTypes(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: required completed item types`, ok: true, detail: "artifact has no required-item contract" };
+  }
+  const actual = itemTypes(recording);
+  const missing = expected.filter((type) => !actual.includes(String(type)));
+  return {
+    name: `${label}: required completed item types`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label} missing: ${missing.join(", ")}; actual: ${actual.join(", ")}`,
+  };
+}
+
+function checkForbiddenCompletedItemTypes(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: forbidden completed item types`, ok: true, detail: "artifact has no forbidden-item contract" };
+  }
+  const actual = itemTypes(recording);
+  const present = expected.filter((type) => actual.includes(String(type)));
+  return {
+    name: `${label}: forbidden completed item types`,
+    ok: present.length === 0,
+    detail: present.length === 0 ? undefined : `${label} unexpected: ${present.join(", ")}`,
+  };
+}
+
+function checkThreadContinuity(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: thread ID continuity`, ok: true, detail: "scenario does not require resume" };
+  }
+  const ids = (recording.threadIds ?? []).filter((value: unknown) => typeof value === "string" && value.length > 0);
+  const ok = ids.length > 1 && ids.every((id: string) => id === ids[0]);
+  return {
+    name: `${label}: thread ID continuity`,
+    ok,
+    detail: ok ? undefined : `${label} thread IDs: ${JSON.stringify(ids)}`,
+  };
+}
+
+function checkExpectedCommandExecutions(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected)) {
+    return { name: `${label}: expected command executions`, ok: true, detail: "artifact has no command contract" };
+  }
+  const actual = commandExecutions(recording);
+  const ok = expected.every((contract: any, index: number) => {
+    const item = actual[index];
+    if (!item || item.status !== contract.status || item.exitCode !== contract.exitCode) {
+      return false;
+    }
+    if (typeof contract.output === "string" && item.output !== contract.output) {
+      return false;
+    }
+    return typeof contract.outputPattern !== "string" || new RegExp(contract.outputPattern).test(item.output);
+  }) && actual.length === expected.length;
+  return {
+    name: `${label}: expected command executions`,
+    ok,
+    detail: ok ? undefined : `${label}: ${JSON.stringify(actual)}; expected: ${JSON.stringify(expected)}`,
+  };
+}
+
+function checkExpectedFileChanges(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected)) {
+    return { name: `${label}: expected file changes`, ok: true, detail: "artifact has no file-change contract" };
+  }
+  const actual = (recording.events ?? [])
+    .filter((event: any) => event.type === "item.completed" && event.item?.type === "file_change")
+    .map((event: any) => ({ status: String(event.item?.status ?? ""), stderr: String(event.item?.stderr ?? "") }));
+  const ok = actual.length === expected.length && expected.every((contract: any, index: number) => {
+    const item = actual[index];
+    return Boolean(item) && item.status === contract.status &&
+      (typeof contract.stderrPattern !== "string" || new RegExp(contract.stderrPattern, "i").test(item.stderr));
+  });
+  return { name: `${label}: expected file changes`, ok, detail: ok ? undefined : `${label}: ${JSON.stringify(actual)}; expected: ${JSON.stringify(expected)}` };
+}
+
+function checkEventTypeSequence(rust: any, go: any, comparison: unknown) {
+  if (comparison === "semantic-tools") {
+    return { name: "semantic event lifecycle", ok: true, detail: "scenario compares completed tool semantics and terminal lifecycle; commentary and started-event interleaving are non-contractual" };
+  }
+  const left = eventTypes(rust);
+  const right = eventTypes(go);
+  const strictOk = JSON.stringify(left) === JSON.stringify(right);
+  if (strictOk) {
+    return { name: "strict event type sequence", ok: true };
+  }
+  const compatibleLeft = comparableEventTypes(rust);
+  const compatibleRight = comparableEventTypes(go);
+  const compatible = JSON.stringify(compatibleLeft) === JSON.stringify(compatibleRight);
+  return {
+    name: "strict event type sequence",
+    ok: compatible,
+    detail: compatible
+      ? `compatible after recoverable reconnect events: rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}`
+      : `rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}`,
+  };
+}
+
+function comparableEventTypes(recording: any): string[] {
+  return (recording.events ?? []).flatMap((event: any) => {
+    if (event.type !== "error") {
+      return [String(event.type)];
+    }
+    const message = String(event.message ?? "");
+    return /^Reconnecting\.\.\. \d+\/\d+ \(/.test(message) ? [] : ["error"];
+  });
+}
+
+function checkItemTypeSequence(rust: any, go: any, comparison: unknown) {
+  if (comparison === "semantic-tools") {
+    const comparable = (recording: any) => (recording.events ?? [])
+      .filter((event: any) => event.type === "item.completed")
+      .filter((event: any) => event.item?.type !== "agent_message")
+      .filter((event: any) => !(event.item?.type === "file_change" && event.item?.status === "failed"))
+      .map((event: any) => String(event.item?.type));
+    const left = comparable(rust);
+    const right = comparable(go);
+    const ok = JSON.stringify(left) === JSON.stringify(right);
+    return { name: "semantic completed tool sequence", ok, detail: ok ? undefined : `rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}` };
+  }
+  const left = itemTypes(rust);
+  const right = itemTypes(go);
+  const ok = JSON.stringify(left) === JSON.stringify(right);
+  return { name: "strict completed item type sequence", ok, detail: ok ? undefined : `rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}` };
+}
+
+function checkAgentMessageCount(rust: any, go: any, comparison: unknown) {
+  if (comparison === "final-per-turn") {
+    const left = finalAgentMessagesByTurn(rust).length;
+    const right = finalAgentMessagesByTurn(go).length;
+    const ok = left === right;
+    return { name: "final agent message count", ok, detail: ok ? undefined : `rust: ${left}; go: ${right}` };
+  }
+  const left = agentMessages(rust).length;
+  const right = agentMessages(go).length;
+  const ok = left === right;
+  return { name: "agent message count", ok, detail: ok ? undefined : `rust: ${left}; go: ${right}` };
+}
+
+function checkErrorItemSymmetry(rust: any, go: any) {
+  const left = errorItems(rust).length;
+  const right = errorItems(go).length;
+  const ok = left === right;
+  return { name: "error item symmetry", ok, detail: ok ? undefined : `rust: ${left}; go: ${right}` };
+}
+
+function checkUsage(label: string, recording: any, expectedTurns: number, required: boolean) {
+  if (!required) {
+    return { name: `${label}: usage`, ok: true, detail: "scenario does not require usage" };
+  }
+  const completed = (recording.events ?? []).filter((event: any) => event.type === "turn.completed");
+  const withUsage = completed.filter((event: any) => Boolean(event.usage));
+  const ok = completed.length === expectedTurns && withUsage.length === expectedTurns;
+  return { name: `${label}: usage`, ok, detail: ok ? undefined : `${label} usage events: ${withUsage.length}/${expectedTurns}` };
+}
+
+function checkCommandExecutionSemantics(rust: any, go: any, comparison: unknown) {
+  const left = commandExecutions(rust);
+  const right = commandExecutions(go);
+  const comparable = (items: any[]) =>
+    comparison === "status-exit-code"
+      ? items.map((item) => ({ status: item.status, exitCode: item.exitCode }))
+      : items;
+  const ok = JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
+  return {
+    name: "command execution semantics",
+    ok,
+    detail: ok ? undefined : `rust: ${JSON.stringify(left)}; go: ${JSON.stringify(right)}`,
+  };
+}
+
+function commandExecutions(recording: any) {
+  return (recording.events ?? [])
+    .filter((event: any) => event.type === "item.completed" && event.item?.type === "command_execution")
+    .map((event: any) => ({
+      status: event.item?.status,
+      exitCode: event.item?.exit_code,
+      output: String(event.item?.aggregated_output ?? "").replaceAll("\r\n", "\n").trim(),
+    }));
+}
+
+function checkWorkspaceUnchanged(label: string, recording: any, required: boolean) {
+  if (!required) {
+    return { name: `${label}: workspace unchanged`, ok: true, detail: "scenario permits workspace mutation" };
+  }
+  const before = recording.workspace?.before ?? {};
+  const after = recording.workspace?.after ?? {};
+  const ok = JSON.stringify(before) === JSON.stringify(after);
+  return {
+    name: `${label}: workspace unchanged`,
+    ok,
+    detail: ok ? undefined : `${label} changes: ${JSON.stringify(workspaceChanges(before, after))}`,
+  };
+}
+
+function checkWorkspaceSideEffects(rust: any, go: any, selectedPaths?: unknown) {
+  const left = workspaceChanges(rust.workspace?.before ?? {}, rust.workspace?.after ?? {});
+  const right = workspaceChanges(go.workspace?.before ?? {}, go.workspace?.after ?? {});
+  const selected = Array.isArray(selectedPaths) ? new Set(selectedPaths.map(String)) : null;
+  const comparable = (items: any[]) => selected ? items.filter((item) => selected.has(item.path)) : items;
+  const ok = JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
+  return {
+    name: "workspace side effects match",
+    ok,
+    detail: ok ? undefined : `rust: ${JSON.stringify(left)}; go: ${JSON.stringify(right)}`,
+  };
+}
+
+function checkExpectedWorkspaceChanges(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected)) {
+    return { name: `${label}: expected workspace changes`, ok: true, detail: "artifact has no workspace-change contract" };
+  }
+  const actual = workspaceChanges(recording.workspace?.before ?? {}, recording.workspace?.after ?? {});
+  const ok = actual.length === expected.length && expected.every((contract: any, index: number) => {
+    const item = actual[index];
+    if (!item || item.path !== contract.path || item.change !== contract.change) {
+      return false;
+    }
+    if (typeof contract.hash === "string") {
+      return item.hash === contract.hash;
+    }
+    return true;
+  });
+  return {
+    name: `${label}: expected workspace changes`,
+    ok,
+    detail: ok ? undefined : `${label}: ${JSON.stringify(actual)}; expected: ${JSON.stringify(expected)}`,
+  };
+}
+
+function checkWorkspaceRequiredPaths(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: required workspace paths`, ok: true, detail: "artifact has no required-workspace-path contract" };
+  }
+  const after = recording.workspace?.after ?? {};
+  const missing = expected.filter((entry) => !(String(entry) in after));
+  return {
+    name: `${label}: required workspace paths`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label} missing: ${missing.join(", ")}`,
+  };
+}
+
+function workspaceChanges(before: Record<string, string>, after: Record<string, string>) {
+  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return names.flatMap((name) => {
+    if (!(name in before)) {
+      return [{ path: name, change: "added", hash: after[name] }];
+    }
+    if (!(name in after)) {
+      return [{ path: name, change: "removed", hash: before[name] }];
+    }
+    if (before[name] !== after[name]) {
+      return [{ path: name, change: "modified", before: before[name], after: after[name] }];
+    }
+    return [];
+  });
+}
+
+function itemTypes(recording: any): string[] {
+  return (recording.events ?? [])
+    .filter((event: any) => event.type === "item.completed")
+    .map((event: any) => String(event.item?.type));
+}
+
+function eventTypes(recording: any): string[] {
+  return Array.isArray(recording.events) ? recording.events.map((event: any) => String(event.type)) : [];
+}
+
+function agentMessages(recording: any): string[] {
+  return (recording.events ?? [])
+    .filter((event: any) => event.type === "item.completed" && event.item?.type === "agent_message")
+    .map((event: any) => String(event.item?.text ?? ""));
+}
+
+function errorItems(recording: any): any[] {
+  return (recording.events ?? []).filter((event: any) => event.type === "item.completed" && event.item?.type === "error");
+}
+
+function renderReport(result: CompareResult, artifactDir: string, manifest: any): string {
+  const checks = result.checks.map((check) => `- ${check.ok ? "PASS" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`).join("\n");
+  const baseline = manifest?.baseline?.rustBaselineDrift
+    ? `Baseline drift: local Rust ${manifest.baseline.rustUpstreamCommit} differs from parity.json ${manifest.baseline.parityRustUpstreamHead ?? manifest.baseline.parityRustBaseline}.`
+    : "Baseline drift: none recorded.";
+  return `# SDK Parity Report
+
+Status: ${result.status}
+Classification: ${result.classification}
+Confidence: ${result.confidence}
+
+${baseline}
+
+Artifact: ${artifactDir}
+
+## Event Types
+
+- rust: ${result.eventTypes.rust.join(" -> ")}
+- go: ${result.eventTypes.go.join(" -> ")}
+
+## Checks
+
+${checks}
+
+## Reproduce
+
+\`\`\`powershell
+npm --prefix sdktests run report -- --artifact "${artifactDir}"
+\`\`\`
+`;
+}

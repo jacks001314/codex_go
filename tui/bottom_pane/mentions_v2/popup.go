@@ -114,7 +114,8 @@ func (p *Popup) NextSearchMode() {
 }
 
 func (p *Popup) CalculateRequiredHeight(width int) int {
-	return MaxPopupRows + 2
+	visible := minInt(MaxPopupRows, maxInt(1, len(p.Rows())))
+	return visible + 2
 }
 
 func (p *Popup) Rows() []SearchResult {

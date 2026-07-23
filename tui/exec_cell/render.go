@@ -282,7 +282,7 @@ func commandHeaderLines(prefix string, command string, width int, themeID string
 }
 
 func highlightCommandLine(line string, themeID string, styled bool) string {
-	if !styled {
+	if !styled || len(line) > 4096 {
 		return line
 	}
 	return tui.HighlightBashANSI(line, themeID)

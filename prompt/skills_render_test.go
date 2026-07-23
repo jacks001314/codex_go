@@ -314,7 +314,7 @@ func TestRenderExtensionAvailableSkillsMatchesRustBoundedCatalog(t *testing.T) {
 	}
 }
 
-func TestRenderExtensionAvailableSkillsReportsFixedByteOmissionsInBodyLikeRust(t *testing.T) {
+func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t *testing.T) {
 	skills := make([]InstructionsSkillMetadata, 0, 10)
 	for index := 0; index < 10; index++ {
 		skills = append(skills, InstructionsSkillMetadata{
@@ -325,10 +325,10 @@ func TestRenderExtensionAvailableSkillsReportsFixedByteOmissionsInBodyLikeRust(t
 		})
 	}
 	available := RenderExtensionAvailableSkills(skills, false)
-	if available == nil || available.Report == nil || available.Report.OmittedCount == 0 {
-		t.Fatalf("extension omission report = %#v", available)
+	if available == nil || available.Report == nil || available.Report.OmittedCount != 0 || available.Report.IncludedCount != len(skills) {
+		t.Fatalf("extension pressure report = %#v", available)
 	}
-	if available.WarningMessage != nil || !strings.Contains(available.Body, "additional skills omitted from this bounded skills list") {
+	if available.WarningMessage != nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
 		t.Fatalf("extension bounded catalog body = %q warning=%v", available.Body, available.WarningMessage)
 	}
 }

@@ -543,6 +543,7 @@ type Thread struct {
 	ParentThreadID *string           `json:"parentThreadId"`
 	Preview        string            `json:"preview"`
 	Ephemeral      bool              `json:"ephemeral"`
+	IsPinned       bool              `json:"isPinned"`
 	HistoryMode    ThreadHistoryMode `json:"historyMode"`
 	ModelProvider  string            `json:"modelProvider"`
 	CreatedAt      int64             `json:"createdAt"`
@@ -577,6 +578,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ParentThreadID *string           `json:"parentThreadId"`
 		Preview        string            `json:"preview"`
 		Ephemeral      bool              `json:"ephemeral"`
+		IsPinned       bool              `json:"isPinned"`
 		HistoryMode    ThreadHistoryMode `json:"historyMode"`
 		ModelProvider  string            `json:"modelProvider"`
 		CreatedAt      int64             `json:"createdAt"`
@@ -600,6 +602,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ParentThreadID: t.ParentThreadID,
 		Preview:        t.Preview,
 		Ephemeral:      t.Ephemeral,
+		IsPinned:       t.IsPinned,
 		HistoryMode:    historyMode,
 		ModelProvider:  t.ModelProvider,
 		CreatedAt:      t.CreatedAt,
@@ -1948,6 +1951,7 @@ type ThreadApproveGuardianDeniedActionResponse struct{}
 type ThreadMetadataUpdateParams struct {
 	ThreadID string                      `json:"threadId"`
 	GitInfo  *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
+	IsPinned *bool                       `json:"isPinned,omitempty"`
 }
 
 func (p *ThreadMetadataUpdateParams) Validate() error {
@@ -2020,6 +2024,7 @@ type ThreadListParams struct {
 	ModelProviders   []string             `json:"modelProviders,omitempty"`
 	SourceKinds      []ThreadSourceKind   `json:"sourceKinds,omitempty"`
 	Archived         *bool                `json:"archived,omitempty"`
+	IsPinned         *bool                `json:"isPinned,omitempty"`
 	CWD              *ThreadListCwdFilter `json:"cwd,omitempty"`
 	UseStateDBOnly   bool                 `json:"useStateDbOnly,omitempty"`
 	SearchTerm       *string              `json:"searchTerm,omitempty"`
@@ -2544,6 +2549,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		ParentThreadID: stringPtrIfNotEmpty(string(record.ParentThreadID)),
 		Preview:        record.Preview,
 		Ephemeral:      boolFromMap(record.Metadata.Extra, "ephemeral"),
+		IsPinned:       record.IsPinned,
 		HistoryMode:    historyMode,
 		ModelProvider:  modelProvider,
 		CreatedAt:      unixOrZero(record.CreatedAt),
@@ -2706,6 +2712,7 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 	if params.Archived != nil {
 		options.Archived = *params.Archived
 	}
+	options.IsPinned = params.IsPinned
 	options.ModelProviders = append([]string(nil), params.ModelProviders...)
 	if params.CWD != nil {
 		options.CWDs = normalizeThreadListCWDs(params.CWD.Values)
@@ -4520,9 +4527,12 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 	if err := params.Validate(); err != nil {
 		return session.MetadataPatch{}, err
 	}
-	patch := session.MetadataPatch{}
+	patch := session.MetadataPatch{IsPinned: params.IsPinned}
+	if params.GitInfo == nil && params.IsPinned == nil {
+		return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
+	}
 	if params.GitInfo == nil {
-		return session.MetadataPatch{}, jsonRPCInvalidRequest("gitInfo must include at least one field")
+		return patch, nil
 	}
 	if !params.GitInfo.SHA.Set && !params.GitInfo.Branch.Set && !params.GitInfo.OriginURL.Set {
 		return session.MetadataPatch{}, jsonRPCInvalidRequest("gitInfo must include at least one field")

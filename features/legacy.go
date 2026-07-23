@@ -10,6 +10,11 @@ type LegacyFeatureUsage struct {
 	Feature string
 }
 
+type LegacyFeatureNotice struct {
+	Summary string
+	Details string
+}
+
 var legacyFeatureAliases = map[string]string{
 	"connectors":                          "apps",
 	"enable_experimental_windows_sandbox": "experimental_windows_sandbox",
@@ -142,6 +147,55 @@ func sortedLegacyUsages(usages map[string]LegacyFeatureUsage) []LegacyFeatureUsa
 		return out[i].Alias < out[j].Alias
 	})
 	return out
+}
+
+func NoticeForLegacyFeatureUsage(usage LegacyFeatureUsage) LegacyFeatureNotice {
+	alias := strings.TrimSpace(usage.Alias)
+	canonical := strings.TrimSpace(usage.Feature)
+	switch canonical {
+	case "web_search_request", "web_search_cached":
+		label := alias
+		switch alias {
+		case "web_search":
+			label = "[features].web_search"
+		case "features.web_search_request", "web_search_request":
+			label = "[features].web_search_request"
+		case "features.web_search_cached", "web_search_cached":
+			label = "[features].web_search_cached"
+		}
+		return LegacyFeatureNotice{
+			Summary: "`" + label + "` is deprecated because web search is enabled by default.",
+			Details: "Set `web_search` to `\"live\"`, `\"indexed\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it.",
+		}
+	case "use_legacy_landlock":
+		label := alias
+		if alias == "features.use_legacy_landlock" || alias == "use_legacy_landlock" {
+			label = "[features].use_legacy_landlock"
+		}
+		return LegacyFeatureNotice{
+			Summary: "`" + label + "` is deprecated and will be removed soon.",
+			Details: "Remove this setting to stop opting into the legacy Linux sandbox behavior.",
+		}
+	default:
+		label := alias
+		if !strings.Contains(alias, ".") && !strings.HasPrefix(alias, "[") {
+			label = "[features]." + alias
+		}
+		notice := LegacyFeatureNotice{
+			Summary: "`" + label + "` is deprecated. Use `[features]." + canonical + "` instead.",
+		}
+		if alias != canonical {
+			notice.Details = "Enable it with `--enable " + canonical + "` or `[features]." + canonical + "` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details."
+		}
+		return notice
+	}
+}
+
+func (n LegacyFeatureNotice) Message() string {
+	if strings.TrimSpace(n.Details) == "" {
+		return n.Summary
+	}
+	return n.Summary + " (" + n.Details + ")"
 }
 
 func normalizeSettings(settings map[string]bool) {

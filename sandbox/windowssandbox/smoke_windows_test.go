@@ -99,6 +99,54 @@ func TestWindowsSandboxElevatedSmoke(t *testing.T) {
 	}
 }
 
+func TestWindowsSandboxElevatedDirectPowerShellWriteSmoke(t *testing.T) {
+	if !windowsSandboxSmokeEnabled("elevated-direct") {
+		t.Skip("set CODEX_WINDOWS_SANDBOX_SMOKE=elevated-direct or all to run")
+	}
+	cwd := windowsSandboxSmokeTempDir(t, "elevated-direct-workspace")
+	tmp := filepath.Join(cwd, "tmp")
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		t.Fatalf("MkdirAll(tmp) error = %v", err)
+	}
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_WINDOWS_SANDBOX_SMOKE_CODEX_HOME"))
+	if codexHome == "" {
+		codexHome = windowsSandboxSmokeDefaultCodexHome()
+	}
+	profile := coresandbox.WorkspaceWritePermissionProfile()
+	result, err := RunWindowsSandboxCaptureForPermissionProfileElevated(&ElevatedSandboxProfileCaptureRequest{
+		Capture: CaptureRequest{
+			PermissionProfile: &profile,
+			WorkspaceRoots:    []string{cwd},
+			CodexHome:         codexHome,
+			CWD:               cwd,
+			Env:               windowsSandboxSmokeEnv(tmp),
+			Command: []string{
+				"powershell",
+				"-NoProfile",
+				"-Command",
+				"Set-Content -LiteralPath .\\smoke.txt -Value elevated-direct-ok -NoNewline",
+			},
+			TimeoutMS: int64Ptr(30000),
+		},
+	})
+	if err != nil {
+		if IsUnsupported(err) {
+			t.Skipf("Windows elevated sandbox unsupported on this host: %v", err)
+		}
+		t.Fatalf("RunWindowsSandboxCaptureForPermissionProfileElevated() error = %v", err)
+	}
+	if result == nil || result.ExitCode != 0 {
+		t.Fatalf("direct PowerShell result = %#v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, "smoke.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(smoke.txt) error = %v", err)
+	}
+	if string(data) != "elevated-direct-ok" {
+		t.Fatalf("smoke.txt = %q", data)
+	}
+}
+
 func windowsSandboxSmokeDefaultCodexHome() string {
 	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
 		return value

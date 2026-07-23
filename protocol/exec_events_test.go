@@ -114,7 +114,7 @@ func TestFileChangeItemJSONShape(t *testing.T) {
 	event := ItemCompleted(FileChangeItem("file-change-1", []FileChange{
 		{Path: "a/added.txt", Kind: "add"},
 		{Path: "b/deleted.txt", Kind: "delete"},
-		{Path: "c/modified.txt", Kind: "update"},
+		{Path: "c/modified.txt", Kind: "update", Diff: "@@ -1 +1 @@\n-old\n+new", MovePath: "c/renamed.txt"},
 	}, "completed"))
 	data, err := json.Marshal(event)
 	if err != nil {

@@ -52,6 +52,9 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 	if c.YoloMode {
 		lines = append(lines, "permissions: YOLO mode")
 	}
+	for i := range lines {
+		lines[i] = tui.TruncateWithEllipsis(lines[i], innerWidth)
+	}
 	return historyBorder(lines, innerWidth)
 }
 

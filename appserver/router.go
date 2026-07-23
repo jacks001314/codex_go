@@ -2002,11 +2002,13 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	if err != nil {
 		return nil, threadMetadataWriteError(params.ThreadID, err)
 	}
-	if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
-		return nil, err
-	}
-	if err := updateRustStateThreadGitInfo(codexHomeFromSessionStore(r.store), params.ThreadID, record.Metadata.Git); err != nil {
-		return nil, fmt.Errorf("failed to update sqlite thread git metadata: %w", err)
+	if params.GitInfo != nil {
+		if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
+			return nil, err
+		}
+		if err := updateRustStateThreadGitInfo(codexHomeFromSessionStore(r.store), params.ThreadID, record.Metadata.Git); err != nil {
+			return nil, fmt.Errorf("failed to update sqlite thread git metadata: %w", err)
+		}
 	}
 	path := r.threadRolloutPath(record)
 	return &ThreadMetadataUpdateResponse{Thread: BuildThread(record, path, false)}, nil

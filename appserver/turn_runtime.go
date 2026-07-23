@@ -926,6 +926,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 
 	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS)
 	if err != nil {
+		if ctx.Err() != nil {
+			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 		return
@@ -941,6 +944,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		})
 		if compactErr != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
+			if ctx.Err() != nil {
+				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			}
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
 			return
 		}
@@ -950,6 +956,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		// appTurnConfig contains the session history; reload it after compaction.
 		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS); err != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
+			if ctx.Err() != nil {
+				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			}
 			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 			return
 		}
@@ -1109,6 +1118,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
+	if summary := finalAgentMessageSummary(threadItems); len(summary) > 0 {
+		completedTurn.Items = summary
+		completedTurn.ItemsView = TurnItemsSummary
+	}
 	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
@@ -1459,6 +1472,16 @@ func completedTurnNotificationTurn(turnID string, status TurnStatus, appErr *Tur
 		CompletedAt: completedAt,
 		DurationMS:  durationMS,
 	}
+}
+
+func finalAgentMessageSummary(items []ThreadItem) []ThreadItem {
+	for i := len(items) - 1; i >= 0; i-- {
+		if normalizeThreadItemType(items[i].Type) != "agentMessage" || strings.TrimSpace(items[i].Text) == "" {
+			continue
+		}
+		return []ThreadItem{items[i]}
+	}
+	return nil
 }
 
 func (r *RuntimeRouter) notifyTurnPlanUpdates(threadID string, turnID string, result *turn.AgentLoopResult) {
@@ -4551,6 +4574,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if item := collaborationModeInstructionsInputItem(params); item != nil {
 		inputItems = append(inputItems, item)
 	}
+	if item, err := r.multiAgentModeInputItem(threadID, params); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	inputItems = append(inputItems, r.recommendedPluginInputItems(cfg)...)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
@@ -7622,4 +7650,56 @@ func appToolOutputIsDynamic(output *tool.Output) bool {
 		return true
 	}
 	return false
+}
+
+const explicitRequestOnlyMultiAgentModeText = "Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
+const proactiveMultiAgentModeText = "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it."
+
+func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.TurnStartParams) (any, error) {
+	mode := string(MultiAgentModeExplicitRequestOnly)
+	if params != nil && params.MultiAgentMode != nil {
+		candidate := strings.TrimSpace(*params.MultiAgentMode)
+		if candidate == string(MultiAgentModeProactive) || candidate == string(MultiAgentModeExplicitRequestOnly) {
+			mode = candidate
+		}
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	previous := ""
+	if len(state.MultiAgentMode) > 0 {
+		var snapshot struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(state.MultiAgentMode, &snapshot); err != nil {
+			return nil, err
+		}
+		previous = strings.TrimSpace(snapshot.Mode)
+	}
+	if previous == mode {
+		return nil, nil
+	}
+	snapshot, err := json.Marshal(map[string]string{"mode": mode})
+	if err != nil {
+		return nil, err
+	}
+	state.MultiAgentMode = snapshot
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return nil, err
+	}
+	body := explicitRequestOnlyMultiAgentModeText
+	if mode == string(MultiAgentModeProactive) {
+		body = proactiveMultiAgentModeText
+	}
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
+	return renderedFragmentInputItem(rendered), nil
 }

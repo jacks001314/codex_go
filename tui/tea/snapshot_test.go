@@ -157,7 +157,7 @@ Type to search                         Filter: [Cwd] All    Sort: [Updated] Crea
 
 › 3d ago      Newer Session
 
-─────────────────────────────────────────────────────────────────────── 1 / 1 · 100%
+──────────────────────────────────────────────────────────────────────── 1 / 1 · 100%
 enter resume   esc exit   ctrl+c exit   tab focus   ←/→ option
 ctrl+o comfy   ctrl+t preview   ctrl+e exp   ↑/↓ browse
 Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)

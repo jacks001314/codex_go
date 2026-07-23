@@ -113,6 +113,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req.Exec.Subcommand != "" && req.Exec.Subcommand != "review" && req.Exec.Subcommand != "resume" {
 		return nil, fmt.Errorf("unknown exec subcommand %s", req.Exec.Subcommand)
 	}
+	if err := validateExecWorkingDirectory(requestCWD(req)); err != nil {
+		return nil, err
+	}
 	if warning := removedFullAutoWarning(req.Exec); warning != "" {
 		fmt.Fprintln(stderr, warning)
 	}
@@ -197,8 +200,19 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
 		return nil, err
 	}
+	for index, usage := range cfg.LegacyFeatureUsages() {
+		notice := features.NoticeForLegacyFeatureUsage(usage)
+		if err := eventSink.Emit(protocol.ItemCompleted(protocol.ErrorItem(fmt.Sprintf("item_%d", index), notice.Message()))); err != nil {
+			return nil, err
+		}
+	}
 	if err := eventSink.Emit(protocol.TurnStarted()); err != nil {
 		return nil, err
+	}
+	if resumeContext == nil {
+		if err := r.persistSessionStart(req, threadID, turnID, prompt, requestInputs, modelID, providerID); err != nil {
+			return nil, err
+		}
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		if _, err := r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cfg, agent, eventSink); err != nil {
@@ -221,7 +235,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			runPrompt = ""
 		}
 	}
-	streamCollector := &execStreamEventCollector{sink: eventSink}
+	streamCollector := &execStreamEventCollector{sink: eventSink, workingDirectory: requestCWD(req)}
 	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var imageGenerationOptions *turn.ImageGenerationOptions
@@ -287,6 +301,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		UnifiedExecEnabled:           features.Enabled(cfg.FeatureSettings(), "unified_exec"),
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			_ = r.persistInterruptedSession(threadID, turnID, err)
+		}
 		if execIsContextWindowExceeded(err) && resumeContext != nil && resumeContext.Record != nil {
 			_ = r.persistExecContextWindowExceeded(resumeContext.Record)
 		}
@@ -341,6 +358,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}, nil
 }
 
+func validateExecWorkingDirectory(cwd string) error {
+	info, err := os.Stat(cwd)
+	if err != nil {
+		return fmt.Errorf("working directory %q is invalid: %w", cwd, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("working directory %q is not a directory", cwd)
+	}
+	return nil
+}
+
 func execReviewSubagentMetadata(req *Request) (string, string) {
 	if req != nil && req.Exec.Subcommand == "review" {
 		return string(model.AgentTaskReview), string(model.AgentTaskReview)
@@ -386,6 +414,7 @@ type agentRunConfig struct {
 
 type execStreamEventCollector struct {
 	sink                  *execEventSink
+	workingDirectory      string
 	events                []protocol.ThreadEvent
 	streamAssistantDeltas bool
 	streamedAgentText     map[string]string
@@ -507,7 +536,7 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 		return
 	}
 	if invocation.ToolName.Key() == tool.DefaultApplyPatchToolName {
-		changes := fileChangesFromAny(tool.ApplyPatchChanges(invocation, ""))
+		changes := fileChangesFromAny(tool.ApplyPatchChanges(invocation, c.workingDirectory))
 		if len(changes) > 0 {
 			item := protocol.FileChangeItem(firstNonEmpty(invocation.CallID, "apply_patch"), changes, "in_progress")
 			autoApproved := true
@@ -2172,11 +2201,7 @@ func commandExecutionProtocolItem(execution *turn.ToolExecutionResult, status st
 	aggregated := ""
 	var exitCode *int
 	if execution.Output != nil && status != "in_progress" {
-		if hookResponse, ok := execution.Output.Data["hook_response"].(string); ok && hookResponse != "" {
-			aggregated = hookResponse
-		} else {
-			aggregated = execution.Output.Body
-		}
+		aggregated = commandExecutionAggregatedOutput(execution.Output)
 		if code, ok := intFromAny(execution.Output.Data["exit_code"]); ok {
 			exitCode = &code
 		}
@@ -2188,6 +2213,21 @@ func commandExecutionProtocolItem(execution *turn.ToolExecutionResult, status st
 		exitCode,
 		status,
 	)
+}
+
+func commandExecutionAggregatedOutput(output *tool.Output) string {
+	if output == nil {
+		return ""
+	}
+	stdout, stdoutPresent := output.Data["stdout"].(string)
+	stderr, stderrPresent := output.Data["stderr"].(string)
+	if stdoutPresent || stderrPresent {
+		return stdout + stderr
+	}
+	if hookResponse, ok := output.Data["hook_response"].(string); ok {
+		return hookResponse
+	}
+	return output.Body
 }
 
 func commandExecutionProtocolItemFromOutput(output *tool.Output, status string) protocol.ThreadItem {
@@ -2232,6 +2272,12 @@ func commandFromShellInvocation(invocation *tool.Invocation) string {
 func commandExecutionStatusFromOutput(output *tool.Output) string {
 	if output == nil {
 		return "in_progress"
+	}
+	if exitCode, ok := intFromAny(output.Data["exit_code"]); ok {
+		if exitCode == 0 {
+			return "completed"
+		}
+		return "failed"
 	}
 	if output.Success {
 		return "completed"
@@ -2968,6 +3014,78 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		return "", err
 	}
 	return path, nil
+}
+
+func (r *Runner) persistSessionStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, modelID string, providerID string) error {
+	if r == nil || req == nil || req.Exec.Ephemeral {
+		return nil
+	}
+	now := r.now().UTC()
+	record := &session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Preview:   firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           requestCWD(req),
+			Model:         modelID,
+			ModelProvider: providerID,
+			Source:        "cli",
+			ThreadSource:  string(taskKind(req)),
+			HistoryMode:   string(session.ForkAll),
+			SessionPrefix: session.PrefixForSessionID(threadID),
+			RolloutTurns:  []session.TurnSnapshot{{ID: turnID, Status: "running"}},
+		},
+		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, nil, now, nil, nil)...),
+	}
+	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	if err := store.Create(record); err != nil && !errors.Is(err, session.ErrConflict) {
+		return err
+	}
+	return r.createExecRollout(record, now)
+}
+
+func (r *Runner) persistInterruptedSession(threadID string, turnID string, cause error) error {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return err
+	}
+	now := r.now().UTC()
+	completedAt := now.Unix()
+	found := false
+	for i := range record.Metadata.RolloutTurns {
+		if record.Metadata.RolloutTurns[i].ID == turnID {
+			record.Metadata.RolloutTurns[i].Status = "interrupted"
+			record.Metadata.RolloutTurns[i].CompletedAt = &completedAt
+			record.Metadata.RolloutTurns[i].ErrorMessage = cause.Error()
+			found = true
+			break
+		}
+	}
+	if !found {
+		record.Metadata.RolloutTurns = append(record.Metadata.RolloutTurns, session.TurnSnapshot{ID: turnID, Status: "interrupted", CompletedAt: &completedAt, ErrorMessage: cause.Error()})
+	}
+	record.UpdatedAt = now
+	record.RecencyAt = now
+	if err := store.Save(record); err != nil {
+		return err
+	}
+	path, err := rollout.FindThreadPath(r.CodexHome, threadID, false)
+	if err != nil {
+		return nil
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	return recorder.AppendTurnAborted(turnID, "interrupted", now, 0)
 }
 
 func execTokenUsageForResult(resumeContext *execResumeContext, result *turn.AgentLoopResult, modelID string, cfg *config.Config) *protocol.ThreadTokenUsage {

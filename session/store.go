@@ -119,6 +119,7 @@ type Record struct {
 	Title          string    `json:"title,omitempty"`
 	Preview        string    `json:"preview,omitempty"`
 	Archived       bool      `json:"archived"`
+	IsPinned       bool      `json:"is_pinned,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	RecencyAt      time.Time `json:"recency_at"`
@@ -131,6 +132,7 @@ type MetadataPatch struct {
 	Title                   *string
 	Preview                 *string
 	Archived                *bool
+	IsPinned                *bool
 	CWD                     *string
 	Model                   *string
 	ModelProvider           *string
@@ -169,6 +171,7 @@ type ListOptions struct {
 	SortKey        SortKey
 	SortDirection  SortDirection
 	Archived       bool
+	IsPinned       *bool
 	Search         string
 	ModelProviders []string
 	CWDs           []string
@@ -435,6 +438,9 @@ func (s *Store) UpdateMetadata(threadID ThreadID, patch *MetadataPatch, includeA
 	}
 	if patch.Archived != nil {
 		record.Archived = *patch.Archived
+	}
+	if patch.IsPinned != nil {
+		record.IsPinned = *patch.IsPinned
 	}
 	if patch.CWD != nil {
 		record.Metadata.CWD = *patch.CWD
@@ -784,6 +790,9 @@ func (s *Store) loadAll() ([]Record, error) {
 
 func matchesListOptions(record *Record, options *ListOptions, all []Record) bool {
 	if record.Archived != options.Archived {
+		return false
+	}
+	if options.IsPinned != nil && record.IsPinned != *options.IsPinned {
 		return false
 	}
 	if len(options.ModelProviders) > 0 && !containsString(options.ModelProviders, record.Metadata.ModelProvider) {

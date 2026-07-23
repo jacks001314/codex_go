@@ -122,10 +122,13 @@ type TodoItem struct {
 }
 
 type FileChange struct {
-	Path     string `json:"path"`
-	Kind     string `json:"kind"`
-	Diff     string `json:"diff,omitempty"`
-	MovePath string `json:"move_path,omitempty"`
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	// Diff and MovePath are retained for in-process consumers such as the TUI,
+	// but the public exec/SDK event shape intentionally matches Rust and only
+	// serializes path and kind.
+	Diff     string `json:"-"`
+	MovePath string `json:"-"`
 }
 
 type MCPToolResult struct {

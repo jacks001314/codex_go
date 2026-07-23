@@ -175,6 +175,35 @@ func TestRunContextWindowExceededMarksResumeForNextPreTurnCompact(t *testing.T) 
 	}
 }
 
+func TestRunJSONEmitsLegacyFeatureDeprecationBeforeTurnStarted(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nweb_search_request = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	_, err := NewLocalRunner(home).Run(Request{
+		Exec: cli.ExecOptions{Prompt: "hello", JSON: true},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	wantTypes := "thread.started,item.completed,turn.started,item.completed,turn.completed"
+	if got := strings.Join(execEventTypes(events), ","); got != wantTypes {
+		t.Fatalf("event types = %q, want %q", got, wantTypes)
+	}
+	if events[1].Item == nil || events[1].Item.ID != "item_0" || events[1].Item.Type != "error" {
+		t.Fatalf("deprecation item = %#v", events[1].Item)
+	}
+	wantMessage := "`[features].web_search_request` is deprecated because web search is enabled by default. (Set `web_search` to `\"live\"`, `\"indexed\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it.)"
+	if events[1].Item.Message != wantMessage {
+		t.Fatalf("deprecation message = %q, want %q", events[1].Item.Message, wantMessage)
+	}
+}
+
 func TestRunJSONRustPromptStdinGolden(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -2688,12 +2717,14 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 					"changes": []map[string]any{{
 						"path": "a/added.txt",
 						"kind": map[string]any{"type": "add"},
+						"diff": "+hi",
 					}, {
 						"path": "b/deleted.txt",
 						"kind": map[string]any{"type": "delete"},
 					}, {
 						"path": "c/modified.txt",
-						"kind": map[string]any{"type": "update", "move_path": nil},
+						"kind": map[string]any{"type": "update", "move_path": "c/renamed.txt"},
+						"diff": "@@ -1 +1 @@\n-old\n+new",
 					}},
 				},
 			},
@@ -2716,6 +2747,16 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	}
 	if item.Changes[0].Kind != "add" || item.Changes[1].Kind != "delete" || item.Changes[2].Kind != "update" {
 		t.Fatalf("file_change changes = %#v", item.Changes)
+	}
+	if item.Changes[0].Diff != "+hi" || item.Changes[2].MovePath != "c/renamed.txt" {
+		t.Fatalf("file_change internal details = %#v", item.Changes)
+	}
+	data, err := json.Marshal(events[fileChangeIndex])
+	if err != nil {
+		t.Fatalf("json.Marshal(file_change) error = %v", err)
+	}
+	if bytes.Contains(data, []byte(`"diff"`)) || bytes.Contains(data, []byte(`"move_path"`)) {
+		t.Fatalf("SDK file_change leaked non-Rust fields: %s", data)
 	}
 	if execEventItemIndex(events, "tool-call-call-apply") >= 0 || execEventItemIndex(events, "tool-output-call-apply") >= 0 {
 		t.Fatalf("file change should not emit generic apply_patch tool events: %#v", events)
@@ -3046,6 +3087,63 @@ func TestEmitFinalEventsKeepsApprovalRequiredExecCommandAsToolOutput(t *testing.
 	}
 }
 
+func TestCommandExecutionNonZeroExitIsFailedEvenWhenToolOutputSucceeded(t *testing.T) {
+	event, ok := eventFromToolOutputExecution(&turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "call-failed-command",
+			ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"exit 7"}`},
+		},
+		Output: &tool.Output{
+			Success: true,
+			Body:    "SDK_EXIT_7\n",
+			Data: map[string]any{
+				"exit_code": 1,
+			},
+		},
+	})
+	if !ok || event.Item == nil {
+		t.Fatalf("event = %#v ok=%v", event, ok)
+	}
+	if event.Item.Type != "command_execution" || event.Item.Status != "failed" || event.Item.ExitCode == nil || *event.Item.ExitCode != 1 {
+		t.Fatalf("command item = %#v", event.Item)
+	}
+}
+
+func TestCommandExecutionUsesRawStreamsInsteadOfUnifiedExecMetadata(t *testing.T) {
+	output := &tool.Output{
+		Body: "Chunk ID: abc123\nWall time: 1 second\nOutput:\n",
+		Data: map[string]any{
+			"stdout":        "real stdout\n",
+			"stderr":        "real stderr\n",
+			"hook_response": "Chunk ID: abc123\nWall time: 1 second\nOutput:\n",
+		},
+	}
+	if got := commandExecutionAggregatedOutput(output); got != "real stdout\nreal stderr\n" {
+		t.Fatalf("commandExecutionAggregatedOutput() = %q", got)
+	}
+}
+
+func TestRunContextRejectsMissingWorkingDirectoryBeforeStartingThread(t *testing.T) {
+	runner := NewRunner(t.TempDir())
+	missing := filepath.Join(t.TempDir(), "missing")
+	var stdout bytes.Buffer
+	_, err := runner.RunContext(context.Background(), &Request{
+		Root: cli.RootOptions{},
+		Exec: cli.ExecOptions{
+			Shared: cli.SharedOptions{CWD: missing},
+			Prompt: "must not run",
+			JSON:   true,
+		},
+	}, strings.NewReader(""), &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("RunContext() error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no lifecycle events", stdout.String())
+	}
+}
+
 func TestWriteStdinCompletionMapsToOriginalCommandExecutionLikeRust(t *testing.T) {
 	running := &turn.ToolExecutionResult{
 		Invocation: &tool.Invocation{CallID: "write-running", ToolName: tool.PlainName(tool.DefaultWriteStdinToolName)},
@@ -3350,7 +3448,8 @@ func TestExecStreamEventCollectorClearsRetryBeforeRecoveredDelta(t *testing.T) {
 }
 
 func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBegin(t *testing.T) {
-	collector := &execStreamEventCollector{streamAssistantDeltas: true}
+	workingDirectory := t.TempDir()
+	collector := &execStreamEventCollector{streamAssistantDeltas: true, workingDirectory: workingDirectory}
 	patch := "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"
 	collector.Handle(&model.ResponsesStreamEvent{
 		Kind: model.ResponsesStreamEventOutputAdded,
@@ -3371,6 +3470,9 @@ func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBe
 	}
 	if events[0].Item.ID != "patch-1" || events[0].Item.Status != "in_progress" || len(events[0].Item.Changes) != 1 {
 		t.Fatalf("apply_patch start item = %#v", events[0].Item)
+	}
+	if got := events[0].Item.Changes[0].Path; got != filepath.Join(workingDirectory, "a.txt") {
+		t.Fatalf("apply_patch start path = %q, want workspace path", got)
 	}
 }
 
@@ -3716,6 +3818,48 @@ func TestRunJSONEmitsErrorEventWhenTurnFails(t *testing.T) {
 	}
 	if string(data) != "keep existing contents" {
 		t.Fatalf("last message file = %q, want unchanged after failed turn", data)
+	}
+}
+
+func TestRunPersistsNewThreadBeforeInterruptedTurnCompletes(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &failingAgent{err: context.Canceled}
+	var stdout, stderr bytes.Buffer
+	_, err := runner.RunContext(context.Background(), &Request{Exec: cli.ExecOptions{Prompt: "interrupt me", JSON: true}}, strings.NewReader(""), &stdout, &stderr)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunContext error = %v, want context.Canceled", err)
+	}
+	threadID := deterministicThreadID("interrupt me")
+	record, readErr := session.NewStore(filepath.Join(home, "sessions")).Read(session.ThreadID(threadID), true, true)
+	if readErr != nil {
+		t.Fatalf("interrupted thread was not persisted: %v", readErr)
+	}
+	if record.Metadata.CWD == "" || len(record.Items) != 1 || record.Items[0].Role != "user" || record.Items[0].Text != "interrupt me" {
+		t.Fatalf("interrupted record = %#v", record)
+	}
+	if len(record.Metadata.RolloutTurns) != 1 || record.Metadata.RolloutTurns[0].Status != "interrupted" || record.Metadata.RolloutTurns[0].CompletedAt == nil {
+		t.Fatalf("interrupted turn state = %#v", record.Metadata.RolloutTurns)
+	}
+	if _, rolloutErr := rollout.FindThreadPath(home, threadID, false); rolloutErr != nil {
+		t.Fatalf("interrupted rollout was not persisted: %v", rolloutErr)
+	}
+	rolloutPath, _ := rollout.FindThreadPath(home, threadID, false)
+	lines, _, rolloutErr := rollout.Load(rolloutPath)
+	if rolloutErr != nil {
+		t.Fatalf("Load interrupted rollout error: %v", rolloutErr)
+	}
+	foundAborted := false
+	for i := range lines {
+		if lines[i].Type == "event_msg" && strings.Contains(string(lines[i].Payload), `"type":"turn_aborted"`) {
+			foundAborted = true
+		}
+	}
+	if !foundAborted {
+		t.Fatalf("interrupted rollout missing turn_aborted: %#v", lines)
 	}
 }
 

@@ -34,7 +34,6 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 			want: `{"method":"configWarning","params":{"summary":"queued","details":null}}`,
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := json.Marshal(tc.value)
@@ -45,6 +44,37 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 				t.Fatalf("encoded = %s, want %s", data, tc.want)
 			}
 		})
+	}
+}
+
+func TestThreadPinningProtocolParity(t *testing.T) {
+	request, err := ParseRequest([]byte(`{"id":1,"method":"thread/metadata/update","params":{"threadId":"thread-1","isPinned":false}}`))
+	if err != nil {
+		t.Fatalf("ParseRequest error = %v", err)
+	}
+	var params ThreadMetadataUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		t.Fatalf("DecodeParams error = %v", err)
+	}
+	if params.IsPinned == nil || *params.IsPinned {
+		t.Fatalf("isPinned = %#v, want explicit false", params.IsPinned)
+	}
+	patch, err := MetadataPatchToSession(&params)
+	if err != nil || patch.IsPinned == nil || *patch.IsPinned {
+		t.Fatalf("MetadataPatchToSession() = %#v, %v", patch, err)
+	}
+	pinned := true
+	options, err := BuildListOptions(&ThreadListParams{IsPinned: &pinned})
+	if err != nil || options.IsPinned == nil || !*options.IsPinned {
+		t.Fatalf("BuildListOptions() = %#v, %v", options, err)
+	}
+	data, err := json.Marshal(&Thread{ID: "thread-1", IsPinned: true})
+	if err != nil {
+		t.Fatalf("Marshal(Thread) error = %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil || encoded["isPinned"] != true {
+		t.Fatalf("thread JSON = %s, %v", data, err)
 	}
 }
 

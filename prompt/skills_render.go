@@ -150,51 +150,47 @@ func RenderAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, option
 }
 
 func RenderExtensionAvailableSkills(skills []InstructionsSkillMetadata, includeUsageInstructions bool) *AvailableSkills {
-	skillLines := make([]string, 0, len(skills))
-	totalBytes := 0
-	omitted := 0
-	eligible := 0
+	lines := make([]skillRenderLine, 0, len(skills))
 	for _, skill := range skills {
 		if !skill.AllowsImplicitInvocation() {
 			continue
 		}
-		eligible++
-		description := truncateSkillDescription(skill.Description)
-		path := strings.ReplaceAll(firstNonEmptyString(skill.LocatorPath, skill.Path), "\\", "/")
 		locatorKind := strings.TrimSpace(skill.LocatorKind)
 		if locatorKind == "" {
 			locatorKind = "file"
 		}
-		line := "- " + skill.Name + ": "
-		if description != "" {
-			line += description + " "
-		}
-		line += "(" + locatorKind + ": " + path + ")"
-		if totalBytes+len(line) > DefaultSkillMetadataCharBudget {
-			omitted++
-			continue
-		}
-		totalBytes += len(line)
-		skillLines = append(skillLines, line)
+		lines = append(lines, skillRenderLine{name: skill.Name, description: truncateSkillDescription(skill.Description), path: strings.ReplaceAll(firstNonEmptyString(skill.LocatorPath, skill.Path), "\\", "/"), locatorKind: locatorKind})
 	}
+	budget := SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
+	skillLines, report := renderSkillLines(lines, budget)
 	if len(skillLines) == 0 {
 		return nil
 	}
-	if omitted > 0 {
+	if report.OmittedCount > 0 {
+		omitted := report.OmittedCount
 		word := "skills"
 		if omitted == 1 {
 			word = "skill"
 		}
-		skillLines = append(skillLines, fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word))
+		marker := fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word)
+		for len(skillLines) > 0 && linesCost(budget, append(skillLines, marker)) > budget.Limit {
+			skillLines = skillLines[:len(skillLines)-1]
+			report.IncludedCount--
+			report.OmittedCount++
+			omitted = report.OmittedCount
+			if omitted == 1 {
+				word = "skill"
+			} else {
+				word = "skills"
+			}
+			marker = fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word)
+		}
+		skillLines = append(skillLines, marker)
 	}
 	return &AvailableSkills{
 		Body:       renderAvailableSkillsBody(nil, skillLines, includeUsageInstructions),
 		SkillLines: skillLines,
-		Report: &SkillRenderReport{
-			TotalCount:    eligible,
-			IncludedCount: eligible - omitted,
-			OmittedCount:  omitted,
-		},
+		Report:     report,
 	}
 }
 

@@ -828,6 +828,40 @@ func TestResponsesAgentRunnerAddsHostedImageGenerationForCodexBackend(t *testing
 	}
 }
 
+func TestResponsesAgentRunnerDoesNotAddHostedImageGenerationForFreePlan(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-test","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens: map[string]any{
+				"access_token": "token",
+				"plan_type":    "free",
+			},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:            "gpt-test",
+			InputModalities: []string{"text", "image"},
+		}}}),
+	})
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "draw"}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	tools, _ := recordedBody["tools"].([]any)
+	if hasResponseToolType(tools, "image_generation") {
+		t.Fatalf("free-plan tools should not include image_generation: %#v", tools)
+	}
+}
+
 func TestResponsesAgentRunnerAddsHostedImageGenerationForOpenAIAPIKey(t *testing.T) {
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1042,6 +1076,24 @@ func TestParseResponsesStreamDeduplicatesCompletedAssistantMessageWithStableID(t
 		`{"type":"response.created","response":{"id":"resp-1"}}`,
 		`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
 		`{"type":"response.completed","response":{"id":"resp-1","output":[{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil)
+	if err != nil {
+		t.Fatalf("parseResponsesStream error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.ID != "msg_123" || item.Type != "agent_message" || item.Text != "done" {
+		t.Fatalf("deduped item = %#v", item)
+	}
+}
+
+func TestParseResponsesStreamDeduplicatesCompletedAssistantMessageWhenSummaryOmitsID(t *testing.T) {
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-1"}}`,
+		`{"type":"response.output_item.done","item":{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+		`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
 	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil)
 	if err != nil {
 		t.Fatalf("parseResponsesStream error = %v", err)

@@ -31,6 +31,40 @@ func TestSearchMessageOccurrencesFiltersAssistantCommentary(t *testing.T) {
 	}
 }
 
+func TestStorePinUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
+	store := NewStore(t.TempDir())
+	now := fixedTime()
+	for i, id := range []ThreadID{"thread-1", "thread-2", "thread-3"} {
+		at := now.Add(time.Duration(i) * time.Minute)
+		if err := store.Save(&Record{ID: id, CreatedAt: at, UpdatedAt: at, RecencyAt: at}); err != nil {
+			t.Fatalf("Save(%s) error = %v", id, err)
+		}
+	}
+	pinned := true
+	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{IsPinned: &pinned}, true); err != nil {
+		t.Fatalf("pin thread error = %v", err)
+	}
+	page, err := store.List(ListOptions{PageSize: 1, IsPinned: &pinned})
+	if err != nil {
+		t.Fatalf("List(pinned) error = %v", err)
+	}
+	if got := ids(page.Records); !reflect.DeepEqual(got, []ThreadID{"thread-2"}) || page.NextCursor != "" {
+		t.Fatalf("List(pinned) = %v cursor %q, want [thread-2] and no cursor", got, page.NextCursor)
+	}
+	loaded, err := store.Load("thread-2")
+	if err != nil || !loaded.IsPinned {
+		t.Fatalf("Load(thread-2) = %#v, %v; want persisted pin", loaded, err)
+	}
+	pinned = false
+	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{IsPinned: &pinned}, true); err != nil {
+		t.Fatalf("unpin thread error = %v", err)
+	}
+	loaded, err = store.Load("thread-2")
+	if err != nil || loaded.IsPinned {
+		t.Fatalf("Load(thread-2) after unpin = %#v, %v", loaded, err)
+	}
+}
+
 func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()

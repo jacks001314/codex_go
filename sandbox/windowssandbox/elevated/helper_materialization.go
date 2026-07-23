@@ -41,7 +41,12 @@ func copyCommandRunnerIfNeeded(codexHome string, currentExe string) (string, err
 	}
 	source := bundledExecutablePathForExe(currentExe, commandRunnerFileName)
 	if source == "" {
-		return "", fmt.Errorf("helper not found next to current executable or under %s: %s", resourcesDirname, currentExe)
+		// Go's single-file CLI dispatches the command-runner flag itself. Packaged
+		// builds still prefer the dedicated helper when one is bundled.
+		if !isRegularFile(currentExe) {
+			return "", fmt.Errorf("helper not found next to current executable or under %s: %s", resourcesDirname, currentExe)
+		}
+		source = currentExe
 	}
 	suffix, err := helperVersionSuffix(source)
 	if err != nil {

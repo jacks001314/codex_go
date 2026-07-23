@@ -1,9 +1,14 @@
 {
-  "rustBaseline": "1e20272fa5",
-  "rustTag": "rust-v0.143.0-alpha.10+81",
-  "rustUpstreamHead": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
-  "rustUpstreamTag": "rust-v0.145.0-alpha.20",
-  "generatedAt": "2026-07-20",
+  "rustBaseline": "9d82334302",
+  "rustTag": "main@9d82334302",
+  "rustUpstreamHead": "9d823343026e600dab694e41865ed60613da31b6",
+  "rustUpstreamTag": "main@9d82334302",
+  "rustE2EBinary": {
+    "version": "codex-cli 0.145.0",
+    "tag": "rust-v0.145.0",
+    "sha256": "83751f15cb6a0a7b97df67752c001e3fe1c20e18ffbfec3ff63567296205eb6c"
+  },
+  "generatedAt": "2026-07-23",
   "items": [
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},
     {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./config ./agent ./appserver"},
@@ -29,6 +34,7 @@
     {"id":"tui-bootstrap-parallel-requests","status":"intentional_difference","area":"tui","reason":"Go TUI startup receives locally prepared model metadata and permission requirements; it has no equivalent pair of remote model/list and configRequirements/read requests to parallelize. This is an architecture difference, not an unimplemented Go request scheduler.","userImpact":"No additional startup round trips are introduced in the Go path; model and permission data are already available locally or from the existing settings load.","test":"go test ./tui/tea ./app -run Bootstrap -count=1"},
     {"id":"external-agent-memory-import","status":"done","area":"memory","reason":"Go detects external project Markdown memory, verifies SHA-256 content, imports under extension-scoped resources with scope.json and source/project/cwd/hash metadata, rejects path/hash failures, and removes resources for disappeared projects without inventing rollout provenance.","test":"go test ./config -run ExternalAgentMemory -count=1"},
     {"id":"realtime-webrtc-crate-removal","status":"intentional_difference","area":"realtime","reason":"The Rust crate removal is repository-structure cleanup, not a wire-protocol removal.","userImpact":"Go retains its existing realtime capability; external protocol behavior is unchanged.","test":"go test ./appserver ./model"},
-    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap is verified on a native Kali runner. Go now has a parameterized macOS seatbelt backend with workspace metadata protection, network restriction, Unix-socket allowlists, and CODEX_SANDBOX propagation; Darwin packages cross-compile. Native macOS seatbelt/root/desktop artifacts are still required.","test":"go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"}
+    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap is verified on a native Kali runner. Go now has a parameterized macOS seatbelt backend with workspace metadata protection, network restriction, Unix-socket allowlists, and CODEX_SANDBOX propagation; Darwin packages cross-compile. Native macOS seatbelt/root/desktop artifacts are still required.","test":"go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"},
+    {"id":"sdk-streaming-smoke","status":"done","area":"sdk","reason":"The official TypeScript SDK drives the official Rust CLI and codex_go with isolated homes and workspaces, the configured default model, no SDK model overrides, strict event/item ordering, usage checks, and workspace side-effect comparison.","test":"npm --prefix sdktests run test:smoke -- --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"}
   ]
 }

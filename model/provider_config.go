@@ -91,8 +91,9 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 			values,
 			"websocket_connect_timeout_ms",
 		),
-		RequiresOpenAIAuth: boolConfig(values, "requires_openai_auth"),
-		SupportsWebsockets: boolConfig(values, "supports_websockets"),
+		RequiresOpenAIAuth:          boolConfig(values, "requires_openai_auth"),
+		SupportsWebsockets:          boolConfig(values, "supports_websockets"),
+		SupportsStandaloneWebSearch: boolConfig(values, "supports_standalone_web_search"),
 	}
 	if wireAPI := stringConfig(values, "wire_api"); wireAPI != "" {
 		parsed, err := ParseWireAPI(wireAPI)

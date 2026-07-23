@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -81,7 +82,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	_ = ctx
 	patch, ok := applyPatchPayloadCommand(invocation)
 	if !ok {
-		return nil, RespondToModel("apply_patch handler received unsupported payload")
+		return nil, RespondToModel(applyPatchUnsupportedPayloadMessage(invocation))
 	}
 	if strings.TrimSpace(patch) == "" {
 		return nil, RespondToModel("apply_patch requires a patch body")
@@ -197,10 +198,66 @@ func (e *ApplyPatchExecutor) WithUpdatedHookInput(invocation *Invocation, update
 }
 
 func applyPatchPayloadCommand(invocation *Invocation) (string, bool) {
-	if invocation == nil || invocation.Payload.Kind != PayloadCustom {
+	if invocation == nil {
 		return "", false
 	}
-	return invocation.Payload.Input, true
+	switch invocation.Payload.Kind {
+	case PayloadCustom:
+		return invocation.Payload.Input, true
+	case PayloadFunction:
+		arguments := strings.TrimSpace(invocation.Payload.Arguments)
+		if arguments == "" {
+			return "", false
+		}
+		if strings.HasPrefix(arguments, "*** Begin Patch") {
+			return arguments, true
+		}
+		if !json.Valid([]byte(arguments)) {
+			if patch := embeddedApplyPatch(arguments); patch != "" {
+				return patch, true
+			}
+		}
+		var wrapped map[string]any
+		if err := json.Unmarshal([]byte(arguments), &wrapped); err == nil {
+			for _, key := range []string{"patch", "input", "command"} {
+				if value, ok := wrapped[key].(string); ok {
+					if patch := embeddedApplyPatch(value); patch != "" {
+						return patch, true
+					}
+				}
+			}
+		}
+		var quoted string
+		if err := json.Unmarshal([]byte(arguments), &quoted); err == nil {
+			if patch := embeddedApplyPatch(quoted); patch != "" {
+				return patch, true
+			}
+		}
+		if patch := embeddedApplyPatch(arguments); patch != "" && strings.Contains(patch, "\n") {
+			return patch, true
+		}
+	}
+	return "", false
+}
+
+func embeddedApplyPatch(value string) string {
+	value = strings.TrimSpace(value)
+	if start := strings.Index(value, "*** Begin Patch"); start >= 0 {
+		return value[start:]
+	}
+	return ""
+}
+
+func applyPatchUnsupportedPayloadMessage(invocation *Invocation) string {
+	if invocation == nil {
+		return "apply_patch handler received nil invocation"
+	}
+	return fmt.Sprintf(
+		"apply_patch handler received unsupported payload (kind=%q input_bytes=%d arguments_bytes=%d)",
+		invocation.Payload.Kind,
+		len(invocation.Payload.Input),
+		len(invocation.Payload.Arguments),
+	)
 }
 
 func applyPatchHookToolName() *HookToolName {

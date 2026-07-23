@@ -843,8 +843,12 @@ func (a *responsesStreamAccumulator) recordAgentItem(item *AgentItem) {
 				continue
 			}
 			existingKey := agentItemRecordKey(&a.items[i])
-			if isGeneratedAgentMessageID(existingKey) || key == "" || existingKey == "" {
-				a.items[i] = *item
+			if isGeneratedAgentMessageID(existingKey) || isGeneratedAgentMessageID(key) || key == "" || existingKey == "" {
+				merged := mergeStreamAgentItem(a.items[i], *item)
+				if isGeneratedAgentMessageID(existingKey) && key != "" && !isGeneratedAgentMessageID(key) {
+					merged.ID = item.ID
+				}
+				a.items[i] = merged
 				a.rebuildMessages()
 				return
 			}
@@ -979,14 +983,40 @@ func (a *responsesStreamAccumulator) applyToolInputDeltas(item *AgentItem) {
 	}
 	switch item.Type {
 	case "function_call":
-		if item.Arguments == "" {
-			item.Arguments = accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID)
+		if accumulated := accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID); accumulated != "" {
+			item.Arguments = accumulated
+		} else if item.Name == "apply_patch" {
+			item.Arguments = firstNonEmptyResponseValue(
+				accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID),
+				soleAccumulatedToolInputDelta(a.customToolInputDeltas),
+				soleAccumulatedToolInputDelta(a.functionCallArgDeltas),
+			)
 		}
 	case "custom_tool_call":
-		if item.Input == "" {
-			item.Input = accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID)
+		if accumulated := accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID); accumulated != "" {
+			item.Input = accumulated
+		} else if item.Name == "apply_patch" {
+			item.Input = firstNonEmptyResponseValue(
+				accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID),
+				soleAccumulatedToolInputDelta(a.customToolInputDeltas),
+				soleAccumulatedToolInputDelta(a.functionCallArgDeltas),
+			)
 		}
 	}
+}
+
+func soleAccumulatedToolInputDelta(values map[string]string) string {
+	unique := ""
+	for _, value := range values {
+		if value == "" || value == unique {
+			continue
+		}
+		if unique != "" {
+			return ""
+		}
+		unique = value
+	}
+	return unique
 }
 
 func accumulatedToolInputDelta(values map[string]string, keys ...string) string {

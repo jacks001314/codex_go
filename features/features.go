@@ -84,6 +84,7 @@ var Registry = []Spec{
 	{Key: "enable_fanout", Stage: StageUnderDevelopment},
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
+	{Key: "mcp_2026_07_28", Stage: StageUnderDevelopment},
 	{Key: "apps_mcp_path_override", Stage: StageRemoved},
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
