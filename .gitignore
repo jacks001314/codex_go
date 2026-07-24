@@ -3,4 +3,6 @@
 fuck.*
 code.exe
 bin/
+!sandbox/windowssandbox/bin/
+!sandbox/windowssandbox/bin/**
 dist/
