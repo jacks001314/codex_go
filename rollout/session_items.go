@@ -258,6 +258,7 @@ func applyTurnContextMetadata(metadata *session.Metadata, raw json.RawMessage) {
 func sessionItemsFromRolloutLines(lines []Line, fallback time.Time) ([]session.Item, []session.TurnSnapshot) {
 	builder := newRolloutReplayBuilder(fallback)
 	for i := range lines {
+		builder.rolloutOrdinal = uint64(i + 1)
 		if lines[i].ThreadRolledBack != nil {
 			builder.rollback(int(lines[i].ThreadRolledBack.NumTurns))
 			continue
@@ -294,11 +295,12 @@ func sessionItemsFromRolloutLines(lines []Line, fallback time.Time) ([]session.I
 }
 
 type rolloutReplayBuilder struct {
-	items         []session.Item
-	turns         []session.TurnSnapshot
-	current       *rolloutReplayTurn
-	fallback      time.Time
-	nextItemIndex int
+	items          []session.Item
+	turns          []session.TurnSnapshot
+	current        *rolloutReplayTurn
+	fallback       time.Time
+	nextItemIndex  int
+	rolloutOrdinal uint64
 }
 
 type rolloutReplayTurn struct {
@@ -619,6 +621,8 @@ func (b *rolloutReplayBuilder) finishCurrentTurn() {
 }
 
 func (b *rolloutReplayBuilder) appendGeneratedItem(item session.Item) {
+	item.CreatedAtOrdinal = b.rolloutOrdinal
+	item.UpdatedAtOrdinal = b.rolloutOrdinal
 	b.items = append(b.items, item)
 	if b.current != nil {
 		b.current.itemCount++
@@ -632,6 +636,21 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 	if b.current != nil && firstNonEmptyString(stringFromMap(item.Metadata, "turnId"), stringFromMap(item.Metadata, "turn_id"), stringFromMap(item.Data, "turnId"), stringFromMap(item.Data, "turn_id")) == "" {
 		item.Metadata["turnId"] = b.current.snapshot.ID
 	}
+	item.UpdatedAtOrdinal = b.rolloutOrdinal
+	turnID := sessionItemTurnID(&item, len(b.items))
+	for i := range b.items {
+		if b.items[i].ID != item.ID || sessionItemTurnID(&b.items[i], i) != turnID {
+			continue
+		}
+		item.CreatedAt = b.items[i].CreatedAt
+		item.CreatedAtOrdinal = b.items[i].CreatedAtOrdinal
+		if item.CreatedAtOrdinal == 0 {
+			item.CreatedAtOrdinal = item.UpdatedAtOrdinal
+		}
+		b.items[i] = item
+		return
+	}
+	item.CreatedAtOrdinal = item.UpdatedAtOrdinal
 	b.items = append(b.items, item)
 	if b.current == nil {
 		return

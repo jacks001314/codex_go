@@ -20,6 +20,7 @@ func TestListStatusAndToolCall(t *testing.T) {
 	if len(response.Servers) != 2 || response.Servers[0].Server.Name != "custom" {
 		t.Fatalf("response = %#v", response)
 	}
+
 	encodedStatus, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Marshal status returned error: %v", err)
@@ -374,6 +375,109 @@ func TestApplyRuntimeConfigReplacesConfiguredServers(t *testing.T) {
 	if _, err := service.CallTool(&MCPToolCallParams{ServerName: "old", ToolName: "read"}); err != nil {
 		t.Fatalf("old optional fallback should remain callable after required config removed: %v", err)
 	}
+}
+
+func TestApplyRuntimeConfigReusesHealthyConnectionForViewOnlyChanges(t *testing.T) {
+	initial := ServerConfig{
+		URL:          "https://example.test/mcp",
+		Enabled:      true,
+		EnabledTools: []string{"read"},
+		ToolTimeout:  time.Second,
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: initial},
+	}})
+	initialRuntime, _ := service.serverConfig("docs")
+	client := service.httpClientForServer("docs", &initialRuntime)
+	service.SetServer(MCPServerStatus{
+		Name:  "docs",
+		State: MCPServerReady,
+		Tools: []MCPToolInfo{{Name: "read"}},
+	})
+
+	updated := cloneServerConfig(&initial)
+	updated.EnabledTools = []string{"write"}
+	updated.ToolTimeout = 2 * time.Second
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: updated},
+	}})
+
+	updatedRuntime, _ := service.serverConfig("docs")
+	if got := service.httpClientForServer("docs", &updatedRuntime); got != client {
+		t.Fatalf("ApplyRuntimeConfig() replaced a healthy connection for view-only changes: old=%s new=%s", mcpConnectionCacheKey(&initialRuntime, false), mcpConnectionCacheKey(&updatedRuntime, false))
+	}
+	status := service.ConfiguredStatuses()
+	if len(status) != 1 || len(status[0].Tools) != 1 || status[0].Tools[0].Name != "read" {
+		t.Fatalf("ApplyRuntimeConfig() did not preserve published inventory: %#v", status)
+	}
+}
+
+func TestApplyRuntimeConfigReplacesChangedOrClosedConnections(t *testing.T) {
+	initial := ServerConfig{URL: "https://example.test/one", Enabled: true}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: initial},
+	}})
+	initialRuntime, _ := service.serverConfig("docs")
+	first := service.httpClientForServer("docs", &initialRuntime)
+
+	changed := cloneServerConfig(&initial)
+	changed.URL = "https://example.test/two"
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: changed},
+	}})
+	changedRuntime, _ := service.serverConfig("docs")
+	second := service.httpClientForServer("docs", &changedRuntime)
+	if second == first {
+		t.Fatal("ApplyRuntimeConfig() reused a connection after its identity changed")
+	}
+	if !first.isClosed() {
+		t.Fatal("ApplyRuntimeConfig() did not close the replaced connection")
+	}
+
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: changed},
+	}})
+	changedRuntime, _ = service.serverConfig("docs")
+	if got := service.httpClientForServer("docs", &changedRuntime); got == second {
+		t.Fatal("ApplyRuntimeConfig() reused a closed connection")
+	}
+}
+
+func TestApplyRuntimeConfigPreservesRefreshedAppsTools(t *testing.T) {
+	config := ServerConfig{URL: "https://example.test/apps", Enabled: true}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		CodexAppsServerName: {Config: config},
+	}})
+	appsRuntime, _ := service.serverConfig(CodexAppsServerName)
+	client := service.httpClientForServer(CodexAppsServerName, &appsRuntime)
+	service.SetServer(MCPServerStatus{
+		Name:  CodexAppsServerName,
+		State: MCPServerReady,
+		Tools: []MCPToolInfo{{Name: "newly_installed"}},
+	})
+
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		CodexAppsServerName: {Config: config},
+		"other":             {Config: ServerConfig{Command: "other", Enabled: true}},
+	}})
+
+	appsRuntime, _ = service.serverConfig(CodexAppsServerName)
+	if got := service.httpClientForServer(CodexAppsServerName, &appsRuntime); got != client {
+		t.Fatal("ApplyRuntimeConfig() replaced the Apps connection during unrelated refresh")
+	}
+	status := service.ConfiguredStatuses()
+	for _, server := range status {
+		if server.effectiveName() == CodexAppsServerName {
+			if len(server.Tools) != 1 || server.Tools[0].Name != "newly_installed" {
+				t.Fatalf("Apps tools after runtime refresh = %#v", server.Tools)
+			}
+			return
+		}
+	}
+	t.Fatal("Apps server missing after runtime refresh")
 }
 
 func TestMCPOAuthAndContentJSONShape(t *testing.T) {

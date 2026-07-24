@@ -202,6 +202,33 @@ func TestToolDispatcherRespondToModelBecomesFailedOutput(t *testing.T) {
 	}
 }
 
+func TestToolDispatcherApplyPatchVerificationFailureIsNotFileChange(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName(tool.DefaultApplyPatchToolName)}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return nil, tool.RespondToModel("apply_patch verification failed: missing context")
+	})); err != nil {
+		t.Fatalf("register apply_patch: %v", err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		ID: "patch-1", Type: "custom_tool_call", Name: tool.DefaultApplyPatchToolName,
+		CallID: "patch-1", Input: "*** Begin Patch\n*** Update File: state.txt\n@@\n-MISSING\n+VALUE\n*** End Patch",
+	}})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Output.Success {
+		t.Fatalf("results = %#v", results)
+	}
+	if results[0].Output.Data != nil {
+		t.Fatalf("verification failure data = %#v, want nil so no file_change event is emitted", results[0].Output.Data)
+	}
+	if got := results[0].Response.Output.Text(); !strings.Contains(got, "missing context") {
+		t.Fatalf("response output = %q", got)
+	}
+}
+
 func TestToolDispatcherMissingToolBecomesFailedOutput(t *testing.T) {
 	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(tool.NewRegistry())})
 

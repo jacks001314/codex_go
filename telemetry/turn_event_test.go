@@ -324,6 +324,8 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 			"failure_kind": null,
 			"requested_additional_permissions": false,
 			"requested_network_access": false,
+			"plugin_id": null,
+			"script_path": null,
 			"command_execution_source": "agent",
 			"exit_code": 0,
 			"command_total_action_count": 4,

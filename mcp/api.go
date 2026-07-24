@@ -436,12 +436,12 @@ type MCPToolCallParams struct {
 	Arguments  any    `json:"arguments,omitempty"`
 	Meta       any    `json:"_meta,omitempty"`
 
-	PermissionProfile       string `json:"-"`
-	SandboxCWD              string `json:"-"`
-	CodexLinuxSandboxExe    string `json:"-"`
-	UseLegacyLandlock       bool   `json:"-"`
-	ServerEnvironmentID     string `json:"-"`
-	SupportsSandboxStateMeta bool  `json:"-"`
+	PermissionProfile        string `json:"-"`
+	SandboxCWD               string `json:"-"`
+	CodexLinuxSandboxExe     string `json:"-"`
+	UseLegacyLandlock        bool   `json:"-"`
+	ServerEnvironmentID      string `json:"-"`
+	SupportsSandboxStateMeta bool   `json:"-"`
 }
 
 func (p MCPToolCallParams) MarshalJSON() ([]byte, error) {
@@ -615,15 +615,41 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	}
 	refreshed := NewMCPService(runtime)
 	s.mu.Lock()
-	oldHTTPClients := s.httpClientsForCloseLocked()
-	oldStdioClients := s.stdioClientsForCloseLocked()
+	nextHTTPClients := map[string]*cachedMCPHTTPClient{}
+	nextStdioClients := map[string]*cachedMCPStdioClient{}
+	var oldHTTPClients []*httpClient
+	var oldStdioClients []*stdioClient
+	for name, cached := range s.httpClients {
+		config, ok := refreshed.configs[name]
+		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
+			cached.key == mcpConnectionCacheKey(&config, s.openAIForm) {
+			nextHTTPClients[name] = cached
+			preserveMCPServerInventory(refreshed.servers, s.servers, name)
+			continue
+		}
+		if cached != nil && cached.client != nil {
+			oldHTTPClients = append(oldHTTPClients, cached.client)
+		}
+	}
+	for name, cached := range s.stdioClients {
+		config, ok := refreshed.configs[name]
+		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
+			cached.key == mcpConnectionCacheKey(&config, s.openAIForm) {
+			nextStdioClients[name] = cached
+			preserveMCPServerInventory(refreshed.servers, s.servers, name)
+			continue
+		}
+		if cached != nil && cached.client != nil {
+			oldStdioClients = append(oldStdioClients, cached.client)
+		}
+	}
 	oldOAuthLogins := s.oauthLoginsForCancelLocked()
 	s.servers = refreshed.servers
 	s.configs = refreshed.configs
 	s.dynamicConfig = refreshed.dynamicConfig
 	s.required = refreshed.required
-	s.httpClients = map[string]*cachedMCPHTTPClient{}
-	s.stdioClients = map[string]*cachedMCPStdioClient{}
+	s.httpClients = nextHTTPClients
+	s.stdioClients = nextStdioClients
 	s.oauthLogins = map[string]*OAuthLoginServer{}
 	s.oauth = refreshed.oauth
 	s.generation++
@@ -635,6 +661,23 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	closeStdioClients(oldStdioClients)
 	cancelOAuthLogins(oldOAuthLogins)
 	s.clearResourceCache()
+}
+
+func preserveMCPServerInventory(next map[string]MCPServerStatus, previous map[string]MCPServerStatus, name string) {
+	current, ok := next[name]
+	if !ok {
+		return
+	}
+	old, ok := previous[name]
+	if !ok {
+		return
+	}
+	current.State = old.State
+	current.Error = cloneStringPtr(old.Error)
+	current.Tools = append([]MCPToolInfo(nil), old.Tools...)
+	current.Resources = append([]MCPResource(nil), old.Resources...)
+	current.ResourceTemplates = append([]MCPResourceTemplate(nil), old.ResourceTemplates...)
+	next[name] = current
 }
 
 func (s *MCPService) Close() error {
@@ -1354,8 +1397,8 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 		s.httpClients = map[string]*cachedMCPHTTPClient{}
 	}
 	openAIForm := s.openAIForm
-	key := mcpHTTPClientCacheKey(config, openAIForm)
-	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil {
+	key := mcpConnectionCacheKey(config, openAIForm)
+	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() {
 		s.mu.Unlock()
 		return cached.client
 	}
@@ -1368,11 +1411,20 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	return client
 }
 
-func mcpHTTPClientCacheKey(config *ServerConfig, openAIForm bool) string {
+func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	if config == nil {
 		return fmt.Sprintf("openaiForm=%t", openAIForm)
 	}
 	cloned := cloneServerConfig(config)
+	cloned.Enabled = false
+	cloned.DisabledReason = ""
+	cloned.Required = false
+	cloned.EnabledTools = nil
+	cloned.DisabledTools = nil
+	cloned.DefaultToolsApprovalMode = nil
+	cloned.Tools = nil
+	cloned.StartupTimeout = 0
+	cloned.ToolTimeout = 0
 	applyHTTPRequest := cloned.ApplyHTTPRequest != nil
 	cloned.ApplyHTTPRequest = nil
 	data, err := json.Marshal(cloned)
@@ -1398,8 +1450,8 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		s.stdioClients = map[string]*cachedMCPStdioClient{}
 	}
 	openAIForm := s.openAIForm
-	key := mcpHTTPClientCacheKey(config, openAIForm)
-	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil {
+	key := mcpConnectionCacheKey(config, openAIForm)
+	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() {
 		s.mu.Unlock()
 		return cached.client
 	}

@@ -9,6 +9,7 @@ import (
 	osexec "os/exec"
 	"strings"
 
+	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
@@ -17,6 +18,13 @@ import (
 type startedUnifiedExecCommand struct {
 	stdin   io.WriteCloser
 	readers []io.ReadCloser
+}
+
+func windowsSandboxProxySettingsMode(mode execserver.WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
+	if mode == execserver.WindowsSandboxProxySettingsPreserve {
+		return windowssandbox.ProxySettingsPreserve
+	}
+	return windowssandbox.ProxySettingsReconcile
 }
 
 func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedExecSandboxCommand, error) {
@@ -44,6 +52,7 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 			TTY:                 req.TTY,
 			StdinOpen:           req.TTY,
 			UsePrivateDesktop:   req.WindowsSandboxPrivateDesktop,
+			ProxySettingsMode:   windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),
 		},
 		PTY:                 req.TTY,
 		WindowsSandboxLevel: level,

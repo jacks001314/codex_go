@@ -1047,6 +1047,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, cmd
 		}
 		keySpec := keySpecFromKeyMsg(msg)
+		if m.keyMatches("global", "toggle_side_conversation", keySpec) ||
+			(keySpec == "ctrl-7" && m.keyMatches("global", "toggle_side_conversation", "ctrl-/")) {
+			return m, m.toggleSideConversation()
+		}
 		if m.keyMatches("global", "open_transcript", keySpec) {
 			return m, m.openTranscriptOverlay()
 		}

@@ -555,10 +555,11 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		windowsSandboxLevel = sandbox.WindowsSandboxDisabled
 	}
 	return &execserver.FileSystemSandboxContext{
-		Permissions:                  json.RawMessage(portableJSON),
-		CWD:                          cwd,
-		WindowsSandboxLevel:          string(windowsSandboxLevel),
-		WindowsSandboxPrivateDesktop: req.WindowsSandboxPrivateDesktop,
+		Permissions:                     json.RawMessage(portableJSON),
+		CWD:                             cwd,
+		WindowsSandboxLevel:             string(windowsSandboxLevel),
+		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
+		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
 	}, nil
 }
 

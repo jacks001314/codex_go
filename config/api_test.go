@@ -104,10 +104,12 @@ func TestConfigReadResponseMarshalRustShape(t *testing.T) {
 
 func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	model := "gpt-5"
+	disableAutoReview := true
 	requirements := &ConfigRequirements{
 		AllowedApprovalPolicies: []sandbox.AskForApproval{},
 		AllowedSandboxModes:     []sandbox.SandboxMode{sandbox.SandboxWorkspaceWrite},
 		ComputerUse:             &ComputerUseRequirements{},
+		BrowserUse:              &BrowserUseRequirements{DisableAutoReview: &disableAutoReview},
 		Hooks: &ManagedHooksRequirements{
 			PreToolUse: []ConfiguredHookGroup{{
 				Hooks: []ConfiguredHookHandler{{Type: "command", Command: "echo ok"}},
@@ -138,6 +140,10 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	computerUse := root["computerUse"].(map[string]any)
 	if computerUse["allowLockedComputerUse"] != nil {
 		t.Fatalf("computerUse = %+v", computerUse)
+	}
+	browserUse := root["browserUse"].(map[string]any)
+	if browserUse["disableAutoReview"] != true {
+		t.Fatalf("browserUse = %+v", browserUse)
 	}
 	network := root["network"].(map[string]any)
 	if _, ok := network["allowedDomains"].([]any); !ok {
@@ -768,6 +774,7 @@ func TestConfigWarningsClone(t *testing.T) {
 
 func TestExternalAgentConfigDetectAndImport(t *testing.T) {
 	service := NewConfigService(t.TempDir())
+	service.SetExternalAgentHome(t.TempDir())
 	service.SetClock(func() time.Time { return time.UnixMilli(1234) })
 	cwd := t.TempDir()
 	detected := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true, CWDs: []string{cwd}})
@@ -776,16 +783,36 @@ func TestExternalAgentConfigDetectAndImport(t *testing.T) {
 	}
 
 	source := "cursor"
+	providerID := "cursor-desktop"
 	response, notification := service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{
 		MigrationItems: detected.Items,
 		Source:         &source,
+		ProviderID:     &providerID,
 	})
 	if response.ImportID != "import-1" || notification.ImportID != "import-1" {
 		t.Fatalf("import response = %+v notification = %+v", response, notification)
 	}
 	histories := service.ImportHistories()
-	if len(histories.Data) != 1 || histories.Data[0].CompletedAtMS != 1234 || len(histories.Data[0].Successes) != 2 {
+	if len(histories.Data) != 1 || histories.Data[0].ProviderID == nil || *histories.Data[0].ProviderID != providerID || histories.Data[0].CompletedAtMS != 1234 || len(histories.Data[0].Successes) != 2 {
 		t.Fatalf("histories = %+v", histories.Data)
+	}
+
+	recorded := service.RecordExternalAgentImportHistory(&ExternalAgentConfigImportHistoryRecordParams{
+		ProviderID: "external-client",
+		ItemTypeResults: []ExternalAgentConfigImportTypeResult{{
+			ItemType: MigrationConfig,
+			Successes: []ExternalAgentConfigImportItemTypeSuccess{{
+				ItemType: MigrationConfig,
+				Source:   &source,
+			}},
+		}},
+	})
+	if recorded.ImportID != "import-2" {
+		t.Fatalf("recorded import response = %+v", recorded)
+	}
+	histories = service.ImportHistories()
+	if len(histories.Data) != 2 || histories.Data[1].ProviderID == nil || *histories.Data[1].ProviderID != "external-client" || len(histories.Data[1].Successes) != 1 {
+		t.Fatalf("recorded histories = %+v", histories.Data)
 	}
 }
 
@@ -808,7 +835,6 @@ func TestExternalAgentSessionImportFailureKeepsStableSubErrorType(t *testing.T) 
 		t.Fatalf("histories = %#v", histories.Data)
 	}
 }
-
 
 func writeConfig(t *testing.T, home string, body string) {
 	t.Helper()

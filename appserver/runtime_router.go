@@ -24,6 +24,7 @@ import (
 	"codex_go/chatgptapi"
 	"codex_go/compact"
 	"codex_go/config"
+	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
@@ -98,6 +99,29 @@ type RuntimeServices struct {
 	WorkspaceCodexPluginsEnabled *bool
 
 	RemoteControlDisabledByRequirements bool
+}
+
+func guardianTurnStart(params *turn.TurnStartParams) bool {
+	if params == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(params.Originator), "guardian") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(params.ResponsesAPIMetadata["x-openai-subagent"]), "guardian")
+}
+
+func (r *RuntimeRouter) configureEnvironmentHTTPPolicy() {
+	if r == nil || r.services.Environment == nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	cfg := &config.Config{Values: read.Config}
+	client, _ := r.httpClientForConfig(cfg).(*http.Client)
+	r.services.Environment.SetHTTPClient(client)
 }
 
 type SkillShadowMetricSink interface {
@@ -518,6 +542,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		services.ManagedNetworkRequirements = cloneRuntimeNetworkRequirements(options.Requirements.Network)
 	}
 	router := NewRuntimeRouter(services)
+	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
 	router.configureManagedNetworkFromConfig()
@@ -805,8 +830,13 @@ func (r *RuntimeRouter) Close() error {
 		r.services.Account.CancelActiveLogins()
 	}
 	var closeErr error
+	if r.services.ThreadRouter != nil {
+		closeErr = r.services.ThreadRouter.Close()
+	}
 	if closer, ok := r.services.Analytics.(interface{ Close() error }); ok && closer != nil {
-		closeErr = closer.Close()
+		if err := closer.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
 	}
 	if r.services.Remote != nil {
 		if err := r.services.Remote.Close(); err != nil && closeErr == nil {
@@ -1555,6 +1585,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleExternalAgentConfigDetect(request)
 	case MethodExternalAgentConfigImport:
 		return r.handleExternalAgentConfigImport(request)
+	case MethodExternalAgentConfigImportHistoryRecord:
+		return r.handleExternalAgentConfigImportHistoryRecord(request)
 	case MethodExternalAgentConfigImportHistoriesRead:
 		return r.requireConfig().ImportHistories(), nil
 	case MethodLoginAccount:
@@ -1742,6 +1774,14 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 		return nil, fmt.Errorf("%w: unexpected thread/rollback response %T", ErrInvalidRequest, result)
 	}
 	return response, nil
+}
+
+func (r *RuntimeRouter) handleExternalAgentConfigImportHistoryRecord(request *Request) (*config.ExternalAgentConfigImportHistoryRecordResponse, error) {
+	var params config.ExternalAgentConfigImportHistoryRecordParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.requireConfig().RecordExternalAgentImportHistory(&params), nil
 }
 
 func threadMethodRequiresLoadedRuntime(method Method) bool {
@@ -2413,6 +2453,12 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	if !params.Ephemeral {
+		if err := r.services.ThreadRouter.retainPaginatedWriter(record); err != nil {
+			_ = r.services.ThreadRouter.store.Delete(record.ID)
+			return nil, true, err
+		}
+	}
 	applyThreadForkName(record, sourceRecord)
 	if params.ThreadSource != nil {
 		value := string(*params.ThreadSource)
@@ -2563,6 +2609,24 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	record.Metadata.ServiceTier = serviceTier
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	sessionDefaults := threadRecordConfigOverrides(record)
+	if sessionDefaults == nil {
+		sessionDefaults = map[string]any{}
+	}
+	for key, value := range map[string]string{
+		"model":                      modelID,
+		"model_reasoning_effort":     reasoningEffort,
+		"plan_mode_reasoning_effort": stringConfigValue(cfg, "plan_mode_reasoning_effort"),
+		"service_tier":               serviceTier,
+		"personality":                firstNonEmpty(stringPtrValue(params.Personality), stringConfigValue(cfg, "personality")),
+	} {
+		if strings.TrimSpace(value) != "" {
+			sessionDefaults[key] = strings.TrimSpace(value)
+		}
+	}
+	if len(sessionDefaults) > 0 {
+		record.Metadata.Extra["config"] = sessionDefaults
+	}
 	if tokenBudget, tokenBudgetErr := cfg.TokenBudgetConfig(); tokenBudgetErr == nil && tokenBudget != nil {
 		record.Metadata.Extra["token_budget_enabled"] = tokenBudget.Enabled
 		if tokenBudget.AutoCompactFallbackPrompt != "" {
@@ -6340,7 +6404,8 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	response, notification := r.requireConfig().ImportExternalAgentConfig(&params)
+	sessionResults := r.importExternalAgentSessions(&params)
+	response, notification := r.requireConfig().ImportExternalAgentConfigWithResults(&params, sessionResults)
 	if notification != nil && len(notification.ItemTypeResults) > 0 {
 		r.notify(NotificationExternalAgentConfigImportCompleted, notification)
 		r.emitExternalAgentConfigImportAnalytics(context.Background(), request.normalizedConnectionID(), &params, notification)
@@ -8014,6 +8079,8 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	}
 	requestUserInputModes := requestUserInputAvailableModesForTurn(cfg)
 	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
+	disableUpdatePlan := cfg != nil && !cfg.UpdatePlanEnabled()
+	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
 	var candidates []plugin.DiscoverableInfo
 	if r != nil {
 		candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(cfg))
@@ -8036,7 +8103,7 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 		}
 	}
 	mcpTools, mcpConnectors := r.mcpRuntimeInputsForTurn(threadID, cfg)
-	if r != nil && r.services.ToolRouter != nil && !requestUserInputDefaultMode && !enableCurrentTimeTool && !enableSleepTool && webSearchOptions == nil && imageGenerationOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if r != nil && r.services.ToolRouter != nil && !requestUserInputDefaultMode && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
@@ -8061,6 +8128,9 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 			options.Shell.MaxOutputTokens = cfg.ToolOutputTokenLimit()
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelFromConfigValues(cfg.Values)
 			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopFromConfigValues(cfg.Values)
+		}
+		if guardianTurnStart(params) {
+			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
 		}
 		options.Shell.UnifiedExecEvents = r.runtimeUnifiedExecEventSink(threadID, strings.TrimSpace(turnID))
 		options.Shell.UnifiedExecEnvironments = r.unifiedExecEnvironmentsForTurn(params)
@@ -8108,6 +8178,8 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool
+	options.DisableUpdatePlan = disableUpdatePlan
+	options.DisableWaitAgent = disableWaitAgent
 	options.ClockProvider = clockProvider
 	if len(candidates) > 0 {
 		options.PluginInstallCandidates = candidates
@@ -8623,6 +8695,11 @@ func (r *RuntimeRouter) mcpRuntimeInputsForTurn(threadID string, cfg *config.Con
 	tools := mcp.RuntimeToolsFromStatuses(response.Data)
 	if len(tools) == 0 {
 		return nil, nil
+	}
+	if cfg != nil {
+		for i := range tools {
+			tools[i].OmitLegacyPrefix = cfg.OmitLegacyMCPToolPrefix(tools[i].ServerName)
+		}
 	}
 	tools = r.annotateRuntimeMCPToolsWithPluginSources(tools)
 	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg)

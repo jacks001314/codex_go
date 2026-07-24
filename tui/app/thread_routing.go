@@ -22,6 +22,7 @@ type ThreadEventStore struct {
 	InputState               *ThreadInputState
 	Active                   bool
 	ActiveTurnID             string
+	PendingInterruptTurnID   string
 	Buffer                   []ThreadBufferedEvent
 	Capacity                 int
 	PendingInteractiveReplay *PendingInteractiveReplayState
@@ -169,6 +170,21 @@ func (s *ThreadEventStore) ClearActiveTurn() {
 	s.ActiveTurnID = ""
 }
 
+func (s *ThreadEventStore) BeginInterrupt(turnID string) bool {
+	if s == nil || turnID == "" || s.PendingInterruptTurnID == turnID {
+		return false
+	}
+	s.PendingInterruptTurnID = turnID
+	return true
+}
+
+func (s *ThreadEventStore) PendingInterrupt() string {
+	if s == nil {
+		return ""
+	}
+	return s.PendingInterruptTurnID
+}
+
 func (s *ThreadEventStore) RebaseBufferAfterSessionRefresh() {
 	if s == nil {
 		return
@@ -229,8 +245,12 @@ func (s *ThreadEventStore) updateActiveTurnFromNotification(notification ServerE
 		if s.ActiveTurnID == target.TurnID {
 			s.ActiveTurnID = ""
 		}
+		if s.PendingInterruptTurnID == target.TurnID {
+			s.PendingInterruptTurnID = ""
+		}
 	case ServerNotificationThreadClosed:
 		s.ActiveTurnID = ""
+		s.PendingInterruptTurnID = ""
 	}
 }
 

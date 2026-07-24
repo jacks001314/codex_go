@@ -39,6 +39,7 @@ import (
 	"codex_go/runtimeutil"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/shell"
 	"codex_go/skillprovider"
 	"codex_go/telemetry"
 	"codex_go/tool"
@@ -55,6 +56,57 @@ type activeRuntimeTurn struct {
 	ConnectionID string
 	RunConfig    *appTurnRunConfig
 	SteerCount   int
+}
+
+func (r *RuntimeRouter) attributeCommandExecutionItem(item *ThreadItem) {
+	if r == nil || item == nil || threadItemWireType(item) != "commandExecution" || r.services.Plugins == nil || r.services.Config == nil {
+		return
+	}
+	command := strings.TrimSpace(threadItemCommand(item))
+	cwd := strings.TrimSpace(threadItemCWD(item))
+	if command == "" || cwd == "" {
+		return
+	}
+	installed := r.services.Plugins.Installed(&plugin.PluginInstalledParams{})
+	pluginIDs := make([]string, 0, len(installed.Plugins))
+	for _, summary := range installed.Plugins {
+		if summary.Enabled && summary.Installed && strings.TrimSpace(summary.ID) != "" {
+			pluginIDs = append(pluginIDs, summary.ID)
+		}
+	}
+	attribution := plugin.NewTrustedPluginRoots(r.services.Config.CodexHome(), pluginIDs).
+		Resolve(shell.SplitCommandLine(command), cwd)
+	if attribution == nil {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data["pluginId"] = attribution.PluginID
+	item.Data["scriptPath"] = attribution.ScriptPath
+}
+
+func (r *RuntimeRouter) attributeSessionCommandItems(items []session.Item) {
+	for i := range items {
+		threadItem := BuildThreadItem(items[i])
+		if threadItemWireType(&threadItem) != "commandExecution" {
+			continue
+		}
+		r.attributeCommandExecutionItem(&threadItem)
+		items[i].Data = cloneAnyMap(threadItem.Data)
+	}
+}
+
+func appReasoningEffortForTurn(cfg *config.Config, params *turn.TurnStartParams) string {
+	if effort := stringPtrValue(params.Effort); effort != "" {
+		return effort
+	}
+	if turnStartPlanMode(params) {
+		if effort := firstNonEmpty(stringConfigValue(cfg, "plan_mode_reasoning_effort"), stringConfigValue(cfg, "planModeReasoningEffort")); effort != "" {
+			return effort
+		}
+	}
+	return firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 }
 
 func activeTurnDiffKey(threadID string, turnID string) string {
@@ -1039,6 +1091,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
 	}
+	r.attributeSessionCommandItems(items)
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
 			r.unifiedExecPersistMu.Unlock()
@@ -1063,6 +1116,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.notifyTurnDiffFromSessionItem(threadID, turnID, &item)
 		}
 		threadItem := BuildThreadItem(item)
+		r.attributeCommandExecutionItem(&threadItem)
 		threadItems = append(threadItems, threadItem)
 		payload := threadItemPayload(threadItem)
 		if shouldNotifyRuntimeItemCompleted(threadItem) {
@@ -1509,6 +1563,7 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 			if unifiedExecEnabled {
 				return
 			}
+			r.attributeCommandExecutionItem(&item)
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item:        threadItemPayload(item),
 				ThreadID:    threadID,
@@ -1604,6 +1659,7 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 				startedAt = time.Now()
 			}
 			item := unifiedExecThreadItem(event, CommandExecutionInProgress)
+			r.attributeCommandExecutionItem(&item)
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				ThreadID:    threadID,
 				TurnID:      turnID,
@@ -1634,6 +1690,7 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 				status = CommandExecutionFailed
 			}
 			item := unifiedExecThreadItem(event, status)
+			r.attributeCommandExecutionItem(&item)
 			r.persistUnifiedExecEnd(threadID, turnID, item, event)
 			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 				ThreadID:      threadID,
@@ -2547,11 +2604,12 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 	if err == nil {
 		return turnAnalyticsErrorFields{}
 	}
-	status := uint16PtrFromHTTPStatus(err.Status)
+	details := err.Details()
+	status := uint16PtrFromHTTPStatus(details.Status)
 	fields := func(info CodexErrorInfo, kind string) turnAnalyticsErrorFields {
 		return turnAnalyticsErrorFields{TurnError: info, CodexErrorKind: stringPtrIfNotEmpty(kind), HTTPStatusCode: status}
 	}
-	switch err.Kind {
+	switch details.Kind {
 	case codexapi.ErrorContextWindowExceeded:
 		return fields("contextWindowExceeded", "context_window_exceeded")
 	case codexapi.ErrorQuotaExceeded:
@@ -2573,7 +2631,7 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 	case codexapi.ErrorStream:
 		return fields(codexErrorInfoWithHTTPStatus("responseStreamConnectionFailed", status), "response_stream_failed")
 	case codexapi.ErrorAPI:
-		return turnAnalyticsErrorFieldsFromAPIStatus(err.Status)
+		return turnAnalyticsErrorFieldsFromAPIStatus(details.Status)
 	default:
 		return turnAnalyticsErrorFields{}
 	}
@@ -4381,6 +4439,9 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 	if unifiedExecExecutionEvented(execution) {
 		metadata["hiddenFromThread"] = true
 	}
+	if hiddenApplyPatchValidationExecution(execution) {
+		metadata["hiddenFromThread"] = true
+	}
 	return session.Item{
 		ID:        "tool-call-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      appToolSessionItemType(execution.Invocation.Payload.Kind),
@@ -4411,6 +4472,9 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	if unifiedExecExecutionEvented(execution) {
 		outputMetadata["hiddenFromThread"] = true
 	}
+	if hiddenApplyPatchValidationExecution(execution) {
+		outputMetadata["hiddenFromThread"] = true
+	}
 	return session.Item{
 		ID:        "tool-output-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      "tool_output",
@@ -4429,6 +4493,12 @@ func unifiedExecExecutionEvented(execution *turn.ToolExecutionResult) bool {
 	}
 	evented, _ := execution.Output.Data["unified_exec_evented"].(bool)
 	return evented
+}
+
+func hiddenApplyPatchValidationExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && execution.Invocation != nil &&
+		execution.Invocation.ToolName.Key() == tool.DefaultApplyPatchToolName &&
+		!appToolOutputIsFileChange(execution.Output)
 }
 
 func appToolExecutionCallID(execution *turn.ToolExecutionResult, createdAt time.Time) string {
@@ -4666,7 +4736,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		PostToolInputItems:           postToolInputItems,
 		PreviousResponseID:           previousResponseID,
 		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:              firstNonEmpty(stringPtrValue(params.Effort), stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort")),
+		ReasoningEffort:              appReasoningEffortForTurn(cfg, params),
 		ReasoningSummary:             stringPtrValue(params.Summary),
 		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
 		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),

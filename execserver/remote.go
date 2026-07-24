@@ -81,7 +81,16 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 		cfg.HTTPClient = remoteHTTPClient()
 	}
 	if cfg.Dial == nil {
-		cfg.Dial = websocket.Dial
+		cfg.Dial = func(ctx context.Context, url string, options *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+			if options == nil {
+				options = &websocket.DialOptions{}
+			} else {
+				cloned := *options
+				options = &cloned
+			}
+			options.HTTPClient = cfg.HTTPClient
+			return websocket.Dial(ctx, url, options)
+		}
 	}
 	if cfg.Backoff <= 0 {
 		cfg.Backoff = defaultRemoteBackoff
@@ -96,7 +105,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	}
 	defer identity.Destroy()
 
-	server := NewServer()
+	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	backoff := cfg.Backoff
 	registration, err := registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
 	if err != nil {

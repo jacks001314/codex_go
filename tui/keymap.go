@@ -29,6 +29,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "toggle_vim_mode", "Turn Vim composer mode on or off.", nil),
 	keymapGatedAction("global", "Global", "toggle_fast_mode", "Turn Fast mode on or off.", nil, keymapFeatureFastMode),
 	keymapAction("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode.", []string{"alt-r"}),
+	keymapAction("global", "Global", "toggle_side_conversation", "Switch between a side conversation and its parent.", []string{"ctrl-/"}),
 	keymapAction("chat", "Chat", "interrupt_turn", "Interrupt the active turn.", []string{"esc"}),
 	keymapAction("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort.", []string{"alt-,", "shift-down"}),
 	keymapAction("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort.", []string{"alt-.", "shift-up"}),

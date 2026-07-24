@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,7 @@ var (
 type DialClientOptions struct {
 	ClientName      string
 	ResumeSessionID string
+	HTTPClient      *http.Client
 }
 
 type ProcessEventKind string
@@ -235,7 +237,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		done:        make(chan struct{}),
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification)
+		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient)
 	}
 	conn, initialized, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
 	if err != nil {
@@ -253,8 +255,10 @@ func dialInitializedClientConnection(
 	clientName string,
 	resumeSessionID string,
 	handleNotification func(string, json.RawMessage) error,
+	httpClient *http.Client,
 ) (clientConnection, *InitializeResponse, error) {
-	conn, _, err := websocket.Dial(ctx, serverURL, nil)
+	dialOptions := &websocket.DialOptions{HTTPClient: httpClient}
+	conn, _, err := websocket.Dial(ctx, serverURL, dialOptions)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -291,6 +291,13 @@ func (e *ClientRetryableError) Error() string {
 	return e.Message
 }
 
+func (e *ClientRetryableError) RequestedRetryDelay() (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	return e.RequestedDelay, e.RequestedDelay > 0
+}
+
 func (s *ClientRetryState) Handle(err error, request ClientRetryRequest, canFallback bool, websocketEnabled bool, debug bool) ClientRetryDecision {
 	if s.MaxRetries == 0 {
 		s.MaxRetries = 3
@@ -303,9 +310,8 @@ func (s *ClientRetryState) Handle(err error, request ClientRetryRequest, canFall
 	if s.Retries < s.MaxRetries {
 		s.Retries++
 		delay := ClientBackoff(s.Retries)
-		var retryable *ClientRetryableError
-		if asClientRetryable(err, &retryable) && retryable.RequestedDelay > 0 {
-			delay = retryable.RequestedDelay
+		if requested, ok := RetryDelayInfo(err); ok {
+			delay = requested
 		}
 		notify := s.Retries > 1 || debug || !websocketEnabled || request == ClientRetryRemoteCompactionV2
 		return ClientRetryDecision{Retry: true, Delay: delay, NotifyUser: notify}
@@ -338,17 +344,6 @@ func stripClientImageDetails(items []ClientResponseItem) {
 			}
 		}
 	}
-}
-
-func asClientRetryable(err error, target **ClientRetryableError) bool {
-	if err == nil {
-		return false
-	}
-	if retryable, ok := err.(*ClientRetryableError); ok {
-		*target = retryable
-		return true
-	}
-	return false
 }
 
 func minClientUint64(a uint64, b uint64) uint64 {

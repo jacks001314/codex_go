@@ -25,6 +25,23 @@ func TestNormalizeRuntimeToolsForModelMatchesRustNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuntimeToolsForModelOmitsLegacyPrefixSelectively(t *testing.T) {
+	tools := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{
+		{ServerName: "docs", OmitLegacyPrefix: true, Tool: RuntimeTool{Name: "search"}},
+		{ServerName: "memory", Tool: RuntimeTool{Name: "read"}},
+	})
+	if tools[0].CallableNamespace != "docs" {
+		t.Fatalf("selected namespace = %q, want docs", tools[0].CallableNamespace)
+	}
+	if tools[1].CallableNamespace != "mcp__memory" {
+		t.Fatalf("legacy namespace = %q, want mcp__memory", tools[1].CallableNamespace)
+	}
+	again := NormalizeRuntimeToolsForModel(tools)
+	if again[0].CallableNamespace != "docs" || again[1].CallableNamespace != "mcp__memory" {
+		t.Fatalf("normalization is not idempotent: %#v", again)
+	}
+}
+
 func TestNormalizeRuntimeToolsForModelDisambiguatesCollisions(t *testing.T) {
 	tools := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{
 		{ServerName: "basic-server", Tool: RuntimeTool{Name: "lookup"}},

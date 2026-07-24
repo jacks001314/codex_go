@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,19 @@ type EnvironmentAddParams struct {
 	EnvironmentID    string  `json:"environmentId"`
 	ExecServerURL    string  `json:"execServerUrl"`
 	ConnectTimeoutMS *uint64 `json:"connectTimeoutMs,omitempty"`
+}
+
+func (m *EnvironmentManager) SetHTTPClient(httpClient *http.Client) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.httpClient = httpClient
+	for id, record := range m.records {
+		record.HTTPClient = httpClient
+		m.records[id] = record
+	}
 }
 
 func (p *EnvironmentAddParams) Validate() error {
@@ -112,6 +126,7 @@ type EnvironmentRecord struct {
 	Shell            EnvironmentShellInfo
 	CWD              *string
 	InfoOverride     bool
+	HTTPClient       *http.Client
 }
 
 type EnvironmentManager struct {
@@ -119,13 +134,19 @@ type EnvironmentManager struct {
 	defaultShell EnvironmentShellInfo
 	defaultCWD   *string
 	records      map[string]EnvironmentRecord
+	httpClient   *http.Client
 }
 
 func NewEnvironmentManager(defaultShell EnvironmentShellInfo, defaultCWD string) *EnvironmentManager {
+	return NewEnvironmentManagerWithHTTPClient(defaultShell, defaultCWD, nil)
+}
+
+func NewEnvironmentManagerWithHTTPClient(defaultShell EnvironmentShellInfo, defaultCWD string, httpClient *http.Client) *EnvironmentManager {
 	return &EnvironmentManager{
 		defaultShell: defaultShell,
 		defaultCWD:   pathURI(defaultCWD),
 		records:      map[string]EnvironmentRecord{},
+		httpClient:   httpClient,
 	}
 }
 
@@ -141,6 +162,7 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 		ConnectTimeoutMS: cloneUint64Ptr(params.ConnectTimeoutMS),
 		Shell:            m.defaultShell,
 		CWD:              cloneString(m.defaultCWD),
+		HTTPClient:       m.httpClient,
 	}
 	m.records[record.EnvironmentID] = record
 	return &EnvironmentAddResponse{}, nil
@@ -161,6 +183,7 @@ func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverc
 		NoiseProvider: provider,
 		Shell:         m.defaultShell,
 		CWD:           cloneString(m.defaultCWD),
+		HTTPClient:    m.httpClient,
 	}
 	return nil
 }
@@ -359,7 +382,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
 	defer cancel()
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
 		if err != nil {
 			return nil, err
 		}
@@ -377,7 +400,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		}
 		return response, nil
 	}
-	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
+	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +452,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
 	defer cancel()
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +463,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 		}
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusKind(status.Status)}, nil
 	}
-	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
+	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
 	if err != nil {
 		return nil, err
 	}

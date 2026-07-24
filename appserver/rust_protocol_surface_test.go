@@ -128,6 +128,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodConfigRequirementsRead):                 true,
 		string(MethodExternalAgentConfigDetect):              true,
 		string(MethodExternalAgentConfigImport):              true,
+		string(MethodExternalAgentConfigImportHistoryRecord): true,
 		string(MethodExternalAgentConfigImportHistoriesRead): true,
 		string(MethodLoginAccount):                           true,
 		string(MethodCancelLoginAccount):                     true,

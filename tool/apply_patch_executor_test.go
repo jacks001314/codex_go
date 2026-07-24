@@ -84,6 +84,25 @@ func TestApplyPatchExecutorIncludesDeleteContentInFileChange(t *testing.T) {
 	}
 }
 
+func TestApplyPatchExecutorAcceptsAbsolutePathLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	external := t.TempDir()
+	target := filepath.Join(external, "absolute.txt")
+	if err := os.WriteFile(target, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
+	patch := "*** Begin Patch\n*** Update File: " + target + "\n@@\n-before\n+after\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{CallID: "absolute", ToolName: PlainName(DefaultApplyPatchToolName), Payload: Payload{Kind: PayloadCustom, Input: patch}})
+	if err != nil || output == nil || !output.Success {
+		t.Fatalf("Execute() = %#v, %v", output, err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "after\n" {
+		t.Fatalf("target = %q, %v", data, err)
+	}
+}
+
 func TestApplyPatchExecutorRejectsInvalidPatchWithGrammarError(t *testing.T) {
 	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: t.TempDir()})
 	_, err := executor.Execute(context.Background(), &Invocation{

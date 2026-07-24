@@ -53,6 +53,8 @@ type ToolRegistryOptions struct {
 	EnableToolSearch      bool
 	EnableCurrentTimeTool bool
 	EnableSleepTool       bool
+	DisableUpdatePlan     bool
+	DisableWaitAgent      bool
 	DynamicTools          []DynamicToolSpec
 	ThreadID              string
 	TurnID                string
@@ -96,6 +98,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			ThreadID:                       options.ThreadID,
 			EnableCurrentTime:              options.EnableCurrentTimeTool,
 			EnableClockSleep:               options.EnableSleepTool,
+			DisableUpdatePlan:              options.DisableUpdatePlan,
 		}); err != nil {
 			return nil, err
 		}
@@ -142,10 +145,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.EnableAgents {
 		if err := agent.RegisterMultiAgentHandlersWithOptions(registry, &agent.MultiAgentHandlerOptions{
-			Controller: options.AgentController,
-			Exposure:   options.AgentExposure,
-			Roles:      options.AgentRoles,
-			Defaults:   options.AgentDefaults,
+			Controller:       options.AgentController,
+			Exposure:         options.AgentExposure,
+			Roles:            options.AgentRoles,
+			Defaults:         options.AgentDefaults,
+			DisableWaitAgent: options.DisableWaitAgent,
 		}); err != nil {
 			return nil, err
 		}

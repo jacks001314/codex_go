@@ -98,13 +98,15 @@ type CodexCommandExecutionEventRequest struct {
 
 type CodexCommandExecutionEventParams struct {
 	CodexToolItemEventBase
-	CommandExecutionSource      string `json:"command_execution_source"`
-	ExitCode                    *int32 `json:"exit_code"`
-	CommandTotalActionCount     uint64 `json:"command_total_action_count"`
-	CommandReadActionCount      uint64 `json:"command_read_action_count"`
-	CommandListFilesActionCount uint64 `json:"command_list_files_action_count"`
-	CommandSearchActionCount    uint64 `json:"command_search_action_count"`
-	CommandUnknownActionCount   uint64 `json:"command_unknown_action_count"`
+	PluginID                    *string `json:"plugin_id"`
+	ScriptPath                  *string `json:"script_path"`
+	CommandExecutionSource      string  `json:"command_execution_source"`
+	ExitCode                    *int32  `json:"exit_code"`
+	CommandTotalActionCount     uint64  `json:"command_total_action_count"`
+	CommandReadActionCount      uint64  `json:"command_read_action_count"`
+	CommandListFilesActionCount uint64  `json:"command_list_files_action_count"`
+	CommandSearchActionCount    uint64  `json:"command_search_action_count"`
+	CommandUnknownActionCount   uint64  `json:"command_unknown_action_count"`
 }
 
 type CodexFileChangeEventRequest struct {

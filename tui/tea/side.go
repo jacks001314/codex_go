@@ -15,7 +15,7 @@ const (
 	SideRenameBlockMessage           = "Side conversations are ephemeral and cannot be renamed."
 	SideMainThreadUnavailableMessage = "'/side' is unavailable until the main thread is ready."
 	SideNoStartedConversationMessage = "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
-	SideAlreadyOpenMessage           = "A side conversation is already open. Press Ctrl+C to return before starting another."
+	SideAlreadyOpenMessage           = "A side conversation is already open. Press ctrl + c to return before starting another."
 )
 
 const SideBoundaryPrompt = `Side conversation boundary.
@@ -62,6 +62,35 @@ type SideStartParams struct {
 	ApprovalPolicy  string
 	Sandbox         string
 	Personality     string
+}
+
+func (m *Model) toggleSideConversation() bubbletea.Cmd {
+	if m == nil || m.State == nil || m.activeSide == nil {
+		return nil
+	}
+	side := m.activeSide
+	if side.ShowingSide {
+		side.SideMessages = cloneSideMessages(m.State.Messages)
+		side.SideStatus = strings.TrimSpace(m.State.Status)
+		side.SidePlaceholder = m.composer.Placeholder
+		m.State.SetThreadID(side.ParentThreadID)
+		m.State.Messages = cloneSideMessages(side.ParentMessages)
+		m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
+		m.composer.Placeholder = firstNonEmpty(side.ParentPlaceholder, "Ask Codex")
+		side.ShowingSide = false
+	} else {
+		side.ParentMessages = cloneSideMessages(m.State.Messages)
+		side.ParentStatus = strings.TrimSpace(m.State.Status)
+		side.ParentPlaceholder = m.composer.Placeholder
+		m.State.SetThreadID(side.SideThreadID)
+		m.State.Messages = cloneSideMessages(side.SideMessages)
+		m.setStatus(firstNonEmpty(side.SideStatus, "idle"))
+		m.composer.Placeholder = firstNonEmpty(side.SidePlaceholder, "Ask Codex in side conversation")
+		side.ShowingSide = true
+	}
+	m.notice = m.sideContextLabel()
+	m.refreshTranscript()
+	return m.refreshStatusControlsCmd()
 }
 
 type SideStartResponse struct {
@@ -120,6 +149,10 @@ type activeSideConversation struct {
 	ParentStatus      string
 	ParentPlaceholder string
 	ParentSideStatus  SideParentStatus
+	SideMessages      []codextui.Message
+	SideStatus        string
+	SidePlaceholder   string
+	ShowingSide       bool
 }
 
 func SideDeveloperInstructions(existingInstructions string) string {
@@ -256,6 +289,9 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 		ParentMessages:    parentMessages,
 		ParentStatus:      parentStatus,
 		ParentPlaceholder: m.composer.Placeholder,
+		SideStatus:        "idle",
+		SidePlaceholder:   "Ask Codex in side conversation",
+		ShowingSide:       true,
 	}
 	m.State.SetThreadID(sideThreadID)
 	m.State.Messages = nil
@@ -329,18 +365,21 @@ func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, n
 }
 
 func (m *Model) inSideConversation() bool {
-	return m != nil && m.activeSide != nil
+	return m != nil && m.activeSide != nil && m.activeSide.ShowingSide
 }
 
 func (m *Model) sideContextLabel() string {
 	if m == nil || m.activeSide == nil {
 		return ""
 	}
+	if !m.activeSide.ShowingSide {
+		return "ctrl + / for side"
+	}
 	parts := []string{"from main thread"}
 	if statusLabel := m.activeSide.ParentSideStatus.label(true); statusLabel != "" {
 		parts = append(parts, statusLabel)
 	}
-	parts = append(parts, "Ctrl+C to return")
+	parts = append(parts, "ctrl + / to switch", "ctrl + c to close")
 	return "Side " + strings.Join(parts, " - ")
 }
 

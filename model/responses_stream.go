@@ -165,7 +165,10 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		if attempt >= maxRetries || !isRetryableResponsesStreamError(err) {
 			return nil, err
 		}
-		delay := responsesRetryDelay(nil, attempt+1)
+		delay, requested := codexapi.RetryDelayInfo(err)
+		if !requested {
+			delay = responsesRetryDelay(nil, attempt+1)
+		}
 		emitResponsesStreamEvent(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), &ResponsesStreamEvent{
 			Kind:            ResponsesStreamEventRetrying,
 			RetryAttempt:    attempt + 1,
@@ -226,9 +229,10 @@ func isRetryableResponsesStreamError(err error) bool {
 	}
 	var apiError *codexapi.APIError
 	if errors.As(err, &apiError) {
+		details := apiError.Details()
 		// Context exhaustion is deterministic for the current input. Retrying the
 		// same request cannot change the token count and only duplicates work.
-		return apiError.Kind != codexapi.ErrorContextWindowExceeded && apiError.Status >= http.StatusInternalServerError
+		return details.Kind != codexapi.ErrorContextWindowExceeded && details.Status >= http.StatusInternalServerError
 	}
 	var apiErr *ResponsesAPIError
 	if errors.As(err, &apiErr) {

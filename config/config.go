@@ -337,6 +337,14 @@ func validateKnownFeatureFields(value any) error {
 			}
 		}
 	}
+	if nonPrefixed, ok := features["non_prefixed_mcp_tool_names"].(map[string]any); ok {
+		known := map[string]bool{"enabled": true, "server_names": true}
+		for key := range nonPrefixed {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.non_prefixed_mcp_tool_names.%s`", key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -483,6 +491,63 @@ func (c *Config) OrchestratorSkillsEnabled() bool {
 		return true
 	}
 	return enabled
+}
+
+func (c *Config) UpdatePlanEnabled() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	tools, ok := c.Values["tools"].(map[string]any)
+	if !ok {
+		return true
+	}
+	updatePlan, ok := tools["update_plan"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := updatePlan["enabled"].(bool)
+	return !ok || enabled
+}
+
+func (c *Config) WaitAgentEnabled() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return true
+	}
+	multiAgentV2, ok := features["multi_agent_v2"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := multiAgentV2["wait_agent_enabled"].(bool)
+	return !ok || enabled
+}
+
+func (c *Config) OmitLegacyMCPToolPrefix(serverName string) bool {
+	if c == nil || !featureflags.Enabled(c.FeatureSettings(), "non_prefixed_mcp_tool_names") {
+		return false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return true
+	}
+	feature, ok := features["non_prefixed_mcp_tool_names"].(map[string]any)
+	if !ok {
+		return true
+	}
+	rawServerNames, configured := feature["server_names"]
+	if !configured {
+		return true
+	}
+	serverName = strings.TrimSpace(serverName)
+	for _, configuredName := range stringListFromConfigValue(rawServerNames) {
+		if configuredName == serverName {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) ToolOutputTokenLimit() *int {

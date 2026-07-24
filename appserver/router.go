@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/agent"
@@ -25,10 +26,93 @@ type Router struct {
 	store      *session.Store
 	now        func() time.Time
 	spawnGraph agent.Store
+	writersMu  sync.Mutex
+	writers    map[session.ThreadID]*session.WriterLock
 }
 
 func NewRouter(store *session.Store) *Router {
-	return &Router{store: store, now: time.Now}
+	return &Router{store: store, now: time.Now, writers: map[session.ThreadID]*session.WriterLock{}}
+}
+
+func (r *Router) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.writersMu.Lock()
+	locks := make([]*session.WriterLock, 0, len(r.writers))
+	for threadID, lock := range r.writers {
+		locks = append(locks, lock)
+		delete(r.writers, threadID)
+	}
+	r.writersMu.Unlock()
+	var closeErr error
+	for _, lock := range locks {
+		if err := lock.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (r *Router) retainPaginatedWriter(record *session.Record) error {
+	if !threadUsesPaginatedHistory(record) {
+		return nil
+	}
+	r.writersMu.Lock()
+	defer r.writersMu.Unlock()
+	if _, ok := r.writers[record.ID]; ok {
+		return nil
+	}
+	lock, err := r.store.AcquireWriter(record.ID)
+	if err != nil {
+		return writerOwnershipError(err)
+	}
+	r.writers[record.ID] = lock
+	return nil
+}
+
+func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*session.WriterLock, error) {
+	r.writersMu.Lock()
+	defer r.writersMu.Unlock()
+	missing := make([]session.ThreadID, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if _, ok := r.writers[threadID]; !ok {
+			missing = append(missing, threadID)
+		}
+	}
+	locks, err := r.store.AcquireWriters(missing)
+	if err != nil {
+		return nil, writerOwnershipError(err)
+	}
+	return locks, nil
+}
+
+func (r *Router) releaseRetainedWriters(threadIDs []session.ThreadID) {
+	r.writersMu.Lock()
+	locks := make([]*session.WriterLock, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if lock := r.writers[threadID]; lock != nil {
+			locks = append(locks, lock)
+			delete(r.writers, threadID)
+		}
+	}
+	r.writersMu.Unlock()
+	for _, lock := range locks {
+		_ = lock.Close()
+	}
+}
+
+func closeTemporaryWriters(locks []*session.WriterLock) {
+	for i := len(locks) - 1; i >= 0; i-- {
+		_ = locks[i].Close()
+	}
+}
+
+func writerOwnershipError(err error) error {
+	if errors.Is(err, session.ErrConflict) {
+		return jsonRPCInvalidRequest(strings.TrimPrefix(err.Error(), session.ErrConflict.Error()+": "))
+	}
+	return err
 }
 
 func (r *Router) SetClock(clock func() time.Time) {
@@ -740,8 +824,16 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
+	if err := r.retainPaginatedWriter(record); err != nil {
+		_ = r.store.Delete(record.ID)
+		return nil, err
+	}
 	if len(record.Items) > 0 {
-		_ = r.createThreadRollout(record, now)
+		if err := r.createThreadRollout(record, now); err != nil {
+			r.releaseRetainedWriters([]session.ThreadID{record.ID})
+			_ = r.store.Delete(record.ID)
+			return nil, err
+		}
 	}
 	path := r.threadRolloutPath(record)
 	thread := BuildThread(record, path, true)
@@ -839,6 +931,9 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	}
 	if includeTurns {
 		r.attachRolloutTurnSnapshots(record)
+	}
+	if err := r.retainPaginatedWriter(record); err != nil {
+		return nil, err
 	}
 	path := r.threadRolloutPath(record)
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
@@ -1358,6 +1453,12 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
+	if !params.Ephemeral {
+		if err := r.retainPaginatedWriter(record); err != nil {
+			_ = r.store.Delete(record.ID)
+			return nil, err
+		}
+	}
 	applyThreadForkName(record, sourceRecord)
 	if params.ThreadSource != nil {
 		value := string(*params.ThreadSource)
@@ -1571,6 +1672,11 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 	if err != nil {
 		return nil, err
 	}
+	lifecycleLocks, err := r.acquireLifecycleWriters(threadIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer closeTemporaryWriters(lifecycleLocks)
 	if rootRecord, readErr := r.store.Read(session.ThreadID(params.ThreadID), true, false); readErr == nil && unmaterializedThread(rootRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", params.ThreadID))
 	} else if readErr != nil && !errors.Is(readErr, session.ErrThreadNotFound) {
@@ -1595,6 +1701,7 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 			archivedThreadIDs = append(archivedThreadIDs, threadID)
 		}
 	}
+	r.releaseRetainedWriters(archivedThreadIDs)
 	return &ThreadArchiveResponse{archivedThreadIDs: archivedThreadIDs}, nil
 }
 
@@ -1661,12 +1768,18 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 	if err != nil {
 		return nil, threadDeleteError(params.ThreadID, err)
 	}
+	lifecycleLocks, err := r.acquireLifecycleWriters(threadIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer closeTemporaryWriters(lifecycleLocks)
 	for _, threadID := range session.DeleteOrderForSubtree(threadIDs) {
 		if err := r.store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
 		}
 		r.deleteThreadRollouts(threadID)
 	}
+	r.releaseRetainedWriters(threadIDs)
 	return &ThreadDeleteResponse{}, nil
 }
 

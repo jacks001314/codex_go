@@ -494,6 +494,7 @@ type ConfigRequirements struct {
 	AllowAppshots                        *bool                     `json:"allowAppshots,omitempty"`
 	AllowRemoteControl                   *bool                     `json:"allowRemoteControl,omitempty"`
 	ComputerUse                          *ComputerUseRequirements  `json:"computerUse,omitempty"`
+	BrowserUse                           *BrowserUseRequirements   `json:"browserUse,omitempty"`
 	FeatureRequirements                  map[string]bool           `json:"featureRequirements,omitempty"`
 	Hooks                                *ManagedHooksRequirements `json:"hooks,omitempty"`
 	EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency,omitempty"`
@@ -514,6 +515,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowAppshots                        *bool                     `json:"allowAppshots"`
 		AllowRemoteControl                   *bool                     `json:"allowRemoteControl"`
 		ComputerUse                          *ComputerUseRequirements  `json:"computerUse"`
+		BrowserUse                           *BrowserUseRequirements   `json:"browserUse"`
 		FeatureRequirements                  map[string]bool           `json:"featureRequirements"`
 		Hooks                                *ManagedHooksRequirements `json:"hooks"`
 		EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency"`
@@ -531,11 +533,24 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowAppshots:                        cloneBoolPtr(r.AllowAppshots),
 		AllowRemoteControl:                   cloneBoolPtr(r.AllowRemoteControl),
 		ComputerUse:                          cloneComputerUse(r.ComputerUse),
+		BrowserUse:                           cloneBrowserUse(r.BrowserUse),
 		FeatureRequirements:                  cloneBoolMap(r.FeatureRequirements),
 		Hooks:                                cloneManagedHooks(r.Hooks),
 		EnforceResidency:                     cloneResidencyRequirementPtr(r.EnforceResidency),
 		Network:                              cloneNetwork(r.Network),
 		Models:                               cloneModels(r.Models),
+	})
+}
+
+type BrowserUseRequirements struct {
+	DisableAutoReview *bool `json:"disableAutoReview,omitempty"`
+}
+
+func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		DisableAutoReview *bool `json:"disableAutoReview"`
+	}{
+		DisableAutoReview: cloneBoolPtr(r.DisableAutoReview),
 	})
 }
 
@@ -876,6 +891,7 @@ func (r *ExternalAgentConfigDetectResponse) MarshalJSON() ([]byte, error) {
 type ExternalAgentConfigImportParams struct {
 	MigrationItems  []ExternalAgentConfigMigrationItem `json:"migrationItems"`
 	Source          *string                            `json:"source"`
+	ProviderID      *string                            `json:"providerId"`
 	MigrationSource *string                            `json:"migrationSource,omitempty"`
 }
 
@@ -918,8 +934,18 @@ func (r *ExternalAgentConfigImportTypeResult) MarshalJSON() ([]byte, error) {
 	})
 }
 
+type ExternalAgentConfigImportHistoryRecordParams struct {
+	ProviderID      string                                `json:"providerId"`
+	ItemTypeResults []ExternalAgentConfigImportTypeResult `json:"itemTypeResults"`
+}
+
+type ExternalAgentConfigImportHistoryRecordResponse struct {
+	ImportID string `json:"importId"`
+}
+
 type ExternalAgentConfigImportHistory struct {
 	ImportID      string                                     `json:"importId"`
+	ProviderID    *string                                    `json:"providerId"`
 	CompletedAtMS int64                                      `json:"completedAtMs"`
 	Successes     []ExternalAgentConfigImportItemTypeSuccess `json:"successes"`
 	Failures      []ExternalAgentConfigImportItemTypeFailure `json:"failures"`
@@ -928,11 +954,13 @@ type ExternalAgentConfigImportHistory struct {
 func (h *ExternalAgentConfigImportHistory) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ImportID      string                                     `json:"importId"`
+		ProviderID    *string                                    `json:"providerId"`
 		CompletedAtMS int64                                      `json:"completedAtMs"`
 		Successes     []ExternalAgentConfigImportItemTypeSuccess `json:"successes"`
 		Failures      []ExternalAgentConfigImportItemTypeFailure `json:"failures"`
 	}{
 		ImportID:      h.ImportID,
+		ProviderID:    cloneStringPtr(h.ProviderID),
 		CompletedAtMS: h.CompletedAtMS,
 		Successes:     importSuccessesForJSON(h.Successes),
 		Failures:      importFailuresForJSON(h.Failures),
@@ -1846,11 +1874,18 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 		if item, ok := s.detectExternalMemoryMigration(params.CWDs); ok {
 			items = append(items, item)
 		}
+		if item, ok := s.detectExternalSessionMigration(); ok {
+			items = append(items, item)
+		}
 	}
 	return &ExternalAgentConfigDetectResponse{Items: items}
 }
 
 func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImportParams) (*ExternalAgentConfigImportResponse, *ExternalAgentConfigImportCompletedNotification) {
+	return s.ImportExternalAgentConfigWithResults(params, nil)
+}
+
+func (s *ConfigService) ImportExternalAgentConfigWithResults(params *ExternalAgentConfigImportParams, additional []ExternalAgentConfigImportTypeResult) (*ExternalAgentConfigImportResponse, *ExternalAgentConfigImportCompletedNotification) {
 	if params == nil {
 		params = &ExternalAgentConfigImportParams{}
 	}
@@ -1861,6 +1896,9 @@ func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImp
 	var typeResults []ExternalAgentConfigImportTypeResult
 	for i := range params.MigrationItems {
 		item := params.MigrationItems[i]
+		if item.ItemType == MigrationSessions {
+			continue
+		}
 		if item.ItemType == MigrationMemory {
 			result := s.importExternalMemory(&item, params.Source)
 			typeResults = append(typeResults, result)
@@ -1878,9 +1916,11 @@ func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImp
 	if _, validation := ValidatePendingSessionImports(params.MigrationItems); validation != nil && len(validation.Failures) > 0 {
 		typeResults = append(typeResults, *validation)
 	}
+	typeResults = append(typeResults, additional...)
 	notification := BuildExternalAgentImportResult(importID, typeResults)
 	history := ExternalAgentConfigImportHistory{
 		ImportID:      importID,
+		ProviderID:    cloneStringPtr(params.ProviderID),
 		CompletedAtMS: s.now().UTC().UnixMilli(),
 		Successes:     collectImportSuccesses(notification.ItemTypeResults),
 		Failures:      collectImportFailures(notification.ItemTypeResults),
@@ -1897,6 +1937,25 @@ func (s *ConfigService) ImportHistories() *ExternalAgentConfigImportHistoriesRea
 		out[i] = cloneImportHistory(&s.importHistory[i])
 	}
 	return &ExternalAgentConfigImportHistoriesReadResponse{Data: out}
+}
+
+func (s *ConfigService) RecordExternalAgentImportHistory(params *ExternalAgentConfigImportHistoryRecordParams) *ExternalAgentConfigImportHistoryRecordResponse {
+	if params == nil {
+		params = &ExternalAgentConfigImportHistoryRecordParams{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	importID := fmt.Sprintf("import-%d", len(s.importHistory)+1)
+	providerID := strings.TrimSpace(params.ProviderID)
+	history := ExternalAgentConfigImportHistory{
+		ImportID:      importID,
+		ProviderID:    stringPtrIfNotEmpty(providerID),
+		CompletedAtMS: s.now().UTC().UnixMilli(),
+		Successes:     collectImportSuccesses(params.ItemTypeResults),
+		Failures:      collectImportFailures(params.ItemTypeResults),
+	}
+	s.importHistory = append(s.importHistory, history)
+	return &ExternalAgentConfigImportHistoryRecordResponse{ImportID: importID}
 }
 
 func applyEdit(root map[string]any, edit *ConfigEdit) {
@@ -2474,6 +2533,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)
 	clone.AllowRemoteControl = cloneBoolPtr(requirements.AllowRemoteControl)
 	clone.ComputerUse = cloneComputerUse(requirements.ComputerUse)
+	clone.BrowserUse = cloneBrowserUse(requirements.BrowserUse)
 	clone.Hooks = cloneManagedHooks(requirements.Hooks)
 	clone.EnforceResidency = cloneResidencyRequirementPtr(requirements.EnforceResidency)
 	clone.Network = cloneNetwork(requirements.Network)
@@ -2509,6 +2569,13 @@ func cloneComputerUse(value *ComputerUseRequirements) *ComputerUseRequirements {
 		return nil
 	}
 	return &ComputerUseRequirements{AllowLockedComputerUse: cloneBoolPtr(value.AllowLockedComputerUse)}
+}
+
+func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
+	if value == nil {
+		return nil
+	}
+	return &BrowserUseRequirements{DisableAutoReview: cloneBoolPtr(value.DisableAutoReview)}
 }
 
 func cloneManagedHooks(value *ManagedHooksRequirements) *ManagedHooksRequirements {
@@ -2915,6 +2982,7 @@ func cloneImportHistory(value *ExternalAgentConfigImportHistory) ExternalAgentCo
 	}
 	return ExternalAgentConfigImportHistory{
 		ImportID:      value.ImportID,
+		ProviderID:    cloneStringPtr(value.ProviderID),
 		CompletedAtMS: value.CompletedAtMS,
 		Successes:     cloneImportSuccesses(value.Successes),
 		Failures:      cloneImportFailures(value.Failures),

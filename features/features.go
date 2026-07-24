@@ -114,6 +114,7 @@ var Registry = []Spec{
 	{Key: "default_mode_request_user_input", Stage: StageUnderDevelopment},
 	{Key: "terminal_visualization_instructions", Stage: StageUnderDevelopment},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
+	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},
 	{Key: "rollout_budget", Stage: StageUnderDevelopment},

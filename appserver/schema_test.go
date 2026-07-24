@@ -62,6 +62,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConsumeAccountRateLimitResetCredit), "ConsumeAccountRateLimitResetCreditParams", "ConsumeAccountRateLimitResetCreditResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodGetWorkspaceMessages), "", "GetWorkspaceMessagesResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodConfigRequirementsRead), "", "ConfigRequirementsReadResponse")
+	requireProtocolSignature(t, stable.ClientRequests, string(MethodExternalAgentConfigImportHistoryRecord), "ExternalAgentConfigImportHistoryRecordParams", "ExternalAgentConfigImportHistoryRecordResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodExternalAgentConfigImportHistoriesRead), "", "ExternalAgentConfigImportHistoriesReadResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodHooksList), "HooksListParams", "HooksListResponse")
 	requireProtocolSignature(t, stable.ClientRequests, string(MethodMCPServerToolCall), "McpServerToolCallParams", "McpServerToolCallResponse")

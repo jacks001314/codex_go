@@ -159,9 +159,10 @@ func (e *requestFailure) Error() string {
 }
 
 type Server struct {
-	mu        sync.Mutex
-	processes map[string]*processState
-	handles   map[string]*os.File
+	mu         sync.Mutex
+	processes  map[string]*processState
+	handles    map[string]*os.File
+	httpClient *http.Client
 
 	registryMu         sync.Mutex
 	sessions           map[string]*serverSessionEntry
@@ -314,12 +315,29 @@ type ManagedNetworkSandboxContext struct {
 }
 
 type FileSystemSandboxContext struct {
-	Permissions                  json.RawMessage `json:"permissions"`
-	CWD                          string          `json:"cwd,omitempty"`
-	WorkspaceRoots               []string        `json:"workspaceRoots,omitempty"`
-	WindowsSandboxLevel          string          `json:"windowsSandboxLevel"`
-	WindowsSandboxPrivateDesktop bool            `json:"windowsSandboxPrivateDesktop,omitempty"`
-	UseLegacyLandlock            bool            `json:"useLegacyLandlock,omitempty"`
+	Permissions                     json.RawMessage                 `json:"permissions"`
+	CWD                             string                          `json:"cwd,omitempty"`
+	WorkspaceRoots                  []string                        `json:"workspaceRoots,omitempty"`
+	WindowsSandboxLevel             string                          `json:"windowsSandboxLevel"`
+	WindowsSandboxPrivateDesktop    bool                            `json:"windowsSandboxPrivateDesktop,omitempty"`
+	WindowsSandboxProxySettingsMode WindowsSandboxProxySettingsMode `json:"windowsSandboxProxySettingsMode,omitempty"`
+	UseLegacyLandlock               bool                            `json:"useLegacyLandlock,omitempty"`
+}
+
+type WindowsSandboxProxySettingsMode string
+
+const (
+	WindowsSandboxProxySettingsReconcile WindowsSandboxProxySettingsMode = "reconcile"
+	WindowsSandboxProxySettingsPreserve  WindowsSandboxProxySettingsMode = "preserve"
+)
+
+func (m WindowsSandboxProxySettingsMode) Validate() error {
+	switch m {
+	case "", WindowsSandboxProxySettingsReconcile, WindowsSandboxProxySettingsPreserve:
+		return nil
+	default:
+		return fmt.Errorf("unsupported Windows sandbox proxy settings mode %q", m)
+	}
 }
 
 type ExecEnvPolicy struct {
@@ -659,18 +677,27 @@ func (a *afterResponseActions) run() {
 }
 
 func NewServer() *Server {
+	return NewServerWithHTTPClient(nil)
+}
+
+func NewServerWithHTTPClient(httpClient *http.Client) *Server {
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
 	return &Server{
 		processes:          map[string]*processState{},
 		handles:            map[string]*os.File{},
+		httpClient:         httpClient,
 		sessions:           map[string]*serverSessionEntry{},
 		detachedSessionTTL: 30 * time.Second,
 	}
 }
 
-func newSessionServer() *Server {
+func newSessionServer(httpClient *http.Client) *Server {
 	return &Server{
-		processes: map[string]*processState{},
-		handles:   map[string]*os.File{},
+		processes:  map[string]*processState{},
+		handles:    map[string]*os.File{},
+		httpClient: httpClient,
 	}
 }
 
@@ -728,7 +755,7 @@ func (s *Server) attachSession(ctx context.Context, resumeSessionID *string) (*s
 	sessionID := uuid.NewString()
 	entry := &serverSessionEntry{
 		id:           sessionID,
-		server:       newSessionServer(),
+		server:       newSessionServer(s.httpClient),
 		connectionID: connectionID,
 	}
 	s.sessions[sessionID] = entry
@@ -1234,7 +1261,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return doHTTPRequest(ctx, &params)
+		return doHTTPRequest(ctx, &params, s.serverForConnection(ctx).httpClient)
 	default:
 		return nil, requestError(-32601, fmt.Sprintf("exec-server stub does not implement `%s` yet", req.Method))
 	}
@@ -1563,6 +1590,9 @@ func prepareExecProcess(params *ExecParams) ([]string, string, error) {
 	}
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, "", requestError(-32602, "invalid sandbox context: permissions are required")
+	}
+	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
+		return nil, "", requestError(-32602, "invalid sandbox context: "+err.Error())
 	}
 	sandboxCWD := cwd
 	if strings.TrimSpace(sandboxContext.CWD) != "" {
@@ -2186,7 +2216,7 @@ func walkPath(params *FSWalkParams) (*FSWalkResponse, error) {
 	}, nil
 }
 
-func doHTTPRequest(ctx context.Context, params *HTTPRequestParams) (*HTTPRequestResponse, error) {
+func doHTTPRequest(ctx context.Context, params *HTTPRequestParams, configuredClient ...*http.Client) (*HTTPRequestResponse, error) {
 	if params == nil {
 		return nil, errors.New("http/request params are required")
 	}
@@ -2254,7 +2284,11 @@ func doHTTPRequest(ctx context.Context, params *HTTPRequestParams) (*HTTPRequest
 		}
 		req.Header.Add(header.Name, header.Value)
 	}
-	client, err := newExecServerHTTPClient()
+	var baseClient *http.Client
+	if len(configuredClient) > 0 {
+		baseClient = configuredClient[0]
+	}
+	client, err := newExecServerHTTPClient(baseClient)
 	if err != nil {
 		return nil, err
 	}

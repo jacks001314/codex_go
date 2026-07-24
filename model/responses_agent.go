@@ -32,6 +32,30 @@ type HTTPDoer interface {
 	Do(request *http.Request) (*http.Response, error)
 }
 
+func responsesRequestedRetryDelay(headers http.Header, now time.Time) (time.Duration, bool) {
+	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
+	if retryAfter == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.ParseFloat(retryAfter, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds * float64(time.Second)), true
+	}
+	if when, err := http.ParseTime(retryAfter); err == nil {
+		delay := when.Sub(now)
+		if delay > 0 {
+			return delay, true
+		}
+	}
+	return 0, false
+}
+
+func (e *ResponsesAPIError) RequestedRetryDelay() (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	return e.retryDelay, e.hasRetryDelay
+}
+
 type ResponsesAgentOptions struct {
 	Provider                   *APIProvider
 	Auth                       *AuthHeaders
@@ -240,6 +264,8 @@ type ResponsesAPIError struct {
 	CFRay                  string
 	AuthorizationError     string
 	AuthorizationErrorCode string
+	retryDelay             time.Duration
+	hasRetryDelay          bool
 }
 
 func (e *ResponsesAPIError) Error() string {
@@ -1784,7 +1810,7 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		message = http.StatusText(statusCode)
 	}
 	message = mapProviderAPIErrorMessage(providerName, statusCode, bodyText, message)
-	return &ResponsesAPIError{
+	apiError := &ResponsesAPIError{
 		StatusCode:             statusCode,
 		Message:                message,
 		Body:                   bodyText,
@@ -1793,6 +1819,11 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		AuthorizationError:     responseHeaderValue(headers, "x-openai-authorization-error"),
 		AuthorizationErrorCode: responseAuthorizationErrorCode(headers),
 	}
+	if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
+		apiError.retryDelay = delay
+		apiError.hasRetryDelay = true
+	}
+	return apiError
 }
 
 const bedrockExpiredSignatureMessage = "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex"
@@ -2005,16 +2036,8 @@ func (r *ResponsesAgentRunner) refreshManagedChatGPTAuth(ctx context.Context) er
 
 func responsesRetryDelay(response *http.Response, attempt uint64) time.Duration {
 	if response != nil {
-		if retryAfter := strings.TrimSpace(response.Header.Get("Retry-After")); retryAfter != "" {
-			if seconds, err := strconv.ParseFloat(retryAfter, 64); err == nil && seconds >= 0 {
-				return time.Duration(seconds * float64(time.Second))
-			}
-			if when, err := http.ParseTime(retryAfter); err == nil {
-				delay := time.Until(when)
-				if delay > 0 {
-					return delay
-				}
-			}
+		if delay, ok := responsesRequestedRetryDelay(response.Header, time.Now()); ok {
+			return delay
 		}
 	}
 	if attempt == 0 {

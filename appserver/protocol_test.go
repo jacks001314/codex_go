@@ -34,6 +34,7 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 			want: `{"method":"configWarning","params":{"summary":"queued","details":null}}`,
 		},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := json.Marshal(tc.value)
@@ -268,5 +269,41 @@ func TestJSONRPCErrorDataIncludesMCPRemoteErrorDetails(t *testing.T) {
 	}
 	if code := runtimeErrorCode(err); code != -32001 {
 		t.Fatalf("runtimeErrorCode() = %d, want -32001", code)
+	}
+}
+
+func TestCommandExecutionItemIncludesPluginAttribution(t *testing.T) {
+	item := &ThreadItem{
+		ID:   "cmd-1",
+		Type: "commandExecution",
+		Data: map[string]any{
+			"command":    "python scripts/run.py",
+			"pluginId":   "sample@openai-curated",
+			"scriptPath": "scripts/run.py",
+		},
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if payload["pluginId"] != "sample@openai-curated" || payload["scriptPath"] != "scripts/run.py" {
+		t.Fatalf("command execution payload = %#v", payload)
+	}
+}
+
+func TestSafeCommandPluginScriptPath(t *testing.T) {
+	pluginID := "sample@openai-curated"
+	safe := "scripts/run.py"
+	if got := safeCommandPluginScriptPath(&pluginID, &safe); got == nil || *got != safe {
+		t.Fatalf("safeCommandPluginScriptPath() = %#v", got)
+	}
+	for _, path := range []string{"/tmp/run.py", `scripts\run.py`, "scripts/../run.py"} {
+		if got := safeCommandPluginScriptPath(&pluginID, &path); got != nil {
+			t.Fatalf("unsafe path %q accepted as %#v", path, got)
+		}
 	}
 }

@@ -233,7 +233,7 @@ func DialNoiseRendezvousClient(
 		if err != nil {
 			return nil, nil, err
 		}
-		wire, err := dialNoiseHarnessConnection(ctx, bundle, identity)
+		wire, err := dialNoiseHarnessConnection(ctx, bundle, identity, options.HTTPClient)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -295,6 +295,7 @@ func dialNoiseHarnessConnection(
 	ctx context.Context,
 	bundle *NoiseRendezvousConnectBundle,
 	identity *remoteNoiseIdentity,
+	httpClient *http.Client,
 ) (clientConnection, error) {
 	if bundle == nil || identity == nil {
 		return nil, errors.New("Noise rendezvous connection is incomplete")
@@ -307,7 +308,7 @@ func dialNoiseHarnessConnection(
 	if index := strings.IndexAny(diagnosticURL, "?#"); index >= 0 {
 		diagnosticURL = diagnosticURL[:index]
 	}
-	conn, response, err := websocket.Dial(ctx, bundle.WebSocketURL, nil)
+	conn, response, err := websocket.Dial(ctx, bundle.WebSocketURL, &websocket.DialOptions{HTTPClient: httpClient})
 	if err != nil {
 		statusCode := 0
 		if response != nil {

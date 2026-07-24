@@ -103,6 +103,8 @@ type ThreadItem struct {
 	Result            *MCPToolResult               `json:"result,omitempty"`
 	CallError         *MCPToolError                `json:"error,omitempty"`
 	Command           string                       `json:"command,omitempty"`
+	PluginID          string                       `json:"plugin_id,omitempty"`
+	ScriptPath        string                       `json:"script_path,omitempty"`
 	AggregatedOutput  *string                      `json:"aggregated_output,omitempty"`
 	ExitCode          *int                         `json:"exit_code,omitempty"`
 	Status            string                       `json:"status,omitempty"`
@@ -158,6 +160,13 @@ func ThreadStarted(threadID string) ThreadEvent {
 		Type:     "thread.started",
 		ThreadID: threadID,
 	}
+}
+
+func CommandExecutionItemWithAttribution(id string, command string, aggregatedOutput string, exitCode *int, status string, pluginID string, scriptPath string) ThreadItem {
+	item := CommandExecutionItem(id, command, aggregatedOutput, exitCode, status)
+	item.PluginID = pluginID
+	item.ScriptPath = scriptPath
+	return item
 }
 
 func TurnStarted() ThreadEvent {

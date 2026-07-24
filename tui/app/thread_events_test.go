@@ -33,6 +33,29 @@ func TestThreadEventStoreActiveTurnTrackingMatchRust(t *testing.T) {
 	}
 }
 
+func TestThreadEventStoreCoalescesAndClearsPendingInterrupt(t *testing.T) {
+	store := NewThreadEventStore(8)
+	if !store.BeginInterrupt("turn-1") {
+		t.Fatal("first interrupt should be accepted")
+	}
+	if store.BeginInterrupt("turn-1") {
+		t.Fatal("repeated interrupt should be coalesced")
+	}
+	store.EnqueueNotification(ServerEvent{Name: ServerNotificationTurnCompleted, TurnID: "turn-other"})
+	if got := store.PendingInterrupt(); got != "turn-1" {
+		t.Fatalf("unrelated completion cleared pending interrupt: %q", got)
+	}
+	store.EnqueueNotification(ServerEvent{Name: ServerNotificationTurnCompleted, TurnID: "turn-1"})
+	if got := store.PendingInterrupt(); got != "" {
+		t.Fatalf("completed interrupt remained pending: %q", got)
+	}
+	store.BeginInterrupt("turn-2")
+	store.EnqueueNotification(ServerEvent{Name: ServerNotificationThreadClosed})
+	if got := store.PendingInterrupt(); got != "" {
+		t.Fatalf("closed thread retained pending interrupt: %q", got)
+	}
+}
+
 func TestThreadEventSurvivesSessionRefreshMatchRust(t *testing.T) {
 	cases := []struct {
 		event ThreadBufferedEvent

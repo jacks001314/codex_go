@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,20 +45,143 @@ type SortDirection string
 type ThreadID string
 
 type Item struct {
-	ID         string          `json:"id"`
-	Type       string          `json:"type"`
-	Role       string          `json:"role,omitempty"`
-	Text       string          `json:"text,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Namespace  string          `json:"namespace,omitempty"`
-	CallID     string          `json:"call_id,omitempty"`
-	Status     string          `json:"status,omitempty"`
-	Content    []ContentPart   `json:"content,omitempty"`
-	Data       map[string]any  `json:"data,omitempty"`
-	Raw        json.RawMessage `json:"raw,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	ResponseID string          `json:"response_id,omitempty"`
-	Metadata   map[string]any  `json:"metadata,omitempty"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Role             string          `json:"role,omitempty"`
+	Text             string          `json:"text,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Namespace        string          `json:"namespace,omitempty"`
+	CallID           string          `json:"call_id,omitempty"`
+	Status           string          `json:"status,omitempty"`
+	Content          []ContentPart   `json:"content,omitempty"`
+	Data             map[string]any  `json:"data,omitempty"`
+	Raw              json.RawMessage `json:"raw,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	ResponseID       string          `json:"response_id,omitempty"`
+	Metadata         map[string]any  `json:"metadata,omitempty"`
+	CreatedAtOrdinal uint64          `json:"created_at_ordinal,omitempty"`
+	UpdatedAtOrdinal uint64          `json:"updated_at_ordinal,omitempty"`
+}
+
+func (s *Store) ListItems(threadID ThreadID, options ListItemsOptions) (*ItemPage, error) {
+	record, err := s.Read(threadID, true, true)
+	if err != nil {
+		return nil, err
+	}
+	if options.AfterUpdatedAtOrdinal != nil && record.ForkedFromID != "" {
+		return nil, fmt.Errorf("%w: incremental item replay is not supported for forked threads", ErrInvalidThreadID)
+	}
+	sortKey := options.SortKey
+	if sortKey == "" {
+		sortKey = ItemSortCreatedAtOrdinal
+	}
+	if sortKey == ItemSortUpdatedAtOrdinal && options.AfterUpdatedAtOrdinal == nil {
+		return nil, fmt.Errorf("%w: update-ordinal item sorting requires an update watermark", ErrInvalidThreadID)
+	}
+	if sortKey != ItemSortCreatedAtOrdinal && sortKey != ItemSortUpdatedAtOrdinal {
+		return nil, fmt.Errorf("%w: unsupported item sort key %q", ErrInvalidThreadID, sortKey)
+	}
+	cursorScope, cursorOrdinal, err := parseItemCursor(options.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	if cursorScope != "" && cursorScope != sortKey {
+		return nil, fmt.Errorf("%w: item cursor sort key does not match request", ErrInvalidThreadID)
+	}
+	items := cloneItems(record.Items)
+	for i := range items {
+		if items[i].CreatedAtOrdinal == 0 {
+			items[i].CreatedAtOrdinal = uint64(i + 1)
+		}
+		if items[i].UpdatedAtOrdinal == 0 {
+			items[i].UpdatedAtOrdinal = items[i].CreatedAtOrdinal
+		}
+	}
+	filtered := items[:0]
+	for i := range items {
+		item := items[i]
+		if options.TurnID != "" && itemTurnID(&item, i) != options.TurnID {
+			continue
+		}
+		if options.AfterUpdatedAtOrdinal != nil && item.UpdatedAtOrdinal <= *options.AfterUpdatedAtOrdinal {
+			continue
+		}
+		ordinal := item.CreatedAtOrdinal
+		if sortKey == ItemSortUpdatedAtOrdinal {
+			ordinal = item.UpdatedAtOrdinal
+		}
+		if cursorOrdinal > 0 {
+			if options.SortDirection == SortDesc && ordinal >= cursorOrdinal {
+				continue
+			}
+			if options.SortDirection != SortDesc && ordinal <= cursorOrdinal {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left, right := filtered[i].CreatedAtOrdinal, filtered[j].CreatedAtOrdinal
+		if sortKey == ItemSortUpdatedAtOrdinal {
+			left, right = filtered[i].UpdatedAtOrdinal, filtered[j].UpdatedAtOrdinal
+		}
+		if options.SortDirection == SortDesc {
+			return left > right
+		}
+		return left < right
+	})
+	limit := options.PageSize
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+	pageItems := append([]Item(nil), filtered[:limit]...)
+	next := ""
+	if limit < len(filtered) && limit > 0 {
+		last := pageItems[len(pageItems)-1]
+		ordinal := last.CreatedAtOrdinal
+		if sortKey == ItemSortUpdatedAtOrdinal {
+			ordinal = last.UpdatedAtOrdinal
+		}
+		next = fmt.Sprintf("%s:%d", sortKey, ordinal)
+	}
+	return &ItemPage{Items: pageItems, NextCursor: next}, nil
+}
+
+func parseItemCursor(cursor string) (ItemSortKey, uint64, error) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		return "", 0, nil
+	}
+	parts := strings.Split(cursor, ":")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("%w: invalid item cursor", ErrInvalidThreadID)
+	}
+	ordinal, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: invalid item cursor", ErrInvalidThreadID)
+	}
+	return ItemSortKey(parts[0]), ordinal, nil
+}
+
+type ItemSortKey string
+
+const (
+	ItemSortCreatedAtOrdinal ItemSortKey = "created_at_ordinal"
+	ItemSortUpdatedAtOrdinal ItemSortKey = "updated_at_ordinal"
+)
+
+type ListItemsOptions struct {
+	TurnID                string
+	Cursor                string
+	PageSize              int
+	SortDirection         SortDirection
+	SortKey               ItemSortKey
+	AfterUpdatedAtOrdinal *uint64
+}
+
+type ItemPage struct {
+	Items      []Item
+	NextCursor string
 }
 
 type ContentPart struct {
@@ -265,7 +390,9 @@ type ForkOptions struct {
 }
 
 type Store struct {
-	root string
+	root                  string
+	writerLocksOnce       sync.Once
+	writerLockCoordinator *writerLockCoordinator
 }
 
 func NewStore(root string) *Store {

@@ -29,6 +29,67 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestOmitLegacyMCPToolPrefixSupportsGlobalAndServerModes(t *testing.T) {
+	disabled := &Config{Values: map[string]any{}}
+	if disabled.OmitLegacyMCPToolPrefix("docs") {
+		t.Fatal("feature should default to preserving legacy prefixes")
+	}
+	global := &Config{Values: map[string]any{
+		"features": map[string]any{"non_prefixed_mcp_tool_names": true},
+	}}
+	if !global.OmitLegacyMCPToolPrefix("docs") || !global.OmitLegacyMCPToolPrefix("memory") {
+		t.Fatal("boolean feature should omit prefixes globally")
+	}
+	selective := &Config{Values: map[string]any{
+		"features": map[string]any{"non_prefixed_mcp_tool_names": map[string]any{
+			"enabled": true, "server_names": []any{"docs"},
+		}},
+	}}
+	if !selective.OmitLegacyMCPToolPrefix("docs") || selective.OmitLegacyMCPToolPrefix("memory") {
+		t.Fatal("configured server_names should omit prefixes selectively")
+	}
+	explicitlyDisabled := &Config{Values: map[string]any{
+		"features": map[string]any{"non_prefixed_mcp_tool_names": map[string]any{
+			"enabled": false, "server_names": []any{"docs"},
+		}},
+	}}
+	if explicitlyDisabled.OmitLegacyMCPToolPrefix("docs") {
+		t.Fatal("disabled feature should preserve prefixes despite server_names")
+	}
+
+	home := t.TempDir()
+	body := "[features.non_prefixed_mcp_tool_names]\nenabled = true\nserver_names = [\"docs\"]\n"
+	if err := os.WriteFile(ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	loaded, err := LoadEffectiveWithOptions(home, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions returned error: %v", err)
+	}
+	if !loaded.OmitLegacyMCPToolPrefix("docs") || loaded.OmitLegacyMCPToolPrefix("memory") {
+		t.Fatal("loaded TOML server_names should omit prefixes selectively")
+	}
+	if err := validateKnownTopLevelConfigFields(map[string]any{
+		"features": map[string]any{"non_prefixed_mcp_tool_names": map[string]any{"future": true}},
+	}); err == nil {
+		t.Fatal("strict config should reject unknown non-prefixed MCP fields")
+	}
+}
+
+func TestToolEnablementUsesRustDefaultsAndNestedConfig(t *testing.T) {
+	defaults := &Config{Values: map[string]any{}}
+	if !defaults.UpdatePlanEnabled() || !defaults.WaitAgentEnabled() {
+		t.Fatal("tool switches should default to enabled")
+	}
+	disabled := &Config{Values: map[string]any{
+		"tools":    map[string]any{"update_plan": map[string]any{"enabled": false}},
+		"features": map[string]any{"multi_agent_v2": map[string]any{"wait_agent_enabled": false}},
+	}}
+	if disabled.UpdatePlanEnabled() || disabled.WaitAgentEnabled() {
+		t.Fatal("nested tool switches should disable their tools")
+	}
+}
+
 func TestLoadParsesSimpleConfig(t *testing.T) {
 	dir := t.TempDir()
 	body := `

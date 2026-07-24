@@ -30,6 +30,7 @@ import (
 	"codex_go/install"
 	"codex_go/mcp"
 	"codex_go/model"
+	codexnetwork "codex_go/network"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
@@ -666,19 +667,19 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	if strings.TrimSpace(opts.Remote) != "" {
 		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig)
 	}
-	if strictConfig {
-		if _, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
-			RawOverrides: rootConfigOverrides,
-			StrictConfig: true,
-		}); err != nil {
-			return err
-		}
+	loadedConfig, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
+		RawOverrides: rootConfigOverrides,
+		StrictConfig: strictConfig,
+	})
+	if err != nil {
+		return err
 	}
 	listenURL := opts.Listen
 	if !opts.ListenSet {
 		listenURL = execserver.DefaultListenURL
 	}
-	return execserver.NewServer().ServeTransport(ctx, listenURL, stdin, stdout)
+	httpClient := codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)
+	return execserver.NewServerWithHTTPClient(httpClient).ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
 func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool) error {
@@ -710,6 +711,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			EnvironmentID: environmentID,
 			Name:          strings.TrimSpace(opts.Name),
 			AuthHeaders:   headers,
+			HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -738,6 +740,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		EnvironmentID: environmentID,
 		Name:          strings.TrimSpace(opts.Name),
 		AuthHeaders:   headers,
+		HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
 	})
 }
 

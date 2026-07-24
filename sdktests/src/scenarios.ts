@@ -67,6 +67,46 @@ export type Scenario = {
 
 export const scenarios: Scenario[] = [
   {
+    name: "resume-real-coding-recovery",
+    description: "Completes a multi-file refactor, resumes it in a fresh CLI process, recovers from a failed patch, and runs tests.",
+    timeoutMs: 240000,
+    threadOptions: { sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never", networkAccessEnabled: false, webSearchMode: "disabled" },
+    turns: [
+      {
+        prompt: "Run exactly one shell command to read legacy_math.py, service.py, test_service.py, and obsolete.txt: Get-Content -LiteralPath .\\legacy_math.py, .\\service.py, .\\test_service.py, .\\obsolete.txt. Then call apply_patch exactly once with the exact patch below. Do not run tests in this turn.\n*** Begin Patch\n*** Update File: legacy_math.py\n*** Move to: math_utils.py\n@@\n def add(left, right):\n     return left + right\n*** Update File: service.py\n@@\n-from legacy_math import add\n+from math_utils import add\n*** Delete File: obsolete.txt\n*** End Patch\nAfter the patch succeeds, reply with exactly CORE_LOOP_TURN1_OK.",
+      },
+      {
+        resume: true,
+        prompt: "This is a resumed turn in a fresh CLI process. First call apply_patch exactly once with this exact patch, which must fail because its context is absent; do not retry it:\n*** Begin Patch\n*** Update File: service.py\n@@\n-MISSING_CONTEXT\n+SHOULD_NOT_APPEAR\n*** End Patch\nAfter that failure, call apply_patch exactly once more with the exact patch below to fix the implementation and add its regression test:\n*** Begin Patch\n*** Update File: service.py\n@@\n def total(values):\n+    if not isinstance(values, list):\n+        raise TypeError(\"values must be a list\")\n     result = 0\n*** Update File: test_service.py\n@@\n     def test_empty(self):\n         self.assertEqual(total([]), 0)\n+\n+    def test_rejects_non_list(self):\n+        with self.assertRaisesRegex(TypeError, \"values must be a list\"):\n+            total((1, 2))\n*** End Patch\nThen run exactly one shell command: python -m unittest -v test_service.py. After tests pass, reply with exactly CORE_LOOP_RECOVERY_OK.",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      exactAgentMessages: ["CORE_LOOP_TURN1_OK", "CORE_LOOP_RECOVERY_OK"],
+      requiredCompletedItemTypes: ["command_execution", "file_change", "agent_message"],
+      commandExecutions: [{ status: "completed", exitCode: 0 }, { status: "completed", exitCode: 0 }],
+      commandOutputComparison: "status-exit-code",
+      fileChanges: [{ status: "completed" }, { status: "completed" }],
+      requireStableThreadId: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "required",
+      workspaceRequiredPaths: ["math_utils.py", "service.py", "test_service.py"],
+      compareWorkspacePaths: ["legacy_math.py", "math_utils.py", "service.py", "test_service.py", "obsolete.txt"],
+    },
+  },
+  {
+    name: "apply-patch-absolute-path-success",
+    description: "Uses absolute in-workspace paths for update, add, move, and delete like Rust apply_patch.",
+    timeoutMs: 240000,
+    threadOptions: { sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never", networkAccessEnabled: false, webSearchMode: "disabled" },
+    turns: [{ prompt: "You must call apply_patch exactly once using the exact patch below, even though its paths are absolute. Do not explain, do not skip the tool, do not retry, and do not run shell commands.\n*** Begin Patch\n*** Update File: {{WORKSPACE}}/state.txt\n@@\n-BASE\n+ABSOLUTE_UPDATED\n*** Add File: {{WORKSPACE}}/absolute-added.txt\n+ABSOLUTE_ADDED\n*** Update File: {{WORKSPACE}}/guard.txt\n*** Move to: {{WORKSPACE}}/absolute-moved.txt\n@@\n-UNCHANGED\n+ABSOLUTE_MOVED\n*** End Patch\nAfter the tool succeeds, reply with exactly ABSOLUTE_PATH_SUCCESS." }],
+    expected: { terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["ABSOLUTE_PATH_SUCCESS"], requiredCompletedItemTypes: ["file_change", "agent_message"],
+      fileChanges: [{ status: "completed" }], forbiddenCompletedItemTypes: ["command_execution"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "required",
+      workspaceRequiredPaths: ["state.txt", "absolute-added.txt", "absolute-moved.txt"],
+      compareWorkspacePaths: ["state.txt", "guard.txt", "absolute-added.txt", "absolute-moved.txt"] },
+  },
+  {
     name: "resume-concurrent-nonoverlap",
     description: "Runs two simultaneous SDK resume calls against one persisted thread and applies non-overlapping patches.",
     timeoutMs: 180000,

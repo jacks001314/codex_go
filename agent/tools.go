@@ -257,10 +257,11 @@ func RegisterMultiAgentHandlers(registry *tool.Registry, controller ToolControll
 }
 
 type MultiAgentHandlerOptions struct {
-	Controller ToolController
-	Exposure   tool.Exposure
-	Roles      map[string]RoleConfig
-	Defaults   SpawnDefaults
+	Controller       ToolController
+	Exposure         tool.Exposure
+	Roles            map[string]RoleConfig
+	Defaults         SpawnDefaults
+	DisableWaitAgent bool
 }
 
 type SpawnDefaults struct {
@@ -281,6 +282,9 @@ func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *Mul
 		controller = NewRoleAwareToolController(controller, options.Roles, options.Defaults)
 	}
 	for _, kind := range []MultiAgentToolKind{MultiAgentToolSpawn, MultiAgentToolSend, MultiAgentToolWait, MultiAgentToolResume, MultiAgentToolClose} {
+		if kind == MultiAgentToolWait && options.DisableWaitAgent {
+			continue
+		}
 		executor := NewMultiAgentToolExecutor(kind, controller)
 		executor.exposure = options.Exposure
 		if kind == MultiAgentToolSpawn && len(options.Roles) > 0 {

@@ -1257,7 +1257,7 @@ func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
 	changes := []protocol.FileChange{{Path: `C:\work\a.txt`, Kind: "update", Diff: "@@\n-old\n+new"}}
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.FileChangeItem("patch-1", changes, "in_progress"))})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "a.txt") {
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "a.txt") || !strings.Contains(view, "(+1 -1)") {
 		t.Fatalf("started file change missing summary:\n%s", view)
 	}
 
@@ -2117,7 +2117,7 @@ func TestModelSideCommandStartsRuntimeSideConversation(t *testing.T) {
 	if len(state.Messages) != 0 {
 		t.Fatalf("side transcript should start empty, got %#v", state.Messages)
 	}
-	if view := model.View(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "Ctrl+C to return") {
+	if view := model.View(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl + / to switch") {
 		t.Fatalf("side context missing:\n%s", view)
 	}
 

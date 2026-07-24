@@ -28,6 +28,18 @@ func (f guardianAgentFunc) Run(ctx context.Context, request *model.AgentRequest)
 	return f(ctx, request)
 }
 
+func TestGuardianTurnStartSelectsWindowsProxyPreserveMode(t *testing.T) {
+	if !guardianTurnStart(&turn.TurnStartParams{Originator: "guardian"}) {
+		t.Fatal("guardian originator was not detected")
+	}
+	if !guardianTurnStart(&turn.TurnStartParams{ResponsesAPIMetadata: map[string]string{"x-openai-subagent": "guardian"}}) {
+		t.Fatal("guardian subagent metadata was not detected")
+	}
+	if guardianTurnStart(&turn.TurnStartParams{Originator: "review"}) {
+		t.Fatal("ordinary review turn selected Guardian preserve mode")
+	}
+}
+
 type guardianPrewarmAgent struct {
 	mu            sync.Mutex
 	requests      []*model.AgentRequest

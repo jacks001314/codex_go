@@ -54,9 +54,10 @@ try {
     const turnEvents: any[] = [];
     let turnError: any = null;
     try {
+      const prompt = turnSpec.prompt.replaceAll("{{WORKSPACE}}", input.workspace.replaceAll("\\", "/"));
       const turnInput = turnSpec.includeLocalImage
-        ? [{ type: "text", text: turnSpec.prompt }, { type: "local_image", path: path.join(input.workspace, "image.png") }]
-        : turnSpec.prompt;
+        ? [{ type: "text", text: prompt }, { type: "local_image", path: path.join(input.workspace, "image.png") }]
+        : prompt;
       const turn = await activeThread.runStreamed(turnInput, { signal: controller.signal, outputSchema: turnSpec.outputSchema });
       for await (const event of turn.events) {
         events.push(event); turnEvents.push(event); currentThreadId = activeThread.id;

@@ -27,6 +27,7 @@ type stdioInventory struct {
 type stdioClient struct {
 	mu                                 sync.Mutex
 	writeMu                            sync.Mutex
+	closed                             bool
 	config                             *ServerConfig
 	cmd                                *exec.Cmd
 	stdin                              io.WriteCloser
@@ -581,7 +582,17 @@ func (c *stdioClient) Close() error {
 	return c.closeLocked()
 }
 
+func (c *stdioClient) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 func (c *stdioClient) closeLocked() error {
+	c.closed = true
 	pending := c.pendingCallsLocked()
 	stderr := c.stderr
 	var waitErr error

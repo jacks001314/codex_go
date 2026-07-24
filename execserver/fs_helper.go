@@ -23,6 +23,13 @@ var fsHelperCommandForExecutable = func(executable string) []string {
 	return []string{executable, FSHelperArg1}
 }
 
+func windowsSandboxProxySettingsModeForFS(mode WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
+	if mode == WindowsSandboxProxySettingsPreserve {
+		return windowssandbox.ProxySettingsPreserve
+	}
+	return windowssandbox.ProxySettingsReconcile
+}
+
 type fsHelperRequest struct {
 	Operation string          `json:"operation"`
 	Params    json.RawMessage `json:"params"`
@@ -355,7 +362,7 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		PermissionProfile:                profile,
 		WindowsSandboxLevel:              level,
 		WindowsSandboxPrivateDesktop:     ctx.WindowsSandboxPrivateDesktop,
-		ProxySettingsMode:                windowssandbox.ProxySettingsPreserve,
+		ProxySettingsMode:                windowsSandboxProxySettingsModeForFS(ctx.WindowsSandboxProxySettingsMode),
 		ReadRootsIncludePlatformDefaults: true,
 		CodexHome:                        fsHelperCodexHome(),
 	})

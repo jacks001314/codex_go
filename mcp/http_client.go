@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/http/httpguts"
 	"golang.org/x/oauth2"
 )
 
@@ -60,6 +59,7 @@ type httpClient struct {
 	config                             *ServerConfig
 	client                             *http.Client
 	mu                                 sync.Mutex
+	closed                             bool
 	nextID                             atomic.Int64
 	initialized                        bool
 	sessionID                          string
@@ -265,9 +265,10 @@ func newMCPHTTPClient(config *ServerConfig) *httpClient {
 }
 
 func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *httpClient {
+	client := &http.Client{Timeout: mcpClientTimeout(config)}
 	return &httpClient{
 		config:     config,
-		client:     &http.Client{Timeout: mcpClientTimeout(config)},
+		client:     mcpHTTPClientWithDefaultHeaders(client, config),
 		openAIForm: openAIForm,
 		retrySleep: time.Sleep,
 	}
@@ -293,11 +294,21 @@ func (c *httpClient) Close() error {
 	sessionID := strings.TrimSpace(c.sessionID)
 	c.sessionID = ""
 	c.initialized = false
+	c.closed = true
 	c.mu.Unlock()
 	if sessionID == "" {
 		return nil
 	}
 	return c.deleteSession(sessionID)
+}
+
+func (c *httpClient) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 func (c *httpClient) deleteSession(sessionID string) error {
@@ -585,20 +596,7 @@ func (c *httpClient) applyConfiguredHTTPHeaders(request *http.Request) {
 	if c == nil || c.config == nil || request == nil {
 		return
 	}
-	for name, value := range c.config.HTTPHeaders {
-		if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
-			continue
-		}
-		request.Header.Set(name, value)
-	}
-	for name, envVar := range c.config.EnvHTTPHeaders {
-		if !httpguts.ValidHeaderFieldName(name) || strings.TrimSpace(envVar) == "" {
-			continue
-		}
-		if value := os.Getenv(strings.TrimSpace(envVar)); strings.TrimSpace(value) != "" && httpguts.ValidHeaderFieldValue(value) {
-			request.Header.Set(name, value)
-		}
-	}
+	applyMCPHTTPHeaders(request, c.config.HTTPHeaders, c.config.EnvHTTPHeaders)
 }
 
 func readMCPHTTPRPCResponse(response *http.Response, id int64) (*httpRPCResponse, error) {

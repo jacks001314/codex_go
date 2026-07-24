@@ -40,10 +40,7 @@ type OAuthRefreshOptions struct {
 }
 
 func NewOAuthTokenClient(client *http.Client) *OAuthTokenClient {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &OAuthTokenClient{Client: client}
+	return &OAuthTokenClient{Client: mcpHTTPClientWithDefaultHeaders(client, nil)}
 }
 
 func (c *OAuthTokenClient) ExchangeAuthorizationCode(ctx context.Context, options *OAuthCodeExchangeOptions) (*OAuthTokenSet, error) {

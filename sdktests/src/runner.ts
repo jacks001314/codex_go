@@ -54,7 +54,9 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
             ? "coding_move"
           : scenario.name === "real-coding-multifile-refactor"
             ? "coding_refactor"
-          : scenario.name.startsWith("resume-")
+          : scenario.name === "resume-real-coding-recovery"
+            ? "coding_refactor"
+          : scenario.name.startsWith("resume-") || scenario.name === "apply-patch-absolute-path-success"
             ? "resume_tools"
           : "smoke",
     );

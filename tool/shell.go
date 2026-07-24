@@ -53,34 +53,35 @@ type ExecCommandArgs struct {
 }
 
 type ShellRequest struct {
-	Command                      []string
-	HookCommand                  string
-	CWD                          string
-	TimeoutMS                    uint64
-	YieldTimeMS                  uint64
-	MaxOutputTokens              *int
-	Env                          map[string]string
-	TTY                          bool
-	SandboxPermissions           sandbox.SandboxPermissions
-	AdditionalPermissions        *sandbox.AdditionalPermissionProfile
-	SandboxProfile               *ShellSandboxProfile
-	PermissionProfileID          string
-	PermissionProfile            *sandbox.PermissionProfile
-	PermissionProfileJSON        string
-	WindowsSandboxLevel          sandbox.WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop bool
-	ApprovalRequired             bool
-	ApprovalReason               string
-	Justification                string
-	PrefixRule                   []string
-	UnifiedExecEventSink         UnifiedExecEventSink
-	UnifiedExecThreadID          string
-	UnifiedExecTurnID            string
-	UnifiedExecRemoteURL         string
-	UnifiedExecNoiseProvider     execserver.NoiseRendezvousConnectProvider
-	UnifiedExecEnvironmentID     string
-	EnforceManagedNetwork        bool
-	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+	Command                         []string
+	HookCommand                     string
+	CWD                             string
+	TimeoutMS                       uint64
+	YieldTimeMS                     uint64
+	MaxOutputTokens                 *int
+	Env                             map[string]string
+	TTY                             bool
+	SandboxPermissions              sandbox.SandboxPermissions
+	AdditionalPermissions           *sandbox.AdditionalPermissionProfile
+	SandboxProfile                  *ShellSandboxProfile
+	PermissionProfileID             string
+	PermissionProfile               *sandbox.PermissionProfile
+	PermissionProfileJSON           string
+	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
+	WindowsSandboxPrivateDesktop    bool
+	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
+	ApprovalRequired                bool
+	ApprovalReason                  string
+	Justification                   string
+	PrefixRule                      []string
+	UnifiedExecEventSink            UnifiedExecEventSink
+	UnifiedExecThreadID             string
+	UnifiedExecTurnID               string
+	UnifiedExecRemoteURL            string
+	UnifiedExecNoiseProvider        execserver.NoiseRendezvousConnectProvider
+	UnifiedExecEnvironmentID        string
+	EnforceManagedNetwork           bool
+	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
 }
 
 type UnifiedExecEnvironment struct {
@@ -114,21 +115,22 @@ type ShellResult struct {
 }
 
 type ShellValidationOptions struct {
-	AdditionalPermissionsAllowed bool
-	ApprovalPolicy               sandbox.AskForApproval
-	PermissionsPreapproved       bool
-	AllowLoginShell              bool
-	ShellMode                    UnifiedExecShellMode
-	ZshForkShell                 *Shell
-	CWD                          string
-	Env                          map[string]string
-	DefaultTimeoutMS             uint64
-	PermissionProfileID          string
-	PermissionProfile            *sandbox.PermissionProfile
-	WindowsSandboxLevel          sandbox.WindowsSandboxLevel
-	WindowsSandboxPrivateDesktop bool
-	EnforceManagedNetwork        bool
-	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+	AdditionalPermissionsAllowed    bool
+	ApprovalPolicy                  sandbox.AskForApproval
+	PermissionsPreapproved          bool
+	AllowLoginShell                 bool
+	ShellMode                       UnifiedExecShellMode
+	ZshForkShell                    *Shell
+	CWD                             string
+	Env                             map[string]string
+	DefaultTimeoutMS                uint64
+	PermissionProfileID             string
+	PermissionProfile               *sandbox.PermissionProfile
+	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
+	WindowsSandboxPrivateDesktop    bool
+	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
+	EnforceManagedNetwork           bool
+	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
 }
 
 type ResolvedCommand struct {
@@ -311,27 +313,28 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		timeoutMS = args.TimeoutMS
 	}
 	return &ShellRequest{
-		Command:                      resolved.Command,
-		HookCommand:                  args.Cmd,
-		CWD:                          cwd,
-		TimeoutMS:                    timeoutMS,
-		YieldTimeMS:                  yieldTimeMS,
-		MaxOutputTokens:              args.MaxOutputTokens,
-		Env:                          mergeEnv(opts.Env, args.Env),
-		TTY:                          args.TTY,
-		SandboxPermissions:           sandboxPermissions,
-		AdditionalPermissions:        additionalPermissions,
-		SandboxProfile:               sandboxProfile,
-		PermissionProfileID:          permissionProfileID,
-		PermissionProfile:            permissionProfile,
-		WindowsSandboxLevel:          opts.WindowsSandboxLevel,
-		WindowsSandboxPrivateDesktop: opts.WindowsSandboxPrivateDesktop,
-		EnforceManagedNetwork:        opts.EnforceManagedNetwork,
-		ManagedNetwork:               cloneManagedNetworkSandboxContext(opts.ManagedNetwork),
-		ApprovalRequired:             approvalRequired,
-		ApprovalReason:               approvalReason,
-		Justification:                args.Justification,
-		PrefixRule:                   cloneStrings(args.PrefixRule),
+		Command:                         resolved.Command,
+		HookCommand:                     args.Cmd,
+		CWD:                             cwd,
+		TimeoutMS:                       timeoutMS,
+		YieldTimeMS:                     yieldTimeMS,
+		MaxOutputTokens:                 args.MaxOutputTokens,
+		Env:                             mergeEnv(opts.Env, args.Env),
+		TTY:                             args.TTY,
+		SandboxPermissions:              sandboxPermissions,
+		AdditionalPermissions:           additionalPermissions,
+		SandboxProfile:                  sandboxProfile,
+		PermissionProfileID:             permissionProfileID,
+		PermissionProfile:               permissionProfile,
+		WindowsSandboxLevel:             opts.WindowsSandboxLevel,
+		WindowsSandboxPrivateDesktop:    opts.WindowsSandboxPrivateDesktop,
+		WindowsSandboxProxySettingsMode: opts.WindowsSandboxProxySettingsMode,
+		EnforceManagedNetwork:           opts.EnforceManagedNetwork,
+		ManagedNetwork:                  cloneManagedNetworkSandboxContext(opts.ManagedNetwork),
+		ApprovalRequired:                approvalRequired,
+		ApprovalReason:                  approvalReason,
+		Justification:                   args.Justification,
+		PrefixRule:                      cloneStrings(args.PrefixRule),
 	}, nil
 }
 

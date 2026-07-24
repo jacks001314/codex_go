@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"codex_go/plugin"
 	"codex_go/telemetry"
 )
 
@@ -46,6 +47,8 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 	exitCode := int32PtrFromThreadItemData(item, "exitCode", "exit_code")
 	counts := commandActionAnalyticsCounts(threadItemCommandActions(item))
 	reviewSummary := r.toolItemReviewSummary(threadID, turnID, threadItemExternalID(item))
+	pluginID := threadItemStringPtrFromData(item.Data, "pluginId", "plugin_id")
+	scriptPath := safeCommandPluginScriptPath(pluginID, threadItemStringPtrFromData(item.Data, "scriptPath", "script_path"))
 	event := telemetry.NewCodexCommandExecutionEvent(telemetry.CodexCommandExecutionEventParams{
 		CodexToolItemEventBase: telemetry.CodexToolItemEventBase{
 			ThreadID:                       threadID,
@@ -70,6 +73,8 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 			RequestedAdditionalPermissions: reviewSummary.RequestedAdditionalPermissions,
 			RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 		},
+		PluginID:                    pluginID,
+		ScriptPath:                  scriptPath,
 		CommandExecutionSource:      commandExecutionSourceAnalyticsValue(threadItemCommandSource(item)),
 		ExitCode:                    exitCode,
 		CommandTotalActionCount:     counts.Total,
@@ -79,6 +84,14 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 		CommandUnknownActionCount:   counts.Unknown,
 	})
 	sink.TrackCodexCommandExecutionEvent(ctx, event)
+}
+
+func safeCommandPluginScriptPath(pluginID *string, scriptPath *string) *string {
+	if pluginID == nil || strings.TrimSpace(*pluginID) == "" || scriptPath == nil || !plugin.IsSafePluginRelativePath(*scriptPath) {
+		return nil
+	}
+	path := *scriptPath
+	return &path
 }
 
 func commandExecutionAnalyticsOutcome(status CommandExecutionStatus) (string, *string, bool) {

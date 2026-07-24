@@ -36,6 +36,14 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 	return ConfigRequirementsFromMap(values), nil
 }
 
+func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {
+	var out BrowserUseRequirements
+	if value, ok := boolAnyKey(values, "disable_auto_review", "disableAutoReview"); ok {
+		out.DisableAutoReview = &value
+	}
+	return &out
+}
+
 func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
 	if len(values) == 0 {
 		return nil
@@ -88,6 +96,9 @@ func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
 	}
 	if nested, ok := mapAnyKey(values, "computer_use", "computerUse"); ok {
 		out.ComputerUse = computerUseRequirementsFromMap(nested)
+	}
+	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
+		out.BrowserUse = browserUseRequirementsFromMap(nested)
 	}
 	if values, ok := boolMapAnyKey(values, "feature_requirements", "featureRequirements", "features"); ok {
 		out.FeatureRequirements = values
@@ -407,6 +418,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowAppshots == nil &&
 			value.AllowRemoteControl == nil &&
 			value.ComputerUse == nil &&
+			value.BrowserUse == nil &&
 			value.FeatureRequirements == nil &&
 			value.Hooks == nil &&
 			value.EnforceResidency == nil &&

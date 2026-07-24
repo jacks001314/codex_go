@@ -135,6 +135,9 @@ func appImageGenerationStandaloneEnabled(provider model.ProviderInfo, capabiliti
 	if !features.Enabled(featureSettings, "image_generation") {
 		return false
 	}
+	if account := auth.AccountFromAuth(snapshot); account != nil && account.PlanType == auth.PlanFree {
+		return false
+	}
 	return appImageGenerationStandaloneAuthEnabled(provider, snapshot)
 }
 

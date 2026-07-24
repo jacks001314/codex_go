@@ -350,6 +350,7 @@ func TestRuntimeRouterThreadListAndSearchOverlayRuntimeStatus(t *testing.T) {
 func TestRuntimeRouterThreadStartAcceptsPaginatedHistoryMode(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
 	persistent := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:         t.TempDir(),
 		HistoryMode: ThreadHistoryPaginated,
@@ -5059,6 +5060,97 @@ func TestRuntimeRouterConfigWriteSuccessPathsMatchRust(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterConfigBatchWriteKeepsExistingThreadDefaultsStatic(t *testing.T) {
+	home := t.TempDir()
+	initialConfig := strings.Join([]string{
+		`model = "gpt-old"`,
+		`model_reasoning_effort = "low"`,
+		`plan_mode_reasoning_effort = "medium"`,
+		`service_tier = "default"`,
+		`personality = "pragmatic"`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(config.ConfigPath(home), []byte(initialConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	agent := newRecordingRuntimeAgent("done")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread returned error: %v", err)
+	}
+	snapshot := threadRecordConfigOverrides(record)
+	for key, want := range map[string]string{
+		"model":                      "gpt-old",
+		"model_reasoning_effort":     "low",
+		"plan_mode_reasoning_effort": "medium",
+		"service_tier":               "default",
+		"personality":                "pragmatic",
+	} {
+		if got := stringFromAny(snapshot[key]); got != want {
+			t.Fatalf("snapshot[%q] = %q, want %q; snapshot=%#v", key, got, want, snapshot)
+		}
+	}
+
+	batch := router.Handle(requestWithParams(t, IntID(2), MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+		ReloadUserConfig: true,
+		Edits: []config.ConfigEdit{
+			{KeyPath: "model", Value: "gpt-new"},
+			{KeyPath: "model_reasoning_effort", Value: "high"},
+			{KeyPath: "plan_mode_reasoning_effort", Value: "high"},
+			{KeyPath: "service_tier", Value: "priority"},
+			{KeyPath: "personality", Value: "friendly"},
+		},
+	}))
+	if batch.Error != nil {
+		t.Fatalf("config batch write error: %+v", batch.Error)
+	}
+	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "use the original defaults",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if request.Model != "gpt-old" || request.ReasoningEffort != "low" {
+		t.Fatalf("agent request model=%q effort=%q, want old thread defaults", request.Model, request.ReasoningEffort)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestAppReasoningEffortForTurnUsesPlanModeDefault(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{
+		"model_reasoning_effort":     "low",
+		"plan_mode_reasoning_effort": "high",
+	}}
+	params := &turn.TurnStartParams{CollaborationMode: map[string]any{"mode": "plan"}}
+	if got := appReasoningEffortForTurn(cfg, params); got != "high" {
+		t.Fatalf("plan mode effort = %q, want high", got)
+	}
+	explicit := "medium"
+	params.Effort = &explicit
+	if got := appReasoningEffortForTurn(cfg, params); got != "medium" {
+		t.Fatalf("explicit effort = %q, want medium", got)
+	}
+}
+
 func TestRuntimeRouterConfigBatchWriteRejectsLegacyProfilesAtomicallyLikeRust(t *testing.T) {
 	home := t.TempDir()
 	configPath := config.ConfigPath(home)
@@ -5749,6 +5841,40 @@ func TestRuntimeRouterPluginManagementEmitsAnalyticsLikeRust(t *testing.T) {
 		uninstalled.EventParams.HasSkills == nil || !*uninstalled.EventParams.HasSkills ||
 		uninstalled.EventParams.MCPServerCount == nil || *uninstalled.EventParams.MCPServerCount != 2 {
 		t.Fatalf("uninstalled event params = %#v", uninstalled.EventParams)
+	}
+}
+
+func TestRuntimeRouterRecordsExternalAgentImportHistory(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	source := "external.json"
+	record := router.Handle(requestWithParams(t, IntID(1), MethodExternalAgentConfigImportHistoryRecord, config.ExternalAgentConfigImportHistoryRecordParams{
+		ProviderID: "external-client",
+		ItemTypeResults: []config.ExternalAgentConfigImportTypeResult{{
+			ItemType: config.MigrationConfig,
+			Successes: []config.ExternalAgentConfigImportItemTypeSuccess{{
+				ItemType: config.MigrationConfig,
+				Source:   &source,
+			}},
+		}},
+	}))
+	if record.Error != nil {
+		t.Fatalf("recordHistory error: %+v", record.Error)
+	}
+	recorded := record.Result.(*config.ExternalAgentConfigImportHistoryRecordResponse)
+	if recorded.ImportID == "" {
+		t.Fatal("recordHistory returned empty import id")
+	}
+	read := router.Handle(requestWithParams(t, IntID(2), MethodExternalAgentConfigImportHistoriesRead, map[string]any{}))
+	if read.Error != nil {
+		t.Fatalf("readHistories error: %+v", read.Error)
+	}
+	histories := read.Result.(*config.ExternalAgentConfigImportHistoriesReadResponse)
+	if len(histories.Data) != 1 ||
+		histories.Data[0].ImportID != recorded.ImportID ||
+		histories.Data[0].ProviderID == nil ||
+		*histories.Data[0].ProviderID != "external-client" ||
+		len(histories.Data[0].Successes) != 1 {
+		t.Fatalf("histories = %+v", histories.Data)
 	}
 }
 
@@ -19924,6 +20050,49 @@ func TestRuntimeRouterUpdatePlanEmitsTurnPlanUpdated(t *testing.T) {
 	}
 	if len(updated.Plan) != 2 || updated.Plan[0].Status != TurnPlanStepInProgress || updated.Plan[1].Status != TurnPlanStepPending {
 		t.Fatalf("turn plan = %+v", updated.Plan)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterUpdatePlanToolFollowsConfig(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[tools.update_plan]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	agent := newRecordingRuntimeAgent("done")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "no plan tool",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "continue",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	toolsJSON, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatalf("Marshal tools error = %v", err)
+	}
+	if strings.Contains(string(toolsJSON), `"name":"update_plan"`) {
+		t.Fatalf("update_plan should be disabled: %s", toolsJSON)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }

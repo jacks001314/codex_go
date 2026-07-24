@@ -12,8 +12,12 @@ import (
 
 const customCAHint = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, ensure it points to a PEM file containing one or more CERTIFICATE blocks, or unset it to use system roots."
 
-func newExecServerHTTPClient() (*http.Client, error) {
-	client := &http.Client{Jar: sharedChatGPTCloudflareCookieJar}
+func newExecServerHTTPClient(configured ...*http.Client) (*http.Client, error) {
+	client := &http.Client{}
+	if len(configured) > 0 && configured[0] != nil {
+		*client = *configured[0]
+	}
+	client.Jar = sharedChatGPTCloudflareCookieJar
 	sourceEnv, path := configuredCustomCA()
 	if path == "" {
 		return client, nil
@@ -30,7 +34,11 @@ func newExecServerHTTPClient() (*http.Client, error) {
 	if !rootCAs.AppendCertsFromPEM(pemData) {
 		return nil, fmt.Errorf("Failed to load CA certificates from %s selected by %s: no usable CERTIFICATE blocks found. %s", path, sourceEnv, customCAHint)
 	}
-	transport, ok := http.DefaultTransport.(*http.Transport)
+	baseTransport := client.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	transport, ok := baseTransport.(*http.Transport)
 	if !ok {
 		return nil, fmt.Errorf("Failed to build HTTP client while using CA bundle from %s (%s): default HTTP transport is not configurable", sourceEnv, path)
 	}

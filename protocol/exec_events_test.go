@@ -15,10 +15,31 @@ func TestThreadStartedJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal returned error: %v", err)
 	}
+
 	got := string(data)
 	want := `{"type":"thread.started","thread_id":"thread-1"}`
 	if got != want {
 		t.Fatalf("json = %s, want %s", got, want)
+	}
+}
+
+func TestCommandExecutionItemAttributionJSONShape(t *testing.T) {
+	event := ItemStarted(CommandExecutionItemWithAttribution(
+		"cmd-1",
+		"python scripts/run.py",
+		"",
+		nil,
+		"in_progress",
+		"sample@openai-curated",
+		"scripts/run.py",
+	))
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	want := `{"type":"item.started","item":{"id":"cmd-1","type":"command_execution","command":"python scripts/run.py","plugin_id":"sample@openai-curated","script_path":"scripts/run.py","aggregated_output":"","status":"in_progress"}}`
+	if string(data) != want {
+		t.Fatalf("json = %s, want %s", data, want)
 	}
 }
 

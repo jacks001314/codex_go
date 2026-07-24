@@ -21,6 +21,9 @@ allow_appshots = false
 allow_remote_control = true
 enforce_residency = "us"
 
+[browser_use]
+disable_auto_review = true
+
 [feature_requirements]
 shell_tool = false
 web_search = true
@@ -81,6 +84,9 @@ service_tier = "auto"
 	}
 	if requirements.AllowAppshots == nil || *requirements.AllowAppshots {
 		t.Fatalf("AllowAppshots = %#v", requirements.AllowAppshots)
+	}
+	if requirements.BrowserUse == nil || requirements.BrowserUse.DisableAutoReview == nil || !*requirements.BrowserUse.DisableAutoReview {
+		t.Fatalf("BrowserUse = %#v", requirements.BrowserUse)
 	}
 	if requirements.FeatureRequirements["shell_tool"] || !requirements.FeatureRequirements["web_search"] {
 		t.Fatalf("FeatureRequirements = %#v", requirements.FeatureRequirements)

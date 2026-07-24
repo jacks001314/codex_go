@@ -266,10 +266,30 @@ func (a *Action) preflight(cwd string) error {
 	}
 	defer os.RemoveAll(tempDir)
 
+	shadowPaths := map[string]string{}
+	nextShadowPath := 0
+	shadowPathFor := func(name string) (string, error) {
+		resolved, err := resolveWorkspacePath(cwd, name)
+		if err != nil {
+			return "", err
+		}
+		key := filepath.Clean(resolved)
+		if existing, ok := shadowPaths[key]; ok {
+			return existing, nil
+		}
+		nextShadowPath++
+		shadow := filepath.Join("paths", fmt.Sprintf("%d", nextShadowPath))
+		shadowPaths[key] = shadow
+		return shadow, nil
+	}
 	for _, name := range a.FilePaths() {
 		source, sourceErr := resolveWorkspacePath(cwd, name)
 		if sourceErr != nil {
 			return sourceErr
+		}
+		shadow, shadowErr := shadowPathFor(name)
+		if shadowErr != nil {
+			return shadowErr
 		}
 		info, statErr := os.Stat(source)
 		if errors.Is(statErr, os.ErrNotExist) {
@@ -281,7 +301,7 @@ func (a *Action) preflight(cwd string) error {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		target, targetErr := resolveWorkspacePath(tempDir, name)
+		target, targetErr := resolveWorkspacePath(tempDir, shadow)
 		if targetErr != nil {
 			return targetErr
 		}
@@ -296,7 +316,23 @@ func (a *Action) preflight(cwd string) error {
 			return writeErr
 		}
 	}
-	_, err = a.applyCommitted(tempDir)
+	shadowAction := &Action{Hunks: make([]Change, len(a.Hunks)), Changes: map[string]Change{}}
+	for index, hunk := range a.Hunks {
+		shadowAction.Hunks[index] = hunk
+		shadow, shadowErr := shadowPathFor(hunk.Path)
+		if shadowErr != nil {
+			return shadowErr
+		}
+		shadowAction.Hunks[index].Path = shadow
+		if strings.TrimSpace(hunk.MovePath) != "" {
+			moveShadow, moveErr := shadowPathFor(hunk.MovePath)
+			if moveErr != nil {
+				return moveErr
+			}
+			shadowAction.Hunks[index].MovePath = moveShadow
+		}
+	}
+	_, err = shadowAction.applyCommitted(tempDir)
 	return err
 }
 
@@ -615,21 +651,13 @@ func resolveWorkspacePath(cwd string, path string) (string, error) {
 		cwd = "."
 	}
 	clean := filepath.Clean(path)
-	full := filepath.Join(cwd, clean)
-	absCWD, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", err
+	full := clean
+	if !filepath.IsAbs(clean) {
+		full = filepath.Join(cwd, clean)
 	}
 	absFull, err := filepath.Abs(full)
 	if err != nil {
 		return "", err
-	}
-	rel, err := filepath.Rel(absCWD, absFull)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("%w: path escapes workspace", ErrInvalidPatch)
 	}
 	return absFull, nil
 }
@@ -716,12 +744,9 @@ func validatePath(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("%w: empty path", ErrInvalidPatch)
 	}
-	if filepath.IsAbs(path) {
-		return fmt.Errorf("%w: path must be relative", ErrInvalidPatch)
-	}
 	clean := filepath.Clean(path)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("%w: path escapes workspace", ErrInvalidPatch)
+	if clean == "." {
+		return fmt.Errorf("%w: empty path", ErrInvalidPatch)
 	}
 	return nil
 }

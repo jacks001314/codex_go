@@ -27,6 +27,27 @@ func TestDynamicToolPreservesInlineAudioContent(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.DisableUpdatePlan = true
+	options.DisableWaitAgent = true
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	for _, name := range []tool.ToolName{
+		tool.PlainName("update_plan"),
+		tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolWait)),
+	} {
+		if _, ok := registry.Lookup(name); ok {
+			t.Fatalf("disabled tool %s was registered", name.Key())
+		}
+	}
+	if _, ok := registry.Lookup(tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolSpawn))); !ok {
+		t.Fatal("disabling wait_agent should not disable other agent tools")
+	}
+}
+
 type fakeDynamicToolCaller struct {
 	method string
 	params *DynamicToolCallParams

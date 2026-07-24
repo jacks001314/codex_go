@@ -115,7 +115,6 @@ func TestParseRejectsInvalidPatch(t *testing.T) {
 		"",
 		"*** Begin Patch\n*** End Patch",
 		"*** Begin Patch\n*** Add File: a.txt\nno plus\n*** End Patch",
-		"*** Begin Patch\n*** Delete File: ../secret\n*** End Patch",
 		"*** Begin Patch\n*** Update File: empty.txt\n*** End Patch",
 		"*** Begin Patch\nwhat\n*** End Patch",
 	}
@@ -123,6 +122,92 @@ func TestParseRejectsInvalidPatch(t *testing.T) {
 		if _, err := Parse(input); !errors.Is(err, ErrInvalidPatch) {
 			t.Fatalf("Parse(%q) error = %v, want ErrInvalidPatch", input, err)
 		}
+	}
+}
+
+func TestApplyAcceptsRelativeAndAbsolutePathsLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	external := t.TempDir()
+	relativeUpdate := filepath.Join(cwd, "relative-update.txt")
+	absoluteUpdate := filepath.Join(external, "absolute-update.txt")
+	relativeDelete := filepath.Join(cwd, "relative-delete.txt")
+	absoluteDelete := filepath.Join(external, "absolute-delete.txt")
+	if err := os.WriteFile(relativeUpdate, []byte("relative old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absoluteUpdate, []byte("absolute old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(relativeDelete, []byte("relative delete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absoluteDelete, []byte("absolute delete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relativeAdd := filepath.Join(cwd, "relative-add.txt")
+	absoluteAdd := filepath.Join(external, "absolute-add.txt")
+	patch := "*** Begin Patch\n" +
+		"*** Add File: relative-add.txt\n+relative add\n" +
+		"*** Add File: " + absoluteAdd + "\n+absolute add\n" +
+		"*** Delete File: relative-delete.txt\n" +
+		"*** Delete File: " + absoluteDelete + "\n" +
+		"*** Update File: relative-update.txt\n@@\n-relative old\n+relative new\n" +
+		"*** Update File: " + absoluteUpdate + "\n@@\n-absolute old\n+absolute new\n" +
+		"*** End Patch"
+	if _, err := Apply(patch, &ApplyOptions{CWD: cwd}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	for path, want := range map[string]string{relativeAdd: "relative add\n", absoluteAdd: "absolute add\n", relativeUpdate: "relative new\n", absoluteUpdate: "absolute new\n"} {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != want {
+			t.Fatalf("ReadFile(%s) = %q, %v; want %q", path, data, err, want)
+		}
+	}
+	for _, path := range []string{relativeDelete, absoluteDelete} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("deleted path %s still exists: %v", path, err)
+		}
+	}
+}
+
+func TestAbsolutePathPreflightFailureDoesNotMutateWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	external := t.TempDir()
+	target := filepath.Join(external, "target.txt")
+	if err := os.WriteFile(target, []byte("actual\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patch := "*** Begin Patch\n*** Add File: " + filepath.Join(external, "should-not-remain.txt") + "\n+temporary\n*** Update File: " + target + "\n@@\n-missing\n+new\n*** End Patch"
+	if _, err := Apply(patch, &ApplyOptions{CWD: cwd}); err == nil {
+		t.Fatal("Apply() error = nil, want failure")
+	}
+	if _, err := os.Stat(filepath.Join(external, "should-not-remain.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preflight add escaped into workspace: %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "actual\n" {
+		t.Fatalf("target = %q, %v", data, err)
+	}
+}
+
+func TestApplyAbsoluteMovePreservesContentLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	external := t.TempDir()
+	source := filepath.Join(external, "source.txt")
+	destination := filepath.Join(external, "destination.txt")
+	if err := os.WriteFile(source, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patch := "*** Begin Patch\n*** Update File: " + source + "\n*** Move to: " + destination + "\n@@\n-before\n+after\n*** End Patch"
+	if _, err := Apply(patch, &ApplyOptions{CWD: cwd}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still exists: %v", err)
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil || string(data) != "after\n" {
+		t.Fatalf("destination = %q, %v", data, err)
 	}
 }
 

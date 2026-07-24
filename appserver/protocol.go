@@ -136,6 +136,7 @@ const (
 	MethodConfigRequirementsRead                 Method = "configRequirements/read"
 	MethodExternalAgentConfigDetect              Method = "externalAgentConfig/detect"
 	MethodExternalAgentConfigImport              Method = "externalAgentConfig/import"
+	MethodExternalAgentConfigImportHistoryRecord Method = "externalAgentConfig/import/recordHistory"
 	MethodExternalAgentConfigImportHistoriesRead Method = "externalAgentConfig/import/readHistories"
 	MethodLoginAccount                           Method = "account/login/start"
 	MethodCancelLoginAccount                     Method = "account/login/cancel"
@@ -876,6 +877,8 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 		return json.Marshal(struct {
 			Type             string                 `json:"type"`
 			ID               string                 `json:"id"`
+			PluginID         *string                `json:"pluginId"`
+			ScriptPath       *string                `json:"scriptPath"`
 			Command          string                 `json:"command"`
 			CWD              string                 `json:"cwd"`
 			ProcessID        *string                `json:"processId"`
@@ -888,6 +891,8 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 		}{
 			Type:             "commandExecution",
 			ID:               threadItemExternalID(i),
+			PluginID:         threadItemStringPtrFromData(i.Data, "pluginId", "plugin_id"),
+			ScriptPath:       threadItemStringPtrFromData(i.Data, "scriptPath", "script_path"),
 			Command:          threadItemCommand(i),
 			CWD:              threadItemCWD(i),
 			ProcessID:        threadItemStringPtrFromData(i.Data, "processId", "process_id"),

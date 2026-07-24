@@ -34,6 +34,7 @@ type RuntimeToolInfo struct {
 	ConnectorName        string      `json:"connectorName,omitempty"`
 	PluginDisplayNames   []string    `json:"pluginDisplayNames,omitempty"`
 	ServerOrigin         string      `json:"serverOrigin,omitempty"`
+	OmitLegacyPrefix     bool        `json:"-"`
 	Tool                 RuntimeTool `json:"tool"`
 }
 
@@ -160,7 +161,9 @@ func NormalizeRuntimeToolsForModel(tools []RuntimeToolInfo) []RuntimeToolInfo {
 		seenRawTools[rawToolIdentity] = true
 
 		namespace := sanitizeRuntimeMCPToolName(rawNamespace)
-		if !strings.HasPrefix(namespace, LegacyMCPToolNamePrefix) {
+		if info.OmitLegacyPrefix {
+			namespace = strings.TrimPrefix(namespace, LegacyMCPToolNamePrefix)
+		} else if !strings.HasPrefix(namespace, LegacyMCPToolNamePrefix) {
 			namespace = LegacyMCPToolNamePrefix + namespace
 		}
 		candidates = append(candidates, runtimeToolNameCandidate{

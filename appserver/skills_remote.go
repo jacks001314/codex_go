@@ -113,14 +113,14 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 	defer cancel()
 	var caller remoteEnvironmentFSCaller
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go"})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
 		if err != nil {
 			return nil, nil, err
 		}
 		defer client.Close()
 		caller = clientRemoteEnvironmentFSCaller{client: client}
 	} else {
-		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, nil)
+		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
 		if err != nil {
 			return nil, nil, err
 		}

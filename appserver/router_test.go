@@ -35,6 +35,7 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 	if startResponse.Error != nil {
 		t.Fatalf("start error: %+v", startResponse.Error)
 	}
+
 	start, ok := startResponse.Result.(*ThreadStartResponse)
 	if !ok {
 		t.Fatalf("unexpected start result type: %T", startResponse.Result)
@@ -606,6 +607,7 @@ func TestRouterApproveGuardianDeniedActionRequiresEvent(t *testing.T) {
 func TestRouterThreadStartPersistsPaginatedHistoryMode(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
 	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:         "D:/repo",
 		HistoryMode: ThreadHistoryPaginated,
@@ -2486,6 +2488,7 @@ func TestRouterThreadReadAndListPreservePathlessStoreMetadata(t *testing.T) {
 func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:     store.Root(),
 		SessionID:     "session-paginated",
@@ -3792,5 +3795,45 @@ func createRecordWithHistoryMode(t *testing.T, store *session.Store, id session.
 	})
 	if err != nil {
 		t.Fatalf("create record: %v", err)
+	}
+}
+
+func TestRouterPaginatedWriterOwnershipBlocksCompetingResumeArchiveAndDelete(t *testing.T) {
+	root := t.TempDir()
+	owner := NewRouter(session.NewStore(root))
+	contender := NewRouter(session.NewStore(root))
+	t.Cleanup(func() { _ = contender.Close() })
+	t.Cleanup(func() { _ = owner.Close() })
+
+	start := owner.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         "D:/repo",
+		HistoryMode: ThreadHistoryPaginated,
+		Prompt:      "owned",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error = %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	for _, request := range []*Request{
+		requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}),
+		requestWithParams(t, IntID(3), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}),
+		requestWithParams(t, IntID(4), MethodThreadDelete, ThreadDeleteParams{ThreadID: threadID}),
+	} {
+		response := contender.Handle(request)
+		if response.Error == nil || response.Error.Code != -32600 || !strings.Contains(response.Error.Message, "already has an active writer") {
+			t.Fatalf("%s response = %+v, want ownership conflict", request.Method, response)
+		}
+		if _, err := owner.store.Read(session.ThreadID(threadID), true, true); err != nil {
+			t.Fatalf("owned thread changed after %s conflict: %v", request.Method, err)
+		}
+	}
+
+	if err := owner.Close(); err != nil {
+		t.Fatalf("owner.Close() error = %v", err)
+	}
+	resume := contender.Handle(requestWithParams(t, IntID(5), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resume.Error != nil {
+		t.Fatalf("resume after ownership transfer error = %+v", resume.Error)
 	}
 }

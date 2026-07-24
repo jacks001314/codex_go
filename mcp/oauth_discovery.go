@@ -50,6 +50,7 @@ func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *
 	if client == nil {
 		client = http.DefaultClient
 	}
+	client = mcpHTTPClientWithDefaultHeaders(client, nil)
 	raw := strings.TrimSpace(serverURL)
 	if raw == "" {
 		return nil, errors.New("MCP OAuth discovery URL is required")

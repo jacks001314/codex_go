@@ -27,6 +27,9 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, true, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
+	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
+		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
+	}
 	cwd, err := nativeExecServerPath(params.CWD, "cwd")
 	if err != nil {
 		return nil, true, err
@@ -73,7 +76,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 			StdinOpen:                        params.TTY || params.PipeStdin,
 			UsePrivateDesktop:                sandboxContext.WindowsSandboxPrivateDesktop,
 			ProxyEnforced:                    params.EnforceManagedNetwork,
-			ProxySettingsMode:                windowssandbox.ProxySettingsPreserve,
+			ProxySettingsMode:                windowsSandboxProxySettingsMode(sandboxContext.WindowsSandboxProxySettingsMode),
 			ReadRootsIncludePlatformDefaults: true,
 		},
 		PTY:                 params.TTY,
@@ -90,4 +93,11 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		terminate: session.Terminate,
 		close:     session.Close,
 	}, true, nil
+}
+
+func windowsSandboxProxySettingsMode(mode WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
+	if mode == WindowsSandboxProxySettingsPreserve {
+		return windowssandbox.ProxySettingsPreserve
+	}
+	return windowssandbox.ProxySettingsReconcile
 }

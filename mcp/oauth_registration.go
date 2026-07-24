@@ -35,10 +35,7 @@ type OAuthClientRegistrar struct {
 }
 
 func NewOAuthClientRegistrar(client *http.Client) *OAuthClientRegistrar {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &OAuthClientRegistrar{Client: client}
+	return &OAuthClientRegistrar{Client: mcpHTTPClientWithDefaultHeaders(client, nil)}
 }
 
 func (r *OAuthClientRegistrar) Register(ctx context.Context, options *OAuthClientRegistrationOptions) (*OAuthClientRegistrationResponse, error) {

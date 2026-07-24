@@ -51,6 +51,11 @@ type Request struct {
 	Input                  []turn.TurnUserInput
 	AdditionalInstructions string
 	AdditionalInputItems   []any
+	// InternalEventHandler receives the complete in-process event before its
+	// public JSON representation is encoded. Local UI consumers use this to
+	// retain non-wire details such as file-change diffs while the SDK JSON shape
+	// remains Rust-compatible.
+	InternalEventHandler func(protocol.ThreadEvent)
 }
 
 type Result struct {
@@ -194,6 +199,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		writeHumanConfigSummary(stderr, req, cfg, identityPrompt, threadID, modelID, providerID, approvalPolicy, permissionProfile, reasoningEffort)
 	}
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
+	eventSink.internalHandler = req.InternalEventHandler
 	if !req.Exec.JSON && stderr != nil {
 		eventSink.human = newExecHumanRenderer(stderr, execColorFlagValue(req.Exec))
 	}
@@ -536,13 +542,8 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 		return
 	}
 	if invocation.ToolName.Key() == tool.DefaultApplyPatchToolName {
-		changes := fileChangesFromAny(tool.ApplyPatchChanges(invocation, c.workingDirectory))
-		if len(changes) > 0 {
-			item := protocol.FileChangeItem(firstNonEmpty(invocation.CallID, "apply_patch"), changes, "in_progress")
-			autoApproved := true
-			item.AutoApproved = &autoApproved
-			c.emit(protocol.ItemStarted(item))
-		}
+		// Rust begins the public FileChange lifecycle only after validation.
+		// Final execution mapping emits started/completed for validated patches.
 		return
 	}
 	if invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
@@ -637,11 +638,12 @@ func rustStyleModelRerouteReason(reason string) string {
 }
 
 type execEventSink struct {
-	mu      sync.Mutex
-	events  []protocol.ThreadEvent
-	encoder *json.Encoder
-	human   *execHumanRenderer
-	err     error
+	mu              sync.Mutex
+	events          []protocol.ThreadEvent
+	encoder         *json.Encoder
+	human           *execHumanRenderer
+	internalHandler func(protocol.ThreadEvent)
+	err             error
 }
 
 func newExecEventSink(stdout io.Writer, encodeJSON bool) *execEventSink {
@@ -668,6 +670,9 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 		}
 	}
 	s.events = append(s.events, event)
+	if s.internalHandler != nil {
+		s.internalHandler(event)
+	}
 	if s.err != nil {
 		return s.err
 	}
@@ -2094,7 +2099,20 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		item := commandExecutionProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
 	}
-	if isPlanUpdateExecution(execution) || isFileChangeExecution(execution) {
+	if isPlanUpdateExecution(execution) {
+		return nil
+	}
+	if isFileChangeExecution(execution) {
+		item := protocol.FileChangeItem(
+			"file-change-"+safeSessionItemID(execution.Invocation.CallID),
+			fileChangesFromToolOutput(execution.Output),
+			"in_progress",
+		)
+		autoApproved := true
+		item.AutoApproved = &autoApproved
+		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
+	}
+	if isApplyPatchExecution(execution) {
 		return nil
 	}
 	callID := execution.Invocation.CallID
@@ -2127,6 +2145,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 			execStringFromAny(execution.Output.Data["stdout"]),
 			firstNonEmpty(execStringFromAny(execution.Output.Data["stderr"]), execution.Output.Error),
 		)), true
+	}
+	if isApplyPatchExecution(execution) {
+		return protocol.ThreadEvent{}, false
 	}
 	if isCollabExecution(execution) {
 		return protocol.ItemCompleted(collabToolCallProtocolItem(execution, collabToolCallStatusFromOutput(execution.Output))), true
@@ -2800,6 +2821,11 @@ func isFileChangeExecution(execution *turn.ToolExecutionResult) bool {
 	}
 	marker, _ := execution.Output.Data["fileChange"].(bool)
 	return marker
+}
+
+func isApplyPatchExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && execution.Invocation != nil &&
+		execution.Invocation.ToolName.Key() == tool.DefaultApplyPatchToolName
 }
 
 func fileChangesFromToolOutput(output *tool.Output) []protocol.FileChange {

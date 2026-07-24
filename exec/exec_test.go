@@ -2741,6 +2741,13 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	if fileChangeIndex < 0 {
 		t.Fatalf("file_change event missing: %#v", events)
 	}
+	if events[fileChangeIndex].Type != "item.started" || events[fileChangeIndex].Item.Status != "in_progress" {
+		t.Fatalf("file_change start event = %#v", events[fileChangeIndex])
+	}
+	fileChangeIndex++
+	if fileChangeIndex >= len(events) || events[fileChangeIndex].Type != "item.completed" {
+		t.Fatalf("file_change completion event missing after start: %#v", events)
+	}
 	item := events[fileChangeIndex].Item
 	if item.Type != "file_change" || item.Status != "completed" || len(item.Changes) != 3 {
 		t.Fatalf("file_change item = %#v", item)
@@ -2760,6 +2767,53 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	}
 	if execEventItemIndex(events, "tool-call-call-apply") >= 0 || execEventItemIndex(events, "tool-output-call-apply") >= 0 {
 		t.Fatalf("file change should not emit generic apply_patch tool events: %#v", events)
+	}
+}
+
+func TestEmitFinalEventsSuppressesApplyPatchValidationFailureLikeRust(t *testing.T) {
+	result := &turn.AgentLoopResult{
+		Response: &model.AgentResponse{},
+		ToolExecutions: []turn.ToolExecutionResult{{
+			Invocation: &tool.Invocation{
+				CallID: "patch-validation", ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+				Payload: tool.Payload{Kind: tool.PayloadCustom, Input: "*** Begin Patch\n*** Update File: state.txt\n@@\n-MISSING\n+VALUE\n*** End Patch"},
+			},
+			Output: &tool.Output{
+				CallID: "patch-validation", ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+				Success: false, Body: "apply_patch verification failed: missing context",
+				Error: "apply_patch verification failed: missing context",
+			},
+		}},
+	}
+	sink := newExecEventSink(nil, false)
+
+	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
+	}
+	for _, event := range sink.Events() {
+		if event.Item != nil && (event.Item.Type == "file_change" || event.Item.Type == "tool_call" || event.Item.Type == "tool_output") {
+			t.Fatalf("validation failure leaked public tool event: %#v", event)
+		}
+	}
+}
+
+func TestExecEventSinkKeepsInternalFileChangeDiffWhileJSONStaysRustCompatible(t *testing.T) {
+	var stdout bytes.Buffer
+	var internal protocol.ThreadEvent
+	sink := newExecEventSink(&stdout, true)
+	sink.internalHandler = func(event protocol.ThreadEvent) { internal = event }
+	event := protocol.ItemCompleted(protocol.FileChangeItem("patch-1", []protocol.FileChange{{
+		Path: "a.go", Kind: "update", Diff: "@@ -1 +1 @@\n-old\n+new", MovePath: "b.go",
+	}}, "completed"))
+	if err := sink.Emit(event); err != nil {
+		t.Fatalf("Emit() error = %v", err)
+	}
+	if internal.Item == nil || len(internal.Item.Changes) != 1 || internal.Item.Changes[0].Diff == "" || internal.Item.Changes[0].MovePath != "b.go" {
+		t.Fatalf("internal event lost file-change details: %#v", internal)
+	}
+	encoded := stdout.String()
+	if strings.Contains(encoded, "@@ -1 +1 @@") || strings.Contains(encoded, "b.go") || strings.Contains(encoded, "\"diff\"") {
+		t.Fatalf("public JSON leaked internal file-change details: %s", encoded)
 	}
 }
 
@@ -2795,6 +2849,13 @@ func TestEmitFinalEventsPreservesDeclinedFileChangeLikeRust(t *testing.T) {
 	fileChangeIndex := execEventItemIndex(events, "file-change-patch-2")
 	if fileChangeIndex < 0 {
 		t.Fatalf("file_change event missing: %#v", events)
+	}
+	if events[fileChangeIndex].Type != "item.started" || events[fileChangeIndex].Item.Status != "in_progress" {
+		t.Fatalf("file_change start event = %#v", events[fileChangeIndex])
+	}
+	fileChangeIndex++
+	if fileChangeIndex >= len(events) || events[fileChangeIndex].Type != "item.completed" {
+		t.Fatalf("file_change completion event missing after start: %#v", events)
 	}
 	if got := events[fileChangeIndex].Item.Status; got != "declined" {
 		t.Fatalf("file_change status = %q, want declined", got)
@@ -3447,9 +3508,8 @@ func TestExecStreamEventCollectorClearsRetryBeforeRecoveredDelta(t *testing.T) {
 	}
 }
 
-func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBegin(t *testing.T) {
-	workingDirectory := t.TempDir()
-	collector := &execStreamEventCollector{streamAssistantDeltas: true, workingDirectory: workingDirectory}
+func TestExecStreamEventCollectorDefersApplyPatchBeginUntilValidation(t *testing.T) {
+	collector := &execStreamEventCollector{streamAssistantDeltas: true, workingDirectory: t.TempDir()}
 	patch := "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"
 	collector.Handle(&model.ResponsesStreamEvent{
 		Kind: model.ResponsesStreamEventOutputAdded,
@@ -3464,15 +3524,8 @@ func TestExecStreamEventCollectorSuppressesGenericApplyPatchAndEmitsFileChangeBe
 		ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
 		Payload:  tool.Payload{Kind: tool.PayloadCustom, Input: patch},
 	}, time.Now())
-	events := collector.Events()
-	if len(events) != 1 || events[0].Type != "item.started" || events[0].Item == nil || events[0].Item.Type != "file_change" {
-		t.Fatalf("apply_patch start events = %#v", events)
-	}
-	if events[0].Item.ID != "patch-1" || events[0].Item.Status != "in_progress" || len(events[0].Item.Changes) != 1 {
-		t.Fatalf("apply_patch start item = %#v", events[0].Item)
-	}
-	if got := events[0].Item.Changes[0].Path; got != filepath.Join(workingDirectory, "a.txt") {
-		t.Fatalf("apply_patch start path = %q, want workspace path", got)
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("pre-validation apply_patch events = %#v, want none", events)
 	}
 }
 

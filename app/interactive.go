@@ -1790,13 +1790,20 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		execOpts.Prompt = ""
 	}
 	streamWriter := newInteractiveStreamEventWriter(send)
+	streamOutput := io.Writer(streamWriter)
+	var internalEventHandler func(protocol.ThreadEvent)
+	if _, ok := runner.(*codexexec.Runner); ok {
+		streamOutput = io.Discard
+		internalEventHandler = streamWriter.HandleEvent
+	}
 	result, err := runner.RunContext(ctx, &codexexec.Request{
 		Root:                   turnRoot,
 		Exec:                   execOpts,
 		Input:                  inputs,
 		AdditionalInstructions: additionalInstructions,
 		AdditionalInputItems:   additionalInputItems,
-	}, strings.NewReader(""), streamWriter, io.Discard)
+		InternalEventHandler:   internalEventHandler,
+	}, strings.NewReader(""), streamOutput, io.Discard)
 	streamWriter.Flush()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
@@ -2051,6 +2058,19 @@ func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 		w.send(codextea.ThreadEventMsg{Event: protocol.ErrorEvent("failed to parse stream event: " + err.Error())})
 		return
 	}
+	w.handleEventLocked(event)
+}
+
+func (w *interactiveStreamEventWriter) HandleEvent(event protocol.ThreadEvent) {
+	if w == nil || w.send == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.handleEventLocked(event)
+}
+
+func (w *interactiveStreamEventWriter) handleEventLocked(event protocol.ThreadEvent) {
 	if interactiveThreadEventHasAssistantOutput(event) {
 		w.sawAssistantOutput = true
 	}

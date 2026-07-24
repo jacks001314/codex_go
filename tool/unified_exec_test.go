@@ -631,14 +631,18 @@ func TestUnifiedExecSandboxContextUsesPortablePathURIsLikeRust(t *testing.T) {
 	profile := sandbox.WorkspaceWritePermissionProfile()
 	profile.SandboxPolicy.WritableRoots = []string{writable}
 	context, err := unifiedExecSandboxContext(&ShellRequest{
-		CWD:               cwd,
-		PermissionProfile: &profile,
+		CWD:                             cwd,
+		PermissionProfile:               &profile,
+		WindowsSandboxProxySettingsMode: execserver.WindowsSandboxProxySettingsPreserve,
 	})
 	if err != nil {
 		t.Fatalf("unifiedExecSandboxContext() error = %v", err)
 	}
 	if !strings.HasPrefix(context.CWD, "file:") || context.WindowsSandboxLevel != "disabled" {
 		t.Fatalf("context = %#v", context)
+	}
+	if context.WindowsSandboxProxySettingsMode != execserver.WindowsSandboxProxySettingsPreserve {
+		t.Fatalf("proxy settings mode = %q", context.WindowsSandboxProxySettingsMode)
 	}
 	var profileWire map[string]any
 	if err := json.Unmarshal(context.Permissions, &profileWire); err != nil {

@@ -471,6 +471,7 @@ type CoreHandlerOptions struct {
 	EnableCurrentTime              bool
 	EnableClockSleep               bool
 	EnableLegacySleep              bool
+	DisableUpdatePlan              bool
 }
 
 func RegisterCoreHandlers(registry *Registry, planStore *PlanStore, status func() compact.TokenStatus, responder UserInputResponder) error {
@@ -487,9 +488,11 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 		options = &CoreHandlerOptions{}
 	}
 	handlers := []Executor{
-		NewPlanHandler(options.PlanStore),
 		NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes),
 		NewGetContextRemainingHandler(options.ContextStatus),
+	}
+	if !options.DisableUpdatePlan {
+		handlers = append(handlers, NewPlanHandler(options.PlanStore))
 	}
 	if options.EnableLegacySleep {
 		handlers = append(handlers, &SleepHandler{})
