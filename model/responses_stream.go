@@ -821,10 +821,29 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		emitResponsesStreamEvent(handler, event)
 		return true, nil
+	case "response.incomplete":
+		return false, responseIncompleteError(sse.Data)
 	case "response.failed":
 		return false, responseFailedError(sse.Data)
 	}
 	return false, nil
+}
+
+func responseIncompleteError(data []byte) error {
+	reason := "unknown"
+	var payload struct {
+		Response struct {
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(data, &payload) == nil {
+		if value := strings.TrimSpace(payload.Response.IncompleteDetails.Reason); value != "" {
+			reason = value
+		}
+	}
+	return fmt.Errorf("Incomplete response returned, reason: %s", reason)
 }
 
 func (a *responsesStreamAccumulator) recordAgentItem(item *AgentItem) {

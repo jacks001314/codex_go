@@ -496,6 +496,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		case "response.completed":
 			responseID := responseIDFromWebsocketEvent(event)
 			return &AgentResponse{ResponseID: responseID, ProviderID: r.ProviderID}, nil
+		case "response.incomplete":
+			closeResponsesWebsocketSession(session, "prewarm incomplete")
+			return nil, responseIncompleteError(data)
 		case "response.failed", "error":
 			closeResponsesWebsocketSession(session, "prewarm failed")
 			return nil, fmt.Errorf("responses websocket prewarm failed: %s", strings.TrimSpace(responseToolString(event["error"])))

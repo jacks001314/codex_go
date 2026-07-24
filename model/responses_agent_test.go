@@ -311,6 +311,26 @@ func TestResponsesAgentRunnerPrewarmNoopsWithoutWebSocketSupport(t *testing.T) {
 	}
 }
 
+func TestResponsesAgentRunnerPrewarmReportsResponseIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.incomplete","response":{"id":"warm-1","incomplete_details":{"reason":"max_output_tokens"}}}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	_, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test"})
+	if err == nil || err.Error() != "Incomplete response returned, reason: max_output_tokens" {
+		t.Fatalf("Prewarm() error = %v", err)
+	}
+}
+
 func TestResponsesAgentRunnerRunWebSocketUsesPreviousResponseID(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -2221,6 +2241,44 @@ func TestResponsesAgentRunnerDoesNotRetryResponseFailed(t *testing.T) {
 	}
 	if attempts.Load() != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestResponsesAgentRunnerReportsResponseIncompleteReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(responsesSSE(
+			`{"type":"response.incomplete","response":{"id":"resp-1","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		)))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL + "/v1", StreamMaxRetries: 0},
+		Stream:   true,
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err == nil || err.Error() != "Incomplete response returned, reason: max_output_tokens" {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestResponsesAgentRunnerReportsUnknownResponseIncompleteReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(responsesSSE(
+			`{"type":"response.incomplete","response":{"id":"resp-1","incomplete_details":null}}`,
+		)))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL + "/v1", StreamMaxRetries: 0},
+		Stream:   true,
+	})
+	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err == nil || err.Error() != "Incomplete response returned, reason: unknown" {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 
