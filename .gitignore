@@ -1,5 +1,7 @@
-# Ignore hidden directories such as .agents, .gocache, .tmp.
+# Ignore hidden directories such as .gocache and .tmp.
 .*/
+!/.agents/
+!/.agents/**
 fuck.*
 code.exe
 bin/

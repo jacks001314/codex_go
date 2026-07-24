@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDK Parity Tests"
+  short_description: "Compare Rust and Go Codex through SDK scenarios"
+  default_prompt: "Use $sdktests to run real SDK parity scenarios against the Rust and Go Codex CLIs."
