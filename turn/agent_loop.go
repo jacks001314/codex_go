@@ -66,6 +66,7 @@ type AgentLoopRequest struct {
 	DisableHostedImageGeneration bool
 	PostToolInputItems           ToolPostExecutionInputItems
 	OnToolStarted                ToolStartedCallback
+	OnToolCompleted              ToolCompletedCallback
 	Timing                       *TimingState
 	SamplingFollowUp             SamplingFollowUp
 	OnAssistantMessage           AssistantMessageCallback

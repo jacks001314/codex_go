@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { compareArtifact, type CompareResult } from "./compare.ts";
 import { normalizeRecording } from "./normalize.ts";
+import { currentPlatformSuite } from "./platform/index.ts";
 import { getScenario } from "./scenarios.ts";
 import { copyCodexHome, copyFixture, copyWindowsSandboxState, maybeRunText, readJson, repoRoot, safeConfigSummary, sdktestsRoot, sha256File, snapshotFiles, writeJson } from "./util.ts";
 
@@ -22,6 +24,10 @@ export type ParityRunResult = {
 
 export async function runParity(args: RunArgs): Promise<ParityRunResult> {
   const scenario = getScenario(args.scenario);
+  const platformSuite = currentPlatformSuite();
+  if (scenario.platforms && !scenario.platforms.includes(platformSuite)) {
+    throw new Error(`Scenario ${scenario.name} does not support platform ${platformSuite}`);
+  }
   const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
   const artifactDir = path.join(sdktestsRoot, "artifacts", `${stamp}-${scenario.name}`);
   const tmpDir = path.join(sdktestsRoot, ".tmp", `${stamp}-${scenario.name}`);
@@ -33,7 +39,7 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
   if (!existsSync(sdkIndex)) {
     throw new Error(`SDK dist not found: ${sdkIndex}`);
   }
-  const homeSource = path.join(process.env.USERPROFILE ?? "", ".codex");
+  const homeSource = path.join(os.homedir(), ".codex");
   const sourceConfig = path.join(homeSource, "config.toml");
   const configSummary = safeConfigSummary(sourceConfig);
 
@@ -175,18 +181,22 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
   return {
     generatedAt: new Date().toISOString(),
     platform: {
+      suite: currentPlatformSuite(),
       os: process.platform,
       arch: process.arch,
       node: process.version,
       go: maybeRunText("go", ["version"], repoRoot),
     },
     baseline: {
+      mode: "rust-binary",
+      rustBinaryPath: args.rustPath,
       goCommit,
       goDirty: Boolean(goStatus?.trim()),
       parityRustBaseline: parity.rustBaseline,
       parityRustUpstreamHead: parity.rustUpstreamHead,
       rustUpstreamCommit,
-      rustBaselineDrift:
+      rustBaselineDrift: false,
+      parityRecordDrift:
         Boolean(rustUpstreamCommit) &&
         Boolean(parity.rustUpstreamHead) &&
         rustUpstreamCommit !== parity.rustUpstreamHead,
@@ -209,6 +219,7 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
     },
     scenario: {
       name: scenario.name,
+      variant: `${scenario.name}/${currentPlatformSuite()}`,
       turnCount: scenario.turns.length,
       turns: scenario.turns.map((turn: any) => ({
         resume: Boolean(turn.resume),

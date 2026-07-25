@@ -11,7 +11,7 @@ description: 通过官方 Codex TypeScript SDK 对 Rust 与 Go 版 Codex CLI 进
 
 - 先读当前仓库状态、`README.md`、`parity.json` 和相关实现；不要假定二进制、上游仓库或 SDK 的位置。
 - 默认在当前仓库的 `sdktests/` 建立可提交的测试工程与场景。若已有 SDK 差分设施，扩展它而不是另建框架。
-- 优先使用本地 Rust 上游 `sdk/typescript`，让 SDK 与 Rust 基线来自同一提交。常见上游位置是 `D:\qax\reagent\dev\git\codex`，但必须探测并记录实际路径与 commit。
+- 优先使用本地 Rust 上游 `sdk/typescript`，让 SDK 与 Rust 基线来自同一提交。windows 上游位置是 `D:\qax\reagent\dev\git\codex`，linux 上游位置是"../codex" 但必须探测并记录实际路径与 commit。
 - 使用 SDK 的 `codexPathOverride` 注入待测二进制；测试代码不得绕开 SDK 直接为两端实现不同的调用逻辑。
 - 每次运行使用独立 `CODEX_HOME` 和工作区副本。除明确测试 resume/import 外，不共享会话、配置或缓存。
 - 不输出、复制或提交 API key、认证文件、完整用户配置。报告中只记录认证方式是否可用。

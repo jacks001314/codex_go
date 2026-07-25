@@ -600,6 +600,7 @@ type Model struct {
 	editorActive                     bool
 	toolCalls                        map[string]*toolCallDisplayState
 	mcpToolCalls                     map[string]*mcpToolCallDisplayState
+	renderedFileChanges              map[string]bool
 	startedThreadIDs                 map[string]bool
 	completedThreadIDs               map[string]bool
 	taskStartedAt                    time.Time
@@ -726,6 +727,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		availableRateLimitResetCredits: cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
 		toolCalls:                      map[string]*toolCallDisplayState{},
 		mcpToolCalls:                   map[string]*mcpToolCallDisplayState{},
+		renderedFileChanges:            map[string]bool{},
 		startedThreadIDs:               map[string]bool{},
 		completedThreadIDs:             map[string]bool{},
 		now:                            time.Now,
@@ -1902,7 +1904,18 @@ func (m *Model) renderFileChangeItem(item *protocol.ThreadItem, completed bool) 
 		return
 	}
 	if len(changes) > 0 {
+		id := strings.TrimSpace(item.ID)
+		if completed && id != "" && m.renderedFileChanges[id] {
+			m.Transcript.needsFinalMessageSeparator = true
+			return
+		}
 		m.applyHistoryCell(historycell.NewPatchEvent(changes, m.State.CWD))
+		if id != "" {
+			if m.renderedFileChanges == nil {
+				m.renderedFileChanges = map[string]bool{}
+			}
+			m.renderedFileChanges[id] = true
+		}
 		if completed {
 			m.Transcript.needsFinalMessageSeparator = true
 		}

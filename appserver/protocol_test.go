@@ -3,6 +3,7 @@ package appserver
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"codex_go/config"
@@ -305,5 +306,17 @@ func TestSafeCommandPluginScriptPath(t *testing.T) {
 		if got := safeCommandPluginScriptPath(&pluginID, &path); got != nil {
 			t.Fatalf("unsafe path %q accepted as %#v", path, got)
 		}
+	}
+}
+
+func TestThreadStartResponseSandboxUsesRustResponseShape(t *testing.T) {
+	got, ok := threadStartResponseSandbox("read-only").(map[string]any)
+	if !ok || got["type"] != "readOnly" || got["networkAccess"] != false {
+		t.Fatalf("read-only response = %#v, want Rust readOnly response object", got)
+	}
+
+	custom := map[string]any{"type": "externalSandbox", "networkAccess": "disabled"}
+	if got := threadStartResponseSandbox(custom); !reflect.DeepEqual(got, custom) {
+		t.Fatalf("custom sandbox response = %#v, want %#v", got, custom)
 	}
 }

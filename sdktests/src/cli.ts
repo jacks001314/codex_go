@@ -1,6 +1,7 @@
 import path from "node:path";
 import { compareArtifact } from "./compare.ts";
 import { runParity } from "./runner.ts";
+import { currentPlatformSuite } from "./platform/index.ts";
 import { scenarios } from "./scenarios.ts";
 import { latestArtifactDir, sdktestsRoot } from "./util.ts";
 
@@ -10,6 +11,7 @@ const command = args.shift() ?? "smoke";
 try {
   if (command === "smoke") {
     const options = parseOptions(args);
+    validatePlatformOption(options.platform);
     const result = await runParity({
       scenario: "streaming-smoke",
       rustPath: required(options.rust, "--rust"),
@@ -22,6 +24,7 @@ try {
     process.exitCode = exitCode(result.comparison.status);
   } else if (command === "parity") {
     const options = parseOptions(args);
+    validatePlatformOption(options.platform);
     const scenarioNames = options.all
       ? scenarios.filter((scenario) => !scenario.optIn).map((scenario) => scenario.name)
       : [required(options.scenario, "--scenario")];
@@ -98,4 +101,11 @@ function parseOrder(value: string | boolean | undefined): ("rust" | "go")[] | un
     return ["go", "rust"];
   }
   throw new Error(`Invalid --order ${String(value)}; expected rust-go or go-rust`);
+}
+
+function validatePlatformOption(value: string | boolean | undefined): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || value !== currentPlatformSuite()) {
+    throw new Error(`Live platform is ${currentPlatformSuite()}; cannot run --platform ${String(value)}`);
+  }
 }

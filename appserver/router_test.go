@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestRouterStartReadListAndItems(t *testing.T) {
+func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	router.SetClock(func() time.Time { return fixedTime() })
@@ -74,17 +74,14 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 		t.Fatalf("thread/start payload thread.ephemeral = %v, present=%v; want false", startThreadPayload["ephemeral"], ok)
 	}
 
-	readRequest := requestWithParams(t, StringID("read"), MethodThreadRead, ThreadReadParams{
-		ThreadID:     start.Thread.ID,
-		IncludeTurns: true,
-	})
+	readRequest := requestWithParams(t, StringID("read"), MethodThreadRead, ThreadReadParams{ThreadID: start.Thread.ID})
 	readResponse := router.Handle(readRequest)
 	if readResponse.Error != nil {
 		t.Fatalf("read error: %+v", readResponse.Error)
 	}
 	read := readResponse.Result.(*ThreadReadResponse)
-	if len(read.Thread.Turns) != 1 {
-		t.Fatalf("turns not included: %+v", read.Thread.Turns)
+	if len(read.Thread.Turns) != 0 {
+		t.Fatalf("thread/start prompt unexpectedly created turns: %+v", read.Thread.Turns)
 	}
 	if read.Thread.Path == nil || !strings.HasSuffix(*read.Thread.Path, ".jsonl") {
 		t.Fatalf("read thread Path = %+v, want rollout jsonl path", read.Thread.Path)
@@ -96,31 +93,19 @@ func TestRouterStartReadListAndItems(t *testing.T) {
 		t.Fatalf("list error: %+v", listResponse.Error)
 	}
 	list := listResponse.Result.(*ThreadListResponse)
-	if len(list.Data) != 1 || list.Data[0].ID != start.Thread.ID {
-		t.Fatalf("unexpected list: %+v", list.Data)
+	if len(list.Data) != 0 {
+		t.Fatalf("thread/list exposed unmaterialized thread: %+v", list.Data)
 	}
 
 	itemsRequest := requestWithParams(t, IntID(3), MethodThreadItemsList, ThreadItemsListParams{
 		ThreadID: start.Thread.ID,
 	})
 	itemsResponse := router.Handle(itemsRequest)
-	if itemsResponse.Error != nil {
-		t.Fatalf("items error: %+v", itemsResponse.Error)
+	if itemsResponse.Error == nil || !strings.Contains(itemsResponse.Error.Message, "unavailable before first user message") {
+		t.Fatalf("items response = %+v, want unmaterialized-thread error", itemsResponse)
 	}
-	items := itemsResponse.Result.(*ThreadItemsListResponse)
-	if len(items.Data) != 1 || items.Data[0].ID != "item-1" || items.Data[0].Text != "hello" {
-		t.Fatalf("items response = %+v", items)
-	}
-	rolloutPath, err := rollout.FindThreadPath(store.Root(), start.Thread.ID, false)
-	if err != nil {
-		t.Fatalf("rollout path error: %v", err)
-	}
-	lines, _, err := rollout.Load(rolloutPath)
-	if err != nil {
-		t.Fatalf("rollout load error: %v", err)
-	}
-	if len(lines) < 2 || lines[1].ItemID == "" {
-		t.Fatalf("rollout lines = %+v", lines)
+	if _, err := os.Stat(*start.Thread.Path); !os.IsNotExist(err) {
+		t.Fatalf("thread/start prompt unexpectedly materialized rollout: %v", err)
 	}
 }
 

@@ -811,16 +811,6 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 			Extra:                   extra,
 		},
 	}
-	if params.Prompt != "" {
-		record.Items = []session.Item{{
-			ID:        "item-" + safeIdentifier(request.ID.String()),
-			Type:      "message",
-			Role:      "user",
-			Text:      params.Prompt,
-			CreatedAt: now,
-			Metadata:  map[string]any{"turnId": "turn-" + safeIdentifier(request.ID.String())},
-		}}
-	}
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
@@ -2140,6 +2130,7 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 	if err != nil {
 		return nil, err
 	}
+	records = materializedThreadRecords(records)
 	var page *session.Page
 	if params.UseStateDBOnly {
 		page, err = session.ListRecords(records, options)
@@ -2150,6 +2141,16 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 		return nil, err
 	}
 	return BuildListResponse(page, r.store, false)
+}
+
+func materializedThreadRecords(records []session.Record) []session.Record {
+	out := make([]session.Record, 0, len(records))
+	for i := range records {
+		if !unmaterializedThread(&records[i]) {
+			out = append(out, records[i])
+		}
+	}
+	return out
 }
 
 func (r *Router) listRecordsIncludingRollouts(records []session.Record, options session.ListOptions, includeHistory bool) (*session.Page, error) {

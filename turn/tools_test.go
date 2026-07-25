@@ -392,6 +392,52 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 	}
 }
 
+func TestBuildToolRegistryGatesAdditionalPermissionsSchemaLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableUnifiedExec = true
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(default) error = %v", err)
+	}
+	execSpec, ok := registry.Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+	if !ok {
+		t.Fatal("exec_command spec missing")
+	}
+	properties := execSpec.InputSchema["properties"].(map[string]any)
+	if _, ok := properties["additional_permissions"]; ok {
+		t.Fatalf("default exec_command schema exposes additional_permissions: %#v", properties)
+	}
+
+	options = DefaultToolRegistryOptions(t.TempDir())
+	options.EnableUnifiedExec = true
+	options.Shell.Validation.AdditionalPermissionsAllowed = true
+	registry, err = BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(enabled) error = %v", err)
+	}
+	execSpec, ok = registry.Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+	if !ok {
+		t.Fatal("exec_command spec missing with exec_permission_approvals")
+	}
+	properties = execSpec.InputSchema["properties"].(map[string]any)
+	if _, ok := properties["additional_permissions"]; !ok {
+		t.Fatalf("enabled exec_command schema lacks additional_permissions: %#v", properties)
+	}
+}
+
+func TestBuildToolRegistryOmitsEmptyToolSearchLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableAgents = false
+	options.EnableMCP = false
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName)); ok {
+		t.Fatal("tool_search registered without discoverable tools")
+	}
+}
+
 func TestBuildToolRegistryToolSearchFindsDeferredTools(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false

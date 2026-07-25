@@ -10,15 +10,16 @@ import (
 )
 
 func TestInputItemsFromRecordUsesRawItem(t *testing.T) {
+	call := json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"shell","arguments":"{}"}`)
 	raw := json.RawMessage(`{"type":"function_call_output","call_id":"call-1","output":"done"}`)
-	record := &Record{Items: []Item{{Type: "tool_output", Raw: raw}}}
+	record := &Record{Items: []Item{{Type: "function_call", Raw: call}, {Type: "tool_output", Raw: raw}}}
 
 	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
 
-	if len(items) != 1 {
-		t.Fatalf("items len = %d, want 1", len(items))
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
 	}
-	got := items[0].(map[string]any)
+	got := items[1].(map[string]any)
 	if got["type"] != "function_call_output" || got["output"] != "done" {
 		t.Fatalf("item = %#v", got)
 	}
@@ -91,6 +92,77 @@ func TestInputItemsFromRecordBuildsMessagesAndToolItems(t *testing.T) {
 	}
 }
 
+func TestInputItemsFromRecordKeepsToolOutputResponseItemIDLikeRust(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "fc_server", Type: "function_call", CallID: "call-1", Name: "echo", Text: `{}`},
+		{ID: "fco_local", Type: "tool_output", CallID: "call-1", Text: "ok"},
+	}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 2 {
+		t.Fatalf("items = %#v", items)
+	}
+	output, ok := items[1].(map[string]any)
+	if !ok || output["id"] != "fco_local" {
+		t.Fatalf("output = %#v", items[1])
+	}
+}
+
+func TestInputItemsFromRecordNormalizesInterruptedAndOrphanToolsLikeRust(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "keep user history"},
+		{ID: "call-missing", Type: "function_call", Name: "exec_command", CallID: "call-missing", Text: `{"cmd":"sleep 30"}`},
+		{ID: "orphan", Type: "function_call_output", CallID: "call-orphan", Text: "must disappear"},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "keep assistant history"},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 4 {
+		t.Fatalf("items = %#v, want user, call, synthetic output, assistant", items)
+	}
+	if got := items[0].(map[string]any)["role"]; got != "user" {
+		t.Fatalf("first item role = %v", got)
+	}
+	call := items[1].(map[string]any)
+	output := items[2].(map[string]any)
+	if call["call_id"] != "call-missing" || output["type"] != "function_call_output" ||
+		output["call_id"] != "call-missing" || output["output"] != "aborted" {
+		t.Fatalf("normalized pair = %#v %#v", call, output)
+	}
+	if got := items[3].(map[string]any)["role"]; got != "assistant" {
+		t.Fatalf("last item role = %v", got)
+	}
+}
+
+func TestInputItemsFromRecordNormalizesToolSearchLikeRust(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "search", Type: "tool_search_call", CallID: "search-1", Text: `{"query":"weather"}`},
+		{ID: "orphan-client", Type: "tool_search_output", CallID: "orphan-client", Data: map[string]any{"execution": "client"}},
+		{ID: "server", Type: "tool_search_output", CallID: "server-search", Data: map[string]any{"execution": "server"}},
+	}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 3 {
+		t.Fatalf("items = %#v, want call, synthetic client output, server output", items)
+	}
+	synthetic := items[1].(map[string]any)
+	if synthetic["type"] != "tool_search_output" || synthetic["call_id"] != "search-1" || synthetic["execution"] != "client" {
+		t.Fatalf("synthetic search output = %#v", synthetic)
+	}
+}
+
+func TestInputItemsFromRecordKeepsExistingToolPairOnceLikeRust(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "call", Type: "function_call", Name: "exec_command", CallID: "call-1", Text: `{"cmd":"pwd"}`},
+		{ID: "output", Type: "function_call_output", CallID: "call-1", Text: "ok"},
+	}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want existing pair exactly once", items)
+	}
+	if items[1].(map[string]any)["output"] != "ok" {
+		t.Fatalf("output = %#v", items[1])
+	}
+}
+
 func TestInputItemsFromRecordOmitsEmptyNamespacesForResponses(t *testing.T) {
 	record := &Record{Items: []Item{
 		{ID: "plain-call", Type: "function_call", Name: "shell", CallID: "call-1", Text: `{}`},
@@ -100,18 +172,18 @@ func TestInputItemsFromRecordOmitsEmptyNamespacesForResponses(t *testing.T) {
 
 	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
 
-	if len(items) != 3 {
-		t.Fatalf("items len = %d, want 3", len(items))
+	if len(items) != 6 {
+		t.Fatalf("items len = %d, want 3 calls plus 3 synthetic outputs", len(items))
 	}
 	plain := items[0].(map[string]any)
 	if _, ok := plain["namespace"]; ok {
 		t.Fatalf("plain call should omit namespace: %#v", plain)
 	}
-	custom := items[1].(map[string]any)
+	custom := items[2].(map[string]any)
 	if _, ok := custom["namespace"]; ok {
 		t.Fatalf("custom call should omit blank namespace: %#v", custom)
 	}
-	namespaced := items[2].(map[string]any)
+	namespaced := items[4].(map[string]any)
 	if namespaced["namespace"] != "angr" {
 		t.Fatalf("namespaced call = %#v", namespaced)
 	}
@@ -123,8 +195,8 @@ func TestInputItemsFromRecordSanitizesRawEmptyNamespace(t *testing.T) {
 
 	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
 
-	if len(items) != 1 {
-		t.Fatalf("items len = %d, want 1", len(items))
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want call plus synthetic output", len(items))
 	}
 	call := items[0].(map[string]any)
 	if _, ok := call["namespace"]; ok {
@@ -189,6 +261,34 @@ func TestInputItemsFromRecordToolSearchRustRequiredFields(t *testing.T) {
 	tools, ok := output["tools"].([]any)
 	if !ok || len(tools) != 0 {
 		t.Fatalf("tool search output = %#v", output)
+	}
+}
+
+func TestInputItemsFromRecordRestoresPersistedGenericToolSearchOutputLikeRust(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "search-1", Type: "tool_search_call", CallID: "call-1"},
+		{
+			ID:     "search-out-1",
+			Type:   "tool_output",
+			CallID: "call-1",
+			Data: map[string]any{"tools": []any{map[string]any{
+				"type": "namespace", "name": "weather", "tools": []any{},
+			}}},
+			Metadata: map[string]any{"payloadKind": "tool_search"},
+		},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 2 {
+		t.Fatalf("items = %#v", items)
+	}
+	output, ok := items[1].(map[string]any)
+	if !ok || output["type"] != "tool_search_output" || output["call_id"] != "call-1" {
+		t.Fatalf("output = %#v", items[1])
+	}
+	tools, ok := output["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v", output["tools"])
 	}
 }
 

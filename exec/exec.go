@@ -3,9 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -162,7 +160,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	identityPrompt := firstNonEmpty(prompt, turnUserInputsSummary(requestInputs))
 
-	threadID := deterministicThreadID(identityPrompt)
+	threadID := newThreadID()
 	if resumeContext != nil && resumeContext.Record != nil {
 		threadID = string(resumeContext.Record.ID)
 	}
@@ -228,7 +226,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	runPrompt := prompt
-	inputItems := execStartupInputItems(req, permissionProfile, r.now())
+	inputItems := execStartupInputItems(req, permissionProfile, approvalPolicy, r.now())
 	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
 	inputItems = append(inputItems, req.AdditionalInputItems...)
 	if len(requestInputs) > 0 {
@@ -305,6 +303,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		DisableHostedImageGeneration: req.Exec.Subcommand == "review",
 		ToolOutputTokenLimit:         cfg.ToolOutputTokenLimit(),
 		UnifiedExecEnabled:           features.Enabled(cfg.FeatureSettings(), "unified_exec"),
+		ExecPermissionApprovals:      features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -416,6 +415,7 @@ type agentRunConfig struct {
 	DisableHostedImageGeneration bool
 	ToolOutputTokenLimit         *int
 	UnifiedExecEnabled           bool
+	ExecPermissionApprovals      bool
 }
 
 type execStreamEventCollector struct {
@@ -453,6 +453,11 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		// complete command is known. The model's output-added event can carry
 		// empty arguments and must not create a generic exec_command cell.
 		if event.Item.Name == tool.DefaultExecCommandToolName {
+			return
+		}
+		if event.Item.Name == tool.CodeModeExecToolName {
+			// Rust renders code-mode's nested commands through the canonical
+			// command_execution lifecycle, not as a separate outer tool_call.
 			return
 		}
 		// MCP calls get their canonical lifecycle item from ToolStarted, once
@@ -560,6 +565,31 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 		nil,
 		"in_progress",
 	)))
+}
+
+func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *turn.ToolExecutionResult) {
+	if c == nil || execution == nil {
+		return
+	}
+	for _, event := range eventsFromToolExecution(execution) {
+		c.emit(event)
+	}
+}
+
+func (c *execStreamEventCollector) AssistantMessage(response *model.AgentResponse, _ int, hasToolCalls bool) {
+	if c == nil || response == nil || !hasToolCalls {
+		return
+	}
+	for i := range response.Items {
+		item := response.Items[i]
+		if item.Type != "" && item.Type != "agent_message" && item.Type != "message" {
+			continue
+		}
+		if strings.TrimSpace(item.Text) == "" {
+			continue
+		}
+		c.emit(protocol.ItemCompleted(protocol.AgentMessageItem(firstNonEmpty(item.ID, "agent-message"), item.Text)))
+	}
 }
 
 func isExecWebSearchInvocation(invocation *tool.Invocation) bool {
@@ -753,6 +783,8 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OutputSchema:                 run.OutputSchema,
 		DisableHostedImageGeneration: run.DisableHostedImageGeneration,
 		OnToolStarted:                run.StreamEvents.ToolStarted,
+		OnToolCompleted:              run.StreamEvents.ToolCompleted,
+		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 	})
 }
 
@@ -772,6 +804,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.Shell.Approval = r.ShellApproval
 		if run != nil {
 			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit
+			options.Shell.Validation.AdditionalPermissionsAllowed = run.ExecPermissionApprovals
 		}
 	}
 	options.UserInputResponder = r.UserInput
@@ -1096,13 +1129,11 @@ func resumeInputItems(ctx *execResumeContext) []any {
 }
 
 func resumePreviousResponseID(ctx *execResumeContext) string {
-	if ctx == nil || ctx.Record == nil {
-		return ""
-	}
-	if strings.TrimSpace(ctx.Record.Metadata.LastResponseID) != "" {
-		return strings.TrimSpace(ctx.Record.Metadata.LastResponseID)
-	}
-	return strings.TrimSpace(ctx.Record.Metadata.PreviousResponseID)
+	// Rust only uses previous_response_id for an incremental request on the
+	// same live WebSocket connection. A fresh-process resume reconstructs the
+	// complete normalized rollout history instead of referencing an old server
+	// response chain.
+	return ""
 }
 
 func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execResumeContext, error) {
@@ -1316,9 +1347,9 @@ func requestCWD(req *Request) string {
 	return "."
 }
 
-func execStartupInputItems(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) []any {
+func execStartupInputItems(req *Request, permissions *config.SandboxPermissionProfileResolution, approvalPolicy sandbox.AskForApproval, now time.Time) []any {
 	items := make([]any, 0, 2)
-	if item := developerMessageInputItem(execPermissionsInstructions(permissions)); item != nil {
+	if item := developerMessageInputItem(execPermissionsInstructions(permissions, approvalPolicy)); item != nil {
 		items = append(items, item)
 	}
 	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now)); item != nil {
@@ -1342,7 +1373,7 @@ func developerMessageInputItem(text string) any {
 	}
 }
 
-func execPermissionsInstructions(permissions *config.SandboxPermissionProfileResolution) string {
+func execPermissionsInstructions(permissions *config.SandboxPermissionProfileResolution, approvalPolicy sandbox.AskForApproval) string {
 	mode := sandboxPermissionProfileID(permissions)
 	if mode == "" {
 		mode = "default"
@@ -1362,7 +1393,16 @@ func execPermissionsInstructions(permissions *config.SandboxPermissionProfileRes
 	default:
 		detail = "Filesystem access follows the configured permission profile."
 	}
-	return fmt.Sprintf("<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `%s`: %s Network access is %s.\n</permissions instructions>", mode, detail, network)
+	approval := ""
+	if approvalPolicy == sandbox.ApprovalNever {
+		// Match Rust PermissionsInstructions: when approvals can never be
+		// requested, explicitly prevent the model from adding a per-command
+		// sandbox override. Without this instruction models commonly add
+		// require_escalated to network commands even when the active profile
+		// already grants network access, and the command is then rejected.
+		approval = "\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected."
+	}
+	return fmt.Sprintf("<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `%s`: %s Network access is %s.%s\n</permissions instructions>", mode, detail, network, approval)
 }
 
 func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) string {
@@ -1468,14 +1508,19 @@ func baseInstructionsForRequest(req *Request, cfg *config.Config) (string, error
 	return baseInstructionsForConfig(cfg)
 }
 
-func deterministicThreadID(prompt string) string {
-	sum := sha1.Sum([]byte(prompt))
-	return "thread-" + hex.EncodeToString(sum[:8])
+func newThreadID() string {
+	// Match Rust ThreadId::new(): fresh threads receive a UUIDv7. In
+	// particular, the ID must not be derived from the prompt because it is also
+	// used as the Responses prompt_cache_key and must not be shared by separate
+	// sessions that happen to start with identical text.
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.NewString()
 }
 
 func deterministicTurnID(prompt string) string {
-	sum := sha1.Sum([]byte("turn:" + prompt))
-	return "turn-" + hex.EncodeToString(sum[:8])
+	return "turn-" + uuid.NewString()
 }
 
 func removedFullAutoWarning(opts cli.ExecOptions) string {
@@ -2062,6 +2107,30 @@ func todoListIDFromPlanUpdateExecution(execution *turn.ToolExecutionResult) stri
 }
 
 func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
+	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
+		commands, _ := execution.Output.Data["nested_commands"].([]string)
+		outputs, _ := execution.Output.Data["nested_outputs"].([]string)
+		exitCodes, _ := execution.Output.Data["nested_exit_codes"].([]int)
+		events := make([]protocol.ThreadEvent, 0, len(commands)*2)
+		for index, command := range commands {
+			id := fmt.Sprintf("command-%s-%d", safeSessionItemID(execution.Invocation.CallID), index+1)
+			events = append(events, protocol.ItemStarted(protocol.CommandExecutionItem(id, command, "", nil, "in_progress")))
+			output := ""
+			if index < len(outputs) {
+				output = outputs[index]
+			}
+			exitCode := 0
+			if index < len(exitCodes) {
+				exitCode = exitCodes[index]
+			}
+			status := "completed"
+			if exitCode != 0 {
+				status = "failed"
+			}
+			events = append(events, protocol.ItemCompleted(protocol.CommandExecutionItem(id, command, output, &exitCode, status)))
+		}
+		return events
+	}
 	if isPlanUpdateExecution(execution) {
 		todoLists := &execTodoListState{}
 		events := todoLists.eventsForPlanUpdate(execution)
@@ -2090,6 +2159,9 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
 	}
 	if execution.Invocation.Payload.Kind == tool.PayloadToolSearch {
+		return nil
+	}
+	if execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
 		return nil
 	}
 	if isWriteStdinExecution(execution) {
@@ -2133,6 +2205,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 		return protocol.ItemCompleted(protocol.TodoListItem("todo-list-"+safeSessionItemID(execution.Invocation.CallID), items)), true
 	}
 	if execution.Invocation.Payload.Kind == tool.PayloadToolSearch {
+		return protocol.ThreadEvent{}, false
+	}
+	if execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
 		return protocol.ThreadEvent{}, false
 	}
 	if isFileChangeExecution(execution) {
@@ -2206,8 +2281,17 @@ func isCommandExecution(execution *turn.ToolExecutionResult) bool {
 	if _, ok := intFromAny(execution.Output.Data["exit_code"]); ok {
 		return true
 	}
-	_, ok := intFromAny(execution.Output.Data["process_id"])
-	return ok
+	if _, ok := intFromAny(execution.Output.Data["process_id"]); ok {
+		return true
+	}
+	return !execution.Output.Success && strings.Contains(strings.ToLower(outputBodyText(execution.Output)), "approval policy is never")
+}
+
+func outputBodyText(output *tool.Output) string {
+	if output == nil {
+		return ""
+	}
+	return output.Body
 }
 
 func isWriteStdinExecution(execution *turn.ToolExecutionResult) bool {
@@ -3867,7 +3951,6 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 			for i := range response.Items {
 				if isToolAgentItemForSession(&response.Items[i]) {
 					toolItemCount++
-					continue
 				}
 				item := sessionItemFromAgentItem(turnID, fallbackAssistantID, response.ResponseID, &response.Items[i], result.TimingProfile, createdAt, responseExtraMetadata, imageContext)
 				if item.ID != "" {
@@ -3891,11 +3974,6 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 			})
 		}
 		toolExecutions := execToolExecutionsForResponse(result.ToolExecutions, executionIndex, toolItemCount)
-		for i := range toolExecutions {
-			if item, ok := sessionItemForToolCall(turnID, suffix, &toolExecutions[i], createdAt, responseExtraMetadata); ok {
-				items = append(items, item)
-			}
-		}
 		for i := range toolExecutions {
 			if item, ok := sessionItemForToolOutput(turnID, suffix, &toolExecutions[i], createdAt, responseExtraMetadata); ok {
 				items = append(items, item)
@@ -3984,6 +4062,11 @@ func sessionItemForToolOutput(turnID string, suffix string, execution *turn.Tool
 	callID := execToolExecutionCallID(execution, createdAt)
 	outputMetadata := addTimingMetadata(sessionMetadata(turnID, extraMetadata), execution.StartedAt, execution.FinishedAt)
 	outputMetadata["toolName"] = execution.Invocation.ToolName.Key()
+	// Rust persists the concrete ResponseItem variant for both sides of a tool
+	// exchange. Preserve the payload kind on the output too, otherwise a
+	// tool-search output is reconstructed as a function_call_output, discarded
+	// as an orphan, and replaced with a synthetic empty search result on resume.
+	outputMetadata["payloadKind"] = string(execution.Invocation.Payload.Kind)
 	outputMetadata["success"] = execution.Output.Success
 	outputMetadata["callId"] = callID
 	if strings.TrimSpace(execution.Output.Error) != "" {
@@ -3994,7 +4077,7 @@ func sessionItemForToolOutput(turnID string, suffix string, execution *turn.Tool
 		outputCreatedAt = createdAt
 	}
 	return session.Item{
-		ID:        "tool-output-" + suffix + "-" + safeSessionItemID(callID),
+		ID:        newToolOutputResponseItemID(execution.Invocation.Payload.Kind),
 		Type:      "tool_output",
 		CallID:    callID,
 		Text:      execution.Output.Body,
@@ -4002,6 +4085,20 @@ func sessionItemForToolOutput(turnID string, suffix string, execution *turn.Tool
 		CreatedAt: outputCreatedAt,
 		Metadata:  outputMetadata,
 	}, true
+}
+
+func newToolOutputResponseItemID(kind tool.PayloadKind) string {
+	prefix := "fco"
+	switch kind {
+	case tool.PayloadCustom:
+		prefix = "ctco"
+	case tool.PayloadToolSearch:
+		prefix = "tso"
+	}
+	if id, err := uuid.NewV7(); err == nil {
+		return prefix + "_" + id.String()
+	}
+	return prefix + "_" + uuid.NewString()
 }
 
 func execToolExecutionCallID(execution *turn.ToolExecutionResult, createdAt time.Time) string {

@@ -36,7 +36,111 @@ func InputItemsFromItems(items []Item, options *HistoryBuildOptions) []any {
 			out = append(out, input)
 		}
 	}
+	return normalizeHistoryToolPairs(out)
+}
+
+// normalizeHistoryToolPairs mirrors Rust ConversationHistory normalization:
+// orphan client tool outputs are removed, while calls interrupted before an
+// output was persisted receive a synthetic "aborted" output immediately after
+// the call. User and assistant messages are never removed by this pass.
+func normalizeHistoryToolPairs(items []any) []any {
+	functionCalls := map[string]bool{}
+	customCalls := map[string]bool{}
+	toolSearchCalls := map[string]bool{}
+	functionOutputs := map[string]bool{}
+	customOutputs := map[string]bool{}
+	toolSearchOutputs := map[string]bool{}
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		callID := historyString(item["call_id"])
+		switch historyString(item["type"]) {
+		case "function_call", "local_shell_call":
+			if callID != "" {
+				functionCalls[callID] = true
+			}
+		case "custom_tool_call":
+			if callID != "" {
+				customCalls[callID] = true
+			}
+		case "tool_search_call":
+			if callID != "" {
+				toolSearchCalls[callID] = true
+			}
+		case "function_call_output":
+			if callID != "" {
+				functionOutputs[callID] = true
+			}
+		case "custom_tool_call_output":
+			if callID != "" {
+				customOutputs[callID] = true
+			}
+		case "tool_search_output":
+			if callID != "" {
+				toolSearchOutputs[callID] = true
+			}
+		}
+	}
+
+	cleaned := make([]any, 0, len(items))
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok {
+			cleaned = append(cleaned, value)
+			continue
+		}
+		callID := historyString(item["call_id"])
+		switch historyString(item["type"]) {
+		case "function_call_output":
+			if callID == "" || !functionCalls[callID] {
+				continue
+			}
+		case "custom_tool_call_output":
+			if callID == "" || !customCalls[callID] {
+				continue
+			}
+		case "tool_search_output":
+			if historyString(item["execution"]) != "server" && callID != "" && !toolSearchCalls[callID] {
+				continue
+			}
+		}
+		cleaned = append(cleaned, value)
+	}
+
+	out := make([]any, 0, len(cleaned)+4)
+	for _, value := range cleaned {
+		out = append(out, value)
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		callID := historyString(item["call_id"])
+		if callID == "" {
+			continue
+		}
+		switch historyString(item["type"]) {
+		case "function_call", "local_shell_call":
+			if !functionOutputs[callID] {
+				out = append(out, map[string]any{"type": "function_call_output", "call_id": callID, "output": "aborted"})
+			}
+		case "custom_tool_call":
+			if !customOutputs[callID] {
+				out = append(out, map[string]any{"type": "custom_tool_call_output", "call_id": callID, "output": "aborted"})
+			}
+		case "tool_search_call":
+			if !toolSearchOutputs[callID] {
+				out = append(out, map[string]any{"type": "tool_search_output", "call_id": callID, "status": "completed", "execution": "client", "tools": []any{}})
+			}
+		}
+	}
 	return out
+}
+
+func historyString(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
 }
 
 func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
@@ -205,6 +309,7 @@ func toolOutputInputItem(item *Item) map[string]any {
 		}
 	}
 	out := map[string]any{
+		"id":      item.ID,
 		"type":    outputType,
 		"call_id": callID,
 	}

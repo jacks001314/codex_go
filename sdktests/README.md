@@ -10,6 +10,18 @@ Run a minimal live smoke:
 npm --prefix sdktests run test:smoke -- --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
 ```
 
+Platform-specific shell commands live in `src/platform/linux.ts` and
+`src/platform/windows.ts`. Common prompts, schemas, and observable contracts
+remain in `src/scenarios.ts`. The live runner records the selected platform
+suite and scenario variant in `run-manifest.json`; an explicit mismatched
+`--platform linux|windows` is rejected.
+
+Linux example:
+
+```sh
+npm --prefix sdktests run test:parity -- --platform linux --scenario workspace-structured-read --rust /usr/local/bin/codex --go /path/to/codex-go --sdk /path/to/codex/sdk/typescript
+```
+
 Replay the latest saved artifact without another model call:
 
 ```powershell

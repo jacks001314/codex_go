@@ -176,6 +176,47 @@ func TestToolResponseItemMarshalRustRequiredFields(t *testing.T) {
 	}
 }
 
+func TestToolResponseFromOutputPrefersFormattedBodyLikeRust(t *testing.T) {
+	invocation := &tool.Invocation{
+		CallID:   "call-shell",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction},
+	}
+	response := ToolResponseFromOutput(invocation, &tool.Output{
+		Success: true,
+		Body:    "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nhello",
+		Data:    map[string]any{"output": "hello"},
+	})
+	if response == nil || response.Output == nil || response.Output.Text() != "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nhello" {
+		t.Fatalf("response = %#v", response)
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	items, ok := payload["output"].([]any)
+	if !ok || len(items) != 1 || items[0].(map[string]any)["type"] != "input_text" {
+		t.Fatalf("wire payload = %#v", payload)
+	}
+}
+
+func TestToolResponseFromOutputStillPrefersContentItems(t *testing.T) {
+	items := []FunctionCallOutputContentItem{{Type: "input_text", Text: "structured"}}
+	invocation := &tool.Invocation{CallID: "call-media", Payload: tool.Payload{Kind: tool.PayloadFunction}}
+	response := ToolResponseFromOutput(invocation, &tool.Output{
+		Success: true,
+		Body:    "fallback",
+		Data:    map[string]any{"content_items": items},
+	})
+	if response == nil || response.Output == nil || response.Output.Text() != "structured" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestToolDispatcherRespondToModelBecomesFailedOutput(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("reject")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {

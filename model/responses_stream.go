@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -158,11 +159,18 @@ type responsesStreamAccumulator struct {
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	maxRetries := r.streamMaxRetries()
 	for attempt := uint64(0); ; attempt++ {
+		fields := responsesRequestDiagnosticFields(request, apiRequest)
+		fields["stream_attempt"] = attempt + 1
+		fields["stream_max_retries"] = maxRetries
+		responsesDiagnostic("sampling.start", fields)
 		response, err := r.runStreamingOnce(ctx, request, apiRequest)
 		if err == nil {
+			responsesDiagnostic("sampling.completed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "response_id": response.ResponseID})
 			return response, nil
 		}
-		if attempt >= maxRetries || !isRetryableResponsesStreamError(err) {
+		retryable := isRetryableResponsesStreamError(err)
+		responsesDiagnostic("sampling.failed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "error": err.Error(), "error_kind": responsesDiagnosticErrorKind(err), "retryable": retryable, "retry_budget_remaining": attempt < maxRetries})
+		if attempt >= maxRetries || !retryable {
 			return nil, err
 		}
 		delay, requested := codexapi.RetryDelayInfo(err)
@@ -206,6 +214,14 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 		return nil, err
 	}
 	defer httpResponse.Body.Close()
+	responsesDiagnostic("sampling.headers", map[string]any{
+		"thread_id":    request.ThreadID,
+		"turn_id":      request.TurnID,
+		"http_status":  httpResponse.StatusCode,
+		"request_id":   responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+		"trace_id":     responseHeaderValue(httpResponse.Header, "x-trace-id"),
+		"server_model": responseHeaderValue(httpResponse.Header, responsesOpenAIModelHeader, responsesXOpenAIModelHeader),
+	})
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, 16<<20))
 		if readErr != nil {
@@ -224,15 +240,21 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 }
 
 func isRetryableResponsesStreamError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errResponsesStreamFailed) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var apiError *codexapi.APIError
 	if errors.As(err, &apiError) {
 		details := apiError.Details()
-		// Context exhaustion is deterministic for the current input. Retrying the
-		// same request cannot change the token count and only duplicates work.
-		return details.Kind != codexapi.ErrorContextWindowExceeded && details.Status >= http.StatusInternalServerError
+		switch details.Kind {
+		case codexapi.ErrorRetryable, codexapi.ErrorServerOverloaded:
+			return true
+		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
+			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest, codexapi.ErrorCyberPolicy:
+			return false
+		default:
+			return details.Status >= http.StatusInternalServerError
+		}
 	}
 	var apiErr *ResponsesAPIError
 	if errors.As(err, &apiErr) {
@@ -1593,17 +1615,58 @@ func responseFailedError(data []byte) error {
 	if errBody == nil {
 		errBody = payload.Response.Error
 	}
-	if responseErrorCode(errBody) == "context_length_exceeded" {
+	code := responseErrorCode(errBody)
+	message := ""
+	if errBody != nil {
+		message = strings.TrimSpace(errBody.Message)
+	}
+	responsesDiagnostic("response.failed", map[string]any{"code": code, "message": message})
+	switch code {
+	case "context_length_exceeded":
 		return &codexapi.APIError{
 			Kind:    codexapi.ErrorContextWindowExceeded,
 			Status:  http.StatusBadRequest,
-			Message: strings.TrimSpace(errBody.Message),
+			Message: message,
 		}
+	case "insufficient_quota":
+		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Message: message}
+	case "usage_not_included":
+		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
+	case "cyber_policy":
+		return &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy, Message: message}
+	case "invalid_prompt", "bio_policy":
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
+	case "server_is_overloaded", "slow_down":
+		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
 	}
-	if errBody != nil && strings.TrimSpace(errBody.Message) != "" {
-		return fmt.Errorf("%w: %s", errResponsesStreamFailed, strings.TrimSpace(errBody.Message))
+	if errBody != nil {
+		retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
+		if delay, ok := responseFailedRetryDelay(code, message); ok {
+			return retryable.WithRetryDelay(delay)
+		}
+		return retryable
 	}
 	return errResponsesStreamFailed
+}
+
+var responseFailedRetryDelayPattern = regexp.MustCompile(`(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)`)
+
+func responseFailedRetryDelay(code, message string) (time.Duration, bool) {
+	if code != "rate_limit_exceeded" {
+		return 0, false
+	}
+	matches := responseFailedRetryDelayPattern.FindStringSubmatch(message)
+	if len(matches) != 3 {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	if strings.EqualFold(matches[2], "ms") {
+		return time.Duration(value * float64(time.Millisecond)), true
+	}
+	return time.Duration(value * float64(time.Second)), true
 }
 
 func responseErrorCode(errBody *responsesAgentAPIErrorBody) string {

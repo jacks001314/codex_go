@@ -2546,8 +2546,10 @@ func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse
 		return
 	}
 	originator := stringPtrValue(params.ServiceName)
+	var clientInfo ClientInfo
 	if strings.TrimSpace(originator) == "" {
 		if info, ok := r.connectionClientInfo(request.normalizedConnectionID()); ok {
+			clientInfo = info
 			originator = strings.TrimSpace(info.Name)
 		}
 	}
@@ -2559,6 +2561,15 @@ func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse
 		return
 	}
 	record.Metadata.Originator = strings.TrimSpace(originator)
+	// Rust attributes threads started by the VS Code client to `vscode` and
+	// reports the running CLI version on the thread. The extension uses these
+	// fields when grouping and diagnosing sessions.
+	if strings.EqualFold(strings.TrimSpace(clientInfo.Name), "codex_vscode") || strings.EqualFold(strings.TrimSpace(clientInfo.Name), "vscode") {
+		record.Metadata.Source = string(SessionSourceVsCode)
+		response.Thread.Source = SessionSourceVsCode
+	}
+	record.Metadata.CLIVersion = appServerVersion()
+	response.Thread.CLIVersion = record.Metadata.CLIVersion
 	_ = r.runtimeSaveThreadRecord(record)
 }
 
@@ -2579,6 +2590,9 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
+	response.ApprovalPolicy = params.ApprovalPolicy
+	response.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
+	response.Sandbox = threadStartResponseSandbox(params.Sandbox)
 	cwd := r.effectiveThreadStartCWD(&params)
 	runtimeWorkspaceRoots := threadRuntimeWorkspaceRoots(cwd, params.RuntimeWorkspaceRoots)
 	if modelID != "" {
@@ -2651,6 +2665,13 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return
 	}
+}
+
+func threadStartResponseSandbox(value any) any {
+	if text, ok := value.(string); ok {
+		return threadSettingsSandboxPolicy(text)
+	}
+	return value
 }
 
 func (r *RuntimeRouter) effectiveThreadStartCWD(params *ThreadStartParams) string {
@@ -3981,6 +4002,16 @@ func turnStartSettingsUpdateParams(params *turn.TurnStartParams) (*SettingsUpdat
 	}
 	update := &SettingsUpdateParams{ThreadID: strings.TrimSpace(params.ThreadID)}
 	hasUpdate := false
+	if policy, ok := parseTurnApprovalPolicy(params.ApprovalPolicy); ok {
+		value := string(policy)
+		update.ApprovalPolicy = &value
+		hasUpdate = true
+	}
+	if sandboxPolicy, err := parseTurnSandboxPolicy(params.SandboxPolicy); err == nil && sandboxPolicy != nil {
+		value := string(sandboxPolicy.Kind)
+		update.SandboxPolicy = &value
+		hasUpdate = true
+	}
 	if cwd := strings.TrimSpace(params.CWD); cwd != "" {
 		update.CWD = &cwd
 		hasUpdate = true
@@ -4330,7 +4361,9 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 	}
 	if r.hasRuntimeThreadStore() {
 		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
-			r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
+			// Match Rust app-server ordering: acknowledge turn/interrupt before
+			// publishing the interrupted terminal lifecycle notifications.
+			go r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
 		}
 	}
 	return response, nil
@@ -8109,6 +8142,9 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options := turn.DefaultToolRegistryOptions(cwd)
 	options.UnifiedExec = r.services.UnifiedExec
 	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
+	if options.Shell != nil && cfg != nil {
+		options.Shell.Validation.AdditionalPermissionsAllowed = features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals")
+	}
 	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
 		options.Shell.Validation.PermissionProfile = permissionProfile.Profile

@@ -31,6 +31,8 @@ import (
 	"codex_go/session"
 	"codex_go/tool"
 	"codex_go/turn"
+
+	"github.com/google/uuid"
 )
 
 type execTerminalBuffer struct {
@@ -724,6 +726,17 @@ func TestRunAddsStartupEnvironmentContextInputItems(t *testing.T) {
 	}
 }
 
+func TestExecPermissionsInstructionsForNeverForbidsSandboxOverridesLikeRust(t *testing.T) {
+	never := execPermissionsInstructions(nil, sandbox.ApprovalNever)
+	if !strings.Contains(never, "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.") {
+		t.Fatalf("never permissions instructions = %q", never)
+	}
+	onRequest := execPermissionsInstructions(nil, sandbox.ApprovalOnRequest)
+	if strings.Contains(onRequest, "Do not provide the `sandbox_permissions`") {
+		t.Fatalf("on-request permissions instructions unexpectedly forbid overrides: %q", onRequest)
+	}
+}
+
 func TestRunIncludesAdditionalInstructionsAndInputItems(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -1275,6 +1288,35 @@ too_long = "` + strings.Repeat("x", 513) + `"
 	}
 }
 
+func TestFreshRunsWithSamePromptUseDistinctThreadAndPromptCacheKeys(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	var firstThreadID, firstCacheKey string
+	for run := 0; run < 2; run++ {
+		agent := &recordingAgent{message: "ok"}
+		runner := NewRunner(home)
+		runner.Agent = agent
+		var stdout, stderr bytes.Buffer
+		result, err := runner.Run(Request{Exec: cli.ExecOptions{Prompt: "same prompt"}}, strings.NewReader(""), &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("run %d returned error: %v", run, err)
+		}
+		if _, err := uuid.Parse(result.ThreadID); err != nil {
+			t.Fatalf("run %d ThreadID = %q, want UUID: %v", run, result.ThreadID, err)
+		}
+		if agent.request.PromptCacheKey != result.ThreadID {
+			t.Fatalf("run %d PromptCacheKey = %q, want %q", run, agent.request.PromptCacheKey, result.ThreadID)
+		}
+		if run == 0 {
+			firstThreadID, firstCacheKey = result.ThreadID, agent.request.PromptCacheKey
+		} else if result.ThreadID == firstThreadID || agent.request.PromptCacheKey == firstCacheKey {
+			t.Fatalf("fresh runs reused identity: first thread/cache=%q/%q second=%q/%q", firstThreadID, firstCacheKey, result.ThreadID, agent.request.PromptCacheKey)
+		}
+	}
+}
+
 func TestRunWarnsForRemovedFullAuto(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -1528,8 +1570,8 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 	if !agentRequestInputItemsHaveText(agent.request, "old user") || !agentRequestInputItemsHaveText(agent.request, "old answer") {
 		t.Fatalf("agent input items = %#v", agent.request.InputItems)
 	}
-	if agent.request.PreviousResponseID != "resp-last" {
-		t.Fatalf("PreviousResponseID = %q, want latest response id", agent.request.PreviousResponseID)
+	if agent.request.PreviousResponseID != "" {
+		t.Fatalf("PreviousResponseID = %q, want empty for fresh-process resume like Rust", agent.request.PreviousResponseID)
 	}
 	record := loadSessionRecord(t, home, "thread-existing")
 	if len(record.Items) != 4 {
@@ -1551,6 +1593,40 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 	}
 	if len(lines) < 3 {
 		t.Fatalf("rollout lines = %+v", lines)
+	}
+}
+
+func TestResumeInputItemsKeepsLocalHistoryWithResponseID(t *testing.T) {
+	ctx := &execResumeContext{Record: &session.Record{
+		Metadata: session.Metadata{CWD: t.TempDir(), LastResponseID: "resp-last"},
+		Items: []session.Item{
+			{ID: "old-user", Type: "message", Role: "user", Text: "云南天气"},
+			{ID: "old-assistant", Type: "agent_message", Role: "assistant", Text: "云南天气回答"},
+		},
+	}}
+	items := resumeInputItems(ctx)
+	request := &model.AgentRequest{InputItems: items}
+	if !agentRequestInputItemsHaveText(request, "云南天气") || !agentRequestInputItemsHaveText(request, "云南天气回答") {
+		t.Fatalf("resume input items = %#v, want local history retained", items)
+	}
+}
+
+func TestSessionItemForToolOutputPreservesToolSearchPayloadKind(t *testing.T) {
+	now := fixedExecTime()
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "search-1",
+			ToolName: tool.PlainName("tool_search"),
+			Payload:  tool.Payload{Kind: tool.PayloadToolSearch},
+		},
+		Output: &tool.Output{Body: `{"tools":[]}`, Success: true},
+	}
+	item, ok := sessionItemForToolOutput("turn-1", "1", execution, now, nil)
+	if !ok {
+		t.Fatal("sessionItemForToolOutput() = false")
+	}
+	if item.Metadata["payloadKind"] != string(tool.PayloadToolSearch) {
+		t.Fatalf("metadata = %#v", item.Metadata)
 	}
 }
 
@@ -2060,7 +2136,10 @@ func TestInteractiveExplicitOnRequestReachesShellApproval(t *testing.T) {
 	if policy != sandbox.ApprovalOnRequest {
 		t.Fatalf("effective approval policy = %q, want on-request", policy)
 	}
-	router, err := runner.toolRouterForRequest(req, &agentRunConfig{ApprovalPolicy: policy})
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+		ApprovalPolicy:          policy,
+		ExecPermissionApprovals: true,
+	})
 	if err != nil {
 		t.Fatalf("toolRouterForRequest returned error: %v", err)
 	}
@@ -2436,6 +2515,9 @@ func TestRunPersistsToolExecutions(t *testing.T) {
 	if output.Text != "tool says hi" || output.Metadata["toolName"] != "echo" || output.Metadata["success"] != true {
 		t.Fatalf("tool output item = %#v", output)
 	}
+	if !strings.HasPrefix(output.ID, "fco_") {
+		t.Fatalf("tool output response item id = %q", output.ID)
+	}
 	if output.Metadata["startedAtMs"] == nil || output.Metadata["completedAtMs"] == nil || output.Metadata["durationMs"] == nil {
 		t.Fatalf("tool timing metadata missing = %#v", output.Metadata)
 	}
@@ -2501,8 +2583,8 @@ func TestSessionItemsForTurnPersistsAllModelResponses(t *testing.T) {
 	if final == nil || final.ResponseID != "resp-final" {
 		t.Fatalf("final item = %#v", final)
 	}
-	if execSessionItemByID(items, "call-1") != nil {
-		t.Fatalf("tool call response item should be represented by tool execution, items = %#v", items)
+	if call := execSessionItemByID(items, "call-1"); call == nil || call.Raw == nil || call.ResponseID != "resp-first" {
+		t.Fatalf("original tool call response item was not preserved, items = %#v", items)
 	}
 	reasoningIndex := execSessionItemIndexByID(items, "reasoning-1")
 	call1Index := execSessionItemIndexByTypeAndCallID(items, "function_call", "call-1")
@@ -2767,6 +2849,96 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	}
 	if execEventItemIndex(events, "tool-call-call-apply") >= 0 || execEventItemIndex(events, "tool-output-call-apply") >= 0 {
 		t.Fatalf("file change should not emit generic apply_patch tool events: %#v", events)
+	}
+}
+
+func TestExecCommentaryCompletesBeforeToolLifecycleLikeRust(t *testing.T) {
+	sink := newExecEventSink(nil, false)
+	collector := &execStreamEventCollector{sink: sink}
+	response := &model.AgentResponse{Items: []model.AgentItem{
+		{ID: "commentary-1", Type: "agent_message", Text: "I will run the command."},
+		{ID: "call-1", Type: "function_call", Name: tool.DefaultExecCommandToolName, CallID: "call-1"},
+	}}
+	collector.AssistantMessage(response, 0, true)
+	collector.ToolStarted(context.Background(), &tool.Invocation{
+		CallID: "call-1", ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"printf ok"}`},
+	}, time.Now())
+	events := sink.Events()
+	if len(events) != 2 || events[0].Type != "item.completed" || events[0].Item == nil || events[0].Item.ID != "commentary-1" ||
+		events[1].Type != "item.started" || events[1].Item == nil || events[1].Item.ID != "call-1" {
+		t.Fatalf("event order = %#v, want commentary completed before command started", events)
+	}
+}
+
+func TestExecToolCompletesBeforeNextCommentaryLikeRust(t *testing.T) {
+	sink := newExecEventSink(nil, false)
+	collector := &execStreamEventCollector{sink: sink}
+	invocation := &tool.Invocation{
+		CallID: "call-1", ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"printf ok"}`},
+	}
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output:     &tool.Output{CallID: "call-1", ToolName: tool.PlainName(tool.DefaultExecCommandToolName), Success: true, Body: "ok", Data: map[string]any{"exit_code": 0}},
+	})
+	collector.AssistantMessage(&model.AgentResponse{Items: []model.AgentItem{{
+		ID: "commentary-2", Type: "agent_message", Text: "I will run the next command.",
+	}}}, 1, true)
+	events := sink.Events()
+	if len(events) != 3 || events[0].Type != "item.started" || events[1].Type != "item.completed" ||
+		events[1].Item == nil || events[1].Item.ID != "call-1" || events[2].Type != "item.completed" ||
+		events[2].Item == nil || events[2].Item.ID != "commentary-2" {
+		t.Fatalf("event order = %#v, want command lifecycle closed before next commentary", events)
+	}
+}
+
+func TestExecRejectedCommandStillClosesCommandLifecycle(t *testing.T) {
+	sink := newExecEventSink(nil, false)
+	collector := &execStreamEventCollector{sink: sink}
+	invocation := &tool.Invocation{
+		CallID: "call-rejected", ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"curl https://example.com","sandbox_permissions":"with_additional_permissions"}`},
+	}
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{
+			CallID: "call-rejected", ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+			Success: false, Body: "approval policy is never; reject command",
+		},
+	})
+	events := sink.Events()
+	if len(events) != 2 || events[0].Type != "item.started" || events[1].Type != "item.completed" ||
+		events[0].Item == nil || events[1].Item == nil || events[0].Item.ID != "call-rejected" ||
+		events[1].Item.ID != "call-rejected" || events[1].Item.Type != "command_execution" ||
+		events[1].Item.Status != "failed" {
+		t.Fatalf("rejected command lifecycle = %#v, want one command started then failed", events)
+	}
+}
+
+func TestExecCompletedApplyPatchEmitsFileChangeLifecycleInOrder(t *testing.T) {
+	sink := newExecEventSink(nil, false)
+	collector := &execStreamEventCollector{sink: sink}
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID: "patch-1", ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+			Payload: tool.Payload{Kind: tool.PayloadCustom, Input: "*** Begin Patch\n*** Add File: quicksort.java\n+class quicksort {}\n*** End Patch"},
+		},
+		Output: &tool.Output{
+			CallID: "patch-1", ToolName: tool.PlainName(tool.DefaultApplyPatchToolName), Success: true,
+			Data: map[string]any{
+				"fileChange": true, "status": "completed",
+				"changes": []map[string]any{{"path": "quicksort.java", "kind": map[string]any{"type": "add"}}},
+			},
+		},
+	})
+	events := sink.Events()
+	if len(events) != 2 || events[0].Type != "item.started" || events[1].Type != "item.completed" ||
+		events[0].Item == nil || events[1].Item == nil || events[0].Item.Type != "file_change" ||
+		events[0].Item.ID != events[1].Item.ID {
+		t.Fatalf("file change lifecycle = %#v, want started then completed for one item", events)
 	}
 }
 
@@ -3886,7 +4058,11 @@ func TestRunPersistsNewThreadBeforeInterruptedTurnCompletes(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunContext error = %v, want context.Canceled", err)
 	}
-	threadID := deterministicThreadID("interrupt me")
+	var started protocol.ThreadEvent
+	if err := json.Unmarshal(bytes.Split(bytes.TrimSpace(stdout.Bytes()), []byte("\n"))[0], &started); err != nil {
+		t.Fatalf("decode thread.started: %v", err)
+	}
+	threadID := started.ThreadID
 	record, readErr := session.NewStore(filepath.Join(home, "sessions")).Read(session.ThreadID(threadID), true, true)
 	if readErr != nil {
 		t.Fatalf("interrupted thread was not persisted: %v", readErr)

@@ -1268,6 +1268,32 @@ func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
 	}
 }
 
+func TestModelRendersSuccessfulFileChangeLifecycleOnce(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `/work`})
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	changes := []protocol.FileChange{{Path: `/work/quicksort.java`, Kind: "add", Diff: "+class quicksort {}\n"}}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.FileChangeItem("patch-1", changes, "in_progress"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItem("patch-1", changes, "completed"))})
+
+	view := utils.StripANSI(model.View())
+	if got := strings.Count(view, "Added quicksort.java"); got != 1 {
+		t.Fatalf("successful file change rendered %d times, want 1:\n%s", got, view)
+	}
+}
+
+func TestModelRendersCompletedOnlyFileChange(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `/work`})
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	changes := []protocol.FileChange{{Path: `/work/quicksort.java`, Kind: "add", Diff: "+class quicksort {}\n"}}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItem("patch-1", changes, "completed"))})
+
+	if view := utils.StripANSI(model.View()); strings.Count(view, "Added quicksort.java") != 1 {
+		t.Fatalf("completed-only file change missing or duplicated:\n%s", view)
+	}
+}
+
 func TestModelStreamsToolInputIntoHistoryCell(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})

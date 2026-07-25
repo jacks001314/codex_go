@@ -1473,16 +1473,18 @@ func TestResponsesAgentRunnerSendsStoreAndMetadataFieldsWithoutHTTPPreviousRespo
 	}
 }
 
-func TestResponsesAgentRunnerStripsInputItemIDsUnlessEnabledOrStore(t *testing.T) {
+func TestResponsesAgentRunnerPreparesInputItemIDsLikeRust(t *testing.T) {
 	cases := []struct {
 		name           string
 		store          bool
 		itemIDsEnabled bool
+		inputID        string
 		wantID         bool
 	}{
-		{name: "default strips ids"},
-		{name: "item ids enabled keeps ids", itemIDsEnabled: true, wantID: true},
-		{name: "store keeps ids", store: true, wantID: true},
+		{name: "default strips legacy id", inputID: "legacy-id"},
+		{name: "default keeps responses prefixed id", inputID: "msg_server", wantID: true},
+		{name: "item ids enabled keeps legacy id", inputID: "legacy-id", itemIDsEnabled: true, wantID: true},
+		{name: "store keeps legacy id", inputID: "legacy-id", store: true, wantID: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1504,7 +1506,7 @@ func TestResponsesAgentRunnerStripsInputItemIDsUnlessEnabledOrStore(t *testing.T
 				Store:          tc.store,
 				ItemIDsEnabled: tc.itemIDsEnabled,
 				InputItems: []any{&AgentItem{
-					ID:   "msg-old",
+					ID:   tc.inputID,
 					Type: "agent_message",
 					Text: "old",
 				}},
@@ -2217,13 +2219,21 @@ func TestResponsesAgentRunnerRetriesDroppedSSEStreamLikeRust(t *testing.T) {
 	}
 }
 
-func TestResponsesAgentRunnerDoesNotRetryResponseFailed(t *testing.T) {
+func TestResponsesAgentRunnerRetriesTemporaryResponseFailedLikeRust(t *testing.T) {
 	var attempts atomic.Int64
+	var retryEvents []*ResponsesStreamEvent
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
+		attempt := attempts.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			_, _ = w.Write([]byte(responsesSSE(
+				`{"type":"response.failed","response":{"id":"resp-1","error":{"code":"upstream_unavailable","message":"Upstream service temporarily unavailable"}}}`,
+			)))
+			return
+		}
 		_, _ = w.Write([]byte(responsesSSE(
-			`{"type":"response.failed","response":{"id":"resp-1","error":{"code":"invalid_request","message":"bad request"}}}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"recovered"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-2"}}`,
 		)))
 	}))
 	defer server.Close()
@@ -2234,13 +2244,49 @@ func TestResponsesAgentRunnerDoesNotRetryResponseFailed(t *testing.T) {
 			StreamMaxRetries: 2,
 		},
 		Stream: true,
+		StreamHandler: func(event *ResponsesStreamEvent) {
+			if event.Kind == ResponsesStreamEventRetrying {
+				retryEvents = append(retryEvents, event)
+			}
+		},
 	})
-	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
-	if err == nil || !strings.Contains(err.Error(), "bad request") {
-		t.Fatalf("Run() error = %v", err)
+	response, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err != nil || response == nil || response.Message != "recovered" {
+		t.Fatalf("response=%#v error=%v", response, err)
 	}
-	if attempts.Load() != 1 {
-		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	if attempts.Load() != 2 || len(retryEvents) != 1 || retryEvents[0].RetryAttempt != 1 {
+		t.Fatalf("attempts=%d retryEvents=%#v", attempts.Load(), retryEvents)
+	}
+}
+
+func TestResponsesAgentRunnerDoesNotRetryFatalResponseFailedLikeRust(t *testing.T) {
+	for _, code := range []string{"context_length_exceeded", "insufficient_quota", "usage_not_included", "cyber_policy", "invalid_prompt", "bio_policy"} {
+		t.Run(code, func(t *testing.T) {
+			var attempts atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(responsesSSE(fmt.Sprintf(
+					`{"type":"response.failed","response":{"id":"resp-1","error":{"code":%q,"message":"fatal"}}}`,
+					code,
+				))))
+			}))
+			defer server.Close()
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL + "/v1", StreamMaxRetries: 2}, Stream: true})
+			if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"}); err == nil {
+				t.Fatal("Run() error = nil")
+			}
+			if attempts.Load() != 1 {
+				t.Fatalf("attempts = %d, want 1", attempts.Load())
+			}
+		})
+	}
+}
+
+func TestResponseFailedRateLimitRetryDelayLikeRust(t *testing.T) {
+	err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Please try again in 11.054s."}}}`))
+	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay != 11054*time.Millisecond {
+		t.Fatalf("retry delay = %v, %t", delay, ok)
 	}
 }
 

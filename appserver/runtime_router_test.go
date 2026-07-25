@@ -11519,16 +11519,19 @@ func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *tes
 	modelID, _ := modelWithServiceTierForRuntimeTest(t)
 	effort := "low"
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Prompt:   "hello",
-		Model:    modelID,
-		Effort:   &effort,
+		ThreadID:       threadID,
+		Prompt:         "hello",
+		Model:          modelID,
+		Effort:         &effort,
+		ApprovalPolicy: string(sandbox.ApprovalNever),
+		SandboxPolicy:  sandbox.NewReadOnlyPolicy(),
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	updated := lastThreadSettingsNotification(t, sink, threadID)
-	if updated.ThreadSettings.Model != modelID || updated.ThreadSettings.Effort == nil || *updated.ThreadSettings.Effort != effort {
+	if updated.ThreadSettings.Model != modelID || updated.ThreadSettings.Effort == nil || *updated.ThreadSettings.Effort != effort ||
+		updated.ThreadSettings.ApprovalPolicy != string(sandbox.ApprovalNever) || updated.ThreadSettings.SandboxPolicy != string(sandbox.SandboxReadOnly) {
 		t.Fatalf("thread/settings/updated = %+v", updated)
 	}
 	firstRequest := waitForRuntimeAgentRequest(t, agent)

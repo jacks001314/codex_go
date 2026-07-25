@@ -36,7 +36,7 @@ var Registry = []Spec{
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
 	{Key: "js_repl", Stage: StageRemoved},
-	{Key: "code_mode", Stage: StageUnderDevelopment},
+	{Key: "code_mode", Stage: StageUnderDevelopment, DefaultEnabled: true},
 	{Key: "code_mode_host", Stage: StageUnderDevelopment},
 	{Key: "code_mode_only", Stage: StageUnderDevelopment},
 	{Key: "js_repl_tools_only", Stage: StageRemoved},

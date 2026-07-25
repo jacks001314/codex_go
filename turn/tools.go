@@ -47,6 +47,7 @@ type ToolRegistryOptions struct {
 	EnableCore            bool
 	EnableShell           bool
 	EnableUnifiedExec     bool
+	EnableCodeMode        bool
 	EnableApplyPatch      bool
 	EnableMCP             bool
 	EnableAgents          bool
@@ -64,7 +65,9 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 	return &ToolRegistryOptions{
 		Shell: &tool.ShellExecutorOptions{
 			Validation: tool.ShellValidationOptions{
-				AdditionalPermissionsAllowed: true,
+				// Rust exposes with_additional_permissions only when the
+				// exec_permission_approvals feature is enabled for this turn.
+				AdditionalPermissionsAllowed: false,
 				ApprovalPolicy:               sandbox.ApprovalOnRequest,
 				CWD:                          cwd,
 			},
@@ -76,6 +79,7 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 		EnableCore:        true,
 		EnableShell:       true,
 		EnableUnifiedExec: featureflags.Enabled(nil, "unified_exec"),
+		EnableCodeMode:    featureflags.Enabled(nil, "code_mode"),
 		EnableApplyPatch:  true,
 		EnableMCP:         true,
 		EnableAgents:      true,
@@ -112,7 +116,17 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 				options.Shell.UnifiedExec = options.UnifiedExec
 			}
 		}
-		if err := tool.RegisterShellHandler(registry, options.Shell); err != nil {
+		shellExecutor := tool.NewShellExecutor(options.Shell)
+		if options.EnableCodeMode {
+			shellSpec := shellExecutor.Spec()
+			shellSpec.Exposure = tool.ExposureHidden
+			if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
+				return nil, err
+			}
+			if err := registry.Register(tool.NewCodeModeExecExecutor(shellExecutor)); err != nil {
+				return nil, err
+			}
+		} else if err := registry.Register(shellExecutor); err != nil {
 			return nil, err
 		}
 		maxOutputTokens := (*int)(nil)
@@ -190,8 +204,14 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		return nil, err
 	}
 	if options.EnableToolSearch {
-		if err := tool.RegisterToolSearchFromRegistry(registry); err != nil {
-			return nil, err
+		// Rust only adds tool_search when at least one deferred executor is
+		// searchable. Advertising an empty search tool causes models to emit a
+		// useless tool_search_call/output pair which is then persisted into
+		// resumed Responses history.
+		if len(registry.DiscoverableSpecs()) > 0 {
+			if err := tool.RegisterToolSearchFromRegistry(registry); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return registry, nil

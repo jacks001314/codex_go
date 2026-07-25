@@ -1,6 +1,10 @@
+import { platformCommands, type PlatformSuite } from "./platform/index.ts";
+
 export type Scenario = {
   name: string;
   description: string;
+  platforms?: PlatformSuite[];
+  codexConfig?: Record<string, unknown>;
   optIn?: boolean;
   timeoutMs: number;
   workingDirectoryMode?: "fixture" | "missing";
@@ -65,7 +69,179 @@ export type Scenario = {
   };
 };
 
+const commands = platformCommands();
+
 export const scenarios: Scenario[] = [
+  {
+    name: "linux-two-command-resume-stream-audit",
+    description: "Creates a deterministic two-command Responses history, resumes in a fresh CLI process, and detects stream closure independently of network/model tool-choice variance.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "Execute exactly these two exec_command calls sequentially and no other tools. First command: printf 'RESUME_HISTORY_ALPHA\\n'. Second command: printf 'RESUME_HISTORY_BETA\\n'. Do not combine the commands. After both complete, reply with exactly RESUME_HISTORY_TURN1_OK. Do not send commentary before, between, or after tool calls.",
+      },
+      {
+        resume: true,
+        prompt: "This is a fresh-process resumed turn. Execute exactly one exec_command call: printf 'RESUME_HISTORY_GAMMA\\n'. Then reply with exactly RESUME_HISTORY_TURN2_OK. Do not send commentary before or after the tool call.",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      exactAgentMessages: ["RESUME_HISTORY_TURN1_OK", "RESUME_HISTORY_TURN2_OK"],
+      requiredCompletedItemTypes: ["command_execution", "agent_message"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "RESUME_HISTORY_ALPHA" },
+        { status: "completed", exitCode: 0, output: "RESUME_HISTORY_BETA" },
+        { status: "completed", exitCode: 0, output: "RESUME_HISTORY_GAMMA" },
+      ],
+      requireStableThreadId: true, commandOutputComparison: "exact",
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-resume-interrupted-tool-history-audit",
+    description: "Interrupts a Linux command after item.started, then resumes and verifies Rust-style aborted history normalization without replay.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "workspace-write", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "Run exactly one shell command: sleep 30; printf SHOULD_NOT_EXIST > interrupted-marker.txt. Do not send commentary before or after the tool call and do nothing else.",
+        abortAfterEventType: "item.started", continueAfterError: true, timeoutMs: 30000,
+      },
+      {
+        resume: true,
+        prompt: "Resume without replaying the interrupted command. Run exactly one shell command: if test -e interrupted-marker.txt; then printf MARKER_EXISTS; else printf MARKER_ABSENT; fi. Do not send commentary before or after the tool call. Then reply with exactly INTERRUPT_RESUME_OK.",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["INTERRUPT_RESUME_OK"], requiredCompletedItemTypes: ["command_execution", "agent_message"],
+      commandExecutions: [{ status: "completed", exitCode: 0, output: "MARKER_ABSENT" }],
+      requireStableThreadId: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-mixed-tool-failures-recovery-audit",
+    description: "Exercises missing-command, failed-patch, successful-command, and successful-patch lifecycles in one turn.",
+    platforms: ["linux"], optIn: true, timeoutMs: 240000,
+    threadOptions: {
+      sandboxMode: "workspace-write", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "按顺序完成以下操作，每一步都必须只执行一次，失败后继续：1）运行命令 definitely_missing_codex_tool_20260724；2）用 apply_patch 将 README.txt 中不存在的 MISSING_CONTEXT 改为 SHOULD_NOT_APPEAR，此补丁必须失败；3）运行命令 printf 'RECOVERY_COMMAND_OK\\n'；4）用 apply_patch 新建 recovery-ok.txt，内容恰好为 RECOVERY_PATCH_OK。最后回复 MIXED_TOOL_FAILURES_RECOVERED。" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["command_execution", "file_change", "agent_message"],
+      commandExecutions: [
+        { status: "failed", exitCode: 127, outputPattern: "not found|command not found" },
+        { status: "completed", exitCode: 0, output: "RECOVERY_COMMAND_OK" },
+      ],
+      fileChanges: [{ status: "completed" }],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "required", workspaceRequiredPaths: ["recovery-ok.txt"], compareWorkspacePaths: ["README.txt", "recovery-ok.txt"],
+    },
+  },
+  {
+    name: "linux-parallel-partial-failure-recovery-audit",
+    description: "Runs parallel commands where one succeeds and one fails, then verifies a later recovery command closes cleanly.",
+    platforms: ["linux"], optIn: true, timeoutMs: 240000,
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "第一步必须在同一响应中并行调用两次 exec_command，且不要发送其他工具调用：一个运行 printf 'PARALLEL_SUCCESS\\n'，另一个运行 sh -c 'printf PARALLEL_FAILURE >&2; exit 7'。两者完成后，再单独运行一次 printf 'AFTER_PARALLEL_RECOVERY\\n'。最后回复 PARALLEL_FAILURE_RECOVERED。" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["command_execution", "agent_message"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "PARALLEL_SUCCESS" },
+        { status: "failed", exitCode: 7, output: "PARALLEL_FAILURE" },
+        { status: "completed", exitCode: 0, output: "AFTER_PARALLEL_RECOVERY" },
+      ],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "yunnan-then-hebei-weather-resume-audit",
+    description: "Runs Yunnan then Hebei city-weather requests across a resumed SDK thread and audits continuity, cross-turn contamination, ordering, and duplicates.",
+    optIn: true,
+    timeoutMs: 300000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: true, webSearchMode: "live",
+    },
+    turns: [
+      { prompt: "请你告诉我云南各个城市的天气", timeoutMs: 180000 },
+      { prompt: "请你告诉我河北各个城市的天气", resume: true, timeoutMs: 300000 },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      requiredCompletedItemTypes: ["agent_message"], requireStableThreadId: true,
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "chrome-beijing-weather-order-audit",
+    description: "Opens Chrome and searches for Beijing weather while auditing browser-command lifecycle, duplicate launches, and message ordering.",
+    optIn: true,
+    timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: true, webSearchMode: "live",
+    },
+    turns: [{ prompt: "请你打开chrome浏览器，并查询北京天气" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "hebei-cities-weather-order-audit",
+    description: "Answers the user's natural-language Hebei cities weather request with live web search and audits tool/message ordering and duplicates.",
+    optIn: true,
+    timeoutMs: 240000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: true, webSearchMode: "live",
+    },
+    turns: [{ prompt: "请你告诉我河北各个城市的天气" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "java-quicksort-file-order-audit",
+    description: "Creates quicksort.java from the user's natural-language request and audits raw event order and duplicates.",
+    optIn: true,
+    timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "workspace-write", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "请你用java写一个quicksort的算法，写到文件quicksort.java" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["file_change", "agent_message"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "required", workspaceRequiredPaths: ["quicksort.java"],
+      compareWorkspacePaths: ["quicksort.java"],
+    },
+  },
   {
     name: "resume-real-coding-recovery",
     description: "Completes a multi-file refactor, resumes it in a fresh CLI process, recovers from a failed patch, and runs tests.",
@@ -1042,7 +1218,7 @@ export const scenarios: Scenario[] = [
     turns: [
       {
         prompt:
-          "Run exactly one shell command: Get-Content -LiteralPath .\\README.txt. Do not send commentary before or after the tool call. Then return its first line and number of non-empty lines.",
+          `Run exactly one shell command: ${commands.workspaceStructuredRead}. Do not send commentary before or after the tool call. Then return its first line and number of non-empty lines.`,
         outputSchema: {
           type: "object",
           properties: {
@@ -1083,7 +1259,7 @@ export const scenarios: Scenario[] = [
     turns: [
       {
         prompt:
-          "Run exactly one shell command: Set-Content -LiteralPath .\\result.txt -Value SDK_FILE_WRITE_OK -NoNewline. Do not send commentary before or after the tool call and do not modify any other file. After the command succeeds, reply with exactly FILE_WRITE_OK.",
+          `Run exactly one shell command: ${commands.workspaceFileWrite}. Do not send commentary before or after the tool call and do not modify any other file. After the command succeeds, reply with exactly FILE_WRITE_OK.`,
       },
     ],
     expected: {
@@ -1117,7 +1293,7 @@ export const scenarios: Scenario[] = [
     turns: [
       {
         prompt:
-          "Run exactly one shell command: powershell -NoProfile -Command \"Write-Output SDK_EXIT_7; exit 7\". Do not send commentary before or after the tool call. After it finishes, reply with exactly COMMAND_EXIT_7_OBSERVED.",
+          `Run exactly one shell command: ${commands.commandExitSeven}. Do not send commentary before or after the tool call. After it finishes, reply with exactly COMMAND_EXIT_7_OBSERVED.`,
       },
     ],
     expected: {
@@ -1130,7 +1306,7 @@ export const scenarios: Scenario[] = [
       commandExecutions: [
         {
           status: "failed",
-          exitCode: 1,
+          exitCode: commands.suite === "linux" ? 7 : 1,
           output: "SDK_EXIT_7",
         },
       ],

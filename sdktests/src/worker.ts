@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -22,10 +22,31 @@ function checkpoint(extra: Record<string, unknown> = {}) {
   }, null, 2)}\n`, "utf8");
 }
 
+function rolloutJsonl(): string {
+  const root = path.join(input.envHome, "sessions");
+  if (!existsSync(root)) return "";
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const name of readdirSync(directory)) {
+      const candidate = path.join(directory, name);
+      if (statSync(candidate).isDirectory()) visit(candidate);
+      else if (name.endsWith(".jsonl")) files.push(candidate);
+    }
+  };
+  visit(root);
+  return files.map((file) => readFileSync(file, "utf8")).find((text) => !currentThreadId || text.includes(currentThreadId)) ?? "";
+}
+
 try {
   const client = new sdk.Codex({
     codexPathOverride: input.codexPath,
-    env: { ...process.env, CODEX_HOME: input.envHome, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      CODEX_HOME: input.envHome,
+      NO_COLOR: "1",
+      CODEX_GO_RESPONSES_DEBUG_FILE: path.join(input.envHome, "responses-debug.jsonl"),
+    },
+    config: input.scenario.codexConfig,
   });
   const baseOptions = {
     ...input.scenario.threadOptions,
@@ -94,5 +115,12 @@ try {
   status = "error";
   error = { name: err?.name, message: String(err?.message ?? err) };
 } finally {
-  checkpoint({ workerPid: process.pid, workerCompleted: true });
+  checkpoint({
+    workerPid: process.pid,
+    workerCompleted: true,
+    responsesDebug: existsSync(path.join(input.envHome, "responses-debug.jsonl"))
+      ? readFileSync(path.join(input.envHome, "responses-debug.jsonl"), "utf8")
+      : "",
+    rolloutJsonl: rolloutJsonl(),
+  });
 }

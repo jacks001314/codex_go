@@ -1270,8 +1270,34 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 		if err != nil {
 			return nil, err
 		}
+		responsesDiagnostic("http.attempt", map[string]any{
+			"thread_id":        request.ThreadID,
+			"turn_id":          request.TurnID,
+			"http_attempt":     attempt + 1,
+			"http_max_retries": maxRetries,
+			"accept":           accept,
+		})
 		httpResponse, err := r.doResponsesHTTPRequest(httpRequest)
-		if shouldRetryResponsesHTTPRequest(httpResponse, err, retryTooManyRequests) && attempt < maxRetries {
+		shouldRetry := shouldRetryResponsesHTTPRequest(httpResponse, err, retryTooManyRequests)
+		status := 0
+		requestID := ""
+		traceID := ""
+		if httpResponse != nil {
+			status = httpResponse.StatusCode
+			requestID = responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader)
+			traceID = responseHeaderValue(httpResponse.Header, "x-trace-id")
+		}
+		responsesDiagnostic("http.result", map[string]any{
+			"thread_id":       request.ThreadID,
+			"turn_id":         request.TurnID,
+			"http_attempt":    attempt + 1,
+			"http_status":     status,
+			"request_id":      requestID,
+			"trace_id":        traceID,
+			"transport_error": diagnosticErrorMessage(err),
+			"retryable":       shouldRetry,
+		})
+		if shouldRetry && attempt < maxRetries {
 			lastErr = err
 			if httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
 				_ = r.refreshAuthAfterUnauthorized(ctx)
@@ -1342,23 +1368,35 @@ func stripResponseInputItemID(item any) any {
 			return nil
 		}
 		clone := *typed
-		clone.ID = ""
+		if !isPrefixedResponseItemID(clone.ID) {
+			clone.ID = ""
+		}
 		clone.Data = cloneAgentItemMap(typed.Data)
 		clone.Search = cloneAgentItemMap(typed.Search)
 		return &clone
 	case AgentItem:
 		clone := typed
-		clone.ID = ""
+		if !isPrefixedResponseItemID(clone.ID) {
+			clone.ID = ""
+		}
 		clone.Data = cloneAgentItemMap(typed.Data)
 		clone.Search = cloneAgentItemMap(typed.Search)
 		return clone
 	case map[string]any:
 		clone := cloneMapAny(typed)
-		delete(clone, "id")
+		if !isPrefixedResponseItemID(responseToolString(clone["id"])) {
+			delete(clone, "id")
+		}
 		return clone
 	default:
 		return item
 	}
+}
+
+func isPrefixedResponseItemID(value string) bool {
+	value = strings.TrimSpace(value)
+	prefix, suffix, ok := strings.Cut(value, "_")
+	return ok && prefix != "" && suffix != ""
 }
 
 func responsesLiteInputItems(inputItems []any, tools []any, instructions string) []any {

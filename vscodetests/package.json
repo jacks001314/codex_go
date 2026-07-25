@@ -1,0 +1,15 @@
+{
+  "name": "codex-go-vscode-protocol-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:smoke": "node --experimental-strip-types src/cli.ts smoke",
+    "test:live-turn": "node --experimental-strip-types src/cli.ts live-turn",
+    "test:live-interrupt": "node --experimental-strip-types src/cli.ts live-interrupt",
+    "test:command-exec": "node --experimental-strip-types src/cli.ts command-exec",
+    "report": "node --experimental-strip-types src/cli.ts report"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

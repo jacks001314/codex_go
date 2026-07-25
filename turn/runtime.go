@@ -142,6 +142,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Now:                r.now,
 			PostToolInputItems: request.PostToolInputItems,
 			OnToolStarted:      request.OnToolStarted,
+			OnToolCompleted:    request.OnToolCompleted,
 			ThreadID:           request.ThreadID,
 			TurnID:             request.TurnID,
 		}),

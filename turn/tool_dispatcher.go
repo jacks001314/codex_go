@@ -19,6 +19,7 @@ type ToolDispatcherOptions struct {
 	Now                func() time.Time
 	PostToolInputItems ToolPostExecutionInputItems
 	OnToolStarted      ToolStartedCallback
+	OnToolCompleted    ToolCompletedCallback
 	ThreadID           string
 	TurnID             string
 }
@@ -29,6 +30,7 @@ type ToolDispatcher struct {
 	now                func() time.Time
 	postToolInputItems ToolPostExecutionInputItems
 	onToolStarted      ToolStartedCallback
+	onToolCompleted    ToolCompletedCallback
 	threadID           string
 	turnID             string
 	clockMu            sync.Mutex
@@ -46,6 +48,7 @@ type ToolExecutionResult struct {
 type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
 
 type ToolStartedCallback func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time)
+type ToolCompletedCallback func(ctx context.Context, result *ToolExecutionResult)
 
 type ToolResponseItem struct {
 	Type      string                     `json:"type"`
@@ -124,6 +127,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		now:                now,
 		postToolInputItems: options.PostToolInputItems,
 		onToolStarted:      options.OnToolStarted,
+		onToolCompleted:    options.OnToolCompleted,
 		threadID:           strings.TrimSpace(options.ThreadID),
 		turnID:             strings.TrimSpace(options.TurnID),
 	}
@@ -288,14 +292,18 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		finishedAt = d.nowUTC()
 	}
 	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
-	return &ToolExecutionResult{
+	result := &ToolExecutionResult{
 		Invocation: invocation,
 		Output:     output,
 		Response:   ToolResponseFromOutput(invocation, output),
 		InputItems: inputItems,
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
-	}, nil
+	}
+	if d.onToolCompleted != nil {
+		d.onToolCompleted(toolCtx, result)
+	}
+	return result, nil
 }
 
 func toolCallErrorForModel(err error) *tool.FunctionCallError {
@@ -366,11 +374,30 @@ func ToolResponseFromOutput(invocation *tool.Invocation, output *tool.Output) *T
 			Output: NewFunctionCallOutputPayload(outputBody(output), boolPtr(output.Success)),
 		}
 	default:
+		body := outputBody(output)
+		if invocation.ToolName.Namespace == "" && invocation.ToolName.Name == tool.DefaultExecCommandToolName {
+			body = []FunctionCallOutputContentItem{{Type: "input_text", Text: functionCallOutputBodyText(body)}}
+		}
 		return &ToolResponseItem{
 			Type:   "function_call_output",
 			CallID: firstNonEmptyTurnString(output.CallID, invocation.CallID),
-			Output: NewFunctionCallOutputPayload(outputBody(output), boolPtr(output.Success)),
+			Output: NewFunctionCallOutputPayload(body, boolPtr(output.Success)),
 		}
+	}
+}
+
+func functionCallOutputBodyText(body any) string {
+	switch typed := body.(type) {
+	case string:
+		return typed
+	case []FunctionCallOutputContentItem:
+		return FunctionCallOutputContentItemsText(typed)
+	default:
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Sprint(body)
+		}
+		return string(data)
 	}
 }
 
@@ -476,12 +503,14 @@ func outputBody(output *tool.Output) any {
 		if value, ok := output.Data["content_items"]; ok {
 			return value
 		}
-		if value, ok := output.Data["output"]; ok {
-			return value
-		}
 	}
 	if strings.TrimSpace(output.Body) != "" {
 		return output.Body
+	}
+	if output.Data != nil {
+		if value, ok := output.Data["output"]; ok {
+			return value
+		}
 	}
 	if strings.TrimSpace(output.Error) != "" {
 		return output.Error
