@@ -750,7 +750,7 @@ func TestRouterThreadSetNameMaterializesEmptyThreadForFork(t *testing.T) {
 	}
 }
 
-func TestRouterThreadStartPersistsDynamicTools(t *testing.T) {
+func TestRouterThreadStartRetainsDynamicToolsWhenRolloutMaterializes(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	router.SetClock(func() time.Time { return fixedTime() })
@@ -785,6 +785,10 @@ func TestRouterThreadStartPersistsDynamicTools(t *testing.T) {
 	if len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 {
 		t.Fatalf("metadata dynamic/capability roots = %#v", record.Metadata)
 	}
+	if _, err := os.Stat(*startedThread.Path); !os.IsNotExist(err) {
+		t.Fatalf("thread/start unexpectedly materialized rollout: %v", err)
+	}
+	materializeThreadRolloutForTest(t, router, store, startedThread.ID)
 	rolloutPath, err := rollout.FindThreadPath(store.Root(), startedThread.ID, false)
 	if err != nil {
 		t.Fatalf("rollout path error: %v", err)
@@ -1550,6 +1554,7 @@ func TestRouterSetNameAndMemoryModeRejectArchivedThread(t *testing.T) {
 		t.Fatalf("start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router, store, threadID)
 	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}))
 	if archive.Error != nil {
 		t.Fatalf("archive error: %+v", archive.Error)
@@ -1975,6 +1980,7 @@ func TestRouterLifecycleNullServiceTierUsesDefault(t *testing.T) {
 	if err := store.Save(record); err != nil {
 		t.Fatalf("Save record error = %v", err)
 	}
+	materializeThreadRolloutForTest(t, router, store, start.Thread.ID)
 	resumeResponse := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, map[string]any{
 		"threadId":    start.Thread.ID,
 		"serviceTier": nil,
@@ -2071,6 +2077,7 @@ func TestRouterThreadResumeRejectsArchivedSessionByID(t *testing.T) {
 		t.Fatalf("start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router, store, threadID)
 	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}))
 	if archive.Error != nil {
 		t.Fatalf("archive error: %+v", archive.Error)
@@ -2112,6 +2119,7 @@ func TestRouterThreadForkRejectsArchivedSessionByIDAndPath(t *testing.T) {
 		t.Fatalf("start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router, store, threadID)
 	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}))
 	if archive.Error != nil {
 		t.Fatalf("archive error: %+v", archive.Error)
@@ -2167,6 +2175,7 @@ func TestRouterResumeAndForkRuntimeWorkspaceRootsUseEffectiveRoots(t *testing.T)
 	if err := store.Save(record); err != nil {
 		t.Fatalf("Save record error = %v", err)
 	}
+	materializeThreadRolloutForTest(t, router, store, threadID)
 
 	resume := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
 		ThreadID:     threadID,
@@ -3783,6 +3792,38 @@ func createRecordWithHistoryMode(t *testing.T, store *session.Store, id session.
 	}
 }
 
+// materializeThreadRolloutForTest mirrors Rust's ensure_rollout_materialized:
+// it persists the live session metadata without inventing a user message or turn.
+func materializeThreadRolloutForTest(t *testing.T, router *Router, store *session.Store, threadID string) {
+	t.Helper()
+	if router == nil || store == nil {
+		t.Fatal("materialize thread rollout: router and store are required")
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("materialize thread rollout read error: %v", err)
+	}
+	path := router.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		t.Fatalf("materialize thread rollout path is empty for %s", threadID)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("materialize thread rollout stat error: %v", err)
+	}
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = fixedTime()
+	}
+	if err := router.createThreadRollout(record, now); err != nil {
+		t.Fatalf("materialize thread rollout create error: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("materialized thread rollout missing at %q: %v", path, err)
+	}
+}
+
 func TestRouterPaginatedWriterOwnershipBlocksCompetingResumeArchiveAndDelete(t *testing.T) {
 	root := t.TempDir()
 	owner := NewRouter(session.NewStore(root))
@@ -3799,6 +3840,7 @@ func TestRouterPaginatedWriterOwnershipBlocksCompetingResumeArchiveAndDelete(t *
 		t.Fatalf("thread/start error = %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, owner, owner.store, threadID)
 
 	for _, request := range []*Request{
 		requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}),

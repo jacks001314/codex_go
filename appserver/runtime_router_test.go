@@ -768,10 +768,11 @@ func TestRuntimeRouterEphemeralThreadStartStaysInMemory(t *testing.T) {
 func TestRuntimeRouterEphemeralForkStaysReadableAndUnlisted(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("fork ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
-		Agent:        newRecordingRuntimeAgent("fork ok"),
+		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
@@ -781,6 +782,15 @@ func TestRuntimeRouterEphemeralForkStaysReadableAndUnlisted(t *testing.T) {
 		t.Fatalf("source start error: %+v", start.Error)
 	}
 	source := start.Result.(*ThreadStartResponse).Thread
+	sourceTurn := router.Handle(requestWithParams(t, IntID(11), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: source.ID,
+		Prompt:   "persist source history",
+	}))
+	if sourceTurn.Error != nil {
+		t.Fatalf("source turn error: %+v", sourceTurn.Error)
+	}
+	_ = waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, sourceTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
 		ThreadID:  source.ID,
 		Ephemeral: true,
@@ -1454,6 +1464,7 @@ func TestRuntimeRouterThreadUnsubscribeTracksConnectionSubscriptions(t *testing.
 		t.Fatalf("thread/start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, threadID)
 
 	assertUnsubscribe(t, router, 2, "conn-b", threadID, ThreadUnsubscribeStatusNotSubscribed)
 	assertUnsubscribe(t, router, 3, "conn-a", threadID, ThreadUnsubscribeStatusUnsubscribed)
@@ -1541,6 +1552,7 @@ func TestRuntimeRouterThreadResumeRejectsStalePathWhileRunning(t *testing.T) {
 	if thread.Path == nil || strings.TrimSpace(*thread.Path) == "" {
 		t.Fatalf("thread path = %+v", thread.Path)
 	}
+	materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, thread.ID)
 	if err := router.registerActiveRuntimeTurn(thread.ID, "turn-running", func() {}, fixedTime().UnixMilli(), &turn.TurnStartParams{
 		ThreadID: thread.ID,
 		Prompt:   "still running",
@@ -1591,6 +1603,7 @@ func TestRuntimeRouterThreadResumeRunningIgnoresOverrideMismatch(t *testing.T) {
 		t.Fatalf("thread/start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, threadID)
 	if err := router.registerActiveRuntimeTurn(threadID, "turn-running", func() {}, fixedTime().Add(time.Minute).UnixMilli(), &turn.TurnStartParams{
 		ThreadID: threadID,
 		CWD:      cwd,
@@ -1704,7 +1717,9 @@ func TestRuntimeRouterThreadArchiveDeleteUnloadRuntimeStatus(t *testing.T) {
 		if response.Error != nil {
 			t.Fatalf("thread/start error: %+v", response.Error)
 		}
-		return response.Result.(*ThreadStartResponse).Thread.ID
+		threadID := response.Result.(*ThreadStartResponse).Thread.ID
+		materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, threadID)
+		return threadID
 	}
 	loadedIDs := func(id int64) []string {
 		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadLoadedList, ThreadLoadedListParams{}))
@@ -7383,8 +7398,8 @@ func TestRuntimeRouterSDKContractSmoke(t *testing.T) {
 		t.Fatalf("thread/read response = %+v", threadRead)
 	}
 	threadList := send(4, MethodThreadList, ThreadListParams{})
-	if threadList.Error != nil || len(threadList.Result.(*ThreadListResponse).Data) != 1 {
-		t.Fatalf("thread/list response = %+v", threadList)
+	if threadList.Error != nil || len(threadList.Result.(*ThreadListResponse).Data) != 0 {
+		t.Fatalf("thread/list before first user message = %+v", threadList)
 	}
 
 	turnStart := send(5, MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "run turn"})
@@ -7393,6 +7408,10 @@ func TestRuntimeRouterSDKContractSmoke(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForBlockingAgentStart(t, agent)
+	threadList = send(53, MethodThreadList, ThreadListParams{})
+	if threadList.Error != nil || len(threadList.Result.(*ThreadListResponse).Data) != 1 || threadList.Result.(*ThreadListResponse).Data[0].ID != threadID {
+		t.Fatalf("thread/list after first user message = %+v", threadList)
+	}
 
 	turnSteer := send(51, MethodTurnSteer, turn.TurnSteerParams{
 		ThreadID:       threadID,
@@ -12076,7 +12095,8 @@ func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T)
 
 func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
-	start := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+	threadRouter := NewRouter(store)
+	start := threadRouter.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		Model:  "personality-model",
 		Prompt: "materialize",
 	}))
@@ -12084,6 +12104,7 @@ func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.
 		t.Fatalf("thread start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, threadRouter, store, threadID)
 
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -14590,17 +14611,26 @@ func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.
 		t.Fatalf("initialize error: %+v", response.Error)
 	}
 
-	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
-		CWD:    t.TempDir(),
-		Prompt: "compact soon",
-	})
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()})
 	threadStart.ConnectionID = "conn-auto-compact-analytics"
 	threadResponse := router.Handle(threadStart)
 	if threadResponse.Error != nil {
 		t.Fatalf("thread start error: %+v", threadResponse.Error)
 	}
 	threadID := threadResponse.Result.(*ThreadStartResponse).Thread.ID
-	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+	seedTurn := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "seed compactable context",
+	})
+	seedTurn.ConnectionID = "conn-auto-compact-analytics"
+	seedResponse := router.Handle(seedTurn)
+	if seedResponse.Error != nil {
+		t.Fatalf("seed turn start error: %+v", seedResponse.Error)
+	}
+	_ = waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, seedResponse.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	turnStart := requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Prompt:   "trigger auto compact",
 		Config:   map[string]any{"model_auto_compact_token_limit": 1},
@@ -15737,14 +15767,23 @@ func TestRuntimeRouterTurnStartSendsForkLineageInClientMetadataLikeRust(t *testi
 		t.Fatalf("thread start error: %+v", start.Error)
 	}
 	sourceID := start.Result.(*ThreadStartResponse).Thread.ID
-	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+	seedTurn := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: sourceID,
+		Prompt:   "persist source",
+	}))
+	if seedTurn.Error != nil {
+		t.Fatalf("source turn error: %+v", seedTurn.Error)
+	}
+	_ = waitForRuntimeAgentRequest(t, agent)
+	waitForTurnCompletedStatus(t, sink, seedTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{
 		ThreadID: sourceID,
 	}))
 	if fork.Error != nil {
 		t.Fatalf("thread fork error: %+v", fork.Error)
 	}
 	forkID := fork.Result.(*ThreadForkResponse).Thread.ID
-	turnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+	turnStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: forkID,
 		Prompt:   "continue fork",
 	}))
@@ -19446,6 +19485,7 @@ func TestRuntimeRouterEphemeralForkRejectsArchivedSourceByIDAndPath(t *testing.T
 		t.Fatalf("start error: %+v", start.Error)
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, threadID)
 	archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: threadID}))
 	if archive.Error != nil {
 		t.Fatalf("archive error: %+v", archive.Error)
