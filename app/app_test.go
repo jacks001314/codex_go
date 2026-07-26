@@ -2399,6 +2399,15 @@ func TestRemoteAgentDeltaClearsRetryBeforeOutput(t *testing.T) {
 	}
 }
 
+func TestRemoteAgentMessagePreservesCommentaryPhase(t *testing.T) {
+	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id": "msg-commentary", "type": "agentMessage", "text": "我先查询天气。", "phase": "commentary",
+	}, true)
+	if item.Type != "agent_message" || item.Text != "我先查询天气。" || item.Phase != "commentary" {
+		t.Fatalf("remote item = %#v", item)
+	}
+}
+
 func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

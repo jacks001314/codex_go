@@ -19,6 +19,7 @@ type SessionRuntime struct {
 	closed  bool
 	nextID  uint64
 	wakeups map[string]chan struct{}
+	factory EngineFactory
 }
 
 func NewSessionRuntime() *SessionRuntime {
@@ -26,6 +27,7 @@ func NewSessionRuntime() *SessionRuntime {
 		cells:   NewCellStore(),
 		nextID:  1,
 		wakeups: map[string]chan struct{}{},
+		factory: SobekEngineFactory{},
 	}
 }
 
@@ -60,9 +62,26 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (
 	if _, err := r.cells.Start(cellID.String(), request.Source); err != nil {
 		return nil, err
 	}
-	initialText, finalText, shouldYield := renderLocalExecution(request.Source)
-	if initialText != "" {
-		if _, err := r.cells.AppendOutput(cellID.String(), initialText); err != nil {
+	engine, err := r.factory.NewEngine()
+	if err != nil {
+		return nil, err
+	}
+	result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools})
+	_ = engine.Close()
+	items := []ContentItem{}
+	if result != nil {
+		items = result.ContentItems
+	}
+	output := ""
+	if result != nil {
+		for _, item := range items {
+			if item.Type == "input_text" {
+				output += item.Text
+			}
+		}
+	}
+	if output != "" {
+		if _, err := r.cells.AppendOutput(cellID.String(), output); err != nil {
 			return nil, err
 		}
 	}
@@ -70,20 +89,20 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (
 	if request.YieldTimeMS != nil {
 		yieldMS = *request.YieldTimeMS
 	}
-	if shouldYield || yieldMS == 0 {
-		go r.completeLater(ctx, cellID, finalText, wakeup)
+	if yieldMS == 0 {
+		go r.completeLater(ctx, cellID, "", execErr, wakeup)
 		return &StartedCell{
 			CellID:          cellID,
-			InitialResponse: Yielded(cellID, []ContentItem{InputText(initialText)}),
+			InitialResponse: Yielded(cellID, cloneContentItems(items)),
 		}, nil
 	}
-	if _, err := r.cells.Complete(cellID.String(), finalText, nil); err != nil {
+	if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
 		return nil, err
 	}
 	r.signal(cellID.String())
 	return &StartedCell{
 		CellID:          cellID,
-		InitialResponse: Result(cellID, []ContentItem{InputText(initialText + finalText)}, nil),
+		InitialResponse: Result(cellID, cloneContentItems(items), errorText(execErr)),
 	}, nil
 }
 
@@ -153,14 +172,14 @@ func (r *SessionRuntime) Shutdown() {
 	r.mu.Unlock()
 }
 
-func (r *SessionRuntime) completeLater(ctx context.Context, cellID CellID, output string, wakeup <-chan struct{}) {
+func (r *SessionRuntime) completeLater(ctx context.Context, cellID CellID, output string, execErr error, wakeup <-chan struct{}) {
 	select {
 	case <-ctx.Done():
 		_, _ = r.cells.Complete(cellID.String(), "", ctx.Err())
 	case <-wakeup:
 		return
 	case <-time.After(10 * time.Millisecond):
-		_, _ = r.cells.Complete(cellID.String(), output, nil)
+		_, _ = r.cells.Complete(cellID.String(), output, execErr)
 	}
 	r.signal(cellID.String())
 }
@@ -209,44 +228,12 @@ func runtimeResponseFromCell(cell *Cell) RuntimeResponse {
 	}
 }
 
-func renderLocalExecution(source string) (string, string, bool) {
-	request := ParseExecRequest(source)
-	body := strings.TrimSpace(request.Source)
-	if body == "" {
-		return "", "", false
+func errorText(err error) *string {
+	if err == nil {
+		return nil
 	}
-	shouldYield := strings.Contains(body, "await") || strings.Contains(body, "setTimeout") || strings.Contains(request.Pragma, "yield")
-	text := extractTextArgument(body)
-	if text == "" {
-		text = body
-	}
-	if shouldYield {
-		return text, "", true
-	}
-	return text, "", false
-}
-
-func extractTextArgument(source string) string {
-	for _, marker := range []string{"text(", "console.log(", "notify("} {
-		index := strings.Index(source, marker)
-		if index < 0 {
-			continue
-		}
-		start := index + len(marker)
-		if start >= len(source) {
-			continue
-		}
-		quote := source[start]
-		if quote != '\'' && quote != '"' && quote != '`' {
-			continue
-		}
-		end := strings.IndexByte(source[start+1:], quote)
-		if end < 0 {
-			continue
-		}
-		return source[start+1 : start+1+end]
-	}
-	return ""
+	value := err.Error()
+	return &value
 }
 
 func stringPtrLocal(value string) *string {

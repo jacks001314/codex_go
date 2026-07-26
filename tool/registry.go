@@ -101,6 +101,10 @@ type Invocation struct {
 	Cancel    context.CancelCauseFunc
 }
 
+type CodeModeNotifyFunc func(callID string, text string)
+type CodeModeNestedToolStartedFunc func(context.Context, *Invocation, time.Time)
+type CodeModeNestedToolCompletedFunc func(context.Context, *Invocation, *Output, error, time.Time, time.Time)
+
 func (i *Invocation) DecodeArguments(target any) error {
 	if i == nil {
 		return fmt.Errorf("%w: invocation is nil", ErrToolInvalidCall)

@@ -12870,6 +12870,38 @@ func TestResponsesStreamRetryUsesRustErrorNotificationShape(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamPreservesCommentaryPhaseForTUIBoundary(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+	state := newResponsesStreamNotificationState(false, "turn-weather")
+	commentary := &model.AgentItem{ID: "msg-commentary", Type: "agent_message", Text: "我先查询天气。", Data: map[string]any{"phase": "commentary"}}
+
+	router.notifyResponsesStreamEvent("thread-weather", "turn-weather", &model.ResponsesStreamEvent{Kind: model.ResponsesStreamEventOutputAdded, ItemID: commentary.ID, Item: commentary}, state)
+	router.notifyResponsesStreamEvent("thread-weather", "turn-weather", &model.ResponsesStreamEvent{Kind: model.ResponsesStreamEventOutputText, ItemID: commentary.ID, Delta: commentary.Text}, state)
+	router.notifyResponsesStreamEvent("thread-weather", "turn-weather", &model.ResponsesStreamEvent{Kind: model.ResponsesStreamEventOutputAdded, ItemID: "call-weather", Item: &model.AgentItem{ID: "call-weather", Type: "function_call", Name: tool.DefaultExecCommandToolName, CallID: "call-weather", Arguments: `{"cmd":"curl weather"}`}}, state)
+
+	notifications := sink.List()
+	commentaryAt, toolAt := -1, -1
+	for index, notification := range notifications {
+		switch notification.Method {
+		case NotificationItemStarted:
+			payload, _ := notification.Params.(*ItemStartedNotification)
+			if payload != nil && payload.Item["id"] == commentary.ID {
+				commentaryAt = index
+				if payload.Item["phase"] != "commentary" {
+					t.Fatalf("commentary phase = %#v", payload.Item["phase"])
+				}
+			} else if payload != nil && payload.Item["id"] == "call-weather" {
+				toolAt = index
+			}
+		}
+	}
+	if commentaryAt < 0 || toolAt < 0 || commentaryAt >= toolAt {
+		t.Fatalf("notifications = %#v; commentaryAt=%d toolAt=%d", notifications, commentaryAt, toolAt)
+	}
+}
+
 func TestRuntimeRouterSkillInstructionsInputItemTruncatesMainPromptLikeRust(t *testing.T) {
 	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{})

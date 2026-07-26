@@ -56,6 +56,17 @@ func TestAgentMessageItemCompletedJSONShape(t *testing.T) {
 	}
 }
 
+func TestAgentMessageItemWithPhaseJSONShape(t *testing.T) {
+	event := ItemCompleted(AgentMessageItemWithPhase("item-1", "先查询天气。", "commentary"))
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"phase":"commentary"`)) {
+		t.Fatalf("event JSON = %s, want commentary phase", data)
+	}
+}
+
 func TestToolItemJSONShape(t *testing.T) {
 	started := ItemStarted(ToolCallItem("tool-call-1", "exec_command", `{"cmd":"date"}`))
 	data, err := json.Marshal(started)

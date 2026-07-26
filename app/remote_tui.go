@@ -3085,7 +3085,7 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 	wireType := remotePayloadString(payload, "type")
 	switch wireType {
 	case "agentMessage":
-		return protocol.AgentMessageItem(id, remotePayloadString(payload, "text"))
+		return protocol.AgentMessageItemWithPhase(id, remotePayloadString(payload, "text"), remotePayloadString(payload, "phase"))
 	case "commandExecution":
 		command := remotePayloadString(payload, "command")
 		status := remotePayloadString(payload, "status")

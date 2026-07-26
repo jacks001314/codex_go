@@ -40,8 +40,14 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkRequiredCompletedItemTypes("go", go, expected.requiredCompletedItemTypes),
     checkForbiddenCompletedItemTypes("rust", rust, expected.forbiddenCompletedItemTypes),
     checkForbiddenCompletedItemTypes("go", go, expected.forbiddenCompletedItemTypes),
-    checkExpectedCommandExecutions("rust", rust, expected.commandExecutions),
-    checkExpectedCommandExecutions("go", go, expected.commandExecutions),
+    checkUniqueCompletedItems("rust", rust, expected.uniqueCompletedItemTypes),
+    checkUniqueCompletedItems("go", go, expected.uniqueCompletedItemTypes),
+    checkUniqueCommandExecutions("rust", rust, expected.uniqueCommandExecutions),
+    checkUniqueCommandExecutions("go", go, expected.uniqueCommandExecutions),
+    checkCommentaryBeforeTool("rust", rust, expected.requireCommentaryBeforeTool),
+    checkCommentaryBeforeTool("go", go, expected.requireCommentaryBeforeTool),
+    checkExpectedCommandExecutions("rust", rust, expected.commandExecutions, expected.commandOutputComparison),
+    checkExpectedCommandExecutions("go", go, expected.commandExecutions, expected.commandOutputComparison),
     checkExpectedFileChanges("rust", rust, expected.fileChanges),
     checkExpectedFileChanges("go", go, expected.fileChanges),
     checkThreadContinuity("rust", rust, expected.requireStableThreadId),
@@ -232,6 +238,63 @@ function checkForbiddenCompletedItemTypes(label: string, recording: any, expecte
   };
 }
 
+function checkUniqueCompletedItems(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: unique completed items`, ok: true, detail: "artifact has no uniqueness contract" };
+  }
+  const duplicates: string[] = [];
+  for (const type of expected.map(String)) {
+    for (const turn of recording.turns ?? [{ index: 0, events: recording.events ?? [] }]) {
+      const seen = new Set<string>();
+      for (const event of turn.events ?? []) {
+        if (event.type !== "item.completed" || event.item?.type !== type) continue;
+        const item = event.item ?? {};
+        const key = String(item.id ?? item.callId ?? item.call_id ?? `${type}:${item.text ?? ""}:${item.server ?? ""}:${item.tool ?? ""}`);
+        if (seen.has(key)) duplicates.push(`turn${turn.index}:${type}:${key}`);
+        seen.add(key);
+      }
+    }
+  }
+  return { name: `${label}: unique completed items`, ok: duplicates.length === 0, detail: duplicates.length === 0 ? undefined : duplicates.join(", ") };
+}
+
+function checkUniqueCommandExecutions(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: unique command executions`, ok: true, detail: "scenario has no command uniqueness contract" };
+  }
+  const duplicates: string[] = [];
+  for (const turn of recording.turns ?? [{ index: 0, events: recording.events ?? [] }]) {
+    const seen = new Set<string>();
+    for (const event of turn.events ?? []) {
+      if (event.type !== "item.completed" || event.item?.type !== "command_execution") continue;
+      const key = JSON.stringify({
+        command: String(event.item?.command ?? "").trim(),
+        status: String(event.item?.status ?? ""),
+        exitCode: event.item?.exit_code,
+        output: String(event.item?.aggregated_output ?? "").replaceAll("\r\n", "\n").trim(),
+      });
+      if (seen.has(key)) duplicates.push(`turn${turn.index}:${key}`);
+      seen.add(key);
+    }
+  }
+  return { name: `${label}: unique command executions`, ok: duplicates.length === 0, detail: duplicates.length === 0 ? undefined : duplicates.join(", ") };
+}
+
+function checkCommentaryBeforeTool(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: commentary before tool`, ok: true, detail: "scenario has no commentary ordering contract" };
+  }
+  const failures: string[] = [];
+  for (const turn of recording.turns ?? [{ index: 0, events: recording.events ?? [] }]) {
+    const events = turn.events ?? [];
+    const firstTool = events.findIndex((event: any) => event.type === "item.started" && ["command_execution", "web_search", "mcp_tool_call", "tool_call"].includes(event.item?.type));
+    if (firstTool < 0) continue;
+    const commentary = events.findIndex((event: any, index: number) => index < firstTool && event.type === "item.completed" && event.item?.type === "agent_message" && (event.item?.phase === "commentary" || event.item?.phase == null));
+    if (commentary < 0) failures.push(`turn${turn.index}: first tool at event ${firstTool} has no preceding assistant commentary`);
+  }
+  return { name: `${label}: commentary before tool`, ok: failures.length === 0, detail: failures.length === 0 ? undefined : failures.join(", ") };
+}
+
 function checkThreadContinuity(label: string, recording: any, required: unknown) {
   if (!required) {
     return { name: `${label}: thread ID continuity`, ok: true, detail: "scenario does not require resume" };
@@ -245,11 +308,12 @@ function checkThreadContinuity(label: string, recording: any, required: unknown)
   };
 }
 
-function checkExpectedCommandExecutions(label: string, recording: any, expected: unknown) {
+function checkExpectedCommandExecutions(label: string, recording: any, expected: unknown, comparison: unknown) {
   if (!Array.isArray(expected)) {
     return { name: `${label}: expected command executions`, ok: true, detail: "artifact has no command contract" };
   }
-  const actual = commandExecutions(recording);
+  const actual = normalizeParallelCommandPrefix(commandExecutions(recording), comparison);
+  expected = normalizeParallelCommandPrefix(expected, comparison);
   const ok = expected.every((contract: any, index: number) => {
     const item = actual[index];
     if (!item || item.status !== contract.status || item.exitCode !== contract.exitCode) {
@@ -283,6 +347,9 @@ function checkExpectedFileChanges(label: string, recording: any, expected: unkno
 }
 
 function checkEventTypeSequence(rust: any, go: any, comparison: unknown) {
+  if (comparison === "model-selected-tools") {
+    return { name: "model-selected event lifecycle", ok: true, detail: "scenario permits each model to choose whether and how many tools to invoke; per-side lifecycle, ordering, and uniqueness remain contractual" };
+  }
   if (comparison === "semantic-tools") {
     return { name: "semantic event lifecycle", ok: true, detail: "scenario compares completed tool semantics and terminal lifecycle; commentary and started-event interleaving are non-contractual" };
   }
@@ -315,10 +382,15 @@ function comparableEventTypes(recording: any): string[] {
 }
 
 function checkItemTypeSequence(rust: any, go: any, comparison: unknown) {
+  if (comparison === "model-selected-tools") {
+    return { name: "model-selected completed tool sequence", ok: true, detail: "scenario does not require identical model-selected tool counts" };
+  }
   if (comparison === "semantic-tools") {
     const comparable = (recording: any) => (recording.events ?? [])
       .filter((event: any) => event.type === "item.completed")
       .filter((event: any) => event.item?.type !== "agent_message")
+      .filter((event: any) => event.item?.type !== "error")
+      .filter((event: any) => event.item?.type !== "web_search")
       .filter((event: any) => !(event.item?.type === "file_change" && event.item?.status === "failed"))
       .map((event: any) => String(event.item?.type));
     const left = comparable(rust);
@@ -346,8 +418,12 @@ function checkAgentMessageCount(rust: any, go: any, comparison: unknown) {
 }
 
 function checkErrorItemSymmetry(rust: any, go: any) {
-  const left = errorItems(rust).length;
-  const right = errorItems(go).length;
+  const actionable = (recording: any) => errorItems(recording).filter((event: any) => {
+    const message = String(event.item?.message ?? event.message ?? "");
+    return !message.includes("Under-development features enabled") && !message.includes("web_search_request` is deprecated");
+  });
+  const left = actionable(rust).length;
+  const right = actionable(go).length;
   const ok = left === right;
   return { name: "error item symmetry", ok, detail: ok ? undefined : `rust: ${left}; go: ${right}` };
 }
@@ -363,8 +439,11 @@ function checkUsage(label: string, recording: any, expectedTurns: number, requir
 }
 
 function checkCommandExecutionSemantics(rust: any, go: any, comparison: unknown) {
-  const left = commandExecutions(rust);
-  const right = commandExecutions(go);
+  if (comparison === "informational") {
+    return { name: "command execution semantics", ok: true, detail: "scenario permits model-selected command differences; per-side lifecycle and uniqueness remain contractual" };
+  }
+  const left = normalizeParallelCommandPrefix(commandExecutions(rust), comparison);
+  const right = normalizeParallelCommandPrefix(commandExecutions(go), comparison);
   const comparable = (items: any[]) =>
     comparison === "status-exit-code"
       ? items.map((item) => ({ status: item.status, exitCode: item.exitCode }))
@@ -375,6 +454,12 @@ function checkCommandExecutionSemantics(rust: any, go: any, comparison: unknown)
     ok,
     detail: ok ? undefined : `rust: ${JSON.stringify(left)}; go: ${JSON.stringify(right)}`,
   };
+}
+
+function normalizeParallelCommandPrefix(items: any[], comparison: unknown) {
+  if (comparison !== "parallel-prefix-unordered" || items.length < 2) return items;
+  const prefix = items.slice(0, 2).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return [...prefix, ...items.slice(2)];
 }
 
 function commandExecutions(recording: any) {

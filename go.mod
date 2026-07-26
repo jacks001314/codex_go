@@ -4,6 +4,8 @@ go 1.26.2
 
 require github.com/pelletier/go-toml/v2 v2.4.2
 
+require github.com/grafana/sobek v0.0.0-20260722203707-64fef69693b6
+
 require (
 	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/atotto/clipboard v0.1.4
@@ -81,7 +83,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/grafana/sobek v0.0.0-20260722203707-64fef69693b6 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

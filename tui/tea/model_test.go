@@ -1251,6 +1251,58 @@ func TestModelAppliesThreadEvents(t *testing.T) {
 	}
 }
 
+func TestModelKeepsWeatherCommentaryBeforeCommand(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-commentary", "我先查询河北各城市天气。")})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-commentary", "我先查询河北各城市天气。", "commentary"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", "curl weather", "", nil, "in_progress"))})
+
+	view := utils.StripANSI(model.View())
+	commentaryAt := strings.Index(view, "我先查询河北各城市天气。")
+	commandAt := strings.Index(view, "curl weather")
+	if commentaryAt < 0 || commandAt < 0 || commentaryAt >= commandAt {
+		t.Fatalf("commentary must render before command:\n%s", view)
+	}
+	if got := strings.Count(view, "我先查询河北各城市天气。"); got != 1 {
+		t.Fatalf("commentary count = %d, want 1:\n%s", got, view)
+	}
+}
+
+func TestModelWeatherLifecycleShowsRunningAndNoDuplicateResults(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 100, Height: 30})
+	commentary := "我先查询河北各城市天气。"
+	final := "天气查询完成。"
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-commentary", commentary)})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", "curl weather", "", nil, "in_progress"))})
+	running := utils.StripANSI(model.View())
+	if !strings.Contains(running, commentary) || !strings.Contains(running, "Running curl weather") {
+		t.Fatalf("running lifecycle missing commentary or command:\n%s", running)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-commentary", commentary, "commentary"))})
+	exitCode := 0
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.CommandExecutionItem("call-weather", "curl weather", "sunny\n", &exitCode, "completed"))})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-final", final)})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-final", final, "final_answer"))})
+	model.Update(ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+
+	view := utils.StripANSI(model.View())
+	for text, want := range map[string]int{commentary: 1, "sunny": 1, final: 1} {
+		if got := strings.Count(view, text); got != want {
+			t.Fatalf("%q count = %d, want %d:\n%s", text, got, want, view)
+		}
+	}
+	if strings.Index(view, commentary) >= strings.Index(view, "Ran curl weather") || strings.Index(view, "Ran curl weather") >= strings.Index(view, final) {
+		t.Fatalf("lifecycle order is not commentary -> command -> final:\n%s", view)
+	}
+}
+
 func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `C:\work`})
 	model := NewModel(state, Options{Width: 80, Height: 24})

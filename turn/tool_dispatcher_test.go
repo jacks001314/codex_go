@@ -89,6 +89,62 @@ func TestToolDispatcherAddsThreadAndTurnContextToInvocations(t *testing.T) {
 	}
 }
 
+func TestToolDispatcherCollectsCodeModeNotifyBeforeFinalOutput(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName(tool.CodeModeExecToolName)}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		notify := invocation.Context["code_mode_notify"].(tool.CodeModeNotifyFunc)
+		notify(invocation.CallID, "ping")
+		return &tool.Output{Success: true, Body: "final"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{ID: "exec-id", CallID: "exec-call", Type: "custom_tool_call", Name: tool.CodeModeExecToolName, Input: `notify("ping")`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || len(results[0].InputItems) != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	item, ok := results[0].InputItems[0].(*ToolResponseItem)
+	if !ok || item.Type != "custom_tool_call_output" || item.CallID != "exec-call" || item.Output.Text() != "ping" {
+		t.Fatalf("notify item = %#v", results[0].InputItems[0])
+	}
+}
+
+func TestToolDispatcherEmitsNestedCodeModeToolLifecycleWithoutHistoryItems(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.NamespacedName("mcp__demo", "inspect")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok", Data: map[string]any{"server": "demo", "tool": "inspect"}}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	exec, _ := tool.NewCodeModeExecutors(registry)
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	var started []*tool.Invocation
+	var completed []*ToolExecutionResult
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), OnToolStarted: func(_ context.Context, invocation *tool.Invocation, _ time.Time) {
+		started = append(started, invocation)
+	}, OnToolCompleted: func(_ context.Context, result *ToolExecutionResult) {
+		completed = append(completed, result)
+	}})
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{ID: "exec-id", CallID: "exec-call", Type: "custom_tool_call", Name: tool.CodeModeExecToolName, Input: `await tools.mcp__demo__inspect({}); text("done")`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || len(started) != 2 || len(completed) != 2 {
+		t.Fatalf("results=%d started=%d completed=%d", len(results), len(started), len(completed))
+	}
+	if started[0].ToolName.Key() != tool.CodeModeExecToolName || started[1].ToolName.Key() != "mcp__demo.inspect" || started[1].Source != "code_mode" {
+		t.Fatalf("started = %#v", started)
+	}
+	if len(results[0].InputItems) != 0 {
+		t.Fatalf("nested lifecycle leaked into model history: %#v", results[0].InputItems)
+	}
+}
+
 func TestToolDispatcherToolSearchOutput(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := tool.RegisterToolSearchHandler(registry, []tool.Spec{{

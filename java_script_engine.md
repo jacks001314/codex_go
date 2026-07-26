@@ -450,3 +450,55 @@ Linux 和 Windows 使用相同语义断言，但命令、shell quoting、退出�
 5. 保持当前正则工具路径在显式兼容开关下短期存在，Sobek 稳定后删除。
 
 第二个提交再接通单个 `tools.exec_command` Promise，避免一次修改同时跨越引擎、工具路由、事件和持久化四个边界。
+
+## 17. 2026-07-25 Linux 实施记录
+
+- Phase 0：固定 Sobek `v0.0.0-20260722203707-64fef69693b6` 为直接依赖；Rust 基线保持 Codex CLI `0.145.0`。
+- Phase 1：已增加 `codemode.Engine`/`SobekEngine`，替换 `renderLocalExecution`；同步 JavaScript、`text`、`exit`、exception 和 context interrupt 单测通过。
+- Phase 2：默认 `exec` 已删除正则解析，按 Registry 动态注入 function/freeform `tools.*`，嵌套调用经 Router、sandbox 和 approval 路径。
+- Phase 3：已实现 Promise completion queue；nested tools 在 goroutine 执行，Sobek runtime 只在 event-loop goroutine resolve/reject；`try/catch`、`Promise.all`、失败恢复和 race 测试通过。
+- Phase 4：已实现 `text/image/audio/generatedImage` content items、`ALL_TOOLS`、session-scope `store/load`。MCP 调用复用通用 Registry bridge；确定性 fixture 已覆盖 namespaced 调用、`structuredContent`、`_meta`、MCP `ImageContent`/`AudioContent` 的 data URL 转换及图片 detail。
+- Phase 5：已实现 `setTimeout/clearTimeout` 回投和取消；默认 Registry 中 `exec`/`wait` 已共享 cell manager，支持 pragma 超时 yield、`yield_control`、增量 wait 游标和 terminate。普通 code-mode `wait` 不再被 SDK/TUI 错映射成多代理 `wait_agent`。
+- Phase 6：custom call/output ID、双轮 fresh-process resume、中断历史恢复和 SDK command/file events 已通过现有对齐测试；Windows 只能保留独立脚本和静态构建检查，本轮 Linux 环境不能宣称 Windows live parity。
+- `notify` 已按 Rust delegate 语义改为独立注入同一 outer exec call ID 的 `custom_tool_call_output`，不进入最终 exec body；dispatcher 顺序、无 SDK 重复事件的单测与 live rollout audit 均通过。
+- 资源边界按 Rust 当前实现对齐：64 MiB code-mode frame、1024 pending delegate callback、非空 source、pragma JS safe integer；未增加 Rust 中不存在的 store/content/wall-time 任意限制。
+- running cell 的 fresh-process resume 已实测：两端均不持久化活 cell，`wait` 返回 `exec cell <id> not found`，随后会话可继续。
+- `terminate:true` 已按 Rust 改为成功的终止 lifecycle，保留终止前输出并关闭 cell；不再把主动终止误报为 JavaScript/context 失败。
+- code-mode nested MCP 调用已接入 SDK/TUI started/completed 事件回调，但不写入顶层模型历史；本地 stdio MCP fixture 覆盖 structured content、image/audio block、business failure recovery 与 fresh-process resume。
+- JavaScript error matrix 已覆盖 syntax、throw、Promise reject、timer callback throw、无限循环 context abort；Sobek interrupt 保留原始 `context.DeadlineExceeded`，便于 SDK 正确识别取消。
+- SDK comparator 增加按 turn 的 completed-item 唯一性断言，用于 agent/file/MCP 去重；原始事件完整保留，非必要 web-search 工具选择不参与 code-mode nested-tool 语义序列。
+
+已通过的 Rust/Go live parity artifacts：
+
+- `2026-07-25T151044407Z-linux-mixed-tool-failures-recovery-audit`
+- `2026-07-25T151424127Z-linux-parallel-partial-failure-recovery-audit`
+- `2026-07-25T151533098Z-linux-two-command-resume-stream-audit`
+- `2026-07-25T151740778Z-streaming-smoke`
+- `2026-07-25T151817323Z-resume-apply-patch-parse-recovery`
+- `2026-07-25T152348888Z-linux-resume-interrupted-tool-history-audit`
+- `2026-07-25T153241598Z-apply-patch-context-mismatch-failure`
+- `2026-07-25T153312561Z-apply-patch-multifile-atomic-failure`
+- `2026-07-25T153341987Z-apply-patch-absolute-path-success`
+- `2026-07-25T160434966Z-linux-code-mode-yield-wait-audit`
+- `2026-07-25T160657876Z-linux-mixed-tool-failures-recovery-audit`
+- `2026-07-25T161042571Z-linux-parallel-partial-failure-recovery-audit`
+- `2026-07-25T161152687Z-linux-two-command-resume-stream-audit`
+- `2026-07-25T162815023Z-linux-code-mode-running-cell-fresh-resume-audit`
+- `2026-07-25T162947867Z-linux-code-mode-notify-order-audit`
+- `2026-07-25T163202798Z-streaming-smoke`
+- `2026-07-25T163228540Z-linux-code-mode-yield-wait-audit`
+- `2026-07-25T163311610Z-linux-mixed-tool-failures-recovery-audit`
+- `2026-07-25T163422378Z-linux-parallel-partial-failure-recovery-audit`
+- `2026-07-25T163533293Z-linux-two-command-resume-stream-audit`
+- `2026-07-26T000648201Z-linux-code-mode-terminate-order-audit`
+- `2026-07-26T003009111Z-linux-code-mode-mcp-structured-resume-audit`（原始双端成功记录；修复 comparator 后离线 parity）
+- `2026-07-26T003253722Z-streaming-smoke`
+- `2026-07-26T003329651Z-linux-code-mode-terminate-order-audit`
+- `2026-07-26T003410301Z-linux-code-mode-notify-order-audit`
+- `2026-07-26T003450817Z-apply-patch-absolute-path-success`
+
+非 Go bug 证据：
+
+- `workspace-structured-read`：模型结构化生成 nondeterminism。
+- `java-quicksort-file-order-audit`：两端模型自由选择的命令和源码不同，但 Go 未出现重复 agent/file-change 消息；场景需固定内容契约。
+- `resume-long-context-tools`：Rust 与 Go 第五轮同时遭遇 upstream unavailable，分类为 infra failure。

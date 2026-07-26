@@ -123,7 +123,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
 				return nil, err
 			}
-			if err := registry.Register(tool.NewCodeModeExecExecutor(shellExecutor)); err != nil {
+			execExecutor, waitExecutor := tool.NewCodeModeExecutors(registry)
+			if err := registry.Register(execExecutor); err != nil {
+				return nil, err
+			}
+			if err := registry.Register(waitExecutor); err != nil {
 				return nil, err
 			}
 		} else if err := registry.Register(shellExecutor); err != nil {

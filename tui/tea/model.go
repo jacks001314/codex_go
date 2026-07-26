@@ -1839,12 +1839,16 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 	}
 	switch item.Type {
 	case "command_execution":
+		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
+		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.renderMCPToolCallItem(item, false)
 	case "tool_call":
+		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.startOrUpdateToolCall(item)
 	case "file_change":
+		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.renderFileChangeItem(item, false)
 	case "agent_message":
 		// Streaming deltas create the visible assistant message.
@@ -1859,7 +1863,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	}
 	switch item.Type {
 	case "agent_message":
-		m.mergeAssistantFinal(item.Text)
+		if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
+			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
+		} else {
+			m.mergeAssistantFinal(item.Text)
+		}
 	case "command_execution":
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":

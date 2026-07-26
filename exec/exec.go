@@ -512,7 +512,7 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		}
 		if !c.completedAgentItems[itemID] {
 			c.completedAgentItems[itemID] = true
-			c.emit(protocol.ItemCompleted(protocol.AgentMessageItem(itemID, event.Item.Text)))
+			c.emit(protocol.ItemCompleted(protocol.AgentMessageItemWithPhase(itemID, event.Item.Text, agentMessagePhase(event.Item))))
 		}
 	case model.ResponsesStreamEventModelReroute:
 		if message := modelRerouteErrorMessage(event.Reroute); message != "" {
@@ -576,6 +576,15 @@ func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *t
 	}
 }
 
+func (c *execStreamEventCollector) CodeModeNotify(_ context.Context, callID string, text string) {
+	if c == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	// Rust injects notify into model history immediately. It does not create a
+	// separate SDK thread item, so keep the public event stream free of duplicates.
+	_ = callID
+}
+
 func (c *execStreamEventCollector) AssistantMessage(response *model.AgentResponse, _ int, hasToolCalls bool) {
 	if c == nil || response == nil || !hasToolCalls {
 		return
@@ -588,7 +597,7 @@ func (c *execStreamEventCollector) AssistantMessage(response *model.AgentRespons
 		if strings.TrimSpace(item.Text) == "" {
 			continue
 		}
-		c.emit(protocol.ItemCompleted(protocol.AgentMessageItem(firstNonEmpty(item.ID, "agent-message"), item.Text)))
+		c.emit(protocol.ItemCompleted(protocol.AgentMessageItemWithPhase(firstNonEmpty(item.ID, "agent-message"), item.Text, agentMessagePhase(&item))))
 	}
 }
 
@@ -784,6 +793,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		DisableHostedImageGeneration: run.DisableHostedImageGeneration,
 		OnToolStarted:                run.StreamEvents.ToolStarted,
 		OnToolCompleted:              run.StreamEvents.ToolCompleted,
+		OnCodeModeNotify:             run.StreamEvents.CodeModeNotify,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 	})
 }
@@ -1827,7 +1837,7 @@ func eventsFromAgentResponse(threadID string, response *model.AgentResponse, exe
 	}
 	for _, item := range response.Items {
 		if item.Type == "" || item.Type == "agent_message" {
-			events = append(events, protocol.ItemCompleted(protocol.AgentMessageItem(item.ID, item.Text)))
+			events = append(events, protocol.ItemCompleted(protocol.AgentMessageItemWithPhase(item.ID, item.Text, agentMessagePhase(&item))))
 		}
 	}
 	if event, ok := todoLists.completionEvent(); ok {
@@ -1880,7 +1890,7 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 			firstNonEmpty(item.Arguments, item.Input),
 		)
 	case "", "agent_message":
-		return protocol.AgentMessageItem(firstNonEmpty(item.ID, "agent-message"), item.Text)
+		return protocol.AgentMessageItemWithPhase(firstNonEmpty(item.ID, "agent-message"), item.Text, agentMessagePhase(item))
 	case "reasoning":
 		text := reasoningSummaryText(item.Data)
 		if strings.TrimSpace(text) == "" {
@@ -1900,6 +1910,18 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 			Text: firstNonEmpty(item.Text, item.Arguments, item.Input),
 		}
 	}
+}
+
+func agentMessagePhase(item *model.AgentItem) string {
+	if item == nil {
+		return ""
+	}
+	for _, key := range []string{"phase", "messagePhase", "message_phase"} {
+		if value, ok := item.Data[key].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func streamAgentItemLooksLikeMCP(item *model.AgentItem) bool {
@@ -2108,6 +2130,14 @@ func todoListIDFromPlanUpdateExecution(execution *turn.ToolExecutionResult) stri
 
 func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
 	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
+		// Code-mode nested tools emit their canonical lifecycle through the
+		// dispatcher callbacks while they execute. Reconstructing the same
+		// commands from nested_commands at turn completion duplicates every
+		// command in SDK/TUI output. Keep reconstruction only for callers that
+		// execute code mode without live lifecycle callbacks.
+		if codeModeNestedLifecycleWasStreamed(execution.Invocation) {
+			return nil
+		}
 		commands, _ := execution.Output.Data["nested_commands"].([]string)
 		outputs, _ := execution.Output.Data["nested_outputs"].([]string)
 		exitCodes, _ := execution.Output.Data["nested_exit_codes"].([]int)
@@ -2146,6 +2176,15 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 	return events
 }
 
+func codeModeNestedLifecycleWasStreamed(invocation *tool.Invocation) bool {
+	if invocation == nil || invocation.Context == nil {
+		return false
+	}
+	_, started := invocation.Context["code_mode_nested_tool_started"].(tool.CodeModeNestedToolStartedFunc)
+	_, completed := invocation.Context["code_mode_nested_tool_completed"].(tool.CodeModeNestedToolCompletedFunc)
+	return started && completed
+}
+
 func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
 	if execution == nil || execution.Invocation == nil {
 		return nil
@@ -2162,6 +2201,9 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		return nil
 	}
 	if execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
+		return nil
+	}
+	if execution.Invocation.ToolName.Namespace == "" && execution.Invocation.ToolName.Name == "wait" {
 		return nil
 	}
 	if isWriteStdinExecution(execution) {
@@ -2208,6 +2250,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 		return protocol.ThreadEvent{}, false
 	}
 	if execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
+		return protocol.ThreadEvent{}, false
+	}
+	if execution.Invocation.ToolName.Namespace == "" && execution.Invocation.ToolName.Name == "wait" {
 		return protocol.ThreadEvent{}, false
 	}
 	if isFileChangeExecution(execution) {
@@ -2487,7 +2532,7 @@ func normalizeCollabToolString(raw string) (string, bool) {
 		return "spawn_agent", true
 	case "agent_send_input", "send_input", "sendinput":
 		return "send_input", true
-	case "agent_wait_agent", "wait_agent", "agent_wait", "wait", "waitagent":
+	case "agent_wait_agent", "wait_agent", "agent_wait", "waitagent":
 		return "wait", true
 	case "agent_close_agent", "close_agent", "closeagent":
 		return "close_agent", true

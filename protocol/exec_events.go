@@ -86,6 +86,7 @@ type ThreadItem struct {
 
 	Message           string                       `json:"message,omitempty"`
 	Text              string                       `json:"text,omitempty"`
+	Phase             string                       `json:"phase,omitempty"`
 	ToolName          string                       `json:"tool_name,omitempty"`
 	CallID            string                       `json:"call_id,omitempty"`
 	Input             string                       `json:"input,omitempty"`
@@ -174,10 +175,15 @@ func TurnStarted() ThreadEvent {
 }
 
 func AgentMessageItem(id, text string) ThreadItem {
+	return AgentMessageItemWithPhase(id, text, "")
+}
+
+func AgentMessageItemWithPhase(id, text, phase string) ThreadItem {
 	return ThreadItem{
-		ID:   id,
-		Type: "agent_message",
-		Text: text,
+		ID:    id,
+		Type:  "agent_message",
+		Text:  text,
+		Phase: phase,
 	}
 }
 

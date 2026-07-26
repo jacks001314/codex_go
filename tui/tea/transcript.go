@@ -251,6 +251,28 @@ func (t *TranscriptComponent) mergeAssistantFinal(state *codextui.State, text st
 	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
 }
 
+// completeAssistantCommentary fixes the streamed preamble in transcript history
+// before a tool cell is inserted. Rust treats commentary as a completed
+// mid-turn message rather than leaving it as the active final-answer stream.
+func (t *TranscriptComponent) completeAssistantCommentary(state *codextui.State, itemID string, text string, width int) {
+	if t == nil || state == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
+	t.activeAssistantDeltaItemID = ""
+}
+
+// finishAssistantPreambleBeforeTool closes the active streamed assistant item
+// at the tool boundary. The text is already present in State.Messages; only
+// the streaming identity must be reset so later final-answer deltas cannot
+// merge back into or replace the preamble.
+func (t *TranscriptComponent) finishAssistantPreambleBeforeTool() {
+	if t == nil {
+		return
+	}
+	t.activeAssistantDeltaItemID = ""
+}
+
 // insertFinalMessageSeparatorIfNeeded inserts a separator between tool calls and assistant message.
 func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextui.State, width int) {
 	if t == nil || state == nil || !t.needsFinalMessageSeparator {

@@ -1,4 +1,5 @@
 import { platformCommands, type PlatformSuite } from "./platform/index.ts";
+import { fileURLToPath } from "node:url";
 
 export type Scenario = {
   name: string;
@@ -53,8 +54,8 @@ export type Scenario = {
       status: string;
       stderrPattern?: string;
     }[];
-    commandOutputComparison?: "exact" | "status-exit-code";
-    eventSequenceComparison?: "strict" | "semantic-tools";
+    commandOutputComparison?: "exact" | "status-exit-code" | "parallel-prefix-unordered" | "informational";
+    eventSequenceComparison?: "strict" | "semantic-tools" | "model-selected-tools";
     agentMessageComparison?: "strict" | "final-per-turn";
     compareWorkspacePaths?: string[];
     forbiddenCompletedItemTypes?: string[];
@@ -66,12 +67,110 @@ export type Scenario = {
       hash?: string;
     }[];
     workspaceRequiredPaths?: string[];
+    uniqueCompletedItemTypes?: string[];
+    uniqueCommandExecutions?: boolean;
+    requireCommentaryBeforeTool?: boolean;
   };
 };
 
 const commands = platformCommands();
+const localMCPServer = fileURLToPath(new URL("./fixtures/mcp_server.mjs", import.meta.url));
 
 export const scenarios: Scenario[] = [
+  {
+    name: "linux-code-mode-mcp-structured-resume-audit",
+    description: "Uses the same local MCP server for Rust and Go to audit structured/media content, business failure recovery, and fresh-process resume.",
+    platforms: ["linux"], optIn: true, timeoutMs: 240000,
+    codexConfig: {
+      mcp_servers: { sdkfixture: { command: process.execPath, args: [localMCPServer], enabled: true, default_tools_approval_mode: "approve" } },
+      features: { deferred_executor: false, code_mode: true },
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      { prompt: "Use exec exactly once with this JavaScript, adjusting only the MCP tool identifier if the exposed name differs: const result = await tools.mcp__sdkfixture__inspect({value: 7}); text(result.content[0].text); text(result.structuredContent.answer); text(result.content[1].type); text(result.content[2].type); Then reply exactly MCP_STRUCTURED_TURN1_OK. Do not use shell or send commentary." },
+      { resume: true, prompt: "This is a fresh-process resume. Use exec exactly once. In JavaScript call the sdkfixture controlled_failure MCP tool inside try/catch, then call the sdkfixture inspect tool with value 9, emit text(\"MCP_RECOVERED\") and text(the inspect structuredContent.echoed), and finish. Then reply exactly MCP_STRUCTURED_TURN2_OK. Do not use shell or send commentary." },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      exactAgentMessages: ["MCP_STRUCTURED_TURN1_OK", "MCP_STRUCTURED_TURN2_OK"],
+      requiredCompletedItemTypes: ["agent_message", "mcp_tool_call"], forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      uniqueCompletedItemTypes: ["agent_message", "mcp_tool_call"],
+      requireStableThreadId: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-code-mode-terminate-order-audit",
+    description: "Terminates a yielded code-mode cell and verifies a successful terminal tool lifecycle without duplicate output.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: text(\"BEFORE_TERMINATE\"); yield_control(); await new Promise(resolve => setTimeout(resolve, 60000)); text(\"AFTER_TERMINATE_MUST_NOT_APPEAR\"); After exec returns a running cell id, call wait exactly once with that cell_id and terminate true. Then reply exactly TERMINATE_ORDER_OK. Do not use any other tool or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["TERMINATE_ORDER_OK"], requiredCompletedItemTypes: ["agent_message"],
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-code-mode-notify-order-audit",
+    description: "Audits notify as an immediate separate rollout output without duplicating it in the final exec body or SDK agent stream.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: notify(\"NOTIFY_ONE\"); text(\"FINAL_OUTPUT\"); Then reply with exactly NOTIFY_ORDER_OK. Do not use other tools, do not send commentary, and do not repeat either helper output in your reply." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["NOTIFY_ORDER_OK"], requiredCompletedItemTypes: ["agent_message"],
+      uniqueCompletedItemTypes: ["agent_message"],
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-code-mode-running-cell-fresh-resume-audit",
+    description: "Measures Rust/Go behavior when a yielded code-mode cell id is referenced from a fresh resumed CLI process.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      { prompt: "Use exec exactly once with this exact JavaScript and do not call wait: // @exec: {\"yield_time_ms\": 0}\nawait new Promise(resolve => setTimeout(resolve, 60000)); text(\"STALE_CELL_SHOULD_NOT_COMPLETE\");\nAfter exec reports a running cell id, reply with exactly RUNNING_CELL_CREATED followed by one space and that exact cell id. Do not use any other tool." },
+      { resume: true, prompt: "This is a fresh-process resumed turn. Read the cell id from your immediately preceding reply and call wait exactly once with that cell_id and yield_time_ms 1. Do not create another exec cell. Then reply with exactly FRESH_CELL_WAIT_OBSERVED. This is an error-path audit, so a missing/unknown cell response is expected." },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      requiredCompletedItemTypes: ["agent_message"], requireStableThreadId: true,
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "linux-code-mode-yield-wait-audit",
+    description: "Forces code-mode to yield a running timer cell, then requires wait to complete it without duplicate output.",
+    platforms: ["linux"], optIn: true, timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use the exec code-mode tool exactly once with this exact JavaScript, including the pragma: // @exec: {\"yield_time_ms\": 0}\nawait new Promise(resolve => setTimeout(resolve, 50)); text(\"YIELD_WAIT_COMPLETE\");\nAfter exec returns a running cell id, call wait with that cell id exactly once. Then reply with exactly YIELD_WAIT_OK. Do not run commands, edit files, or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["YIELD_WAIT_OK"], requiredCompletedItemTypes: ["agent_message"],
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
   {
     name: "linux-two-command-resume-stream-audit",
     description: "Creates a deterministic two-command Responses history, resumes in a fresh CLI process, and detects stream closure independently of network/model tool-choice variance.",
@@ -99,7 +198,7 @@ export const scenarios: Scenario[] = [
         { status: "completed", exitCode: 0, output: "RESUME_HISTORY_GAMMA" },
       ],
       requireStableThreadId: true, commandOutputComparison: "exact",
-      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      eventSequenceComparison: "model-selected-tools", agentMessageComparison: "final-per-turn",
       workspaceMutation: "none",
     },
   },
@@ -168,6 +267,7 @@ export const scenarios: Scenario[] = [
         { status: "completed", exitCode: 0, output: "AFTER_PARALLEL_RECOVERY" },
       ],
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+      commandOutputComparison: "parallel-prefix-unordered",
     },
   },
   {
@@ -220,7 +320,9 @@ export const scenarios: Scenario[] = [
     expected: {
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       requiredCompletedItemTypes: ["agent_message"],
-      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      uniqueCommandExecutions: true, requireCommentaryBeforeTool: true,
+      commandOutputComparison: "informational",
+      eventSequenceComparison: "model-selected-tools", agentMessageComparison: "final-per-turn",
       workspaceMutation: "none",
     },
   },
@@ -237,6 +339,7 @@ export const scenarios: Scenario[] = [
     expected: {
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       requiredCompletedItemTypes: ["file_change", "agent_message"],
+      uniqueCompletedItemTypes: ["file_change", "agent_message"],
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
       workspaceMutation: "required", workspaceRequiredPaths: ["quicksort.java"],
       compareWorkspacePaths: ["quicksort.java"],

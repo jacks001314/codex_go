@@ -3409,6 +3409,27 @@ func TestWriteStdinCompletionMapsToOriginalCommandExecutionLikeRust(t *testing.T
 	}
 }
 
+func TestCodeModeDoesNotReplayNestedCommandsAfterLiveLifecycle(t *testing.T) {
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "code-call",
+			ToolName: tool.PlainName(tool.CodeModeExecToolName),
+			Context: map[string]any{
+				"code_mode_nested_tool_started":   tool.CodeModeNestedToolStartedFunc(func(context.Context, *tool.Invocation, time.Time) {}),
+				"code_mode_nested_tool_completed": tool.CodeModeNestedToolCompletedFunc(func(context.Context, *tool.Invocation, *tool.Output, error, time.Time, time.Time) {}),
+			},
+		},
+		Output: &tool.Output{Success: true, Data: map[string]any{
+			"nested_commands":   []string{"curl weather"},
+			"nested_outputs":    []string{"sunny"},
+			"nested_exit_codes": []int{0},
+		}},
+	}
+	if events := eventsFromToolExecution(execution); len(events) != 0 {
+		t.Fatalf("replayed nested command events = %#v, want none after live lifecycle", events)
+	}
+}
+
 func TestEmitFinalEventsIncludesAgentMessagesAfterStreaming(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Responses: []*model.AgentResponse{{
@@ -3704,9 +3725,23 @@ func TestExecStreamEventCollectorDefersApplyPatchBeginUntilValidation(t *testing
 func TestExecStreamEventCollectorPreservesCommentaryBeforeToolStart(t *testing.T) {
 	collector := &execStreamEventCollector{streamAssistantDeltas: true}
 	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventOutputAdded,
+		ItemID: "msg-commentary",
+		Item: &model.AgentItem{ID: "msg-commentary", Type: "agent_message", Data: map[string]any{
+			"phase": "commentary",
+		}},
+	})
+	collector.Handle(&model.ResponsesStreamEvent{
 		Kind:   model.ResponsesStreamEventOutputText,
 		ItemID: "msg-commentary",
 		Delta:  "我查询一下天气。",
+	})
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventOutputDone,
+		ItemID: "msg-commentary",
+		Item: &model.AgentItem{ID: "msg-commentary", Type: "agent_message", Text: "我查询一下天气。", Data: map[string]any{
+			"phase": "commentary",
+		}},
 	})
 	collector.ToolStarted(context.Background(), &tool.Invocation{
 		CallID:   "call-weather",
@@ -3714,14 +3749,17 @@ func TestExecStreamEventCollectorPreservesCommentaryBeforeToolStart(t *testing.T
 		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"curl weather"}`},
 	}, time.Now())
 	events := collector.Events()
-	if len(events) != 2 || events[0].Type != "item.delta" || events[1].Type != "item.started" {
+	if len(events) != 3 || events[0].Type != "item.delta" || events[1].Type != "item.completed" || events[2].Type != "item.started" {
 		t.Fatalf("event order = %#v", events)
 	}
 	if events[0].Delta == nil || events[0].Delta.Text != "我查询一下天气。" {
 		t.Fatalf("commentary event = %#v", events[0])
 	}
-	if events[1].Item == nil || events[1].Item.Type != "command_execution" {
-		t.Fatalf("tool event = %#v", events[1])
+	if events[1].Item == nil || events[1].Item.Phase != "commentary" {
+		t.Fatalf("commentary completion = %#v", events[1])
+	}
+	if events[2].Item == nil || events[2].Item.Type != "command_execution" {
+		t.Fatalf("tool event = %#v", events[2])
 	}
 }
 
@@ -3866,6 +3904,22 @@ func TestEventsFromToolExecutionHideToolSearchLikeRust(t *testing.T) {
 	})
 	if events := collector.Events(); len(events) != 0 {
 		t.Fatalf("streamed tool_search should stay hidden: %#v", events)
+	}
+}
+
+func TestCodeModeWaitIsHiddenAndNotCollaborationTool(t *testing.T) {
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{CallID: "wait-cell", ToolName: tool.PlainName("wait"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cell_id":"1"}`}},
+		Output:     &tool.Output{CallID: "wait-cell", ToolName: tool.PlainName("wait"), Success: true, Body: "done"},
+	}
+	if isCollabExecution(execution) {
+		t.Fatal("plain code-mode wait must not be classified as a collaboration tool")
+	}
+	if events := eventsFromToolExecution(execution); len(events) != 0 {
+		t.Fatalf("code-mode wait events = %#v, want hidden", events)
+	}
+	if _, ok := normalizeCollabToolString("wait"); ok {
+		t.Fatal("plain wait must not normalize to wait_agent")
 	}
 }
 

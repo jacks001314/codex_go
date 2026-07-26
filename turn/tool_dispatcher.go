@@ -20,6 +20,7 @@ type ToolDispatcherOptions struct {
 	PostToolInputItems ToolPostExecutionInputItems
 	OnToolStarted      ToolStartedCallback
 	OnToolCompleted    ToolCompletedCallback
+	OnCodeModeNotify   CodeModeNotifyCallback
 	ThreadID           string
 	TurnID             string
 }
@@ -31,6 +32,7 @@ type ToolDispatcher struct {
 	postToolInputItems ToolPostExecutionInputItems
 	onToolStarted      ToolStartedCallback
 	onToolCompleted    ToolCompletedCallback
+	onCodeModeNotify   CodeModeNotifyCallback
 	threadID           string
 	turnID             string
 	clockMu            sync.Mutex
@@ -49,6 +51,7 @@ type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invo
 
 type ToolStartedCallback func(ctx context.Context, invocation *tool.Invocation, startedAt time.Time)
 type ToolCompletedCallback func(ctx context.Context, result *ToolExecutionResult)
+type CodeModeNotifyCallback func(ctx context.Context, callID string, text string)
 
 type ToolResponseItem struct {
 	Type      string                     `json:"type"`
@@ -128,6 +131,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		postToolInputItems: options.PostToolInputItems,
 		onToolStarted:      options.OnToolStarted,
 		onToolCompleted:    options.OnToolCompleted,
+		onCodeModeNotify:   options.OnCodeModeNotify,
 		threadID:           strings.TrimSpace(options.ThreadID),
 		turnID:             strings.TrimSpace(options.TurnID),
 	}
@@ -262,6 +266,42 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		invocation.Cancel = nil
 		cancel(nil)
 	}()
+	var notifyMu sync.Mutex
+	notifyItems := []any{}
+	if invocation.ToolName.Namespace == "" && invocation.ToolName.Name == tool.CodeModeExecToolName {
+		if invocation.Context == nil {
+			invocation.Context = map[string]any{}
+		}
+		invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID string, text string) {
+			if strings.TrimSpace(text) == "" {
+				return
+			}
+			item := &ToolResponseItem{Type: "custom_tool_call_output", CallID: callID, Name: tool.CodeModeExecToolName, Output: NewFunctionCallOutputPayload(text, boolPtr(true))}
+			notifyMu.Lock()
+			notifyItems = append(notifyItems, item)
+			notifyMu.Unlock()
+			if d.onCodeModeNotify != nil {
+				d.onCodeModeNotify(toolCtx, callID, text)
+			}
+		})
+		invocation.Context["code_mode_nested_tool_started"] = tool.CodeModeNestedToolStartedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedStartedAt time.Time) {
+			if d.onToolStarted != nil {
+				d.onToolStarted(nestedCtx, nested, nestedStartedAt)
+			}
+		})
+		invocation.Context["code_mode_nested_tool_completed"] = tool.CodeModeNestedToolCompletedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedOutput *tool.Output, nestedErr error, nestedStartedAt, nestedFinishedAt time.Time) {
+			if d.onToolCompleted == nil {
+				return
+			}
+			if nestedOutput == nil {
+				nestedOutput = &tool.Output{CallID: nested.CallID, ToolName: nested.ToolName, Success: nestedErr == nil, CompletedAt: nestedFinishedAt}
+				if nestedErr != nil {
+					nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
+				}
+			}
+			d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
+		})
+	}
 	startedAt := d.nowUTC()
 	if d.onToolStarted != nil {
 		d.onToolStarted(toolCtx, invocation, startedAt)
@@ -292,6 +332,9 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		finishedAt = d.nowUTC()
 	}
 	inputItems := d.postExecutionInputItems(toolCtx, invocation, output)
+	notifyMu.Lock()
+	inputItems = append(notifyItems, inputItems...)
+	notifyMu.Unlock()
 	result := &ToolExecutionResult{
 		Invocation: invocation,
 		Output:     output,
