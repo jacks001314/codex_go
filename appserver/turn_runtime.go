@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -4640,6 +4641,9 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
 	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
 	inputItems := append([]any(nil), historyItems...)
+	if item := r.turnEnvironmentContextInputItem(params); item != nil {
+		inputItems = append(inputItems, item)
+	}
 	inputItems = append(inputItems, additionalInputItems...)
 	if item := collaborationModeInstructionsInputItem(params); item != nil {
 		inputItems = append(inputItems, item)
@@ -4765,6 +4769,51 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			UseResponsesLite:   r.modelUsesResponsesLite(modelProviderConfig.Model),
 		}),
 	}, nil
+}
+
+// turnEnvironmentContextInputItem mirrors Rust's per-turn world-state context.
+// In particular, the shell reported here must be the same primary environment
+// shell that exec_command will use, otherwise models can emit syntax for the
+// host shell (for example a POSIX heredoc) and hand it to remote PowerShell.
+func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartParams) any {
+	if params == nil || len(params.Environments) == 0 {
+		return nil
+	}
+	cwd := strings.TrimSpace(firstNonEmpty(turnCWD(params), r.services.DefaultCWD))
+	shellName := ""
+	if environments := r.unifiedExecEnvironmentsForTurn(params); len(environments) > 0 {
+		if shell := environments[0].Shell; shell != nil {
+			shellName = string(shell.Type)
+		}
+	}
+	if shellName == "" && r != nil && r.services.Environment != nil {
+		if info := r.services.Environment.defaultShell; strings.TrimSpace(info.Name) != "" {
+			shellName = strings.TrimSpace(info.Name)
+		} else if strings.TrimSpace(info.Path) != "" {
+			shellName = string(tool.DetectShellType(info.Path))
+		}
+	}
+	if shellName == "" {
+		if runtime.GOOS == "windows" {
+			shellName = "powershell"
+		} else {
+			shellName = "sh"
+		}
+	}
+	var b strings.Builder
+	b.WriteString("<environment_context>\n")
+	fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
+	fmt.Fprintf(&b, "  <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
+	b.WriteString("</environment_context>")
+	return model.UserMessageInputItem(b.String())
+}
+
+func escapeEnvironmentXML(value string) string {
+	var b strings.Builder
+	if err := xml.EscapeText(&b, []byte(value)); err != nil {
+		return value
+	}
+	return b.String()
 }
 
 type appTurnAnalyticsThreadSnapshot struct {

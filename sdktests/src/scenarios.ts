@@ -291,6 +291,43 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    name: "yunnan-cities-weather-tool-failure-audit",
+    description: "Answers the Yunnan cities weather request while auditing failed-tool lifecycle, recovery, commentary ordering, and duplicates.",
+    optIn: true,
+    timeoutMs: 240000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: true, webSearchMode: "live",
+    },
+    turns: [{ prompt: "给我云南各个城市的天气" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"], uniqueCommandExecutions: true,
+      requireCommentaryBeforeTool: true, commandOutputComparison: "informational",
+      eventSequenceComparison: "model-selected-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "yunnan-weather-deterministic-tool-failure-audit",
+    description: "Forces the same failing Yunnan weather shell lookup on both implementations and audits failure lifecycle and recovery.",
+    optIn: true,
+    timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "给我云南各个城市的天气。你必须先且只执行一次这个 shell 命令：curl -sS --max-time 5 'https://sdk-weather.invalid/Yunnan?format=j1'。不要重试，不要执行其他工具。命令失败后，简短说明无法获取实时天气，并列出云南16个州（市）驻地。" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["command_execution", "agent_message"],
+      uniqueCommandExecutions: true, requireCommentaryBeforeTool: true,
+      commandExecutions: [{ status: "failed", exitCode: 6 }], commandOutputComparison: "status-exit-code",
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
     name: "chrome-beijing-weather-order-audit",
     description: "Opens Chrome and searches for Beijing weather while auditing browser-command lifecycle, duplicate launches, and message ordering.",
     optIn: true,

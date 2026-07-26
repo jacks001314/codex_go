@@ -8538,6 +8538,29 @@ func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testin
 	}
 }
 
+func TestTurnEnvironmentContextReportsSelectedPowerShellLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "windows-vscode", ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+		t.Fatalf("add environment: %v", err)
+	}
+	if err := manager.SetInfo("windows-vscode", EnvironmentShellInfo{Name: "powershell", Path: "powershell.exe"}, `C:\workspace`); err != nil {
+		t.Fatalf("set environment info: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager, DefaultCWD: cwd})
+	item := router.turnEnvironmentContextInputItem(&turn.TurnStartParams{
+		CWD: `C:\workspace`,
+		Environments: []map[string]any{{
+			"environmentId": "windows-vscode",
+			"cwd":           `C:\workspace`,
+		}},
+	})
+	text := fmt.Sprint(item.(map[string]any)["content"].([]map[string]any)[0]["text"])
+	if !strings.Contains(text, `<shell>powershell</shell>`) || !strings.Contains(text, `C:\workspace`) {
+		t.Fatalf("environment context item = %q", text)
+	}
+}
+
 func TestRuntimeRouterUnifiedExecEnvironmentUsesRemoteInfoShellLikeRust(t *testing.T) {
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 	urlCh := make(chan string, 1)

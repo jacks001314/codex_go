@@ -618,6 +618,21 @@ type fakeShellRunner struct {
 	err     error
 }
 
+func TestUnifiedExecSpecWarnsAboutPOSIXHeredocForSelectedPowerShellEnvironment(t *testing.T) {
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		UnifiedExec: NewUnifiedExecManager(),
+		Shell:       &Shell{Type: ShellZsh, Path: "/bin/zsh"},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{{
+			ID:    "windows-vscode",
+			Shell: &Shell{Type: ShellPowerShell, Path: "powershell.exe"},
+		}},
+	})
+	description := executor.Spec().Description
+	if !strings.Contains(description, "uses PowerShell") || !strings.Contains(description, "python - <<'PY'") {
+		t.Fatalf("PowerShell exec description = %q", description)
+	}
+}
+
 func (r *fakeShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellResult, error) {
 	_ = ctx
 	r.request = req

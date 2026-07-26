@@ -199,6 +199,11 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 		properties[key] = schema
 	}
 	description := "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+	if shell := e.modelVisibleShell(); shell != nil && shell.Type == ShellPowerShell {
+		description += "\n\nThe selected execution environment uses PowerShell. Write PowerShell-compatible commands. POSIX heredocs such as `python - <<'PY'` are not supported; use `python -c`, a PowerShell here-string piped to Python, or a temporary `.py` file instead."
+	} else if shell != nil && shell.Type == ShellCmd {
+		description += "\n\nThe selected execution environment uses Windows cmd.exe. Write cmd-compatible commands; POSIX heredocs are not supported."
+	}
 	if runtime.GOOS == "windows" {
 		description += "\n\n" + unifiedExecWindowsShellGuidance
 	}
@@ -214,6 +219,19 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 		OutputSchema: unifiedExecOutputSchema(),
 		Parallel:     true,
 	}
+}
+
+// modelVisibleShell returns the shell that an exec_command without an explicit
+// environment_id will actually use. Keep this aligned with Execute: the
+// primary selected environment overrides the session shell.
+func (e *ShellExecutor) modelVisibleShell() *Shell {
+	if e == nil {
+		return nil
+	}
+	if len(e.unifiedExecEnvironments) > 0 && e.unifiedExecEnvironments[0].Shell != nil {
+		return e.unifiedExecEnvironments[0].Shell
+	}
+	return e.sessionShell()
 }
 
 func unifiedExecApprovalProperties(additionalPermissions bool) map[string]any {

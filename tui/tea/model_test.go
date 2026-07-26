@@ -1303,6 +1303,36 @@ func TestModelWeatherLifecycleShowsRunningAndNoDuplicateResults(t *testing.T) {
 	}
 }
 
+func TestModelWeatherFailedCommandLifecycleMatchesRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 100, Height: 30})
+	commentary := "我会只执行一次天气查询。"
+	command := "curl -sS --max-time 5 https://sdk-weather.invalid/Yunnan"
+	failure := "curl: (6) Could not resolve host: sdk-weather.invalid\n"
+	final := "无法获取云南实时天气。"
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-commentary", commentary)})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", command, "", nil, "in_progress"))})
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, commentary) || !strings.Contains(view, "Running "+command) {
+		t.Fatalf("failed weather command did not expose running lifecycle:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-commentary", commentary, "commentary"))})
+	exitCode := 6
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.CommandExecutionItem("call-weather", command, failure, &exitCode, "failed"))})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-final", final)})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-final", final, "final_answer"))})
+	model.Update(ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+
+	view := utils.StripANSI(model.View())
+	for text, want := range map[string]int{commentary: 1, failure[:len(failure)-1]: 1, final: 1} {
+		if got := strings.Count(view, text); got != want {
+			t.Fatalf("%q count = %d, want %d:\n%s", text, got, want, view)
+		}
+	}
+}
+
 func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `C:\work`})
 	model := NewModel(state, Options{Width: 80, Height: 24})
