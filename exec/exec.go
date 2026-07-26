@@ -452,7 +452,7 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		// Rust creates command cells from the execution lifecycle, after the
 		// complete command is known. The model's output-added event can carry
 		// empty arguments and must not create a generic exec_command cell.
-		if event.Item.Name == tool.DefaultExecCommandToolName {
+		if tool.IsShellCommandToolName(tool.PlainName(event.Item.Name)) {
 			return
 		}
 		if event.Item.Name == tool.CodeModeExecToolName {
@@ -551,7 +551,7 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 		// Final execution mapping emits started/completed for validated patches.
 		return
 	}
-	if invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
+	if !tool.IsShellCommandToolName(invocation.ToolName) {
 		return
 	}
 	command := commandFromShellInvocation(invocation)
@@ -793,6 +793,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		DisableHostedImageGeneration: run.DisableHostedImageGeneration,
 		OnToolStarted:                run.StreamEvents.ToolStarted,
 		OnToolCompleted:              run.StreamEvents.ToolCompleted,
+		EmitCodeModeNestedLifecycle:  true,
 		OnCodeModeNotify:             run.StreamEvents.CodeModeNotify,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 	})
@@ -2130,36 +2131,10 @@ func todoListIDFromPlanUpdateExecution(execution *turn.ToolExecutionResult) stri
 
 func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
 	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
-		// Code-mode nested tools emit their canonical lifecycle through the
-		// dispatcher callbacks while they execute. Reconstructing the same
-		// commands from nested_commands at turn completion duplicates every
-		// command in SDK/TUI output. Keep reconstruction only for callers that
-		// execute code mode without live lifecycle callbacks.
-		if codeModeNestedLifecycleWasStreamed(execution.Invocation) {
-			return nil
-		}
-		commands, _ := execution.Output.Data["nested_commands"].([]string)
-		outputs, _ := execution.Output.Data["nested_outputs"].([]string)
-		exitCodes, _ := execution.Output.Data["nested_exit_codes"].([]int)
-		events := make([]protocol.ThreadEvent, 0, len(commands)*2)
-		for index, command := range commands {
-			id := fmt.Sprintf("command-%s-%d", safeSessionItemID(execution.Invocation.CallID), index+1)
-			events = append(events, protocol.ItemStarted(protocol.CommandExecutionItem(id, command, "", nil, "in_progress")))
-			output := ""
-			if index < len(outputs) {
-				output = outputs[index]
-			}
-			exitCode := 0
-			if index < len(exitCodes) {
-				exitCode = exitCodes[index]
-			}
-			status := "completed"
-			if exitCode != 0 {
-				status = "failed"
-			}
-			events = append(events, protocol.ItemCompleted(protocol.CommandExecutionItem(id, command, output, &exitCode, status)))
-		}
-		return events
+		// Rust keeps nested code-mode tool calls inside the outer exec delegate
+		// boundary. They are observable in the exec result and rollout trace, but
+		// are not emitted as top-level SDK command/file/MCP items.
+		return nil
 	}
 	if isPlanUpdateExecution(execution) {
 		todoLists := &execTodoListState{}
@@ -2174,15 +2149,6 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 		events = append(events, event)
 	}
 	return events
-}
-
-func codeModeNestedLifecycleWasStreamed(invocation *tool.Invocation) bool {
-	if invocation == nil || invocation.Context == nil {
-		return false
-	}
-	_, started := invocation.Context["code_mode_nested_tool_started"].(tool.CodeModeNestedToolStartedFunc)
-	_, completed := invocation.Context["code_mode_nested_tool_completed"].(tool.CodeModeNestedToolCompletedFunc)
-	return started && completed
 }
 
 func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
@@ -2320,7 +2286,7 @@ func isCommandExecution(execution *turn.ToolExecutionResult) bool {
 	if execution == nil || execution.Invocation == nil || execution.Output == nil {
 		return false
 	}
-	if execution.Invocation.ToolName.Key() != tool.DefaultExecCommandToolName {
+	if !tool.IsShellCommandToolName(execution.Invocation.ToolName) {
 		return false
 	}
 	if _, ok := intFromAny(execution.Output.Data["exit_code"]); ok {

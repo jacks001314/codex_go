@@ -54,7 +54,7 @@ export type Scenario = {
       status: string;
       stderrPattern?: string;
     }[];
-    commandOutputComparison?: "exact" | "status-exit-code" | "parallel-prefix-unordered" | "informational";
+    commandOutputComparison?: "exact" | "status-exit-code" | "parallel-prefix-unordered" | "unordered" | "informational";
     eventSequenceComparison?: "strict" | "semantic-tools" | "model-selected-tools";
     agentMessageComparison?: "strict" | "final-per-turn";
     compareWorkspacePaths?: string[];
@@ -77,6 +77,86 @@ const commands = platformCommands();
 const localMCPServer = fileURLToPath(new URL("./fixtures/mcp_server.mjs", import.meta.url));
 
 export const scenarios: Scenario[] = [
+  {
+    name: "code-mode-single-command-audit",
+    description: "Runs one deterministic command through JavaScript code mode and verifies nested tool lifecycle and output.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: const r = await tools.shell_command({command: \"Write-Output CODE_MODE_SINGLE_OK\"}); text(r.output); Then reply exactly CODE_MODE_SINGLE_DONE. Do not use any other tool or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["CODE_MODE_SINGLE_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "completed", exitCode: 0, output: "CODE_MODE_SINGLE_OK" }], uniqueCommandExecutions: true,
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "code-mode-serial-command-audit",
+    description: "Runs three nested commands sequentially in one JavaScript cell to audit promise completion and ordering.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once. In JavaScript call tools.shell_command sequentially three times with these command values in order: Write-Output SERIAL_ONE; Write-Output SERIAL_TWO; Write-Output SERIAL_THREE. Pass each value in the command field, await each call before starting the next, emit each result.output with text(), then reply exactly CODE_MODE_SERIAL_DONE. Do not use other tools or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["CODE_MODE_SERIAL_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "SERIAL_ONE" },
+        { status: "completed", exitCode: 0, output: "SERIAL_TWO" },
+        { status: "completed", exitCode: 0, output: "SERIAL_THREE" },
+      ], uniqueCommandExecutions: true,
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "code-mode-parallel-command-audit",
+    description: "Runs four nested commands with Promise.all to expose concurrent dispatch and shared-context failures.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: const results = await Promise.all([tools.shell_command({command: 'Write-Output PARALLEL_A'}), tools.shell_command({command: 'Write-Output PARALLEL_B'}), tools.shell_command({command: 'Write-Output PARALLEL_C'}), tools.shell_command({command: 'Write-Output PARALLEL_D'})]); results.forEach(r => text(r.output)); Then reply exactly CODE_MODE_PARALLEL_DONE. Do not use other tools, substitute another tool name, or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["CODE_MODE_PARALLEL_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "PARALLEL_A" },
+        { status: "completed", exitCode: 0, output: "PARALLEL_B" },
+        { status: "completed", exitCode: 0, output: "PARALLEL_C" },
+        { status: "completed", exitCode: 0, output: "PARALLEL_D" },
+      ], uniqueCommandExecutions: true, commandOutputComparison: "unordered",
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "code-mode-command-failure-recovery-audit",
+    description: "Checks Rust-compatible rejection, catch recovery, and a later successful nested command.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: try { await tools.shell_command({command: \"definitely_missing_code_mode_command_20260726\"}); } catch (error) { text(\"CAUGHT_FAILURE\"); } const recovered = await tools.shell_command({command: \"Write-Output RECOVERY_OK\"}); text(recovered.output); Then reply exactly CODE_MODE_RECOVERY_DONE. Do not use other tools or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["CODE_MODE_RECOVERY_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [
+        { status: "failed", exitCode: 1 },
+        { status: "completed", exitCode: 0, output: "RECOVERY_OK" },
+      ], uniqueCommandExecutions: true, commandOutputComparison: "status-exit-code",
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
   {
     name: "linux-code-mode-mcp-structured-resume-audit",
     description: "Uses the same local MCP server for Rust and Go to audit structured/media content, business failure recovery, and fresh-process resume.",
@@ -309,6 +389,24 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    name: "yunnan-cities-today-weather-audit",
+    description: "Answers the exact Yunnan cities today-weather prompt while auditing live-search lifecycle, recovery, duplicates, and workspace isolation.",
+    optIn: true,
+    timeoutMs: 300000,
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: true, webSearchMode: "live",
+    },
+    turns: [{ prompt: "请你告诉我云南各个城市今天的天气" }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"], uniqueCommandExecutions: true,
+      requireCommentaryBeforeTool: true, commandOutputComparison: "informational",
+      eventSequenceComparison: "model-selected-tools", agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
     name: "yunnan-weather-deterministic-tool-failure-audit",
     description: "Forces the same failing Yunnan weather shell lookup on both implementations and audits failure lifecycle and recovery.",
     optIn: true,
@@ -322,7 +420,7 @@ export const scenarios: Scenario[] = [
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       requiredCompletedItemTypes: ["command_execution", "agent_message"],
       uniqueCommandExecutions: true, requireCommentaryBeforeTool: true,
-      commandExecutions: [{ status: "failed", exitCode: 6 }], commandOutputComparison: "status-exit-code",
+      commandExecutions: [{ status: "failed", exitCode: 1 }], commandOutputComparison: "status-exit-code",
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
       workspaceMutation: "none",
     },

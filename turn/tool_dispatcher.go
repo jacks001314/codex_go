@@ -14,28 +14,30 @@ import (
 )
 
 type ToolDispatcherOptions struct {
-	Router             *tool.Router
-	Hooks              tool.HookRunner
-	Now                func() time.Time
-	PostToolInputItems ToolPostExecutionInputItems
-	OnToolStarted      ToolStartedCallback
-	OnToolCompleted    ToolCompletedCallback
-	OnCodeModeNotify   CodeModeNotifyCallback
-	ThreadID           string
-	TurnID             string
+	Router                      *tool.Router
+	Hooks                       tool.HookRunner
+	Now                         func() time.Time
+	PostToolInputItems          ToolPostExecutionInputItems
+	OnToolStarted               ToolStartedCallback
+	OnToolCompleted             ToolCompletedCallback
+	EmitCodeModeNestedLifecycle bool
+	OnCodeModeNotify            CodeModeNotifyCallback
+	ThreadID                    string
+	TurnID                      string
 }
 
 type ToolDispatcher struct {
-	router             *tool.Router
-	hooks              tool.HookRunner
-	now                func() time.Time
-	postToolInputItems ToolPostExecutionInputItems
-	onToolStarted      ToolStartedCallback
-	onToolCompleted    ToolCompletedCallback
-	onCodeModeNotify   CodeModeNotifyCallback
-	threadID           string
-	turnID             string
-	clockMu            sync.Mutex
+	router                      *tool.Router
+	hooks                       tool.HookRunner
+	now                         func() time.Time
+	postToolInputItems          ToolPostExecutionInputItems
+	onToolStarted               ToolStartedCallback
+	onToolCompleted             ToolCompletedCallback
+	emitCodeModeNestedLifecycle bool
+	onCodeModeNotify            CodeModeNotifyCallback
+	threadID                    string
+	turnID                      string
+	clockMu                     sync.Mutex
 }
 
 type ToolExecutionResult struct {
@@ -125,15 +127,16 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		now = time.Now
 	}
 	return &ToolDispatcher{
-		router:             options.Router,
-		hooks:              options.Hooks,
-		now:                now,
-		postToolInputItems: options.PostToolInputItems,
-		onToolStarted:      options.OnToolStarted,
-		onToolCompleted:    options.OnToolCompleted,
-		onCodeModeNotify:   options.OnCodeModeNotify,
-		threadID:           strings.TrimSpace(options.ThreadID),
-		turnID:             strings.TrimSpace(options.TurnID),
+		router:                      options.Router,
+		hooks:                       options.Hooks,
+		now:                         now,
+		postToolInputItems:          options.PostToolInputItems,
+		onToolStarted:               options.OnToolStarted,
+		onToolCompleted:             options.OnToolCompleted,
+		emitCodeModeNestedLifecycle: options.EmitCodeModeNestedLifecycle,
+		onCodeModeNotify:            options.OnCodeModeNotify,
+		threadID:                    strings.TrimSpace(options.ThreadID),
+		turnID:                      strings.TrimSpace(options.TurnID),
 	}
 }
 
@@ -284,23 +287,25 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				d.onCodeModeNotify(toolCtx, callID, text)
 			}
 		})
-		invocation.Context["code_mode_nested_tool_started"] = tool.CodeModeNestedToolStartedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedStartedAt time.Time) {
-			if d.onToolStarted != nil {
-				d.onToolStarted(nestedCtx, nested, nestedStartedAt)
-			}
-		})
-		invocation.Context["code_mode_nested_tool_completed"] = tool.CodeModeNestedToolCompletedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedOutput *tool.Output, nestedErr error, nestedStartedAt, nestedFinishedAt time.Time) {
-			if d.onToolCompleted == nil {
-				return
-			}
-			if nestedOutput == nil {
-				nestedOutput = &tool.Output{CallID: nested.CallID, ToolName: nested.ToolName, Success: nestedErr == nil, CompletedAt: nestedFinishedAt}
-				if nestedErr != nil {
-					nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
+		if d.emitCodeModeNestedLifecycle {
+			invocation.Context["code_mode_nested_tool_started"] = tool.CodeModeNestedToolStartedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedStartedAt time.Time) {
+				if d.onToolStarted != nil {
+					d.onToolStarted(nestedCtx, nested, nestedStartedAt)
 				}
-			}
-			d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
-		})
+			})
+			invocation.Context["code_mode_nested_tool_completed"] = tool.CodeModeNestedToolCompletedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedOutput *tool.Output, nestedErr error, nestedStartedAt, nestedFinishedAt time.Time) {
+				if d.onToolCompleted == nil {
+					return
+				}
+				if nestedOutput == nil {
+					nestedOutput = &tool.Output{CallID: nested.CallID, ToolName: nested.ToolName, Success: nestedErr == nil, CompletedAt: nestedFinishedAt}
+					if nestedErr != nil {
+						nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
+					}
+				}
+				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
+			})
+		}
 	}
 	startedAt := d.nowUTC()
 	if d.onToolStarted != nil {

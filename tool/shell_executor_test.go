@@ -573,6 +573,41 @@ func TestRegisterShellHandler(t *testing.T) {
 	}
 }
 
+func TestShellCommandSpecAndArgumentsMatchRustLegacyContract(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{Stdout: "legacy ok\n", ExitCode: 0, HasExitCode: true}}
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner:     runner,
+		ToolName:   PlainName(DefaultShellCommandToolName),
+		Validation: ShellValidationOptions{CWD: t.TempDir(), ApprovalPolicy: sandbox.ApprovalNever},
+	})
+	spec := executor.Spec()
+	required, _ := spec.InputSchema["required"].([]string)
+	properties, _ := spec.InputSchema["properties"].(map[string]any)
+	if spec.Name.Key() != DefaultShellCommandToolName || len(required) != 1 || required[0] != "command" {
+		t.Fatalf("shell_command spec = %#v", spec)
+	}
+	if _, ok := properties["command"]; !ok {
+		t.Fatalf("shell_command properties = %#v", properties)
+	}
+	if _, ok := properties["cmd"]; ok {
+		t.Fatalf("shell_command exposes exec_command cmd field: %#v", properties)
+	}
+	if runtime.GOOS == "windows" && (!strings.Contains(spec.Description, "Get-ChildItem -Force") || !strings.Contains(spec.Description, "Start-Process")) {
+		t.Fatalf("shell_command Windows guidance = %q", spec.Description)
+	}
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "legacy-shell",
+		ToolName: PlainName(DefaultShellCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"command":"Write-Output legacy","timeout_ms":1234}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output == nil || runner.request == nil || runner.request.HookCommand != "Write-Output legacy" || runner.request.TimeoutMS != 1234 {
+		t.Fatalf("output = %#v, request = %#v", output, runner.request)
+	}
+}
+
 func TestExecCommandArgsDecodeSnakeCasePermissions(t *testing.T) {
 	var args ExecCommandArgs
 	err := json.Unmarshal([]byte(`{

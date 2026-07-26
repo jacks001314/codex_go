@@ -67,6 +67,7 @@ type AgentLoopRequest struct {
 	PostToolInputItems           ToolPostExecutionInputItems
 	OnToolStarted                ToolStartedCallback
 	OnToolCompleted              ToolCompletedCallback
+	EmitCodeModeNestedLifecycle  bool
 	OnCodeModeNotify             CodeModeNotifyCallback
 	Timing                       *TimingState
 	SamplingFollowUp             SamplingFollowUp

@@ -110,7 +110,7 @@ func TestBuildToolRegistryIncludesCoreAndRuntimeTools(t *testing.T) {
 	}
 	for _, name := range []tool.ToolName{
 		tool.PlainName("update_plan"),
-		tool.PlainName(tool.DefaultExecCommandToolName),
+		tool.PlainName(tool.DefaultShellCommandToolName),
 		tool.PlainName(tool.DefaultApplyPatchToolName),
 		tool.NamespacedName("mcp__calendar", "create_event"),
 		tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolSpawn)),
@@ -376,6 +376,21 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 	if _, ok := registry.Lookup(tool.PlainName(tool.DefaultWriteStdinToolName)); ok {
 		t.Fatal("write_stdin registered while unified_exec disabled")
 	}
+	shellSpec, ok := registry.Spec(tool.PlainName(tool.DefaultShellCommandToolName))
+	if !ok || shellSpec.Exposure != tool.ExposureHidden {
+		t.Fatalf("shell_command spec = %#v", shellSpec)
+	}
+	if _, ok := registry.Lookup(tool.PlainName(tool.DefaultExecCommandToolName)); ok {
+		t.Fatal("exec_command registered while unified_exec disabled")
+	}
+	shellRequired, _ := shellSpec.InputSchema["required"].([]string)
+	if len(shellRequired) != 1 || shellRequired[0] != "command" {
+		t.Fatalf("shell_command required = %#v", shellSpec.InputSchema["required"])
+	}
+	codeModeSpec, ok := registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok || !strings.Contains(codeModeSpec.Description, "tools.shell_command") {
+		t.Fatalf("code-mode spec = %#v", codeModeSpec)
+	}
 
 	options = DefaultToolRegistryOptions(t.TempDir())
 	options.EnableUnifiedExec = true
@@ -389,6 +404,20 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 	execSpec, ok := registry.Spec(tool.PlainName(tool.DefaultExecCommandToolName))
 	if !ok || !strings.Contains(execSpec.Description, "session ID") {
 		t.Fatalf("exec_command spec = %#v", execSpec)
+	}
+	legacySpec, ok := registry.Spec(tool.PlainName(tool.DefaultShellCommandToolName))
+	if !ok || legacySpec.Exposure != tool.ExposureHidden {
+		t.Fatalf("legacy shell_command spec = %#v", legacySpec)
+	}
+	codeModeSpec, ok = registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok || !strings.Contains(codeModeSpec.Description, "tools.exec_command") || strings.Contains(codeModeSpec.Description, "tools.shell_command") {
+		t.Fatalf("unified code-mode spec = %#v", codeModeSpec)
+	}
+	visible := registry.ModelVisibleSpecs()
+	for i := range visible {
+		if visible[i].Name.Key() == tool.DefaultShellCommandToolName {
+			t.Fatalf("legacy shell_command is model-visible with unified_exec: %#v", visible)
+		}
 	}
 }
 

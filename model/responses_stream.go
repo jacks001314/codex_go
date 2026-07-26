@@ -154,6 +154,11 @@ type responsesStreamAccumulator struct {
 	timingMetrics         map[string]any
 	functionCallArgDeltas map[string]string
 	customToolInputDeltas map[string]string
+	declaredCustomTools   map[string]struct{}
+}
+
+func newResponsesStreamAccumulator(request *AgentRequest) *responsesStreamAccumulator {
+	return &responsesStreamAccumulator{declaredCustomTools: declaredCustomResponseTools(request)}
 }
 
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
@@ -287,7 +292,7 @@ func parseResponsesStream(ctx context.Context, reader io.Reader, request *AgentR
 	if reader == nil {
 		return nil, errors.New("responses stream body is nil")
 	}
-	accumulator := &responsesStreamAccumulator{}
+	accumulator := newResponsesStreamAccumulator(request)
 	parser := newResponsesSSEParser(reader)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -719,6 +724,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		if err != nil {
 			return false, err
 		}
+		a.applyToolInputDeltas(item)
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventOutputAdded,
 			ResponseID: a.responseID,
@@ -1026,6 +1032,7 @@ func (a *responsesStreamAccumulator) applyToolInputDeltas(item *AgentItem) {
 	if a == nil || item == nil {
 		return
 	}
+	a.restoreDeclaredCustomToolCall(item)
 	switch item.Type {
 	case "function_call":
 		if accumulated := accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID); accumulated != "" {
@@ -1040,14 +1047,103 @@ func (a *responsesStreamAccumulator) applyToolInputDeltas(item *AgentItem) {
 	case "custom_tool_call":
 		if accumulated := accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID); accumulated != "" {
 			item.Input = accumulated
-		} else if item.Name == "apply_patch" {
+		} else if item.Name == "apply_patch" || a.isDeclaredCustomTool(item) {
 			item.Input = firstNonEmptyResponseValue(
+				item.Input,
 				accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID),
 				soleAccumulatedToolInputDelta(a.customToolInputDeltas),
 				soleAccumulatedToolInputDelta(a.functionCallArgDeltas),
 			)
 		}
 	}
+}
+
+func (a *responsesStreamAccumulator) restoreDeclaredCustomToolCall(item *AgentItem) {
+	if item == nil || item.Type != "function_call" || !a.isDeclaredCustomTool(item) {
+		return
+	}
+	item.Type = "custom_tool_call"
+	item.Input = firstNonEmptyResponseValue(
+		accumulatedToolInputDelta(a.customToolInputDeltas, item.ID, item.CallID),
+		item.Input,
+		item.Arguments,
+		accumulatedToolInputDelta(a.functionCallArgDeltas, item.ID, item.CallID),
+		soleAccumulatedToolInputDelta(a.customToolInputDeltas),
+		soleAccumulatedToolInputDelta(a.functionCallArgDeltas),
+	)
+	item.Arguments = ""
+}
+
+func (a *responsesStreamAccumulator) isDeclaredCustomTool(item *AgentItem) bool {
+	if a == nil || item == nil || len(a.declaredCustomTools) == 0 {
+		return false
+	}
+	_, ok := a.declaredCustomTools[responseToolDeclarationKey(item.Namespace, item.Name)]
+	return ok
+}
+
+func declaredCustomResponseTools(request *AgentRequest) map[string]struct{} {
+	if request == nil {
+		return nil
+	}
+	declared := map[string]struct{}{}
+	collectCustomResponseTools(declared, request.Tools)
+	for _, input := range request.InputItems {
+		item, ok := responseToolDefinitionMap(input)
+		if !ok || !strings.EqualFold(strings.TrimSpace(responseToolString(item["type"])), "additional_tools") {
+			continue
+		}
+		collectCustomResponseTools(declared, responseToolDefinitionSlice(item["tools"]))
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	return declared
+}
+
+func collectCustomResponseTools(declared map[string]struct{}, tools []any) {
+	for _, value := range tools {
+		item, ok := responseToolDefinitionMap(value)
+		if !ok || !strings.EqualFold(strings.TrimSpace(responseToolString(item["type"])), "custom") {
+			continue
+		}
+		key := responseToolDeclarationKey(responseToolString(item["namespace"]), responseToolString(item["name"]))
+		if key != "" {
+			declared[key] = struct{}{}
+		}
+	}
+}
+
+func responseToolDefinitionMap(value any) (map[string]any, bool) {
+	if item, ok := value.(map[string]any); ok {
+		return item, true
+	}
+	normalized, ok := normalizeResponsesInputValue(value)
+	if !ok {
+		return nil, false
+	}
+	item, ok := normalized.(map[string]any)
+	return item, ok
+}
+
+func responseToolDefinitionSlice(value any) []any {
+	if tools, ok := value.([]any); ok {
+		return tools
+	}
+	normalized, ok := normalizeResponsesInputValue(value)
+	if !ok {
+		return nil
+	}
+	tools, _ := normalized.([]any)
+	return tools
+}
+
+func responseToolDeclarationKey(namespace string, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return strings.TrimSpace(namespace) + "\x00" + name
 }
 
 func soleAccumulatedToolInputDelta(values map[string]string) string {

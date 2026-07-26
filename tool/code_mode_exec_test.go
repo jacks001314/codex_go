@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -34,9 +35,55 @@ func TestCodeModeExecUsesCustomPayloadAndNormalizesNestedOutput(t *testing.T) {
 	}
 }
 
+func TestCodeModeExecRunsLegacyShellCommandLikeRustWhenUnifiedExecDisabled(t *testing.T) {
+	runner := &recordingShellRunner{output: "WEATHER_LEGACY_OK\n"}
+	shell := NewShellExecutor(&ShellExecutorOptions{
+		Runner:     runner,
+		ToolName:   PlainName(DefaultShellCommandToolName),
+		Validation: ShellValidationOptions{CWD: t.TempDir()},
+	})
+	registry := NewRegistry()
+	if err := registry.Register(shell); err != nil {
+		t.Fatal(err)
+	}
+	executor := NewCodeModeExecExecutor(registry)
+	description := executor.Spec().Description
+	for _, phrase := range []string{"tools.shell_command", `"required":["command"]`, `"command":"Write-Output hello"`} {
+		if !strings.Contains(description, phrase) {
+			t.Fatalf("description missing %q: %s", phrase, description)
+		}
+	}
+	if strings.Contains(description, "tools.exec_command") {
+		t.Fatalf("legacy description advertises exec_command: %s", description)
+	}
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:  "weather-legacy",
+		Payload: Payload{Kind: PayloadCustom, Input: `const r = await tools.shell_command({command: "Write-Output WEATHER_LEGACY_OK", timeout_ms: 10000, workdir: "` + strings.ReplaceAll(t.TempDir(), `\`, `\\`) + `"}); text(r.output);`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body != "WEATHER_LEGACY_OK" || runner.request == nil || runner.request.HookCommand != "Write-Output WEATHER_LEGACY_OK" {
+		t.Fatalf("output = %#v, request = %#v", output, runner.request)
+	}
+	commands, ok := output.Data["nested_commands"].([]string)
+	if !ok || len(commands) != 1 || commands[0] != "Write-Output WEATHER_LEGACY_OK" {
+		t.Fatalf("nested commands = %#v", output.Data["nested_commands"])
+	}
+}
+
 func TestCodeModeExecDescriptionWarnsConsoleIsUnavailableLikeRust(t *testing.T) {
-	description := NewCodeModeExecExecutor(NewRegistry()).Spec().Description
+	registry := NewRegistry()
+	if err := registry.Register(NewShellExecutor(nil)); err != nil {
+		t.Fatal(err)
+	}
+	description := NewCodeModeExecExecutor(registry).Spec().Description
 	for _, phrase := range []string{"no Node", "no file system", "no network access", "no console"} {
+		if !strings.Contains(description, phrase) {
+			t.Fatalf("description missing %q: %s", phrase, description)
+		}
+	}
+	for _, phrase := range []string{"tools.exec_command", "There is no nested tools.exec method", "Do not use fetch", `"required":["cmd"]`, "text(r.output)"} {
 		if !strings.Contains(description, phrase) {
 			t.Fatalf("description missing %q: %s", phrase, description)
 		}
@@ -70,6 +117,133 @@ func TestCodeModeExecTryCatchAndMultipleTools(t *testing.T) {
 	}
 	if output.Body != "recovered\n[\"one\",\"two\"]" {
 		t.Fatalf("body = %q", output.Body)
+	}
+}
+
+func TestCodeModeExecRejectsFailedShellOutputLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	var calls int
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName(DefaultShellCommandToolName)}, func(context.Context, *Invocation) (*Output, error) {
+		calls++
+		return &Output{
+			Success: true,
+			Body:    "Process exited with code 1\nOutput:\ncontrolled failure",
+			Data:    map[string]any{"exit_code": 1, "timed_out": false},
+		}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewCodeModeExecExecutor(registry).Execute(context.Background(), &Invocation{
+		CallID: "uncaught-shell-failure",
+		Payload: Payload{Kind: PayloadCustom, Input: `
+			await tools.shell_command({command: "fail"});
+			await tools.shell_command({command: "must-not-run"});
+		`},
+	})
+	if err == nil || !strings.Contains(err.Error(), "controlled failure") {
+		t.Fatalf("error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("nested calls = %d, want 1", calls)
+	}
+}
+
+func TestCodeModeExecPreservesNonShellBusinessFailureResult(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("business_failure")}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: false, Body: "business rule rejected", Error: "business rule rejected"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := NewCodeModeExecExecutor(registry).Execute(context.Background(), &Invocation{
+		CallID:  "business-tool-failure",
+		Payload: Payload{Kind: PayloadCustom, Input: `const result = await tools.business_failure({}); text(String(result.success)); text(result.output);`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body != "false\nbusiness rule rejected" {
+		t.Fatalf("body = %q", output.Body)
+	}
+}
+
+func TestCodeModeExecCatchesFailedShellOutputAndClosesNestedLifecycle(t *testing.T) {
+	registry := NewRegistry()
+	var calls int
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName(DefaultShellCommandToolName)}, func(context.Context, *Invocation) (*Output, error) {
+		calls++
+		if calls == 1 {
+			return &Output{
+				Success: true,
+				Body:    "Process exited with code 1\nOutput:\ncontrolled failure",
+				Data:    map[string]any{"exit_code": 1, "timed_out": false},
+			}, nil
+		}
+		return &Output{
+			Success: true,
+			Body:    "Process exited with code 0\nOutput:\nRECOVERY_OK\n",
+			Data:    map[string]any{"exit_code": 0, "timed_out": false},
+		}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	type lifecycleRecord struct {
+		callID   string
+		exitCode int
+	}
+	var mu sync.Mutex
+	started := []string{}
+	completed := []lifecycleRecord{}
+	contextValues := map[string]any{
+		"code_mode_nested_tool_started": CodeModeNestedToolStartedFunc(func(_ context.Context, invocation *Invocation, _ time.Time) {
+			mu.Lock()
+			defer mu.Unlock()
+			started = append(started, invocation.CallID)
+		}),
+		"code_mode_nested_tool_completed": CodeModeNestedToolCompletedFunc(func(_ context.Context, invocation *Invocation, output *Output, err error, _, _ time.Time) {
+			mu.Lock()
+			defer mu.Unlock()
+			exitCode := -1
+			if err == nil && output != nil {
+				exitCode, _ = codeModeInt(output.Data["exit_code"])
+			}
+			completed = append(completed, lifecycleRecord{callID: invocation.CallID, exitCode: exitCode})
+		}),
+	}
+	output, err := NewCodeModeExecExecutor(registry).Execute(context.Background(), &Invocation{
+		CallID:  "caught-shell-failure",
+		Context: contextValues,
+		Payload: Payload{Kind: PayloadCustom, Input: `
+			try {
+				await tools.shell_command({command: "fail"});
+			} catch (error) {
+				text("CAUGHT_FAILURE");
+			}
+			const recovered = await tools.shell_command({command: "recover"});
+			text(recovered.output);
+		`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body != "CAUGHT_FAILURE\nRECOVERY_OK" {
+		t.Fatalf("body = %q", output.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(started) != 2 || len(completed) != 2 {
+		t.Fatalf("lifecycle started = %#v, completed = %#v", started, completed)
+	}
+	for index := range started {
+		if started[index] == "" || completed[index].callID != started[index] {
+			t.Fatalf("lifecycle[%d] started = %q, completed = %#v", index, started[index], completed[index])
+		}
+	}
+	if completed[0].exitCode != 1 || completed[1].exitCode != 0 {
+		t.Fatalf("completed lifecycle = %#v, want exit codes 1 then 0", completed)
 	}
 }
 
@@ -371,8 +545,12 @@ func mustJSON(t *testing.T, value string) []byte {
 	return encoded
 }
 
-type recordingShellRunner struct{ output string }
+type recordingShellRunner struct {
+	output  string
+	request *ShellRequest
+}
 
-func (r *recordingShellRunner) Run(context.Context, *ShellRequest) (*ShellResult, error) {
+func (r *recordingShellRunner) Run(_ context.Context, request *ShellRequest) (*ShellResult, error) {
+	r.request = request
 	return &ShellResult{Stdout: r.output, ExitCode: 0, HasExitCode: true}, nil
 }

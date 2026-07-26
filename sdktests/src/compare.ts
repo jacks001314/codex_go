@@ -312,8 +312,8 @@ function checkExpectedCommandExecutions(label: string, recording: any, expected:
   if (!Array.isArray(expected)) {
     return { name: `${label}: expected command executions`, ok: true, detail: "artifact has no command contract" };
   }
-  const actual = normalizeParallelCommandPrefix(commandExecutions(recording), comparison);
-  expected = normalizeParallelCommandPrefix(expected, comparison);
+  const actual = normalizeCommandOrder(commandExecutions(recording), comparison);
+  expected = normalizeCommandOrder(expected, comparison);
   const ok = expected.every((contract: any, index: number) => {
     const item = actual[index];
     if (!item || item.status !== contract.status || item.exitCode !== contract.exitCode) {
@@ -442,8 +442,8 @@ function checkCommandExecutionSemantics(rust: any, go: any, comparison: unknown)
   if (comparison === "informational") {
     return { name: "command execution semantics", ok: true, detail: "scenario permits model-selected command differences; per-side lifecycle and uniqueness remain contractual" };
   }
-  const left = normalizeParallelCommandPrefix(commandExecutions(rust), comparison);
-  const right = normalizeParallelCommandPrefix(commandExecutions(go), comparison);
+  const left = normalizeCommandOrder(commandExecutions(rust), comparison);
+  const right = normalizeCommandOrder(commandExecutions(go), comparison);
   const comparable = (items: any[]) =>
     comparison === "status-exit-code"
       ? items.map((item) => ({ status: item.status, exitCode: item.exitCode }))
@@ -456,7 +456,10 @@ function checkCommandExecutionSemantics(rust: any, go: any, comparison: unknown)
   };
 }
 
-function normalizeParallelCommandPrefix(items: any[], comparison: unknown) {
+function normalizeCommandOrder(items: any[], comparison: unknown) {
+  if (comparison === "unordered") {
+    return [...items].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
   if (comparison !== "parallel-prefix-unordered" || items.length < 2) return items;
   const prefix = items.slice(0, 2).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   return [...prefix, ...items.slice(2)];

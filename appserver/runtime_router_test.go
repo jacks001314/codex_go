@@ -8290,6 +8290,13 @@ func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	if shouldNotifyRuntimeItemCompleted(ThreadItem{Type: "tool_output", Data: map[string]any{"unified_exec_evented": true}}) {
 		t.Fatal("evented unified exec output should not emit a duplicate completed notification")
 	}
+	pending := router.drainPendingUnifiedExecItems("thread-unified", "turn-unified")
+	if len(pending) != 1 || pending[0].ID != "call-unified" || pending[0].Type != "commandExecution" || !boolFromAny(pending[0].Data["unified_exec_evented"]) {
+		t.Fatalf("pending unified exec items = %#v", pending)
+	}
+	if _, err := router.runtimeAppendItems("thread-unified", pending); err != nil {
+		t.Fatalf("persist pending unified exec items: %v", err)
+	}
 
 	if _, err := store.AppendItem("thread-unified", session.Item{
 		ID:       "transport-output",
@@ -8310,6 +8317,86 @@ func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	}
 	if len(items.Data) != 1 || threadItemWireType(&items.Data[0]) != "commandExecution" || items.Data[0].ID != "call-unified" {
 		t.Fatalf("visible persisted items = %#v", items.Data)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEndNotifiesBeforeBlockedPersistenceLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(session.NewStore(t.TempDir()))})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	router.active["thread-live"] = &activeRuntimeTurn{ThreadID: "thread-live", TurnID: "turn-live"}
+
+	// A held persistence-order lock models a slow session store/rollout writer.
+	// Client-visible completion must still be emitted and the event sink must
+	// return, matching Rust's event-first lifecycle.
+	router.unifiedExecPersistMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		router.runtimeUnifiedExecEventSink("thread-live", "turn-live")(tool.UnifiedExecEvent{
+			Kind:      tool.UnifiedExecEventEnd,
+			CallID:    "call-live",
+			Command:   []string{"echo", "live"},
+			ProcessID: 1,
+			ExitCode:  0,
+			StartedAt: time.Now().Add(-time.Second),
+			Duration:  time.Second,
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		router.unifiedExecPersistMu.Unlock()
+		t.Fatal("unified exec end sink blocked behind persistence")
+	}
+	completed := 0
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationItemCompleted {
+			payload, _ := notification.Params.(*ItemCompletedNotification)
+			if payload != nil && payload.Item["id"] == "call-live" {
+				completed++
+			}
+		}
+	}
+	router.unifiedExecPersistMu.Unlock()
+	if completed != 1 {
+		t.Fatalf("completed notifications = %d, want 1", completed)
+	}
+}
+
+func TestRuntimeRouterUnifiedExecEndAfterTurnPersistsLateBackgroundCompletion(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Save(&session.Record{ID: "thread-background-end", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	defer router.Close()
+	router.runtimeUnifiedExecEventSink("thread-background-end", "turn-background-end")(tool.UnifiedExecEvent{
+		Kind:      tool.UnifiedExecEventEnd,
+		CallID:    "call-background-end",
+		Command:   []string{"echo", "background"},
+		ProcessID: 9,
+		Output:    "background\n",
+		ExitCode:  0,
+		StartedAt: time.Now().Add(-time.Second),
+		Duration:  time.Second,
+	})
+	if pending := router.drainPendingUnifiedExecItems("thread-background-end", "turn-background-end"); len(pending) != 0 {
+		t.Fatalf("late background pending items = %#v", pending)
+	}
+	record, err := store.Load("thread-background-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := 0
+	for _, item := range record.Items {
+		if item.ID == "call-background-end" && item.Type == "commandExecution" {
+			completed++
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("persisted late background completions = %d, items=%#v", completed, record.Items)
 	}
 }
 
@@ -8341,6 +8428,220 @@ func TestRuntimeRouterMCPToolStartedMapsToRustV2Notification(t *testing.T) {
 	arguments, ok := started.Item["arguments"].(map[string]any)
 	if !ok || arguments["label"] != "A" {
 		t.Fatalf("MCP start arguments = %#v", started.Item["arguments"])
+	}
+}
+
+func TestRuntimeRouterCodeModeNestedCommandLifecycleIsVisibleToTUI(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	startedAt := time.Now().UTC()
+	invocation := &tool.Invocation{
+		CallID:   "nested-command",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"Write-Output weather"}`},
+		Source:   "code_mode",
+	}
+	router.runtimeToolStartedNotifier("thread-code", "turn-code", t.TempDir(), false)(context.Background(), invocation, startedAt)
+	router.runtimeToolCompletedNotifier("thread-code", "turn-code", t.TempDir(), false)(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{Success: true, Body: "weather\n", Data: map[string]any{
+			"hook_response": "weather\n",
+			"exit_code":     0,
+		}},
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(time.Second),
+	})
+
+	notifications := sink.List()
+	if len(notifications) != 2 || notifications[0].Method != NotificationItemStarted || notifications[1].Method != NotificationItemCompleted {
+		t.Fatalf("nested command notifications = %#v", notifications)
+	}
+	completed, ok := notifications[1].Params.(*ItemCompletedNotification)
+	if !ok {
+		t.Fatalf("nested command completion = %#v", notifications[1])
+	}
+	if completed.Item["id"] != "nested-command" || completed.Item["type"] != "commandExecution" || completed.Item["status"] != string(CommandExecutionCompleted) || completed.Item["aggregatedOutput"] != "weather\n" || intFromAny(completed.Item["exitCode"]) != 0 {
+		t.Fatalf("nested command completed item = %#v", completed.Item)
+	}
+}
+
+func TestRuntimeRouterCodeModeNestedCommandLifecycleIsVisibleWithUnifiedExec(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+	startedAt := time.Now().UTC()
+	invocation := &tool.Invocation{
+		CallID:   "nested-unified-command",
+		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"Write-Output weather"}`},
+		Source:   "code_mode",
+	}
+	router.runtimeToolStartedNotifier("thread-code", "turn-code", t.TempDir(), true)(context.Background(), invocation, startedAt)
+	router.runtimeToolCompletedNotifier("thread-code", "turn-code", t.TempDir(), true)(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{Success: true, Body: "weather\n", Data: map[string]any{
+			"hook_response": "weather\n",
+			"exit_code":     0,
+		}},
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(time.Second),
+	})
+
+	// When unified exec is enabled, its event sink owns the command lifecycle.
+	// The dispatcher callback must stay silent or the real path emits duplicate
+	// item/started and item/completed notifications.
+	if notifications := sink.List(); len(notifications) != 0 {
+		t.Fatalf("nested unified callback notifications = %#v, want none", notifications)
+	}
+}
+
+func TestRuntimeRouterCodeModeExecEndToEndEmitsOneNestedCommandLifecycleAndOneFinalMessage(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	var responseMu sync.Mutex
+	responseNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		responseMu.Lock()
+		responseNumber++
+		current := responseNumber
+		responseMu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		if current == 1 {
+			_, _ = w.Write([]byte(modelResponsesSSE(
+				`{"type":"response.created","response":{"id":"resp-code-mode"}}`,
+				`{"type":"response.output_item.added","item":{"id":"outer-exec","type":"custom_tool_call","call_id":"outer-exec","name":"exec","input":"const r = await tools.exec_command({\"cmd\":\"echo weather\"}); text(r.output);"}}`,
+				`{"type":"response.output_item.done","item":{"id":"outer-exec","type":"custom_tool_call","call_id":"outer-exec","name":"exec","input":"const r = await tools.exec_command({\"cmd\":\"echo weather\"}); text(r.output);"}}`,
+				`{"type":"response.completed","response":{"id":"resp-code-mode","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			)))
+			return
+		}
+		_, _ = w.Write([]byte(modelResponsesSSE(
+			`{"type":"response.created","response":{"id":"resp-final"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg-final","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			`{"type":"response.output_text.delta","delta":"done"}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-final","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-final","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)))
+	}))
+	defer server.Close()
+	agent := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL + "/v1"},
+		Stream:   true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "run code mode command",
+		Config: map[string]any{
+			"features": map[string]any{"code_mode": true, "unified_exec": true},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	nestedStarted := 0
+	nestedCompleted := 0
+	finalDeltas := []string{}
+	finalCompleted := 0
+	nestedStartedIndex := -1
+	nestedCompletedIndex := -1
+	finalCompletedIndex := -1
+	turnCompletedIndex := -1
+	for index, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationItemStarted:
+			payload, _ := notification.Params.(*ItemStartedNotification)
+			if payload != nil && payload.TurnID == turnID && payload.Item["type"] == "commandExecution" && strings.Contains(stringFromAny(payload.Item["command"]), "echo weather") {
+				nestedStarted++
+				if nestedStartedIndex < 0 {
+					nestedStartedIndex = index
+				}
+			}
+		case NotificationItemCompleted:
+			payload, _ := notification.Params.(*ItemCompletedNotification)
+			if payload == nil || payload.TurnID != turnID {
+				continue
+			}
+			if payload.Item["type"] == "commandExecution" && strings.Contains(stringFromAny(payload.Item["command"]), "echo weather") {
+				nestedCompleted++
+				if nestedCompletedIndex < 0 {
+					nestedCompletedIndex = index
+				}
+			}
+			if payload.Item["type"] == "agentMessage" && payload.Item["id"] == "msg-final" {
+				finalCompleted++
+				if finalCompletedIndex < 0 {
+					finalCompletedIndex = index
+				}
+			}
+		case NotificationAgentMessageDelta:
+			payload, _ := notification.Params.(*AgentMessageDeltaNotification)
+			if payload != nil && payload.TurnID == turnID && payload.ItemID == "msg-final" {
+				finalDeltas = append(finalDeltas, payload.Delta)
+			}
+		case NotificationTurnCompleted:
+			payload, _ := notification.Params.(*TurnCompletedNotification)
+			if payload != nil && payload.Turn.ID == turnID && turnCompletedIndex < 0 {
+				turnCompletedIndex = index
+			}
+		}
+	}
+	if nestedStarted != 1 || nestedCompleted != 1 {
+		t.Fatalf("nested command lifecycle = %d started/%d completed, notifications=%#v", nestedStarted, nestedCompleted, sink.List())
+	}
+	if !reflect.DeepEqual(finalDeltas, []string{"done"}) || finalCompleted != 1 {
+		t.Fatalf("final lifecycle deltas=%#v completed=%d, notifications=%#v", finalDeltas, finalCompleted, sink.List())
+	}
+	if !(nestedStartedIndex < nestedCompletedIndex && nestedCompletedIndex < finalCompletedIndex && finalCompletedIndex < turnCompletedIndex) {
+		t.Fatalf("lifecycle order started=%d command-completed=%d final-completed=%d turn-completed=%d, notifications=%#v", nestedStartedIndex, nestedCompletedIndex, finalCompletedIndex, turnCompletedIndex, sink.List())
+	}
+	responseMu.Lock()
+	gotResponses := responseNumber
+	responseMu.Unlock()
+	if gotResponses != 2 {
+		t.Fatalf("model response count = %d, want 2", gotResponses)
+	}
+	if pending := router.drainPendingUnifiedExecItems(threadID, turnID); len(pending) != 0 {
+		t.Fatalf("pending unified exec items after turn completion = %#v", pending)
+	}
+	persisted, err := store.Load(session.ThreadID(threadID))
+	if err != nil {
+		t.Fatalf("load completed thread: %v", err)
+	}
+	persistedCommands := 0
+	persistedFinals := 0
+	for _, item := range persisted.Items {
+		if item.ID == "outer-exec-nested-1" && item.Type == "commandExecution" {
+			persistedCommands++
+			if !boolFromAny(item.Data["unified_exec_evented"]) {
+				t.Fatalf("persisted command missing unified_exec_evented: %#v", item)
+			}
+		}
+		if item.ID == "msg-final" && item.Type == "agent_message" {
+			persistedFinals++
+		}
+	}
+	if persistedCommands != 1 || persistedFinals != 1 {
+		t.Fatalf("persisted lifecycle = %d commands/%d finals, items=%#v", persistedCommands, persistedFinals, persisted.Items)
 	}
 }
 
@@ -8482,19 +8783,20 @@ func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testin
 		t.Fatalf("toolRouterForTurn() error = %v", err)
 	}
 	visibleSpecs := toolRouter.ModelVisibleSpecs()
-	var execSpec *tool.Spec
+	var codeModeSpec *tool.Spec
 	for i := range visibleSpecs {
-		if visibleSpecs[i].Name.Key() == tool.DefaultExecCommandToolName {
-			execSpec = &visibleSpecs[i]
+		if visibleSpecs[i].Name.Key() == tool.CodeModeExecToolName {
+			codeModeSpec = &visibleSpecs[i]
 			break
 		}
 	}
-	if execSpec == nil {
-		t.Fatalf("exec spec = %#v", execSpec)
+	if codeModeSpec == nil || !strings.Contains(codeModeSpec.Description, "tools.exec_command") || !strings.Contains(codeModeSpec.Description, `"environment_id"`) {
+		t.Fatalf("code-mode exec spec = %#v", codeModeSpec)
 	}
-	properties, ok := execSpec.InputSchema["properties"].(map[string]any)
-	if !ok || properties["environment_id"] == nil {
-		t.Fatalf("exec spec = %#v", execSpec)
+	for i := range visibleSpecs {
+		if visibleSpecs[i].Name.Key() == tool.DefaultExecCommandToolName || visibleSpecs[i].Name.Key() == tool.DefaultShellCommandToolName {
+			t.Fatalf("nested command leaked as a top-level model-visible tool: %#v", visibleSpecs)
+		}
 	}
 	proxyCommand := `printf '%s' "$HTTP_PROXY"`
 	if runtime.GOOS == "windows" {
@@ -19743,8 +20045,8 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 			`{"type":"response.metadata","metadata":{"model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"category":"cyber"},"safety_buffering":{"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}}`,
 			`{"type":"response.created","response":{"id":"resp-1"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
-			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"hello "}`,
-			`{"type":"response.output_text.delta","item_id":"msg-1","delta":"stream"}`,
+			`{"type":"response.output_text.delta","delta":"hello "}`,
+			`{"type":"response.output_text.delta","delta":"stream"}`,
 			`{"type":"response.output_item.added","item":{"id":"call-1","type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":""}}`,
 			`{"type":"response.custom_tool_call_input.delta","item_id":"call-1","call_id":"call-1","delta":"*** Begin Patch\n*** Add File: streamed.txt\n+streamed\n*** End Patch"}`,
 			`{"type":"response.output_item.added","item":{"id":"reasoning-1","type":"reasoning","summary":[],"content":[],"encrypted_content":null}}`,
@@ -19850,6 +20152,19 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 		t.Fatalf("usage = %+v", usage.TokenUsage)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	var agentDeltas []string
+	for _, notification := range sink.List() {
+		if notification == nil || notification.Method != NotificationAgentMessageDelta {
+			continue
+		}
+		payload, ok := notification.Params.(*AgentMessageDeltaNotification)
+		if ok && payload != nil && payload.TurnID == turnID && payload.ItemID == "msg-1" {
+			agentDeltas = append(agentDeltas, payload.Delta)
+		}
+	}
+	if !reflect.DeepEqual(agentDeltas, []string{"hello ", "stream"}) {
+		t.Fatalf("agent message deltas = %#v, want streamed chunks exactly once", agentDeltas)
+	}
 	assertNoModelSafetyBufferingNotification(t, sink, turnID)
 }
 
@@ -21208,7 +21523,7 @@ func (a *shellCommandRuntimeAgent) Run(ctx context.Context, request *model.Agent
 		if index >= 0 && index < len(a.commands) && strings.TrimSpace(a.commands[index]) != "" {
 			command = strings.TrimSpace(a.commands[index])
 		}
-		args := map[string]any{"cmd": command}
+		args := map[string]any{"command": command}
 		if index >= 0 && index < len(a.prefixRules) && len(a.prefixRules[index]) > 0 {
 			args["prefix_rule"] = append([]string(nil), a.prefixRules[index]...)
 		}
@@ -21221,7 +21536,7 @@ func (a *shellCommandRuntimeAgent) Run(ctx context.Context, request *model.Agent
 			Items: []model.AgentItem{{
 				ID:        callID,
 				Type:      "function_call",
-				Name:      tool.DefaultExecCommandToolName,
+				Name:      tool.DefaultShellCommandToolName,
 				CallID:    callID,
 				Arguments: string(arguments),
 			}},
@@ -21264,9 +21579,9 @@ func (a *secondTurnShellCommandRuntimeAgent) Run(ctx context.Context, request *m
 			Items: []model.AgentItem{{
 				ID:        callID,
 				Type:      "function_call",
-				Name:      tool.DefaultExecCommandToolName,
+				Name:      tool.DefaultShellCommandToolName,
 				CallID:    callID,
-				Arguments: fmt.Sprintf(`{"cmd":%q}`, command),
+				Arguments: fmt.Sprintf(`{"command":%q}`, command),
 			}},
 		}, nil
 	}
@@ -22145,9 +22460,9 @@ func (a *implicitSkillRuntimeAgent) Run(ctx context.Context, request *model.Agen
 			Items: []model.AgentItem{{
 				ID:        "shell-call-1",
 				Type:      "function_call",
-				Name:      tool.DefaultExecCommandToolName,
+				Name:      tool.DefaultShellCommandToolName,
 				CallID:    "shell-call-1",
-				Arguments: `{"cmd":"python3 scripts/build.py"}`,
+				Arguments: `{"command":"python3 scripts/build.py"}`,
 			}},
 		}, nil
 	}

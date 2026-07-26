@@ -2,13 +2,114 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
 )
+
+func TestRuntimeExecutesRecoveredCustomToolCallOnceAndReturnsSingleFinal(t *testing.T) {
+	const javascript = `text("RECOVERED")`
+	var requestMu sync.Mutex
+	requestCount := 0
+	var secondRequest map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("Decode request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requestMu.Lock()
+		requestCount++
+		current := requestCount
+		if current == 2 {
+			secondRequest = body
+		}
+		requestMu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if current == 1 {
+			_, _ = w.Write([]byte(strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp-1"}}`,
+				`data: {"type":"response.output_item.added","item":{"id":"ctc_1","type":"function_call","call_id":"call-1","name":"exec","arguments":""}}`,
+				`data: {"type":"response.custom_tool_call_input.delta","item_id":"ctc_1","call_id":"call-1","delta":"text(\"RECOVERED\")"}`,
+				`data: {"type":"response.output_item.done","item":{"id":"ctc_1","type":"function_call","call_id":"call-1","name":"exec","arguments":""}}`,
+				`data: {"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+			}, "\n\n") + "\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp-2"}}`,
+			`data: {"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"DONE"}]}}`,
+			`data: {"type":"response.completed","response":{"id":"resp-2","usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+		}, "\n\n") + "\n\n"))
+	}))
+	defer server.Close()
+
+	var execMu sync.Mutex
+	execCalls := 0
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:     tool.PlainName(tool.CodeModeExecToolName),
+		Freeform: &tool.FreeformSpec{Syntax: "lark", Definition: "start: /[\\s\\S]+/"},
+	}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		execMu.Lock()
+		defer execMu.Unlock()
+		execCalls++
+		if invocation.Payload.Kind != tool.PayloadCustom || invocation.Payload.Input != javascript {
+			t.Fatalf("exec invocation = %#v", invocation)
+		}
+		return &tool.Output{Success: true, Body: "RECOVERED"}, nil
+	})); err != nil {
+		t.Fatalf("register exec: %v", err)
+	}
+
+	runner := model.NewResponsesAgentRunner(&model.ResponsesAgentOptions{
+		Provider: &model.APIProvider{BaseURL: server.URL},
+		Stream:   true,
+		ModelsManager: model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+			Slug:             "gpt-test",
+			UseResponsesLite: true,
+		}}}),
+	})
+	runtime := NewRuntime(&RuntimeOptions{Agent: runner, Router: tool.NewRouter(registry), MaxTurns: 3})
+	result, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run exec", Model: "gpt-test"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	requestMu.Lock()
+	gotRequestCount := requestCount
+	second := secondRequest
+	requestMu.Unlock()
+	execMu.Lock()
+	gotExecCalls := execCalls
+	execMu.Unlock()
+	if gotRequestCount != 2 || gotExecCalls != 1 {
+		t.Fatalf("requests=%d execCalls=%d result=%#v", gotRequestCount, gotExecCalls, result)
+	}
+	if result.Iterations != 2 || len(result.ToolExecutions) != 1 || result.Response.Message != "DONE" || len(ResponseAssistantMessages(result.Response)) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	encodedSecond, err := json.Marshal(second["input"])
+	if err != nil {
+		t.Fatalf("Marshal second input: %v", err)
+	}
+	inputJSON := string(encodedSecond)
+	if !strings.Contains(inputJSON, `"type":"custom_tool_call"`) || !strings.Contains(inputJSON, `"input":"text(\"RECOVERED\")"`) || !strings.Contains(inputJSON, `"type":"custom_tool_call_output"`) {
+		t.Fatalf("second request input = %s", inputJSON)
+	}
+	if strings.Contains(inputJSON, `"type":"function_call","name":"exec"`) {
+		t.Fatalf("second request retained malformed exec call = %s", inputJSON)
+	}
+}
 
 func TestRuntimeInjectsToolsAndRunsLoop(t *testing.T) {
 	agent := &runtimeRecordingAgent{}

@@ -1,6 +1,71 @@
 package model
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(t *testing.T) {
+	javascript := `const result = await tools.shell_command({command: "Write-Output OK"}); text(result.output);`
+	response, err := parseResponsesStream(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.added","item":{"id":"ctc_1","type":"function_call","call_id":"call-1","name":"exec","arguments":""}}`,
+			`{"type":"response.custom_tool_call_input.delta","item_id":"ctc_1","call_id":"call-1","delta":"const result = await tools.shell_command({command: \"Write-Output OK\"}); "}`,
+			`{"type":"response.custom_tool_call_input.delta","item_id":"ctc_1","call_id":"call-1","delta":"text(result.output);"}`,
+			`{"type":"response.output_item.done","item":{"id":"ctc_1","type":"function_call","call_id":"call-1","name":"exec","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)),
+		&AgentRequest{
+			Prompt: "run command",
+			Model:  "gpt-test",
+			Tools:  []any{map[string]any{"type": "custom", "name": "exec"}},
+		},
+		"openai",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStream() error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "custom_tool_call" || item.Name != "exec" || item.CallID != "call-1" || item.Input != javascript || item.Arguments != "" {
+		t.Fatalf("custom tool item = %#v", item)
+	}
+}
+
+func TestParseResponsesStreamKeepsDeclaredFunctionToolAsFunctionCall(t *testing.T) {
+	response, err := parseResponsesStream(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc-1","call_id":"call-1","delta":"{\"cmd\":\"pwd\"}"}`,
+			`{"type":"response.output_item.done","item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"exec_command","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)),
+		&AgentRequest{
+			Prompt: "run command",
+			Model:  "gpt-test",
+			Tools:  []any{map[string]any{"type": "function", "name": "exec_command"}},
+		},
+		"openai",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStream() error = %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	item := response.Items[0]
+	if item.Type != "function_call" || item.Name != "exec_command" || item.Arguments != `{"cmd":"pwd"}` || item.Input != "" {
+		t.Fatalf("function tool item = %#v", item)
+	}
+}
 
 func TestResponsesStreamAccumulatorAppliesCustomToolInputDeltasOverInitialInput(t *testing.T) {
 	acc := &responsesStreamAccumulator{

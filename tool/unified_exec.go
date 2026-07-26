@@ -812,6 +812,14 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 		UnifiedExecEvented:  process.eventSink != nil,
 	}
 	if exited {
+		// Rust emits ExecCommandEnd before returning the tool output for a
+		// short-lived command. The asynchronous watcher is only allowed to own
+		// completion after a command has yielded into the background. Keep the
+		// process exit signal prompt, but do not let a foreground collect return
+		// while its canonical end event is still pending.
+		if process.eventSink != nil {
+			<-process.eventDone
+		}
 		result.ExitCode = exitCode
 		result.HasExitCode = true
 		m.releaseProcessID(process.id)

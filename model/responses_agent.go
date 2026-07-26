@@ -593,7 +593,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		return r.Run(ctx, request)
 	}
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
-	accumulator := &responsesStreamAccumulator{}
+	accumulator := newResponsesStreamAccumulator(request)
 	var outputText strings.Builder
 	receivedEvent := false
 	for {
@@ -1472,8 +1472,10 @@ func agentResponseFromResponses(apiResponse *responsesAgentAPIResponse, request 
 	}
 	items := make([]AgentItem, 0, len(apiResponse.Output))
 	var messages []string
+	accumulator := newResponsesStreamAccumulator(request)
 	for index, output := range apiResponse.Output {
 		if item, ok := toolCallAgentItem(&output, index); ok {
+			accumulator.applyToolInputDeltas(item)
 			items = append(items, *item)
 			continue
 		}

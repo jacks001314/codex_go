@@ -279,6 +279,168 @@ func TestRunJSONRustToolCallGolden(t *testing.T) {
 	}
 }
 
+func TestRunJSONCodeModeLegacyShellCommandEmitsLifecycleBeforeSingleFinal(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:     tool.PlainName(tool.DefaultShellCommandToolName),
+		Exposure: tool.ExposureHidden,
+	}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{
+			CallID:   invocation.CallID,
+			ToolName: invocation.ToolName,
+			Success:  false,
+			Body:     "curl: (6) Could not resolve host: sdk-weather.invalid",
+			Data:     map[string]any{"exit_code": 1},
+		}, nil
+	})); err != nil {
+		t.Fatalf("register shell_command: %v", err)
+	}
+	codeModeExec, codeModeWait := tool.NewCodeModeExecutors(registry, tool.PlainName(tool.DefaultShellCommandToolName))
+	if err := registry.Register(codeModeExec); err != nil {
+		t.Fatalf("register code-mode exec: %v", err)
+	}
+	if err := registry.Register(codeModeWait); err != nil {
+		t.Fatalf("register code-mode wait: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &codeModeLegacyShellLoopAgent{}
+	runner.ToolRouter = tool.NewRouter(registry)
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "tell me today's weather in Yunnan", JSON: true},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	commandStarted, commandCompleted, finalCompleted, turnCompleted := -1, -1, -1, -1
+	commandID := ""
+	commandStarts, commandCompletions, finalCompletions := 0, 0, 0
+	for i := range events {
+		event := events[i]
+		if event.Type == "turn.completed" {
+			turnCompleted = i
+		}
+		if event.Item == nil {
+			continue
+		}
+		switch {
+		case event.Item.Type == "command_execution" && event.Type == "item.started":
+			commandStarts++
+			commandStarted = i
+			commandID = event.Item.ID
+		case event.Item.Type == "command_execution" && event.Type == "item.completed":
+			commandCompletions++
+			commandCompleted = i
+			if event.Item.ID != commandID || event.Item.Status != "failed" || event.Item.ExitCode == nil || *event.Item.ExitCode != 1 {
+				t.Fatalf("command completion = %#v, started ID = %q", event.Item, commandID)
+			}
+		case event.Item.Type == "agent_message" && event.Item.Text == "Weather lookup failed once; no duplicate final.":
+			finalCompletions++
+			finalCompleted = i
+		}
+	}
+	if commandStarts != 1 || commandCompletions != 1 || finalCompletions != 1 {
+		t.Fatalf("lifecycle counts: command started=%d completed=%d final=%d events=%#v", commandStarts, commandCompletions, finalCompletions, events)
+	}
+	if commandStarted < 0 || commandCompleted <= commandStarted || finalCompleted <= commandCompleted || turnCompleted <= finalCompleted {
+		t.Fatalf("event order: command started=%d completed=%d final=%d turn completed=%d events=%#v", commandStarted, commandCompleted, finalCompleted, turnCompleted, events)
+	}
+}
+
+func TestRunJSONCodeModeLegacyShellCommandFailureCanRecoverBeforeSingleFinal(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	registry := tool.NewRegistry()
+	var calls int
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:     tool.PlainName(tool.DefaultShellCommandToolName),
+		Exposure: tool.ExposureHidden,
+	}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		calls++
+		if calls == 1 {
+			return &tool.Output{
+				CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true,
+				Body: "Process exited with code 1\nOutput:\ncontrolled failure",
+				Data: map[string]any{"exit_code": 1, "timed_out": false},
+			}, nil
+		}
+		return &tool.Output{
+			CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true,
+			Body: "Process exited with code 0\nOutput:\nRECOVERY_OK\n",
+			Data: map[string]any{"exit_code": 0, "timed_out": false},
+		}, nil
+	})); err != nil {
+		t.Fatalf("register shell_command: %v", err)
+	}
+	codeModeExec, codeModeWait := tool.NewCodeModeExecutors(registry, tool.PlainName(tool.DefaultShellCommandToolName))
+	if err := registry.Register(codeModeExec); err != nil {
+		t.Fatalf("register code-mode exec: %v", err)
+	}
+	if err := registry.Register(codeModeWait); err != nil {
+		t.Fatalf("register code-mode wait: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &codeModeLegacyShellRecoveryAgent{}
+	runner.ToolRouter = tool.NewRouter(registry)
+
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "recover from a failed nested command", JSON: true},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	events := decodeExecJSONLines(t, stdout.String())
+	commandIDs := []string{}
+	commandStarted := map[string]int{}
+	commandCompleted := map[string]int{}
+	exitCodes := []int{}
+	finalCompletions := 0
+	finalIndex, lastCommandIndex, turnCompleted := -1, -1, -1
+	for index, event := range events {
+		if event.Type == "turn.completed" {
+			turnCompleted = index
+		}
+		if event.Item == nil {
+			continue
+		}
+		switch {
+		case event.Item.Type == "command_execution" && event.Type == "item.started":
+			commandIDs = append(commandIDs, event.Item.ID)
+			commandStarted[event.Item.ID]++
+		case event.Item.Type == "command_execution" && event.Type == "item.completed":
+			commandCompleted[event.Item.ID]++
+			lastCommandIndex = index
+			if event.Item.ExitCode == nil {
+				t.Fatalf("command completion missing exit code: %#v", event.Item)
+			}
+			exitCodes = append(exitCodes, *event.Item.ExitCode)
+		case event.Item.Type == "agent_message" && event.Item.Text == "CODE_MODE_RECOVERY_DONE":
+			finalCompletions++
+			finalIndex = index
+		}
+	}
+	if len(commandIDs) != 2 || len(exitCodes) != 2 || exitCodes[0] != 1 || exitCodes[1] != 0 {
+		t.Fatalf("commands = %#v exitCodes = %#v events = %#v", commandIDs, exitCodes, events)
+	}
+	for _, id := range commandIDs {
+		if id == "" || commandStarted[id] != 1 || commandCompleted[id] != 1 {
+			t.Fatalf("command %q lifecycle started=%d completed=%d events=%#v", id, commandStarted[id], commandCompleted[id], events)
+		}
+	}
+	if finalCompletions != 1 || finalIndex <= lastCommandIndex || turnCompleted <= finalIndex {
+		t.Fatalf("final count=%d final=%d last command=%d turn=%d events=%#v", finalCompletions, finalIndex, lastCommandIndex, turnCompleted, events)
+	}
+}
+
 func TestNewRunnerDefaultsToResponsesAPI(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -2092,10 +2254,10 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	req := &Request{Exec: cli.ExecOptions{Prompt: "hello"}}
 	invocation := &tool.Invocation{
 		CallID:   "call-approval",
-		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		ToolName: tool.PlainName(tool.DefaultShellCommandToolName),
 		Payload: tool.Payload{
 			Kind:      tool.PayloadFunction,
-			Arguments: `{"cmd":"echo hi","sandbox_permissions":"require_escalated","justification":"need more access"}`,
+			Arguments: `{"command":"echo hi","sandbox_permissions":"require_escalated","justification":"need more access"}`,
 		},
 	}
 
@@ -2145,11 +2307,11 @@ func TestInteractiveExplicitOnRequestReachesShellApproval(t *testing.T) {
 	}
 	output, err := router.Dispatch(context.Background(), &tool.Invocation{
 		CallID:   "call-additional-permissions",
-		ToolName: tool.PlainName(tool.DefaultExecCommandToolName),
+		ToolName: tool.PlainName(tool.DefaultShellCommandToolName),
 		Payload: tool.Payload{
 			Kind: tool.PayloadFunction,
 			Arguments: `{
-				"cmd":"mkdir ../test",
+				"command":"mkdir ../test",
 				"sandbox_permissions":"with_additional_permissions",
 				"additional_permissions":{"file_system":{"write":["../test"]}}
 			}`,
@@ -2894,6 +3056,31 @@ func TestExecToolCompletesBeforeNextCommentaryLikeRust(t *testing.T) {
 	}
 }
 
+func TestExecLegacyShellCommandEmitsOneCommandLifecycleLikeRust(t *testing.T) {
+	sink := newExecEventSink(nil, false)
+	collector := &execStreamEventCollector{sink: sink}
+	invocation := &tool.Invocation{
+		CallID:   "legacy-weather",
+		ToolName: tool.PlainName(tool.DefaultShellCommandToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"command":"curl.exe -sS https://sdk-weather.invalid/Yunnan?format=j1","workdir":"C:\\workspace"}`},
+	}
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{
+			CallID: "legacy-weather", ToolName: tool.PlainName(tool.DefaultShellCommandToolName), Success: true,
+			Body: "curl: (6) Could not resolve host", Data: map[string]any{"exit_code": 1},
+		},
+	})
+	events := sink.Events()
+	if len(events) != 2 || events[0].Type != "item.started" || events[1].Type != "item.completed" ||
+		events[0].Item == nil || events[1].Item == nil || events[0].Item.ID != "legacy-weather" ||
+		events[1].Item.ID != "legacy-weather" || events[0].Item.Command != "curl.exe -sS https://sdk-weather.invalid/Yunnan?format=j1" ||
+		events[1].Item.Status != "failed" || events[1].Item.ExitCode == nil || *events[1].Item.ExitCode != 1 {
+		t.Fatalf("legacy command lifecycle = %#v", events)
+	}
+}
+
 func TestExecRejectedCommandStillClosesCommandLifecycle(t *testing.T) {
 	sink := newExecEventSink(nil, false)
 	collector := &execStreamEventCollector{sink: sink}
@@ -3409,7 +3596,7 @@ func TestWriteStdinCompletionMapsToOriginalCommandExecutionLikeRust(t *testing.T
 	}
 }
 
-func TestCodeModeDoesNotReplayNestedCommandsAfterLiveLifecycle(t *testing.T) {
+func TestCodeModeDoesNotExposeNestedCommandsAsTopLevelEvents(t *testing.T) {
 	execution := &turn.ToolExecutionResult{
 		Invocation: &tool.Invocation{
 			CallID:   "code-call",
@@ -3426,7 +3613,7 @@ func TestCodeModeDoesNotReplayNestedCommandsAfterLiveLifecycle(t *testing.T) {
 		}},
 	}
 	if events := eventsFromToolExecution(execution); len(events) != 0 {
-		t.Fatalf("replayed nested command events = %#v, want none after live lifecycle", events)
+		t.Fatalf("nested command events = %#v, want none", events)
 	}
 }
 
@@ -4335,6 +4522,14 @@ type toolLoopRecordingAgent struct {
 	requests []model.AgentRequest
 }
 
+type codeModeLegacyShellLoopAgent struct {
+	requests []model.AgentRequest
+}
+
+type codeModeLegacyShellRecoveryAgent struct {
+	requests []model.AgentRequest
+}
+
 type preTurnCompactAgent struct {
 	requests []model.AgentRequest
 }
@@ -4377,6 +4572,46 @@ func (a *toolLoopRecordingAgent) Run(ctx context.Context, request *model.AgentRe
 		}},
 		Model:      request.Model,
 		ProviderID: request.ProviderID,
+	}, nil
+}
+
+func (a *codeModeLegacyShellLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		return &model.AgentResponse{Items: []model.AgentItem{{
+			ID: "commentary-weather", Type: "agent_message", Text: "Checking Yunnan weather.", Data: map[string]any{"phase": "commentary"},
+		}, {
+			ID: "code-weather", Type: "custom_tool_call", Name: tool.CodeModeExecToolName, CallID: "code-weather",
+			Input: `const r = await tools.shell_command({"command":"curl.exe -sS https://sdk-weather.invalid/Yunnan?format=j1","workdir":"C:\\workspace"}); text(r.output)`,
+		}}}, nil
+	}
+	return &model.AgentResponse{
+		Message: "Weather lookup failed once; no duplicate final.",
+		Items: []model.AgentItem{{
+			ID: "final-weather", Type: "agent_message", Text: "Weather lookup failed once; no duplicate final.", Data: map[string]any{"phase": "final_answer"},
+		}},
+	}, nil
+}
+
+func (a *codeModeLegacyShellRecoveryAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		return &model.AgentResponse{Items: []model.AgentItem{{
+			ID: "code-recovery", Type: "custom_tool_call", Name: tool.CodeModeExecToolName, CallID: "code-recovery",
+			Input: `try { await tools.shell_command({command: "fail"}); } catch (error) { text("CAUGHT_FAILURE"); } const recovered = await tools.shell_command({command: "recover"}); text(recovered.output);`,
+		}}}, nil
+	}
+	return &model.AgentResponse{
+		Message: "CODE_MODE_RECOVERY_DONE",
+		Items: []model.AgentItem{{
+			ID: "final-recovery", Type: "agent_message", Text: "CODE_MODE_RECOVERY_DONE", Data: map[string]any{"phase": "final_answer"},
+		}},
 	}, nil
 }
 

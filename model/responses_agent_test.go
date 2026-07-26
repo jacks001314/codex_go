@@ -394,6 +394,67 @@ func TestResponsesAgentRunnerRunWebSocketParsesFullResponsesEventModel(t *testin
 	}
 }
 
+func TestResponsesAgentRunnerRunWebSocketRecoversDeclaredCustomToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		events := []string{
+			`{"type":"response.created","response":{"id":"resp-ws-custom"}}`,
+			`{"type":"response.custom_tool_call_input.delta","item_id":"ctc-1","call_id":"call-1","delta":"text(\"OK\")"}`,
+			`{"type":"response.output_item.done","item":{"id":"ctc-1","type":"function_call","name":"exec","call_id":"call-1","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-ws-custom","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		}
+		for _, event := range events {
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+		}
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Model:  "gpt-test",
+		Prompt: "run exec",
+		Tools:  []any{map[string]any{"type": "custom", "name": "exec"}},
+	})
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Type != "custom_tool_call" || response.Items[0].Name != "exec" || response.Items[0].Input != `text("OK")` {
+		t.Fatalf("items=%#v", response.Items)
+	}
+}
+
+func TestResponsesAgentRunnerNonStreamingRecoversDeclaredCustomToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp-custom",
+			"model":"gpt-test",
+			"output":[{"id":"ctc-1","type":"function_call","name":"exec","call_id":"call-1","arguments":"text(\"OK\")"}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}})
+	response, err := runner.Run(context.Background(), &AgentRequest{
+		Model:  "gpt-test",
+		Prompt: "run exec",
+		Tools:  []any{map[string]any{"type": "custom", "name": "exec"}},
+	})
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Type != "custom_tool_call" || response.Items[0].Name != "exec" || response.Items[0].Input != `text("OK")` || response.Items[0].Arguments != "" {
+		t.Fatalf("items=%#v", response.Items)
+	}
+}
+
 func TestResponsesAgentRunnerRunWebSocketReusesConnectionWithinTurn(t *testing.T) {
 	connections := 0
 	requests := 0

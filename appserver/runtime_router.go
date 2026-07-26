@@ -188,6 +188,8 @@ type RuntimeRouter struct {
 	selectedSkillMu        sync.Mutex
 	selectedSkills         map[string]map[string]*runtimeSelectedSkillCatalog
 	unifiedExecPersistMu   sync.Mutex
+	unifiedExecPendingMu   sync.Mutex
+	unifiedExecPending     map[string][]session.Item
 	unifiedExecAnalyticsMu sync.Mutex
 	unifiedExecAnalytics   map[string]unifiedExecAnalyticsContext
 	networkApproval        *networkApprovalService
@@ -244,6 +246,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		orchestratorSkills:   map[string]*runtimeOrchestratorSkillCatalog{},
 		orchestratorWarned:   map[string]bool{},
 		selectedSkills:       map[string]map[string]*runtimeSelectedSkillCatalog{},
+		unifiedExecPending:   map[string][]session.Item{},
 		unifiedExecAnalytics: map[string]unifiedExecAnalyticsContext{},
 		managedNetworks:      map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs: map[string]managedNetworkReloadInput{},

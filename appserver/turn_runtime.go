@@ -136,6 +136,7 @@ type responsesStreamNotificationState struct {
 	patchFingerprints         map[string]string
 	activeResponseID          string
 	activeItemID              string
+	activeAgentItemID         string
 	activeReasoningItemID     string
 	planMode                  bool
 	planItemID                string
@@ -171,8 +172,13 @@ func (s *responsesStreamNotificationState) rememberOutputItem(event *model.Respo
 		return
 	}
 	s.activeItemID = itemID
-	if event.Item != nil && event.Item.Type == "reasoning" {
-		s.activeReasoningItemID = itemID
+	if event.Item != nil {
+		switch event.Item.Type {
+		case "message", "agent_message":
+			s.activeAgentItemID = itemID
+		case "reasoning":
+			s.activeReasoningItemID = itemID
+		}
 	}
 }
 
@@ -205,6 +211,18 @@ func (s *responsesStreamNotificationState) reasoningItemID(values ...string) str
 		fallback = values[len(values)-1]
 	}
 	return "reasoning-" + safeIdentifier(fallback)
+}
+
+func (s *responsesStreamNotificationState) agentMessageItemID(turnID string, values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	if s != nil && strings.TrimSpace(s.activeAgentItemID) != "" {
+		return strings.TrimSpace(s.activeAgentItemID)
+	}
+	return "agent-message-" + safeIdentifier(turnID)
 }
 
 func streamAgentItemID(item *model.AgentItem) string {
@@ -445,7 +463,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			Item:     event.RawItem,
 		})
 	case model.ResponsesStreamEventOutputText:
-		itemID := firstNonEmpty(event.ItemID, "agent-message-"+safeIdentifier(turnID))
+		// Some Responses-compatible providers omit item_id on output_text.delta.
+		// Rust associates those deltas with the most recently added assistant
+		// message item; retaining that identity prevents commentary and final
+		// messages from being merged or rendered twice by the TUI.
+		itemID := state.agentMessageItemID(turnID, event.ItemID)
 		if event.Delta == "" {
 			return
 		}
@@ -1055,6 +1077,8 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OutputSchema:                 params.OutputSchema,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		OnToolCompleted:              r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		EmitCodeModeNestedLifecycle:  true,
 		SamplingFollowUp:             r.autoCompactFallbackFollowUp(threadID, runConfig),
 	})
 	if err != nil {
@@ -1088,6 +1112,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if runConfig.ExtraSessionItems != nil {
 		items = append(items, runConfig.ExtraSessionItems()...)
 	}
+	items = append(items, r.drainPendingUnifiedExecItems(threadID, turnID)...)
 	items = append(items, r.sessionItemsForTurn(turnID, params, result, startedAt)...)
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
@@ -1134,14 +1159,6 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.emitCollabAgentToolCallAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
 			r.emitWebSearchAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
 			r.emitImageGenerationAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
-		}
-		if threadItem.Type == "agent_message" && strings.TrimSpace(threadItem.Text) != "" {
-			r.notify(NotificationAgentMessageDelta, &AgentMessageDeltaNotification{
-				ThreadID: threadID,
-				TurnID:   turnID,
-				ItemID:   threadItem.ID,
-				Delta:    threadItem.Text,
-			})
 		}
 	}
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
@@ -1300,6 +1317,8 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		DisableHostedImageGeneration: true,
 		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		OnToolCompleted:              r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		EmitCodeModeNestedLifecycle:  true,
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -1331,6 +1350,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	if runConfig.ExtraSessionItems != nil {
 		items = append(items, runConfig.ExtraSessionItems()...)
 	}
+	items = append(items, r.drainPendingUnifiedExecItems(threadID, turnID)...)
 	items = append(items, reviewRuntimeSessionItems(turnID, output, result, completedAt)...)
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
@@ -1561,6 +1581,9 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
 		}
 		if item, ok := commandExecutionStartedThreadItem(invocation, turnID, cwd, startedAt); ok {
+			// Unified exec owns the canonical command lifecycle for every command,
+			// including commands delegated from code mode. Emitting the dispatcher
+			// callback as well produces a duplicate item/started notification.
 			if unifiedExecEnabled {
 				return
 			}
@@ -1638,6 +1661,57 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 	}
 }
 
+func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID string, cwd string, unifiedExecEnabled bool) turn.ToolCompletedCallback {
+	return func(_ context.Context, execution *turn.ToolExecutionResult) {
+		if r == nil || unifiedExecEnabled || execution == nil || execution.Invocation == nil || execution.Invocation.Source != "code_mode" {
+			return
+		}
+		item, ok := commandExecutionStartedThreadItem(execution.Invocation, turnID, cwd, execution.StartedAt)
+		if !ok {
+			return
+		}
+		status := CommandExecutionCompleted
+		output := ""
+		exitCode := 0
+		hasExitCode := false
+		if execution.Output != nil {
+			output = firstNonEmpty(stringFromAny(execution.Output.Data["hook_response"]), execution.Output.Body)
+			if execution.Output.Data != nil {
+				if _, ok := execution.Output.Data["exit_code"]; ok {
+					exitCode = intFromAny(execution.Output.Data["exit_code"])
+					hasExitCode = true
+				}
+			}
+			if !execution.Output.Success {
+				status = CommandExecutionFailed
+			}
+		}
+		if hasExitCode && exitCode != 0 {
+			status = CommandExecutionFailed
+		}
+		item.Data["status"] = string(status)
+		item.Data["aggregatedOutput"] = output
+		item.Data["aggregated_output"] = output
+		if hasExitCode {
+			item.Data["exitCode"] = exitCode
+			item.Data["exit_code"] = exitCode
+		}
+		completedAt := execution.FinishedAt
+		if completedAt.IsZero() {
+			completedAt = time.Now().UTC()
+		}
+		item.Data["completedAtMs"] = completedAt.UTC().UnixMilli()
+		item.Data["completed_at_ms"] = completedAt.UTC().UnixMilli()
+		r.attributeCommandExecutionItem(&item)
+		r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+			Item:          threadItemPayload(item),
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			CompletedAtMS: completedAt.UTC().UnixMilli(),
+		})
+	}
+}
+
 func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID string) tool.UnifiedExecEventSink {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
@@ -1692,7 +1766,11 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 			}
 			item := unifiedExecThreadItem(event, status)
 			r.attributeCommandExecutionItem(&item)
-			r.persistUnifiedExecEnd(threadID, turnID, item, event)
+			// Rust publishes ExecCommandEnd to the client-facing event stream
+			// before rollout persistence can delay any other work. In particular,
+			// the foreground unified-exec collector waits for this sink to return;
+			// doing store/rollout I/O first can deadlock a real app-server turn
+			// after outputDelta and leave the TUI without item/completed.
 			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 				ThreadID:      threadID,
 				TurnID:        turnID,
@@ -1701,6 +1779,14 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 			})
 			if analytics, ok := r.takeUnifiedExecAnalytics(threadID, turnID, callID); ok {
 				r.emitCommandExecutionAnalyticsEvent(context.Background(), analytics.ConnectionID, threadID, turnID, &item, analytics.RunConfig)
+			}
+			r.enqueuePendingUnifiedExecItem(threadID, turnID, unifiedExecSessionItem(turnID, item, event))
+			// A background process can finish after its originating turn has
+			// already drained the pending queue. Persist that late completion on
+			// the watcher path; foreground completions remain owned by turn
+			// finalization and never block the tool result.
+			if r.activeRuntimeTurnStateSnapshot(threadID, turnID) == nil {
+				r.persistPendingUnifiedExecItemsAfterTurn(threadID, turnID)
 			}
 		}
 	}
@@ -1737,12 +1823,7 @@ func (r *RuntimeRouter) takeUnifiedExecAnalytics(threadID string, turnID string,
 	return analytics, ok
 }
 
-func (r *RuntimeRouter) persistUnifiedExecEnd(threadID string, turnID string, item ThreadItem, event tool.UnifiedExecEvent) {
-	if r == nil || !r.hasRuntimeThreadStore() {
-		return
-	}
-	r.unifiedExecPersistMu.Lock()
-	defer r.unifiedExecPersistMu.Unlock()
+func unifiedExecSessionItem(turnID string, item ThreadItem, event tool.UnifiedExecEvent) session.Item {
 	createdAt := time.Time{}
 	if !event.StartedAt.IsZero() {
 		createdAt = event.StartedAt.Add(event.Duration).UTC()
@@ -1750,19 +1831,95 @@ func (r *RuntimeRouter) persistUnifiedExecEnd(threadID string, turnID string, it
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	stored := session.Item{
+	data := cloneAnyMap(item.Data)
+	data["unified_exec_evented"] = true
+	return session.Item{
 		ID:        item.ID,
 		Type:      "commandExecution",
 		CallID:    item.ID,
 		Text:      event.Output,
 		CreatedAt: createdAt,
-		Data:      cloneAnyMap(item.Data),
+		Data:      data,
 		Metadata:  appTurnMetadata(turnID, map[string]any{"source": string(CommandExecutionSourceUnifiedExecStartup)}),
 	}
-	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), stored); err != nil {
+}
+
+func pendingUnifiedExecItemsKey(threadID string, turnID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
+}
+
+func (r *RuntimeRouter) enqueuePendingUnifiedExecItem(threadID string, turnID string, item session.Item) {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" || strings.TrimSpace(item.ID) == "" {
 		return
 	}
-	_ = r.appendRuntimeRollout(threadID, []session.Item{stored}, createdAt)
+	key := pendingUnifiedExecItemsKey(threadID, turnID)
+	r.unifiedExecPendingMu.Lock()
+	defer r.unifiedExecPendingMu.Unlock()
+	if r.unifiedExecPending == nil {
+		r.unifiedExecPending = map[string][]session.Item{}
+	}
+	pending := r.unifiedExecPending[key]
+	for index := range pending {
+		if pending[index].ID == item.ID {
+			pending[index] = cloneRuntimeSessionItem(item)
+			r.unifiedExecPending[key] = pending
+			return
+		}
+	}
+	r.unifiedExecPending[key] = append(pending, cloneRuntimeSessionItem(item))
+}
+
+func (r *RuntimeRouter) drainPendingUnifiedExecItems(threadID string, turnID string) []session.Item {
+	if r == nil {
+		return nil
+	}
+	key := pendingUnifiedExecItemsKey(threadID, turnID)
+	r.unifiedExecPendingMu.Lock()
+	pending := cloneRuntimeSessionItems(r.unifiedExecPending[key])
+	delete(r.unifiedExecPending, key)
+	r.unifiedExecPendingMu.Unlock()
+	return pending
+}
+
+func (r *RuntimeRouter) persistPendingUnifiedExecItemsAfterTurn(threadID string, turnID string) {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		r.clearPendingUnifiedExecItems(threadID, turnID)
+		return
+	}
+	r.unifiedExecPersistMu.Lock()
+	defer r.unifiedExecPersistMu.Unlock()
+	items := r.drainPendingUnifiedExecItems(threadID, turnID)
+	if len(items) == 0 {
+		return
+	}
+	if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
+		return
+	}
+	createdAt := items[0].CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_ = r.appendRuntimeRollout(threadID, items, createdAt)
+}
+
+func (r *RuntimeRouter) clearPendingUnifiedExecItems(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	r.unifiedExecPendingMu.Lock()
+	defer r.unifiedExecPendingMu.Unlock()
+	if turnID != "" {
+		delete(r.unifiedExecPending, pendingUnifiedExecItemsKey(threadID, turnID))
+		return
+	}
+	prefix := threadID + "\x00"
+	for key := range r.unifiedExecPending {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.unifiedExecPending, key)
+		}
+	}
 }
 
 func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionStatus) ThreadItem {
@@ -1806,16 +1963,21 @@ func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionS
 }
 
 func commandExecutionStartedThreadItem(invocation *tool.Invocation, turnID string, cwd string, startedAt time.Time) (ThreadItem, bool) {
-	if invocation == nil || invocation.ToolName.Key() != tool.DefaultExecCommandToolName || invocation.Payload.Kind != tool.PayloadFunction {
+	if invocation == nil || !tool.IsShellCommandToolName(invocation.ToolName) || invocation.Payload.Kind != tool.PayloadFunction {
 		return ThreadItem{}, false
 	}
-	var args tool.ExecCommandArgs
+	var args struct {
+		Cmd     string `json:"cmd"`
+		Command string `json:"command"`
+		CWD     string `json:"cwd"`
+		Workdir string `json:"workdir"`
+	}
 	if strings.TrimSpace(invocation.Payload.Arguments) != "" {
 		if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &args); err != nil {
 			return ThreadItem{}, false
 		}
 	}
-	command := strings.TrimSpace(args.Cmd)
+	command := strings.TrimSpace(firstNonEmpty(args.Cmd, args.Command))
 	if command == "" {
 		return ThreadItem{}, false
 	}
@@ -2127,6 +2289,7 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	if r.networkApproval != nil {
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
+	r.clearPendingUnifiedExecItems(threadID, turnID)
 	return active, true
 }
 
@@ -2146,6 +2309,7 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 	if r.networkApproval != nil {
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
+	r.clearPendingUnifiedExecItems(threadID, turnID)
 }
 
 func (r *RuntimeRouter) ensureActiveDiffTrackerLocked(threadID string, turnID string) *runtimeutil.DiffTracker {
@@ -5014,7 +5178,7 @@ func analyticsTurnToolCounts(result *turn.AgentLoopResult) *telemetry.CodexTurnT
 		name := execution.Invocation.ToolName
 		key := name.Key()
 		switch {
-		case key == tool.DefaultExecCommandToolName:
+		case tool.IsShellCommandToolName(name):
 			counts.ShellCommand++
 		case key == tool.DefaultApplyPatchToolName:
 			counts.FileChange++
@@ -6631,6 +6795,7 @@ func (r *RuntimeRouter) runtimeMCPServerConfigsForSkills(cfg *config.Config) map
 
 type implicitShellSkillArgs struct {
 	Cmd     string `json:"cmd"`
+	Command string `json:"command"`
 	CWD     string `json:"cwd,omitempty"`
 	Workdir string `json:"workdir,omitempty"`
 }
@@ -6686,7 +6851,7 @@ func implicitSkillForToolInvocation(skills []promptctx.InstructionsSkillMetadata
 		return nil
 	}
 	name := invocation.ToolName.Key()
-	if name != tool.DefaultExecCommandToolName && name != "shell" {
+	if !tool.IsShellCommandToolName(invocation.ToolName) && name != "shell" {
 		return nil
 	}
 	var args implicitShellSkillArgs
@@ -6696,7 +6861,7 @@ func implicitSkillForToolInvocation(skills []promptctx.InstructionsSkillMetadata
 	if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &args); err != nil {
 		return nil
 	}
-	command := strings.TrimSpace(args.Cmd)
+	command := strings.TrimSpace(firstNonEmpty(args.Cmd, args.Command))
 	if command == "" {
 		return nil
 	}

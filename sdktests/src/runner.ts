@@ -142,9 +142,11 @@ async function runWorker(input: any): Promise<any> {
       if (settled) return;
       settled = true;
       if (process.platform === "win32") {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+        const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+        killer.once("exit", () => resolve({ timedOut: true, code: null }));
+        killer.once("error", () => resolve({ timedOut: true, code: null }));
       } else child.kill("SIGKILL");
-      resolve({ timedOut: true, code: null });
+      if (process.platform !== "win32") resolve({ timedOut: true, code: null });
     }, hardTimeoutMs);
     child.once("exit", (code) => {
       if (settled) return;

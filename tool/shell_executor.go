@@ -17,6 +17,7 @@ import (
 
 const (
 	DefaultExecCommandToolName        = "exec_command"
+	DefaultShellCommandToolName       = "shell_command"
 	DefaultExecCommandMaxOutputTokens = 10000
 )
 
@@ -109,6 +110,9 @@ func (e *ShellExecutor) Spec() Spec {
 	if e == nil || e.toolName.Key() == "" {
 		return Spec{Name: PlainName(DefaultExecCommandToolName)}
 	}
+	if e.toolName.Key() == DefaultShellCommandToolName {
+		return e.shellCommandSpec()
+	}
 	if e.unifiedExec != nil {
 		return e.unifiedExecSpec()
 	}
@@ -154,6 +158,67 @@ func (e *ShellExecutor) Spec() Spec {
 		},
 		Parallel: true,
 	}
+}
+
+func (e *ShellExecutor) shellCommandSpec() Spec {
+	properties := map[string]any{
+		"command": map[string]any{
+			"type":        "string",
+			"description": "Shell script to run in the user's default shell.",
+		},
+		"workdir": map[string]any{
+			"type":        "string",
+			"description": "Working directory for the command. Defaults to the turn cwd.",
+		},
+		"timeout_ms": map[string]any{
+			"type":        "number",
+			"description": "Maximum command runtime. Defaults to 10000 ms.",
+		},
+	}
+	if e.validation.AllowLoginShell {
+		properties["login"] = map[string]any{
+			"type":        "boolean",
+			"description": "True runs with login shell semantics; false disables them. Defaults to true.",
+		}
+	}
+	for key, schema := range unifiedExecApprovalProperties(e.validation.AdditionalPermissionsAllowed) {
+		properties[key] = schema
+	}
+	description := "Runs a shell command and returns its output."
+	if runtime.GOOS == "windows" {
+		description = `Runs a Powershell command (Windows) and returns its output.
+
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\nprint('Hello, world!')\n'@ | python -"
+
+` + unifiedExecWindowsShellGuidance
+	} else {
+		description += "\n- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."
+	}
+	return Spec{
+		Name:        e.toolName,
+		Description: description,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"required":             []string{"command"},
+			"additionalProperties": false,
+			"properties":           properties,
+		},
+		Parallel: true,
+	}
+}
+
+func IsShellCommandToolName(name ToolName) bool {
+	if name.Namespace != "" {
+		return false
+	}
+	return name.Name == DefaultExecCommandToolName || name.Name == DefaultShellCommandToolName
 }
 
 func (e *ShellExecutor) unifiedExecSpec() Spec {
@@ -624,7 +689,11 @@ func (e *ShellExecutor) WithUpdatedHookInput(invocation *Invocation, updatedInpu
 	} else if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &args); err != nil {
 		return nil, RespondToModel(fmt.Sprintf("failed to parse exec_command arguments for hook rewrite: %v", err))
 	}
-	args["cmd"] = command
+	commandField := "cmd"
+	if invocation.ToolName.Key() == DefaultShellCommandToolName {
+		commandField = "command"
+	}
+	args[commandField] = command
 	data, err := json.Marshal(args)
 	if err != nil {
 		return nil, RespondToModel(fmt.Sprintf("failed to serialize rewritten exec_command arguments: %v", err))
@@ -692,6 +761,15 @@ func decodeExecCommandInvocation(invocation *Invocation) (*ExecCommandArgs, erro
 	var args ExecCommandArgs
 	if err := invocation.DecodeArguments(&args); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(args.Cmd) == "" && invocation.ToolName.Key() == DefaultShellCommandToolName {
+		var legacy struct {
+			Command string `json:"command"`
+		}
+		if err := invocation.DecodeArguments(&legacy); err != nil {
+			return nil, err
+		}
+		args.Cmd = legacy.Command
 	}
 	return &args, nil
 }

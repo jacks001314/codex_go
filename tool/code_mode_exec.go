@@ -33,12 +33,13 @@ SOURCE: /[\s\S]+/
 `
 
 type codeModeExecExecutor struct {
-	registry *Registry
-	nextID   atomic.Uint64
-	storeMu  sync.RWMutex
-	store    map[string]any
-	cellsMu  sync.Mutex
-	cells    map[string]*codeModeCell
+	registry          *Registry
+	nestedCommandTool ToolName
+	nextID            atomic.Uint64
+	storeMu           sync.RWMutex
+	store             map[string]any
+	cellsMu           sync.Mutex
+	cells             map[string]*codeModeCell
 }
 
 type codeModeCell struct {
@@ -82,17 +83,78 @@ func NewCodeModeExecExecutor(registry *Registry) Executor {
 	return exec
 }
 
-func NewCodeModeExecutors(registry *Registry) (Executor, Executor) {
-	exec := &codeModeExecExecutor{registry: registry, store: map[string]any{}, cells: map[string]*codeModeCell{}}
+func NewCodeModeExecutors(registry *Registry, nestedCommandTool ...ToolName) (Executor, Executor) {
+	var commandTool ToolName
+	if len(nestedCommandTool) > 0 {
+		commandTool = nestedCommandTool[0]
+	}
+	exec := &codeModeExecExecutor{registry: registry, nestedCommandTool: commandTool, store: map[string]any{}, cells: map[string]*codeModeCell{}}
 	return exec, &codeModeWaitExecutor{exec: exec}
 }
 
 func (e *codeModeExecExecutor) Spec() Spec {
 	return Spec{
 		Name:        PlainName(CodeModeExecToolName),
-		Description: "Run JavaScript code to orchestrate/compose tool calls. Runs raw JavaScript with no Node, no file system, no network access, and no console. Accepts raw JavaScript source text, not JSON, quoted strings, markdown, or explanatory prose. All nested tools are available on the global tools object; for example await tools.exec_command({cmd: \"pwd\"}). Use text(result.output) to return output. Execute the requested code directly and do not describe it instead.",
+		Description: codeModeExecDescription(e.registry, e.nestedCommandTool),
 		Freeform:    &FreeformSpec{Syntax: "lark", Definition: codeModeExecGrammar},
 	}
+}
+
+func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName) string {
+	description := `Run JavaScript code to orchestrate/compose tool calls
+- Evaluates the provided JavaScript code in a fresh isolate as an async module.
+- All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
+- Nested tool methods take either a string or an object as their input argument.
+- Nested tools return either an object or a string, based on the description.
+- Runs raw JavaScript -- no Node, no file system, no network access, no console.
+- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
+- You may optionally start the tool input with a first-line pragma like // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}.
+- yield_time_ms asks exec to yield early if the script is still running. Defaults to 10000 ms.
+- max_output_tokens sets the token budget for direct exec results. Defaults to 10000 tokens.
+- When the JavaScript code is fully evaluated, the isolate's lifetime ends and unawaited promises are discarded.
+- Do not use fetch, XMLHttpRequest, require, process, or console; they are unavailable.
+- There is no nested tools.exec method. To run commands, call the enabled nested command tool and await its result.
+
+Global helpers:
+- exit(): Immediately ends the current script successfully.
+- text(value): Appends text to the exec result. Use text(result.output) to forward command output.
+- image(value), audio(value), generatedImage(value): Append supported media results.
+- store(key, value) and load(key): Persist serializable values within the code-mode session.
+- notify(value): Immediately injects an extra custom_tool_call_output.
+- setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
+- ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
+- yield_control(): Yields accumulated output while the script keeps running.`
+
+	if registry == nil {
+		return description
+	}
+	commandToolName := preferredCommandTool.Key()
+	var execSpec Spec
+	var ok bool
+	if commandToolName != "" {
+		execSpec, ok = registry.Spec(preferredCommandTool)
+	} else {
+		commandToolName = DefaultExecCommandToolName
+		execSpec, ok = registry.Spec(PlainName(commandToolName))
+		if !ok || execSpec.Exposure == ExposureHidden {
+			commandToolName = DefaultShellCommandToolName
+			execSpec, ok = registry.Spec(PlainName(commandToolName))
+		}
+	}
+	if !ok {
+		return description
+	}
+	schema, err := json.Marshal(execSpec.InputSchema)
+	if err != nil {
+		return description
+	}
+	argumentName := "cmd"
+	if commandToolName == DefaultShellCommandToolName {
+		argumentName = "command"
+	}
+	return description + "\n\nEnabled nested command tool:\n## tools." + commandToolName + "\n" + strings.TrimSpace(execSpec.Description) +
+		"\nInput schema: " + string(schema) +
+		"\nExample: const r = await tools." + commandToolName + "({\"" + argumentName + "\":\"Write-Output hello\",\"timeout_ms\":10000}); text(r.output);"
 }
 
 func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
@@ -292,6 +354,9 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			continue
 		}
 		spec := executor.Spec()
+		if spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key() {
+			continue
+		}
 		globalName := codeModeIdentifier(ResponsesAPIName(name))
 		toolName := name
 		toolSpec := spec
@@ -307,7 +372,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			promise, resolve, reject := runtime.NewPromise()
 			pending++
 			go func() {
-				nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: invocation.Context, Source: "code_mode"}
+				nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: cloneInvocationContext(invocation.Context), Source: "code_mode"}
 				startedAt := time.Now().UTC()
 				if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
 					started(ctx, nestedInvocation, startedAt)
@@ -336,6 +401,9 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			continue
 		}
 		if spec, ok := e.registry.Spec(name); ok {
+			if spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key() {
+				continue
+			}
 			metadata = append(metadata, map[string]string{"name": codeModeIdentifier(ResponsesAPIName(name)), "description": spec.Description})
 		}
 	}
@@ -394,7 +462,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 				continue
 			}
 			result := codeModeToolResult(completed.output)
-			if completed.name.Name == DefaultExecCommandToolName {
+			if IsShellCommandToolName(completed.name) {
 				if cmd, ok := payloadCommand(completed.payload); ok {
 					commands = append(commands, cmd)
 				}
@@ -402,6 +470,12 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 				if exitCode, ok := result["exit_code"].(int); ok {
 					exitCodes = append(exitCodes, exitCode)
 				}
+			}
+			if failure, failed := codeModeToolFailure(completed.name, completed.output); failed {
+				if err := completed.reject(failure); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if err := completed.resolve(result); err != nil {
 				return nil, err
@@ -413,6 +487,17 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	}
 	body := strings.Join(texts, "\n")
 	return &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": contentItems, "nested_commands": commands, "nested_outputs": nestedOutputs, "nested_exit_codes": exitCodes}}, nil
+}
+
+func cloneInvocationContext(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func parseCodeModeSource(input string) (string, codeModeExecOptions, error) {
@@ -685,14 +770,59 @@ func codeModeToolResult(output *Output) map[string]any {
 	return result
 }
 
-func payloadCommand(payload Payload) (string, bool) {
-	var args struct {
-		Cmd string `json:"cmd"`
-	}
-	if json.Unmarshal([]byte(payload.Arguments), &args) != nil || args.Cmd == "" {
+func codeModeToolFailure(name ToolName, output *Output) (string, bool) {
+	if output == nil || !IsShellCommandToolName(name) {
 		return "", false
 	}
-	return args.Cmd, true
+	failed := !output.Success
+	if timedOut, _ := output.Data["timed_out"].(bool); timedOut {
+		failed = true
+	}
+	if _, running := output.Data["process_id"]; !running {
+		if exitCode, ok := codeModeInt(output.Data["exit_code"]); ok && exitCode != 0 {
+			failed = true
+		}
+	}
+	if !failed {
+		return "", false
+	}
+	if body := strings.TrimSpace(output.Body); body != "" {
+		return body, true
+	}
+	if message := strings.TrimSpace(output.Error); message != "" {
+		return message, true
+	}
+	return fmt.Sprintf("tool %s failed", name.Key()), true
+}
+
+func codeModeInt(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), value == float64(int(value))
+	case json.Number:
+		parsed, err := value.Int64()
+		return int(parsed), err == nil
+	default:
+		return 0, false
+	}
+}
+
+func payloadCommand(payload Payload) (string, bool) {
+	var args struct {
+		Cmd     string `json:"cmd"`
+		Command string `json:"command"`
+	}
+	if json.Unmarshal([]byte(payload.Arguments), &args) != nil {
+		return "", false
+	}
+	command := firstNonEmptyString(args.Cmd, args.Command)
+	return command, command != ""
 }
 
 func renderCodeModeValue(value sobek.Value) string {

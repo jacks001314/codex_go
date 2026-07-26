@@ -220,6 +220,35 @@ func TestUnifiedExecLifecycleEventsMatchRust(t *testing.T) {
 	}
 }
 
+func TestUnifiedExecForegroundEndEventPrecedesToolReturnLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	var mu sync.Mutex
+	var observed []UnifiedExecEvent
+	result, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:     unifiedExecHelperCommand("immediate"),
+		CWD:         t.TempDir(),
+		YieldTimeMS: 1_000,
+		UnifiedExecEventSink: func(event UnifiedExecEvent) {
+			mu.Lock()
+			observed = append(observed, event)
+			mu.Unlock()
+		},
+	}, "foreground-event-call")
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if result == nil || !result.HasExitCode || result.ProcessID != nil {
+		t.Fatalf("foreground result = %#v", result)
+	}
+	mu.Lock()
+	events := append([]UnifiedExecEvent(nil), observed...)
+	mu.Unlock()
+	if len(events) < 2 || events[0].Kind != UnifiedExecEventBegin || events[len(events)-1].Kind != UnifiedExecEventEnd {
+		t.Fatalf("events at tool return = %#v, want begin ... end", events)
+	}
+}
+
 func TestUnifiedExecRemoteExecServerSessionReusesStdinLikeRust(t *testing.T) {
 	probeCtx, cancelProbe := context.WithTimeout(context.Background(), 3*time.Second)
 	ttyAvailable, probeErr := execserver.TTYOutputAvailable(probeCtx)
