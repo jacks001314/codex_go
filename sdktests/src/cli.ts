@@ -17,71 +17,75 @@ import {
 } from "./suite.ts";
 import { latestArtifactDir, sdktestsRoot } from "./util.ts";
 
-const abortController = new AbortController();
-let receivedSignal: "SIGINT" | "SIGTERM" | null = null;
-const signalHandler = (signal: "SIGINT" | "SIGTERM") => {
-  receivedSignal ??= signal;
-  abortController.abort(new Error(`received ${signal}`));
+export type RunCLIOptions = {
+  args: string[];
+  signal: AbortSignal;
+  lockPath?: string;
+  artifactsRoot?: string;
+  tempRoot?: string;
+  log?: (message: string) => void;
 };
-const sigintHandler = () => signalHandler("SIGINT");
-const sigtermHandler = () => signalHandler("SIGTERM");
-process.once("SIGINT", sigintHandler);
-process.once("SIGTERM", sigtermHandler);
 
-try {
-  await main(abortController.signal);
-} catch (error: any) {
-  console.error(error?.message ?? error);
-  process.exitCode = receivedSignal ? signalExitCode(receivedSignal) : 2;
-} finally {
-  process.removeListener("SIGINT", sigintHandler);
-  process.removeListener("SIGTERM", sigtermHandler);
-}
+export type RunProcessCLIOptions = Omit<RunCLIOptions, "signal" | "args"> & { args?: string[] };
 
-async function main(signal: AbortSignal): Promise<void> {
-  const args = process.argv.slice(2);
+export async function runCLI(runOptions: RunCLIOptions): Promise<number> {
+  const args = [...runOptions.args];
   const command = args.shift() ?? "smoke";
   const options = parseOptions(args);
+  const log = runOptions.log ?? console.log;
   if (command === "report") {
     const artifact = path.resolve(stringOption(options.artifact) ?? latestArtifactDir());
     const result = compareArtifact(artifact);
-    console.log(`sdktests report: ${result.status} (${result.classification})`);
-    console.log(path.join(artifact, "report.md"));
-    process.exitCode = exitCode(result.status);
-    return;
+    log(`sdktests report: ${result.status} (${result.classification})`);
+    log(path.join(artifact, "report.md"));
+    return exitCode(result.status);
   }
   if (command !== "smoke" && command !== "parity") {
     throw new Error(`Unknown command: ${command}`);
   }
 
   validatePlatformOption(options.platform);
-  const lock = await acquireLiveRunLock({ recover: options["recover-lock"] === true });
+  const lock = await acquireLiveRunLock({
+    lockPath: runOptions.lockPath,
+    recover: options["recover-lock"] === true,
+  });
   try {
     if (command === "smoke") {
+      const model = stringOption(options.model);
+      const modelReasoningEffort = parseReasoningEffort(options["reasoning-effort"]);
       const result = await runParity({
         scenario: "streaming-smoke",
         rustPath: required(options.rust, "--rust"),
         goPath: required(options.go, "--go"),
         sdkPath: required(options.sdk, "--sdk"),
         order: parseOrder(options.order),
-        signal,
+        signal: runOptions.signal,
+        artifactsRoot: runOptions.artifactsRoot,
+        tempRoot: runOptions.tempRoot,
+        model,
+        modelReasoningEffort,
       });
-      console.log(`sdktests smoke: ${result.comparison.status} (${result.comparison.classification})`);
-      console.log(`sdktests smoke artifact: ${result.artifactDir}`);
-      process.exitCode = exitCode(result.comparison.status);
-      return;
+      log(`sdktests smoke: ${result.comparison.status} (${result.comparison.classification})`);
+      log(`sdktests smoke artifact: ${result.artifactDir}`);
+      return exitCode(result.comparison.status);
     }
-    await runParityCommand(options, signal);
+    return await runParityCommand(options, runOptions, log);
   } finally {
     lock.release();
   }
 }
 
-async function runParityCommand(options: Record<string, string | boolean>, signal: AbortSignal): Promise<void> {
+async function runParityCommand(
+  options: Record<string, string | boolean>,
+  runOptions: RunCLIOptions,
+  log: (message: string) => void,
+): Promise<number> {
   const rustPath = required(options.rust, "--rust");
   const goPath = required(options.go, "--go");
   const sdkPath = required(options.sdk, "--sdk");
-  const identity = buildSuiteIdentity({ rustPath, goPath, sdkPath });
+  const model = stringOption(options.model);
+  const modelReasoningEffort = parseReasoningEffort(options["reasoning-effort"]);
+  const identity = buildSuiteIdentity({ rustPath, goPath, sdkPath, model, modelReasoningEffort });
   let order = parseOrder(options.order) ?? ["rust", "go"];
   let suiteDir: string | null = null;
   let suite: SuiteSummary | null = null;
@@ -100,9 +104,10 @@ async function runParityCommand(options: Record<string, string | boolean>, signa
     const approved = scenarios.filter((scenario) => !scenario.optIn).map((scenario) => scenario.name);
     scenarioNames = selectScenarioNames(approved, stringOption(options.from));
     const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
-    suiteDir = path.join(sdktestsRoot, "artifacts", "suites", `${stamp}-parity`);
+    const artifactsRoot = runOptions.artifactsRoot ?? path.join(sdktestsRoot, "artifacts");
+    suiteDir = path.join(artifactsRoot, "suites", `${stamp}-parity`);
     suite = createSuiteSummary({ suiteDir, identity, order, scenarioNames });
-    console.log(`sdktests suite: ${suiteDir}`);
+    log(`sdktests suite: ${suiteDir}`);
   } else {
     if (options.from) throw new Error("--from requires --all");
     scenarioNames = [required(options.scenario, "--scenario")];
@@ -111,7 +116,7 @@ async function runParityCommand(options: Record<string, string | boolean>, signa
   let aggregateExitCode = suite ? suiteExitCode(suite) : 0;
   try {
     for (const scenario of scenarioNames) {
-      if (signal.aborted) throw new Error("live SDK suite was aborted");
+      if (runOptions.signal.aborted) throw new Error("live SDK suite was aborted");
       if (suite && suiteDir) {
         updateSuiteScenario(suiteDir, suite, scenario, {
           status: "running",
@@ -123,9 +128,20 @@ async function runParityCommand(options: Record<string, string | boolean>, signa
         });
       }
       try {
-        const result = await runParity({ scenario, rustPath, goPath, sdkPath, order, signal });
-        console.log(`sdktests parity ${scenario}: ${result.comparison.status} (${result.comparison.classification})`);
-        console.log(`sdktests parity artifact: ${result.artifactDir}`);
+        const result = await runParity({
+          scenario,
+          rustPath,
+          goPath,
+          sdkPath,
+          order,
+          signal: runOptions.signal,
+          artifactsRoot: runOptions.artifactsRoot,
+          tempRoot: runOptions.tempRoot,
+          model,
+          modelReasoningEffort,
+        });
+        log(`sdktests parity ${scenario}: ${result.comparison.status} (${result.comparison.classification})`);
+        log(`sdktests parity artifact: ${result.artifactDir}`);
         aggregateExitCode = Math.max(aggregateExitCode, exitCode(result.comparison.status));
         if (suite && suiteDir) {
           updateSuiteScenario(suiteDir, suite, scenario, {
@@ -156,8 +172,34 @@ async function runParityCommand(options: Record<string, string | boolean>, signa
     if (suite && suiteDir) finishSuite(suiteDir, suite, "interrupted");
     throw error;
   }
-  if (suiteDir) console.log(`sdktests suite summary: ${path.join(suiteDir, "suite-summary.json")}`);
-  process.exitCode = aggregateExitCode;
+  if (suiteDir) log(`sdktests suite summary: ${path.join(suiteDir, "suite-summary.json")}`);
+  return aggregateExitCode;
+}
+
+export async function runProcessCLI(processOptions: RunProcessCLIOptions = {}): Promise<void> {
+  const abortController = new AbortController();
+  let receivedSignal: "SIGINT" | "SIGTERM" | null = null;
+  const signalHandler = (signal: "SIGINT" | "SIGTERM") => {
+    receivedSignal ??= signal;
+    abortController.abort(new Error(`received ${signal}`));
+  };
+  const sigintHandler = () => signalHandler("SIGINT");
+  const sigtermHandler = () => signalHandler("SIGTERM");
+  process.once("SIGINT", sigintHandler);
+  process.once("SIGTERM", sigtermHandler);
+  try {
+    process.exitCode = await runCLI({
+      ...processOptions,
+      args: processOptions.args ?? process.argv.slice(2),
+      signal: abortController.signal,
+    });
+  } catch (error: any) {
+    console.error(error?.message ?? error);
+    process.exitCode = receivedSignal ? signalExitCode(receivedSignal) : 2;
+  } finally {
+    process.removeListener("SIGINT", sigintHandler);
+    process.removeListener("SIGTERM", sigtermHandler);
+  }
 }
 
 function exitCode(status: "pass" | "behavior_mismatch" | "infra_failure"): number {
@@ -205,9 +247,21 @@ function parseOrder(value: string | boolean | undefined): ("rust" | "go")[] | un
   throw new Error(`Invalid --order ${String(value)}; expected rust-go or go-rust`);
 }
 
+function parseReasoningEffort(
+  value: string | boolean | undefined,
+): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && ["minimal", "low", "medium", "high", "xhigh"].includes(value)) {
+    return value as "minimal" | "low" | "medium" | "high" | "xhigh";
+  }
+  throw new Error(`Invalid --reasoning-effort ${String(value)}; expected minimal, low, medium, high, or xhigh`);
+}
+
 function validatePlatformOption(value: string | boolean | undefined): void {
   if (value === undefined) return;
   if (typeof value !== "string" || value !== currentPlatformSuite()) {
     throw new Error(`Live platform is ${currentPlatformSuite()}; cannot run --platform ${String(value)}`);
   }
 }
+
+if (import.meta.main) await runProcessCLI();

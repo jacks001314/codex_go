@@ -67,6 +67,24 @@ test("suite resume rejects changed binary or SDK hashes", () => {
   }
 });
 
+test("suite resume rejects changed explicit model settings", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-suite-"));
+  try {
+    const pinned = { ...identity, model: "gpt-5.4", modelReasoningEffort: "high" };
+    createSuiteSummary({ suiteDir: root, identity: pinned, order: ["rust", "go"], scenarioNames: ["one"] });
+    assert.throws(
+      () => loadSuiteSummary(root, { ...pinned, model: "gpt-5.5" }),
+      /model changed from gpt-5.4 to gpt-5.5/,
+    );
+    assert.throws(
+      () => loadSuiteSummary(root, { ...pinned, modelReasoningEffort: "medium" }),
+      /modelReasoningEffort changed from high to medium/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("suite resume rejects a changed order without modifying the summary", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-suite-"));
   try {

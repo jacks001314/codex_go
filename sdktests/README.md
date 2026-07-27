@@ -36,6 +36,17 @@ expose `thread/fork`:
 npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex.exe>
 ```
 
+Audit managed feature requirements directly through the raw app-server
+protocol. This remains outside the SDK parity matrix because the TypeScript SDK
+does not expose `configRequirements/read`:
+
+```powershell
+npm --prefix sdktests run test:raw:requirements -- --rust <rust-codex> --rust-app-server <rust-codex-app-server> --go <go-codex.exe>
+```
+
+The Rust app-server must be a debug build because the upstream managed-config
+fixture hook is intentionally compiled out of release builds.
+
 Run one expanded scenario or the approved matrix:
 
 ```powershell
@@ -62,6 +73,16 @@ tree before acquiring the lock. Unreadable lock ownership is never removed
 automatically.
 
 Use `--order go-rust` to alternate which implementation runs first during repeated sampling.
+
+For reproducible targeted reruns, pin the same model settings for both
+implementations without changing the host `config.toml`:
+
+```powershell
+npm --prefix sdktests run test:parity -- --scenario persistent-resume --model <account-supported-model> --reasoning-effort high --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+```
+
+Pinned model settings are recorded in artifacts and suite identity, so a suite
+cannot be resumed with different values.
 
 The approved matrix covers single-turn streaming, schema-constrained workspace
 reading through the shell, and persisted thread resume across CLI processes.

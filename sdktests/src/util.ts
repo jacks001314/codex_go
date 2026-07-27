@@ -112,11 +112,12 @@ export function snapshotFiles(root: string): Record<string, string> {
   }
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "__pycache__") continue;
       const full = path.join(dir, entry.name);
       const rel = path.relative(root, full).replaceAll("\\", "/");
       if (entry.isDirectory()) {
         visit(full);
-      } else if (entry.isFile()) {
+      } else if (entry.isFile() && !entry.name.endsWith(".pyc") && !entry.name.endsWith(".pyo")) {
         out[rel] = sha256File(full) ?? "";
       }
     }

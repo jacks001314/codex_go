@@ -51,6 +51,8 @@ try {
   });
   const baseOptions = {
     ...input.scenario.threadOptions,
+    ...(input.modelOverride ? { model: input.modelOverride } : {}),
+    ...(input.modelReasoningEffortOverride ? { modelReasoningEffort: input.modelReasoningEffortOverride } : {}),
     workingDirectory: input.workingDirectory,
     additionalDirectories: input.additionalDirectories,
   };

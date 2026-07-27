@@ -11,6 +11,8 @@ export type SuiteIdentity = {
   goSha256: string | null;
   sdkPath: string;
   sdkDistSha256: string | null;
+  model?: string;
+  modelReasoningEffort?: string;
 };
 
 export type SuiteScenarioRecord = {
@@ -39,7 +41,13 @@ export type SuiteSummary = {
   scenarios: SuiteScenarioRecord[];
 };
 
-export function buildSuiteIdentity(args: { rustPath: string; goPath: string; sdkPath: string }): SuiteIdentity {
+export function buildSuiteIdentity(args: {
+  rustPath: string;
+  goPath: string;
+  sdkPath: string;
+  model?: string;
+  modelReasoningEffort?: string;
+}): SuiteIdentity {
   const identity: SuiteIdentity = {
     platform: currentPlatformSuite(),
     rustPath: path.resolve(args.rustPath),
@@ -48,6 +56,8 @@ export function buildSuiteIdentity(args: { rustPath: string; goPath: string; sdk
     goSha256: sha256File(args.goPath),
     sdkPath: path.resolve(args.sdkPath),
     sdkDistSha256: sha256File(path.join(args.sdkPath, "dist", "index.js")),
+    ...(args.model ? { model: args.model } : {}),
+    ...(args.modelReasoningEffort ? { modelReasoningEffort: args.modelReasoningEffort } : {}),
   };
   for (const [label, filePath, hash] of [
     ["Rust binary", identity.rustPath, identity.rustSha256],
@@ -156,7 +166,7 @@ export function suiteSummaryPath(suiteDir: string): string {
 }
 
 function assertSuiteIdentity(expected: SuiteIdentity, actual: SuiteIdentity): void {
-  for (const key of ["platform", "rustSha256", "goSha256", "sdkDistSha256"] as const) {
+  for (const key of ["platform", "rustSha256", "goSha256", "sdkDistSha256", "model", "modelReasoningEffort"] as const) {
     if (expected?.[key] !== actual[key]) {
       throw new Error(`cannot resume suite: ${key} changed from ${String(expected?.[key])} to ${String(actual[key])}`);
     }

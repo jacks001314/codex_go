@@ -10,13 +10,17 @@ import { terminateProcessTree } from "./process_tree.ts";
 import { getScenario } from "./scenarios.ts";
 import { copyCodexHome, copyFixture, copyWindowsSandboxState, maybeRunText, readJson, repoRoot, safeConfigSummary, sdktestsRoot, sha256File, snapshotFiles, writeJson, writeJsonAtomic } from "./util.ts";
 
-type RunArgs = {
+export type RunArgs = {
   scenario: string;
   rustPath: string;
   goPath: string;
   sdkPath: string;
   order?: ("rust" | "go")[];
   signal?: AbortSignal;
+  artifactsRoot?: string;
+  tempRoot?: string;
+  model?: string;
+  modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 };
 
 export type ParityRunResult = {
@@ -35,8 +39,8 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
     throw new Error(`SDK dist not found: ${sdkIndex}`);
   }
   const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
-  const artifactDir = path.join(sdktestsRoot, "artifacts", `${stamp}-${scenario.name}`);
-  const tmpDir = path.join(sdktestsRoot, ".tmp", `${stamp}-${scenario.name}`);
+  const artifactDir = path.join(args.artifactsRoot ?? path.join(sdktestsRoot, "artifacts"), `${stamp}-${scenario.name}`);
+  const tmpDir = path.join(args.tempRoot ?? path.join(sdktestsRoot, ".tmp"), `${stamp}-${scenario.name}`);
   mkdirSync(path.join(artifactDir, "raw"), { recursive: true });
   mkdirSync(path.join(artifactDir, "normalized"), { recursive: true });
   mkdirSync(tmpDir, { recursive: true });
@@ -106,6 +110,8 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
         sandboxStateCopied,
         additionalDirectories,
         missingWorkingDirectory: path.join(tmpDir, impl, "missing-workspace"),
+        modelOverride: args.model,
+        modelReasoningEffortOverride: args.modelReasoningEffort,
       }, args.signal);
       recording.workspace = {
         before,
@@ -114,10 +120,10 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
       recording.sandboxLogs = readSandboxLogs(home);
       writeJson(path.join(artifactDir, "raw", `${impl}.json`), recording);
       writeJson(path.join(artifactDir, "normalized", `${impl}.json`), normalizeRecording(recording));
+      if (recording.harness?.aborted) throw new HarnessAbortError("live SDK worker was aborted");
       runState.completedImplementations.push(impl);
       runState.updatedAt = new Date().toISOString();
       writeJsonAtomic(runStatePath, runState);
-      if (recording.harness?.aborted) throw new HarnessAbortError("live SDK worker was aborted");
     }
 
     const comparison = compareArtifact(artifactDir);
@@ -281,8 +287,10 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
     config: {
       source: "copied isolated CODEX_HOME config.toml",
       defaults: configSummary,
-      modelPassedToSdk: false,
-      modelReasoningEffortPassedToSdk: false,
+      modelPassedToSdk: Boolean(args.model),
+      modelReasoningEffortPassedToSdk: Boolean(args.modelReasoningEffort),
+      explicitModel: args.model ?? null,
+      explicitModelReasoningEffort: args.modelReasoningEffort ?? null,
     },
     scenario: {
       name: scenario.name,
