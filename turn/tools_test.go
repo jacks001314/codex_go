@@ -12,6 +12,7 @@ import (
 	"codex_go/agent"
 	"codex_go/mcp"
 	"codex_go/plugin"
+	"codex_go/skillprovider"
 	"codex_go/tool"
 )
 
@@ -311,11 +312,94 @@ func TestSkillsToolsRejectUnsupportedAuthorityLikeRust(t *testing.T) {
 	_, err = tool.NewRouter(registry).Dispatch(context.Background(), &tool.Invocation{
 		CallID:   "skills-list",
 		ToolName: tool.NamespacedName("skills", "list"),
-		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor"}}`},
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"host"}}`},
 	})
 	var callErr *tool.FunctionCallError
-	if !errors.As(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), "expected `orchestrator`") {
+	if !errors.As(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), "expected `orchestrator` or `executor`") {
 		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestExecutorSkillsToolsListReadPaginateAndValidateAuthorityLikeRust(t *testing.T) {
+	visible := skillprovider.CatalogEntry{
+		PackageID: "skill://demo@1/plugin/skills/deploy",
+		Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: "demo@1"},
+		Name:      "demo:deploy", Description: "Deploy through the executor.",
+		MainResource: "skill://demo@1/plugin/skills/deploy/SKILL.md", Enabled: true, PromptVisible: true,
+	}
+	hidden := visible
+	hidden.PackageID = "skill://demo@1/plugin/skills/hidden"
+	hidden.MainResource = hidden.PackageID + "/SKILL.md"
+	hidden.Name = "demo:hidden"
+	hidden.PromptVisible = false
+	contents := "MARKER\n" + strings.Repeat("x", maxSkillToolResponseBytes+1024)
+	provider := skillprovider.ProviderFuncs{
+		ListFunc: func(context.Context, skillprovider.ListQuery) (skillprovider.Catalog, error) {
+			return skillprovider.Catalog{Entries: []skillprovider.CatalogEntry{visible, hidden}}, nil
+		},
+		ReadFunc: func(_ context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
+			if request.Authority.ID != "demo@1" || request.Resource == "" || request.PackageID != visible.PackageID && request.PackageID != hidden.PackageID {
+				return skillprovider.ReadResult{}, errors.New("unexpected read request")
+			}
+			return skillprovider.ReadResult{Resource: request.Resource, Contents: contents}, nil
+		},
+	}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.SkillProviders = skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	listOutput, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: "list", ToolName: tool.NamespacedName("skills", "list"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor"}}`}})
+	if err != nil {
+		t.Fatalf("skills.list error = %v", err)
+	}
+	var listed skillsListResponse
+	if err := json.Unmarshal([]byte(listOutput.Body), &listed); err != nil {
+		t.Fatalf("skills.list JSON = %v", err)
+	}
+	if len(listed.Skills) != 1 || listed.Skills[0].Authority.ID != "demo@1" || listed.Skills[0].Package != visible.PackageID || listed.NextCursor != nil {
+		t.Fatalf("skills.list = %#v", listed)
+	}
+	resource := visible.PackageID + "/references/details.md"
+	readOutput, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: "read", ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"demo@1"},"package":"` + visible.PackageID + `","resource":"` + resource + `"}`}})
+	if err != nil {
+		t.Fatalf("skills.read error = %v", err)
+	}
+	var first skillsReadResponse
+	if err := json.Unmarshal([]byte(readOutput.Body), &first); err != nil {
+		t.Fatalf("skills.read JSON = %v", err)
+	}
+	if !strings.Contains(first.Contents, "MARKER") || first.NextCursor == nil || len(readOutput.Body) > maxSkillToolResponseBytes {
+		t.Fatalf("first page = len(body)=%d response=%#v", len(readOutput.Body), first)
+	}
+	secondOutput, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: "read-2", ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"demo@1"},"package":"` + visible.PackageID + `","resource":"` + resource + `","cursor":"` + *first.NextCursor + `"}`}})
+	if err != nil {
+		t.Fatalf("skills.read second page error = %v", err)
+	}
+	var second skillsReadResponse
+	if err := json.Unmarshal([]byte(secondOutput.Body), &second); err != nil || len(second.Contents) == 0 {
+		t.Fatalf("second page = %#v err=%v", second, err)
+	}
+	for name, arguments := range map[string]string{
+		"authority substitution": `{"authority":{"kind":"executor","id":"other@1"},"package":"` + visible.PackageID + `","resource":"` + resource + `"}`,
+		"path traversal":         `{"authority":{"kind":"executor","id":"demo@1"},"package":"` + visible.PackageID + `","resource":"` + visible.PackageID + `/../secret"}`,
+		"unknown package":        `{"authority":{"kind":"executor","id":"demo@1"},"package":"skill://demo@1/plugin/skills/missing","resource":"skill://demo@1/plugin/skills/missing/SKILL.md"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: name, ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: arguments}})
+			var callErr *tool.FunctionCallError
+			if !errors.As(err, &callErr) || !callErr.RespondsToModel() {
+				t.Fatalf("error = %#v", err)
+			}
+		})
 	}
 }
 
@@ -583,6 +667,66 @@ func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	}
 	if discoverable := registry.DiscoverableSpecs(); len(discoverable) != 0 {
 		t.Fatalf("discoverable specs = %#v, want none when tool_search is disabled", specKeySet(discoverable))
+	}
+}
+
+func TestBuildToolRegistryOmitsDeferredSourcesFromSearchDescription(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.OmitToolSearchSources = true
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName:           "drive",
+		NamespaceDescription: "Drive tools",
+		Tool:                 mcp.RuntimeTool{Name: "create_doc", Description: "Create Google Docs files"},
+	}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.ToolSearchName))
+	if !ok {
+		t.Fatal("tool_search missing")
+	}
+	if strings.Contains(spec.Description, "following sources") || strings.Contains(spec.Description, "Drive tools") {
+		t.Fatalf("tool_search description = %q", spec.Description)
+	}
+	if got := registry.DeferredToolNamespaces(); got["mcp__drive"] != "Drive tools" {
+		t.Fatalf("deferred namespaces = %#v", got)
+	}
+}
+
+func TestBuildToolRegistryWaitForEnvironmentFeatureGateAndHostDescription(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.EnableMCP = false
+	options.EnableToolSearch = false
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Spec(tool.PlainName(tool.WaitForEnvironmentToolName)); ok {
+		t.Fatal("wait_for_environment visible without feature gate")
+	}
+
+	options.EnableWaitForEnvironment = true
+	options.SelectedEnvironmentIDs = []string{"env-1"}
+	options.WaitForEnvironmentToolConfig = &tool.WaitForEnvironmentToolConfig{
+		ToolDescription:          "Host wait description",
+		EnvironmentIDDescription: "Host environment ID description",
+	}
+	registry, err = BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.WaitForEnvironmentToolName))
+	if !ok || spec.Description != "Host wait description" {
+		t.Fatalf("wait spec = %#v, ok=%v", spec, ok)
 	}
 }
 

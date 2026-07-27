@@ -308,6 +308,7 @@ func PrepareElevatedSpawnContextForPermissions(
 	denyWritePathsOverride []string,
 	proxyEnforced bool,
 	proxySettingsMode ProxySettingsMode,
+	disallowSetupElevation bool,
 ) (*ElevatedSpawnContext, error) {
 	if permissions == nil {
 		return nil, ErrInvalidRequest
@@ -344,7 +345,7 @@ func PrepareElevatedSpawnContextForPermissions(
 		denyWritePathsOverride = denyWritePaths
 	}
 
-	sandboxCreds, err := RequireLogonSandboxCredsForPermissions(
+	sandboxCreds, err := requireLogonSandboxCredsForPermissions(
 		permissions,
 		cwd,
 		envMap,
@@ -358,6 +359,7 @@ func PrepareElevatedSpawnContextForPermissions(
 		denyWritePathsOverride,
 		proxyEnforced,
 		proxySettingsMode,
+		!disallowSetupElevation,
 	)
 	if err != nil {
 		return nil, err

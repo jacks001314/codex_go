@@ -203,6 +203,15 @@ func (p *PreparedProxyManagedNetwork) SandboxContextSnapshot() ProxyManagedNetwo
 	}
 }
 
+func (p *PreparedProxyManagedNetwork) RemoteConfigSnapshot() ProxyConfig {
+	if p == nil {
+		return ProxyConfig{}
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return cloneProxyConfig(p.config)
+}
+
 func (p *PreparedProxyManagedNetwork) BlockedSnapshot() []ProxyBlockedRequest {
 	if p == nil || p.server == nil {
 		return nil

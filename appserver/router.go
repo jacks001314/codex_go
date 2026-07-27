@@ -26,80 +26,43 @@ type Router struct {
 	store      *session.Store
 	now        func() time.Time
 	spawnGraph agent.Store
-	writersMu  sync.Mutex
-	writers    map[session.ThreadID]*session.WriterLock
+	threads    *ThreadManager
+	// Deprecated test aliases. Production access goes through threads.
+	writersMu *sync.Mutex
+	writers   map[session.ThreadID]*session.WriterLock
 }
 
 func NewRouter(store *session.Store) *Router {
-	return &Router{store: store, now: time.Now, writers: map[session.ThreadID]*session.WriterLock{}}
+	threads := NewThreadManager(nil)
+	return &Router{store: store, now: time.Now, threads: threads, writersMu: &threads.writersMu, writers: threads.writers}
 }
 
 func (r *Router) Close() error {
 	if r == nil {
 		return nil
 	}
-	r.writersMu.Lock()
-	locks := make([]*session.WriterLock, 0, len(r.writers))
-	for threadID, lock := range r.writers {
-		locks = append(locks, lock)
-		delete(r.writers, threadID)
+	return r.threadManager().CloseWriters()
+}
+
+func (r *Router) threadManager() *ThreadManager {
+	if r.threads == nil {
+		r.threads = NewThreadManager(nil)
+		r.writersMu = &r.threads.writersMu
+		r.writers = r.threads.writers
 	}
-	r.writersMu.Unlock()
-	var closeErr error
-	for _, lock := range locks {
-		if err := lock.Close(); closeErr == nil && err != nil {
-			closeErr = err
-		}
-	}
-	return closeErr
+	return r.threads
 }
 
 func (r *Router) retainPaginatedWriter(record *session.Record) error {
-	if !threadUsesPaginatedHistory(record) {
-		return nil
-	}
-	r.writersMu.Lock()
-	defer r.writersMu.Unlock()
-	if _, ok := r.writers[record.ID]; ok {
-		return nil
-	}
-	lock, err := r.store.AcquireWriter(record.ID)
-	if err != nil {
-		return writerOwnershipError(err)
-	}
-	r.writers[record.ID] = lock
-	return nil
+	return r.threadManager().RetainPaginatedWriter(r.store, record)
 }
 
 func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*session.WriterLock, error) {
-	r.writersMu.Lock()
-	defer r.writersMu.Unlock()
-	missing := make([]session.ThreadID, 0, len(threadIDs))
-	for _, threadID := range threadIDs {
-		if _, ok := r.writers[threadID]; !ok {
-			missing = append(missing, threadID)
-		}
-	}
-	locks, err := r.store.AcquireWriters(missing)
-	if err != nil {
-		return nil, writerOwnershipError(err)
-	}
-	return locks, nil
+	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
 
 func (r *Router) releaseRetainedWriters(threadIDs []session.ThreadID) {
-	r.writersMu.Lock()
-	locks := make([]*session.WriterLock, 0, len(threadIDs))
-	for _, threadID := range threadIDs {
-		if lock := r.writers[threadID]; lock != nil {
-			locks = append(locks, lock)
-			delete(r.writers, threadID)
-		}
-	}
-	r.writersMu.Unlock()
-	for _, lock := range locks {
-		_ = lock.Close()
-	}
+	r.threadManager().ReleaseRetainedWriters(threadIDs)
 }
 
 func closeTemporaryWriters(locks []*session.WriterLock) {
@@ -143,6 +106,7 @@ func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Recor
 	if recorder == nil || record == nil {
 		return nil
 	}
+	record = session.LocalRecord(record)
 	if len(record.Metadata.RolloutTurns) == 0 {
 		return rollout.AppendSessionItems(recorder, record.Items, now)
 	}

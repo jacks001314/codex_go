@@ -77,11 +77,13 @@ func TestKeymapServiceTierAndExecLifecycleInterfaces(t *testing.T) {
 		t.Fatalf("keymap = %#v", keymap)
 	}
 	menu := NewKeymapActionMenuView(KeymapActionItem{Action: "copy", Bindings: []string{"ctrl+o"}})
-	if menu.ViewID != KeymapActionMenuViewID || menu.Items[2].Disabled {
+	remove, ok := selectionItemByIDRustInterfaces(menu.Items, "unset")
+	if menu.ViewID != KeymapActionMenuViewID || !ok || remove.Disabled {
 		t.Fatalf("keymap action menu = %#v", menu)
 	}
 	emptyMenu := NewKeymapActionMenuView(KeymapActionItem{Action: "copy"})
-	if !emptyMenu.Items[2].Disabled {
+	emptyRemove, ok := selectionItemByIDRustInterfaces(emptyMenu.Items, "unset")
+	if !ok || !emptyRemove.Disabled {
 		t.Fatalf("empty keymap action menu = %#v", emptyMenu)
 	}
 
@@ -107,6 +109,15 @@ func TestKeymapServiceTierAndExecLifecycleInterfaces(t *testing.T) {
 	if !lifecycle.TrackUnifiedExecProcessEnd("call", "proc") || len(lifecycle.UnifiedExecProcesses) != 0 {
 		t.Fatalf("lifecycle = %#v", lifecycle)
 	}
+}
+
+func selectionItemByIDRustInterfaces(items []SelectionItem, id string) (SelectionItem, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return SelectionItem{}, false
 }
 
 func TestLifecycleHooksReplayRenderingAndStreaming(t *testing.T) {

@@ -317,6 +317,201 @@ func TestUnifiedExecRemoteExecServerSessionReusesStdinLikeRust(t *testing.T) {
 	}
 }
 
+func TestUnifiedExecRemoteNetworkProxyRequiresExecutorCapabilityLikeRust(t *testing.T) {
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, &websocket.AcceptOptions{})
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		readRequest := func() (map[string]any, error) {
+			_, data, readErr := conn.Read(context.Background())
+			if readErr != nil {
+				return nil, readErr
+			}
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil {
+				return nil, err
+			}
+			return value, nil
+		}
+		writeJSON := func(value any) error {
+			data, marshalErr := json.Marshal(value)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			return conn.Write(context.Background(), websocket.MessageText, data)
+		}
+		initialize, err := readRequest()
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := writeJSON(map[string]any{"id": initialize["id"], "result": map[string]any{"sessionId": "legacy-session"}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		initialized, err := readRequest()
+		if err != nil || initialized["method"] != execserver.MethodInitialized {
+			serverErrors <- fmt.Errorf("initialized notification = %#v, %v", initialized, err)
+			return
+		}
+		info, err := readRequest()
+		if err != nil || info["method"] != execserver.MethodEnvironmentInfo {
+			serverErrors <- fmt.Errorf("environment info request = %#v, %v", info, err)
+			return
+		}
+		if err := writeJSON(map[string]any{"id": info["id"], "result": map[string]any{
+			"shell": map[string]any{"name": "bash", "path": "/bin/bash"},
+			"cwd":   "file:///workspace",
+		}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		_, _, err = conn.Read(context.Background())
+		if err == nil {
+			serverErrors <- errors.New("legacy exec-server unexpectedly received process/start")
+			return
+		}
+		serverErrors <- nil
+	}))
+	defer server.Close()
+
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	environmentID := "remote"
+	_, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:              []string{"ignored"},
+		CWD:                  t.TempDir(),
+		UnifiedExecRemoteURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+		RemoteNetworkProxy: &execserver.RemoteNetworkProxyLaunchConfig{
+			Proxy:         execserver.RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)},
+			EnvironmentID: &environmentID,
+		},
+	}, "capability-call")
+	if err == nil || err.Error() != "selected exec-server does not support executor-local network proxy launches" {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	select {
+	case err := <-serverErrors:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("legacy exec-server did not observe client close")
+	}
+}
+
+func TestUnifiedExecRemoteNetworkProxyLaunchWireShapeLikeRust(t *testing.T) {
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, &websocket.AcceptOptions{})
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		readRequest := func() (map[string]any, error) {
+			_, data, readErr := conn.Read(context.Background())
+			if readErr != nil {
+				return nil, readErr
+			}
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil {
+				return nil, err
+			}
+			return value, nil
+		}
+		writeJSON := func(value any) error {
+			data, marshalErr := json.Marshal(value)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			return conn.Write(context.Background(), websocket.MessageText, data)
+		}
+		initialize, err := readRequest()
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := writeJSON(map[string]any{"id": initialize["id"], "result": map[string]any{"sessionId": "proxy-session"}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		if initialized, err := readRequest(); err != nil || initialized["method"] != execserver.MethodInitialized {
+			serverErrors <- fmt.Errorf("initialized notification = %#v, %v", initialized, err)
+			return
+		}
+		info, err := readRequest()
+		if err != nil || info["method"] != execserver.MethodEnvironmentInfo {
+			serverErrors <- fmt.Errorf("environment info request = %#v, %v", info, err)
+			return
+		}
+		if err := writeJSON(map[string]any{"id": info["id"], "result": map[string]any{
+			"shell":        map[string]any{"name": "bash", "path": "/bin/bash"},
+			"cwd":          "file:///workspace",
+			"capabilities": map[string]any{"networkProxyLaunch": true},
+		}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		start, err := readRequest()
+		if err != nil || start["method"] != execserver.MethodProcessStart {
+			serverErrors <- fmt.Errorf("process start request = %#v, %v", start, err)
+			return
+		}
+		params, _ := start["params"].(map[string]any)
+		launch, _ := params["networkProxy"].(map[string]any)
+		proxy, _ := launch["proxy"].(map[string]any)
+		if proxy["enabled"] != true || proxy["mode"] != string(network.ProxyModeFull) || launch["environmentId"] != "remote-secondary" {
+			serverErrors <- fmt.Errorf("networkProxy launch = %#v", launch)
+			return
+		}
+		processID, _ := params["processId"].(string)
+		if err := writeJSON(map[string]any{"id": start["id"], "result": map[string]any{"processId": processID}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := writeJSON(map[string]any{"method": execserver.MethodProcessExited, "params": map[string]any{"processId": processID, "seq": 1, "exitCode": 0, "sandboxDenied": false}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := writeJSON(map[string]any{"method": execserver.MethodProcessClosed, "params": map[string]any{"processId": processID, "seq": 2}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		serverErrors <- nil
+	}))
+	defer server.Close()
+
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	environmentID := "remote-secondary"
+	result, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:              []string{"ignored"},
+		CWD:                  t.TempDir(),
+		YieldTimeMS:          2_000,
+		UnifiedExecRemoteURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+		RemoteNetworkProxy: &execserver.RemoteNetworkProxyLaunchConfig{
+			Proxy:         execserver.RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)},
+			EnvironmentID: &environmentID,
+		},
+	}, "proxy-wire-call")
+	if err != nil || result == nil || !result.HasExitCode || result.ExitCode != 0 {
+		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+	select {
+	case err := <-serverErrors:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxy exec-server did not finish")
+	}
+}
+
 func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testing.T) {
 	type scenario struct {
 		name      string

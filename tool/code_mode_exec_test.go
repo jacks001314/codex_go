@@ -536,6 +536,99 @@ func TestCodeModeNotifyInjectsSeparateOutputWithoutDuplicatingFinalBody(t *testi
 	}
 }
 
+func TestCodeModeRemoteSuccessDoesNotRunInProcessFallback(t *testing.T) {
+	registry := NewRegistry()
+	remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{
+		CellID: "remote-cell",
+		State:  "completed",
+		ContentItems: []map[string]any{{
+			"type": "input_text",
+			"text": "REMOTE_OK",
+		}},
+	}}
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "remote-success",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("LOCAL_FALLBACK")`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body != "REMOTE_OK" || remote.executeCalls != 1 {
+		t.Fatalf("output = %#v execute calls = %d", output, remote.executeCalls)
+	}
+}
+
+func TestCodeModeRemoteFailureFallsBackInProcess(t *testing.T) {
+	registry := NewRegistry()
+	remote := &recordingCodeModeRemoteSession{err: errors.New("remote unavailable")}
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "remote-fallback",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("LOCAL_OK")`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body != "LOCAL_OK" || remote.executeCalls != 1 {
+		t.Fatalf("output = %#v execute calls = %d", output, remote.executeCalls)
+	}
+}
+
+func TestCodeModeRemoteFailureIsFatalWhenFallbackDisabled(t *testing.T) {
+	registry := NewRegistry()
+	remote := &recordingCodeModeRemoteSession{err: errors.New("remote unavailable")}
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, true)
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "remote-no-fallback",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("MUST_NOT_RUN")`},
+	})
+	if err == nil || output != nil || !strings.Contains(err.Error(), "code-mode remote host unavailable: remote unavailable") {
+		t.Fatalf("output = %#v error = %v", output, err)
+	}
+}
+
+func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("mcp__calendar", "lookup")}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName(DefaultExecCommandToolName), Exposure: ExposureHidden}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("other_hidden"), Exposure: ExposureHidden}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	exec, wait := NewCodeModeExecutors(registry, PlainName(DefaultExecCommandToolName))
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(wait); err != nil {
+		t.Fatal(err)
+	}
+
+	names := NewRouter(registry).CodeModeToolNames()
+	if len(names) != 2 {
+		t.Fatalf("CodeModeToolNames() = %#v", names)
+	}
+	if got := names[DefaultExecCommandToolName]; got.Name != DefaultExecCommandToolName || got.Namespace != nil {
+		t.Fatalf("exec command mapping = %#v", got)
+	}
+	calendar := names["mcp__calendar__lookup"]
+	if calendar.Name != "lookup" || calendar.Namespace == nil || *calendar.Namespace != "mcp__calendar" {
+		t.Fatalf("calendar mapping = %#v", calendar)
+	}
+	if _, ok := names["other_hidden"]; ok {
+		t.Fatalf("hidden non-command tool leaked: %#v", names)
+	}
+}
+
 func mustJSON(t *testing.T, value string) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -549,6 +642,35 @@ type recordingShellRunner struct {
 	output  string
 	request *ShellRequest
 }
+
+type recordingCodeModeRemoteProvider struct {
+	session CodeModeRemoteSession
+}
+
+func (p *recordingCodeModeRemoteProvider) NewSession(CodeModeRemoteDelegate) CodeModeRemoteSession {
+	return p.session
+}
+
+type recordingCodeModeRemoteSession struct {
+	response     CodeModeRemoteResponse
+	err          error
+	executeCalls int
+}
+
+func (s *recordingCodeModeRemoteSession) Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+	s.executeCalls++
+	return s.response, s.err
+}
+
+func (s *recordingCodeModeRemoteSession) Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error) {
+	return s.response, s.err
+}
+
+func (s *recordingCodeModeRemoteSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+	return s.response, s.err
+}
+
+func (s *recordingCodeModeRemoteSession) Close() error { return nil }
 
 func (r *recordingShellRunner) Run(_ context.Context, request *ShellRequest) (*ShellResult, error) {
 	r.request = request

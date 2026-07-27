@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/apps"
+	managedconfig "codex_go/config"
 )
 
 const (
@@ -78,6 +79,7 @@ type RuntimeConfig struct {
 	AvailableEnvironment []string
 	CodexHome            string
 	Auth                 *RuntimeAuth
+	Requirements         *managedconfig.ConfigRequirements
 }
 
 type RuntimeAuth struct {
@@ -91,6 +93,10 @@ func RuntimeConfigFromValues(values map[string]any, codexHome string) *RuntimeCo
 }
 
 func RuntimeConfigFromValuesWithAuth(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth) *RuntimeConfig {
+	return RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, nil)
+}
+
+func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth, requirements *managedconfig.ConfigRequirements) *RuntimeConfig {
 	out := &RuntimeConfig{
 		Servers:              map[string]ServerRegistration{},
 		AppsEnabled:          appsEnabledFromRuntimeConfigValues(values),
@@ -100,6 +106,7 @@ func RuntimeConfigFromValuesWithAuth(values map[string]any, codexHome string, ru
 		AvailableEnvironment: runtimeConfigStringSliceAny(values, "available_environment", "availableEnvironment"),
 		ConnectorIDs:         runtimeConfigStringSliceAny(values, "connector_ids", "connectorIds"),
 		Auth:                 cloneRuntimeAuth(runtimeAuth),
+		Requirements:         managedconfig.CloneConfigRequirements(requirements),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
@@ -179,7 +186,66 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 	}
 	out := base
 	out.Servers = servers
+	out.Requirements = managedconfig.CloneConfigRequirements(base.Requirements)
+	applyManagedMCPRequirements(out.Servers, out.Requirements)
 	return &out
+}
+
+func applyManagedMCPRequirements(servers map[string]ServerRegistration, requirements *managedconfig.ConfigRequirements) {
+	if len(servers) == 0 || requirements == nil {
+		return
+	}
+	pluginFilteringEnabled := false
+	for _, requirement := range requirements.Plugins {
+		if requirement.MCPServers != nil {
+			pluginFilteringEnabled = true
+			break
+		}
+	}
+	emptyGlobalAllowlist := requirements.MCPServers != nil && len(requirements.MCPServers) == 0
+	for name, registration := range servers {
+		source := SourceFromRegistration(&registration)
+		switch source {
+		case CatalogSourcePlugin, CatalogSourceSelectedPlugin:
+			if pluginFilteringEnabled {
+				pluginRequirement, pluginAllowed := requirements.Plugins[strings.TrimSpace(registration.PluginID)]
+				var allowlist map[string]managedconfig.MCPServerRequirement
+				if pluginAllowed && pluginRequirement.MCPServers != nil {
+					allowlist = *pluginRequirement.MCPServers
+				}
+				requirement, allowed := allowlist[name]
+				if !allowed || !managedMCPRequirementMatches(requirement, &registration.Config) {
+					disableMCPRegistrationByRequirements(&registration)
+				}
+			}
+			if emptyGlobalAllowlist {
+				disableMCPRegistrationByRequirements(&registration)
+			}
+		case CatalogSourceConfig:
+			if requirements.MCPServers != nil {
+				requirement, allowed := requirements.MCPServers[name]
+				if !allowed || !managedMCPRequirementMatches(requirement, &registration.Config) {
+					disableMCPRegistrationByRequirements(&registration)
+				}
+			}
+		}
+		servers[name] = registration
+	}
+}
+
+func managedMCPRequirementMatches(requirement managedconfig.MCPServerRequirement, server *ServerConfig) bool {
+	if server == nil {
+		return false
+	}
+	return requirement.Matches(strings.TrimSpace(server.Command), server.Args, strings.TrimSpace(server.URL))
+}
+
+func disableMCPRegistrationByRequirements(registration *ServerRegistration) {
+	if registration == nil {
+		return
+	}
+	registration.Config.Enabled = false
+	registration.Config.DisabledReason = managedconfig.MCPDisabledByRequirements
 }
 
 func appsEnabledFromRuntimeConfigValues(values map[string]any) bool {

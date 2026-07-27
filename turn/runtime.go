@@ -2,10 +2,12 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
 )
@@ -47,6 +49,13 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		now:          now,
 		maxTurns:     options.MaxTurns,
 	}
+}
+
+func (r *Runtime) DeferredToolNamespaces() map[string]string {
+	if r == nil || r.router == nil {
+		return nil
+	}
+	return r.router.DeferredToolNamespaces()
 }
 
 func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoopResult, error) {
@@ -132,6 +141,8 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	if len(loopRequest.Tools) == 0 {
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(r.router.ModelVisibleSpecs())
 	}
+	loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router)
+	loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:        r.agent,
@@ -151,4 +162,38 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+func codeModeClientMetadataForRequest(metadata map[string]string, router *tool.Router) map[string]string {
+	return newCodeModeClientMetadataTransform(metadata, router)(metadata)
+}
+
+func newCodeModeClientMetadataTransform(base map[string]string, router *tool.Router) ClientMetadataTransform {
+	lite := strings.EqualFold(strings.TrimSpace(base["ws_request_header_x_openai_internal_codex_responses_lite"]), "true")
+	baseTurnMetadata := strings.TrimSpace(base[codexapi.ClientCodexTurnMetadataHeader])
+	toolNames := map[string]tool.CodeModeToolNameMetadata(nil)
+	if lite && router != nil {
+		toolNames = router.CodeModeToolNames()
+	}
+	return func(metadata map[string]string) map[string]string {
+		out := cloneStringMap(metadata)
+		if !lite || len(toolNames) == 0 {
+			return out
+		}
+		out["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+		turnMetadataJSON := strings.TrimSpace(out[codexapi.ClientCodexTurnMetadataHeader])
+		if turnMetadataJSON == "" {
+			turnMetadataJSON = baseTurnMetadata
+		}
+		var turnMetadata map[string]any
+		if err := json.Unmarshal([]byte(turnMetadataJSON), &turnMetadata); err != nil || turnMetadata == nil {
+			return out
+		}
+		turnMetadata[codexapi.CodeModeToolNamesKey] = toolNames
+		encoded, err := json.Marshal(turnMetadata)
+		if err == nil {
+			out[codexapi.ClientCodexTurnMetadataHeader] = string(encoded)
+		}
+		return out
+	}
 }

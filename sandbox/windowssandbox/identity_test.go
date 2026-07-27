@@ -1,6 +1,7 @@
 package windowssandbox
 
 import (
+	"errors"
 	"testing"
 
 	coresandbox "codex_go/sandbox"
@@ -182,5 +183,59 @@ func TestRequireLogonSandboxCredsRunsSetupAndRefreshWithOverrides(t *testing.T) 
 		if req.OfflineProxySettings == nil || len(req.OfflineProxySettings.ProxyPorts) != 1 || req.OfflineProxySettings.ProxyPorts[0] != 8080 {
 			t.Fatalf("%s proxy settings = %#v", label, req.OfflineProxySettings)
 		}
+	}
+}
+
+func TestRequireLogonSandboxCredsDisallowsImplicitElevation(t *testing.T) {
+	oldSetup := runElevatedSetupForCredentials
+	oldRefresh := runSetupRefreshForCredentials
+	oldSelect := selectSandboxCredentialsForCredentials
+	defer func() {
+		runElevatedSetupForCredentials = oldSetup
+		runSetupRefreshForCredentials = oldRefresh
+		selectSandboxCredentialsForCredentials = oldSelect
+	}()
+
+	setupCalled := false
+	runElevatedSetupForCredentials = func(*SandboxSetupRequest) error {
+		setupCalled = true
+		return nil
+	}
+	refreshCalled := false
+	runSetupRefreshForCredentials = func(*SandboxSetupRequest) error {
+		refreshCalled = true
+		return nil
+	}
+	selectSandboxCredentialsForCredentials = func(string, SandboxNetworkIdentity) (*SandboxCredentials, error) {
+		return nil, nil
+	}
+
+	home := t.TempDir()
+	profile := coresandbox.ReadOnlyPermissionProfile()
+	permissions, err := ResolvePermissions(&profile, []string{`C:\repo`})
+	if err != nil {
+		t.Fatalf("ResolvePermissions() error = %v", err)
+	}
+	_, err = requireLogonSandboxCredsForPermissions(
+		permissions,
+		`C:\repo`,
+		map[string]string{},
+		home,
+		nil,
+		false,
+		false,
+		nil,
+		false,
+		nil,
+		nil,
+		false,
+		ProxySettingsReconcile,
+		false,
+	)
+	if !errors.Is(err, ErrSetupElevationDisallowed) {
+		t.Fatalf("error = %v, want ErrSetupElevationDisallowed", err)
+	}
+	if setupCalled || refreshCalled {
+		t.Fatalf("implicit setup/refresh called = %t/%t", setupCalled, refreshCalled)
 	}
 }

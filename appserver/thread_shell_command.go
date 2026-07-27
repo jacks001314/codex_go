@@ -115,14 +115,11 @@ func (r *RuntimeRouter) activeRuntimeTurnForShellCommand(threadID string) *activ
 	if r == nil {
 		return nil
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[strings.TrimSpace(threadID)]
+	active := r.threads.ActiveTurn(strings.TrimSpace(threadID))
 	if active == nil {
 		return nil
 	}
-	copy := *active
-	return &copy
+	return active
 }
 
 func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadShellCommandRun) {
@@ -170,7 +167,7 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 	if run.Standalone {
 		_ = r.requireTurns().Complete(&turn.TurnCompleteParams{ThreadID: run.ThreadID, TurnID: run.TurnID, Status: string(TurnStatusCompleted)})
 		duration := completedAtMS - startedAtMS
-		r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
+		r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 			ThreadID: run.ThreadID,
 			Turn:     completedTurnNotificationTurn(run.TurnID, TurnStatusCompleted, nil, &run.StartedAt, &completedAtMS, &duration),
 		})

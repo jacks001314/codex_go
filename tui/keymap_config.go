@@ -161,18 +161,37 @@ func (c *KeymapConfig) Validate() error {
 		return nil
 	}
 	for context, actions := range c.bindings {
-		seen := map[string]string{}
 		for action, bindings := range actions {
 			if _, ok := knownKeymapConfigActions(context)[action]; !ok {
 				return fmt.Errorf("unknown keymap action `%s` in context `%s`", action, context)
 			}
+			if err := validateDistinctKeymapBindings(context, action, bindings); err != nil {
+				return err
+			}
+		}
+	}
+	for context := range knownKeymapConfigContexts() {
+		seen := map[string]string{}
+		for action := range knownKeymapConfigActions(context) {
+			bindings, _, _ := ResolvedKeymapBindings(c, context, action)
 			for _, binding := range bindings {
-				if previous := seen[binding]; previous != "" {
+				if previous := seen[binding]; previous != "" && previous != action {
 					return fmt.Errorf("keybinding `%s` is assigned to both %s.%s and %s.%s", binding, context, previous, context, action)
 				}
 				seen[binding] = action
 			}
 		}
+	}
+	return nil
+}
+
+func validateDistinctKeymapBindings(context string, action string, bindings []string) error {
+	seen := map[string]bool{}
+	for _, binding := range bindings {
+		if seen[binding] {
+			return fmt.Errorf("duplicate keybinding `%s` for %s.%s", binding, context, action)
+		}
+		seen[binding] = true
 	}
 	return nil
 }
@@ -327,7 +346,8 @@ func HandleKeymapCommand(args string, config *KeymapConfig, apply KeymapEditAppl
 func RenderKeymapCommandHelp() string {
 	return strings.Join([]string{
 		"Codex TUI keymap commands:",
-		"  /keymap                         show active key bindings",
+		"  /keymap                         open the shortcut picker",
+		"  /keymap list                    show active key bindings",
 		"  /keymap show CONTEXT.ACTION     show one action",
 		"  /keymap set CONTEXT.ACTION KEY  set custom binding(s)",
 		"  /keymap unbind CONTEXT.ACTION   explicitly unbind an action",

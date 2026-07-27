@@ -99,7 +99,7 @@ func TestKeymapConfigFromConfigValues(t *testing.T) {
 open_external_editor = "Control-E"
 
 [tui.keymap.composer]
-submit = ["ctrl-s", "alt-enter"]
+submit = ["ctrl-shift-s", "alt-enter"]
 queue = []
 `
 	if err := toml.Unmarshal([]byte(input), &values); err != nil {
@@ -112,11 +112,21 @@ queue = []
 	if bindings, ok := config.Binding("global", "open_external_editor"); !ok || strings.Join(bindings, ",") != "ctrl-e" {
 		t.Fatalf("open_external_editor bindings = %#v ok=%v", bindings, ok)
 	}
-	if bindings, ok := config.Binding("composer", "submit"); !ok || strings.Join(bindings, ",") != "ctrl-s,alt-enter" {
+	if bindings, ok := config.Binding("composer", "submit"); !ok || strings.Join(bindings, ",") != "ctrl-shift-s,alt-enter" {
 		t.Fatalf("composer.submit bindings = %#v ok=%v", bindings, ok)
 	}
 	if bindings, ok := config.Binding("composer", "queue"); !ok || len(bindings) != 0 {
 		t.Fatalf("composer.queue bindings = %#v ok=%v, want explicit unbind", bindings, ok)
+	}
+}
+
+func TestKeymapConfigRejectsConflictWithEffectiveDefaultBinding(t *testing.T) {
+	config := NewKeymapConfig()
+	if err := config.Set("composer", "submit", []string{"ctrl-s"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "composer.history_search_next") {
+		t.Fatalf("Validate conflict error = %v", err)
 	}
 }
 

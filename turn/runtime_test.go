@@ -243,6 +243,104 @@ func TestRuntimeMergesPerRequestHostedToolsBeforeAgentRequest(t *testing.T) {
 	}
 }
 
+func TestRuntimeAddsCodeModeToolNamesOnlyForResponsesLite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lite bool
+	}{
+		{name: "lite", lite: true},
+		{name: "non-lite"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &singleTurnAgent{response: &model.AgentResponse{Message: "ok"}}
+			registry := tool.NewRegistry()
+			if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("view_image")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+				return &tool.Output{Success: true}, nil
+			})); err != nil {
+				t.Fatal(err)
+			}
+			exec, wait := tool.NewCodeModeExecutors(registry)
+			if err := registry.Register(exec); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Register(wait); err != nil {
+				t.Fatal(err)
+			}
+			metadata := map[string]string{codexapi.ClientCodexTurnMetadataHeader: `{"thread_id":"thread-1","request_kind":"turn"}`}
+			if tc.lite {
+				metadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+			}
+			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run", ClientMetadata: metadata}); err != nil {
+				t.Fatal(err)
+			}
+			var turnMetadata map[string]any
+			if err := json.Unmarshal([]byte(agent.requests[0].ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+				t.Fatal(err)
+			}
+			toolNames, present := turnMetadata[codexapi.CodeModeToolNamesKey].(map[string]any)
+			if !tc.lite {
+				if present {
+					t.Fatalf("non-lite metadata = %#v", turnMetadata)
+				}
+				return
+			}
+			viewImage, ok := toolNames["view_image"].(map[string]any)
+			if !present || !ok || viewImage["name"] != "view_image" || viewImage["namespace"] != nil {
+				t.Fatalf("lite metadata = %#v", turnMetadata)
+			}
+			if _, legacy := agent.requests[0].ClientMetadata["x-codex-code-mode-tool-names"]; legacy {
+				t.Fatalf("legacy code-mode metadata leaked: %#v", agent.requests[0].ClientMetadata)
+			}
+		})
+	}
+}
+
+func TestRuntimePreservesCodeModeToolNamesAfterSteerMetadataUpdate(t *testing.T) {
+	mailbox := NewSteerMailbox()
+	agent := &fakeLoopAgent{enqueueSteerAfterFirstCall: true, steerMailbox: mailbox}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("view_image")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	exec, wait := tool.NewCodeModeExecutors(registry)
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(wait); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry), SteerMailbox: mailbox, MaxTurns: 3})
+	baseMetadata := map[string]string{
+		codexapi.ClientCodexTurnMetadataHeader:                     `{"thread_id":"thread-1","request_kind":"turn"}`,
+		"ws_request_header_x_openai_internal_codex_responses_lite": "true",
+	}
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run", ThreadID: "thread-1", TurnID: "turn-1", SteerMailbox: mailbox, ClientMetadata: baseMetadata,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.requests) != 2 {
+		t.Fatalf("requests = %#v", agent.requests)
+	}
+	for i := range agent.requests {
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(agent.requests[i].ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
+			t.Fatalf("request %d metadata error = %v", i, err)
+		}
+		if _, ok := metadata[codexapi.CodeModeToolNamesKey]; !ok {
+			t.Fatalf("request %d lost code-mode names: %#v", i, metadata)
+		}
+	}
+}
+
 type runtimeRecordingAgent struct {
 	requests []model.AgentRequest
 }

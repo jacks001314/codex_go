@@ -40,6 +40,67 @@ type codeModeExecExecutor struct {
 	store             map[string]any
 	cellsMu           sync.Mutex
 	cells             map[string]*codeModeCell
+	remote            CodeModeRemoteSession
+	disableFallback   bool
+}
+
+type CodeModeRemoteProvider interface {
+	NewSession(delegate CodeModeRemoteDelegate) CodeModeRemoteSession
+}
+
+type CodeModeRemoteSession interface {
+	Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error)
+	Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error)
+	Terminate(context.Context, string) (CodeModeRemoteResponse, error)
+	Close() error
+}
+
+type CodeModeRemoteDelegate interface {
+	Invoke(context.Context, CodeModeRemoteNestedCall) (json.RawMessage, error)
+	Notify(context.Context, string, string, string) error
+}
+
+type CodeModeRemoteNestedCall struct {
+	CellID            string
+	RuntimeToolCallID string
+	ToolName          ToolName
+	Kind              PayloadKind
+	Input             json.RawMessage
+}
+
+type CodeModeRemoteToolDefinition struct {
+	Name         string
+	ToolName     ToolName
+	Description  string
+	Kind         PayloadKind
+	InputSchema  json.RawMessage
+	OutputSchema json.RawMessage
+}
+
+type CodeModeToolNameMetadata struct {
+	Name      string  `json:"name"`
+	Namespace *string `json:"namespace"`
+}
+
+type codeModeNestedTool struct {
+	globalName string
+	name       ToolName
+	spec       Spec
+}
+
+type CodeModeRemoteExecuteRequest struct {
+	ToolCallID      string
+	Source          string
+	EnabledTools    []CodeModeRemoteToolDefinition
+	YieldTimeMS     *uint64
+	MaxOutputTokens *int
+}
+
+type CodeModeRemoteResponse struct {
+	CellID       string
+	State        string
+	ContentItems []map[string]any
+	ErrorText    string
 }
 
 type codeModeCell struct {
@@ -84,11 +145,18 @@ func NewCodeModeExecExecutor(registry *Registry) Executor {
 }
 
 func NewCodeModeExecutors(registry *Registry, nestedCommandTool ...ToolName) (Executor, Executor) {
+	return NewCodeModeExecutorsWithProvider(registry, nil, false, nestedCommandTool...)
+}
+
+func NewCodeModeExecutorsWithProvider(registry *Registry, provider CodeModeRemoteProvider, disableFallback bool, nestedCommandTool ...ToolName) (Executor, Executor) {
 	var commandTool ToolName
 	if len(nestedCommandTool) > 0 {
 		commandTool = nestedCommandTool[0]
 	}
-	exec := &codeModeExecExecutor{registry: registry, nestedCommandTool: commandTool, store: map[string]any{}, cells: map[string]*codeModeCell{}}
+	exec := &codeModeExecExecutor{registry: registry, nestedCommandTool: commandTool, store: map[string]any{}, cells: map[string]*codeModeCell{}, disableFallback: disableFallback}
+	if provider != nil {
+		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
+	}
 	return exec, &codeModeWaitExecutor{exec: exec}
 }
 
@@ -171,6 +239,15 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	if len(invocation.Payload.Input) > codeModeMaxFrameBytes {
 		return nil, RespondToModel(fmt.Sprintf("code-mode IPC frame length %d exceeds %d bytes", len(invocation.Payload.Input), codeModeMaxFrameBytes))
 	}
+	if e.remote != nil {
+		output, remoteErr := e.executeRemote(ctx, invocation, source, options)
+		if remoteErr == nil {
+			return output, nil
+		}
+		if e.disableFallback {
+			return nil, Fatal(fmt.Sprintf("code-mode remote host unavailable: %v", remoteErr))
+		}
+	}
 	yieldTimeMS := 10000
 	if options.YieldTimeMS != nil {
 		yieldTimeMS = *options.YieldTimeMS
@@ -219,6 +296,201 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 		return nil, ctx.Err()
 	}
 	return &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: "Script running with cell ID " + cellID + "\n" + e.cellDelta(cell), Data: map[string]any{"cell_id": cellID, "running": true}}, nil
+}
+
+func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *Invocation, source string, options codeModeExecOptions) (*Output, error) {
+	delegate, _ := e.remoteDelegate()
+	done := delegate.begin(invocation)
+	defer done()
+	definitions := make([]CodeModeRemoteToolDefinition, 0)
+	for _, nested := range e.nestedTools() {
+		name := nested.name
+		spec := nested.spec
+		kind := PayloadFunction
+		var inputSchema json.RawMessage
+		if spec.Freeform != nil {
+			kind = PayloadCustom
+			inputSchema, _ = json.Marshal(map[string]any{"type": "grammar", "syntax": spec.Freeform.Syntax, "definition": spec.Freeform.Definition})
+		} else {
+			inputSchema, _ = json.Marshal(spec.InputSchema)
+		}
+		outputSchema, _ := json.Marshal(spec.OutputSchema)
+		definitions = append(definitions, CodeModeRemoteToolDefinition{Name: nested.globalName, ToolName: name, Description: spec.Description, Kind: kind, InputSchema: inputSchema, OutputSchema: outputSchema})
+	}
+	var yield *uint64
+	if options.YieldTimeMS != nil {
+		value := uint64(*options.YieldTimeMS)
+		yield = &value
+	}
+	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens})
+	if err != nil {
+		return nil, err
+	}
+	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens))
+}
+
+func (e *codeModeExecExecutor) CodeModeToolNames() map[string]CodeModeToolNameMetadata {
+	nestedTools := e.nestedTools()
+	if len(nestedTools) == 0 {
+		return nil
+	}
+	out := make(map[string]CodeModeToolNameMetadata, len(nestedTools))
+	for _, nested := range nestedTools {
+		var namespace *string
+		if nested.name.Namespace != "" {
+			value := nested.name.Namespace
+			namespace = &value
+		}
+		out[nested.globalName] = CodeModeToolNameMetadata{Name: nested.name.Name, Namespace: namespace}
+	}
+	return out
+}
+
+func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
+	if e == nil || e.registry == nil {
+		return nil
+	}
+	names := e.registry.Names()
+	out := make([]codeModeNestedTool, 0, len(names))
+	for _, name := range names {
+		if name.Key() == CodeModeExecToolName || name.Key() == "wait" {
+			continue
+		}
+		spec, ok := e.registry.Spec(name)
+		if !ok || (spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key()) {
+			continue
+		}
+		out = append(out, codeModeNestedTool{globalName: codeModeIdentifier(ResponsesAPIName(name)), name: name, spec: spec})
+	}
+	return out
+}
+
+func (e *codeModeExecExecutor) remoteDelegate() (*codeModeRemoteDelegate, bool) {
+	if e == nil {
+		return nil, false
+	}
+	return &codeModeRemoteDelegate{exec: e}, true
+}
+
+type codeModeRemoteDelegate struct{ exec *codeModeExecExecutor }
+
+type codeModeRemoteInvocationState struct {
+	mu     sync.Mutex
+	active map[string]*Invocation
+}
+
+var remoteInvocationStates sync.Map
+
+func remoteInvocationState(exec *codeModeExecExecutor) *codeModeRemoteInvocationState {
+	value, _ := remoteInvocationStates.LoadOrStore(exec, &codeModeRemoteInvocationState{active: map[string]*Invocation{}})
+	return value.(*codeModeRemoteInvocationState)
+}
+
+func (d *codeModeRemoteDelegate) begin(invocation *Invocation) func() {
+	state := remoteInvocationState(d.exec)
+	state.mu.Lock()
+	state.active[invocation.CallID] = invocation
+	state.mu.Unlock()
+	return func() {
+		state.mu.Lock()
+		delete(state.active, invocation.CallID)
+		state.mu.Unlock()
+	}
+}
+
+func (d *codeModeRemoteDelegate) invocation(callID string) *Invocation {
+	state := remoteInvocationState(d.exec)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if invocation := state.active[callID]; invocation != nil {
+		return invocation
+	}
+	for parentID, invocation := range state.active {
+		if strings.HasPrefix(callID, parentID) {
+			return invocation
+		}
+	}
+	if len(state.active) == 1 {
+		for _, invocation := range state.active {
+			return invocation
+		}
+	}
+	return nil
+}
+
+func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemoteNestedCall) (json.RawMessage, error) {
+	if d == nil || d.exec == nil || d.exec.registry == nil {
+		return nil, fmt.Errorf("code mode tool registry is unavailable")
+	}
+	executor, ok := d.exec.registry.Lookup(call.ToolName)
+	if !ok {
+		return nil, fmt.Errorf("tool %s not found", call.ToolName.Key())
+	}
+	payload := Payload{Kind: call.Kind}
+	if call.Kind == PayloadCustom {
+		var input string
+		if err := json.Unmarshal(call.Input, &input); err != nil {
+			input = string(call.Input)
+		}
+		payload.Input = input
+	} else {
+		payload.Arguments = string(call.Input)
+	}
+	parent := d.invocation(call.RuntimeToolCallID)
+	invocationContext := map[string]any(nil)
+	if parent != nil {
+		invocationContext = cloneInvocationContext(parent.Context)
+	}
+	invocation := &Invocation{CallID: call.RuntimeToolCallID, ToolName: call.ToolName, Payload: payload, Source: "code_mode", Context: invocationContext}
+	startedAt := time.Now().UTC()
+	if parent != nil {
+		if started, ok := parent.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
+			started(ctx, invocation, startedAt)
+		}
+	}
+	out, err := executor.Execute(ctx, invocation)
+	finishedAt := time.Now().UTC()
+	if parent != nil {
+		if completed, ok := parent.Context["code_mode_nested_tool_completed"].(CodeModeNestedToolCompletedFunc); ok {
+			completed(ctx, invocation, out, err, startedAt, finishedAt)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if failure, failed := codeModeToolFailure(call.ToolName, out); failed {
+		return nil, fmt.Errorf("%s", failure)
+	}
+	return json.Marshal(codeModeToolResult(out))
+}
+
+func (d *codeModeRemoteDelegate) Notify(_ context.Context, callID string, _ string, text string) error {
+	if invocation := d.invocation(callID); invocation != nil {
+		if notify, ok := invocation.Context["code_mode_notify"].(CodeModeNotifyFunc); ok {
+			notify(invocation.CallID, text)
+		}
+	}
+	return nil
+}
+
+func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int) (*Output, error) {
+	texts := make([]string, 0)
+	for _, item := range response.ContentItems {
+		if item["type"] == "input_text" {
+			texts = append(texts, fmt.Sprint(item["text"]))
+		}
+	}
+	if strings.TrimSpace(response.ErrorText) != "" {
+		return nil, RespondToModel("JavaScript execution failed: " + response.ErrorText)
+	}
+	body := strings.Join(texts, "\n")
+	output := &Output{CallID: callID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": response.ContentItems}}
+	if response.State == "yielded" {
+		output.Body = "Script running with cell ID " + response.CellID + "\n" + body
+		output.Data["cell_id"] = response.CellID
+		output.Data["running"] = true
+	}
+	return truncateCodeModeOutput(output, maxTokens), nil
 }
 
 func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *Invocation, yield chan<- struct{}, cell *codeModeCell) (*Output, error) {
@@ -344,20 +616,12 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	}); err != nil {
 		return nil, err
 	}
+	nestedTools := e.nestedTools()
 	toolsObject := runtime.NewObject()
-	for _, name := range e.registry.Names() {
-		if name.Key() == CodeModeExecToolName || name.Key() == "wait" {
-			continue
-		}
-		executor, ok := e.registry.Lookup(name)
-		if !ok {
-			continue
-		}
-		spec := executor.Spec()
-		if spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key() {
-			continue
-		}
-		globalName := codeModeIdentifier(ResponsesAPIName(name))
+	for _, nested := range nestedTools {
+		name := nested.name
+		spec := nested.spec
+		globalName := nested.globalName
 		toolName := name
 		toolSpec := spec
 		if err := toolsObject.Set(globalName, func(call sobek.FunctionCall) sobek.Value {
@@ -396,16 +660,8 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 		return nil, err
 	}
 	metadata := make([]map[string]string, 0)
-	for _, name := range e.registry.Names() {
-		if name.Key() == CodeModeExecToolName || name.Key() == "wait" {
-			continue
-		}
-		if spec, ok := e.registry.Spec(name); ok {
-			if spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key() {
-				continue
-			}
-			metadata = append(metadata, map[string]string{"name": codeModeIdentifier(ResponsesAPIName(name)), "description": spec.Description})
-		}
+	for _, nested := range nestedTools {
+		metadata = append(metadata, map[string]string{"name": nested.globalName, "description": nested.spec.Description})
 	}
 	if err := runtime.Set("ALL_TOOLS", metadata); err != nil {
 		return nil, err
@@ -616,6 +872,25 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 	}
 	if strings.TrimSpace(params.CellID) == "" {
 		return nil, RespondToModel("cell_id is required")
+	}
+	if e.exec.remote != nil {
+		var response CodeModeRemoteResponse
+		var remoteErr error
+		if params.Terminate {
+			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID)
+		} else {
+			waitMS := params.YieldTimeMS
+			if waitMS <= 0 {
+				waitMS = 10000
+			}
+			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS))
+		}
+		if remoteErr == nil {
+			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens))
+		}
+		if e.exec.disableFallback {
+			return nil, Fatal(fmt.Sprintf("code-mode remote host unavailable: %v", remoteErr))
+		}
 	}
 	e.exec.cellsMu.Lock()
 	cell := e.exec.cells[params.CellID]

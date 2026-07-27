@@ -13,6 +13,7 @@ type Popup struct {
 	SearchMode SearchMode
 	Selected   int
 	ScrollTop  int
+	rows       []SearchResult
 }
 
 func NewPopup(candidates []Candidate) *Popup {
@@ -23,21 +24,32 @@ func NewPopup(candidates []Candidate) *Popup {
 	}
 }
 
+func NewPopupWithQuery(candidates []Candidate, query string) *Popup {
+	popup := NewPopup(candidates)
+	popup.Query = query
+	popup.FileSearch.SetQuery(query)
+	popup.refreshRows()
+	return popup
+}
+
 func (p *Popup) SetCandidates(candidates []Candidate) {
 	if p == nil {
 		return
 	}
 	p.Candidates = append([]Candidate(nil), candidates...)
-	p.ClampSelection()
+	p.refreshRows()
 }
 
 func (p *Popup) SetQuery(query string) {
 	if p == nil {
 		return
 	}
+	if p.Query == query && p.rows != nil {
+		return
+	}
 	p.Query = query
 	p.FileSearch.SetQuery(query)
-	p.ClampSelection()
+	p.refreshRows()
 }
 
 func (p *Popup) SetFileMatches(query string, matches []filesearch.FileMatch) {
@@ -45,25 +57,24 @@ func (p *Popup) SetFileMatches(query string, matches []filesearch.FileMatch) {
 		return
 	}
 	p.FileSearch.SetMatches(query, matches)
-	p.ClampSelection()
+	p.refreshRows()
 }
 
 func (p *Popup) SelectedSelection() (Selection, bool) {
 	if p == nil {
 		return Selection{}, false
 	}
-	rows := p.Rows()
-	if p.Selected < 0 || p.Selected >= len(rows) {
+	if p.Selected < 0 || p.Selected >= len(p.rows) {
 		return Selection{}, false
 	}
-	return rows[p.Selected].Selection, true
+	return p.rows[p.Selected].Selection, true
 }
 
 func (p *Popup) MoveUp() {
 	if p == nil {
 		return
 	}
-	length := len(p.Rows())
+	length := len(p.rows)
 	if length == 0 {
 		p.Selected = -1
 		p.ScrollTop = 0
@@ -83,7 +94,7 @@ func (p *Popup) MoveDown() {
 	if p == nil {
 		return
 	}
-	length := len(p.Rows())
+	length := len(p.rows)
 	if length == 0 {
 		p.Selected = -1
 		p.ScrollTop = 0
@@ -102,7 +113,7 @@ func (p *Popup) PreviousSearchMode() {
 		return
 	}
 	p.SearchMode = p.SearchMode.Previous()
-	p.ClampSelection()
+	p.refreshRows()
 }
 
 func (p *Popup) NextSearchMode() {
@@ -110,11 +121,11 @@ func (p *Popup) NextSearchMode() {
 		return
 	}
 	p.SearchMode = p.SearchMode.Next()
-	p.ClampSelection()
+	p.refreshRows()
 }
 
 func (p *Popup) CalculateRequiredHeight(width int) int {
-	visible := minInt(MaxPopupRows, maxInt(1, len(p.Rows())))
+	visible := minInt(MaxPopupRows, maxInt(1, len(p.rows)))
 	return visible + 2
 }
 
@@ -122,14 +133,19 @@ func (p *Popup) Rows() []SearchResult {
 	if p == nil {
 		return nil
 	}
-	return FilteredCandidates(p.Candidates, p.FileSearch.Matches, p.Query, p.SearchMode, p.FileSearch.ShouldShowMatches())
+	return append([]SearchResult(nil), p.rows...)
 }
 
 func (p *Popup) ClampSelection() {
 	if p == nil {
 		return
 	}
-	length := len(p.Rows())
+	p.refreshRows()
+}
+
+func (p *Popup) refreshRows() {
+	p.rows = FilteredCandidates(p.Candidates, p.FileSearch.Matches, p.Query, p.SearchMode, p.FileSearch.ShouldShowMatches())
+	length := len(p.rows)
 	if length == 0 {
 		p.Selected = -1
 		p.ScrollTop = 0

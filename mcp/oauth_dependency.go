@@ -70,7 +70,7 @@ func (s *MCPService) LoginOAuthDependency(ctx context.Context, options *OAuthDep
 	}
 	client := options.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: mcpOAuthLoginDiscoveryMaxTimeout}
+		client = s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryMaxTimeout)
 	}
 	discoveryContext, cancelDiscovery := context.WithTimeout(contextOrBackground(ctx), mcpOAuthLoginDiscoveryMaxTimeout)
 	discovery, err := DiscoverStreamableHTTPOAuth(discoveryContext, config.URL, client)
@@ -96,7 +96,11 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 	}
 	client := options.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = s.httpClientForServer(name, config).oauthHTTPClient(0)
+	}
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = mcpOAuthDependencyLoginTimeout
 	}
 	login, err := StartOAuthLoginServer(contextOrBackground(ctx), &OAuthLoginServerOptions{
 		ServerName:            name,
@@ -109,6 +113,7 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		Scopes:                scopes,
 		Store:                 store,
 		HTTPClient:            client,
+		Timeout:               timeout,
 	})
 	if err != nil {
 		return err
@@ -116,10 +121,6 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 	if options.OpenBrowser != nil {
 		// Browser launch failure does not cancel the callback server, matching Rust.
 		_ = options.OpenBrowser(login.AuthorizationURL)
-	}
-	timeout := options.Timeout
-	if timeout <= 0 {
-		timeout = mcpOAuthDependencyLoginTimeout
 	}
 	waitContext, cancel := context.WithTimeout(contextOrBackground(ctx), timeout)
 	defer cancel()

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/network"
 	"codex_go/utils"
 
 	"github.com/coder/websocket"
@@ -27,6 +28,108 @@ import (
 
 const stdioInitialization = `{"id":0,"method":"initialize","params":{"clientName":"stdio-test"}}` + "\n" +
 	`{"method":"initialized","params":{}}` + "\n"
+
+func TestPrepareExecutorNetworkProxyValidatesCallbackParamsLikeRust(t *testing.T) {
+	server := NewServer()
+	zero := uint64(0)
+	for _, test := range []struct {
+		name   string
+		params *ExecParams
+		want   string
+	}{
+		{name: "zero-timeout", params: &ExecParams{ProcessID: "p", NetworkProxy: &RemoteNetworkProxyLaunchConfig{PolicyDecisionTimeoutMS: &zero}}, want: "network policy decision callback timeout must be nonzero"},
+		{name: "empty-process", params: &ExecParams{NetworkProxy: &RemoteNetworkProxyLaunchConfig{PolicyDecisionTimeoutMS: uint64PtrForExecServerTest(1)}}, want: "callback-enabled process ID must be non-empty"},
+		{name: "long-process", params: &ExecParams{ProcessID: strings.Repeat("p", MaxNetworkPolicyProcessIDBytes+1), NetworkProxy: &RemoteNetworkProxyLaunchConfig{PolicyDecisionTimeoutMS: uint64PtrForExecServerTest(1)}}, want: "callback-enabled process ID must be non-empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := server.prepareExecutorNetworkProxy(context.Background(), test.params)
+			var failure *requestFailure
+			if !errors.As(err, &failure) || failure.code != -32602 || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %#v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareExecutorNetworkProxyStartsExecutorLocalProxyAndClosesLikeRust(t *testing.T) {
+	server := NewServer()
+	environmentID := "remote-test"
+	params := &ExecParams{
+		ProcessID: "proxy-process",
+		EnvPolicy: &ExecEnvPolicy{Inherit: "none", Set: map[string]string{"BASE": "kept"}},
+		Env:       map[string]string{"HTTP_PROXY": "http://controller.invalid:9999"},
+		Sandbox:   json.RawMessage(`{}`),
+		NetworkProxy: &RemoteNetworkProxyLaunchConfig{
+			Proxy:         RemoteNetworkProxyConfig{Enabled: true, EnableSOCKS5: false, Mode: string(network.ProxyModeFull)},
+			EnvironmentID: &environmentID,
+		},
+	}
+	preparedParams, prepared, policyCancel, err := server.prepareExecutorNetworkProxy(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared == nil || policyCancel == nil {
+		t.Fatalf("prepared proxy = %#v cancel=%v", prepared, policyCancel)
+	}
+	defer policyCancel()
+	proxyURL := preparedParams.Env["HTTP_PROXY"]
+	if proxyURL == "" || proxyURL == "http://controller.invalid:9999" || preparedParams.Env["BASE"] != "kept" || preparedParams.EnvPolicy != nil {
+		t.Fatalf("prepared env = %#v", preparedParams.Env)
+	}
+	if preparedParams.ManagedNetwork == nil || len(preparedParams.ManagedNetwork.LoopbackPorts) != 1 || !preparedParams.EnforceManagedNetwork {
+		t.Fatalf("prepared managed network = %#v", preparedParams)
+	}
+	address := strings.TrimPrefix(proxyURL, "http://")
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatalf("executor-local proxy is not listening at %s: %v", address, err)
+	}
+	_ = conn.Close()
+	if err := prepared.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		conn, err = net.DialTimeout("tcp", address, 20*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("executor-local proxy still accepts connections after Close at %s", address)
+}
+
+func TestPrepareExecutorNetworkProxyWindowsNativeLaunchStripsControllerProxyLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows native launches have the shared-ingress SID restriction")
+	}
+	server := NewServer()
+	preparedParams, prepared, policyCancel, err := server.prepareExecutorNetworkProxy(context.Background(), &ExecParams{
+		ProcessID: "native-process",
+		EnvPolicy: &ExecEnvPolicy{Inherit: "none"},
+		Env: map[string]string{
+			"HTTP_PROXY":                         "http://controller.invalid:9999",
+			"http_proxy":                         "http://controller.invalid:9999",
+			"NO_PROXY":                           "localhost",
+			network.ProxyActiveEnvKey:            "1",
+			network.ProxyAllowLocalBindingEnvKey: "0",
+			"KEEP":                               "yes",
+		},
+		NetworkProxy: &RemoteNetworkProxyLaunchConfig{Proxy: RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared != nil || policyCancel != nil || preparedParams.NetworkProxy != nil || preparedParams.ManagedNetwork != nil || preparedParams.EnforceManagedNetwork {
+		t.Fatalf("native Windows prepared state = %#v proxy=%#v", preparedParams, prepared)
+	}
+	if preparedParams.Env["KEEP"] != "yes" || preparedParams.Env["HTTP_PROXY"] != "" || preparedParams.Env["http_proxy"] != "" || preparedParams.Env["NO_PROXY"] != "" || preparedParams.Env[network.ProxyActiveEnvKey] != "" {
+		t.Fatalf("native Windows env = %#v", preparedParams.Env)
+	}
+}
+
+func uint64PtrForExecServerTest(value uint64) *uint64 { return &value }
 
 func TestExecServerFSHelperProcess(t *testing.T) {
 	found := false

@@ -223,6 +223,21 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	return out
 }
 
+func (r *Registry) DeferredToolNamespaces() map[string]string {
+	namespaces := map[string]string{}
+	for _, spec := range r.DiscoverableSpecs() {
+		namespace := strings.TrimSpace(spec.Name.Namespace)
+		if namespace == "" {
+			continue
+		}
+		description := strings.TrimSpace(spec.NamespaceDescription)
+		if existing, ok := namespaces[namespace]; !ok || (strings.TrimSpace(existing) == "" && description != "") {
+			namespaces[namespace] = description
+		}
+	}
+	return namespaces
+}
+
 func (r *Registry) Names() []ToolName {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -259,6 +274,30 @@ func (r *Router) ModelVisibleSpecs() []Spec {
 		return nil
 	}
 	return r.registry.ModelVisibleSpecs()
+}
+
+func (r *Router) DeferredToolNamespaces() map[string]string {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	return r.registry.DeferredToolNamespaces()
+}
+
+func (r *Router) CodeModeToolNames() map[string]CodeModeToolNameMetadata {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	executor, ok := r.registry.Lookup(PlainName(CodeModeExecToolName))
+	if !ok {
+		return nil
+	}
+	provider, ok := executor.(interface {
+		CodeModeToolNames() map[string]CodeModeToolNameMetadata
+	})
+	if !ok {
+		return nil
+	}
+	return provider.CodeModeToolNames()
 }
 
 func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {

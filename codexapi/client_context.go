@@ -220,7 +220,7 @@ func (m *ClientMetadata) CompatibilityHeaders() map[string]string {
 	}
 	headers := map[string]string{ClientCodexWindowIDHeader: m.WindowID}
 	if m.HasTurnMetadata() {
-		if jsonText, ok := m.TurnMetadataJSON(); ok {
+		if jsonText, ok := clientCompatibilityTurnMetadataJSON(m.TurnMetadataValue()); ok {
 			headers[ClientCodexTurnMetadataHeader] = jsonText
 		}
 	}
@@ -231,6 +231,15 @@ func (m *ClientMetadata) CompatibilityHeaders() map[string]string {
 		headers[ClientOpenAISubagentHeader] = m.SubagentHeader
 	}
 	return headers
+}
+
+func clientCompatibilityTurnMetadataJSON(value map[string]any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	delete(value, CodeModeToolNamesKey)
+	bytes, err := json.Marshal(value)
+	return string(bytes), err == nil
 }
 
 func ClientFilterExtraMetadata(values map[string]string) map[string]string {
@@ -253,6 +262,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id",
 		"subagent_kind", "thread_source", "sandbox", "workspaces",
+		CodeModeToolNamesKey,
 	}
 	out := make(map[string]bool, len(keys))
 	for _, key := range keys {

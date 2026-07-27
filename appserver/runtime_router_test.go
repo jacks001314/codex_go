@@ -30,6 +30,7 @@ import (
 	"codex_go/agent"
 	"codex_go/apps"
 	"codex_go/auth"
+	"codex_go/chatgptapi"
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
@@ -3866,6 +3867,13 @@ func TestRuntimeRouterGetAccountRateLimitsReturnsSnapshotLikeRust(t *testing.T) 
 	}
 	if other.PlanType == nil || *other.PlanType != auth.PlanPro {
 		t.Fatalf("other plan type = %+v", other.PlanType)
+	}
+}
+
+func TestAccountPlanTypeFromBackendMapsEnt26(t *testing.T) {
+	plan := accountPlanTypeFromBackend(chatgptapi.PlanEnt26)
+	if plan == nil || *plan != auth.PlanEnt26 {
+		t.Fatalf("plan = %+v, want ent26", plan)
 	}
 }
 
@@ -8842,20 +8850,19 @@ func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testin
 	if managed == nil {
 		t.Fatal("thread managed network was not started")
 	}
-	secondaryEnv, _, err := managed.PrepareForEnvironment("remote-secondary")
-	if err != nil {
-		t.Fatal(err)
+	controllerProxy := managed.EnvSnapshot()["HTTP_PROXY"]
+	if controllerProxy == "" {
+		t.Fatal("controller managed network did not expose its local proxy")
 	}
-	secondaryProxy := secondaryEnv["HTTP_PROXY"]
-	if secondaryProxy == "" || secondaryProxy == managed.EnvSnapshot()["HTTP_PROXY"] || !strings.Contains(output.Body, secondaryProxy) {
-		t.Fatalf("remote output did not use isolated secondary proxy %q; root=%q output=%q", secondaryProxy, managed.EnvSnapshot()["HTTP_PROXY"], output.Body)
+	if strings.Contains(output.Body, controllerProxy) {
+		t.Fatalf("controller-local proxy leaked into remote output: proxy=%q output=%q", controllerProxy, output.Body)
 	}
-	primaryEnv, _, err := managed.PrepareForEnvironment("remote-primary")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if primaryEnv["HTTP_PROXY"] == secondaryProxy {
-		t.Fatalf("primary and secondary environments share proxy %q", secondaryProxy)
+	if runtime.GOOS == "windows" {
+		if strings.Contains(output.Body, "http://127.0.0.1:") {
+			t.Fatalf("native Windows remote launch should stay direct without a sandbox token: %q", output.Body)
+		}
+	} else if !strings.Contains(output.Body, "http://127.0.0.1:") {
+		t.Fatalf("remote output did not use an executor-local proxy: %q", output.Body)
 	}
 }
 
@@ -11960,6 +11967,164 @@ func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterDeferredToolsWorldStateUsesActualRouterAndDoesNotRepeat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\ndeferred_tool_world_state = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	newDeferredRouter := func(namespaces map[string]string) *tool.Router {
+		registry := tool.NewRegistry()
+		for namespace, description := range namespaces {
+			spec := tool.Spec{
+				Name:                 tool.NamespacedName(namespace, "lookup"),
+				Description:          "Lookup",
+				Exposure:             tool.ExposureDiscoverable,
+				NamespaceDescription: description,
+				Search:               &tool.SearchInfo{Text: "lookup"},
+			}
+			if err := registry.Register(tool.NewExecutorFunc(spec, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+				return &tool.Output{Success: true}, nil
+			})); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(namespaces) > 0 {
+			if err := tool.RegisterToolSearchFromRegistryWithOptions(registry, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return tool.NewRouter(registry)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+		Config:       config.NewConfigService(home),
+		ToolRouter:   newDeferredRouter(map[string]string{"mcp__drive": "Drive tools"}),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	router.SetNotificationSink(sink)
+
+	runTurn := func(id int64, want, unwanted string) {
+		started := router.Handle(requestWithParams(t, IntID(id), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "hello"}))
+		if started.Error != nil {
+			t.Fatalf("turn start: %+v", started.Error)
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		input := fmt.Sprintf("%v", request.InputItems)
+		if want != "" && !strings.Contains(input, want) {
+			t.Fatalf("input = %s, missing %q", input, want)
+		}
+		if unwanted != "" && strings.Contains(input, unwanted) {
+			t.Fatalf("input = %s, unexpectedly contains %q", input, unwanted)
+		}
+		waitForTurnCompletedStatus(t, sink, started.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+	}
+	runTurn(2, "Deferred tool namespaces", "No deferred tool namespaces remain")
+	runTurn(3, "", "Deferred tool namespaces")
+
+	router.services.ToolRouter = newDeferredRouter(map[string]string{"mcp__mail": "Mail tools"})
+	runTurn(4, "Added deferred tool namespaces", "No deferred tool namespaces remain")
+	router.services.ToolRouter = newDeferredRouter(nil)
+	runTurn(5, "No deferred tool namespaces remain", "")
+	runTurn(6, "", "<tools>")
+
+	record, err := store.Load(session.ThreadID(threadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Tools) != 0 {
+		t.Fatalf("persisted tools after removal = %s", state.Tools)
+	}
+}
+
+func TestRuntimeRouterWaitForEnvironmentUsesFeatureGateSelectedEnvironmentAndHostDescription(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled_%v", enabled), func(t *testing.T) {
+			home := t.TempDir()
+			environmentCWD := t.TempDir()
+			if err := os.WriteFile(config.ConfigPath(home), []byte(fmt.Sprintf("[features]\ndeferred_executor = %t\n", enabled)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := session.NewStore(t.TempDir())
+			sink := NewNotificationBuffer()
+			agent := newRecordingRuntimeAgent("ok")
+			environments := NewEnvironmentManager(EnvironmentShellInfo{Name: "PowerShell", Path: "powershell.exe"}, environmentCWD)
+			if err := environments.SetInfo("env-1", EnvironmentShellInfo{Name: "PowerShell", Path: "powershell.exe"}, environmentCWD); err != nil {
+				t.Fatal(err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				ThreadRouter: NewRouter(store),
+				Turns:        turn.NewTurnService(),
+				Agent:        agent,
+				ThreadStatus: NewThreadStatusManager(),
+				Models:       model.NewModelService(nil),
+				Config:       config.NewConfigService(home),
+				Environment:  environments,
+				WaitForEnvironmentToolConfig: &tool.WaitForEnvironmentToolConfig{
+					ToolDescription:          "Host wait description",
+					EnvironmentIDDescription: "Host environment ID description",
+				},
+			})
+			started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+			if started.Error != nil {
+				t.Fatal(started.Error)
+			}
+			threadID := started.Result.(*ThreadStartResponse).Thread.ID
+			router.SetNotificationSink(sink)
+			turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+				ThreadID: threadID,
+				Prompt:   "hello",
+				Environments: []map[string]any{{
+					"environmentId": "env-1",
+					"cwd":           environmentCWD,
+				}},
+			}))
+			if turnStart.Error != nil {
+				t.Fatal(turnStart.Error)
+			}
+			request := waitForRuntimeAgentRequest(t, agent)
+			var waitTool map[string]any
+			for _, rawTool := range request.Tools {
+				candidate, ok := mapAnyFromValue(rawTool)
+				if ok && candidate["type"] == "function" && candidate["name"] == tool.WaitForEnvironmentToolName {
+					waitTool = candidate
+					break
+				}
+			}
+			if !enabled {
+				if waitTool != nil {
+					t.Fatalf("wait tool visible while feature disabled: %#v", waitTool)
+				}
+			} else {
+				if waitTool == nil || waitTool["description"] != "Host wait description" {
+					t.Fatalf("wait tool = %#v", waitTool)
+				}
+				parameters, _ := mapAnyFromValue(waitTool["parameters"])
+				properties, _ := mapAnyFromValue(parameters["properties"])
+				environmentID, _ := mapAnyFromValue(properties["environment_id"])
+				if environmentID["description"] != "Host environment ID description" {
+					t.Fatalf("environment_id schema = %#v", environmentID)
+				}
+			}
+			waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+		})
+	}
+}
+
 func TestRuntimeRouterThreadStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -13353,6 +13518,8 @@ func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
 	provider := router.implicitSkillInvocationEventProvider("thread-hidden", "turn-hidden", "model-hidden", &turn.TurnStartParams{CWD: skillDir}, []promptctx.InstructionsSkillMetadata{{
 		Name:                    "disabled-skill",
 		Path:                    filepath.Join(skillDir, SkillFilename),
+		PluginID:                "sample@openai-curated-remote",
+		RemotePluginID:          "plugins~Plugin_sample",
 		AllowImplicitInvocation: &disabled,
 	}})
 	items := provider(context.Background(), &tool.Invocation{
@@ -13367,7 +13534,7 @@ func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
 	}
 	select {
 	case event := <-analytics.skillInvocation:
-		if event.SkillName != "disabled-skill" || stringPtrValue(event.EventParams.SkillScope) != "user" {
+		if event.SkillName != "disabled-skill" || stringPtrValue(event.EventParams.SkillScope) != "user" || stringPtrValue(event.EventParams.PluginID) != "sample@openai-curated-remote" || stringPtrValue(event.EventParams.RemotePluginID) != "plugins~Plugin_sample" {
 			t.Fatalf("skill invocation event = %#v", event)
 		}
 	case <-time.After(time.Second):
@@ -13377,11 +13544,13 @@ func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
 
 func TestPromptSkillMetadataMapsHostDisplayPathLikeRust(t *testing.T) {
 	metadata := promptSkillMetadataFromEntries([]SkillsListEntry{{
-		Name:        "host-skill",
-		Path:        `C:\skills\host-skill\SKILL.md`,
-		Scope:       "user",
-		Description: "host",
-		Enabled:     true,
+		Name:           "host-skill",
+		Path:           `C:\skills\host-skill\SKILL.md`,
+		Scope:          "user",
+		PluginID:       "sample@openai-curated-remote",
+		RemotePluginID: "plugins~Plugin_sample",
+		Description:    "host",
+		Enabled:        true,
 	}})
 	if len(metadata) != 1 || metadata[0].LocatorKind != "file" || metadata[0].LocatorPath != "C:/skills/host-skill/SKILL.md" {
 		t.Fatalf("host metadata = %#v", metadata)
@@ -14346,6 +14515,102 @@ func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplici
 		if !agentRequestInputItemsContain(request, want) {
 			t.Fatalf("explicit executor skill missing %q: %#v", want, request.InputItems)
 		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterExecutorSkillProviderCatalogReadAndResourceAccessLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	capabilityRoot := t.TempDir()
+	skillDir := filepath.Join(capabilityRoot, "plugin", "skills", "deploy")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: deploy\ndescription: Deploy through the executor.\n---\n\nEXECUTOR_MAIN_MARKER\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, SkillMetadataDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll(metadata) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename), []byte("policy:\n  allow_implicit_invocation: false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "details.md"), []byte("EXECUTOR_REFERENCE_MARKER\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(reference) error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store), Turns: turn.NewTurnService(), Agent: agent,
+		Config: configService, Skills: NewSkillsServiceWithOptions(&SkillsServiceOptions{Config: configService}),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+	authorityID := "demo-plugin@1"
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:                     t.TempDir(),
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{{ID: authorityID, Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}}},
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	mainResource := executorSkillDisplayPath(authorityID, filepath.Join(skillDir, SkillFilename))
+	packageID := executorSkillPackageID(mainResource)
+	referenceResource := strings.TrimRight(packageID, "/") + "/references/details.md"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "use [$deploy](" + mainResource + ")"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	for _, want := range []string{"EXECUTOR_MAIN_MARKER", "<resource_access>", `"kind":"executor"`, `"id":"` + authorityID + `"`, `"package":"` + packageID + `"`, `"main_resource":"` + mainResource + `"`} {
+		if !agentRequestInputItemsContain(request, want) {
+			t.Fatalf("explicit executor fragment missing %q: %#v", want, request.InputItems)
+		}
+	}
+	options := turn.DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.SkillProviders = router.executorSkillProviderForThread(threadID)
+	directRead, err := options.SkillProviders.Read(context.Background(), skillprovider.ReadRequest{
+		Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: authorityID},
+		PackageID: packageID,
+		Resource:  referenceResource,
+	})
+	if err != nil || !strings.Contains(directRead.Contents, "EXECUTOR_REFERENCE_MARKER") {
+		t.Fatalf("executor provider read = %#v error = %v", directRead, err)
+	}
+	registry, err := turn.BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	toolRouter := tool.NewRouter(registry)
+	listOutput, err := toolRouter.Dispatch(context.Background(), &tool.Invocation{CallID: "list", ToolName: tool.NamespacedName("skills", "list"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor"}}`}})
+	if err != nil {
+		t.Fatalf("skills.list error = %v", err)
+	}
+	var listed map[string]any
+	if err := json.Unmarshal([]byte(listOutput.Body), &listed); err != nil {
+		t.Fatalf("skills.list JSON = %v", err)
+	}
+	if skills, _ := listed["skills"].([]any); len(skills) != 0 {
+		t.Fatalf("explicit-only skill leaked into skills.list: %s", listOutput.Body)
+	}
+	readOutput, err := toolRouter.Dispatch(context.Background(), &tool.Invocation{CallID: "read", ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"` + authorityID + `"},"package":"` + packageID + `","resource":"` + referenceResource + `"}`}})
+	if err != nil {
+		t.Fatalf("skills.read error = %v", err)
+	}
+	if !strings.Contains(readOutput.Body, "EXECUTOR_REFERENCE_MARKER") {
+		t.Fatalf("skills.read output = %s", readOutput.Body)
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }

@@ -258,7 +258,11 @@ func TestResolveUnifiedExecEnvironmentMatchesRustWithoutTrimmingID(t *testing.T)
 
 func TestShellExecutorResolvesManagedNetworkForSelectedEnvironmentLikeRust(t *testing.T) {
 	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
-	var resolved []string
+	type resolvedEnvironment struct {
+		id     string
+		remote bool
+	}
+	var resolved []resolvedEnvironment
 	cwd := t.TempDir()
 	executor := NewShellExecutor(&ShellExecutorOptions{
 		Runner: runner,
@@ -267,26 +271,47 @@ func TestShellExecutorResolvesManagedNetworkForSelectedEnvironmentLikeRust(t *te
 			ApprovalPolicy: sandbox.ApprovalOnRequest,
 			CWD:            cwd,
 		},
-		UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "primary", CWD: cwd}, {ID: "remote", CWD: cwd}},
-		ManagedNetworkResolver: func(environmentID string) (map[string]string, *network.ProxyManagedNetworkSandboxContext, error) {
-			resolved = append(resolved, environmentID)
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "primary", CWD: cwd}, {ID: "remote", CWD: cwd, ExecServerURL: "ws://remote.invalid"}},
+		ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+			resolved = append(resolved, resolvedEnvironment{id: environmentID, remote: remote})
+			if remote {
+				timeoutMS := uint64(30_000)
+				return &ManagedNetworkResolution{
+					RemoteNetworkProxy: &execserver.RemoteNetworkProxyLaunchConfig{
+						Proxy:                   execserver.RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)},
+						EnvironmentID:           &environmentID,
+						PolicyDecisionTimeoutMS: &timeoutMS,
+					},
+					NetworkPolicyDecisionTimeout: 30 * time.Second,
+				}, nil
+			}
 			port := uint16(41000 + len(resolved))
-			return map[string]string{"HTTP_PROXY": "http://127.0.0.1:" + fmt.Sprint(port)}, &network.ProxyManagedNetworkSandboxContext{LoopbackPorts: []uint16{port}}, nil
+			return &ManagedNetworkResolution{
+				Env:            map[string]string{"HTTP_PROXY": "http://127.0.0.1:" + fmt.Sprint(port)},
+				ManagedNetwork: &network.ProxyManagedNetworkSandboxContext{LoopbackPorts: []uint16{port}},
+			}, nil
 		},
 	})
-	for _, arguments := range []string{`{"cmd":"echo primary"}`, `{"cmd":"echo remote","environment_id":"remote"}`} {
+	for index, arguments := range []string{`{"cmd":"echo primary"}`, `{"cmd":"echo remote","environment_id":"remote"}`} {
 		if _, err := executor.Execute(context.Background(), &Invocation{CallID: "call-network", ToolName: PlainName(DefaultExecCommandToolName), Payload: Payload{Kind: PayloadFunction, Arguments: arguments}}); err != nil {
 			t.Fatal(err)
 		}
-		if runner.request == nil || !runner.request.EnforceManagedNetwork || runner.request.ManagedNetwork == nil || len(runner.request.ManagedNetwork.LoopbackPorts) != 1 {
+		if runner.request == nil || !runner.request.EnforceManagedNetwork {
 			t.Fatalf("managed network request = %#v", runner.request)
 		}
-		port := runner.request.ManagedNetwork.LoopbackPorts[0]
-		if runner.request.Env["HTTP_PROXY"] != "http://127.0.0.1:"+fmt.Sprint(port) {
-			t.Fatalf("managed network env/context mismatch: %#v", runner.request)
+		if index == 0 {
+			if runner.request.ManagedNetwork == nil || len(runner.request.ManagedNetwork.LoopbackPorts) != 1 || runner.request.RemoteNetworkProxy != nil {
+				t.Fatalf("local managed network request = %#v", runner.request)
+			}
+			port := runner.request.ManagedNetwork.LoopbackPorts[0]
+			if runner.request.Env["HTTP_PROXY"] != "http://127.0.0.1:"+fmt.Sprint(port) {
+				t.Fatalf("local managed network env/context mismatch: %#v", runner.request)
+			}
+		} else if runner.request.RemoteNetworkProxy == nil || runner.request.ManagedNetwork != nil || runner.request.Env["HTTP_PROXY"] != "" || runner.request.RemoteNetworkProxy.EnvironmentID == nil || *runner.request.RemoteNetworkProxy.EnvironmentID != "remote" {
+			t.Fatalf("remote managed network launch request = %#v", runner.request)
 		}
 	}
-	if len(resolved) != 2 || resolved[0] != "primary" || resolved[1] != "remote" {
+	if len(resolved) != 2 || resolved[0] != (resolvedEnvironment{id: "primary"}) || resolved[1] != (resolvedEnvironment{id: "remote", remote: true}) {
 		t.Fatalf("resolved environment ids = %#v", resolved)
 	}
 }

@@ -958,6 +958,34 @@ func TestUpgradeMarketplaceRematerializesInstalledRemotePlugin(t *testing.T) {
 	}
 }
 
+func TestEnabledSkillRootsPreserveRemotePluginIdentityLikeRust(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skills", "review")
+	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("---\nname: review\ndescription: review\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewPluginService()
+	service.AddPlugin(PluginDetail{
+		Summary: PluginSummary{
+			ID:             "sample@openai-curated-remote",
+			Name:           "sample",
+			RemotePluginID: "plugins~Plugin_sample",
+			HasSkills:      true,
+			Installed:      true,
+			Enabled:        true,
+			Source:         PluginSource{Type: "local", Path: root},
+		},
+		ManifestPath: filepath.Join(root, ".codex-plugin", "plugin.json"),
+	})
+	roots := service.EnabledSkillRoots()
+	if len(roots) != 1 || roots[0].PluginID != "sample@openai-curated-remote" || roots[0].RemotePluginID != "plugins~Plugin_sample" {
+		t.Fatalf("enabled roots = %#v", roots)
+	}
+}
+
 func TestUpgradeMarketplaceClearsUninstalledMaterializedRemotePlugin(t *testing.T) {
 	home := t.TempDir()
 	service := NewPluginService()
@@ -1438,6 +1466,53 @@ func TestPluginInstallPolicyAndAuthApps(t *testing.T) {
 	}
 	if read.Plugin.Summary.Enabled {
 		t.Fatalf("plugin should be disabled after uninstall: %#v", read.Plugin.Summary)
+	}
+}
+
+type pluginShareBackendFunc func(*PluginShareSaveParams) (*PluginShareSaveResponse, error)
+
+func (f pluginShareBackendFunc) SaveShare(params *PluginShareSaveParams) (*PluginShareSaveResponse, error) {
+	return f(params)
+}
+
+func TestPluginShareBackendPropagatesWorkspacePublishCapability(t *testing.T) {
+	allowed := true
+	service := NewPluginService()
+	service.SetShareBackend(pluginShareBackendFunc(func(params *PluginShareSaveParams) (*PluginShareSaveResponse, error) {
+		if params.RemotePluginID != "local-id" || params.Discoverability != "PRIVATE" || len(params.ShareTargets) != 1 {
+			t.Fatalf("backend params = %#v", params)
+		}
+		return &PluginShareSaveResponse{
+			RemotePluginID:        "remote-id",
+			ShareURL:              "https://example.test/share/remote-id",
+			CanPublishToWorkspace: &allowed,
+		}, nil
+	}))
+	response, err := service.SaveShare(&PluginShareSaveParams{
+		RemotePluginID:  " local-id ",
+		Discoverability: " PRIVATE ",
+		Targets: []PluginSharePrincipal{{
+			Type: "workspace", ID: "workspace-1", Role: "reader",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.RemotePluginID != "remote-id" || response.CanPublishToWorkspace == nil || !*response.CanPublishToWorkspace {
+		t.Fatalf("response = %#v", response)
+	}
+	shares := service.ListShares(&PluginShareListParams{})
+	if len(shares.Items) != 1 || shares.Items[0].CanPublishToWorkspace == nil || !*shares.Items[0].CanPublishToWorkspace {
+		t.Fatalf("shares = %#v", shares.Items)
+	}
+
+	fallback := NewPluginService()
+	fallbackResponse, err := fallback.SaveShare(&PluginShareSaveParams{RemotePluginID: "offline"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallbackResponse.CanPublishToWorkspace != nil {
+		t.Fatalf("offline capability = %#v, want nil", fallbackResponse.CanPublishToWorkspace)
 	}
 }
 

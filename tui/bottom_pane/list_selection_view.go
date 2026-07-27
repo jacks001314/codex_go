@@ -20,17 +20,18 @@ type ListSelectionToggle struct {
 }
 
 type ListSelectionItem struct {
-	ID                  string
-	Label               string
-	Description         string
-	SelectedDescription string
-	SearchValue         string
-	Disabled            bool
-	DisabledReason      string
-	Current             bool
-	Default             bool
-	DismissOnSelect     bool
-	Toggle              *ListSelectionToggle
+	ID                   string
+	Label                string
+	Description          string
+	SelectedDescription  string
+	SearchValue          string
+	Disabled             bool
+	DisabledReason       string
+	DisabledGutterMarker string
+	Current              bool
+	Default              bool
+	DismissOnSelect      bool
+	Toggle               *ListSelectionToggle
 }
 
 type ListSelectionResult struct {
@@ -55,6 +56,7 @@ type ListSelectionView struct {
 	MaxRows           int
 	ColumnWidth       ColumnWidthConfig
 	RowDisplay        SelectionRowDisplay
+	DescriptionLayout SelectionDescriptionLayout
 	AllowCancel       bool
 	lastSearchable    bool
 }
@@ -289,7 +291,7 @@ func (v *ListSelectionView) Rows(width int) []string {
 	}
 	displayRows := v.DisplayRows()
 	state := v.State
-	rendered := RenderGenericRows(displayRows, state, v.maxRows(), "no matches", width, v.ColumnWidth)
+	rendered := RenderGenericRowsWithDescriptionLayout(displayRows, state, v.maxRows(), "no matches", width, v.ColumnWidth, v.DescriptionLayout)
 	if v.RowDisplay == SelectionRowDisplaySingleLine {
 		rendered = RenderGenericRowsSingleLine(displayRows, state, v.maxRows(), "no matches", width, v.ColumnWidth)
 	}
@@ -308,10 +310,24 @@ func (v *ListSelectionView) DisplayRows() []GenericDisplayRow {
 		return nil
 	}
 	rows := make([]GenericDisplayRow, 0, len(v.FilteredIndices))
+	enabledNumber := 0
+	enabledNumberWidth := len(fmt.Sprintf("%d", max(len(v.FilteredIndices), 1)))
 	for visibleIdx, actualIdx := range v.FilteredIndices {
 		item := v.Items[actualIdx]
 		label := firstNonEmptyString(item.Label, item.ID)
-		prefix := fmt.Sprintf("%d. ", visibleIdx+1)
+		isDisabled := !selectionItemEnabled(item)
+		prefix := ""
+		if isDisabled {
+			if item.DisabledGutterMarker != "" {
+				markerWidth := lenColumnsSelection(item.DisabledGutterMarker)
+				prefix = strings.Repeat(" ", max(enabledNumberWidth-markerWidth, 0)) + item.DisabledGutterMarker + "  "
+			} else {
+				prefix = strings.Repeat(" ", enabledNumberWidth+2)
+			}
+		} else {
+			enabledNumber++
+			prefix = fmt.Sprintf("%*d. ", enabledNumberWidth, enabledNumber)
+		}
 		if item.Toggle != nil {
 			if item.Toggle.Placeholder != "" {
 				prefix += item.Toggle.Placeholder
@@ -341,7 +357,7 @@ func (v *ListSelectionView) DisplayRows() []GenericDisplayRow {
 			Description:    description,
 			CategoryTag:    tag,
 			DisabledReason: item.DisabledReason,
-			IsDisabled:     item.Disabled || item.DisabledReason != "",
+			IsDisabled:     isDisabled,
 			WrapIndent:     wrapIndent,
 		})
 	}

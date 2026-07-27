@@ -108,6 +108,68 @@ service_tier = "auto"
 	}
 }
 
+func TestLoadRequirementsFileParsesManagedMCPAndPluginMatchersLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	body := `
+[mcp_servers.docs.identity]
+url = "https://docs.example/mcp"
+
+[mcp_servers.shell.identity.command]
+executable = "company-cli"
+args = [
+  { match = "exact", value = "approved" },
+  { match = "prefix", value = "tenant-" },
+  { match = "regex", expression = "[a-z]+-[0-9]+" },
+]
+
+[plugins."no-allowlist@test"]
+
+[plugins."empty@test".mcp_servers]
+
+[plugins."sample@test".mcp_servers.plugin_docs.identity]
+url = "https://plugin.example/mcp"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	requirements, err := LoadRequirementsFile(path)
+	if err != nil {
+		t.Fatalf("LoadRequirementsFile() error = %v", err)
+	}
+	if requirements == nil || len(requirements.MCPServers) != 2 || len(requirements.Plugins) != 3 {
+		t.Fatalf("requirements = %#v", requirements)
+	}
+	if !requirements.MCPServers["docs"].Matches("", nil, "https://docs.example/mcp") {
+		t.Fatal("exact URL requirement did not match")
+	}
+	if !requirements.MCPServers["shell"].Matches("company-cli", []string{"approved", "tenant-one", "alpha-42"}, "") {
+		t.Fatal("command matcher requirement did not match")
+	}
+	if requirements.MCPServers["shell"].Matches("company-cli", []string{"approved", "tenant-one", "prefix-alpha-42-suffix"}, "") {
+		t.Fatal("regex matcher was not full-value anchored")
+	}
+	if requirements.Plugins["no-allowlist@test"].MCPServers != nil {
+		t.Fatal("absent plugin allowlist became configured")
+	}
+	if allowlist := requirements.Plugins["empty@test"].MCPServers; allowlist == nil || len(*allowlist) != 0 {
+		t.Fatalf("explicit empty plugin allowlist = %#v", allowlist)
+	}
+}
+
+func TestLoadRequirementsFileRejectsInvalidMCPMatcher(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	body := `[mcp_servers.docs.identity.url]
+match = "regex"
+expression = "["
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	if _, err := LoadRequirementsFile(path); err == nil || !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("LoadRequirementsFile() error = %v", err)
+	}
+}
+
 func TestLoadRequirementsFileMissingReturnsNil(t *testing.T) {
 	requirements, err := LoadRequirementsFile(filepath.Join(t.TempDir(), "requirements.toml"))
 	if err != nil {

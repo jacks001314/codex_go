@@ -24,6 +24,7 @@ type SkillInvocationEventParams struct {
 	ProductClientID *string `json:"product_client_id"`
 	SkillScope      *string `json:"skill_scope"`
 	PluginID        *string `json:"plugin_id"`
+	RemotePluginID  *string `json:"remote_plugin_id"`
 	RepoURL         *string `json:"repo_url"`
 	ThreadID        *string `json:"thread_id"`
 	TurnID          *string `json:"turn_id"`

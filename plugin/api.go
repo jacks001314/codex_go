@@ -486,6 +486,7 @@ func (s *PluginSkill) MarshalJSON() ([]byte, error) {
 
 type EnabledSkillRoot struct {
 	PluginID        string
+	RemotePluginID  string
 	PluginNamespace string
 	Root            string
 }
@@ -1064,33 +1065,36 @@ type PluginShareTarget struct {
 }
 
 type PluginShareContext struct {
-	RemotePluginID       string                 `json:"remotePluginId"`
-	RemoteVersion        *string                `json:"remoteVersion"`
-	Discoverability      *string                `json:"discoverability"`
-	ShareURL             *string                `json:"shareUrl"`
-	CreatorAccountUserID *string                `json:"creatorAccountUserId"`
-	CreatorName          *string                `json:"creatorName"`
-	SharePrincipals      []PluginSharePrincipal `json:"sharePrincipals"`
-	Principals           []PluginSharePrincipal `json:"principals,omitempty"`
+	RemotePluginID        string                 `json:"remotePluginId"`
+	RemoteVersion         *string                `json:"remoteVersion"`
+	Discoverability       *string                `json:"discoverability"`
+	ShareURL              *string                `json:"shareUrl"`
+	CreatorAccountUserID  *string                `json:"creatorAccountUserId"`
+	CreatorName           *string                `json:"creatorName"`
+	SharePrincipals       []PluginSharePrincipal `json:"sharePrincipals"`
+	Principals            []PluginSharePrincipal `json:"principals,omitempty"`
+	CanPublishToWorkspace *bool                  `json:"canPublishToWorkspace,omitempty"`
 }
 
 func (c *PluginShareContext) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		RemotePluginID       string                 `json:"remotePluginId"`
-		RemoteVersion        *string                `json:"remoteVersion"`
-		Discoverability      *string                `json:"discoverability"`
-		ShareURL             *string                `json:"shareUrl"`
-		CreatorAccountUserID *string                `json:"creatorAccountUserId"`
-		CreatorName          *string                `json:"creatorName"`
-		SharePrincipals      []PluginSharePrincipal `json:"sharePrincipals"`
+		RemotePluginID        string                 `json:"remotePluginId"`
+		RemoteVersion         *string                `json:"remoteVersion"`
+		Discoverability       *string                `json:"discoverability"`
+		ShareURL              *string                `json:"shareUrl"`
+		CreatorAccountUserID  *string                `json:"creatorAccountUserId"`
+		CreatorName           *string                `json:"creatorName"`
+		SharePrincipals       []PluginSharePrincipal `json:"sharePrincipals"`
+		CanPublishToWorkspace *bool                  `json:"canPublishToWorkspace"`
 	}{
-		RemotePluginID:       c.RemotePluginID,
-		RemoteVersion:        c.RemoteVersion,
-		Discoverability:      c.Discoverability,
-		ShareURL:             c.ShareURL,
-		CreatorAccountUserID: c.CreatorAccountUserID,
-		CreatorName:          c.CreatorName,
-		SharePrincipals:      pluginSharePrincipalsPtrForJSON(c.SharePrincipals),
+		RemotePluginID:        c.RemotePluginID,
+		RemoteVersion:         c.RemoteVersion,
+		Discoverability:       c.Discoverability,
+		ShareURL:              c.ShareURL,
+		CreatorAccountUserID:  c.CreatorAccountUserID,
+		CreatorName:           c.CreatorName,
+		SharePrincipals:       pluginSharePrincipalsPtrForJSON(c.SharePrincipals),
+		CanPublishToWorkspace: cloneBoolPtr(c.CanPublishToWorkspace),
 	})
 }
 
@@ -1121,8 +1125,9 @@ func (p *PluginShareSaveParams) MarshalJSON() ([]byte, error) {
 }
 
 type PluginShareSaveResponse struct {
-	RemotePluginID string `json:"remotePluginId"`
-	ShareURL       string `json:"shareUrl"`
+	RemotePluginID        string `json:"remotePluginId"`
+	ShareURL              string `json:"shareUrl"`
+	CanPublishToWorkspace *bool  `json:"canPublishToWorkspace"`
 }
 
 type PluginShareUpdateTargetsParams struct {
@@ -1227,6 +1232,10 @@ type PluginShareDeleteParams struct {
 
 type PluginShareDeleteResponse struct{}
 
+type PluginShareBackend interface {
+	SaveShare(*PluginShareSaveParams) (*PluginShareSaveResponse, error)
+}
+
 type PluginService struct {
 	mu                            sync.Mutex
 	marketplaces                  map[string]Marketplace
@@ -1241,6 +1250,16 @@ type PluginService struct {
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
+	shareBackend                  PluginShareBackend
+}
+
+func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.shareBackend = backend
+	s.mu.Unlock()
 }
 
 func NewPluginService() *PluginService {
@@ -2330,6 +2349,7 @@ func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 		}
 		roots = append(roots, EnabledSkillRoot{
 			PluginID:        detail.Summary.ID,
+			RemotePluginID:  detail.Summary.RemotePluginID,
 			PluginNamespace: firstNonEmpty(detail.Summary.Name, detail.Summary.ID),
 			Root:            filepath.Join(pluginRoot, "skills"),
 		})
@@ -2460,7 +2480,6 @@ func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *Pl
 	destination := marketplacePluginInstallDestination(installRoot, detail.Summary.MarketplaceName, detail.Summary.Name)
 	pluginSubdir = marketplacePluginSubdirForMaterialization(pluginSubdir, destination)
 	pluginRoot := materializedMarketplacePluginRoot(destination, pluginSubdir)
-	manifestPath := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
 	plugin := marketplaceManifestPlugin{
 		Name:         detail.Summary.Name,
 		Source:       marketplacePluginSourceFromSummary(&detail.Summary.Source, pluginSubdir),
@@ -2491,7 +2510,7 @@ func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *Pl
 		return materialized
 	}
 	if !force {
-		if manifest := readPluginManifestFile(manifestPath); manifest != nil {
+		if manifest := readPluginManifestForRoot(pluginRoot); manifest != nil {
 			materialized := detailFromManifest(manifest)
 			return &materialized, nil
 		}
@@ -2504,9 +2523,9 @@ func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *Pl
 	if err := materializer.MaterializeMarketplacePlugin(source, destination); err != nil {
 		return nil, err
 	}
-	manifest := readPluginManifestFile(manifestPath)
+	manifest := readPluginManifestForRoot(pluginRoot)
 	if manifest == nil {
-		return nil, fmt.Errorf("%w: materialized marketplace plugin %q has no .codex-plugin/plugin.json", ErrInvalidPluginRequest, detail.Summary.ID)
+		return nil, fmt.Errorf("%w: materialized marketplace plugin %q has no supported plugin manifest", ErrInvalidPluginRequest, detail.Summary.ID)
 	}
 	materialized := detailFromManifest(manifest)
 	return &materialized, nil
@@ -2659,17 +2678,46 @@ func (s *PluginService) SaveShare(params *PluginShareSaveParams) (*PluginShareSa
 	}
 	targets = normalizePluginSharePrincipals(targets)
 	discoverability := strings.TrimSpace(params.Discoverability)
-	shareURL := "https://chatgpt.com/codex/plugins/" + remoteID
+	normalizedParams := &PluginShareSaveParams{
+		PluginPath:      strings.TrimSpace(params.PluginPath),
+		RemotePluginID:  remoteID,
+		Discoverability: discoverability,
+		ShareTargets:    append([]PluginSharePrincipal(nil), targets...),
+	}
+	s.mu.Lock()
+	backend := s.shareBackend
+	s.mu.Unlock()
+	response := &PluginShareSaveResponse{
+		RemotePluginID: remoteID,
+		ShareURL:       "https://chatgpt.com/codex/plugins/" + remoteID,
+	}
+	if backend != nil {
+		remoteResponse, err := backend.SaveShare(normalizedParams)
+		if err != nil {
+			return nil, err
+		}
+		if remoteResponse == nil {
+			return nil, fmt.Errorf("%w: plugin share backend returned an empty response", ErrInvalidPluginRequest)
+		}
+		response = &PluginShareSaveResponse{
+			RemotePluginID:        firstNonEmpty(strings.TrimSpace(remoteResponse.RemotePluginID), remoteID),
+			ShareURL:              strings.TrimSpace(remoteResponse.ShareURL),
+			CanPublishToWorkspace: cloneBoolPtr(remoteResponse.CanPublishToWorkspace),
+		}
+		remoteID = response.RemotePluginID
+	}
+	shareURL := response.ShareURL
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.shares[remoteID] = PluginShareContext{
-		RemotePluginID:  remoteID,
-		Discoverability: stringPtrIfNotEmpty(discoverability),
-		ShareURL:        &shareURL,
-		SharePrincipals: append([]PluginSharePrincipal(nil), targets...),
-		Principals:      append([]PluginSharePrincipal(nil), targets...),
+		RemotePluginID:        remoteID,
+		Discoverability:       stringPtrIfNotEmpty(discoverability),
+		ShareURL:              stringPtrIfNotEmpty(shareURL),
+		SharePrincipals:       append([]PluginSharePrincipal(nil), targets...),
+		Principals:            append([]PluginSharePrincipal(nil), targets...),
+		CanPublishToWorkspace: cloneBoolPtr(response.CanPublishToWorkspace),
 	}
-	return &PluginShareSaveResponse{RemotePluginID: remoteID, ShareURL: shareURL}, nil
+	return response, nil
 }
 
 func (s *PluginService) UpdateShareTargets(params *PluginShareUpdateTargetsParams) (*PluginShareUpdateTargetsResponse, error) {
@@ -2985,6 +3033,10 @@ func sanitize(value string) string {
 }
 
 func pluginRootFromManifestPath(path string) string {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if filepath.Base(clean) == AgentPluginManifestRelativePath && filepath.Base(filepath.Dir(clean)) != ".codex-plugin" && filepath.Base(filepath.Dir(clean)) != ".claude-plugin" && filepath.Base(filepath.Dir(clean)) != ".cursor-plugin" {
+		return filepath.Dir(clean)
+	}
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
@@ -3379,6 +3431,7 @@ func cloneShare(share PluginShareContext) PluginShareContext {
 		value := *share.CreatorName
 		share.CreatorName = &value
 	}
+	share.CanPublishToWorkspace = cloneBoolPtr(share.CanPublishToWorkspace)
 	share.SharePrincipals = append([]PluginSharePrincipal(nil), share.SharePrincipals...)
 	share.Principals = append([]PluginSharePrincipal(nil), share.Principals...)
 	return share

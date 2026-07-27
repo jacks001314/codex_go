@@ -11,28 +11,31 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/network"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 )
 
 type Client struct {
-	conn        clientConnection
-	url         string
-	clientName  string
-	sessionID   string
-	open        clientConnectionOpener
-	cleanup     func()
-	writeMu     sync.Mutex
-	recoverMu   sync.Mutex
-	mu          sync.Mutex
-	nextID      int64
-	nextHTTPID  uint64
-	pending     map[int64]chan clientCallResult
-	sessions    map[string]*clientProcessSession
-	httpStreams map[string]*HTTPBodyStream
-	done        chan struct{}
-	closeOnce   sync.Once
-	closed      bool
+	conn         clientConnection
+	url          string
+	clientName   string
+	sessionID    string
+	open         clientConnectionOpener
+	cleanup      func()
+	writeMu      sync.Mutex
+	recoverMu    sync.Mutex
+	mu           sync.Mutex
+	nextID       int64
+	nextHTTPID   uint64
+	pending      map[int64]chan clientCallResult
+	sessions     map[string]*clientProcessSession
+	httpStreams  map[string]*HTTPBodyStream
+	inboundIDs   map[int64]struct{}
+	inboundSlots chan struct{}
+	done         chan struct{}
+	closeOnce    sync.Once
+	closed       bool
 }
 
 type clientConnection interface {
@@ -155,6 +158,15 @@ type clientProcessSession struct {
 	pending       map[uint64]ProcessEvent
 	subscription  *ProcessEventSubscription
 	closed        bool
+	policyMu      sync.Mutex
+	policy        *networkPolicyDecisionController
+	policyDone    chan struct{}
+	policyOnce    sync.Once
+}
+
+type networkPolicyDecisionController struct {
+	decider network.ProxyPolicyDecider
+	timeout time.Duration
 }
 
 type HTTPBodyStream struct {
@@ -227,14 +239,16 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		clientName = "codex-go-unified-exec"
 	}
 	client := &Client{
-		url:         url,
-		clientName:  clientName,
-		nextID:      1,
-		nextHTTPID:  1,
-		pending:     map[int64]chan clientCallResult{},
-		sessions:    map[string]*clientProcessSession{},
-		httpStreams: map[string]*HTTPBodyStream{},
-		done:        make(chan struct{}),
+		url:          url,
+		clientName:   clientName,
+		nextID:       1,
+		nextHTTPID:   1,
+		pending:      map[int64]chan clientCallResult{},
+		sessions:     map[string]*clientProcessSession{},
+		httpStreams:  map[string]*HTTPBodyStream{},
+		inboundIDs:   map[int64]struct{}{},
+		inboundSlots: make(chan struct{}, MaxInFlightServerRequests),
+		done:         make(chan struct{}),
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
 		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient)
@@ -564,7 +578,7 @@ func (c *Client) SubscribeProcessEvents(processID string) (*ProcessEventSubscrip
 	if _, exists := c.sessions[processID]; exists {
 		return nil, fmt.Errorf("process event subscription already exists for %s", processID)
 	}
-	session := &clientProcessSession{pending: map[uint64]ProcessEvent{}}
+	session := &clientProcessSession{pending: map[uint64]ProcessEvent{}, policyDone: make(chan struct{})}
 	subscription := &ProcessEventSubscription{
 		client:    c,
 		processID: processID,
@@ -624,7 +638,60 @@ func (s *ProcessEventSubscription) Close() {
 		}
 		s.client.mu.Unlock()
 	}
+	s.session.cancelNetworkPolicy()
 	s.close(errors.New("process event subscription is closed"))
+}
+
+func (c *Client) RegisterNetworkPolicyController(processID string, timeout time.Duration, decider network.ProxyPolicyDecider) error {
+	if c == nil {
+		return errors.New("exec-server client is closed")
+	}
+	processID = strings.TrimSpace(processID)
+	if processID == "" || len(processID) > MaxNetworkPolicyProcessIDBytes {
+		return fmt.Errorf("process id must be 1..%d bytes", MaxNetworkPolicyProcessIDBytes)
+	}
+	if timeout <= 0 {
+		return errors.New("network policy decision timeout must be positive")
+	}
+	if decider == nil {
+		return errors.New("network policy decider is required")
+	}
+	c.mu.Lock()
+	session := c.sessions[processID]
+	c.mu.Unlock()
+	if session == nil {
+		return fmt.Errorf("unknown process id %s", processID)
+	}
+	session.policyMu.Lock()
+	defer session.policyMu.Unlock()
+	select {
+	case <-session.policyDone:
+		return fmt.Errorf("process id %s is closed", processID)
+	default:
+	}
+	session.policy = &networkPolicyDecisionController{decider: decider, timeout: timeout}
+	return nil
+}
+
+func (s *clientProcessSession) networkPolicySnapshot() (*networkPolicyDecisionController, <-chan struct{}) {
+	if s == nil {
+		return nil, nil
+	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	return s.policy, s.policyDone
+}
+
+func (s *clientProcessSession) cancelNetworkPolicy() {
+	if s == nil {
+		return
+	}
+	s.policyOnce.Do(func() {
+		s.policyMu.Lock()
+		s.policy = nil
+		close(s.policyDone)
+		s.policyMu.Unlock()
+	})
 }
 
 func (s *ProcessEventSubscription) publish(event ProcessEvent) {
@@ -1294,6 +1361,8 @@ func (c *Client) write(ctx context.Context, data []byte) error {
 }
 
 func (c *Client) readLoop(conn clientConnection) {
+	connectionDone := make(chan struct{})
+	defer close(connectionDone)
 	for {
 		data, err := conn.Read(context.Background())
 		if err != nil {
@@ -1309,14 +1378,34 @@ func (c *Client) readLoop(conn clientConnection) {
 			_ = c.failTransport(conn, err)
 			return
 		}
-		id, ok := clientResponseID(envelope.ID)
-		if !ok {
-			if envelope.Method != "" {
+		if envelope.Method != "" {
+			if len(envelope.ID) == 0 {
 				if err := c.handleNotification(envelope.Method, envelope.Params); err != nil {
 					_ = c.failTransport(conn, err)
 					return
 				}
+				continue
 			}
+			id, ok := clientResponseID(envelope.ID)
+			if !ok || id < 0 {
+				_ = c.failTransport(conn, errors.New("exec-server sent an invalid request ID"))
+				return
+			}
+			if !c.admitInboundRequest(id) {
+				_ = c.failTransport(conn, errors.New("exec-server reused an in-flight request ID"))
+				return
+			}
+			select {
+			case c.inboundSlots <- struct{}{}:
+				go c.handleInboundRequest(conn, connectionDone, id, envelope.Method, envelope.Params)
+			default:
+				c.releaseInboundRequest(id, false)
+				go c.respondInboundResult(conn, id, &NetworkPolicyRequestResponse{Decision: DenyNetworkPolicyDecision(NetworkPolicyDenialReason)})
+			}
+			continue
+		}
+		id, ok := clientResponseID(envelope.ID)
+		if !ok {
 			continue
 		}
 		var response clientResponse
@@ -1331,6 +1420,125 @@ func (c *Client) readLoop(conn clientConnection) {
 		if responseCh != nil {
 			responseCh <- clientCallResult{response: response}
 		}
+	}
+}
+
+func (c *Client) admitInboundRequest(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.inboundIDs[id]; exists {
+		return false
+	}
+	c.inboundIDs[id] = struct{}{}
+	return true
+}
+
+func (c *Client) releaseInboundRequest(id int64, releaseSlot bool) {
+	c.mu.Lock()
+	delete(c.inboundIDs, id)
+	c.mu.Unlock()
+	if releaseSlot {
+		<-c.inboundSlots
+	}
+}
+
+func (c *Client) handleInboundRequest(conn clientConnection, connectionDone <-chan struct{}, id int64, method string, raw json.RawMessage) {
+	defer c.releaseInboundRequest(id, true)
+	if method != MethodNetworkPolicyRequest {
+		c.respondInboundError(conn, id, -32601, fmt.Sprintf("exec-server client does not implement `%s` yet", method))
+		return
+	}
+	var params NetworkPolicyRequestParams
+	if err := json.Unmarshal(raw, &params); err != nil || !validExecServerNetworkProtocol(params.Request.Protocol) {
+		c.respondInboundError(conn, id, -32602, "invalid network policy request params")
+		return
+	}
+	validProcess := params.ProcessID != "" && len(params.ProcessID) <= MaxNetworkPolicyProcessIDBytes
+	validHost := params.Request.Host != "" && len(params.Request.Host) <= MaxNetworkPolicyHostBytes && !containsControlOrWhitespace(params.Request.Host) && params.Request.Port != 0
+	c.mu.Lock()
+	session := c.sessions[params.ProcessID]
+	c.mu.Unlock()
+	var controller *networkPolicyDecisionController
+	var processDone <-chan struct{}
+	if validProcess && validHost && session != nil {
+		controller, processDone = session.networkPolicySnapshot()
+	}
+	decision := network.DenyProxyDecision(NetworkPolicyDenialReason)
+	if controller != nil && controller.decider != nil && processDone != nil {
+		decisionCh := make(chan network.ProxyDecision, 1)
+		requestCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() { decisionCh <- controller.decider.Decide(requestCtx, params.Request.ProxyRequest("")) }()
+		timer := time.NewTimer(controller.timeout)
+		defer timer.Stop()
+		select {
+		case <-connectionDone:
+			return
+		case <-processDone:
+		case <-timer.C:
+		case decision = <-decisionCh:
+		}
+	}
+	if session != nil {
+		c.mu.Lock()
+		current := c.sessions[params.ProcessID]
+		c.mu.Unlock()
+		if current != session {
+			return
+		}
+	}
+	c.respondInboundResult(conn, id, &NetworkPolicyRequestResponse{Decision: execServerDecisionFromProxy(decision)})
+}
+
+func validExecServerNetworkProtocol(protocol ExecServerNetworkProtocol) bool {
+	switch protocol {
+	case NetworkProtocolHTTP, NetworkProtocolHTTPSConnect, NetworkProtocolSOCKS5TCP, NetworkProtocolSOCKS5UDP:
+		return true
+	default:
+		return false
+	}
+}
+
+func execServerDecisionFromProxy(decision network.ProxyDecision) ExecServerNetworkPolicyDecision {
+	if decision.Allow {
+		return AllowNetworkPolicyDecision()
+	}
+	reason := decision.Reason
+	if reason == "" || len(reason) > MaxNetworkPolicyReasonBytes || containsControl(reason) {
+		reason = NetworkPolicyDenialReason
+	}
+	if decision.Decision == network.ProxyPolicyDecisionAsk {
+		return AskNetworkPolicyDecision(reason)
+	}
+	return DenyNetworkPolicyDecision(reason)
+}
+
+func (c *Client) respondInboundResult(conn clientConnection, id int64, result any) {
+	c.respondInbound(conn, map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+func (c *Client) respondInboundError(conn clientConnection, id int64, code int, message string) {
+	c.respondInbound(conn, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+}
+
+func (c *Client) respondInbound(conn clientConnection, response any) {
+	data, err := json.Marshal(response)
+	if err != nil {
+		return
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.mu.Lock()
+	current := c.conn
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || current != conn {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, data); err != nil {
+		_ = c.failTransport(conn, err)
 	}
 }
 
@@ -1508,6 +1716,7 @@ func failClientInFlight(
 	}
 	for _, session := range sessions {
 		if session != nil && session.subscription != nil {
+			session.cancelNetworkPolicy()
 			session.subscription.close(err)
 		}
 	}
@@ -1602,6 +1811,7 @@ func (c *Client) failProcessSessions(err error) {
 	c.mu.Unlock()
 	for _, session := range sessions {
 		if session != nil && session.subscription != nil {
+			session.cancelNetworkPolicy()
 			session.subscription.close(err)
 		}
 	}
@@ -1614,6 +1824,7 @@ func (c *Client) failProcessSession(processID string, session *clientProcessSess
 	}
 	c.mu.Unlock()
 	if session != nil && session.subscription != nil {
+		session.cancelNetworkPolicy()
 		session.subscription.close(err)
 	}
 }

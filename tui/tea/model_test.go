@@ -17,6 +17,7 @@ import (
 	"codex_go/review"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 	"codex_go/utils"
@@ -294,10 +295,10 @@ func TestModelSlashEditorOpensExternalEditor(t *testing.T) {
 	}
 }
 
-func TestModelKeymapCommandRendersCatalog(t *testing.T) {
+func TestModelKeymapListCommandRendersCatalog(t *testing.T) {
 	model := NewModel(nil, Options{})
 
-	typeText(t, model, "/keymap")
+	typeText(t, model, "/keymap list")
 	model.Update(key(bubbletea.KeyEnter))
 	if got := len(model.State.Messages); got != 1 {
 		t.Fatalf("messages len = %d, want 1", got)
@@ -319,6 +320,66 @@ func TestModelKeymapCommandRendersCatalog(t *testing.T) {
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("/keymap should not submit prompts: %#v", model.SubmittedPrompts())
 	}
+}
+
+func TestModelKeymapCommandOpensGuidedPickerAndCapturesKey(t *testing.T) {
+	var edits []codextui.KeymapEdit
+	model := NewModel(nil, Options{
+		OnKeymapEdit: func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
+			edits = append(edits, edit)
+			next := modelKeymapConfigAfterEdit(t, nil, edit)
+			return next, "saved keymap", nil
+		},
+	})
+
+	typeText(t, model, "/keymap")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID {
+		t.Fatalf("/keymap modal = %#v", model.modal)
+	}
+	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "global:open_transcript")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.id != chatwidget.KeymapActionMenuViewID {
+		t.Fatalf("action modal = %#v", model.modal)
+	}
+	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "set")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.keymapCapture == nil {
+		t.Fatalf("capture modal = %#v", model.modal)
+	}
+	model.Update(key(bubbletea.KeyCtrlK))
+	if len(edits) != 1 || edits[0].Context != "global" || edits[0].Action != "open_transcript" || !reflect.DeepEqual(edits[0].Bindings, []string{"ctrl-k"}) {
+		t.Fatalf("guided keymap edits = %#v", edits)
+	}
+	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID || model.notice != "saved keymap" {
+		t.Fatalf("post-capture modal=%#v notice=%q", model.modal, model.notice)
+	}
+}
+
+func modalOptionIndexByID(t *testing.T, options []ModalOption, id string) int {
+	t.Helper()
+	for index, option := range options {
+		if option.ID == id {
+			return index
+		}
+	}
+	t.Fatalf("modal option %q missing from %#v", id, options)
+	return -1
+}
+
+func modelKeymapConfigAfterEdit(t *testing.T, current *codextui.KeymapConfig, edit codextui.KeymapEdit) *codextui.KeymapConfig {
+	t.Helper()
+	next := current.Clone()
+	var err error
+	if edit.Operation == codextui.KeymapEditUnset {
+		err = next.Unset(edit.Context, edit.Action)
+	} else {
+		err = next.Set(edit.Context, edit.Action, edit.Bindings)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
 }
 
 func TestModelKeymapCommandAppliesRuntimeRemap(t *testing.T) {
@@ -2750,6 +2811,112 @@ func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) 
 	}
 }
 
+func TestModelBareUnifiedMentionResetsFileSearch(t *testing.T) {
+	queries := []string{}
+	model := NewModel(codextui.NewState(nil), Options{
+		SessionPickerCWD: `D:\repo`,
+		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+			queries = append(queries, query)
+			if cwd != `D:\repo` || cancellationToken != "tui-mentions-v2" {
+				t.Fatalf("search cwd/token = %q/%q", cwd, cancellationToken)
+			}
+			return appserver.FuzzyFileSearchResponse{}, nil
+		},
+	})
+
+	_, cmd := model.Update(runes("@"))
+	runTeaCmd(t, model, cmd)
+	if !reflect.DeepEqual(queries, []string{""}) {
+		t.Fatalf("queries = %#v, want one empty reset", queries)
+	}
+	if model.mentionPopup == nil || model.mentionPopup.Query != "" {
+		t.Fatalf("mention popup = %#v", model.mentionPopup)
+	}
+}
+
+func TestModelReopeningIdenticalUnifiedMentionRestartsFileSearch(t *testing.T) {
+	queries := []string{}
+	model := NewModel(codextui.NewState(nil), Options{
+		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+			queries = append(queries, query)
+			return appserver.FuzzyFileSearchResponse{}, nil
+		},
+	})
+	model.composer.SetValue("@foo @foo")
+	model.composer.SetCursor(4)
+	runTeaCmd(t, model, model.refreshSkillPopup())
+	if !reflect.DeepEqual(queries, []string{"", "foo"}) {
+		t.Fatalf("first queries = %#v", queries)
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.mentionPopup != nil {
+		t.Fatal("mention popup should close on escape")
+	}
+
+	model.composer.SetCursor(len([]rune("@foo @foo")))
+	runTeaCmd(t, model, model.refreshSkillPopup())
+	if !reflect.DeepEqual(queries, []string{"", "foo", "", "foo"}) {
+		t.Fatalf("reopen queries = %#v", queries)
+	}
+}
+
+func TestModelRestoredUnifiedMentionRestartsFileSearch(t *testing.T) {
+	queries := []string{}
+	model := NewModel(codextui.NewState(nil), Options{
+		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+			queries = append(queries, query)
+			return appserver.FuzzyFileSearchResponse{}, nil
+		},
+	})
+
+	_, cmd := model.Update(ExternalEditorFinishedMsg{Text: "@foo"})
+	runTeaCmd(t, model, cmd)
+	if !reflect.DeepEqual(queries, []string{"", "foo"}) {
+		t.Fatalf("restored queries = %#v", queries)
+	}
+	if model.mentionPopup == nil || model.mentionPopup.Query != "foo" {
+		t.Fatalf("restored mention popup = %#v", model.mentionPopup)
+	}
+}
+
+func TestModelOpenUnifiedMentionRefreshesSkillAndPluginCatalog(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	model.composer.SetValue("@")
+	model.composer.CursorEnd()
+	model.refreshSkillPopup()
+	if model.mentionPopup == nil {
+		t.Fatal("mention popup did not open")
+	}
+
+	model.applySkillsInventoryResult(SkillsInventoryResultMsg{Response: appserver.SkillsListResponse{Skills: []appserver.SkillsListEntry{{
+		Name: "docs", Path: "skills/docs/SKILL.md", Enabled: true,
+	}}}})
+	model.applyMentionPluginInventoryResult(MentionPluginInventoryResultMsg{Response: plugin.PluginListResponse{Plugins: []plugin.PluginSummary{{
+		ID: "search@team", Name: "search", DisplayName: "Search", Installed: true, Enabled: true,
+	}}}})
+	if got := unifiedMentionRowNames(model.mentionPopup.Rows()); !reflect.DeepEqual(got, []string{"Search", "docs"}) {
+		t.Fatalf("initial rows = %#v", got)
+	}
+
+	model.applySkillsInventoryResult(SkillsInventoryResultMsg{Response: appserver.SkillsListResponse{Skills: []appserver.SkillsListEntry{{
+		Name: "review", Path: "skills/review/SKILL.md", Enabled: true,
+	}}}})
+	model.applyMentionPluginInventoryResult(MentionPluginInventoryResultMsg{Response: plugin.PluginListResponse{Plugins: []plugin.PluginSummary{{
+		ID: "calendar@team", Name: "calendar", DisplayName: "Calendar", Installed: true, Enabled: true,
+	}}}})
+	if got := unifiedMentionRowNames(model.mentionPopup.Rows()); !reflect.DeepEqual(got, []string{"Calendar", "review"}) {
+		t.Fatalf("refreshed rows = %#v", got)
+	}
+}
+
+func unifiedMentionRowNames(rows []mentionsv2.SearchResult) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.DisplayName)
+	}
+	return out
+}
+
 func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:            90,
@@ -3065,6 +3232,43 @@ func TestModelModalBlocksComposerInput(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "Confirm") {
 		t.Fatalf("modal should still be active:\n%s", model.View())
+	}
+}
+
+func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
+	custom := false
+	view := chatwidget.NewKeymapActionMenuView(chatwidget.KeymapActionItem{
+		Action:           "open_transcript",
+		Bindings:         []string{"ctrl-t"},
+		HasCustomBinding: &custom,
+	})
+	for _, width := range []int{48, 64, 96} {
+		model := NewModel(nil, Options{Width: width, Height: 24})
+		model.openSelectionViewModal(ModalKindGeneric, view)
+		rendered := ansiSequenceRE.ReplaceAllString(model.renderModal(), "")
+		for _, line := range strings.Split(rendered, "\n") {
+			if got := codextui.DisplayWidth(line); got > width {
+				t.Fatalf("width %d line %q is %d columns", width, line, got)
+			}
+		}
+		if !strings.Contains(rendered, "–  Remove custom binding (disabled)") || strings.Contains(rendered, "3. Remove custom binding") {
+			t.Fatalf("width %d disabled gutter mismatch:\n%s", width, rendered)
+		}
+		if width < 96 {
+			if !strings.Contains(rendered, "Replace binding\n     Capture one key and replace `ctrl-t`.") {
+				t.Fatalf("width %d should stack selected description:\n%s", width, rendered)
+			}
+			continue
+		}
+		var twoColumn bool
+		for _, line := range strings.Split(rendered, "\n") {
+			if strings.Contains(line, "Replace binding") && strings.Contains(line, "Capture one key and replace `ctrl-t`.") {
+				twoColumn = true
+			}
+		}
+		if !twoColumn {
+			t.Fatalf("width 96 should keep description in columns:\n%s", rendered)
+		}
 	}
 }
 

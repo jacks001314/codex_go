@@ -483,23 +483,25 @@ var supportedExperimentalFeatureEnablement = []string{
 }
 
 type ConfigRequirements struct {
-	AllowedApprovalPolicies              []sandbox.AskForApproval  `json:"allowedApprovalPolicies,omitempty"`
-	AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers,omitempty"`
-	AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes,omitempty"`
-	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations,omitempty"`
-	AllowedPermissionProfiles            map[string]bool           `json:"allowedPermissionProfiles,omitempty"`
-	DefaultPermissions                   *string                   `json:"defaultPermissions,omitempty"`
-	AllowedWebSearchModes                []WebSearchMode           `json:"allowedWebSearchModes,omitempty"`
-	AllowManagedHooksOnly                *bool                     `json:"allowManagedHooksOnly,omitempty"`
-	AllowAppshots                        *bool                     `json:"allowAppshots,omitempty"`
-	AllowRemoteControl                   *bool                     `json:"allowRemoteControl,omitempty"`
-	ComputerUse                          *ComputerUseRequirements  `json:"computerUse,omitempty"`
-	BrowserUse                           *BrowserUseRequirements   `json:"browserUse,omitempty"`
-	FeatureRequirements                  map[string]bool           `json:"featureRequirements,omitempty"`
-	Hooks                                *ManagedHooksRequirements `json:"hooks,omitempty"`
-	EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency,omitempty"`
-	Network                              *NetworkRequirements      `json:"network,omitempty"`
-	Models                               *ModelsRequirements       `json:"models,omitempty"`
+	AllowedApprovalPolicies              []sandbox.AskForApproval        `json:"allowedApprovalPolicies,omitempty"`
+	AllowedApprovalsReviewers            []ApprovalsReviewer             `json:"allowedApprovalsReviewers,omitempty"`
+	AllowedSandboxModes                  []sandbox.SandboxMode           `json:"allowedSandboxModes,omitempty"`
+	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode       `json:"allowedWindowsSandboxImplementations,omitempty"`
+	AllowedPermissionProfiles            map[string]bool                 `json:"allowedPermissionProfiles,omitempty"`
+	DefaultPermissions                   *string                         `json:"defaultPermissions,omitempty"`
+	AllowedWebSearchModes                []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
+	AllowManagedHooksOnly                *bool                           `json:"allowManagedHooksOnly,omitempty"`
+	AllowAppshots                        *bool                           `json:"allowAppshots,omitempty"`
+	AllowRemoteControl                   *bool                           `json:"allowRemoteControl,omitempty"`
+	ComputerUse                          *ComputerUseRequirements        `json:"computerUse,omitempty"`
+	BrowserUse                           *BrowserUseRequirements         `json:"browserUse,omitempty"`
+	FeatureRequirements                  map[string]bool                 `json:"featureRequirements,omitempty"`
+	Hooks                                *ManagedHooksRequirements       `json:"hooks,omitempty"`
+	EnforceResidency                     *ResidencyRequirement           `json:"enforceResidency,omitempty"`
+	Network                              *NetworkRequirements            `json:"network,omitempty"`
+	Models                               *ModelsRequirements             `json:"models,omitempty"`
+	MCPServers                           map[string]MCPServerRequirement `json:"-"`
+	Plugins                              map[string]PluginRequirements   `json:"-"`
 }
 
 func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
@@ -1300,17 +1302,18 @@ func migrationDetailsHasEntries(item *ExternalAgentConfigMigrationItem) bool {
 }
 
 type ConfigService struct {
-	mu                sync.Mutex
-	codexHome         string
-	profile           string
-	userConfig        string
-	requirements      *ConfigRequirements
-	warnings          []ConfigWarningNotification
-	managedLayers     []Layer
-	featureDefaults   map[string]bool
-	importHistory     []ExternalAgentConfigImportHistory
-	externalAgentHome string
-	now               func() time.Time
+	mu                   sync.Mutex
+	codexHome            string
+	profile              string
+	userConfig           string
+	requirements         *ConfigRequirements
+	requirementsOverride bool
+	warnings             []ConfigWarningNotification
+	managedLayers        []Layer
+	featureDefaults      map[string]bool
+	importHistory        []ExternalAgentConfigImportHistory
+	externalAgentHome    string
+	now                  func() time.Time
 }
 
 func NewConfigService(codexHome string) *ConfigService {
@@ -1368,6 +1371,41 @@ func (s *ConfigService) SetRequirements(requirements *ConfigRequirements) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requirements = cloneRequirements(requirements)
+	s.requirementsOverride = true
+}
+
+// SetRequirementsIfDifferentFromLoaded preserves file-backed requirements
+// when the caller passes the same startup snapshot, while still treating a
+// genuinely different value as an explicit override.
+func (s *ConfigService) SetRequirementsIfDifferentFromLoaded(requirements *ConfigRequirements) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if reflect.DeepEqual(s.requirements, requirements) {
+		return
+	}
+	s.requirements = cloneRequirements(requirements)
+	s.requirementsOverride = true
+}
+
+func (s *ConfigService) ReloadRequirementsFromHome() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.requirementsOverride {
+		s.mu.Unlock()
+		return nil
+	}
+	home := s.codexHome
+	s.mu.Unlock()
+	requirements, err := LoadRequirementsFile(filepath.Join(home, "requirements.toml"))
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.requirements = cloneRequirements(requirements)
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *ConfigService) loadRequirementsFromHome() {
@@ -2538,7 +2576,52 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.EnforceResidency = cloneResidencyRequirementPtr(requirements.EnforceResidency)
 	clone.Network = cloneNetwork(requirements.Network)
 	clone.Models = cloneModels(requirements.Models)
+	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
+	clone.Plugins = clonePluginRequirements(requirements.Plugins)
 	return &clone
+}
+
+func cloneMCPServerRequirements(values map[string]MCPServerRequirement) map[string]MCPServerRequirement {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]MCPServerRequirement, len(values))
+	for name, requirement := range values {
+		cloned := requirement
+		if requirement.Identity != nil {
+			identity := *requirement.Identity
+			identity.Command = cloneStringPtr(requirement.Identity.Command)
+			identity.URL = cloneStringPtr(requirement.Identity.URL)
+			cloned.Identity = &identity
+		}
+		if requirement.Command != nil {
+			command := *requirement.Command
+			command.Args = append([]MCPServerValueMatcher(nil), requirement.Command.Args...)
+			cloned.Command = &command
+		}
+		if requirement.URL != nil {
+			urlMatcher := *requirement.URL
+			cloned.URL = &urlMatcher
+		}
+		out[name] = cloned
+	}
+	return out
+}
+
+func clonePluginRequirements(values map[string]PluginRequirements) map[string]PluginRequirements {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]PluginRequirements, len(values))
+	for name, requirement := range values {
+		cloned := requirement
+		if requirement.MCPServers != nil {
+			servers := cloneMCPServerRequirements(*requirement.MCPServers)
+			cloned.MCPServers = &servers
+		}
+		out[name] = cloned
+	}
+	return out
 }
 
 func cloneSlice[T any](values []T) []T {

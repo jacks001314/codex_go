@@ -28,6 +28,21 @@ func TestAccountFromAuth(t *testing.T) {
 		t.Fatalf("chatgpt account = %+v", chatgpt)
 	}
 
+	ent26 := AccountFromAuth(&AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token": fakeJWTAccount(map[string]any{
+				"email": "enterprise@example.com",
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_plan_type": "ent26",
+				},
+			}),
+		},
+	})
+	if ent26 == nil || ent26.PlanType != PlanEnt26 || !ent26.PlanType.IsBusinessLike() || !ent26.PlanType.IsWorkspaceAccount() {
+		t.Fatalf("ent26 account = %+v", ent26)
+	}
+
 	external := AccountFromAuth(&AuthDotJSON{
 		AuthMode: "chatgptAuthTokens",
 		Tokens: map[string]any{
@@ -87,6 +102,23 @@ func TestAccountFromAuth(t *testing.T) {
 	})
 	if agentJWT == nil || agentJWT.Type != AccountChatGPT || agentJWT.Email == nil || *agentJWT.Email != "jwt-agent@example.com" || agentJWT.PlanType != PlanEnterprise {
 		t.Fatalf("agent identity jwt account = %+v", agentJWT)
+	}
+}
+
+func TestPlanTypeClassificationsMatchRust(t *testing.T) {
+	if !PlanBusiness.IsBusinessLike() || !PlanEnt26.IsBusinessLike() || !PlanEnterpriseCBPUsageBased.IsBusinessLike() {
+		t.Fatal("business-like workspace plans must be classified together")
+	}
+	if PlanTeam.IsBusinessLike() || PlanEnterprise.IsBusinessLike() {
+		t.Fatal("team and legacy enterprise plans are not business-like")
+	}
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
+		if !plan.IsWorkspaceAccount() {
+			t.Fatalf("plan %q should be a workspace account", plan)
+		}
+	}
+	if PlanPlus.IsWorkspaceAccount() || PlanUnknown.IsWorkspaceAccount() {
+		t.Fatal("individual or unknown plans must not be workspace accounts")
 	}
 }
 
@@ -269,6 +301,11 @@ func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 			name: "chatgpt without email",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, PlanType: PlanEnterprise}, RequiresOpenAIAuth: true},
 			want: `{"account":{"type":"chatgpt","email":null,"planType":"enterprise"},"requiresOpenaiAuth":true}`,
+		},
+		{
+			name: "chatgpt ent26",
+			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, PlanType: PlanEnt26}, RequiresOpenAIAuth: true},
+			want: `{"account":{"type":"chatgpt","email":null,"planType":"ent26"},"requiresOpenaiAuth":true}`,
 		},
 		{
 			name: "chatgpt missing plan",

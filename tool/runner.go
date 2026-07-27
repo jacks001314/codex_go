@@ -22,8 +22,15 @@ type ShellRunner interface {
 type LocalShellRunner struct{}
 
 var (
-	runWindowsShellSandboxCapture = windowssandbox.RunWindowsSandboxCaptureForPermissionProfileElevated
-	defaultShellRunnerCodexHome   = defaultLocalShellRunnerCodexHome
+	runWindowsShellSandboxCapture = func(capture *windowssandbox.CaptureRequest, elevated bool) (*windowssandbox.CaptureResult, error) {
+		if elevated {
+			return windowssandbox.RunWindowsSandboxCaptureForPermissionProfileElevated(
+				&windowssandbox.ElevatedSandboxProfileCaptureRequest{Capture: *capture},
+			)
+		}
+		return windowssandbox.RunWindowsSandboxCaptureWithFilesystemOverrides(capture)
+	}
+	defaultShellRunnerCodexHome = defaultLocalShellRunnerCodexHome
 )
 
 func NewLocalShellRunner() *LocalShellRunner {
@@ -95,24 +102,30 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 		value := int64(req.TimeoutMS)
 		timeout = &value
 	}
-	result, err := runWindowsShellSandboxCapture(&windowssandbox.ElevatedSandboxProfileCaptureRequest{
-		Capture: windowssandbox.CaptureRequest{
-			PermissionProfileID: plan.PermissionProfileID,
-			PermissionProfile:   plan.PermissionProfile,
-			WorkspaceRoots:      []string{commandCWD},
-			CodexHome:           codexHome,
-			Command:             append([]string(nil), plan.Command...),
-			CWD:                 commandCWD,
-			Env:                 env,
-			TimeoutMS:           timeout,
-			Cancellation: windowssandbox.CancellationToken{
-				IsCancelled: func() bool {
-					return ctx.Err() != nil
-				},
+	capture := &windowssandbox.CaptureRequest{
+		PermissionProfileID:    plan.PermissionProfileID,
+		PermissionProfile:      plan.PermissionProfile,
+		WorkspaceRoots:         []string{commandCWD},
+		CodexHome:              codexHome,
+		Command:                append([]string(nil), plan.Command...),
+		CWD:                    commandCWD,
+		Env:                    env,
+		TimeoutMS:              timeout,
+		UsePrivateDesktop:      req.WindowsSandboxPrivateDesktop,
+		TTY:                    req.TTY,
+		ProxyEnforced:          req.EnforceManagedNetwork,
+		ProxySettingsMode:      windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),
+		DisallowSetupElevation: req.ApprovalPolicy == sandbox.ApprovalNever,
+		Cancellation: windowssandbox.CancellationToken{
+			IsCancelled: func() bool {
+				return ctx.Err() != nil
 			},
-			TTY: req.TTY,
 		},
-	})
+	}
+	result, err := runWindowsShellSandboxCapture(
+		capture,
+		windowsShellSandboxUsesElevated(plan.PermissionProfile, req.WindowsSandboxLevel, req.EnforceManagedNetwork),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +139,10 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 		Duration: time.Since(started),
 		TimedOut: result.TimedOut || errors.Is(ctx.Err(), context.DeadlineExceeded),
 	}, nil
+}
+
+func windowsShellSandboxUsesElevated(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel, proxyEnforced bool) bool {
+	return proxyEnforced || configured == sandbox.WindowsSandboxElevated || profile != nil && profile.HasDenyReadEntries()
 }
 
 func (r *LocalShellRunner) runDirect(ctx context.Context, command []string, cwd string, env map[string]string, started time.Time) (*ShellResult, error) {

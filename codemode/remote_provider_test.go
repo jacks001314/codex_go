@@ -1,0 +1,325 @@
+package codemode
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"codex_go/tool"
+
+	"github.com/coder/websocket"
+)
+
+type recordingRemoteDelegate struct {
+	mu       sync.Mutex
+	calls    []tool.CodeModeRemoteNestedCall
+	notifies []string
+}
+
+func (d *recordingRemoteDelegate) Invoke(_ context.Context, call tool.CodeModeRemoteNestedCall) (json.RawMessage, error) {
+	d.mu.Lock()
+	d.calls = append(d.calls, call)
+	d.mu.Unlock()
+	return json.RawMessage(`{"output":"DELEGATE_OK","success":true}`), nil
+}
+
+func (d *recordingRemoteDelegate) Notify(_ context.Context, _, _, text string) error {
+	d.mu.Lock()
+	d.notifies = append(d.notifies, text)
+	d.mu.Unlock()
+	return nil
+}
+
+func TestWebSocketProviderExecutesAndHandlesDelegates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) || hello.Type != "connection/hello" {
+			return
+		}
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: CapabilitySet{}}))
+
+		var open ClientToHost
+		if !readClientFrame(t, ctx, conn, &open) || open.Request == nil || open.Request.Method != "session/open" {
+			return
+		}
+		writeHostFrame(t, ctx, conn, HostOperationResponse(open.ID, ResultOK(SessionReady(open.Request.SessionID))))
+
+		var execute ClientToHost
+		if !readClientFrame(t, ctx, conn, &execute) || execute.Request == nil || execute.Request.Method != "session/execute" {
+			return
+		}
+		cellID := CellID("cell-remote")
+		writeHostFrame(t, ctx, conn, HostOperationResponse(execute.ID, ResultOK(ExecutionStarted(cellID))))
+		input := json.RawMessage(`{"cmd":"Write-Output remote"}`)
+		writeHostFrame(t, ctx, conn, DelegateRequestMessage(7, execute.Request.SessionID, InvokeToolRequest(NestedToolCall{
+			CellID: cellID, RuntimeToolCallID: "nested-1", ToolName: PlainToolName("exec_command"), ProtocolToolKind: ProtocolToolKindFunction, Input: input,
+		})))
+		var delegateResponse ClientToHost
+		if !readClientFrame(t, ctx, conn, &delegateResponse) || delegateResponse.Type != "delegate/response" || delegateResponse.DelegateResponse == nil || delegateResponse.DelegateResponse.Status != "ok" {
+			return
+		}
+		writeHostFrame(t, ctx, conn, DelegateRequestMessage(8, execute.Request.SessionID, NotifyRequest("exec-call", cellID, "REMOTE_NOTIFY")))
+		var notifyResponse ClientToHost
+		if !readClientFrame(t, ctx, conn, &notifyResponse) || notifyResponse.DelegateResponse == nil || notifyResponse.DelegateResponse.Status != "ok" {
+			return
+		}
+		writeHostFrame(t, ctx, conn, InitialResponse(execute.ID, ResultOK(Result(cellID, []ContentItem{InputText("REMOTE_OK")}, nil))))
+
+		var shutdown ClientToHost
+		if readClientFrame(t, ctx, conn, &shutdown) && shutdown.Request != nil && shutdown.Request.Method == "session/shutdown" {
+			writeHostFrame(t, ctx, conn, HostOperationResponse(shutdown.ID, ResultOK(SessionClosed(shutdown.Request.SessionID))))
+		}
+	}))
+	defer server.Close()
+
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	delegate := &recordingRemoteDelegate{}
+	session := provider.NewSession(delegate)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{
+		ToolCallID: "exec-call",
+		Source:     `text("REMOTE_OK")`,
+		EnabledTools: []tool.CodeModeRemoteToolDefinition{{
+			Name: "exec_command", ToolName: tool.PlainName("exec_command"), Kind: tool.PayloadFunction,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.State != "completed" || response.CellID != "cell-remote" || len(response.ContentItems) != 1 || response.ContentItems[0]["text"] != "REMOTE_OK" {
+		t.Fatalf("response = %#v", response)
+	}
+	delegate.mu.Lock()
+	if len(delegate.calls) != 1 || delegate.calls[0].ToolName.Key() != "exec_command" || len(delegate.notifies) != 1 || delegate.notifies[0] != "REMOTE_NOTIFY" {
+		t.Fatalf("delegate calls=%#v notifies=%#v", delegate.calls, delegate.notifies)
+	}
+	delegate.mu.Unlock()
+	if err := session.Close(); err != nil {
+		t.Fatalf("session.Close() error = %v", err)
+	}
+	_ = provider.Close()
+}
+
+func TestRemoteSessionConcurrentFirstExecuteOpensOnce(t *testing.T) {
+	var openCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) {
+			return
+		}
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1}))
+
+		for completed := 0; completed < 2; {
+			var message ClientToHost
+			if !readClientFrame(t, ctx, conn, &message) || message.Request == nil {
+				return
+			}
+			switch message.Request.Method {
+			case "session/open":
+				openCount.Add(1)
+				writeHostFrame(t, ctx, conn, HostOperationResponse(message.ID, ResultOK(SessionReady(message.Request.SessionID))))
+			case "session/execute":
+				completed++
+				cellID := CellID(fmt.Sprintf("cell-%d", completed))
+				writeHostFrame(t, ctx, conn, HostOperationResponse(message.ID, ResultOK(ExecutionStarted(cellID))))
+				writeHostFrame(t, ctx, conn, InitialResponse(message.ID, ResultOK(Result(cellID, []ContentItem{InputText("OK")}, nil))))
+			default:
+				t.Errorf("unexpected method %q", message.Request.Method)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	session := provider.NewSession(&recordingRemoteDelegate{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("OK")`})
+			errs <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	}
+	if got := openCount.Load(); got != 1 {
+		t.Fatalf("session/open count = %d, want 1", got)
+	}
+	_ = provider.Close()
+}
+
+func TestRemoteSessionReopensAfterConnectionLoss(t *testing.T) {
+	var connectionCount atomic.Int32
+	var openCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connectionNumber := connectionCount.Add(1)
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) {
+			return
+		}
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1}))
+		var open ClientToHost
+		if !readClientFrame(t, ctx, conn, &open) || open.Request == nil || open.Request.Method != "session/open" {
+			return
+		}
+		openCount.Add(1)
+		writeHostFrame(t, ctx, conn, HostOperationResponse(open.ID, ResultOK(SessionReady(open.Request.SessionID))))
+		var execute ClientToHost
+		if !readClientFrame(t, ctx, conn, &execute) || execute.Request == nil || execute.Request.Method != "session/execute" {
+			return
+		}
+		cellID := CellID(fmt.Sprintf("cell-%d", connectionNumber))
+		writeHostFrame(t, ctx, conn, HostOperationResponse(execute.ID, ResultOK(ExecutionStarted(cellID))))
+		writeHostFrame(t, ctx, conn, InitialResponse(execute.ID, ResultOK(Result(cellID, []ContentItem{InputText("OK")}, nil))))
+	}))
+	defer server.Close()
+
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	session := provider.NewSession(&recordingRemoteDelegate{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("ONE")`}); err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	concrete := session.(*remoteSession)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		concrete.mu.Lock()
+		connection := concrete.openedOn
+		concrete.mu.Unlock()
+		if connection != nil && !connection.Alive() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first connection did not close")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("TWO")`}); err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if got := openCount.Load(); got != 2 {
+		t.Fatalf("session/open count = %d, want 2", got)
+	}
+	_ = provider.Close()
+}
+
+func TestWebSocketTransportRejectsTextFrames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"connection/ready"}`))
+	}))
+	defer server.Close()
+	transport, _, err := DialWebSocket(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	if err != nil {
+		t.Fatalf("DialWebSocket() error = %v", err)
+	}
+	defer transport.Close()
+	var message HostToClient
+	_, err = transport.Read(context.Background(), &message)
+	if err == nil || !strings.Contains(err.Error(), "must be binary framed messages") {
+		t.Fatalf("Read(text frame) error = %v", err)
+	}
+}
+
+func TestWebSocketTransportRejectsOversizedAndTruncatedFrames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_ = conn.Write(request.Context(), websocket.MessageBinary, []byte{10, 0, 0, 0, '{'})
+	}))
+	defer server.Close()
+	transport, _, err := DialWebSocket(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	if err != nil {
+		t.Fatalf("DialWebSocket() error = %v", err)
+	}
+	defer transport.Close()
+	var message HostToClient
+	_, err = transport.Read(context.Background(), &message)
+	if err == nil || !errors.Is(err, bytes.ErrTooLarge) && !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("Read(truncated frame) error = %v", err)
+	}
+}
+
+func readClientFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, target *ClientToHost) bool {
+	t.Helper()
+	messageType, payload, err := conn.Read(ctx)
+	if err != nil {
+		if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway {
+			return false
+		}
+		t.Errorf("Read() error = %v", err)
+		return false
+	}
+	if messageType != websocket.MessageBinary {
+		t.Errorf("message type = %v, want binary", messageType)
+		return false
+	}
+	ok, err := NewFramedReader(bytes.NewReader(payload)).Read(target)
+	if err != nil {
+		t.Errorf("decode frame error = %v", err)
+		return false
+	}
+	return ok
+}
+
+func writeHostFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, message HostToClient) {
+	t.Helper()
+	frame, err := EncodeFrame(message)
+	if err != nil {
+		t.Fatalf("EncodeFrame() error = %v", err)
+	}
+	payload, err := (&frame).Bytes()
+	if err != nil {
+		t.Fatalf("frame.Bytes() error = %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+}

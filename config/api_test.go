@@ -105,6 +105,7 @@ func TestConfigReadResponseMarshalRustShape(t *testing.T) {
 func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	model := "gpt-5"
 	disableAutoReview := true
+	hiddenCommand := "hidden"
 	requirements := &ConfigRequirements{
 		AllowedApprovalPolicies: []sandbox.AskForApproval{},
 		AllowedSandboxModes:     []sandbox.SandboxMode{sandbox.SandboxWorkspaceWrite},
@@ -120,6 +121,10 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 			Domains:        map[string]NetworkPermission{"example.com": NetworkAllow},
 		},
 		Models: &ModelsRequirements{NewThread: &NewThreadModelDefaults{Model: &model}},
+		MCPServers: map[string]MCPServerRequirement{
+			"internal": {Identity: &MCPServerIdentity{Command: &hiddenCommand}},
+		},
+		Plugins: map[string]PluginRequirements{"sample@test": {}},
 	}
 	data, err := json.Marshal(requirements)
 	if err != nil {
@@ -128,6 +133,12 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	var root map[string]any
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("Unmarshal ConfigRequirements error = %v", err)
+	}
+	if _, ok := root["mcpServers"]; ok {
+		t.Fatalf("internal MCP requirements leaked into public response: %s", data)
+	}
+	if _, ok := root["plugins"]; ok {
+		t.Fatalf("internal plugin requirements leaked into public response: %s", data)
 	}
 	if policies, ok := root["allowedApprovalPolicies"].([]any); !ok || len(policies) != 0 {
 		t.Fatalf("allowedApprovalPolicies = %+v", root["allowedApprovalPolicies"])

@@ -1,12 +1,18 @@
 package chatwidget
 
-import "strings"
+import (
+	"strings"
+
+	bottompane "codex_go/tui/bottom_pane"
+)
 
 const (
 	KeymapPickerViewID             = "keymap-picker"
 	KeymapActionMenuViewID         = "keymap-action-menu"
 	KeymapReplaceBindingMenuViewID = "keymap-replace-binding-menu"
 )
+
+const keymapActionMenuMinDescriptionWidth = 24
 
 const (
 	KeymapActionOpenActionMenu UsageMenuAction = "keymap_open_action_menu"
@@ -18,10 +24,11 @@ const (
 )
 
 type KeymapActionItem struct {
-	Context     string
-	Action      string
-	Description string
-	Bindings    []string
+	Context          string
+	Action           string
+	Description      string
+	Bindings         []string
+	HasCustomBinding *bool
 }
 
 type KeymapPickerConfig struct {
@@ -45,6 +52,7 @@ type KeymapApplyUpdateResult struct {
 
 func NewKeymapPickerView(config KeymapPickerConfig) SelectionView {
 	items := make([]SelectionItem, 0, len(config.Items)+1)
+	initialSelectedIndex := 0
 	for _, item := range config.Items {
 		id := strings.TrimSpace(item.Context) + ":" + strings.TrimSpace(item.Action)
 		if strings.TrimSpace(id) == ":" {
@@ -65,6 +73,9 @@ func NewKeymapPickerView(config KeymapPickerConfig) SelectionView {
 			Action:      KeymapActionOpenActionMenu,
 			IsCurrent:   item.Context == config.SelectedContext && item.Action == config.SelectedAction,
 		})
+		if item.Context == config.SelectedContext && item.Action == config.SelectedAction {
+			initialSelectedIndex = len(items) - 1
+		}
 	}
 	items = append(items, SelectionItem{
 		ID:              "debug",
@@ -74,29 +85,63 @@ func NewKeymapPickerView(config KeymapPickerConfig) SelectionView {
 		DismissOnSelect: true,
 	})
 	return SelectionView{
-		ViewID:            KeymapPickerViewID,
-		Title:             "Keymap",
-		FooterHint:        standardPopupHintLine,
-		AllowCancel:       true,
-		Searchable:        true,
-		SearchPlaceholder: "Type to search actions",
-		Items:             items,
+		ViewID:               KeymapPickerViewID,
+		Title:                "Keymap",
+		FooterHint:           standardPopupHintLine,
+		AllowCancel:          true,
+		Searchable:           true,
+		SearchPlaceholder:    "Type to search actions",
+		Items:                items,
+		InitialSelectedIndex: initialSelectedIndex,
 	}
 }
 
 func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 	name := strings.TrimSpace(item.Action)
+	hasCustomBinding := len(item.Bindings) > 0
+	if item.HasCustomBinding != nil {
+		hasCustomBinding = *item.HasCustomBinding
+	}
+	items := make([]SelectionItem, 0, 6)
+	currentBinding := strings.Join(item.Bindings, ", ")
+	switch len(item.Bindings) {
+	case 0:
+		items = append(items, SelectionItem{ID: "set", Name: "Set key", Description: "Capture a key for this unbound action.", SelectedDescription: "Capture one key and bind this action.", Action: KeymapActionSetBinding, DismissOnSelect: true})
+	case 1:
+		items = append(items,
+			SelectionItem{ID: "set", Name: "Replace binding", Description: "Capture a replacement key.", SelectedDescription: "Capture one key and replace `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
+			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep the current binding and add another key.", SelectedDescription: "Capture one key and keep `" + currentBinding + "` as an alternate.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+		)
+	default:
+		items = append(items,
+			SelectionItem{ID: "replace_one", Name: "Replace one binding...", Description: "Choose which existing binding to replace.", SelectedDescription: "Pick one current binding, then capture its replacement.", Action: KeymapActionReplaceBinding},
+			SelectionItem{ID: "set", Name: "Replace all bindings", Description: "Replace every current binding with one key.", SelectedDescription: "Capture one key and replace `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
+			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep current bindings and add another key.", SelectedDescription: "Capture one key and keep `" + currentBinding + "`.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+		)
+	}
+	removeReason := ""
+	if !hasCustomBinding {
+		removeReason = "No custom root override to remove."
+	}
+	items = append(items,
+		SelectionItem{ID: "unset", Name: "Remove custom binding", Description: func() string {
+			if hasCustomBinding {
+				return "Restore the default keymap binding."
+			}
+			return ""
+		}(), Disabled: !hasCustomBinding, DisabledReason: removeReason, DisabledGutterMarker: "–", Action: KeymapActionUnsetBinding, DismissOnSelect: true},
+		SelectionItem{ID: "back", Name: "Back to shortcuts", Description: "Return to the shortcut list.", DismissOnSelect: true},
+	)
 	return SelectionView{
-		ViewID:      KeymapActionMenuViewID,
-		Title:       "Edit " + name,
-		Subtitle:    strings.Join(item.Bindings, ", "),
-		FooterHint:  standardPopupHintLine,
-		AllowCancel: true,
-		Items: []SelectionItem{
-			{ID: "set", Name: "Set binding", Action: KeymapActionSetBinding, DismissOnSelect: true},
-			{ID: "add", Name: "Add alternate binding", Action: KeymapActionAddBinding, DismissOnSelect: true},
-			{ID: "unset", Name: "Unset binding", Action: KeymapActionUnsetBinding, Disabled: len(item.Bindings) == 0, DismissOnSelect: true},
-		},
+		ViewID:            KeymapActionMenuViewID,
+		Title:             "Edit " + name,
+		Subtitle:          strings.Join(item.Bindings, ", "),
+		FooterNote:        "Changes write the root `tui.keymap.*` override.",
+		FooterHint:        standardPopupHintLine,
+		AllowCancel:       true,
+		ColumnWidth:       bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil),
+		DescriptionLayout: bottompane.NewStackBelowWhenNarrowDescriptionLayout(keymapActionMenuMinDescriptionWidth),
+		Items:             items,
 	}
 }
 

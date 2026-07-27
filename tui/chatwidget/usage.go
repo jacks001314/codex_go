@@ -3,6 +3,8 @@ package chatwidget
 import (
 	"strconv"
 	"strings"
+
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 const (
@@ -30,6 +32,7 @@ type SelectionItem struct {
 	SearchValue                string
 	Disabled                   bool
 	DisabledReason             string
+	DisabledGutterMarker       string
 	IsCurrent                  bool
 	IsDefault                  bool
 	Action                     UsageMenuAction
@@ -51,6 +54,9 @@ type SelectionView struct {
 	ReopenOnCancel             bool
 	RefreshResetAvailability   bool
 	RefreshResetAvailabilityID uint64
+	ColumnWidth                bottompane.ColumnWidthConfig
+	DescriptionLayout          bottompane.SelectionDescriptionLayout
+	FooterNote                 string
 }
 
 type UsageMenuState struct {

@@ -332,7 +332,7 @@ func configuredPluginsFromConfig(values map[string]any) []PluginDetail {
 				SHA:    stringPtrIfNotEmpty(stringConfigValue(entry["sha"])),
 			},
 		}
-		manifest := readPluginManifestFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"))
+		manifest := readPluginManifestForRoot(pluginRoot)
 		detail := marketplacePluginDetailFromManifest(name, marketplaceName, "", marketplacePath, pluginRoot, plugin, manifest)
 		detail.Summary.ID = id
 		detail.Summary.Installed = true

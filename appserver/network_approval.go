@@ -27,8 +27,11 @@ type networkApprovalKey struct {
 }
 
 type pendingNetworkApproval struct {
-	done     chan struct{}
-	decision network.ProxyDecision
+	done         chan struct{}
+	decision     network.ProxyDecision
+	turnID       string
+	connectionID string
+	cancel       context.CancelFunc
 }
 
 type networkApprovalService struct {
@@ -86,6 +89,9 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	if s == nil || s.router == nil {
 		return network.AskProxyDecision(network.ProxyReasonNotAllowed)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	active := s.router.activeTurnForNetworkApprovalThread(threadID, request.EnvironmentID)
 	if active == nil {
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
@@ -120,12 +126,24 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 			return pending.decision
 		}
 	}
-	pending := &pendingNetworkApproval{done: make(chan struct{})}
+	approvalCtx, approvalCancel := context.WithCancel(ctx)
+	pending := &pendingNetworkApproval{
+		done:         make(chan struct{}),
+		turnID:       active.turnID,
+		connectionID: active.connectionID,
+		cancel:       approvalCancel,
+	}
 	s.pending[key] = pending
 	s.mu.Unlock()
 
-	decision, cache := s.requestApproval(ctx, active, key, request)
+	decision, cache := s.requestApproval(approvalCtx, active, key, request)
+	approvalCancel()
 	s.mu.Lock()
+	if s.pending[key] != pending {
+		decision = pending.decision
+		s.mu.Unlock()
+		return decision
+	}
 	switch cache {
 	case NetworkPolicyRuleAllow:
 		delete(s.denied, key)
@@ -240,6 +258,51 @@ func (s *networkApprovalService) clearActiveCallsForTurn(threadID string, turnID
 	}
 }
 
+func (s *networkApprovalService) cancelPendingForTurn(threadID string, turnID string) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if s == nil || threadID == "" {
+		return
+	}
+	s.cancelPending(func(key networkApprovalKey, pending *pendingNetworkApproval) bool {
+		return key.threadID == threadID && (turnID == "" || pending.turnID == turnID)
+	})
+}
+
+func (s *networkApprovalService) cancelPendingForConnection(connectionID string) {
+	connectionID = normalizeConnectionID(connectionID)
+	if s == nil || connectionID == "" {
+		return
+	}
+	s.cancelPending(func(_ networkApprovalKey, pending *pendingNetworkApproval) bool {
+		return normalizeConnectionID(pending.connectionID) == connectionID
+	})
+}
+
+func (s *networkApprovalService) cancelPending(matches func(networkApprovalKey, *pendingNetworkApproval) bool) {
+	if s == nil || matches == nil {
+		return
+	}
+	denied := network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	var cancels []context.CancelFunc
+	s.mu.Lock()
+	for key, pending := range s.pending {
+		if pending == nil || !matches(key, pending) {
+			continue
+		}
+		delete(s.pending, key)
+		pending.decision = denied
+		close(pending.done)
+		if pending.cancel != nil {
+			cancels = append(cancels, pending.cancel)
+		}
+	}
+	s.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
 func (s *networkApprovalService) clearThread(threadID string) {
 	if s == nil {
 		return
@@ -248,6 +311,7 @@ func (s *networkApprovalService) clearThread(threadID string) {
 	if threadID == "" {
 		return
 	}
+	s.cancelPendingForTurn(threadID, "")
 	s.mu.Lock()
 	for key := range s.allowed {
 		if key.threadID == threadID {
@@ -464,10 +528,8 @@ func (r *RuntimeRouter) activeTurnForNetworkApprovalThread(threadID string, envi
 		return nil
 	}
 	environmentID = strings.TrimSpace(environmentID)
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
 	var selected *activeRuntimeTurn
-	for _, active := range r.active {
+	for _, active := range r.threads.ActiveTurns() {
 		if active == nil || strings.TrimSpace(active.TurnID) == "" {
 			continue
 		}

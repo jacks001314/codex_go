@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	ErrWindowsOnly           = errors.New("windows sandbox is only available on Windows")
-	ErrBackendNotImplemented = errors.New("windows sandbox backend is unavailable")
-	ErrHostUnsupported       = errors.New("windows sandbox host does not support the required feature")
-	ErrInvalidRequest        = errors.New("invalid windows sandbox request")
+	ErrWindowsOnly              = errors.New("windows sandbox is only available on Windows")
+	ErrBackendNotImplemented    = errors.New("windows sandbox backend is unavailable")
+	ErrHostUnsupported          = errors.New("windows sandbox host does not support the required feature")
+	ErrInvalidRequest           = errors.New("invalid windows sandbox request")
+	ErrSetupElevationDisallowed = errors.New("windows sandbox setup elevation is disabled for this command")
 )
 
 func Unsupported(feature string) error {
@@ -63,6 +64,7 @@ type CaptureRequest struct {
 	WriteRootsOverrideSet            bool
 	DenyReadPaths                    []string
 	DenyWritePaths                   []string
+	DisallowSetupElevation           bool
 }
 
 func (r *CaptureRequest) Validate() error {

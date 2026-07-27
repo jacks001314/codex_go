@@ -141,6 +141,37 @@ func TestHookRunnerAddsPluginEnv(t *testing.T) {
 	}
 }
 
+func TestHookRunnerFastExitPreservesOutputWithoutReadingLargeStdinLikeRust(t *testing.T) {
+	runner := NewHookRunner()
+	hook := hookRunnerMetadata("fast-exit", HookEventSessionStart, "", 0)
+	command := hookRunnerOutputCommand("hook-ran", "hook-stderr")
+	hook.Command = &command
+
+	result, err := runner.Run(context.Background(), &HookRunRequest{
+		ThreadID:  "thread-fast-exit",
+		CWD:       t.TempDir(),
+		EventName: HookEventSessionStart,
+		InputJSON: fmt.Sprintf(`{"padding":%q}`, strings.Repeat("x", 1024*1024)),
+		Hooks:     []HookMetadata{hook},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(result.Runs) != 1 {
+		t.Fatalf("runs = %+v, want one", result.Runs)
+	}
+	run := result.Runs[0]
+	if run.Status != HookRunCompleted {
+		t.Fatalf("status = %q entries=%+v, want completed", run.Status, run.Entries)
+	}
+	if !hookEntriesContain(run.Entries, HookOutputContext, "hook-ran") {
+		t.Fatalf("stdout was not preserved: entries=%+v", run.Entries)
+	}
+	if !hookEntriesContain(run.Entries, HookOutputError, "hook-stderr") {
+		t.Fatalf("stderr was not preserved: entries=%+v", run.Entries)
+	}
+}
+
 func hookRunnerMetadata(key string, event HookEventName, matcher string, order int64) HookMetadata {
 	command := hookRunnerOutputCommand("", "")
 	metadata := HookMetadata{

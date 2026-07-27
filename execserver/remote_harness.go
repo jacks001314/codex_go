@@ -219,14 +219,16 @@ func DialNoiseRendezvousClient(
 		return nil, fmt.Errorf("failed to generate Noise harness identity: %w", err)
 	}
 	client := &Client{
-		clientName:  clientName,
-		nextID:      1,
-		nextHTTPID:  1,
-		pending:     map[int64]chan clientCallResult{},
-		sessions:    map[string]*clientProcessSession{},
-		httpStreams: map[string]*HTTPBodyStream{},
-		done:        make(chan struct{}),
-		cleanup:     identity.Destroy,
+		clientName:   clientName,
+		nextID:       1,
+		nextHTTPID:   1,
+		pending:      map[int64]chan clientCallResult{},
+		sessions:     map[string]*clientProcessSession{},
+		httpStreams:  map[string]*HTTPBodyStream{},
+		inboundIDs:   map[int64]struct{}{},
+		inboundSlots: make(chan struct{}, MaxInFlightServerRequests),
+		done:         make(chan struct{}),
+		cleanup:      identity.Destroy,
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
 		bundle, err := provider.ConnectBundle(ctx, identity.PublicKey())

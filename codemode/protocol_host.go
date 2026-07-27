@@ -244,6 +244,87 @@ type HostToClient struct {
 	Request    *DelegateRequest
 }
 
+func (m *HostToClient) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return fmt.Errorf("host-to-client message is nil")
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	*m = HostToClient{Type: envelope.Type}
+	switch envelope.Type {
+	case "connection/ready":
+		var value struct {
+			Type            string          `json:"type"`
+			SelectedVersion ProtocolVersion `json:"selectedVersion"`
+			Capabilities    CapabilitySet   `json:"capabilities"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.Hello = &HostHello{SelectedVersion: value.SelectedVersion, Capabilities: value.Capabilities}
+	case "connection/rejected":
+		var value struct {
+			Reason HandshakeRejectReason `json:"reason"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.Reason = &value.Reason
+	case "operation/response":
+		var value struct {
+			ID     RequestID                `json:"id"`
+			Result WireResult[HostResponse] `json:"result"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.ID, m.Result = value.ID, &value.Result
+	case "execute/initialResponse":
+		var value struct {
+			ID     RequestID                   `json:"id"`
+			Result WireResult[RuntimeResponse] `json:"result"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.ID, m.Initial = value.ID, &value.Result
+	case "delegate/request":
+		var value struct {
+			ID        DelegateRequestID `json:"id"`
+			SessionID SessionID         `json:"sessionId"`
+			Request   DelegateRequest   `json:"request"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.DelegateID, m.SessionID, m.Request = value.ID, value.SessionID, &value.Request
+	case "delegate/cancel":
+		var value struct {
+			ID DelegateRequestID `json:"id"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.DelegateID = value.ID
+	case "cell/closed":
+		var value struct {
+			SessionID SessionID `json:"sessionId"`
+			CellID    CellID    `json:"cellId"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.SessionID, m.CellID = value.SessionID, value.CellID
+	default:
+		return fmt.Errorf("unknown host-to-client type %q", envelope.Type)
+	}
+	return nil
+}
+
 func HostHelloMessage(hello HostHello) HostToClient {
 	return HostToClient{Type: "connection/ready", Hello: &hello}
 }

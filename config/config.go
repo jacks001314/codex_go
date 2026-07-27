@@ -15,7 +15,8 @@ import (
 )
 
 type Config struct {
-	Values map[string]any
+	Values       map[string]any
+	Requirements *ConfigRequirements
 }
 
 type ForcedLoginMethod string
@@ -146,7 +147,11 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			mergeConfigMaps(values, managedValues)
 		}
 	}
-	return &Config{Values: values}, nil
+	requirements, err := LoadRequirementsFile(filepath.Join(codexHome, "requirements.toml"))
+	if err != nil {
+		return nil, err
+	}
+	return &Config{Values: values, Requirements: requirements}, nil
 }
 
 func LoadEffective(codexHome string, rawOverrides, enableFeatures, disableFeatures []string, cwd ...string) (*Config, error) {

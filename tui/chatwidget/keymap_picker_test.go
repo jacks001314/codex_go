@@ -1,6 +1,10 @@
 package chatwidget
 
-import "testing"
+import (
+	"testing"
+
+	bottompane "codex_go/tui/bottom_pane"
+)
 
 func TestKeymapReplaceBindingMenuMatchesRust(t *testing.T) {
 	view := NewKeymapReplaceBindingMenuView(KeymapActionItem{
@@ -30,5 +34,26 @@ func TestApplyKeymapRuntimeUpdateSynchronizesBindingsMatchRust(t *testing.T) {
 		!result.BottomPaneBindingsUpdated ||
 		!result.RequestRedraw {
 		t.Fatalf("apply result = %#v", result)
+	}
+}
+
+func TestKeymapActionMenuResponsiveConfigMatchesRust(t *testing.T) {
+	custom := false
+	view := NewKeymapActionMenuView(KeymapActionItem{
+		Action:           "open_transcript",
+		Bindings:         []string{"ctrl-t"},
+		HasCustomBinding: &custom,
+	})
+	if view.ColumnWidth.Mode != bottompane.ColumnWidthAutoAllRows {
+		t.Fatalf("column width mode = %v, want AutoAllRows", view.ColumnWidth.Mode)
+	}
+	if view.DescriptionLayout.Mode != bottompane.SelectionDescriptionStackBelowWhenNarrow || view.DescriptionLayout.MinDescriptionWidth != 24 {
+		t.Fatalf("description layout = %#v", view.DescriptionLayout)
+	}
+	if len(view.Items) != 4 || view.Items[2].Name != "Remove custom binding" || !view.Items[2].Disabled || view.Items[2].DisabledGutterMarker != "–" {
+		t.Fatalf("action menu items = %#v", view.Items)
+	}
+	if view.Items[2].DisabledReason != "No custom root override to remove." {
+		t.Fatalf("remove disabled reason = %q", view.Items[2].DisabledReason)
 	}
 }

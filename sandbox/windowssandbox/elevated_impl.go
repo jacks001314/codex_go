@@ -44,6 +44,7 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 		capture.DenyWritePaths,
 		capture.ProxyEnforced,
 		effectiveProxySettingsMode(capture.ProxySettingsMode),
+		capture.DisallowSetupElevation,
 	)
 	if err != nil {
 		return nil, err
@@ -75,7 +76,7 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", spawnRequest)
 		},
 		func() (elevated.SandboxCredentials, error) {
-			refreshed, err := RefreshLogonSandboxCredsForPermissions(
+			refreshed, err := refreshLogonSandboxCredsForPermissions(
 				permissions,
 				capture.CWD,
 				envMap,
@@ -89,6 +90,7 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 				capture.DenyWritePaths,
 				capture.ProxyEnforced,
 				effectiveProxySettingsMode(capture.ProxySettingsMode),
+				!capture.DisallowSetupElevation,
 			)
 			if err != nil {
 				return elevated.SandboxCredentials{}, err
@@ -132,6 +134,7 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 		capture.DenyWritePaths,
 		capture.ProxyEnforced,
 		effectiveProxySettingsMode(capture.ProxySettingsMode),
+		capture.DisallowSetupElevation,
 	)
 	if err != nil {
 		return nil, err

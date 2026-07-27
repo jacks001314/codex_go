@@ -44,6 +44,12 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkUniqueCompletedItems("go", go, expected.uniqueCompletedItemTypes),
     checkUniqueCommandExecutions("rust", rust, expected.uniqueCommandExecutions),
     checkUniqueCommandExecutions("go", go, expected.uniqueCommandExecutions),
+    checkStartedCompletedPairs("rust", rust, expected.requireStartedCompletedPairs),
+    checkStartedCompletedPairs("go", go, expected.requireStartedCompletedPairs),
+    checkSingleFinalAgentMessagePerTurn("rust", rust, expected.requireSingleFinalAgentMessagePerTurn),
+    checkSingleFinalAgentMessagePerTurn("go", go, expected.requireSingleFinalAgentMessagePerTurn),
+    checkNoEmptyCommandExecutions("rust", rust, expected.forbidEmptyCommandExecutions),
+    checkNoEmptyCommandExecutions("go", go, expected.forbidEmptyCommandExecutions),
     checkCommentaryBeforeTool("rust", rust, expected.requireCommentaryBeforeTool),
     checkCommentaryBeforeTool("go", go, expected.requireCommentaryBeforeTool),
     checkExpectedCommandExecutions("rust", rust, expected.commandExecutions, expected.commandOutputComparison),
@@ -97,7 +103,7 @@ export function compareArtifact(artifactDir: string): CompareResult {
       rust: eventTypes(rust),
       go: eventTypes(go),
     },
-    firstMismatch: firstFailure?.detail ?? null,
+    firstMismatch: firstFailure ? `${firstFailure.name}: ${firstFailure.detail ?? "check failed"}` : null,
   };
   writeJson(path.join(artifactDir, "comparison.json"), result);
   writeFileSync(path.join(artifactDir, "report.md"), renderReport(result, artifactDir, manifest), "utf8");
@@ -463,6 +469,77 @@ function normalizeCommandOrder(items: any[], comparison: unknown) {
   if (comparison !== "parallel-prefix-unordered" || items.length < 2) return items;
   const prefix = items.slice(0, 2).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   return [...prefix, ...items.slice(2)];
+}
+
+function checkStartedCompletedPairs(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: started/completed pairs`, ok: true, detail: "scenario has no pair contract" };
+  }
+  const required = new Set(expected.map(String));
+  const failures: string[] = [];
+  for (const turn of turnsForChecks(recording)) {
+    const counts = new Map<string, { type: string; started: number; completed: number; firstStarted: number; firstCompleted: number }>();
+    for (let index = 0; index < (turn.events ?? []).length; index += 1) {
+      const event = turn.events[index];
+      const type = String(event.item?.type ?? "");
+      if (!required.has(type) || (event.type !== "item.started" && event.type !== "item.completed")) continue;
+      const id = String(event.item?.id ?? event.item?.call_id ?? event.item?.callId ?? "");
+      const key = `${type}:${id || "<missing-id>"}`;
+      const count = counts.get(key) ?? { type, started: 0, completed: 0, firstStarted: -1, firstCompleted: -1 };
+      if (event.type === "item.started") {
+        count.started += 1;
+        if (count.firstStarted < 0) count.firstStarted = index;
+      } else {
+        count.completed += 1;
+        if (count.firstCompleted < 0) count.firstCompleted = index;
+      }
+      counts.set(key, count);
+    }
+    for (const [key, count] of counts) {
+      if (count.started !== 1 || count.completed !== 1 || count.firstStarted >= count.firstCompleted) {
+        failures.push(`turn${turn.index}:${key}:started=${count.started},completed=${count.completed},order=${count.firstStarted}<${count.firstCompleted}`);
+      }
+    }
+    for (const type of required) {
+      const observed = [...counts.values()].some((count) => count.type === type);
+      if (!observed) failures.push(`turn${turn.index}:${type}:missing`);
+    }
+  }
+  return { name: `${label}: started/completed pairs`, ok: failures.length === 0, detail: failures.length === 0 ? undefined : failures.join("; ") };
+}
+
+function checkSingleFinalAgentMessagePerTurn(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: single final agent message`, ok: true, detail: "scenario has no single-final contract" };
+  }
+  const failures: string[] = [];
+  for (const turn of turnsForChecks(recording)) {
+    const finals = (turn.events ?? []).filter((event: any) =>
+      event.type === "item.completed" && event.item?.type === "agent_message" && event.item?.phase !== "commentary");
+    if (finals.length !== 1) failures.push(`turn${turn.index}:finals=${finals.length}`);
+  }
+  return { name: `${label}: single final agent message`, ok: failures.length === 0, detail: failures.length === 0 ? undefined : failures.join("; ") };
+}
+
+function checkNoEmptyCommandExecutions(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: non-empty command executions`, ok: true, detail: "scenario permits empty commands" };
+  }
+  const failures: string[] = [];
+  for (const turn of turnsForChecks(recording)) {
+    for (const event of turn.events ?? []) {
+      if (event.item?.type !== "command_execution" || (event.type !== "item.started" && event.type !== "item.completed")) continue;
+      const command = Array.isArray(event.item?.command) ? event.item.command.join(" ") : String(event.item?.command ?? "");
+      if (command.trim().length === 0) failures.push(`turn${turn.index}:${event.type}:${String(event.item?.id ?? "<missing-id>")}`);
+    }
+  }
+  return { name: `${label}: non-empty command executions`, ok: failures.length === 0, detail: failures.length === 0 ? undefined : failures.join("; ") };
+}
+
+function turnsForChecks(recording: any): any[] {
+  return Array.isArray(recording.turns) && recording.turns.length > 0
+    ? recording.turns
+    : [{ index: 0, events: recording.events ?? [] }];
 }
 
 function commandExecutions(recording: any) {

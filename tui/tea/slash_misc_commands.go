@@ -359,13 +359,6 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		if id == "" {
 			id = item.Name
 		}
-		description := item.Description
-		if strings.TrimSpace(item.DisabledReason) != "" {
-			if strings.TrimSpace(description) != "" {
-				description += "\n"
-			}
-			description += item.DisabledReason
-		}
 		label := item.Name
 		markers := []string{}
 		if item.IsCurrent {
@@ -378,10 +371,13 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 			label += " (" + strings.Join(markers, ", ") + ")"
 		}
 		options = append(options, ModalOption{
-			ID:          id,
-			Label:       label,
-			Description: description,
-			Disabled:    item.Disabled || strings.TrimSpace(item.DisabledReason) != "",
+			ID:                   id,
+			Label:                label,
+			Description:          item.Description,
+			SelectedDescription:  item.SelectedDescription,
+			DisabledReason:       item.DisabledReason,
+			DisabledGutterMarker: item.DisabledGutterMarker,
+			Disabled:             item.Disabled || strings.TrimSpace(item.DisabledReason) != "",
 		})
 	}
 	body := strings.TrimSpace(view.Subtitle)
@@ -394,11 +390,15 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		}
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      view.ViewID,
-		Kind:    kind,
-		Title:   view.Title,
-		Body:    body,
-		Options: options,
+		ID:                view.ViewID,
+		Kind:              kind,
+		Title:             view.Title,
+		Body:              body,
+		Options:           options,
+		FooterNote:        view.FooterNote,
+		FooterHint:        view.FooterHint,
+		ColumnWidth:       view.ColumnWidth,
+		DescriptionLayout: view.DescriptionLayout,
 	})
 	if m.modal != nil && view.InitialSelectedIndex >= 0 && view.InitialSelectedIndex < len(m.modal.options) {
 		m.modal.selected = view.InitialSelectedIndex

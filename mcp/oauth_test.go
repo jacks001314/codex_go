@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,12 @@ import (
 	"testing"
 	"time"
 )
+
+type oauthRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f oauthRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestOAuthStoreSaveLoadStatusAndDelete(t *testing.T) {
 	home := t.TempDir()
@@ -820,6 +827,134 @@ func TestMCPServiceOauthLoginUsesDynamicClientRegistration(t *testing.T) {
 	}
 	if loaded == nil || loaded.ClientID != "dynamic-client" || loaded.ClientSecret != "dynamic-secret" || loaded.AccessToken != "access-dynamic" || loaded.RefreshToken != "refresh-dynamic" {
 		t.Fatalf("stored tokens = %#v", loaded)
+	}
+}
+
+func TestMCPServiceOauthLoginUsesFinalRuntimeHTTPClientLikeRust(t *testing.T) {
+	const runtimeHost = "runtime-only.invalid"
+	seen := map[string]int{}
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path]++
+		if r.Header.Get("X-Configured") != "configured-value" || r.Header.Get("X-From-Env") != "env-value" {
+			t.Fatalf("OAuth request headers for %s = %#v", r.URL.Path, r.Header)
+		}
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server/mcp":
+			writeJSON(t, w, map[string]any{
+				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"token_endpoint":         "https://" + runtimeHost + "/token",
+				"registration_endpoint":  "https://" + runtimeHost + "/register",
+			})
+		case "/register":
+			writeJSON(t, w, map[string]any{"client_id": "runtime-client", "client_secret": "runtime-secret"})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm() error = %v", err)
+			}
+			if r.Form.Get("code") != "runtime-code" || r.Form.Get("client_id") != "runtime-client" {
+				t.Fatalf("token form = %#v", r.Form)
+			}
+			writeJSON(t, w, map[string]any{"access_token": "runtime-access", "refresh_token": "runtime-refresh", "expires_in": 3600})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	t.Setenv("CODEX_TEST_MCP_OAUTH_HEADER", "env-value")
+
+	home := t.TempDir()
+	config := ServerConfig{
+		URL:            "https://" + runtimeHost + "/mcp",
+		Enabled:        true,
+		HTTPHeaders:    map[string]string{"X-Configured": "configured-value"},
+		EnvHTTPHeaders: map[string]string{"X-From-Env": "CODEX_TEST_MCP_OAUTH_HEADER"},
+	}
+	service := NewMCPService(&RuntimeConfig{CodexHome: home, Servers: map[string]ServerRegistration{"docs": {Config: config}}})
+	t.Cleanup(func() { _ = service.Close() })
+	runtimeConfig, ok := service.serverConfig("docs")
+	if !ok {
+		t.Fatal("runtime MCP config missing")
+	}
+	runtimeClient := service.httpClientForServer("docs", &runtimeConfig)
+	baseTransport := issuer.Client().Transport
+	runtimeClient.client.Transport = oauthRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != runtimeHost {
+			return nil, fmt.Errorf("OAuth request bypassed runtime route: %s", request.URL)
+		}
+		cloned := request.Clone(request.Context())
+		cloned.URL.Scheme = "http"
+		cloned.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return baseTransport.RoundTrip(cloned)
+	})
+
+	login, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}})
+	if err != nil {
+		t.Fatalf("OauthLogin() error = %v", err)
+	}
+	authorizationURL, err := url.Parse(login.AuthorizationURL)
+	if err != nil {
+		t.Fatalf("Parse authorization URL error = %v", err)
+	}
+	redirectURI := authorizationURL.Query().Get("redirect_uri")
+	state := authorizationURL.Query().Get("state")
+	if redirectURI == "" || state == "" || authorizationURL.Query().Get("client_id") != "runtime-client" {
+		t.Fatalf("authorization URL = %s", login.AuthorizationURL)
+	}
+	response, err := http.Get(redirectURI + "?code=runtime-code&state=" + url.QueryEscape(state))
+	if err != nil {
+		t.Fatalf("callback GET error = %v", err)
+	}
+	_ = response.Body.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		tokens, loadErr := NewOAuthStore(home).Load("docs", config.URL)
+		if loadErr != nil {
+			t.Fatalf("Load() error = %v", loadErr)
+		}
+		if tokens != nil && tokens.AccessToken == "runtime-access" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tokens, err := NewOAuthStore(home).Load("docs", config.URL)
+	if err != nil || tokens == nil || tokens.AccessToken != "runtime-access" || tokens.RefreshToken != "runtime-refresh" {
+		t.Fatalf("stored tokens = %#v err=%v", tokens, err)
+	}
+	for _, path := range []string{"/.well-known/oauth-authorization-server/mcp", "/register", "/token"} {
+		if seen[path] != 1 {
+			t.Fatalf("OAuth runtime route count for %s = %d, want 1; all=%#v", path, seen[path], seen)
+		}
+	}
+}
+
+func TestMCPOAuthCallbackTimeoutAndRequestTimeoutSemanticsLikeRust(t *testing.T) {
+	if got := mcpOAuthLoginTimeout(nil); got != 5*time.Minute {
+		t.Fatalf("default OAuth callback timeout = %s, want 5m", got)
+	}
+	timeoutSecs := uint64(600)
+	if got := mcpOAuthLoginTimeout(&timeoutSecs); got != 10*time.Minute {
+		t.Fatalf("explicit OAuth callback timeout = %s, want 10m", got)
+	}
+
+	login, err := StartOAuthLoginServer(context.Background(), &OAuthLoginServerOptions{
+		ServerName:            "docs",
+		ServerURL:             "https://mcp.example.test/mcp",
+		ClientID:              "client-1",
+		AuthorizationEndpoint: "https://issuer.example.test/authorize",
+		TokenEndpoint:         "https://issuer.example.test/token",
+		Timeout:               20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartOAuthLoginServer() error = %v", err)
+	}
+	select {
+	case result := <-login.Done():
+		if result == nil || result.Error == nil || !strings.Contains(result.Error.Error(), "timed out waiting for OAuth callback") {
+			t.Fatalf("timeout result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OAuth callback timeout")
 	}
 }
 

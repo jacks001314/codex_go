@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/applypatch"
 	"codex_go/apps"
@@ -928,13 +929,16 @@ func (r *RuntimeRouter) startReviewRuntimeAsync(params *review.StartParams, resp
 	paramsCopy := cloneTurnStartParams(turnParams)
 	ctx, cancel := context.WithCancel(context.Background())
 	startedAtMS := time.Unix(startedAt, 0).UTC().UnixMilli()
-	if err := r.registerActiveRuntimeTurn(turnParams.ThreadID, turnID, cancel, startedAtMS, paramsCopy); err != nil {
+	if err := r.registerTrackedActiveRuntimeTurn(turnParams.ThreadID, turnID, cancel, startedAtMS, paramsCopy); err != nil {
 		cancel()
 		r.emitTurnRuntimeError(turnParams.ThreadID, turnID, err)
 		return
 	}
 	r.updateActiveRuntimeTurnAnalytics(turnParams.ThreadID, turnID, connectionID, nil)
-	go r.runReviewRuntime(ctx, paramsCopy, record, runtime, connectionID)
+	go func() {
+		defer r.threads.TurnWorkerDone()
+		r.runReviewRuntime(ctx, paramsCopy, record, runtime, connectionID)
+	}()
 }
 
 func (r *RuntimeRouter) reviewRuntimeAvailable() bool {
@@ -999,7 +1003,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	_ = r.appendRuntimeTurnStarted(threadID, turnID, startedAt)
 	promptPersisted := false
 
-	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS)
+	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
 	if err != nil {
 		if ctx.Err() != nil {
 			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
@@ -1029,7 +1033,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.notify(NotificationContextCompacted, notification)
 		}
 		// appTurnConfig contains the session history; reload it after compaction.
-		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS); err != nil {
+		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			if ctx.Err() != nil {
 				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
@@ -1194,7 +1198,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		completedTurn.Items = summary
 		completedTurn.ItemsView = TurnItemsSummary
 	}
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
@@ -1281,7 +1285,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		startedAt = time.Now().UTC()
 	}
 	startedAtMS := startedAt.UnixMilli()
-	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS)
+	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
 	if err != nil {
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
@@ -1381,7 +1385,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
@@ -2148,16 +2152,7 @@ func (r *RuntimeRouter) reserveRuntimeThread(threadID string) error {
 	if r == nil {
 		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	if r.active == nil {
-		r.active = map[string]*activeRuntimeTurn{}
-	}
-	if active := r.active[threadID]; active != nil {
-		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
-	}
-	r.active[threadID] = &activeRuntimeTurn{ThreadID: threadID}
-	return nil
+	return r.threads.ReserveTurn(threadID)
 }
 
 func (r *RuntimeRouter) registerActiveRuntimeTurn(threadID string, turnID string, cancel context.CancelFunc, startedAtMS int64, params *turn.TurnStartParams) error {
@@ -2167,72 +2162,43 @@ func (r *RuntimeRouter) registerActiveRuntimeTurn(threadID string, turnID string
 		}
 		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	if r.active == nil {
-		r.active = map[string]*activeRuntimeTurn{}
-	}
-	if active := r.active[threadID]; active != nil {
-		if active.TurnID == "" {
-			active.TurnID = turnID
-			active.Cancel = cancel
-			active.StartedAtMS = startedAtMS
-			active.Params = cloneTurnStartParams(params)
-			r.ensureActiveDiffTrackerLocked(threadID, turnID)
-			return nil
-		}
+	return r.threads.RegisterTurn(threadID, turnID, cancel, startedAtMS, params)
+}
+
+func (r *RuntimeRouter) registerTrackedActiveRuntimeTurn(threadID string, turnID string, cancel context.CancelFunc, startedAtMS int64, params *turn.TurnStartParams) error {
+	if r == nil {
 		if cancel != nil {
 			cancel()
 		}
-		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
+		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
-	r.active[threadID] = &activeRuntimeTurn{
-		ThreadID:    threadID,
-		TurnID:      turnID,
-		Cancel:      cancel,
-		StartedAtMS: startedAtMS,
-		Params:      cloneTurnStartParams(params),
-	}
-	r.ensureActiveDiffTrackerLocked(threadID, turnID)
-	return nil
+	return r.threads.RegisterTrackedTurn(threadID, turnID, cancel, startedAtMS, params)
 }
 
 func (r *RuntimeRouter) updateActiveRuntimeTurnAnalytics(threadID string, turnID string, connectionID string, runConfig *appTurnRunConfig) {
 	if r == nil {
 		return
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
-	if active == nil || active.TurnID != turnID {
-		return
-	}
-	if strings.TrimSpace(connectionID) != "" {
-		active.ConnectionID = normalizeConnectionID(connectionID)
-	}
-	active.RunConfig = runConfig
+	r.threads.UpdateTurn(threadID, turnID, func(active *activeRuntimeTurn) {
+		if strings.TrimSpace(connectionID) != "" {
+			active.ConnectionID = normalizeConnectionID(connectionID)
+		}
+		active.RunConfig = runConfig
+	})
 }
 
 func (r *RuntimeRouter) noteAcceptedTurnSteer(threadID string, turnID string) {
 	if r == nil {
 		return
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
-	if active == nil || active.TurnID != turnID {
-		return
-	}
-	active.SteerCount++
+	r.threads.UpdateTurn(threadID, turnID, func(active *activeRuntimeTurn) { active.SteerCount++ })
 }
 
 func (r *RuntimeRouter) activeRuntimeTurnSteerCount(threadID string, turnID string) int {
 	if r == nil {
 		return 0
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
+	active := r.threads.ActiveTurn(threadID)
 	if active == nil || active.TurnID != turnID {
 		return 0
 	}
@@ -2243,9 +2209,7 @@ func (r *RuntimeRouter) activeRuntimeTurnIsReview(threadID string, turnID string
 	if r == nil {
 		return false
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
+	active := r.threads.ActiveTurn(threadID)
 	if active == nil || active.TurnID != turnID || active.Params == nil {
 		return false
 	}
@@ -2256,14 +2220,9 @@ func (r *RuntimeRouter) consumeCompletedRuntimeTurn(threadID string, turnID stri
 	if r == nil {
 		return false
 	}
-	r.turnsMu.Lock()
-	active := r.active[threadID]
-	if active == nil || active.TurnID != turnID {
-		r.turnsMu.Unlock()
+	if _, ok := r.threads.ConsumeTurn(threadID, turnID, false); !ok {
 		return false
 	}
-	delete(r.active, threadID)
-	r.turnsMu.Unlock()
 	if r.networkApproval != nil {
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
@@ -2274,19 +2233,15 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	if r == nil {
 		return nil, false
 	}
-	r.turnsMu.Lock()
-	active := r.active[threadID]
-	if active == nil || active.TurnID != turnID {
-		r.turnsMu.Unlock()
+	active, ok := r.threads.ConsumeTurn(threadID, turnID, true)
+	if !ok {
 		return nil, false
 	}
-	delete(r.active, threadID)
-	delete(r.diffs, activeTurnDiffKey(threadID, turnID))
-	r.turnsMu.Unlock()
 	if active.Cancel != nil {
 		active.Cancel()
 	}
 	if r.networkApproval != nil {
+		r.networkApproval.cancelPendingForTurn(threadID, turnID)
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
 	r.clearPendingUnifiedExecItems(threadID, turnID)
@@ -2297,70 +2252,39 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 	if r == nil {
 		return
 	}
-	r.turnsMu.Lock()
-	active := r.active[threadID]
-	if active == nil || active.TurnID != turnID {
-		r.turnsMu.Unlock()
+	if _, ok := r.threads.ConsumeTurn(threadID, turnID, true); !ok {
 		return
 	}
-	delete(r.active, threadID)
-	delete(r.diffs, activeTurnDiffKey(threadID, turnID))
-	r.turnsMu.Unlock()
 	if r.networkApproval != nil {
+		r.networkApproval.cancelPendingForTurn(threadID, turnID)
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
 	r.clearPendingUnifiedExecItems(threadID, turnID)
 }
 
 func (r *RuntimeRouter) ensureActiveDiffTrackerLocked(threadID string, turnID string) *runtimeutil.DiffTracker {
-	if r == nil {
-		return nil
-	}
-	if r.diffs == nil {
-		r.diffs = map[string]*runtimeutil.DiffTracker{}
-	}
-	key := activeTurnDiffKey(threadID, turnID)
-	tracker := r.diffs[key]
-	if tracker == nil {
-		tracker = runtimeutil.NewDiffTracker()
-		r.diffs[key] = tracker
-	}
-	return tracker
+	return r.threads.ensureDiffLocked(threadID, turnID)
 }
 
 func (r *RuntimeRouter) activeDiffTracker(threadID string, turnID string) *runtimeutil.DiffTracker {
 	if r == nil {
 		return nil
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	return r.ensureActiveDiffTrackerLocked(threadID, turnID)
+	return r.threads.DiffTracker(threadID, turnID)
 }
 
 func (r *RuntimeRouter) activeUnifiedDiffSnapshot(threadID string, turnID string) string {
 	if r == nil {
 		return ""
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	tracker := r.diffs[activeTurnDiffKey(threadID, turnID)]
-	if tracker == nil {
-		return ""
-	}
-	diff := tracker.UnifiedDiff()
-	if diff == nil {
-		return ""
-	}
-	return *diff
+	return r.threads.DiffSnapshot(threadID, turnID)
 }
 
 func (r *RuntimeRouter) clearActiveDiffTracker(threadID string, turnID string) {
 	if r == nil {
 		return
 	}
-	r.turnsMu.Lock()
-	delete(r.diffs, activeTurnDiffKey(threadID, turnID))
-	r.turnsMu.Unlock()
+	r.threads.ClearDiff(threadID, turnID)
 	r.clearToolItemReviewSummaries(threadID, turnID)
 }
 
@@ -2634,7 +2558,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		ThreadID:  threadID,
 		TurnID:    turnID,
 	})
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
 	})
@@ -2658,7 +2582,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
@@ -2684,7 +2608,7 @@ func (r *RuntimeRouter) finishReviewRuntimeInterrupted(threadID string, turnID s
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
@@ -2711,7 +2635,7 @@ func (r *RuntimeRouter) finishReviewRuntimeFallbackCompleted(threadID string, tu
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &recordStartedAt, &completedAt, &durationMS)
-	r.notify(NotificationTurnCompleted, &TurnCompletedNotification{
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurn,
 	})
@@ -4779,7 +4703,7 @@ type responsesMetadataLineage struct {
 	ThreadSource       string
 }
 
-func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, startedAtMS int64) (*appTurnRunConfig, error) {
+func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime) (*appTurnRunConfig, error) {
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, err
@@ -4813,6 +4737,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		inputItems = append(inputItems, item)
 	}
 	if item, err := r.multiAgentModeInputItem(threadID, params); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
+	if item, err := r.deferredToolsWorldStateInputItem(threadID, turnRuntime, features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)
@@ -5356,20 +5285,11 @@ func (r *RuntimeRouter) activeRuntimeTurnStateSnapshot(threadID string, turnID s
 	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
+	active := r.threads.ActiveTurn(threadID)
 	if active == nil || active.TurnID != turnID {
 		return nil
 	}
-	return &activeRuntimeTurn{
-		ThreadID:     active.ThreadID,
-		TurnID:       active.TurnID,
-		StartedAtMS:  active.StartedAtMS,
-		Params:       cloneTurnStartParams(active.Params),
-		ConnectionID: active.ConnectionID,
-		RunConfig:    active.RunConfig,
-	}
+	return active
 }
 
 func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string) {
@@ -5720,6 +5640,11 @@ func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*c
 	if loaded != nil {
 		cfg = loaded
 	}
+	if cfg.Requirements == nil {
+		if requirements := r.services.Config.Requirements(); requirements != nil {
+			cfg.Requirements = requirements.Requirements
+		}
+	}
 	applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
 	return cfg, nil
 }
@@ -6037,12 +5962,11 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	if err != nil {
 		return "", nil, nil, err
 	}
+	hostWarnings := make([]string, 0, len(response.Errors))
 	for _, skillErr := range response.Errors {
-		r.notify(NotificationWarning, &WarningNotification{
-			ThreadID: stringPtrIfNotEmpty(threadID),
-			Message:  fmt.Sprintf("Failed to load skill at %s: %s", skillErr.Path, skillErr.Message),
-		})
+		hostWarnings = append(hostWarnings, fmt.Sprintf("Failed to load skill at %s: %s", skillErr.Path, skillErr.Message))
 	}
+	r.notifySkillWarnings(threadID, hostWarnings)
 	skillEntries := cloneSkills(response.Skills)
 	pluginSkillEntries := []SkillsListEntry(nil)
 	if (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) && (cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")) {
@@ -6066,15 +5990,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		return "", nil, nil, err
 	}
 	skillEntries = append(skillEntries, selectedCapabilitySkillEntries...)
-	for _, message := range selectedCapabilitySkillWarnings {
-		if strings.TrimSpace(message) == "" {
-			continue
-		}
-		r.notify(NotificationWarning, &WarningNotification{
-			ThreadID: stringPtrIfNotEmpty(threadID),
-			Message:  strings.TrimSpace(message),
-		})
-	}
+	r.notifySkillWarnings(threadID, selectedCapabilitySkillWarnings)
 	hostSkillMetadata := promptSkillMetadataFromEntries(hostSkillEntries)
 	selectedCapabilitySkillMetadata := promptSkillMetadataFromEntries(selectedCapabilitySkillEntries)
 	skillMetadata := append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...)
@@ -6083,21 +5999,11 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		var orchestratorWarnings []string
 		orchestratorMetadata, orchestratorWarnings = r.orchestratorSkillMetadataForRuntime(threadID)
 		skillMetadata = append(skillMetadata, orchestratorMetadata...)
-		for _, message := range orchestratorWarnings {
-			r.notify(NotificationWarning, &WarningNotification{
-				ThreadID: stringPtrIfNotEmpty(threadID),
-				Message:  message,
-			})
-		}
+		r.notifySkillWarnings(threadID, orchestratorWarnings)
 	}
 	customMetadata, customWarnings := r.customSkillMetadataForRuntime(ctx, turnID)
 	skillMetadata = append(skillMetadata, customMetadata...)
-	for _, message := range customWarnings {
-		r.notify(NotificationWarning, &WarningNotification{
-			ThreadID: stringPtrIfNotEmpty(threadID),
-			Message:  message,
-		})
-	}
+	r.notifySkillWarnings(threadID, customWarnings)
 	r.runSkillShadowSelection(cfg, params, hostSkillMetadata, orchestratorMetadata)
 	hostSkillMetadata = selectSkillMetadata(cfg, params, hostSkillMetadata)
 	selectedCapabilitySkillMetadata = selectSkillMetadata(cfg, params, selectedCapabilitySkillMetadata)
@@ -6144,6 +6050,62 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	return strings.Join(nonEmpty(rendered), "\n\n"), skillInputItems, postToolInputItems, nil
 }
 
+func (r *RuntimeRouter) notifySkillWarnings(threadID string, warnings []string) {
+	if r == nil {
+		return
+	}
+	warnings = turnBoundedSkillWarnings(warnings)
+	if len(warnings) == 0 {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	for _, message := range warnings {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			continue
+		}
+		r.skillWarningsMu.Lock()
+		seen := r.skillWarnings[threadID]
+		if seen == nil {
+			seen = map[string]struct{}{}
+			r.skillWarnings[threadID] = seen
+		}
+		_, duplicate := seen[message]
+		if !duplicate {
+			seen[message] = struct{}{}
+		}
+		r.skillWarningsMu.Unlock()
+		if duplicate {
+			continue
+		}
+		r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
+	}
+}
+
+func turnBoundedSkillWarnings(warnings []string) []string {
+	const maxWarnings = 4
+	const maxBytes = 256
+	out := make([]string, 0, maxWarnings)
+	for _, warning := range warnings {
+		if len(out) >= maxWarnings {
+			break
+		}
+		warning = strings.TrimSpace(warning)
+		if warning == "" {
+			continue
+		}
+		if len(warning) > maxBytes {
+			end := maxBytes
+			for end > 0 && !utf8.RuneStart(warning[end]) {
+				end--
+			}
+			warning = warning[:end]
+		}
+		out = append(out, warning)
+	}
+	return out
+}
+
 func nonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -6168,7 +6130,7 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime() ([]SkillsListEnt
 	entries := make([]SkillsListEntry, 0)
 	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
-		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, PluginRoot: filepath.Dir(root.Root)})
+		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, RemotePluginID: root.RemotePluginID, PluginRoot: filepath.Dir(root.Root)})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -6297,7 +6259,26 @@ func applyExecutorSkillDisplayPaths(entries []SkillsListEntry, selectedRootID st
 		if strings.TrimSpace(entries[i].DisplayPath) == "" {
 			entries[i].DisplayPath = executorSkillDisplayPath(selectedRootID, entries[i].Path)
 		}
+		if entries[i].SourcePath == "" {
+			entries[i].SourcePath = entries[i].Path
+		}
+		entries[i].AuthorityKind = string(skillprovider.SourceExecutor)
+		entries[i].AuthorityID = strings.TrimSpace(selectedRootID)
+		entries[i].ResourceID = strings.TrimSpace(entries[i].DisplayPath)
+		entries[i].PackageID = executorSkillPackageID(entries[i].ResourceID)
 	}
+}
+
+func executorSkillPackageID(resource string) string {
+	resource = strings.TrimSpace(resource)
+	if !strings.HasPrefix(resource, "skill://") {
+		return ""
+	}
+	separator := strings.LastIndex(resource, "/")
+	if separator <= len("skill://") {
+		return ""
+	}
+	return strings.TrimRight(resource[:separator], "/")
 }
 
 func executorSkillDisplayPath(selectedRootID string, sourcePath string) string {
@@ -6373,8 +6354,13 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 				Root:                    entry.Root,
 				Description:             description,
 				PluginID:                entry.PluginID,
+				RemotePluginID:          entry.RemotePluginID,
 				Contents:                entry.Contents,
 				AllowImplicitInvocation: allowImplicit,
+				AuthorityKind:           entry.AuthorityKind,
+				AuthorityID:             entry.AuthorityID,
+				PackageID:               entry.PackageID,
+				ResourceID:              entry.ResourceID,
 			})
 		}
 	}
@@ -6392,12 +6378,16 @@ func promptSkillLocatorKind(entry SkillsListEntry) string {
 }
 
 func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]promptctx.InstructionsSkillMetadata, []string) {
-	if r == nil || r.services.MCP == nil {
+	if r == nil {
 		return nil, nil
 	}
-	cacheKey, cache := r.orchestratorSkillCacheForRuntime(threadID)
+	service := r.mcpServiceForThread(threadID, nil)
+	if service == nil {
+		return nil, nil
+	}
+	cacheKey, cache := r.orchestratorSkillCacheForRuntime(threadID, service)
 	cache.once.Do(func() {
-		cache.catalog, cache.err = turn.LoadOrchestratorSkillCatalog(r.services.MCP, strings.TrimSpace(threadID))
+		cache.catalog, cache.err = turn.LoadOrchestratorSkillCatalog(service, strings.TrimSpace(threadID))
 	})
 	metadata := make([]promptctx.InstructionsSkillMetadata, 0, len(cache.catalog.Skills))
 	for _, skill := range cache.catalog.Skills {
@@ -6431,8 +6421,16 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 	return metadata, warnings
 }
 
-func (r *RuntimeRouter) orchestratorSkillCacheForRuntime(threadID string) (string, *runtimeOrchestratorSkillCatalog) {
-	cacheKey := fmt.Sprintf("%s\x00%d", strings.TrimSpace(threadID), r.services.MCP.Generation())
+func (r *RuntimeRouter) orchestratorSkillCacheForRuntime(threadID string, service *mcp.MCPService) (string, *runtimeOrchestratorSkillCatalog) {
+	bindingRevision := uint64(0)
+	if r != nil && r.mcpRuntimes != nil {
+		bindingRevision = r.mcpRuntimes.bindingRevision(threadID, service)
+	}
+	generation := uint64(0)
+	if service != nil {
+		generation = service.Generation()
+	}
+	cacheKey := fmt.Sprintf("%s\x00%d\x00%d", strings.TrimSpace(threadID), bindingRevision, generation)
 	r.orchestratorSkillMu.Lock()
 	defer r.orchestratorSkillMu.Unlock()
 	if r.orchestratorSkills == nil {
@@ -6450,10 +6448,14 @@ func (r *RuntimeRouter) orchestratorSkillCacheForRuntime(threadID string) (strin
 }
 
 func (r *RuntimeRouter) readOrchestratorSkillResourceForRuntime(threadID string, skill promptctx.InstructionsSkillMetadata) (string, error) {
-	if r == nil || r.services.MCP == nil {
+	if r == nil {
 		return "", errors.New("session MCP resource client is not configured")
 	}
-	_, cache := r.orchestratorSkillCacheForRuntime(threadID)
+	service := r.mcpServiceForThread(threadID, nil)
+	if service == nil {
+		return "", errors.New("session MCP resource client is not configured")
+	}
+	_, cache := r.orchestratorSkillCacheForRuntime(threadID, service)
 	key := skill.PackageID + "\x00" + skill.ResourceID
 	cache.resourceMu.Lock()
 	if contents, ok := cache.resources[key]; ok {
@@ -6461,7 +6463,7 @@ func (r *RuntimeRouter) readOrchestratorSkillResourceForRuntime(threadID string,
 		return contents, nil
 	}
 	cache.resourceMu.Unlock()
-	contents, err := turn.ReadOrchestratorSkillResource(r.services.MCP, threadID, skill.PackageID, skill.ResourceID)
+	contents, err := turn.ReadOrchestratorSkillResource(service, threadID, skill.PackageID, skill.ResourceID)
 	if err != nil {
 		return "", err
 	}
@@ -6769,7 +6771,7 @@ func (r *RuntimeRouter) runtimeMCPServerConfigsForSkills(cfg *config.Config) map
 	if r != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuth(values, codexHome, runtimeAuth)
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, cfg.Requirements)
 	out := make(map[string]mcp.RuntimeServerConfig, len(runtimeConfig.Servers))
 	for name, registration := range runtimeConfig.Servers {
 		config := registration.Config
@@ -6920,6 +6922,7 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 			ProductClientID: stringPtrIfNotEmpty(productClientID),
 			SkillScope:      stringPtrIfNotEmpty(scope),
 			PluginID:        stringPtrIfNotEmpty(skill.PluginID),
+			RemotePluginID:  stringPtrIfNotEmpty(skill.RemotePluginID),
 			RepoURL:         stringPtrIfNotEmpty(repoURL),
 			ThreadID:        stringPtrIfNotEmpty(threadID),
 			TurnID:          stringPtrIfNotEmpty(turnID),
@@ -7036,6 +7039,20 @@ func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill prompt
 				return nil, false, err
 			}
 			contents = read
+		} else if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), string(skillprovider.SourceExecutor)) {
+			providers := r.executorSkillProviderForThread(threadID)
+			if providers == nil {
+				return nil, false, errors.New("executor skill provider is not configured")
+			}
+			result, err := providers.Read(context.Background(), skillprovider.ReadRequest{
+				Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: skill.AuthorityID},
+				PackageID: skill.PackageID,
+				Resource:  skill.ResourceID,
+			})
+			if err != nil {
+				return nil, false, err
+			}
+			contents = result.Contents
 		} else if strings.TrimSpace(skill.AuthorityKind) != "" {
 			if r == nil || r.services.CustomSkills == nil {
 				return nil, false, fmt.Errorf("%s skill provider is not configured", skill.AuthorityKind)
@@ -7062,7 +7079,17 @@ func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill prompt
 	}
 	renderPath := firstNonEmpty(skill.LocatorPath, skill.Path)
 	name, renderPath, contents, truncated := promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
-	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
+	var fragment *contextfrag.SkillInstructions
+	if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), string(skillprovider.SourceExecutor)) && !skill.AllowsImplicitInvocation() {
+		fragment = contextfrag.NewSkillInstructionsWithExecutorResourceAccess(name, renderPath, contents, &contextfrag.ExecutorSkillResourceAccess{
+			AuthorityID:  skill.AuthorityID,
+			Package:      skill.PackageID,
+			MainResource: skill.ResourceID,
+		})
+	} else {
+		fragment = contextfrag.NewSkillInstructions(name, renderPath, contents)
+	}
+	rendered := contextfrag.Render(fragment)
 	return renderedFragmentInputItem(rendered), truncated, nil
 }
 
@@ -7986,4 +8013,58 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
 	return renderedFragmentInputItem(rendered), nil
+}
+
+func (r *RuntimeRouter) deferredToolsWorldStateInputItem(threadID string, runtime *turn.Runtime, enabled bool) (any, error) {
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	previous := map[string]string{}
+	previousKnown := len(state.Tools) > 0
+	if previousKnown {
+		if err := json.Unmarshal(state.Tools, &previous); err != nil {
+			previousKnown = false
+			previous = map[string]string{}
+		}
+	}
+	if !enabled {
+		if len(state.Tools) == 0 {
+			return nil, nil
+		}
+		state.Tools = nil
+		record.Metadata.WorldState, err = session.EncodeWorldState(state)
+		if err != nil {
+			return nil, err
+		}
+		return nil, r.runtimeSaveThreadRecord(record)
+	}
+	current := map[string]string{}
+	if runtime != nil {
+		current = contextfrag.NormalizeDeferredToolNamespaces(runtime.DeferredToolNamespaces())
+	}
+	fragment := contextfrag.DeferredToolsStateFragment(current, previous, previousKnown)
+	if len(current) == 0 {
+		state.Tools = nil
+	} else {
+		state.Tools, err = json.Marshal(current)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if fragment == nil && ((len(current) == 0 && len(state.Tools) == 0) || previousKnown) {
+		return nil, nil
+	}
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return nil, err
+	}
+	return renderedFragmentInputItem(contextfrag.Render(fragment)), nil
 }

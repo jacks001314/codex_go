@@ -70,6 +70,7 @@ type ShellRequest struct {
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
+	ApprovalPolicy                  sandbox.AskForApproval
 	ApprovalRequired                bool
 	ApprovalReason                  string
 	Justification                   string
@@ -82,6 +83,9 @@ type ShellRequest struct {
 	UnifiedExecEnvironmentID        string
 	EnforceManagedNetwork           bool
 	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy              *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider            network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout    time.Duration
 }
 
 type UnifiedExecEnvironment struct {
@@ -131,6 +135,9 @@ type ShellValidationOptions struct {
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
 	EnforceManagedNetwork           bool
 	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy              *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider            network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout    time.Duration
 }
 
 type ResolvedCommand struct {
@@ -329,8 +336,12 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		WindowsSandboxLevel:             opts.WindowsSandboxLevel,
 		WindowsSandboxPrivateDesktop:    opts.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: opts.WindowsSandboxProxySettingsMode,
+		ApprovalPolicy:                  opts.ApprovalPolicy,
 		EnforceManagedNetwork:           opts.EnforceManagedNetwork,
 		ManagedNetwork:                  cloneManagedNetworkSandboxContext(opts.ManagedNetwork),
+		RemoteNetworkProxy:              opts.RemoteNetworkProxy,
+		NetworkPolicyDecider:            opts.NetworkPolicyDecider,
+		NetworkPolicyDecisionTimeout:    opts.NetworkPolicyDecisionTimeout,
 		ApprovalRequired:                approvalRequired,
 		ApprovalReason:                  approvalReason,
 		Justification:                   args.Justification,

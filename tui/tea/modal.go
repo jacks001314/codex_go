@@ -37,19 +37,26 @@ const (
 )
 
 type ModalOption struct {
-	ID          string
-	Label       string
-	Description string
-	Shortcut    string
-	Disabled    bool
+	ID                   string
+	Label                string
+	Description          string
+	SelectedDescription  string
+	DisabledReason       string
+	DisabledGutterMarker string
+	Shortcut             string
+	Disabled             bool
 }
 
 type ModalRequestMsg struct {
-	ID      string
-	Kind    ModalKind
-	Title   string
-	Body    string
-	Options []ModalOption
+	ID                string
+	Kind              ModalKind
+	Title             string
+	Body              string
+	Options           []ModalOption
+	FooterNote        string
+	FooterHint        string
+	ColumnWidth       bottompane.ColumnWidthConfig
+	DescriptionLayout bottompane.SelectionDescriptionLayout
 }
 
 type ApprovalRequestMsg struct {
@@ -93,12 +100,17 @@ type UserInputDecision struct {
 }
 
 type modalState struct {
-	id       string
-	kind     ModalKind
-	title    string
-	body     string
-	options  []ModalOption
-	selected int
+	id                string
+	kind              ModalKind
+	title             string
+	body              string
+	options           []ModalOption
+	selected          int
+	footerNote        string
+	footerHint        string
+	columnWidth       bottompane.ColumnWidthConfig
+	descriptionLayout bottompane.SelectionDescriptionLayout
+	keymapCapture     *keymapCaptureState
 
 	elicitation        *bottompane.ElicitationFormRequest
 	modelPicker        *codextui.ModelPicker
@@ -150,11 +162,15 @@ func (m *Model) openModal(message ModalRequestMsg) {
 		options = []ModalOption{{ID: "ok", Label: "OK", Shortcut: "enter"}}
 	}
 	m.modal = &modalState{
-		id:      strings.TrimSpace(message.ID),
-		kind:    message.Kind,
-		title:   firstNonEmpty(message.Title, "Select an option"),
-		body:    strings.TrimSpace(message.Body),
-		options: options,
+		id:                strings.TrimSpace(message.ID),
+		kind:              message.Kind,
+		title:             firstNonEmpty(message.Title, "Select an option"),
+		body:              strings.TrimSpace(message.Body),
+		options:           options,
+		footerNote:        strings.TrimSpace(message.FooterNote),
+		footerHint:        strings.TrimSpace(message.FooterHint),
+		columnWidth:       message.ColumnWidth,
+		descriptionLayout: message.DescriptionLayout,
 	}
 	m.notice = ""
 }
@@ -171,11 +187,14 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 			id = fmt.Sprintf("option_%d", i+1)
 		}
 		out = append(out, ModalOption{
-			ID:          id,
-			Label:       label,
-			Description: strings.TrimSpace(option.Description),
-			Shortcut:    strings.ToLower(strings.TrimSpace(option.Shortcut)),
-			Disabled:    option.Disabled,
+			ID:                   id,
+			Label:                label,
+			Description:          strings.TrimSpace(option.Description),
+			SelectedDescription:  strings.TrimSpace(option.SelectedDescription),
+			DisabledReason:       strings.TrimSpace(option.DisabledReason),
+			DisabledGutterMarker: strings.TrimSpace(option.DisabledGutterMarker),
+			Shortcut:             strings.ToLower(strings.TrimSpace(option.Shortcut)),
+			Disabled:             option.Disabled,
 		})
 	}
 	return out
@@ -187,6 +206,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.themePicker != nil {
 		return m.updateThemePickerModal(message)
+	}
+	if m.modal.keymapCapture != nil {
+		return m.updateKeymapCapture(message)
 	}
 	if m.modal.sessionPicker != nil {
 		return m.updateSessionPickerModal(message)
@@ -602,6 +624,13 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.commitTerminalTitleSetup(modal.terminalTitleSetup)
 	}
+	if modal.kind == ModalKindGeneric && isKeymapModalID(modal.id) {
+		m.modal = nil
+		if cancelled {
+			return m.cancelKeymapModal(modal.id)
+		}
+		return m.applyKeymapModalOption(modal.id, response.OptionID)
+	}
 	m.modal = nil
 	if !cancelled && len(modal.options) > 0 {
 		if notice != "" {
@@ -914,6 +943,9 @@ func (m *Model) renderModal() string {
 	if m.modal.themePicker != nil {
 		return m.renderThemePickerModal()
 	}
+	if m.modal.keymapCapture != nil {
+		return m.renderKeymapCapture()
+	}
 	if m.modal.sessionPicker != nil {
 		return m.renderSessionPickerModal()
 	}
@@ -923,6 +955,17 @@ func (m *Model) renderModal() string {
 	if m.modal.body != "" {
 		builder.WriteString(indentLines(m.modal.body, "  "))
 		builder.WriteString("\n")
+	}
+	if m.modal.descriptionLayout.Mode == bottompane.SelectionDescriptionStackBelowWhenNarrow {
+		builder.WriteString(m.renderResponsiveModalOptions())
+		builder.WriteString("\n")
+		if m.modal.footerNote != "" {
+			builder.WriteString(m.modal.footerNote)
+			builder.WriteString("\n")
+		}
+		footer := firstNonEmpty(m.modal.footerHint, "Esc cancel | Enter choose")
+		builder.WriteString(footer)
+		return strings.TrimRight(builder.String(), "\n")
 	}
 	for i, option := range m.modal.options {
 		selected := i == m.modal.selected
@@ -941,8 +984,15 @@ func (m *Model) renderModal() string {
 		if option.Shortcut != "" && option.Shortcut != "enter" {
 			line += " (" + option.Shortcut + ")"
 		}
-		if option.Description != "" {
-			line += " - " + option.Description
+		description := option.Description
+		if option.DisabledReason != "" {
+			if description != "" {
+				description += "\n"
+			}
+			description += option.DisabledReason
+		}
+		if description != "" {
+			line += " - " + description
 		}
 		if selected {
 			line = codextui.RenderSelectedRow(line)
@@ -966,6 +1016,52 @@ func (m *Model) renderModal() string {
 	}
 	builder.WriteString(footer)
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func (m *Model) renderResponsiveModalOptions() string {
+	if m == nil || m.modal == nil {
+		return ""
+	}
+	enabledNumber := 0
+	enabledCount := 0
+	for _, option := range m.modal.options {
+		if !option.Disabled {
+			enabledCount++
+		}
+	}
+	numberWidth := len(fmt.Sprintf("%d", max(enabledCount, 1)))
+	rows := make([]bottompane.GenericDisplayRow, 0, len(m.modal.options))
+	for index, option := range m.modal.options {
+		prefix := ""
+		if option.Disabled {
+			markerWidth := codextui.DisplayWidth(option.DisabledGutterMarker)
+			if option.DisabledGutterMarker != "" {
+				prefix = codextui.SelectionPrefix(false) + strings.Repeat(" ", max(numberWidth-markerWidth, 0)) + option.DisabledGutterMarker + "  "
+			} else {
+				prefix = codextui.SelectionPrefix(false) + strings.Repeat(" ", numberWidth+2)
+			}
+		} else {
+			enabledNumber++
+			prefix = codextui.SelectionPrefix(index == m.modal.selected) + fmt.Sprintf("%*d. ", numberWidth, enabledNumber)
+		}
+		description := option.Description
+		if index == m.modal.selected && option.SelectedDescription != "" {
+			description = option.SelectedDescription
+		}
+		rows = append(rows, bottompane.GenericDisplayRow{
+			Name:           option.Label,
+			NamePrefix:     prefix,
+			Description:    description,
+			DisabledReason: option.DisabledReason,
+			IsDisabled:     option.Disabled,
+		})
+	}
+	width := m.width - 4
+	if width <= 0 {
+		width = max(m.width, 1)
+	}
+	state := bottompane.ScrollState{SelectedIdx: m.modal.selected, HasSelection: true}
+	return strings.Join(bottompane.RenderGenericRowsWithDescriptionLayout(rows, state, len(rows), "", width, m.modal.columnWidth, m.modal.descriptionLayout), "\n")
 }
 
 func (m *Model) renderSessionPickerModal() string {

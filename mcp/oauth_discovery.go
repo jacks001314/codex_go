@@ -18,7 +18,7 @@ const (
 	mcpOAuthAuthorizationServerWellKnownPath = "/.well-known/oauth-authorization-server"
 	mcpOAuthProtectedResourceWellKnownPath   = "/.well-known/oauth-protected-resource"
 	mcpOAuthMetadataMaxBytes                 = 1 << 20
-	mcpOAuthLoginDiscoveryMaxTimeout         = 2 * time.Second
+	mcpOAuthLoginDiscoveryMaxTimeout         = 5 * time.Second
 )
 
 type StreamableHTTPOAuthDiscovery struct {

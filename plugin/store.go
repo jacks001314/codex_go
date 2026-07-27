@@ -431,16 +431,8 @@ func resolveInstallManifest(sourcePath string, fallbackManifest []byte) []byte {
 }
 
 func findPluginManifestPathOnly(sourcePath string) string {
-	candidates := []string{
-		filepath.Join(sourcePath, ".codex-plugin", "plugin.json"),
-		filepath.Join(sourcePath, ".claude-plugin", "plugin.json"),
-	}
-	for _, p := range candidates {
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return p
-		}
-	}
-	return ""
+	path, _ := findPluginManifestPath(sourcePath)
+	return path
 }
 
 func pluginManifestVersionForSource(sourcePath string, fallbackManifest []byte) (string, error) {

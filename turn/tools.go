@@ -10,6 +10,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/plugin"
 	"codex_go/sandbox"
+	"codex_go/skillprovider"
 	"codex_go/tool"
 )
 
@@ -20,6 +21,9 @@ type ToolRegistryOptions struct {
 	RequestUserInputAvailableModes []string
 	DynamicToolCaller              DynamicToolCaller
 	ClockProvider                  tool.ClockProvider
+	EnvironmentWaiter              tool.EnvironmentWaiter
+	SelectedEnvironmentIDs         []string
+	WaitForEnvironmentToolConfig   *tool.WaitForEnvironmentToolConfig
 
 	Shell       *tool.ShellExecutorOptions
 	ApplyPatch  *tool.ApplyPatchExecutorOptions
@@ -30,6 +34,7 @@ type ToolRegistryOptions struct {
 	MCPConnectors             []mcp.RuntimeConnector
 	MCPExposure               tool.Exposure
 	OrchestratorSkillsEnabled *bool
+	SkillProviders            *skillprovider.Registry
 
 	AgentController agent.ToolController
 	AgentExposure   tool.Exposure
@@ -44,21 +49,25 @@ type ToolRegistryOptions struct {
 	ImageGeneration                    *ImageGenerationOptions
 	ViewImage                          *tool.ViewImageOptions
 
-	EnableCore            bool
-	EnableShell           bool
-	EnableUnifiedExec     bool
-	EnableCodeMode        bool
-	EnableApplyPatch      bool
-	EnableMCP             bool
-	EnableAgents          bool
-	EnableToolSearch      bool
-	EnableCurrentTimeTool bool
-	EnableSleepTool       bool
-	DisableUpdatePlan     bool
-	DisableWaitAgent      bool
-	DynamicTools          []DynamicToolSpec
-	ThreadID              string
-	TurnID                string
+	EnableCore               bool
+	EnableShell              bool
+	EnableUnifiedExec        bool
+	EnableCodeMode           bool
+	CodeModeProvider         tool.CodeModeRemoteProvider
+	DisableCodeModeFallback  bool
+	EnableApplyPatch         bool
+	EnableMCP                bool
+	EnableAgents             bool
+	EnableToolSearch         bool
+	OmitToolSearchSources    bool
+	EnableCurrentTimeTool    bool
+	EnableSleepTool          bool
+	EnableWaitForEnvironment bool
+	DisableUpdatePlan        bool
+	DisableWaitAgent         bool
+	DynamicTools             []DynamicToolSpec
+	ThreadID                 string
+	TurnID                   string
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -127,7 +136,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
 				return nil, err
 			}
-			execExecutor, waitExecutor := tool.NewCodeModeExecutors(registry, shellOptions.ToolName)
+			execExecutor, waitExecutor := tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, shellOptions.ToolName)
 			if err := registry.Register(execExecutor); err != nil {
 				return nil, err
 			}
@@ -228,9 +237,14 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		// useless tool_search_call/output pair which is then persisted into
 		// resumed Responses history.
 		if len(registry.DiscoverableSpecs()) > 0 {
-			if err := tool.RegisterToolSearchFromRegistry(registry); err != nil {
+			if err := tool.RegisterToolSearchFromRegistryWithOptions(registry, options.OmitToolSearchSources); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if options.EnableWaitForEnvironment {
+		if err := registry.Register(tool.NewWaitForEnvironmentHandler(options.EnvironmentWaiter, options.SelectedEnvironmentIDs, options.WaitForEnvironmentToolConfig)); err != nil {
+			return nil, err
 		}
 	}
 	return registry, nil

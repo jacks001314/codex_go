@@ -85,6 +85,39 @@ type httpClientCallOptions struct {
 	Progress    MCPProgressHandler
 }
 
+type mcpOAuthHeaderTransport struct {
+	base           http.RoundTripper
+	httpHeaders    map[string]string
+	envHTTPHeaders map[string]string
+}
+
+func (t *mcpOAuthHeaderTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	cloned.Header = request.Header.Clone()
+	defaults := http.Header{"User-Agent": []string{mcpUserAgent()}}
+	applyMCPHTTPHeaders(&http.Request{Header: defaults}, t.httpHeaders, t.envHTTPHeaders)
+	for name, values := range defaults {
+		if httpHeaderContainsKey(cloned.Header, name) {
+			continue
+		}
+		cloned.Header[name] = append([]string(nil), values...)
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(cloned)
+}
+
+func httpHeaderContainsKey(headers http.Header, target string) bool {
+	for name := range headers {
+		if strings.EqualFold(name, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func listMCPInventory(config *ServerConfig) (*stdioInventory, error) {
 	if strings.TrimSpace(config.URL) != "" {
 		return listMCPHTTPInventory(config)
@@ -272,6 +305,40 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 		openAIForm: openAIForm,
 		retrySleep: time.Sleep,
 	}
+}
+
+// oauthHTTPClient reuses the final MCP runtime client's routing, proxy, TLS,
+// cookie, and redirect behavior while keeping OAuth request timeouts isolated
+// from the active streamable HTTP session. Configured server headers are
+// defaults: OAuth-specific request headers win when both provide the same key.
+func (c *httpClient) oauthHTTPClient(timeout time.Duration) *http.Client {
+	if c == nil || c.client == nil {
+		client := *http.DefaultClient
+		if timeout > 0 {
+			client.Timeout = timeout
+		}
+		return &client
+	}
+	client := *c.client
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	var httpHeaders map[string]string
+	var envHTTPHeaders map[string]string
+	if c.config != nil {
+		httpHeaders = cloneStringMap(c.config.HTTPHeaders)
+		envHTTPHeaders = cloneStringMap(c.config.EnvHTTPHeaders)
+	}
+	base := c.client.Transport
+	if headerTransport, ok := base.(*mcpHeaderTransport); ok {
+		base = headerTransport.base
+	}
+	client.Transport = &mcpOAuthHeaderTransport{
+		base:           base,
+		httpHeaders:    httpHeaders,
+		envHTTPHeaders: envHTTPHeaders,
+	}
+	return &client
 }
 
 func mcpClientTimeout(config *ServerConfig) time.Duration {

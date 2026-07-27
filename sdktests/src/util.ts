@@ -119,10 +119,13 @@ export function latestArtifactDir(): string {
     ? readdirSync(artifacts, { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.join(artifacts, entry.name))
+        .filter((directory) =>
+          existsSync(path.join(directory, "raw", "rust.json")) &&
+          existsSync(path.join(directory, "raw", "go.json")))
         .sort()
     : [];
   if (dirs.length === 0) {
-    throw new Error("No sdktests artifacts found.");
+    throw new Error("No complete Rust/Go sdktests parity artifacts found.");
   }
   return dirs.at(-1)!;
 }

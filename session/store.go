@@ -237,20 +237,32 @@ type TurnSnapshot struct {
 }
 
 type Record struct {
-	ID             ThreadID  `json:"id"`
-	SessionID      string    `json:"session_id,omitempty"`
-	ForkedFromID   ThreadID  `json:"forked_from_id,omitempty"`
-	ParentThreadID ThreadID  `json:"parent_thread_id,omitempty"`
-	Title          string    `json:"title,omitempty"`
-	Preview        string    `json:"preview,omitempty"`
-	Archived       bool      `json:"archived"`
-	IsPinned       bool      `json:"is_pinned,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	RecencyAt      time.Time `json:"recency_at"`
-	Metadata       Metadata  `json:"metadata"`
-	Items          []Item    `json:"items,omitempty"`
-	FromRollout    bool      `json:"-"`
+	ID             ThreadID         `json:"id"`
+	SessionID      string           `json:"session_id,omitempty"`
+	ForkedFromID   ThreadID         `json:"forked_from_id,omitempty"`
+	ParentThreadID ThreadID         `json:"parent_thread_id,omitempty"`
+	Title          string           `json:"title,omitempty"`
+	Preview        string           `json:"preview,omitempty"`
+	Archived       bool             `json:"archived"`
+	IsPinned       bool             `json:"is_pinned,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
+	RecencyAt      time.Time        `json:"recency_at"`
+	Metadata       Metadata         `json:"metadata"`
+	HistoryBase    *HistoryPosition `json:"history_base,omitempty"`
+	Items          []Item           `json:"items,omitempty"`
+	FromRollout    bool             `json:"-"`
+	InheritedItems int              `json:"-"`
+	InheritedTurns int              `json:"-"`
+}
+
+// HistoryPosition freezes the materialized prefix inherited by a paginated
+// fork. The JSON store has item and turn ordinals rather than Rust's physical
+// rollout byte offsets, so the prefix lengths are the durable equivalent.
+type HistoryPosition struct {
+	ThreadID ThreadID `json:"thread_id"`
+	ItemEnd  int      `json:"item_end_exclusive"`
+	TurnEnd  int      `json:"turn_end_exclusive"`
 }
 
 type MetadataPatch struct {
@@ -389,14 +401,55 @@ type ForkOptions struct {
 	Now            time.Time
 }
 
+type ForkBoundaryKind string
+
+const (
+	ForkBoundaryLatest      ForkBoundaryKind = "latest"
+	ForkBoundaryThroughTurn ForkBoundaryKind = "throughTurn"
+	ForkBoundaryBeforeTurn  ForkBoundaryKind = "beforeTurn"
+)
+
+type ForkBoundary struct {
+	Kind   ForkBoundaryKind
+	TurnID string
+}
+
+type PrepareForkParams struct {
+	Mode     ForkMode
+	LastN    int
+	Boundary ForkBoundary
+}
+
+type PreparedFork struct {
+	SourceID     ThreadID
+	HistoryBase  *HistoryPosition
+	Items        []Item
+	RolloutTurns []TurnSnapshot
+}
+
 type Store struct {
 	root                  string
+	mu                    *sync.RWMutex
 	writerLocksOnce       sync.Once
 	writerLockCoordinator *writerLockCoordinator
 }
 
+var storeRootLocks sync.Map
+
 func NewStore(root string) *Store {
-	return &Store{root: root}
+	return &Store{root: root, mu: storeRootLock(root)}
+}
+
+func storeRootLock(root string) *sync.RWMutex {
+	key := filepath.Clean(root)
+	if absolute, err := filepath.Abs(key); err == nil {
+		key = absolute
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	lock, _ := storeRootLocks.LoadOrStore(key, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
 }
 
 func (s *Store) Root() string {
@@ -411,6 +464,12 @@ func (s *Store) Path(threadID ThreadID) (string, error) {
 }
 
 func (s *Store) Save(record *Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked(record)
+}
+
+func (s *Store) saveLocked(record *Record) error {
 	if record == nil {
 		return fmt.Errorf("%w: record is nil", ErrInvalidThreadID)
 	}
@@ -432,9 +491,17 @@ func (s *Store) Save(record *Record) error {
 			record.Items[i].CreatedAt = record.CreatedAt
 		}
 	}
-	record.Metadata.Git = cloneStringMap(record.Metadata.Git)
-	record.Metadata.Extra = cloneAnyMap(record.Metadata.Extra)
-	record.Items = cloneItems(record.Items)
+	physical := cloneRecord(record)
+	if physical.HistoryBase != nil {
+		if physical.InheritedItems < 0 || physical.InheritedItems > len(physical.Items) {
+			return fmt.Errorf("%w: invalid inherited item prefix for thread %s", ErrInvalidThreadID, physical.ID)
+		}
+		if physical.InheritedTurns < 0 || physical.InheritedTurns > len(physical.Metadata.RolloutTurns) {
+			return fmt.Errorf("%w: invalid inherited turn prefix for thread %s", ErrInvalidThreadID, physical.ID)
+		}
+		physical.Items = cloneItems(physical.Items[physical.InheritedItems:])
+		physical.Metadata.RolloutTurns = cloneTurnSnapshots(physical.Metadata.RolloutTurns[physical.InheritedTurns:])
+	}
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return err
 	}
@@ -442,15 +509,21 @@ func (s *Store) Save(record *Record) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(record, "", "  ")
+	data, err := json.MarshalIndent(physical, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return writeStoreFileAtomically(path, data)
 }
 
 func (s *Store) Create(record *Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createLocked(record)
+}
+
+func (s *Store) createLocked(record *Record) error {
 	if record == nil {
 		return fmt.Errorf("%w: record is nil", ErrInvalidThreadID)
 	}
@@ -463,10 +536,16 @@ func (s *Store) Create(record *Record) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return s.Save(record)
+	return s.saveLocked(record)
 }
 
 func (s *Store) Load(threadID ThreadID) (*Record, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadLocked(threadID)
+}
+
+func (s *Store) loadLocked(threadID ThreadID) (*Record, error) {
 	path, err := s.Path(threadID)
 	if err != nil {
 		return nil, err
@@ -492,12 +571,15 @@ func (s *Store) Load(threadID ThreadID) (*Record, error) {
 }
 
 func (s *Store) Read(threadID ThreadID, includeArchived bool, includeHistory bool) (*Record, error) {
-	record, err := s.Load(threadID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readLocked(threadID, includeArchived, includeHistory)
+}
+
+func (s *Store) readLocked(threadID ThreadID, includeArchived bool, includeHistory bool) (*Record, error) {
+	record, err := s.readMaterializedLocked(threadID, includeArchived, map[ThreadID]struct{}{})
 	if err != nil {
 		return nil, err
-	}
-	if record.Archived && !includeArchived {
-		return nil, fmt.Errorf("%w: %s", ErrThreadArchived, threadID)
 	}
 	if !includeHistory {
 		record.Items = nil
@@ -505,8 +587,46 @@ func (s *Store) Read(threadID ThreadID, includeArchived bool, includeHistory boo
 	return record, nil
 }
 
+func (s *Store) readMaterializedLocked(threadID ThreadID, includeArchived bool, visiting map[ThreadID]struct{}) (*Record, error) {
+	if _, ok := visiting[threadID]; ok {
+		return nil, fmt.Errorf("%w: cyclic history reference at thread %s", ErrInvalidThreadID, threadID)
+	}
+	visiting[threadID] = struct{}{}
+	defer delete(visiting, threadID)
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, err
+	}
+	if record.Archived && !includeArchived {
+		return nil, fmt.Errorf("%w: %s", ErrThreadArchived, threadID)
+	}
+	if record.HistoryBase == nil {
+		return record, nil
+	}
+	base := *record.HistoryBase
+	if base.ThreadID == "" || base.ThreadID == record.ID || base.ItemEnd < 0 || base.TurnEnd < 0 {
+		return nil, fmt.Errorf("%w: invalid history reference for thread %s", ErrInvalidThreadID, threadID)
+	}
+	source, err := s.readMaterializedLocked(base.ThreadID, true, visiting)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve history base for thread %s: %v", ErrInvalidThreadID, threadID, err)
+	}
+	if base.ItemEnd > len(source.Items) || base.TurnEnd > len(source.Metadata.RolloutTurns) {
+		return nil, fmt.Errorf("%w: history reference for thread %s exceeds source %s", ErrInvalidThreadID, threadID, base.ThreadID)
+	}
+	localItems := cloneItems(record.Items)
+	localTurns := cloneTurnSnapshots(record.Metadata.RolloutTurns)
+	record.Items = append(cloneItems(source.Items[:base.ItemEnd]), localItems...)
+	record.Metadata.RolloutTurns = append(cloneTurnSnapshots(source.Metadata.RolloutTurns[:base.TurnEnd]), localTurns...)
+	record.InheritedItems = base.ItemEnd
+	record.InheritedTurns = base.TurnEnd
+	return record, nil
+}
+
 func (s *Store) AppendItem(threadID ThreadID, item Item) (*Record, error) {
-	record, err := s.Read(threadID, true, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.readLocked(threadID, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -520,14 +640,16 @@ func (s *Store) AppendItem(threadID ThreadID, item Item) (*Record, error) {
 	if record.Preview == "" {
 		record.Preview = itemPreviewText(&item)
 	}
-	if err := s.Save(record); err != nil {
+	if err := s.saveLocked(record); err != nil {
 		return nil, err
 	}
 	return record, nil
 }
 
 func (s *Store) AppendItems(threadID ThreadID, items []Item) (*Record, error) {
-	record, err := s.Read(threadID, true, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.readLocked(threadID, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -543,14 +665,20 @@ func (s *Store) AppendItems(threadID ThreadID, items []Item) (*Record, error) {
 			record.Preview = itemPreviewText(&items[i])
 		}
 	}
-	if err := s.Save(record); err != nil {
+	if err := s.saveLocked(record); err != nil {
 		return nil, err
 	}
 	return record, nil
 }
 
 func (s *Store) UpdateMetadata(threadID ThreadID, patch *MetadataPatch, includeArchived bool) (*Record, error) {
-	record, err := s.Read(threadID, includeArchived, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateMetadataLocked(threadID, patch, includeArchived)
+}
+
+func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, includeArchived bool) (*Record, error) {
+	record, err := s.readLocked(threadID, includeArchived, true)
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +788,7 @@ func (s *Store) UpdateMetadata(threadID ThreadID, patch *MetadataPatch, includeA
 		record.Metadata.Extra = cloneAnyMap(patch.Extra)
 	}
 	record.UpdatedAt = time.Now().UTC()
-	if err := s.Save(record); err != nil {
+	if err := s.saveLocked(record); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -678,6 +806,18 @@ func (s *Store) Unarchive(threadID ThreadID) (*Record, error) {
 }
 
 func (s *Store) Delete(threadID ThreadID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.loadAllLocked()
+	if err != nil {
+		return err
+	}
+	for i := range records {
+		base := records[i].HistoryBase
+		if records[i].ID != threadID && base != nil && base.ThreadID == threadID {
+			return fmt.Errorf("%w: cannot delete thread %s: forked history still references it", ErrInvalidThreadID, threadID)
+		}
+	}
 	path, err := s.Path(threadID)
 	if err != nil {
 		return err
@@ -694,7 +834,9 @@ func (s *Store) SubtreeThreadIDs(root ThreadID) ([]ThreadID, error) {
 	if err := validateThreadID(root); err != nil {
 		return nil, err
 	}
-	records, err := s.loadAll()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records, err := s.loadAllLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -744,7 +886,9 @@ func ArchiveNotificationOrder(ids []ThreadID) []ThreadID {
 }
 
 func (s *Store) List(options ListOptions) (*Page, error) {
-	records, err := s.loadAll()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records, err := s.loadAllLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -752,7 +896,9 @@ func (s *Store) List(options ListOptions) (*Page, error) {
 }
 
 func (s *Store) AllRecords() ([]Record, error) {
-	return s.loadAll()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadAllLocked()
 }
 
 func ListRecords(records []Record, options ListOptions) (*Page, error) {
@@ -800,14 +946,22 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 }
 
 func (s *Store) Fork(sourceID ThreadID, options ForkOptions) (*Record, error) {
-	source, err := s.Read(sourceID, true, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source, err := s.readLocked(sourceID, true, true)
 	if err != nil {
 		return nil, err
 	}
-	return s.ForkRecord(source, options)
+	return s.forkRecordLocked(source, options)
 }
 
 func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forkRecordLocked(source, options)
+}
+
+func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, error) {
 	if source == nil {
 		return nil, fmt.Errorf("%w: source record is nil", ErrInvalidThreadID)
 	}
@@ -832,13 +986,11 @@ func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error)
 	if strings.TrimSpace(options.LastTurnID) != "" && strings.TrimSpace(options.BeforeTurnID) != "" {
 		return nil, fmt.Errorf("%w: `beforeTurnId` cannot be combined with `lastTurnId`", ErrInvalidThreadID)
 	}
-	if err := validateForkLastTurnSnapshot(source.Metadata.RolloutTurns, options.LastTurnID); err != nil {
-		return nil, err
-	}
-	items, err := forkItems(source.Items, options.Mode, options.LastN, options.LastTurnID, options.BeforeTurnID)
+	prepared, err := s.PrepareFork(source, prepareForkParamsFromOptions(options))
 	if err != nil {
 		return nil, err
 	}
+	items := prepared.Items
 	title := options.Title
 	if title == "" && source.Title != "" {
 		title = source.Title
@@ -852,9 +1004,13 @@ func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error)
 		parentID = source.ID
 	}
 	metadata := forkMetadata(source, options, now, len(items))
-	metadata.RolloutTurns = forkTurnSnapshots(source.Metadata.RolloutTurns, items)
-	if len(metadata.RolloutTurns) == 0 {
-		metadata.RolloutTurns = syntheticForkTurnSnapshots(items, strings.TrimSpace(options.LastTurnID) != "")
+	metadata.RolloutTurns = cloneTurnSnapshots(prepared.RolloutTurns)
+	if prepared.HistoryBase != nil {
+		metadata.Extra["history_base"] = map[string]any{
+			"thread_id":          string(prepared.HistoryBase.ThreadID),
+			"item_end_exclusive": prepared.HistoryBase.ItemEnd,
+			"turn_end_exclusive": prepared.HistoryBase.TurnEnd,
+		}
 	}
 	record := &Record{
 		ID:             newID,
@@ -868,7 +1024,12 @@ func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error)
 		UpdatedAt:      now,
 		RecencyAt:      now,
 		Metadata:       metadata,
+		HistoryBase:    cloneHistoryPosition(prepared.HistoryBase),
 		Items:          items,
+	}
+	if record.HistoryBase != nil {
+		record.InheritedItems = len(items)
+		record.InheritedTurns = len(metadata.RolloutTurns)
 	}
 	if options.Ephemeral {
 		if record.Metadata.Extra == nil {
@@ -877,13 +1038,96 @@ func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error)
 		record.Metadata.Extra["ephemeral"] = true
 		return record, nil
 	}
-	if err := s.Create(record); err != nil {
+	if err := s.createLocked(record); err != nil {
 		return nil, err
 	}
 	return record, nil
 }
 
-func (s *Store) loadAll() ([]Record, error) {
+func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*PreparedFork, error) {
+	if source == nil {
+		return nil, fmt.Errorf("%w: source record is nil", ErrInvalidThreadID)
+	}
+	mode := params.Mode
+	if mode == "" {
+		mode = ForkAll
+	}
+	boundary := params.Boundary
+	if boundary.Kind == "" {
+		boundary.Kind = ForkBoundaryLatest
+	}
+	turnID := strings.TrimSpace(boundary.TurnID)
+	lastTurnID := ""
+	beforeTurnID := ""
+	switch boundary.Kind {
+	case ForkBoundaryLatest:
+		if turnID != "" {
+			return nil, fmt.Errorf("%w: latest fork boundary must not include a turn id", ErrInvalidThreadID)
+		}
+	case ForkBoundaryThroughTurn:
+		if turnID == "" {
+			return nil, fmt.Errorf("%w: throughTurn fork boundary requires a turn id", ErrInvalidThreadID)
+		}
+		lastTurnID = turnID
+	case ForkBoundaryBeforeTurn:
+		if turnID == "" {
+			return nil, fmt.Errorf("%w: beforeTurn fork boundary requires a turn id", ErrInvalidThreadID)
+		}
+		beforeTurnID = turnID
+	default:
+		return nil, fmt.Errorf("%w: unknown fork boundary %q", ErrInvalidThreadID, boundary.Kind)
+	}
+	if err := validateForkLastTurnSnapshot(source.Metadata.RolloutTurns, lastTurnID); err != nil {
+		return nil, err
+	}
+	items, err := forkItems(source.Items, mode, params.LastN, lastTurnID, beforeTurnID)
+	if err != nil {
+		return nil, err
+	}
+	snapshots := forkTurnSnapshots(source.Metadata.RolloutTurns, items)
+	if len(snapshots) == 0 {
+		snapshots = syntheticForkTurnSnapshots(items, lastTurnID != "")
+	}
+	var historyBase *HistoryPosition
+	if strings.EqualFold(strings.TrimSpace(source.Metadata.HistoryMode), "paginated") {
+		historyBase = &HistoryPosition{
+			ThreadID: source.ID,
+			ItemEnd:  len(items),
+			TurnEnd:  len(snapshots),
+		}
+	}
+	return &PreparedFork{
+		SourceID:     source.ID,
+		HistoryBase:  historyBase,
+		Items:        items,
+		RolloutTurns: snapshots,
+	}, nil
+}
+
+func prepareForkParamsFromOptions(options ForkOptions) PrepareForkParams {
+	lastTurnID := strings.TrimSpace(options.LastTurnID)
+	beforeTurnID := strings.TrimSpace(options.BeforeTurnID)
+	boundary := ForkBoundary{Kind: ForkBoundaryLatest}
+	if lastTurnID != "" {
+		boundary = ForkBoundary{Kind: ForkBoundaryThroughTurn, TurnID: lastTurnID}
+	} else if beforeTurnID != "" {
+		boundary = ForkBoundary{Kind: ForkBoundaryBeforeTurn, TurnID: beforeTurnID}
+	}
+	return PrepareForkParams{Mode: options.Mode, LastN: options.LastN, Boundary: boundary}
+}
+
+func cloneTurnSnapshots(values []TurnSnapshot) []TurnSnapshot {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]TurnSnapshot, len(values))
+	for i := range values {
+		out[i] = cloneTurnSnapshot(values[i])
+	}
+	return out
+}
+
+func (s *Store) loadAllLocked() ([]Record, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -913,6 +1157,36 @@ func (s *Store) loadAll() ([]Record, error) {
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+func writeStoreFileAtomically(path string, data []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".thread-store-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = temporary.Close()
+		}
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+	return os.Rename(temporaryPath, path)
 }
 
 func matchesListOptions(record *Record, options *ListOptions, all []Record) bool {
@@ -1333,6 +1607,42 @@ func cloneItems(items []Item) []Item {
 		}
 	}
 	return cloned
+}
+
+func cloneHistoryPosition(position *HistoryPosition) *HistoryPosition {
+	if position == nil {
+		return nil
+	}
+	clone := *position
+	return &clone
+}
+
+func cloneRecord(record *Record) *Record {
+	if record == nil {
+		return nil
+	}
+	clone := *record
+	clone.Metadata = cloneMetadata(record.Metadata)
+	clone.HistoryBase = cloneHistoryPosition(record.HistoryBase)
+	clone.Items = cloneItems(record.Items)
+	return &clone
+}
+
+// LocalRecord returns the physical, non-inherited portion of a record. It is
+// used when creating a paginated child rollout so inherited events remain a
+// reference instead of being replayed into the child file.
+func LocalRecord(record *Record) *Record {
+	clone := cloneRecord(record)
+	if clone == nil || clone.HistoryBase == nil {
+		return clone
+	}
+	if clone.InheritedItems >= 0 && clone.InheritedItems <= len(clone.Items) {
+		clone.Items = cloneItems(clone.Items[clone.InheritedItems:])
+	}
+	if clone.InheritedTurns >= 0 && clone.InheritedTurns <= len(clone.Metadata.RolloutTurns) {
+		clone.Metadata.RolloutTurns = cloneTurnSnapshots(clone.Metadata.RolloutTurns[clone.InheritedTurns:])
+	}
+	return clone
 }
 
 func cloneMetadata(metadata Metadata) Metadata {

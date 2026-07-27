@@ -2,12 +2,15 @@ package appserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/install"
@@ -261,6 +264,46 @@ func TestSkillsServiceIncludesBundledSystemSkillsRoot(t *testing.T) {
 	}
 	if len(response.Skills) != 1 || response.Skills[0].Name != "sys-skill" || response.Skills[0].Scope != "system" {
 		t.Fatalf("skills = %#v, want bundled system skill", response.Skills)
+	}
+}
+
+func TestSkillsWatcherIgnoresGeneratedSystemSkillsLikeRust(t *testing.T) {
+	userRoot := t.TempDir()
+	systemRoot := filepath.Join(userRoot, ".system")
+	if err := os.MkdirAll(systemRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(system) error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{
+			{Path: userRoot, Scope: "user"},
+			{Path: systemRoot, Scope: "system"},
+		},
+		WatchInterval: 10 * time.Millisecond,
+	})
+	defer service.Close()
+	changed := make(chan struct{}, 1)
+	service.SetChangedCallback(func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	service.WatchCWDs(nil)
+	if err := os.WriteFile(filepath.Join(systemRoot, "generated.txt"), []byte("generated"), 0o600); err != nil {
+		t.Fatalf("WriteFile(system) error = %v", err)
+	}
+	select {
+	case <-changed:
+		t.Fatal("generated system skill change triggered watcher")
+	case <-time.After(80 * time.Millisecond):
+	}
+	if err := os.WriteFile(filepath.Join(userRoot, "user.txt"), []byte("user"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("user skill change did not trigger watcher")
 	}
 }
 
@@ -1232,6 +1275,110 @@ func TestDiscoverRemoteEnvironmentSkillsNamespacesAndSortsLikeRust(t *testing.T)
 	}
 }
 
+func TestRemotePluginManifestPathClassificationKeepsLegacyRootsAndAgentPriority(t *testing.T) {
+	tests := []struct {
+		path      string
+		wantRoot  string
+		wantAgent bool
+	}{
+		{"file:///remote/plugin/plugin.json", "file:///remote/plugin", true},
+		{"file:///remote/plugin/.codex-plugin/plugin.json", "file:///remote/plugin", false},
+		{"file:///remote/plugin/.claude-plugin/plugin.json", "file:///remote/plugin", false},
+		{"file:///remote/plugin/.cursor-plugin/plugin.json", "file:///remote/plugin", false},
+	}
+	for _, tc := range tests {
+		root, _, agentManifest, ok := remotePluginRootFromManifestPath(tc.path)
+		if !ok || root != tc.wantRoot || agentManifest != tc.wantAgent {
+			t.Fatalf("remotePluginRootFromManifestPath(%q) = %q, agent=%v, ok=%v", tc.path, root, agentManifest, ok)
+		}
+	}
+}
+
+type remotePluginTestCaller struct {
+	files map[string]string
+}
+
+func (c remotePluginTestCaller) Call(_ context.Context, _ int, method string, params any) (json.RawMessage, error) {
+	values, _ := params.(map[string]any)
+	path, _ := values["path"].(string)
+	switch method {
+	case "fs/getMetadata":
+		_, ok := c.files[path]
+		return json.Marshal(map[string]any{"isFile": ok})
+	case "fs/readFile":
+		contents, ok := c.files[path]
+		if !ok {
+			return nil, fmt.Errorf("missing test file %s", path)
+		}
+		return json.Marshal(map[string]any{"dataBase64": base64.StdEncoding.EncodeToString([]byte(contents))})
+	default:
+		return nil, fmt.Errorf("unsupported method %s", method)
+	}
+}
+
+func TestRemotePluginNamespaceSupportsAgentCursorAndLegacyFallbackLikeRust(t *testing.T) {
+	root := "file:///remote/plugin"
+	tests := []struct {
+		name      string
+		files     map[string]string
+		wantName  string
+		wantAgent bool
+		wantOK    bool
+	}{
+		{
+			name:     "agent root",
+			files:    map[string]string{remoteJoin(root, "plugin.json"): `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-demo"}`},
+			wantName: "agent-demo", wantAgent: true, wantOK: true,
+		},
+		{
+			name: "unrelated root falls back",
+			files: map[string]string{
+				remoteJoin(root, "plugin.json"):               `{"name":"npm-package"}`,
+				remoteJoin(root, ".codex-plugin/plugin.json"): `{"name":"legacy-demo"}`,
+			},
+			wantName: "legacy-demo", wantOK: true,
+		},
+		{
+			name:     "cursor legacy",
+			files:    map[string]string{remoteJoin(root, ".cursor-plugin/plugin.json"): `{"name":"cursor-demo"}`},
+			wantName: "cursor-demo", wantOK: true,
+		},
+		{
+			name: "unsupported agent schema blocks root",
+			files: map[string]string{
+				remoteJoin(root, "plugin.json"):               `{"$schema":"https://agent-plugins.org/schemas/2.0.0/plugin.schema.json","name":"future"}`,
+				remoteJoin(root, ".codex-plugin/plugin.json"): `{"name":"legacy-demo"}`,
+			},
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nextID := 1
+			descriptor, ok := remotePluginNamespaceForRoot(context.Background(), remotePluginTestCaller{files: tc.files}, &nextID, root)
+			if ok != tc.wantOK || descriptor.Name != tc.wantName || descriptor.Agent != tc.wantAgent {
+				t.Fatalf("descriptor = %#v, ok=%v", descriptor, ok)
+			}
+		})
+	}
+}
+
+func TestRemoteAgentPluginOnlyAcceptsDirectChildSkillsLikeRust(t *testing.T) {
+	root := "file:///remote/plugin"
+	if !remoteAgentPluginDirectChildSkill(root, "file:///remote/plugin/skills/direct/SKILL.md") {
+		t.Fatal("direct child skill rejected")
+	}
+	for _, path := range []string{
+		"file:///remote/plugin/skills/group/nested/SKILL.md",
+		"file:///remote/other/skills/direct/SKILL.md",
+		"file:///remote/plugin/SKILL.md",
+	} {
+		if remoteAgentPluginDirectChildSkill(root, path) {
+			t.Fatalf("non-direct skill accepted: %s", path)
+		}
+	}
+}
+
 func TestRemoteEnvironmentSkillWalkWarningsLikeRust(t *testing.T) {
 	warnings := remoteEnvironmentSkillWalkWarnings("file:///remote/skills", remoteFSWalkResponse{
 		Errors: []remoteFSWalkError{{
@@ -1263,12 +1410,13 @@ func TestRemoteSkillSourcePathEscapesLocalPaths(t *testing.T) {
 
 func TestSkillsListEntryMarshalOmitsInternalPluginIDLikeRust(t *testing.T) {
 	payload, err := json.Marshal(&SkillsListEntry{
-		Name:        "review",
-		Description: "Review with plugin context",
-		Path:        "/plugins/docs/skills/review/SKILL.md",
-		Scope:       "plugin",
-		Enabled:     true,
-		PluginID:    "docs@market",
+		Name:           "review",
+		Description:    "Review with plugin context",
+		Path:           "/plugins/docs/skills/review/SKILL.md",
+		Scope:          "plugin",
+		Enabled:        true,
+		PluginID:       "docs@market",
+		RemotePluginID: "plugins~Plugin_docs",
 	})
 	if err != nil {
 		t.Fatalf("Marshal skill entry error = %v", err)
@@ -1279,5 +1427,8 @@ func TestSkillsListEntryMarshalOmitsInternalPluginIDLikeRust(t *testing.T) {
 	}
 	if _, ok := values["pluginId"]; ok {
 		t.Fatalf("pluginId is not part of Rust SkillMetadata: %s", payload)
+	}
+	if _, ok := values["remotePluginId"]; ok {
+		t.Fatalf("remotePluginId is internal skill metadata: %s", payload)
 	}
 }

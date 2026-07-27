@@ -304,6 +304,7 @@ type InstructionsSkillMetadata struct {
 	Root                    string
 	Description             string
 	PluginID                string
+	RemotePluginID          string
 	Contents                string
 	AllowImplicitInvocation *bool
 	AuthorityKind           string

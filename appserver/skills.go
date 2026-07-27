@@ -57,10 +57,17 @@ type SkillsListEntry struct {
 	Dependencies     *SkillDependencies `json:"dependencies,omitempty"`
 	Enabled          bool               `json:"enabled"`
 	PluginID         string             `json:"-"`
+	RemotePluginID   string             `json:"-"`
 	Policy           *SkillPolicy       `json:"-"`
 	Contents         string             `json:"-"`
 	Root             string             `json:"-"`
 	ApplicableCWDs   []string           `json:"-"`
+	AuthorityKind    string             `json:"-"`
+	AuthorityID      string             `json:"-"`
+	PackageID        string             `json:"-"`
+	ResourceID       string             `json:"-"`
+	EnvironmentID    string             `json:"-"`
+	SourcePath       string             `json:"-"`
 }
 
 func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
@@ -233,11 +240,12 @@ type ConfigEntry struct {
 }
 
 type SkillsRoot struct {
-	Path       string
-	Scope      string
-	PluginID   string
-	PluginRoot string
-	CWDs       []string
+	Path           string
+	Scope          string
+	PluginID       string
+	RemotePluginID string
+	PluginRoot     string
+	CWDs           []string
 }
 
 type SkillsServiceOptions struct {
@@ -505,7 +513,8 @@ func (s *SkillsService) registerWatchedRoots(roots []SkillsRoot) {
 	}
 	for _, root := range roots {
 		path := strings.TrimSpace(root.Path)
-		if path == "" || strings.EqualFold(strings.TrimSpace(root.Scope), "environment") || strings.EqualFold(strings.TrimSpace(root.Scope), "plugin") {
+		scope := strings.TrimSpace(root.Scope)
+		if path == "" || strings.EqualFold(scope, "environment") || strings.EqualFold(scope, "plugin") || strings.EqualFold(scope, "system") {
 			continue
 		}
 		path = filepath.Clean(path)
@@ -717,7 +726,7 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 		return nil, nil, err
 	}
 	if !info.IsDir() && filepath.Base(rootPath) == SkillFilename {
-		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID, root.PluginRoot)
+		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot)
 		if skillErr != nil {
 			skillErr.ApplicableCWDs = append([]string(nil), root.CWDs...)
 			return nil, []SkillErrorInfo{*skillErr}, nil
@@ -735,7 +744,7 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	if !info.IsDir() {
 		return nil, nil, nil
 	}
-	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID, root.PluginRoot, root.CWDs)
+	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.CWDs)
 	return entries, skillErrors, err
 }
 
@@ -743,6 +752,7 @@ type skillRootWalker struct {
 	root           string
 	scope          string
 	pluginID       string
+	remotePluginID string
 	pluginRoot     string
 	applicableCWDs []string
 	followSymlinks bool
@@ -752,11 +762,12 @@ type skillRootWalker struct {
 	errors         []SkillErrorInfo
 }
 
-func walkSkillRoot(rootPath string, scope string, pluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
+func walkSkillRoot(rootPath string, scope string, pluginID string, remotePluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	walker := &skillRootWalker{
 		root:           rootPath,
 		scope:          scope,
 		pluginID:       pluginID,
+		remotePluginID: remotePluginID,
 		pluginRoot:     pluginRoot,
 		applicableCWDs: append([]string(nil), applicableCWDs...),
 		followSymlinks: !strings.EqualFold(strings.TrimSpace(scope), "system"),
@@ -831,7 +842,7 @@ func (w *skillRootWalker) walkChildDir(path string, depth int) error {
 }
 
 func (w *skillRootWalker) addSkill(path string) {
-	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID, w.pluginRoot)
+	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID, w.remotePluginID, w.pluginRoot)
 	if skillErr != nil {
 		skillErr.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.errors = append(w.errors, *skillErr)
@@ -857,7 +868,7 @@ func (w *skillRootWalker) dirIdentity(path string) string {
 	return filepath.Clean(path)
 }
 
-func entryFromPath(path string, scope string, pluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
+func entryFromPath(path string, scope string, pluginID string, remotePluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
 	skillDir := filepath.Dir(path)
 	name := filepath.Base(skillDir)
 	data, err := os.ReadFile(path)
@@ -877,7 +888,7 @@ func entryFromPath(path string, scope string, pluginID string, pluginRoot string
 	name = parsed.Name
 	description := parsed.Description
 	shortDescription := parsed.ShortDescription
-	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID}
+	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID, RemotePluginID: remotePluginID}
 	loadSkillMetadata(&entry, skillDir, pluginRoot)
 	return entry, nil, true
 }

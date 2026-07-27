@@ -1534,6 +1534,34 @@ func TestResponsesAgentRunnerSendsStoreAndMetadataFieldsWithoutHTTPPreviousRespo
 	}
 }
 
+func TestResponsesAgentRunnerKeepsCodeModeNamesInClientMetadataButOmitsThemFromHeader(t *testing.T) {
+	var recordedBody map[string]any
+	var recordedHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordedHeader = r.Header.Get(codexapi.ClientCodexTurnMetadataHeader)
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-next","model":"gpt-test","output_text":"ok"}`))
+	}))
+	defer server.Close()
+	turnMetadata := `{"thread_id":"thread-1","code_mode_tool_names":{"view_image":{"name":"view_image","namespace":null}}}`
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL + "/v1"}})
+	if _, err := runner.Run(context.Background(), &AgentRequest{
+		Prompt: "hello", Model: "gpt-test",
+		ClientMetadata: map[string]string{codexapi.ClientCodexTurnMetadataHeader: turnMetadata},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clientMetadata := recordedBody["client_metadata"].(map[string]any)
+	if clientMetadata[codexapi.ClientCodexTurnMetadataHeader] != turnMetadata {
+		t.Fatalf("canonical client metadata = %#v", clientMetadata)
+	}
+	if strings.Contains(recordedHeader, codexapi.CodeModeToolNamesKey) || !strings.Contains(recordedHeader, `"thread_id":"thread-1"`) {
+		t.Fatalf("compatibility header = %q", recordedHeader)
+	}
+}
+
 func TestResponsesAgentRunnerPreparesInputItemIDsLikeRust(t *testing.T) {
 	cases := []struct {
 		name           string

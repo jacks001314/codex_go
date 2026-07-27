@@ -23,10 +23,30 @@ const (
 	PlanTeam                        PlanType = "team"
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
 	PlanBusiness                    PlanType = "business"
+	PlanEnt26                       PlanType = "ent26"
 	PlanEnterpriseCBPUsageBased     PlanType = "enterprise_cbp_usage_based"
 	PlanEnterprise                  PlanType = "enterprise"
 	PlanEdu                         PlanType = "edu"
 )
+
+func (p PlanType) IsBusinessLike() bool {
+	switch p {
+	case PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p PlanType) IsWorkspaceAccount() bool {
+	switch p {
+	case PlanTeam, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26,
+		PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu:
+		return true
+	default:
+		return false
+	}
+}
 
 type AccountType string
 
@@ -1378,6 +1398,8 @@ func planFromString(value string) PlanType {
 		return PlanSelfServeBusinessUsageBased
 	case string(PlanBusiness):
 		return PlanBusiness
+	case string(PlanEnt26):
+		return PlanEnt26
 	case string(PlanEnterpriseCBPUsageBased):
 		return PlanEnterpriseCBPUsageBased
 	case string(PlanEnterprise):

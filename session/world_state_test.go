@@ -10,6 +10,7 @@ func TestWorldStateRoundTripTracksRuntimeInstructionDomains(t *testing.T) {
 		CollaborationMode:      json.RawMessage(`{"mode":"plan"}`),
 		PermissionInstructions: json.RawMessage(`{"profile":"workspace-write"}`),
 		RealtimeConversation:   json.RawMessage(`{"active":true}`),
+		Tools:                  json.RawMessage(`{"mcp__drive":"Drive tools"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -18,7 +19,7 @@ func TestWorldStateRoundTripTracksRuntimeInstructionDomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(state.CollaborationMode) != `{"mode":"plan"}` || string(state.PermissionInstructions) != `{"profile":"workspace-write"}` || string(state.RealtimeConversation) != `{"active":true}` {
+	if string(state.CollaborationMode) != `{"mode":"plan"}` || string(state.PermissionInstructions) != `{"profile":"workspace-write"}` || string(state.RealtimeConversation) != `{"active":true}` || string(state.Tools) != `{"mcp__drive":"Drive tools"}` {
 		t.Fatalf("state = %#v", state)
 	}
 }

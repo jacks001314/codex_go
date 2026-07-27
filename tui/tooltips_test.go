@@ -55,6 +55,12 @@ func TestSelectStartupTooltipMatchesRustPlanBranches(t *testing.T) {
 		t.Fatalf("paid fast promo = %q, %v", got, ok)
 	}
 
+	ent26 := auth.PlanEnt26
+	got, ok = SelectStartupTooltip(&ent26, false, nil, &scriptedTooltipRNG{values: []int{0, 1}})
+	if !ok || got != FastTooltip {
+		t.Fatalf("ent26 paid fast promo = %q, %v", got, ok)
+	}
+
 	got, ok = SelectStartupTooltip(&pro, true, nil, &scriptedTooltipRNG{values: []int{0}})
 	if CurrentTooltipTargetOS() == TooltipTargetOSLinux {
 		if ok || got != "" {
@@ -137,6 +143,20 @@ target_plan_types = ["free"]
 	got, ok = ParseAnnouncementTipTOML(toml, &pro, "0.0.0", dateForTooltipTest("2026-07-08"), TooltipTargetOSLinux)
 	if !ok || got != "all plans" {
 		t.Fatalf("pro/linux announcement = %q, %v", got, ok)
+	}
+}
+
+func TestAnnouncementTipTOMLAcceptsEnt26Plan(t *testing.T) {
+	toml := `
+[[announcements]]
+content = "enterprise announcement"
+target_plan_types = ["ent26"]
+`
+
+	plan := auth.PlanEnt26
+	got, ok := ParseAnnouncementTipTOML(toml, &plan, "0.0.0", dateForTooltipTest("2026-07-08"), TooltipTargetOSWindows)
+	if !ok || got != "enterprise announcement" {
+		t.Fatalf("ent26 announcement = %q, %v", got, ok)
 	}
 }
 

@@ -279,6 +279,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
 		settings = remoteSettings
 	}
+	keymapConfig := interactiveKeymapConfig(root)
+	if remoteKeymap, err := interactiveRemoteKeymapConfig(ctx, endpoint); err == nil {
+		keymapConfig = remoteKeymap
+	}
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	options := codextea.Options{
@@ -290,6 +294,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionHeaderVersion: doctor.Version(),
 		OnSessionAction:      interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:      interactiveRemoteResumeSessionHandler(ctx, endpoint),
+		KeymapConfig:         keymapConfig,
+		OnKeymapEdit:         interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID
@@ -431,6 +437,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return interactiveRemoteReadSkills(ctx, endpoint, skillsCWD)
 		},
+		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+			searchCWD := strings.TrimSpace(cwd)
+			if searchCWD == "" {
+				searchCWD = interactiveSessionPickerCWD(root)
+			}
+			return interactiveRemoteFuzzyFileSearch(ctx, endpoint, query, searchCWD, cancellationToken)
+		},
 		OnReadApps: func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error) {
 			if strings.TrimSpace(threadID) == "" && state != nil {
 				threadID = state.ThreadID
@@ -450,6 +463,58 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	}
 	_, err := codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+func interactiveRemoteKeymapConfig(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*codextui.KeymapConfig, error) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	return interactiveRemoteReadKeymapConfig(reqCtx, client)
+}
+
+func interactiveRemoteKeymapEditHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.KeymapEditFunc {
+	return func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
+		if err := edit.Validate(); err != nil {
+			return nil, "", err
+		}
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return nil, "", err
+		}
+		defer client.close()
+		var response config.ConfigWriteResponse
+		params := config.ConfigValueWriteParams{
+			KeyPath:       edit.KeyPath(),
+			Value:         edit.ConfigValue(),
+			MergeStrategy: config.MergeReplace,
+		}
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodConfigValueWrite, params, &response); err != nil {
+			return nil, "", err
+		}
+		keymap, err := interactiveRemoteReadKeymapConfig(reqCtx, client)
+		if err != nil {
+			return nil, "", err
+		}
+		message := interactiveKeymapEditMessage(edit)
+		if strings.TrimSpace(response.FilePath) != "" {
+			message += " Saved to " + response.FilePath + "."
+		}
+		return keymap, message, nil
+	}
+}
+
+func interactiveRemoteReadKeymapConfig(ctx context.Context, client *remoteAppServerTUIClient) (*codextui.KeymapConfig, error) {
+	var response config.ConfigReadResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
+		return nil, err
+	}
+	return codextui.KeymapConfigFromConfigValues(response.Config)
 }
 
 func interactiveRemoteReadTokenActivity(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
@@ -897,6 +962,28 @@ func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.
 	var response appserver.SkillsListResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodSkillsList, params, &response); err != nil {
 		return appserver.SkillsListResponse{}, err
+	}
+	return response, nil
+}
+
+func interactiveRemoteFuzzyFileSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return appserver.FuzzyFileSearchResponse{}, err
+	}
+	defer client.close()
+	params := appserver.FuzzyFileSearchParams{Query: query}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		params.Roots = []string{cwd}
+	}
+	if cancellationToken = strings.TrimSpace(cancellationToken); cancellationToken != "" {
+		params.CancellationToken = &cancellationToken
+	}
+	var response appserver.FuzzyFileSearchResponse
+	if err := remoteSessionRequest(reqCtx, client, appserver.MethodFuzzyFileSearch, params, &response); err != nil {
+		return appserver.FuzzyFileSearchResponse{}, err
 	}
 	return response, nil
 }

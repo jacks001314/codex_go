@@ -162,12 +162,14 @@ func (s *Server) serveWebSocketConnection(ctx context.Context, conn *websocket.C
 		defer writeMu.Unlock()
 		return conn.Write(writeCtx, websocket.MessageText, encoded)
 	}
+	requestsSender := newServerRequestSender(writeJSON)
+	defer requestsSender.close()
 	notify := processNotifier(func(method string, params any) {
 		if err := writeJSON(map[string]any{"jsonrpc": "2.0", "method": method, "params": params}); err != nil {
 			reportError(err)
 		}
 	})
-	connectionCtx := withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(baseCtx, processNotifierContextKey{}, notify)))
+	connectionCtx := withServerRequestSender(withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(baseCtx, processNotifierContextKey{}, notify))), requestsSender)
 	defer s.detachConnection(connectionCtx)
 	for {
 		messageType, data, err := conn.Read(connectionCtx)
@@ -193,6 +195,14 @@ func (s *Server) serveWebSocketConnection(ctx context.Context, conn *websocket.C
 			continue
 		}
 		requestData := append([]byte(nil), line...)
+		if response, accepted := consumeClientResponse(connectionCtx, requestData); response {
+			if !accepted {
+				cancel()
+				requests.Wait()
+				return nil
+			}
+			continue
+		}
 		if clientMessageClosesConnection(connectionCtx, requestData) {
 			cancel()
 			requests.Wait()

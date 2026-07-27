@@ -9,7 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/utils"
@@ -63,7 +65,15 @@ type ShellApprovalRequest struct {
 
 type ShellApprovalFunc func(context.Context, *ShellApprovalRequest) (ShellApprovalDecision, error)
 
-type ManagedNetworkResolver func(environmentID string) (map[string]string, *network.ProxyManagedNetworkSandboxContext, error)
+type ManagedNetworkResolution struct {
+	Env                          map[string]string
+	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider         network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout time.Duration
+}
+
+type ManagedNetworkResolver func(environmentID string, remote bool) (*ManagedNetworkResolution, error)
 
 func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor := &ShellExecutor{
@@ -400,16 +410,23 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if e.managedNetworkResolver != nil {
 		environmentID := "local"
+		remoteEnvironment := false
 		if environment != nil && strings.TrimSpace(environment.ID) != "" {
 			environmentID = environment.ID
+			remoteEnvironment = environment.ExecServerURL != "" || environment.NoiseProvider != nil
 		}
-		env, managedNetwork, resolveErr := e.managedNetworkResolver(environmentID)
+		resolvedNetwork, resolveErr := e.managedNetworkResolver(environmentID, remoteEnvironment)
 		if resolveErr != nil {
 			return nil, RespondToModel(fmt.Sprintf("failed to prepare network proxy for environment `%s`: %v", environmentID, resolveErr))
 		}
-		validation.Env = env
-		validation.EnforceManagedNetwork = true
-		validation.ManagedNetwork = managedNetwork
+		if resolvedNetwork != nil {
+			validation.Env = resolvedNetwork.Env
+			validation.EnforceManagedNetwork = resolvedNetwork.ManagedNetwork != nil || resolvedNetwork.RemoteNetworkProxy != nil
+			validation.ManagedNetwork = resolvedNetwork.ManagedNetwork
+			validation.RemoteNetworkProxy = resolvedNetwork.RemoteNetworkProxy
+			validation.NetworkPolicyDecider = resolvedNetwork.NetworkPolicyDecider
+			validation.NetworkPolicyDecisionTimeout = resolvedNetwork.NetworkPolicyDecisionTimeout
+		}
 	}
 	if invocationPermissionPreapproved(invocation) {
 		validation.PermissionsPreapproved = true

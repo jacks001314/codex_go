@@ -42,20 +42,23 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 	level := windowsUnifiedExecSandboxLevel(req.PermissionProfile, req.WindowsSandboxLevel)
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{
 		Capture: windowssandbox.CaptureRequest{
-			PermissionProfileID: req.PermissionProfileID,
-			PermissionProfile:   req.PermissionProfile,
-			WorkspaceRoots:      []string{req.CWD},
-			CodexHome:           codexHome,
-			Command:             append([]string(nil), req.Command...),
-			CWD:                 req.CWD,
-			Env:                 env,
-			TTY:                 req.TTY,
-			StdinOpen:           req.TTY,
-			UsePrivateDesktop:   req.WindowsSandboxPrivateDesktop,
-			ProxySettingsMode:   windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),
+			PermissionProfileID:    req.PermissionProfileID,
+			PermissionProfile:      req.PermissionProfile,
+			WorkspaceRoots:         []string{req.CWD},
+			CodexHome:              codexHome,
+			Command:                append([]string(nil), req.Command...),
+			CWD:                    req.CWD,
+			Env:                    env,
+			TTY:                    req.TTY,
+			StdinOpen:              req.TTY,
+			UsePrivateDesktop:      req.WindowsSandboxPrivateDesktop,
+			ProxyEnforced:          req.EnforceManagedNetwork,
+			ProxySettingsMode:      windowsSandboxProxySettingsMode(req.WindowsSandboxProxySettingsMode),
+			DisallowSetupElevation: req.ApprovalPolicy == sandbox.ApprovalNever,
 		},
 		PTY:                 req.TTY,
 		WindowsSandboxLevel: level,
+		ProxyEnforced:       req.EnforceManagedNetwork,
 	})
 	if err != nil {
 		return nil, err
@@ -68,7 +71,7 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 }
 
 func windowsUnifiedExecSandboxLevel(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) windowsunified.WindowsSandboxLevel {
-	if configured == sandbox.WindowsSandboxElevated || (profile != nil && profile.HasDenyReadEntries()) {
+	if windowsShellSandboxUsesElevated(profile, configured, false) {
 		return windowsunified.WindowsSandboxLevelElevated
 	}
 	return windowsunified.WindowsSandboxLevelLegacy

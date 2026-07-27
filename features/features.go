@@ -88,6 +88,7 @@ var Registry = []Spec{
 	{Key: "apps_mcp_path_override", Stage: StageRemoved},
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
+	{Key: "deferred_tool_world_state", Stage: StageUnderDevelopment},
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
 	{Key: "unavailable_dummy_tools", Stage: StageRemoved},
 	{Key: "tool_suggest", Stage: StageStable, DefaultEnabled: true},

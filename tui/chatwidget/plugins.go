@@ -440,6 +440,9 @@ func PluginDisplayName(plugin pluginapi.PluginSummary) string {
 			return value
 		}
 	}
+	if value := strings.TrimSpace(plugin.DisplayName); value != "" {
+		return value
+	}
 	return strings.TrimSpace(plugin.Name)
 }
 

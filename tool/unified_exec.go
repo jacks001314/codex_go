@@ -159,29 +159,31 @@ func unifiedExecOutputSchema() map[string]any {
 }
 
 type unifiedExecProcess struct {
-	id              int
-	callID          string
-	hookCommand     string
-	tty             bool
-	cmd             *osexec.Cmd
-	stdin           io.WriteCloser
-	remote          *execserver.Client
-	remoteURL       string
-	remoteProvider  execserver.NoiseRendezvousConnectProvider
-	remoteSessionID string
-	remoteID        string
-	remoteWrite     uint64
-	remoteEvents    *execserver.ProcessEventSubscription
-	sandbox         unifiedExecSandboxProcess
-	done            chan struct{}
-	eventDone       chan struct{}
-	eventSink       UnifiedExecEventSink
-	command         []string
-	cwd             string
-	startedAt       time.Time
-	lastUsed        time.Time
-	threadID        string
-	turnID          string
+	id                   int
+	callID               string
+	hookCommand          string
+	tty                  bool
+	cmd                  *osexec.Cmd
+	stdin                io.WriteCloser
+	remote               *execserver.Client
+	remoteURL            string
+	remoteProvider       execserver.NoiseRendezvousConnectProvider
+	remoteSessionID      string
+	remoteID             string
+	remoteWrite          uint64
+	remoteEvents         *execserver.ProcessEventSubscription
+	networkPolicyDecider network.ProxyPolicyDecider
+	networkPolicyTimeout time.Duration
+	sandbox              unifiedExecSandboxProcess
+	done                 chan struct{}
+	eventDone            chan struct{}
+	eventSink            UnifiedExecEventSink
+	command              []string
+	cwd                  string
+	startedAt            time.Time
+	lastUsed             time.Time
+	threadID             string
+	turnID               string
 
 	mu            sync.Mutex
 	interactionMu sync.Mutex
@@ -410,12 +412,35 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		m.releaseProcessID(processID)
 		return nil, err
 	}
+	if req.RemoteNetworkProxy != nil && req.RemoteNetworkProxy.Proxy.Enabled {
+		capabilityCtx, capabilityCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		environmentInfo, capabilityErr := client.EnvironmentInfo(capabilityCtx)
+		capabilityCancel()
+		if capabilityErr != nil {
+			_ = client.Close()
+			m.releaseProcessID(processID)
+			return nil, fmt.Errorf("failed to query exec-server capabilities: %w", capabilityErr)
+		}
+		if !environmentInfo.Capabilities.NetworkProxyLaunch {
+			_ = client.Close()
+			m.releaseProcessID(processID)
+			return nil, errors.New("selected exec-server does not support executor-local network proxy launches")
+		}
+	}
 	remoteID := strconv.Itoa(processID)
 	events, err := client.SubscribeProcessEvents(remoteID)
 	if err != nil {
 		_ = client.Close()
 		m.releaseProcessID(processID)
 		return nil, err
+	}
+	if req.NetworkPolicyDecider != nil {
+		if err := client.RegisterNetworkPolicyController(remoteID, req.NetworkPolicyDecisionTimeout, req.NetworkPolicyDecider); err != nil {
+			events.Close()
+			_ = client.Close()
+			m.releaseProcessID(processID)
+			return nil, err
+		}
 	}
 	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	remoteCWD, err := unifiedExecPathURI(req.CWD)
@@ -459,6 +484,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		Sandbox:               sandboxJSON,
 		EnforceManagedNetwork: req.EnforceManagedNetwork,
 		ManagedNetwork:        unifiedExecManagedNetworkContext(req.ManagedNetwork),
+		NetworkProxy:          req.RemoteNetworkProxy,
 	})
 	startCancel()
 	if err != nil {
@@ -468,26 +494,28 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		return nil, err
 	}
 	process := &unifiedExecProcess{
-		id:              processID,
-		callID:          callID,
-		hookCommand:     req.HookCommand,
-		tty:             req.TTY,
-		remote:          client,
-		remoteURL:       req.UnifiedExecRemoteURL,
-		remoteProvider:  req.UnifiedExecNoiseProvider,
-		remoteSessionID: client.SessionID(),
-		remoteID:        remoteID,
-		remoteEvents:    events,
-		done:            make(chan struct{}),
-		eventDone:       make(chan struct{}),
-		output:          newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		transcript:      newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		eventSink:       req.UnifiedExecEventSink,
-		command:         append([]string(nil), req.Command...),
-		cwd:             req.CWD,
-		startedAt:       time.Now(),
-		threadID:        req.UnifiedExecThreadID,
-		turnID:          req.UnifiedExecTurnID,
+		id:                   processID,
+		callID:               callID,
+		hookCommand:          req.HookCommand,
+		tty:                  req.TTY,
+		remote:               client,
+		remoteURL:            req.UnifiedExecRemoteURL,
+		remoteProvider:       req.UnifiedExecNoiseProvider,
+		remoteSessionID:      client.SessionID(),
+		remoteID:             remoteID,
+		remoteEvents:         events,
+		networkPolicyDecider: req.NetworkPolicyDecider,
+		networkPolicyTimeout: req.NetworkPolicyDecisionTimeout,
+		done:                 make(chan struct{}),
+		eventDone:            make(chan struct{}),
+		output:               newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:           newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		eventSink:            req.UnifiedExecEventSink,
+		command:              append([]string(nil), req.Command...),
+		cwd:                  req.CWD,
+		startedAt:            time.Now(),
+		threadID:             req.UnifiedExecThreadID,
+		turnID:               req.UnifiedExecTurnID,
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -1197,6 +1225,18 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 				_ = client.Close()
 				lastErr = subscribeErr
 			} else {
+				p.mu.Lock()
+				policyDecider := p.networkPolicyDecider
+				policyTimeout := p.networkPolicyTimeout
+				p.mu.Unlock()
+				if policyDecider != nil {
+					if registerErr := client.RegisterNetworkPolicyController(processID, policyTimeout, policyDecider); registerErr != nil {
+						events.Close()
+						_ = client.Close()
+						lastErr = registerErr
+						continue
+					}
+				}
 				waitMS := uint64(0)
 				response, readErr := client.Read(context.Background(), &execserver.ReadParams{
 					ProcessID: processID,

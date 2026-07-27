@@ -41,6 +41,7 @@ type marketplacePluginSource struct {
 
 type pluginManifestFile struct {
 	Name              string               `json:"name"`
+	Version           string               `json:"version"`
 	DisplayName       string               `json:"displayName"`
 	Description       string               `json:"description"`
 	Interface         *PluginInterface     `json:"interface"`
@@ -48,6 +49,10 @@ type pluginManifestFile struct {
 	Apps              []AppSummary         `json:"apps"`
 	AppTemplates      []AppTemplateSummary `json:"appTemplates"`
 	AppTemplatesSnake []AppTemplateSummary `json:"app_templates"`
+	ManifestPath      string               `json:"-"`
+	SkillsPath        string               `json:"-"`
+	MCPServersPath    string               `json:"-"`
+	AgentPlugin       bool                 `json:"-"`
 }
 
 func loadMarketplacePlugins(marketplaces []Marketplace) ([]PluginDetail, []MarketplaceLoadErrorInfo) {
@@ -123,8 +128,11 @@ func loadMarketplacePluginDetail(marketplaceRoot string, marketplaceName string,
 		return marketplacePluginDetailFromManifest(pluginName, marketplaceName, marketplaceRoot, marketplacePath, "", plugin, nil), true
 	}
 	pluginRoot := resolveMarketplacePluginPath(marketplaceRoot, plugin.Source.Path)
-	manifestPath := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
-	manifest := readPluginManifestFile(manifestPath)
+	resolved, _ := loadPluginManifest(pluginRoot)
+	var manifest *pluginManifestFile
+	if resolved != nil {
+		manifest = &resolved.Manifest
+	}
 	return marketplacePluginDetailFromManifest(pluginName, marketplaceName, marketplaceRoot, marketplacePath, pluginRoot, plugin, manifest), true
 }
 
@@ -162,17 +170,22 @@ func marketplacePluginDetailFromManifest(pluginName string, marketplaceName stri
 		}
 	}
 	manifestPath := ""
-	if pluginRoot != "" {
-		manifestPath = filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
+	if manifest != nil {
+		manifestPath = manifest.ManifestPath
 	}
-	hasSkills := marketplacePluginHasSkills(pluginRoot)
-	mcpServers := marketplacePluginMCPServers(pluginRoot)
+	hasSkills := marketplacePluginHasSkillsForManifest(pluginRoot, manifest)
+	mcpServers := marketplacePluginMCPServersForManifest(pluginRoot, manifest)
+	var version *string
+	if manifest != nil {
+		version = stringPtrIfNotEmpty(manifest.Version)
+	}
 	summary := PluginSummary{
 		ID:              pluginID(pluginName, marketplaceName),
 		Name:            pluginName,
 		DisplayName:     displayName,
 		Description:     description,
 		MarketplaceName: marketplaceName,
+		Version:         version,
 		Availability:    PluginAvailable,
 		InstallPolicy:   InstallAllowed,
 		AuthPolicy:      AuthNone,
@@ -190,7 +203,7 @@ func marketplacePluginDetailFromManifest(pluginName string, marketplaceName stri
 		Summary:         summary,
 		Description:     stringPtrIfNotEmpty(description),
 		ManifestPath:    manifestPath,
-		Skills:          marketplacePluginSkills(pluginRoot),
+		Skills:          marketplacePluginSkillsForManifest(pluginRoot, manifest),
 		Apps:            apps,
 		AppTemplates:    appTemplates,
 		MCPServers:      mcpServers,
@@ -305,6 +318,15 @@ func readPluginManifestFile(path string) *pluginManifestFile {
 	return &manifest
 }
 
+func readPluginManifestForRoot(pluginRoot string) *pluginManifestFile {
+	resolved, err := loadPluginManifest(pluginRoot)
+	if err != nil || resolved == nil {
+		return nil
+	}
+	manifest := resolved.Manifest
+	return &manifest
+}
+
 func marketplacePluginHasSkills(pluginRoot string) bool {
 	if pluginRoot == "" {
 		return false
@@ -313,17 +335,39 @@ func marketplacePluginHasSkills(pluginRoot string) bool {
 	return err == nil && info.IsDir()
 }
 
+func marketplacePluginHasSkillsForManifest(pluginRoot string, manifest *pluginManifestFile) bool {
+	root := filepath.Join(pluginRoot, "skills")
+	if manifest != nil && strings.TrimSpace(manifest.SkillsPath) != "" {
+		root = manifest.SkillsPath
+	}
+	info, err := os.Stat(root)
+	return err == nil && info.IsDir()
+}
+
 func marketplacePluginSkills(pluginRoot string) []PluginSkill {
-	if !marketplacePluginHasSkills(pluginRoot) {
+	return marketplacePluginSkillsForManifest(pluginRoot, nil)
+}
+
+func marketplacePluginSkillsForManifest(pluginRoot string, manifest *pluginManifestFile) []PluginSkill {
+	if !marketplacePluginHasSkillsForManifest(pluginRoot, manifest) {
 		return nil
 	}
 	skillsRoot := filepath.Join(pluginRoot, "skills")
+	if manifest != nil && strings.TrimSpace(manifest.SkillsPath) != "" {
+		skillsRoot = manifest.SkillsPath
+	}
 	var skills []PluginSkill
 	_ = filepath.WalkDir(skillsRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if manifest != nil && manifest.AgentPlugin && path != skillsRoot {
+				relative, relErr := filepath.Rel(skillsRoot, path)
+				if relErr != nil || strings.Count(filepath.ToSlash(relative), "/") >= 1 {
+					return filepath.SkipDir
+				}
+			}
 			if path != skillsRoot && strings.HasPrefix(d.Name(), ".") {
 				return filepath.SkipDir
 			}
@@ -331,6 +375,12 @@ func marketplacePluginSkills(pluginRoot string) []PluginSkill {
 		}
 		if d.Name() != "SKILL.md" {
 			return nil
+		}
+		if manifest != nil && manifest.AgentPlugin {
+			resolved, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil || !pathWithinRoot(pluginRoot, resolved) {
+				return nil
+			}
 		}
 		name := filepath.Base(filepath.Dir(path))
 		if name == "skills" {
@@ -358,7 +408,14 @@ func marketplacePluginSkills(pluginRoot string) []PluginSkill {
 }
 
 func marketplacePluginMCPServers(pluginRoot string) []string {
+	return marketplacePluginMCPServersForManifest(pluginRoot, nil)
+}
+
+func marketplacePluginMCPServersForManifest(pluginRoot string, manifest *pluginManifestFile) []string {
 	path := filepath.Join(pluginRoot, ".mcp.json")
+	if manifest != nil && strings.TrimSpace(manifest.MCPServersPath) != "" {
+		path = manifest.MCPServersPath
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -375,6 +432,19 @@ func marketplacePluginMCPServers(pluginRoot string) []string {
 	}
 	sort.Strings(servers)
 	return servers
+}
+
+func pathWithinRoot(root string, path string) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(rootAbs, pathAbs)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func marketplaceRootFromPluginRoot(pluginRoot string) string {

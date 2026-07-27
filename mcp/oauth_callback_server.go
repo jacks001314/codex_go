@@ -30,6 +30,7 @@ type OAuthLoginServerOptions struct {
 	Port                  uint16
 	Store                 *OAuthStore
 	HTTPClient            *http.Client
+	Timeout               time.Duration
 }
 
 type OAuthLoginServerResult struct {
@@ -43,9 +44,10 @@ type OAuthLoginServer struct {
 	CallbackURL      string
 	Port             uint16
 
-	server *http.Server
-	done   chan *OAuthLoginServerResult
-	once   sync.Once
+	server    *http.Server
+	done      chan *OAuthLoginServerResult
+	completed chan struct{}
+	once      sync.Once
 }
 
 func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions) (*OAuthLoginServer, error) {
@@ -97,6 +99,7 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		CallbackURL:      redirectURL,
 		Port:             port,
 		done:             make(chan *OAuthLoginServerResult, 1),
+		completed:        make(chan struct{}),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(session.CallbackPath, func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +127,20 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 	go func() {
 		if err := login.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			login.complete(&OAuthLoginServerResult{Error: err})
+		}
+	}()
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = mcpOAuthDependencyLoginTimeout
+	}
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-login.completed:
+			return
+		case <-timer.C:
+			login.complete(&OAuthLoginServerResult{Error: fmt.Errorf("timed out waiting for OAuth callback after %s", timeout)})
 		}
 	}()
 	return login, nil
@@ -161,6 +178,7 @@ func (s *OAuthLoginServer) complete(result *OAuthLoginServerResult) {
 		}
 		s.done <- result
 		close(s.done)
+		close(s.completed)
 		if s.server != nil {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)

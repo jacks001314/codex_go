@@ -24,11 +24,16 @@ type ToolSearchResult struct {
 }
 
 type ToolSearchHandler struct {
-	specs []Spec
-	index []toolSearchDocument
+	specs       []Spec
+	index       []toolSearchDocument
+	omitSources bool
 }
 
 func NewToolSearchHandler(specs []Spec) *ToolSearchHandler {
+	return NewToolSearchHandlerWithOptions(specs, false)
+}
+
+func NewToolSearchHandlerWithOptions(specs []Spec, omitSources bool) *ToolSearchHandler {
 	searchable := make([]Spec, 0, len(specs))
 	for _, spec := range specs {
 		if spec.Exposure != ExposureDiscoverable {
@@ -37,29 +42,37 @@ func NewToolSearchHandler(specs []Spec) *ToolSearchHandler {
 		searchable = append(searchable, cloneSpec(spec))
 	}
 	sortSpecs(searchable)
-	handler := &ToolSearchHandler{specs: searchable}
+	handler := &ToolSearchHandler{specs: searchable, omitSources: omitSources}
 	handler.rebuildIndex()
 	return handler
 }
 
 func RegisterToolSearchHandler(registry *Registry, specs []Spec) error {
+	return RegisterToolSearchHandlerWithOptions(registry, specs, false)
+}
+
+func RegisterToolSearchHandlerWithOptions(registry *Registry, specs []Spec, omitSources bool) error {
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", ErrToolInvalidCall)
 	}
-	return registry.Register(NewToolSearchHandler(specs))
+	return registry.Register(NewToolSearchHandlerWithOptions(specs, omitSources))
 }
 
 func RegisterToolSearchFromRegistry(registry *Registry) error {
+	return RegisterToolSearchFromRegistryWithOptions(registry, false)
+}
+
+func RegisterToolSearchFromRegistryWithOptions(registry *Registry, omitSources bool) error {
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", ErrToolInvalidCall)
 	}
-	return RegisterToolSearchHandler(registry, registry.DiscoverableSpecs())
+	return RegisterToolSearchHandlerWithOptions(registry, registry.DiscoverableSpecs(), omitSources)
 }
 
 func (h *ToolSearchHandler) Spec() Spec {
 	return Spec{
 		Name:        PlainName(ToolSearchName),
-		Description: BuildToolSearchDescription(searchSources(h.specs), DefaultToolSearchLimit),
+		Description: BuildToolSearchDescriptionWithOptions(searchSources(h.specs), DefaultToolSearchLimit, h.omitSources),
 		InputSchema: map[string]any{
 			"type":     "object",
 			"required": []string{"query"},
@@ -125,6 +138,13 @@ func (h *ToolSearchHandler) Execute(ctx context.Context, invocation *Invocation)
 }
 
 func BuildToolSearchDescription(sources []SearchSourceInfo, defaultLimit int) string {
+	return BuildToolSearchDescriptionWithOptions(sources, defaultLimit, false)
+}
+
+func BuildToolSearchDescriptionWithOptions(sources []SearchSourceInfo, defaultLimit int, omitSources bool) string {
+	if omitSources {
+		return fmt.Sprintf("# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nSome of the tools may not have been provided to you upfront, and you should use this tool (`%s`) to search for the required tools. For MCP tool discovery, always use `%s` instead of `list_mcp_resources` or `list_mcp_resource_templates`.", ToolSearchName, ToolSearchName)
+	}
 	sourceDescriptions := renderToolSearchSources(sources)
 	return fmt.Sprintf("# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n%s\nSome of the tools may not have been provided to you upfront, and you should use this tool (`%s`) to search for the required tools. For MCP tool discovery, always use `%s` instead of `list_mcp_resources` or `list_mcp_resource_templates`.", sourceDescriptions, ToolSearchName, ToolSearchName)
 }

@@ -60,6 +60,25 @@ const (
 	SelectionRowDisplaySingleLine
 )
 
+type SelectionDescriptionLayoutMode int
+
+const (
+	SelectionDescriptionColumns SelectionDescriptionLayoutMode = iota
+	SelectionDescriptionStackBelowWhenNarrow
+)
+
+type SelectionDescriptionLayout struct {
+	Mode                SelectionDescriptionLayoutMode
+	MinDescriptionWidth int
+}
+
+func NewStackBelowWhenNarrowDescriptionLayout(minDescriptionWidth int) SelectionDescriptionLayout {
+	return SelectionDescriptionLayout{
+		Mode:                SelectionDescriptionStackBelowWhenNarrow,
+		MinDescriptionWidth: max(minDescriptionWidth, 0),
+	}
+}
+
 type MenuSurfaceRect struct {
 	X      int
 	Y      int
@@ -89,11 +108,15 @@ func MenuSurfacePaddingHeight() int {
 }
 
 func RenderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig) []string {
-	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped)
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped, SelectionDescriptionLayout{})
+}
+
+func RenderGenericRowsWithDescriptionLayout(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, descriptionLayout SelectionDescriptionLayout) []string {
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped, descriptionLayout)
 }
 
 func RenderGenericRowsSingleLine(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig) []string {
-	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplaySingleLine)
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplaySingleLine, SelectionDescriptionLayout{})
 }
 
 func MeasureGenericRowsHeight(rows []GenericDisplayRow, state ScrollState, maxResults int, width int, config ColumnWidthConfig) int {
@@ -101,7 +124,11 @@ func MeasureGenericRowsHeight(rows []GenericDisplayRow, state ScrollState, maxRe
 }
 
 func BuildGenericDisplayLine(row GenericDisplayRow, descCol int) string {
-	description := combinedSelectionDescription(row)
+	return buildGenericDisplayLine(row, descCol, SelectionDescriptionLayout{})
+}
+
+func buildGenericDisplayLine(row GenericDisplayRow, descCol int, descriptionLayout SelectionDescriptionLayout) string {
+	description := combinedSelectionDescription(row, descriptionLayout)
 	nameLimit := -1
 	if description != "" {
 		nameLimit = max(descCol-lenColumnsSelection(row.NamePrefix)-2, 0)
@@ -129,7 +156,7 @@ func BuildGenericDisplayLine(row GenericDisplayRow, descCol int) string {
 	return line
 }
 
-func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, display SelectionRowDisplay) []string {
+func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, display SelectionRowDisplay, descriptionLayout SelectionDescriptionLayout) []string {
 	if width <= 0 {
 		width = 1
 	}
@@ -145,11 +172,12 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 	start := computeItemWindowStart(len(rows), state, maxResults)
 	visible := rows[start:min(start+maxResults, len(rows))]
 	descCol := computeGenericDescCol(rows, start, len(visible), width, config)
+	stackDescriptions := descriptionLayout.shouldStack(width, descCol)
 	out := []string{}
 	for offset, row := range visible {
 		actualIdx := start + offset
 		if display == SelectionRowDisplayWrapped {
-			lines := wrapSelectionRowLines(row, descCol, width)
+			lines := wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, descriptionLayout, stackDescriptions)
 			for lineIdx, line := range lines {
 				if lineIdx > 0 && row.IsDisabled {
 					line = strings.TrimRight(line, " ")
@@ -161,7 +189,7 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 			}
 			continue
 		}
-		line := BuildGenericDisplayLine(row, descCol)
+		line := buildGenericDisplayLine(row, descCol, descriptionLayout)
 		if tui.DisplayWidth(line) > width {
 			line = tui.TruncateWithEllipsis(line, width)
 		}
@@ -202,11 +230,51 @@ func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, wid
 }
 
 func wrapSelectionRowLines(row GenericDisplayRow, descCol int, width int) []string {
-	line := BuildGenericDisplayLine(row, descCol)
+	return wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, SelectionDescriptionLayout{}, false)
+}
+
+func wrapSelectionRowLinesWithDescriptionLayout(row GenericDisplayRow, descCol int, width int, descriptionLayout SelectionDescriptionLayout, stackDescription bool) []string {
 	if width <= 0 {
 		width = 1
 	}
+	if stackDescription {
+		return wrapStackedSelectionRow(row, width)
+	}
+	line := buildGenericDisplayLine(row, descCol, descriptionLayout)
 	return wrapGenericDisplayLine(row, line, descCol, width)
+}
+
+func wrapStackedSelectionRow(row GenericDisplayRow, width int) []string {
+	if width <= 0 {
+		width = 1
+	}
+	prefixWidth := min(lenColumnsSelection(row.NamePrefix), max(width-1, 0))
+	indent := strings.Repeat(" ", prefixWidth)
+	label := row.Name
+	if row.DisabledReason != "" {
+		label += " (disabled)"
+	}
+	if row.DisplayShortcut != "" {
+		label += " (" + row.DisplayShortcut + ")"
+	}
+	if row.CategoryTag != "" {
+		label += "  " + row.CategoryTag
+	}
+	lines := tui.AdaptiveWrapLine(label, tui.WrapOptions{
+		Width:            width,
+		InitialIndent:    row.NamePrefix,
+		SubsequentIndent: indent,
+		BreakWords:       true,
+	})
+	if description := stackedSelectionDescription(row); description != "" {
+		lines = append(lines, tui.AdaptiveWrapLine(description, tui.WrapOptions{
+			Width:            width,
+			InitialIndent:    indent,
+			SubsequentIndent: indent,
+			BreakWords:       true,
+		})...)
+	}
+	return lines
 }
 
 func shouldWrapNameInColumn(row GenericDisplayRow) bool {
@@ -334,14 +402,30 @@ func truncateSelectionName(name string, limit int) string {
 	return tui.TruncateWithEllipsis(name, limit)
 }
 
-func combinedSelectionDescription(row GenericDisplayRow) string {
+func combinedSelectionDescription(row GenericDisplayRow, descriptionLayout SelectionDescriptionLayout) string {
 	switch {
 	case row.Description != "" && row.DisabledReason != "":
 		return row.Description + " (disabled: " + row.DisabledReason + ")"
 	case row.Description != "":
 		return row.Description
 	case row.DisabledReason != "":
+		if descriptionLayout.Mode == SelectionDescriptionStackBelowWhenNarrow {
+			return row.DisabledReason
+		}
 		return "disabled: " + row.DisabledReason
+	default:
+		return ""
+	}
+}
+
+func stackedSelectionDescription(row GenericDisplayRow) string {
+	switch {
+	case row.Description != "" && row.DisabledReason != "":
+		return row.Description + " (disabled: " + row.DisabledReason + ")"
+	case row.Description != "":
+		return row.Description
+	case row.DisabledReason != "":
+		return row.DisabledReason
 	default:
 		return ""
 	}
@@ -366,6 +450,14 @@ func measureGenericRowsHeight(rows []GenericDisplayRow, state ScrollState, maxRe
 		total += max(len(wrapSelectionRowLines(row, descCol, contentWidth)), 1)
 	}
 	return max(total, 1)
+}
+
+func (layout SelectionDescriptionLayout) shouldStack(width int, descCol int) bool {
+	if layout.Mode != SelectionDescriptionStackBelowWhenNarrow {
+		return false
+	}
+	descCol = min(max(descCol, 0), max(width, 0))
+	return max(width-descCol, 0) < layout.MinDescriptionWidth
 }
 
 func lenColumnsSelection(text string) int {

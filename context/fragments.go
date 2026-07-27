@@ -1,6 +1,7 @@
 package context
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -137,9 +138,16 @@ func (p *PluginInstructions) Body() string {
 }
 
 type SkillInstructions struct {
-	Name     string
-	Path     string
-	Contents string
+	Name                   string
+	Path                   string
+	Contents               string
+	ExecutorResourceAccess *ExecutorSkillResourceAccess
+}
+
+type ExecutorSkillResourceAccess struct {
+	AuthorityID  string
+	Package      string
+	MainResource string
 }
 
 func NewSkillInstructions(name string, path string, contents string) *SkillInstructions {
@@ -152,6 +160,21 @@ func NewSkillInstructions(name string, path string, contents string) *SkillInstr
 	return &SkillInstructions{Name: name, Path: path, Contents: contents}
 }
 
+func NewSkillInstructionsWithExecutorResourceAccess(name string, path string, contents string, access *ExecutorSkillResourceAccess) *SkillInstructions {
+	fragment := NewSkillInstructions(name, path, contents)
+	if fragment == nil || access == nil {
+		return fragment
+	}
+	copy := *access
+	copy.AuthorityID = strings.TrimSpace(copy.AuthorityID)
+	copy.Package = strings.TrimSpace(copy.Package)
+	copy.MainResource = strings.TrimSpace(copy.MainResource)
+	if copy.AuthorityID != "" && copy.Package != "" && copy.MainResource != "" {
+		fragment.ExecutorResourceAccess = &copy
+	}
+	return fragment
+}
+
 func (s *SkillInstructions) Role() string {
 	return RoleUser
 }
@@ -161,7 +184,23 @@ func (s *SkillInstructions) Markers() (string, string) {
 }
 
 func (s *SkillInstructions) Body() string {
-	return fmt.Sprintf("\n<name>%s</name>\n<path>%s</path>\n%s\n", s.Name, s.Path, s.Contents)
+	resourceAccess := ""
+	if s.ExecutorResourceAccess != nil {
+		metadata := struct {
+			Authority struct {
+				Kind string `json:"kind"`
+				ID   string `json:"id"`
+			} `json:"authority"`
+			Package      string `json:"package"`
+			MainResource string `json:"main_resource"`
+		}{Package: s.ExecutorResourceAccess.Package, MainResource: s.ExecutorResourceAccess.MainResource}
+		metadata.Authority.Kind = "executor"
+		metadata.Authority.ID = s.ExecutorResourceAccess.AuthorityID
+		if encoded, err := json.Marshal(metadata); err == nil {
+			resourceAccess = "\n<resource_access>" + string(encoded) + "</resource_access>"
+		}
+	}
+	return fmt.Sprintf("\n<name>%s</name>\n<path>%s</path>%s\n%s\n", s.Name, s.Path, resourceAccess, s.Contents)
 }
 
 type AppInstructionsData struct {

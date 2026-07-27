@@ -33,7 +33,7 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 			return nil, err
 		}
 	}
-	return ConfigRequirementsFromMap(values), nil
+	return configRequirementsFromMap(values)
 }
 
 func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {
@@ -45,8 +45,13 @@ func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirement
 }
 
 func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
+	requirements, _ := configRequirementsFromMap(values)
+	return requirements
+}
+
+func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, error) {
 	if len(values) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out ConfigRequirements
 	if values, ok := stringListAnyKey(values, "allowed_approval_policies", "allowedApprovalPolicies"); ok {
@@ -116,10 +121,136 @@ func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
 	if nested, ok := mapAnyKey(values, "models"); ok {
 		out.Models = modelsRequirementsFromMap(nested)
 	}
-	if configRequirementsEmpty(&out) {
-		return nil
+	if nested, ok := mapAnyKey(values, "mcp_servers", "mcpServers"); ok {
+		parsed, err := mcpServerRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.MCPServers = parsed
 	}
-	return &out
+	if nested, ok := mapAnyKey(values, "plugins"); ok {
+		parsed, err := pluginRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Plugins = parsed
+	}
+	if configRequirementsEmpty(&out) {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+func mcpServerRequirementsFromMap(values map[string]any) (map[string]MCPServerRequirement, error) {
+	out := make(map[string]MCPServerRequirement, len(values))
+	for name, raw := range values {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid MCP requirement %q: expected table", name)
+		}
+		requirement, err := mcpServerRequirementFromMap(table)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MCP requirement %q: %w", name, err)
+		}
+		out[name] = requirement
+	}
+	return out, nil
+}
+
+func pluginRequirementsFromMap(values map[string]any) (map[string]PluginRequirements, error) {
+	out := make(map[string]PluginRequirements, len(values))
+	for pluginID, raw := range values {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid plugin requirement %q: expected table", pluginID)
+		}
+		var requirement PluginRequirements
+		if servers, configured := mapAnyKey(table, "mcp_servers", "mcpServers"); configured {
+			parsed, err := mcpServerRequirementsFromMap(servers)
+			if err != nil {
+				return nil, fmt.Errorf("invalid plugin requirement %q: %w", pluginID, err)
+			}
+			requirement.MCPServers = &parsed
+		}
+		out[pluginID] = requirement
+	}
+	return out, nil
+}
+
+func mcpServerRequirementFromMap(values map[string]any) (MCPServerRequirement, error) {
+	identity, ok := mapAnyKey(values, "identity")
+	if !ok || len(values) != 1 {
+		return MCPServerRequirement{}, fmt.Errorf("identity table is required")
+	}
+	if command, ok := stringAnyKey(identity, "command"); ok {
+		requirement := MCPServerRequirement{Identity: &MCPServerIdentity{Command: &command}}
+		return requirement, requirement.Validate()
+	}
+	if rawURL, ok := stringAnyKey(identity, "url"); ok {
+		requirement := MCPServerRequirement{Identity: &MCPServerIdentity{URL: &rawURL}}
+		return requirement, requirement.Validate()
+	}
+	if command, ok := mapAnyKey(identity, "command"); ok {
+		executable, _ := stringAnyKey(command, "executable")
+		args, err := mcpServerValueMatchersFromAny(command["args"])
+		if err != nil {
+			return MCPServerRequirement{}, err
+		}
+		requirement := MCPServerRequirement{Command: &MCPServerCommandMatcher{Executable: executable, Args: args}}
+		return requirement, requirement.Validate()
+	}
+	if urlMatcher, ok := mapAnyKey(identity, "url"); ok {
+		matcher, err := mcpServerValueMatcherFromMap(urlMatcher)
+		if err != nil {
+			return MCPServerRequirement{}, err
+		}
+		requirement := MCPServerRequirement{URL: &matcher}
+		return requirement, requirement.Validate()
+	}
+	return MCPServerRequirement{}, fmt.Errorf("identity requires command or url")
+}
+
+func mcpServerValueMatchersFromAny(raw any) ([]MCPServerValueMatcher, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("command args must be an array")
+	}
+	out := make([]MCPServerValueMatcher, 0, len(items))
+	for index, rawItem := range items {
+		table, ok := rawItem.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("command arg matcher %d must be a table", index)
+		}
+		matcher, err := mcpServerValueMatcherFromMap(table)
+		if err != nil {
+			return nil, fmt.Errorf("command arg matcher %d: %w", index, err)
+		}
+		out = append(out, matcher)
+	}
+	return out, nil
+}
+
+func mcpServerValueMatcherFromMap(values map[string]any) (MCPServerValueMatcher, error) {
+	kind, _ := stringAnyKey(values, "match")
+	matcher := MCPServerValueMatcher{Match: kind}
+	switch kind {
+	case "exact", "prefix":
+		matcher.Value, _ = stringAnyKey(values, "value")
+		if len(values) != 2 {
+			return MCPServerValueMatcher{}, fmt.Errorf("%s matcher requires only match and value", kind)
+		}
+	case "regex":
+		matcher.Expression, _ = stringAnyKey(values, "expression")
+		if len(values) != 2 {
+			return MCPServerValueMatcher{}, fmt.Errorf("regex matcher requires only match and expression")
+		}
+	default:
+		return MCPServerValueMatcher{}, fmt.Errorf("unsupported matcher %q", kind)
+	}
+	return matcher, matcher.Validate()
 }
 
 func computerUseRequirementsFromMap(values map[string]any) *ComputerUseRequirements {
@@ -423,7 +554,9 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.Hooks == nil &&
 			value.EnforceResidency == nil &&
 			value.Network == nil &&
-			value.Models == nil)
+			value.Models == nil &&
+			value.MCPServers == nil &&
+			value.Plugins == nil)
 }
 
 func mapAnyKey(values map[string]any, keys ...string) (map[string]any, bool) {

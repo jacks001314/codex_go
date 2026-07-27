@@ -29,6 +29,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	modelpkg "codex_go/model"
+	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
 	"codex_go/session"
@@ -606,7 +607,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		TUIPet:                    settings.TUIPet,
 		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnReadDebugConfig:         interactiveDebugConfigReader(root),
+		OnReadPlugins:             interactivePluginReader(),
 		OnReadSkills:              interactiveSkillsReader(root),
+		OnFuzzyFileSearch:         interactiveFuzzyFileSearchReader(root),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
@@ -641,7 +644,7 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 	if resolved, resolveErr := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve(); resolveErr == nil && resolved != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolved.Auth)
 	}
-	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuth(loaded.Values, codexHome, runtimeAuth)
+	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(loaded.Values, codexHome, runtimeAuth, loaded.Requirements)
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
 		return nil, nil, nil
 	}
@@ -961,6 +964,36 @@ func interactiveSkillsReader(root *cli.RootOptions) codextea.SkillsListReaderFun
 		response, err := service.List(params)
 		if err != nil || response == nil {
 			return appserver.SkillsListResponse{}, err
+		}
+		return *response, nil
+	}
+}
+
+func interactivePluginReader() codextea.PluginListReaderFunc {
+	service := plugin.NewPluginService()
+	service.SetCodexHome(auth.DefaultCodexHome())
+	return func() (plugin.PluginListResponse, error) {
+		return *service.List(&plugin.PluginListParams{IncludeInstalled: true}), nil
+	}
+}
+
+func interactiveFuzzyFileSearchReader(root *cli.RootOptions) codextea.FuzzyFileSearchReaderFunc {
+	service := appserver.NewMiscService()
+	return func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			cwd = interactiveSessionPickerCWD(root)
+		}
+		params := &appserver.FuzzyFileSearchParams{Query: query}
+		if cwd != "" {
+			params.Roots = []string{cwd}
+		}
+		if cancellationToken = strings.TrimSpace(cancellationToken); cancellationToken != "" {
+			params.CancellationToken = &cancellationToken
+		}
+		response, err := service.FuzzyFileSearch(context.Background(), params)
+		if err != nil || response == nil {
+			return appserver.FuzzyFileSearchResponse{}, err
 		}
 		return *response, nil
 	}
@@ -1951,6 +1984,7 @@ func interactivePromptSkillMetadataFromEntries(entries []appserver.SkillsListEnt
 				Path:                    strings.TrimSpace(entry.Path),
 				Description:             strings.TrimSpace(description),
 				PluginID:                strings.TrimSpace(entry.PluginID),
+				RemotePluginID:          strings.TrimSpace(entry.RemotePluginID),
 				Contents:                entry.Contents,
 				AllowImplicitInvocation: allowImplicit,
 			})

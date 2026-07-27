@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -881,6 +880,71 @@ func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPL
 	return s.ListStatusCheckedWithObserver(params, nil)
 }
 
+// ValidateRequiredServers waits for the current required MCP servers to finish
+// their startup inventory and reports all failures together. This mirrors the
+// Rust session initialization gate: optional server failures remain
+// best-effort, while a required server prevents a new session from loading.
+func (s *MCPService) ValidateRequiredServers(threadID string) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	required := make([]string, 0, len(s.required))
+	for name, enabled := range s.required {
+		if enabled {
+			required = append(required, name)
+		}
+	}
+	s.mu.Unlock()
+	if len(required) == 0 {
+		return nil
+	}
+	sort.Strings(required)
+
+	threadID = strings.TrimSpace(threadID)
+	var threadIDPtr *string
+	if threadID != "" {
+		threadIDPtr = &threadID
+	}
+	if _, err := s.ListStatusChecked(&MCPListServerStatusParams{
+		ThreadID: threadIDPtr,
+		Detail:   &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+	}); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	failures := make([]string, 0, len(required))
+	for _, name := range required {
+		config, configOK := s.configs[name]
+		if !configOK || !config.Enabled {
+			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", name, name))
+			continue
+		}
+		status, statusOK := s.servers[name]
+		if !statusOK {
+			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", name, name))
+			continue
+		}
+		switch status.State {
+		case MCPServerFailed, MCPServerCancelled, MCPServerStopped:
+			reason := ""
+			if status.Error != nil {
+				reason = strings.TrimSpace(*status.Error)
+			}
+			if reason == "" {
+				reason = string(status.State)
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", name, reason))
+		}
+	}
+	s.mu.Unlock()
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("required MCP servers failed to initialize: %s", strings.Join(failures, "; "))
+}
+
 func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusParams, observer MCPStartupObserver) (*MCPListServerStatusResponse, error) {
 	var detail *MCPServerStatusDetail
 	if params != nil {
@@ -1081,10 +1145,9 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 	if store == nil {
 		return "", false
 	}
-	timeout := mcpOAuthLoginTimeout(params.TimeoutSecs)
-	client := &http.Client{Timeout: timeout}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	callbackTimeout := mcpOAuthLoginTimeout(params.TimeoutSecs)
+	client := s.httpClientForServer(name, config).oauthHTTPClient(0)
+	ctx := context.Background()
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
 	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" || strings.TrimSpace(discovery.TokenEndpoint) == "" {
 		return "", false
@@ -1104,6 +1167,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		Scopes:                params.Scopes,
 		Store:                 store,
 		HTTPClient:            client,
+		Timeout:               callbackTimeout,
 	})
 	if err != nil {
 		return "", false
@@ -1118,13 +1182,13 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 
 func mcpOAuthLoginTimeout(timeoutSecs *uint64) time.Duration {
 	if timeoutSecs == nil || *timeoutSecs == 0 {
-		return mcpOAuthLoginDiscoveryMaxTimeout
+		return mcpOAuthDependencyLoginTimeout
 	}
-	timeout := time.Duration(*timeoutSecs) * time.Second
-	if timeout <= 0 || timeout > mcpOAuthLoginDiscoveryMaxTimeout {
-		return mcpOAuthLoginDiscoveryMaxTimeout
+	const maxDurationSeconds = uint64((1<<63 - 1) / int64(time.Second))
+	if *timeoutSecs > maxDurationSeconds {
+		return time.Duration(1<<63 - 1)
 	}
-	return timeout
+	return time.Duration(*timeoutSecs) * time.Second
 }
 
 func (s *MCPService) oauthStoreForConfig(config *ServerConfig) *OAuthStore {

@@ -5,8 +5,80 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	managedconfig "codex_go/config"
 	"time"
 )
+
+func TestRuntimeConfigAppliesManagedMCPRequirementsLikeRust(t *testing.T) {
+	command := "approved-command"
+	requirements := &managedconfig.ConfigRequirements{MCPServers: map[string]managedconfig.MCPServerRequirement{
+		"allowed": {Identity: &managedconfig.MCPServerIdentity{Command: &command}},
+	}}
+	runtime := RuntimeConfigFromValuesWithAuthAndRequirements(map[string]any{"mcp_servers": map[string]any{
+		"allowed": map[string]any{"command": command, "enabled": true},
+		"wrong":   map[string]any{"command": "wrong-command", "enabled": true},
+	}}, t.TempDir(), nil, requirements)
+	if !runtime.Servers["allowed"].Config.Enabled || runtime.Servers["allowed"].Config.DisabledReason != "" {
+		t.Fatalf("allowed server = %#v", runtime.Servers["allowed"].Config)
+	}
+	if runtime.Servers["wrong"].Config.Enabled || runtime.Servers["wrong"].Config.DisabledReason != managedconfig.MCPDisabledByRequirements {
+		t.Fatalf("blocked server = %#v", runtime.Servers["wrong"].Config)
+	}
+}
+
+func TestRuntimeConfigPluginRequirementAllowlistSemanticsLikeRust(t *testing.T) {
+	pluginServers := map[string]ServerRegistration{
+		"docs": {Name: "docs", Source: "plugin", PluginID: "sample@test", Config: ServerConfig{Command: "docs-cli", Enabled: true}},
+	}
+	tests := []struct {
+		name         string
+		requirements *managedconfig.ConfigRequirements
+		wantEnabled  bool
+	}{
+		{
+			name:         "no plugin requirements",
+			requirements: nil,
+			wantEnabled:  true,
+		},
+		{
+			name: "requirements without any allowlist do not filter",
+			requirements: &managedconfig.ConfigRequirements{Plugins: map[string]managedconfig.PluginRequirements{
+				"other@test": {},
+			}},
+			wantEnabled: true,
+		},
+		{
+			name: "explicit empty allowlist denies all",
+			requirements: func() *managedconfig.ConfigRequirements {
+				empty := map[string]managedconfig.MCPServerRequirement{}
+				return &managedconfig.ConfigRequirements{Plugins: map[string]managedconfig.PluginRequirements{
+					"sample@test": {MCPServers: &empty},
+				}}
+			}(),
+			wantEnabled: false,
+		},
+		{
+			name: "any configured allowlist is fail closed for unlisted plugins",
+			requirements: func() *managedconfig.ConfigRequirements {
+				command := "other-cli"
+				other := map[string]managedconfig.MCPServerRequirement{"other": {Identity: &managedconfig.MCPServerIdentity{Command: &command}}}
+				return &managedconfig.ConfigRequirements{Plugins: map[string]managedconfig.PluginRequirements{
+					"other@test": {MCPServers: &other},
+				}}
+			}(),
+			wantEnabled: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := NewManager(pluginServers).RuntimeConfig(RuntimeConfig{Requirements: test.requirements}, nil)
+			if got := runtime.Servers["docs"].Config.Enabled; got != test.wantEnabled {
+				t.Fatalf("plugin server enabled = %v, want %v; config=%#v", got, test.wantEnabled, runtime.Servers["docs"].Config)
+			}
+		})
+	}
+}
 
 func TestManagerRuntimeConfigAppliesBuiltInsAndOverlays(t *testing.T) {
 	manager := NewManager(map[string]ServerRegistration{

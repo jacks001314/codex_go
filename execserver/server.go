@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/shell"
 	"codex_go/utils"
@@ -163,6 +164,7 @@ type Server struct {
 	processes  map[string]*processState
 	handles    map[string]*os.File
 	httpClient *http.Client
+	requests   *serverRequestSender
 
 	registryMu         sync.Mutex
 	sessions           map[string]*serverSessionEntry
@@ -178,32 +180,35 @@ type serverSessionEntry struct {
 }
 
 type processState struct {
-	id              string
-	cmd             *exec.Cmd
-	stdin           io.WriteCloser
-	starting        bool
-	terminateFn     func() error
-	signalFn        func() error
-	pipeStdin       bool
-	tty             bool
-	mu              sync.Mutex
-	cond            *sync.Cond
-	chunks          []outputChunk
-	retainedBytes   int
-	nextSeq         uint64
-	exited          bool
-	exitSequenced   bool
-	exitCode        *int
-	failure         string
-	closed          bool
-	closedSequenced bool
-	openStreams     int
-	seenWriteIDs    map[string]bool
-	seenWriteOrder  []string
-	notify          processNotifier
-	onClosed        func()
-	retention       time.Duration
-	retentionOnce   sync.Once
+	id               string
+	cmd              *exec.Cmd
+	stdin            io.WriteCloser
+	starting         bool
+	terminateFn      func() error
+	signalFn         func() error
+	pipeStdin        bool
+	tty              bool
+	mu               sync.Mutex
+	cond             *sync.Cond
+	chunks           []outputChunk
+	retainedBytes    int
+	nextSeq          uint64
+	exited           bool
+	exitSequenced    bool
+	exitCode         *int
+	failure          string
+	closed           bool
+	closedSequenced  bool
+	openStreams      int
+	seenWriteIDs     map[string]bool
+	seenWriteOrder   []string
+	notify           processNotifier
+	onClosed         func()
+	retention        time.Duration
+	retentionOnce    sync.Once
+	networkProxy     *network.PreparedProxyManagedNetwork
+	policyCancel     context.CancelFunc
+	networkCloseOnce sync.Once
 }
 
 type processNotifier func(method string, params any)
@@ -276,8 +281,13 @@ type InitializeResponse struct {
 }
 
 type EnvironmentInfo struct {
-	Shell ShellInfo `json:"shell"`
-	CWD   *string   `json:"cwd"`
+	Shell        ShellInfo               `json:"shell"`
+	CWD          *string                 `json:"cwd"`
+	Capabilities EnvironmentCapabilities `json:"capabilities"`
+}
+
+type EnvironmentCapabilities struct {
+	NetworkProxyLaunch bool `json:"networkProxyLaunch"`
 }
 
 type EnvironmentStatus struct {
@@ -296,17 +306,18 @@ type ShellInfo struct {
 }
 
 type ExecParams struct {
-	ProcessID             string                        `json:"processId"`
-	Argv                  []string                      `json:"argv"`
-	CWD                   string                        `json:"cwd"`
-	EnvPolicy             *ExecEnvPolicy                `json:"envPolicy,omitempty"`
-	Env                   map[string]string             `json:"env"`
-	TTY                   bool                          `json:"tty"`
-	PipeStdin             bool                          `json:"pipeStdin"`
-	Arg0                  *string                       `json:"arg0"`
-	Sandbox               json.RawMessage               `json:"sandbox,omitempty"`
-	EnforceManagedNetwork bool                          `json:"enforceManagedNetwork,omitempty"`
-	ManagedNetwork        *ManagedNetworkSandboxContext `json:"managedNetwork,omitempty"`
+	ProcessID             string                          `json:"processId"`
+	Argv                  []string                        `json:"argv"`
+	CWD                   string                          `json:"cwd"`
+	EnvPolicy             *ExecEnvPolicy                  `json:"envPolicy,omitempty"`
+	Env                   map[string]string               `json:"env"`
+	TTY                   bool                            `json:"tty"`
+	PipeStdin             bool                            `json:"pipeStdin"`
+	Arg0                  *string                         `json:"arg0"`
+	Sandbox               json.RawMessage                 `json:"sandbox,omitempty"`
+	EnforceManagedNetwork bool                            `json:"enforceManagedNetwork,omitempty"`
+	ManagedNetwork        *ManagedNetworkSandboxContext   `json:"managedNetwork,omitempty"`
+	NetworkProxy          *RemoteNetworkProxyLaunchConfig `json:"networkProxy,omitempty"`
 }
 
 type ManagedNetworkSandboxContext struct {
@@ -745,7 +756,7 @@ func (s *Server) attachSession(ctx context.Context, resumeSessionID *string) (*s
 		entry.connectionID = connectionID
 		entry.detachedConnectionID = ""
 		entry.detachedExpiresAt = time.Time{}
-		entry.server.setProcessNotifier(processNotifierFromContext(ctx))
+		entry.server.setConnectionState(processNotifierFromContext(ctx), serverRequestSenderFromContext(ctx))
 		state.mu.Lock()
 		state.session = entry
 		state.mu.Unlock()
@@ -790,7 +801,7 @@ func (s *Server) detachConnection(ctx context.Context) {
 	entry.connectionID = ""
 	entry.detachedConnectionID = connectionID
 	entry.detachedExpiresAt = time.Now().Add(s.detachedSessionTTL)
-	entry.server.setProcessNotifier(nil)
+	entry.server.setConnectionState(nil, nil)
 	ttl := s.detachedSessionTTL
 	s.registryMu.Unlock()
 
@@ -815,12 +826,21 @@ func (s *Server) expireDetachedSession(sessionID string, connectionID string) {
 }
 
 func (s *Server) setProcessNotifier(notify processNotifier) {
+	s.setConnectionState(notify, s.currentRequestSender())
+}
+
+func (s *Server) setConnectionState(notify processNotifier, requests *serverRequestSender) {
 	s.mu.Lock()
+	previousRequests := s.requests
+	s.requests = requests
 	processes := make([]*processState, 0, len(s.processes))
 	for _, process := range s.processes {
 		processes = append(processes, process)
 	}
 	s.mu.Unlock()
+	if previousRequests != nil && previousRequests != requests {
+		previousRequests.close()
+	}
 	for _, process := range processes {
 		process.mu.Lock()
 		process.notify = notify
@@ -828,8 +848,19 @@ func (s *Server) setProcessNotifier(notify processNotifier) {
 	}
 }
 
+func (s *Server) currentRequestSender() *serverRequestSender {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requests
+}
+
 func (s *Server) shutdown() {
 	s.mu.Lock()
+	requests := s.requests
+	s.requests = nil
 	processes := make([]*processState, 0, len(s.processes))
 	for _, process := range s.processes {
 		processes = append(processes, process)
@@ -841,6 +872,9 @@ func (s *Server) shutdown() {
 	s.processes = map[string]*processState{}
 	s.handles = map[string]*os.File{}
 	s.mu.Unlock()
+	if requests != nil {
+		requests.close()
+	}
 	for _, process := range processes {
 		process.mu.Lock()
 		terminate := process.terminateFn
@@ -852,6 +886,7 @@ func (s *Server) shutdown() {
 		if terminate != nil {
 			_ = terminate()
 		}
+		process.closeNetworkResources()
 	}
 	for _, handle := range handles {
 		_ = handle.Close()
@@ -895,13 +930,26 @@ func (s *Server) serveStream(ctx context.Context, stdin io.Reader, stdout io.Wri
 		notifyActive = false
 		writeMu.Unlock()
 	}()
-	notifyCtx := withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(ctx, processNotifierContextKey{}, processNotifier(func(method string, params any) {
+	writeServerMessage := func(value any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if !notifyActive {
+			return errors.New("exec-server stdio connection is closed")
+		}
+		if notifyErr != nil {
+			return notifyErr
+		}
+		return encoder.Encode(value)
+	}
+	requestsSender := newServerRequestSender(writeServerMessage)
+	defer requestsSender.close()
+	notifyCtx := withServerRequestSender(withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(ctx, processNotifierContextKey{}, processNotifier(func(method string, params any) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		if notifyActive && notifyErr == nil {
 			notifyErr = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 		}
-	}))))
+	})))), requestsSender)
 	detached := false
 	detach := func() {
 		if !detached {
@@ -916,6 +964,12 @@ func (s *Server) serveStream(ctx context.Context, stdin io.Reader, stdout io.Wri
 			continue
 		}
 		requestData := append([]byte(nil), line...)
+		if response, accepted := consumeClientResponse(notifyCtx, requestData); response {
+			if !accepted {
+				break
+			}
+			continue
+		}
 		if clientMessageClosesConnection(notifyCtx, requestData) {
 			break
 		}
@@ -1301,6 +1355,23 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, requestError(-32602, fmt.Sprintf("invalid envPolicy.inherit %q", params.EnvPolicy.Inherit))
 		}
 	}
+	preparedParams, preparedProxy, policyCancel, err := s.prepareExecutorNetworkProxy(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	params = preparedParams
+	preparedNetworkOwned := false
+	defer func() {
+		if preparedNetworkOwned {
+			return
+		}
+		if policyCancel != nil {
+			policyCancel()
+		}
+		if preparedProxy != nil {
+			_ = preparedProxy.Close()
+		}
+	}()
 	if hasJSONValue(params.Sandbox) {
 		state, err := s.reserveProcessState(ctx, params)
 		if err != nil {
@@ -1312,6 +1383,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, startErr
 		}
 		if supported {
+			state.networkProxy = preparedProxy
+			state.policyCancel = policyCancel
+			preparedNetworkOwned = true
 			if ctx.Err() != nil {
 				s.releaseStartingProcess(params.ProcessID, state)
 			}
@@ -1388,6 +1462,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, startErr
 		}
 		if supported {
+			state.networkProxy = preparedProxy
+			state.policyCancel = policyCancel
+			preparedNetworkOwned = true
 			if ctx.Err() != nil {
 				s.releaseStartingProcess(params.ProcessID, state)
 			}
@@ -1462,6 +1539,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 		return nil, err
 	}
+	state.networkProxy = preparedProxy
+	state.policyCancel = policyCancel
+	preparedNetworkOwned = true
 	if ctx.Err() != nil {
 		s.releaseStartingProcess(params.ProcessID, state)
 		if stdin != nil {
@@ -1561,6 +1641,116 @@ func (s *Server) releaseStartingProcess(processID string, state *processState) {
 		delete(s.processes, processID)
 	}
 	s.mu.Unlock()
+	state.closeNetworkResources()
+}
+
+func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecParams) (*ExecParams, *network.PreparedProxyManagedNetwork, context.CancelFunc, error) {
+	if params == nil || params.NetworkProxy == nil {
+		return params, nil, nil, nil
+	}
+	launch := params.NetworkProxy
+	if launch.PolicyDecisionTimeoutMS != nil && *launch.PolicyDecisionTimeoutMS == 0 {
+		return nil, nil, nil, requestError(-32602, "network policy decision callback timeout must be nonzero")
+	}
+	if launch.PolicyDecisionTimeoutMS != nil && (params.ProcessID == "" || len(params.ProcessID) > MaxNetworkPolicyProcessIDBytes) {
+		return nil, nil, nil, requestError(-32602, fmt.Sprintf("callback-enabled process ID must be non-empty and at most %d bytes", MaxNetworkPolicyProcessIDBytes))
+	}
+	preparedParams := *params
+	preparedParams.Env = childEnv(params)
+	preparedParams.EnvPolicy = nil
+	if runtime.GOOS == "windows" && !hasJSONValue(params.Sandbox) {
+		stripManagedProxyEnv(preparedParams.Env)
+		preparedParams.NetworkProxy = nil
+		preparedParams.ManagedNetwork = nil
+		preparedParams.EnforceManagedNetwork = false
+		return &preparedParams, nil, nil, nil
+	}
+	proxyConfig, err := launch.Proxy.ProxyConfig()
+	if err != nil {
+		return nil, nil, nil, requestError(-32602, "invalid network proxy config: "+err.Error())
+	}
+	proxyConfig.EnvironmentID = stringValue(launch.EnvironmentID)
+	proxyConfig.AuditMetadata = network.ProxyAuditMetadata{
+		ConversationID: launch.AuditMetadata.ConversationID,
+		AppVersion:     launch.AuditMetadata.AppVersion,
+		UserAccountID:  launch.AuditMetadata.UserAccountID,
+		AuthMode:       launch.AuditMetadata.AuthMode,
+		Originator:     launch.AuditMetadata.Originator,
+		UserEmail:      launch.AuditMetadata.UserEmail,
+		TerminalType:   launch.AuditMetadata.TerminalType,
+		Model:          launch.AuditMetadata.Model,
+		Slug:           launch.AuditMetadata.Slug,
+	}
+	policyCtx, policyCancel := context.WithCancel(context.Background())
+	if launch.PolicyDecisionTimeoutMS != nil {
+		controllerTimeout := time.Duration(*launch.PolicyDecisionTimeoutMS) * time.Millisecond
+		processID := params.ProcessID
+		proxyConfig.PolicyDecider = network.ProxyPolicyDeciderFunc(func(requestCtx context.Context, request network.ProxyPolicyRequest) network.ProxyDecision {
+			if request.Host == "" || len(request.Host) > MaxNetworkPolicyHostBytes || containsControlOrWhitespace(request.Host) || request.Port == 0 {
+				return network.DenyProxyDecision(NetworkPolicyDenialReason)
+			}
+			sender := s.currentRequestSender()
+			if sender == nil {
+				return network.DenyProxyDecision(NetworkPolicyDenialReason)
+			}
+			callCtx, cancel := context.WithCancel(requestCtx)
+			defer cancel()
+			go func() {
+				select {
+				case <-policyCtx.Done():
+					cancel()
+				case <-callCtx.Done():
+				}
+			}()
+			var response NetworkPolicyRequestResponse
+			err := sender.call(callCtx, MethodNetworkPolicyRequest, NetworkPolicyRequestParams{
+				ProcessID: processID,
+				Request:   NetworkPolicyRequestFromProxy(request),
+			}, controllerTimeout+networkPolicyTransportTimeoutMargin, &response)
+			if err != nil {
+				return network.DenyProxyDecision(NetworkPolicyDenialReason)
+			}
+			switch response.Decision.Type {
+			case "allow":
+				return network.AllowProxyDecision()
+			case "ask":
+				return network.AskProxyDecision(response.Decision.Reason)
+			case "deny":
+				return network.DenyProxyDecision(response.Decision.Reason)
+			default:
+				return network.DenyProxyDecision(NetworkPolicyDenialReason)
+			}
+		})
+	}
+	prepared, err := network.StartProxyManagedNetwork(context.Background(), proxyConfig, preparedParams.Env)
+	if err != nil {
+		policyCancel()
+		return nil, nil, nil, requestError(-32603, "failed to start executor network proxy: "+err.Error())
+	}
+	preparedParams.Env = prepared.EnvSnapshot()
+	sandboxContext := prepared.SandboxContextSnapshot()
+	preparedParams.ManagedNetwork = &ManagedNetworkSandboxContext{
+		LoopbackPorts:     append([]uint16(nil), sandboxContext.LoopbackPorts...),
+		AllowLocalBinding: sandboxContext.AllowLocalBinding,
+	}
+	preparedParams.EnforceManagedNetwork = true
+	return &preparedParams, prepared, policyCancel, nil
+}
+
+func stripManagedProxyEnv(env map[string]string) {
+	for _, key := range append(append([]string{}, network.ProxyURLEnvKeys...), network.NoProxyEnvKeys...) {
+		delete(env, key)
+		delete(env, strings.ToLower(key))
+	}
+	delete(env, network.ProxyActiveEnvKey)
+	delete(env, network.ProxyAllowLocalBindingEnvKey)
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func prepareExecProcess(params *ExecParams) ([]string, string, error) {
@@ -1771,6 +1961,7 @@ func (s *Server) terminateProcess(params *TerminateParams) (*TerminateResponse, 
 	if starting {
 		delete(s.processes, params.ProcessID)
 		s.mu.Unlock()
+		state.closeNetworkResources()
 		return &TerminateResponse{Running: true}, nil
 	}
 	s.mu.Unlock()
@@ -2487,6 +2678,7 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 		}
 	}
 	if closed != nil {
+		p.closeNetworkResources()
 		p.scheduleRetention()
 	}
 }
@@ -2513,6 +2705,7 @@ func (p *processState) finishStream() {
 		notify(MethodProcessClosed, *closed)
 	}
 	if closed != nil {
+		p.closeNetworkResources()
 		p.scheduleRetention()
 	}
 }
@@ -2669,6 +2862,9 @@ func (p *processState) scheduleRetention() {
 }
 
 func (p *processState) terminate() *TerminateResponse {
+	if p != nil && p.policyCancel != nil {
+		p.policyCancel()
+	}
 	p.mu.Lock()
 	cmd := p.cmd
 	terminateFn := p.terminateFn
@@ -2682,6 +2878,20 @@ func (p *processState) terminate() *TerminateResponse {
 		}
 	}
 	return &TerminateResponse{Running: running}
+}
+
+func (p *processState) closeNetworkResources() {
+	if p == nil {
+		return
+	}
+	p.networkCloseOnce.Do(func() {
+		if p.policyCancel != nil {
+			p.policyCancel()
+		}
+		if p.networkProxy != nil {
+			_ = p.networkProxy.Close()
+		}
+	})
 }
 
 func (p *processState) signal(params *SignalParams) (*SignalResponse, error) {
@@ -2753,8 +2963,9 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		}
 	}
 	return &EnvironmentInfo{
-		Shell: ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
-		CWD:   stringPtr(cwd),
+		Shell:        ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
+		CWD:          stringPtr(cwd),
+		Capabilities: EnvironmentCapabilities{NetworkProxyLaunch: true},
 	}
 }
 

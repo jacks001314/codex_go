@@ -3,10 +3,13 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -95,6 +98,78 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, record) {
 		t.Fatalf("Load() = %#v, want %#v", got, record)
+	}
+}
+
+func TestStoreConcurrentAppendItemsPreservesEveryUpdate(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Record{ID: "thread-concurrent-append"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	const writers = 8
+	const itemsPerWriter = 40
+	var wait sync.WaitGroup
+	for writer := range writers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for item := range itemsPerWriter {
+				id := fmt.Sprintf("writer-%d-item-%d", writer, item)
+				if _, err := store.AppendItem("thread-concurrent-append", Item{ID: id, Text: id}); err != nil {
+					t.Errorf("AppendItem(%s) error = %v", id, err)
+					return
+				}
+			}
+		}()
+	}
+	wait.Wait()
+
+	record, err := store.Read("thread-concurrent-append", true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got, want := len(record.Items), writers*itemsPerWriter; got != want {
+		t.Fatalf("item count = %d, want %d", got, want)
+	}
+}
+
+func TestStoreConcurrentInstancesPublishOnlyCompleteJSONSnapshots(t *testing.T) {
+	directory := t.TempDir()
+	store := NewStore(directory)
+	reader := NewStore(directory)
+	record := &Record{ID: "thread-atomic-save", Metadata: Metadata{Extra: map[string]any{}}}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("initial Save() error = %v", err)
+	}
+	var writing atomic.Bool
+	writing.Store(true)
+	readErrors := make(chan error, 1)
+	go func() {
+		for writing.Load() {
+			snapshot, readErr := reader.Load(record.ID)
+			if readErr != nil {
+				readErrors <- readErr
+				return
+			}
+			if snapshot.ID != record.ID {
+				readErrors <- fmt.Errorf("snapshot id = %q, want %q", snapshot.ID, record.ID)
+				return
+			}
+		}
+		readErrors <- nil
+	}()
+	for revision := range 250 {
+		record.Title = strings.Repeat(fmt.Sprintf("revision-%d-", revision), 128)
+		record.Metadata.Extra["revision"] = revision
+		if err := store.Save(record); err != nil {
+			writing.Store(false)
+			t.Fatalf("Save(revision %d) error = %v", revision, err)
+		}
+	}
+	writing.Store(false)
+	if err := <-readErrors; err != nil {
+		t.Fatalf("concurrent file snapshot was incomplete: %v", err)
 	}
 }
 
@@ -549,6 +624,150 @@ func TestStoreForkLastTurnID(t *testing.T) {
 	}
 	if _, err := store.Fork("legacy", ForkOptions{NewID: "legacy-fork", Mode: ForkAll, LastTurnID: "turn-1"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "lastTurnId 'turn-1' is not a persisted canonical turn in the source thread") {
 		t.Fatalf("Fork(synthetic last turn) error = %v, want ErrInvalidThreadID", err)
+	}
+}
+
+func TestStorePrepareForkBoundaries(t *testing.T) {
+	store := NewStore(t.TempDir())
+	source := &Record{
+		ID: "source",
+		Metadata: Metadata{RolloutTurns: []TurnSnapshot{
+			{ID: "turn-1", Status: "completed"},
+			{ID: "turn-2", Status: "completed"},
+			{ID: "turn-3", Status: "inProgress"},
+		}},
+		Items: []Item{
+			{ID: "u1", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "a1", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "u2", Metadata: map[string]any{"turnId": "turn-2"}},
+			{ID: "a2", Metadata: map[string]any{"turnId": "turn-2"}},
+			{ID: "u3", Metadata: map[string]any{"turnId": "turn-3"}},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		boundary ForkBoundary
+		want     []string
+	}{
+		{name: "latest", boundary: ForkBoundary{Kind: ForkBoundaryLatest}, want: []string{"u1", "a1", "u2", "a2", "u3"}},
+		{name: "through", boundary: ForkBoundary{Kind: ForkBoundaryThroughTurn, TurnID: "turn-2"}, want: []string{"u1", "a1", "u2", "a2"}},
+		{name: "before", boundary: ForkBoundary{Kind: ForkBoundaryBeforeTurn, TurnID: "turn-2"}, want: []string{"u1", "a1"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := store.PrepareFork(source, PrepareForkParams{Mode: ForkAll, Boundary: tc.boundary})
+			if err != nil {
+				t.Fatalf("PrepareFork() error = %v", err)
+			}
+			if prepared.SourceID != source.ID || !reflect.DeepEqual(itemIDs(prepared.Items), tc.want) {
+				t.Fatalf("PrepareFork() = source:%s items:%v", prepared.SourceID, itemIDs(prepared.Items))
+			}
+			if len(prepared.Items) > 0 {
+				prepared.Items[0].ID = "mutated"
+				if source.Items[0].ID != "u1" {
+					t.Fatalf("PrepareFork() mutated source: %#v", source.Items[0])
+				}
+			}
+		})
+	}
+
+	if _, err := store.PrepareFork(source, PrepareForkParams{Boundary: ForkBoundary{Kind: ForkBoundaryThroughTurn, TurnID: "turn-3"}}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "in-progress turn") {
+		t.Fatalf("PrepareFork(in progress) error = %v", err)
+	}
+	if _, err := store.PrepareFork(source, PrepareForkParams{Boundary: ForkBoundary{Kind: "invalid"}}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "unknown fork boundary") {
+		t.Fatalf("PrepareFork(invalid boundary) error = %v", err)
+	}
+}
+
+func TestStorePaginatedForkPersistsReferenceBackedHistory(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	source := &Record{
+		ID: "source",
+		Metadata: Metadata{
+			HistoryMode:  "paginated",
+			RolloutTurns: []TurnSnapshot{{ID: "turn-1", Status: "completed"}},
+		},
+		Items: []Item{{ID: "item-1", Type: "user_message", Text: "before", Metadata: map[string]any{"turnId": "turn-1"}}},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	forked, err := store.Fork("source", ForkOptions{NewID: "fork", Mode: ForkAll})
+	if err != nil {
+		t.Fatalf("Fork() error = %v", err)
+	}
+	if forked.HistoryBase == nil || forked.HistoryBase.ThreadID != "source" || forked.HistoryBase.ItemEnd != 1 || forked.HistoryBase.TurnEnd != 1 {
+		t.Fatalf("fork history base = %#v", forked.HistoryBase)
+	}
+	physical, err := store.Load("fork")
+	if err != nil {
+		t.Fatalf("Load(fork) error = %v", err)
+	}
+	if len(physical.Items) != 0 || len(physical.Metadata.RolloutTurns) != 0 {
+		t.Fatalf("physical fork copied inherited history: items=%#v turns=%#v", physical.Items, physical.Metadata.RolloutTurns)
+	}
+	if _, err := store.AppendItems("fork", []Item{{ID: "item-2", Type: "agent_message", Text: "after", Metadata: map[string]any{"turnId": "turn-2"}}}); err != nil {
+		t.Fatalf("AppendItems(fork) error = %v", err)
+	}
+	reopened := NewStore(root)
+	materialized, err := reopened.Read("fork", true, true)
+	if err != nil {
+		t.Fatalf("Read(fork) after reopen error = %v", err)
+	}
+	if got := itemIDs(materialized.Items); !reflect.DeepEqual(got, []string{"item-1", "item-2"}) {
+		t.Fatalf("materialized fork items = %v", got)
+	}
+	physical, err = reopened.Load("fork")
+	if err != nil {
+		t.Fatalf("Load(fork) after append error = %v", err)
+	}
+	if got := itemIDs(physical.Items); !reflect.DeepEqual(got, []string{"item-2"}) {
+		t.Fatalf("physical fork delta items = %v", got)
+	}
+}
+
+func TestStorePaginatedForkFreezesBoundaryAndProtectsSourceDeletion(t *testing.T) {
+	store := NewStore(t.TempDir())
+	source := &Record{
+		ID: "source",
+		Metadata: Metadata{
+			HistoryMode: "paginated",
+			RolloutTurns: []TurnSnapshot{
+				{ID: "turn-1", Status: "completed"},
+				{ID: "turn-2", Status: "completed"},
+			},
+		},
+		Items: []Item{
+			{ID: "item-1", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-2", Metadata: map[string]any{"turnId": "turn-2"}},
+		},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	if _, err := store.Fork("source", ForkOptions{NewID: "fork", LastTurnID: "turn-1"}); err != nil {
+		t.Fatalf("Fork() error = %v", err)
+	}
+	if _, err := store.AppendItem("source", Item{ID: "item-3", Metadata: map[string]any{"turnId": "turn-3"}}); err != nil {
+		t.Fatalf("AppendItem(source) error = %v", err)
+	}
+	forked, err := store.Read("fork", true, true)
+	if err != nil {
+		t.Fatalf("Read(fork) error = %v", err)
+	}
+	if got := itemIDs(forked.Items); !reflect.DeepEqual(got, []string{"item-1"}) {
+		t.Fatalf("fork boundary moved with source: %v", got)
+	}
+	if err := store.Delete("source"); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "forked history still references") {
+		t.Fatalf("Delete(referenced source) error = %v", err)
+	}
+	if err := store.Delete("fork"); err != nil {
+		t.Fatalf("Delete(fork) error = %v", err)
+	}
+	if err := store.Delete("source"); err != nil {
+		t.Fatalf("Delete(source) after child error = %v", err)
 	}
 }
 

@@ -1,13 +1,17 @@
 package tea
 
 import (
+	"fmt"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"codex_go/appserver"
+	"codex_go/features"
+	"codex_go/plugin"
 	codextui "codex_go/tui"
+	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
 )
 
@@ -34,15 +38,16 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		return nil
 	}
 	query, ok := skillPopupQuery(m.composer.Value())
-	mention := false
-	if !ok {
-		query, ok = mentionPopupQuery(m.composer.Value())
-		mention = ok
+	if !ok && features.Enabled(m.featureSettings, "mentions_v2") {
+		m.skillPopup = skillPopupState{}
+		return m.refreshMentionPopup()
 	}
 	if !ok {
 		m.skillPopup = skillPopupState{}
+		m.mentionPopup = nil
 		return nil
 	}
+	m.mentionPopup = nil
 	cwd := strings.TrimSpace(m.sessionCWD)
 	inventoryReady := m.skillsInventory != nil && m.skillsInventoryCWD == cwd
 	inventoryError := m.skillsInventoryErr != "" && m.skillsInventoryCWD == cwd
@@ -82,10 +87,209 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		Selected: selected,
 		Err:      m.skillsInventoryErr,
 	}
-	if mention {
-		m.skillPopup.Active = true
-	}
 	return nil
+}
+
+func (m *Model) refreshMentionPopup() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	start, end, query, ok := m.currentMentionPopupTokenRange()
+	if !ok {
+		m.mentionPopup = nil
+		m.mentionDismissedToken = ""
+		return nil
+	}
+	tokenKey := mentionPopupTokenKey(start, end, query)
+	if m.mentionPopup == nil && m.mentionDismissedToken == tokenKey {
+		return nil
+	}
+	if m.mentionDismissedToken != "" && m.mentionDismissedToken != tokenKey {
+		m.mentionDismissedToken = ""
+	}
+
+	newPopup := m.mentionPopup == nil
+	previousQuery := ""
+	if m.mentionPopup != nil {
+		previousQuery = m.mentionPopup.Query
+		m.mentionPopup.SetQuery(query)
+		m.mentionPopup.SetCandidates(m.mentionCandidates())
+	} else {
+		m.mentionPopup = mentionsv2.NewPopupWithQuery(m.mentionCandidates(), query)
+	}
+
+	commands := []bubbletea.Cmd{}
+	cwd := strings.TrimSpace(m.sessionCWD)
+	if !m.skillsInventoryLoading && (m.skillsInventory == nil || m.skillsInventoryCWD != cwd) && m.onReadSkills != nil {
+		m.skillsInventoryLoading = true
+		reader := m.onReadSkills
+		commands = append(commands, func() bubbletea.Msg {
+			response, err := reader(cwd)
+			return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}
+		})
+	}
+	if !m.mentionPluginInventoryReady && !m.mentionPluginInventoryLoading && m.onReadPlugins != nil {
+		m.mentionPluginInventoryLoading = true
+		reader := m.onReadPlugins
+		commands = append(commands, func() bubbletea.Msg {
+			response, err := reader()
+			return MentionPluginInventoryResultMsg{Response: response, Err: err}
+		})
+	}
+	if m.onFuzzyFileSearch != nil && (newPopup || previousQuery != query) {
+		m.mentionFileSearchGeneration++
+		generation := m.mentionFileSearchGeneration
+		cwd := strings.TrimSpace(m.sessionCWD)
+		reader := m.onFuzzyFileSearch
+		token := "tui-mentions-v2"
+		commands = append(commands, func() bubbletea.Msg {
+			if newPopup && query != "" {
+				_, _ = reader("", cwd, token)
+			}
+			response, err := reader(query, cwd, token)
+			return MentionFileSearchResultMsg{Generation: generation, Query: query, Matches: response.Files, Err: err}
+		})
+	}
+	return bubbletea.Batch(commands...)
+}
+
+func (m *Model) currentMentionPopupTokenRange() (int, int, string, bool) {
+	if m == nil {
+		return 0, 0, "", false
+	}
+	text := m.composer.Value()
+	lines := strings.Split(text, "\n")
+	row := m.composer.Line()
+	if row < 0 || row >= len(lines) {
+		return 0, 0, "", false
+	}
+	lineInfo := m.composer.LineInfo()
+	cursor := 0
+	for i := 0; i < row; i++ {
+		cursor += len([]rune(lines[i])) + 1
+	}
+	cursor += lineInfo.StartColumn + lineInfo.ColumnOffset
+	return mentionPopupTokenRangeAtCursor(text, cursor)
+}
+
+func mentionPopupTokenRangeAtCursor(text string, cursor int) (int, int, string, bool) {
+	runes := []rune(text)
+	if cursor < 0 || cursor > len(runes) {
+		return 0, 0, "", false
+	}
+	start := cursor
+	for start > 0 && mentionPopupNameRune(runes[start-1]) {
+		start--
+	}
+	end := cursor
+	for end < len(runes) && mentionPopupNameRune(runes[end]) {
+		end++
+	}
+	if start == 0 || runes[start-1] != '@' {
+		return 0, 0, "", false
+	}
+	return start - 1, end, string(runes[start:end]), true
+}
+
+func mentionPopupNameRune(value rune) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '-' || value == '_'
+}
+
+func mentionPopupTokenKey(start int, end int, query string) string {
+	return fmt.Sprintf("%d:%d:%s", start, end, query)
+}
+
+func (m *Model) mentionCandidates() []mentionsv2.Candidate {
+	return mentionsv2.BuildSearchCatalog(m.mentionSkillMetadata(), m.mentionPluginSummaries())
+}
+
+func (m *Model) mentionSkillMetadata() []mentionsv2.SkillMetadata {
+	if m == nil || m.skillsInventory == nil {
+		return nil
+	}
+	cwd := strings.TrimSpace(m.sessionCWD)
+	skills := chatwidget.EnabledSkillsForMentions(chatwidget.SkillsForCWD(cwd, m.skillsInventory))
+	if len(skills) == 0 && len(m.skillsInventory.Data) == 0 {
+		skills = chatwidget.EnabledSkillsForMentions(m.skillsInventory.Skills)
+	}
+	out := make([]mentionsv2.SkillMetadata, 0, len(skills))
+	for _, skill := range skills {
+		out = append(out, mentionsv2.SkillMetadata{
+			Name:        strings.TrimSpace(skill.Name),
+			DisplayName: chatwidget.SkillDisplayName(skill),
+			Description: chatwidget.SkillDescription(skill),
+			Path:        strings.TrimSpace(skill.Path),
+		})
+	}
+	return out
+}
+
+func (m *Model) mentionPluginSummaries() []mentionsv2.PluginCapabilitySummary {
+	if m == nil {
+		return nil
+	}
+	out := make([]mentionsv2.PluginCapabilitySummary, 0, len(m.mentionPluginInventory))
+	for _, item := range m.mentionPluginInventory {
+		if !item.Installed || !item.Enabled {
+			continue
+		}
+		description, _ := chatwidget.PluginDescription(item)
+		out = append(out, mentionsv2.PluginCapabilitySummary{
+			ConfigName:      firstNonEmpty(item.ID, item.Name),
+			DisplayName:     firstNonEmpty(chatwidget.PluginDisplayName(item), item.Name, item.ID),
+			Description:     description,
+			HasSkills:       item.HasSkills,
+			MCPServerNames:  append([]string(nil), item.MCPServers...),
+			AppConnectorIDs: append([]string(nil), item.AppConnectors...),
+		})
+	}
+	return out
+}
+
+func pluginSummariesFromResponse(response plugin.PluginListResponse) []plugin.PluginSummary {
+	byID := map[string]plugin.PluginSummary{}
+	for _, item := range response.Plugins {
+		byID[firstNonEmpty(item.ID, item.Name)] = item
+	}
+	for _, marketplace := range response.Marketplaces {
+		for _, item := range marketplace.Plugins {
+			byID[firstNonEmpty(item.ID, item.Name)] = item
+		}
+	}
+	out := make([]plugin.PluginSummary, 0, len(byID))
+	for _, item := range byID {
+		out = append(out, item)
+	}
+	return out
+}
+
+func (m *Model) applyMentionPluginInventoryResult(message MentionPluginInventoryResultMsg) {
+	if m == nil {
+		return
+	}
+	m.mentionPluginInventoryLoading = false
+	if message.Err != nil {
+		m.mentionPluginInventoryErr = strings.TrimSpace(message.Err.Error())
+		m.mentionPluginInventoryReady = true
+		return
+	}
+	m.mentionPluginInventory = pluginSummariesFromResponse(message.Response)
+	m.mentionPluginInventoryReady = true
+	m.mentionPluginInventoryErr = ""
+	if m.mentionPopup != nil {
+		m.mentionPopup.SetCandidates(m.mentionCandidates())
+	}
+}
+
+func (m *Model) applyMentionFileSearchResult(message MentionFileSearchResultMsg) {
+	if m == nil || m.mentionPopup == nil || message.Generation != m.mentionFileSearchGeneration || message.Query != m.mentionPopup.Query {
+		return
+	}
+	if message.Err != nil {
+		m.mentionPopup.SetFileMatches(message.Query, nil)
+		return
+	}
+	m.mentionPopup.SetFileMatches(message.Query, message.Matches)
 }
 
 func (m *Model) applySkillsInventoryResult(message SkillsInventoryResultMsg) {
@@ -109,7 +313,13 @@ func (m *Model) applySkillsInventoryResult(message SkillsInventoryResultMsg) {
 }
 
 func (m *Model) updateSkillPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
-	if m == nil || !m.skillPopup.Active {
+	if m == nil {
+		return nil, false
+	}
+	if m.mentionPopup != nil {
+		return m.updateMentionPopupKey(msg)
+	}
+	if !m.skillPopup.Active {
 		return nil, false
 	}
 	switch msg.Type {
@@ -128,6 +338,83 @@ func (m *Model) updateSkillPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) 
 		}
 	}
 	return nil, false
+}
+
+func (m *Model) updateMentionPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+	if m == nil || m.mentionPopup == nil {
+		return nil, false
+	}
+	switch msg.Type {
+	case bubbletea.KeyUp, bubbletea.KeyCtrlP:
+		m.mentionPopup.MoveUp()
+		return nil, true
+	case bubbletea.KeyDown, bubbletea.KeyCtrlN:
+		m.mentionPopup.MoveDown()
+		return nil, true
+	case bubbletea.KeyLeft:
+		m.mentionPopup.PreviousSearchMode()
+		return nil, true
+	case bubbletea.KeyRight:
+		m.mentionPopup.NextSearchMode()
+		return nil, true
+	case bubbletea.KeyEsc:
+		if start, end, query, ok := m.currentMentionPopupTokenRange(); ok {
+			m.mentionDismissedToken = mentionPopupTokenKey(start, end, query)
+		}
+		m.mentionPopup = nil
+		return nil, true
+	case bubbletea.KeyEnter, bubbletea.KeyTab:
+		selection, selected := m.mentionPopup.SelectedSelection()
+		m.mentionPopup = nil
+		if selected {
+			m.insertMentionSelection(selection)
+			return nil, true
+		}
+		return nil, msg.Type == bubbletea.KeyTab
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) insertMentionSelection(selection mentionsv2.Selection) {
+	if m == nil {
+		return
+	}
+	start, end, _, ok := m.currentMentionPopupTokenRange()
+	if !ok {
+		return
+	}
+	insert := strings.TrimSpace(selection.InsertText)
+	if selection.Kind == mentionsv2.SelectionFile {
+		insert = strings.TrimSpace(selection.Path)
+	}
+	if insert == "" {
+		return
+	}
+	runes := []rune(m.composer.Value())
+	text := string(runes[:start]) + insert + " " + string(runes[end:])
+	m.composer.SetValue(text)
+	m.composer.CursorEnd()
+	if selection.Kind == mentionsv2.SelectionTool {
+		m.addComposerMentionBinding(insert + "|" + strings.TrimSpace(selection.Path))
+	}
+	m.mentionDismissedToken = ""
+}
+
+func (m *Model) addComposerMentionBinding(binding string) {
+	if m == nil {
+		return
+	}
+	binding = strings.TrimSpace(binding)
+	if binding == "" || strings.HasSuffix(binding, "|") {
+		return
+	}
+	for _, existing := range m.composerMentionBindings {
+		if existing == binding {
+			return
+		}
+	}
+	m.composerMentionBindings = append(m.composerMentionBindings, binding)
 }
 
 func (m *Model) moveSkillPopupSelection(delta int) {
@@ -171,12 +458,7 @@ func (m *Model) addComposerSkillMentionBinding(item skillPopupItem) {
 	if binding == "" {
 		return
 	}
-	for _, existing := range m.composerMentionBindings {
-		if existing == binding {
-			return
-		}
-	}
-	m.composerMentionBindings = append(m.composerMentionBindings, binding)
+	m.addComposerMentionBinding(binding)
 }
 
 func skillPopupMentionBinding(item skillPopupItem) string {
@@ -203,7 +485,15 @@ func (m *Model) selectedSkillPopupKey() string {
 }
 
 func (m *Model) renderSkillPopup() string {
-	if m == nil || !m.skillPopup.Active {
+	if m == nil {
+		return ""
+	}
+	if m.mentionPopup != nil {
+		width := firstPositive(m.width, defaultWidth)
+		height := m.mentionPopup.CalculateRequiredHeight(width)
+		return strings.Join(mentionsv2.RenderPopup(m.mentionPopup, width, height), "\n")
+	}
+	if !m.skillPopup.Active {
 		return ""
 	}
 	width := firstPositive(m.width, defaultWidth)
@@ -370,10 +660,11 @@ func (m *Model) activeComposerMentionBindings(text string) []string {
 		return nil
 	}
 	mentions := chatwidget.CollectToolMentions(text, nil)
+	atMentions := chatwidget.ExtractToolMentionsFromTextWithSigil(text, '@')
 	out := make([]string, 0, len(m.composerMentionBindings))
 	for _, binding := range m.composerMentionBindings {
 		name := mentionBindingName(binding)
-		if name == "" || mentions.Names[name] {
+		if name == "" || mentions.Names[name] || atMentions.Names[name] {
 			out = append(out, binding)
 		}
 	}
@@ -400,13 +691,16 @@ func mentionBindingName(binding string) string {
 }
 
 func (m *Model) submissionMentionCatalog() chatwidget.SubmissionMentionCatalog {
-	if m == nil || m.skillsInventory == nil {
+	if m == nil {
 		return chatwidget.SubmissionMentionCatalog{}
 	}
-	cwd := strings.TrimSpace(m.sessionCWD)
-	skills := chatwidget.EnabledSkillsForMentions(chatwidget.SkillsForCWD(cwd, m.skillsInventory))
-	if len(skills) == 0 && len(m.skillsInventory.Data) == 0 {
-		skills = chatwidget.EnabledSkillsForMentions(m.skillsInventory.Skills)
+	var skills []appserver.SkillsListEntry
+	if m.skillsInventory != nil {
+		cwd := strings.TrimSpace(m.sessionCWD)
+		skills = chatwidget.EnabledSkillsForMentions(chatwidget.SkillsForCWD(cwd, m.skillsInventory))
+		if len(skills) == 0 && len(m.skillsInventory.Data) == 0 {
+			skills = chatwidget.EnabledSkillsForMentions(m.skillsInventory.Skills)
+		}
 	}
-	return chatwidget.SubmissionMentionCatalog{Skills: skills}
+	return chatwidget.SubmissionMentionCatalog{Skills: skills, Plugins: append([]plugin.PluginSummary(nil), m.mentionPluginInventory...)}
 }

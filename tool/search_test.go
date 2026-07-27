@@ -98,6 +98,16 @@ func TestToolSearchDescriptionDeduplicatesSources(t *testing.T) {
 	}
 }
 
+func TestToolSearchDescriptionOmitsSourcesWhenWorldStateAdvertisesThem(t *testing.T) {
+	description := BuildToolSearchDescriptionWithOptions([]SearchSourceInfo{{Name: "Google Drive", Description: "Search files and documents."}}, 8, true)
+	if strings.Contains(description, "following sources") || strings.Contains(description, "Google Drive") {
+		t.Fatalf("description = %q", description)
+	}
+	if !strings.Contains(description, "use this tool (`tool_search`) to search") {
+		t.Fatalf("description = %q", description)
+	}
+}
+
 func TestRegisterToolSearchFromRegistry(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("deferred"), Search: &SearchInfo{Text: "find me"}, Exposure: ExposureDiscoverable}, noopExecutor)); err != nil {

@@ -83,6 +83,166 @@ func TestNetworkApprovalDeciderCoalescesConcurrentHostPromptLikeRust(t *testing.
 	}
 }
 
+func TestNetworkApprovalCoalescedWaiterCancellationDoesNotCancelOwnerLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	requestSeen := make(chan *ServerRequest, 1)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requestSeen <- request
+	}))
+	policyRequest := network.ProxyPolicyRequest{Protocol: network.ProxyProtocolHTTP, Host: "example.test", Port: 80, EnvironmentID: "local", Method: "GET"}
+	ownerResult := make(chan network.ProxyDecision, 1)
+	go func() { ownerResult <- router.networkApproval.Decide(context.Background(), policyRequest) }()
+	request := <-requestSeen
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	waiterResult := make(chan network.ProxyDecision, 1)
+	go func() { waiterResult <- router.networkApproval.Decide(waiterCtx, policyRequest) }()
+	cancelWaiter()
+	if decision := <-waiterResult; decision.Allow {
+		t.Fatalf("cancelled waiter decision = %#v", decision)
+	}
+	select {
+	case decision := <-ownerResult:
+		t.Fatalf("owner completed before approval response: %#v", decision)
+	default:
+	}
+	if resolved, err := router.requireServerRequests().Resolve(&Response{ID: request.ID, Result: map[string]any{"decision": string(CommandExecutionApprovalAccept)}}); err != nil || !resolved {
+		t.Fatalf("Resolve() = %t, %v", resolved, err)
+	}
+	if decision := <-ownerResult; !decision.Allow {
+		t.Fatalf("owner decision = %#v", decision)
+	}
+}
+
+func TestNetworkApprovalTurnTerminalCancelsPendingAndIgnoresLateResponseLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	requestSeen := make(chan *ServerRequest, 1)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requestSeen <- request
+	}))
+	result := make(chan network.ProxyDecision, 1)
+	go func() {
+		result <- router.networkApproval.Decide(context.Background(), network.ProxyPolicyRequest{
+			Protocol: network.ProxyProtocolHTTPSConnect,
+			Host:     "late.example",
+			Port:     443,
+		})
+	}()
+	request := <-requestSeen
+	router.clearActiveRuntimeTurn("thread-network", "turn-network")
+	select {
+	case decision := <-result:
+		if decision.Allow {
+			t.Fatalf("terminal decision = %#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending approval was not cancelled at turn terminal")
+	}
+	if resolved, err := router.requireServerRequests().Resolve(&Response{ID: request.ID, Result: map[string]any{"decision": string(CommandExecutionApprovalAcceptForSession)}}); err != nil || resolved {
+		t.Fatalf("late Resolve() = %t, %v", resolved, err)
+	}
+	key := networkApprovalKey{threadID: "thread-network", environmentID: "local", protocol: network.ProxyProtocolHTTPSConnect, host: "late.example", port: 443}
+	router.networkApproval.mu.Lock()
+	_, allowed := router.networkApproval.allowed[key]
+	_, denied := router.networkApproval.denied[key]
+	_, pending := router.networkApproval.pending[key]
+	router.networkApproval.mu.Unlock()
+	if allowed || denied || pending {
+		t.Fatalf("terminal approval leaked state: allowed=%t denied=%t pending=%t", allowed, denied, pending)
+	}
+}
+
+func TestNetworkApprovalConnectionCloseCancelsOnlyMatchingPendingLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	home := router.services.DefaultCWD
+	if err := router.registerActiveRuntimeTurn("thread-network-2", "turn-network-2", func() {}, 1, &turn.TurnStartParams{ThreadID: "thread-network-2", CWD: home}); err != nil {
+		t.Fatal(err)
+	}
+	defer router.clearActiveRuntimeTurn("thread-network-2", "turn-network-2")
+	router.updateActiveRuntimeTurnAnalytics("thread-network-2", "turn-network-2", "connection-network-2", &appTurnRunConfig{ApprovalPolicy: "on-request"})
+	requests := make(chan *ServerRequest, 2)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) { requests <- request }))
+	firstResult := make(chan network.ProxyDecision, 1)
+	secondResult := make(chan network.ProxyDecision, 1)
+	go func() {
+		firstResult <- router.networkApproval.decideForThread(context.Background(), "thread-network", network.ProxyPolicyRequest{Protocol: network.ProxyProtocolHTTP, Host: "first.example", Port: 80})
+	}()
+	go func() {
+		secondResult <- router.networkApproval.decideForThread(context.Background(), "thread-network-2", network.ProxyPolicyRequest{Protocol: network.ProxyProtocolHTTP, Host: "second.example", Port: 80})
+	}()
+	var secondRequest *ServerRequest
+	for range 2 {
+		request := <-requests
+		params := request.Params.(*CommandExecutionRequestApprovalParams)
+		if params.ThreadID == "thread-network-2" {
+			secondRequest = request
+		}
+	}
+	router.ConnectionClosed("connection-network")
+	select {
+	case decision := <-firstResult:
+		if decision.Allow {
+			t.Fatalf("closed connection decision = %#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection close did not cancel matching approval")
+	}
+	select {
+	case decision := <-secondResult:
+		t.Fatalf("other connection completed early: %#v", decision)
+	default:
+	}
+	if secondRequest == nil {
+		t.Fatal("second connection request was not observed")
+	}
+	if resolved, err := router.requireServerRequests().Resolve(&Response{ID: secondRequest.ID, Result: map[string]any{"decision": string(CommandExecutionApprovalAccept)}}); err != nil || !resolved {
+		t.Fatalf("Resolve(second) = %t, %v", resolved, err)
+	}
+	if decision := <-secondResult; !decision.Allow {
+		t.Fatalf("other connection decision = %#v", decision)
+	}
+}
+
+func TestNetworkApprovalConcurrentDifferentHostsResolveIndependentlyLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	requests := make(chan *ServerRequest, 2)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) { requests <- request }))
+	results := map[string]chan network.ProxyDecision{
+		"allow.example": make(chan network.ProxyDecision, 1),
+		"deny.example":  make(chan network.ProxyDecision, 1),
+	}
+	for host, result := range results {
+		host := host
+		result := result
+		go func() {
+			result <- router.networkApproval.Decide(context.Background(), network.ProxyPolicyRequest{Protocol: network.ProxyProtocolHTTP, Host: host, Port: 80, EnvironmentID: "local"})
+		}()
+	}
+	requestByHost := map[string]*ServerRequest{}
+	for range 2 {
+		request := <-requests
+		params := request.Params.(*CommandExecutionRequestApprovalParams)
+		requestByHost[params.NetworkApprovalContext.(*NetworkApprovalContext).Host] = request
+	}
+	if resolved, err := router.requireServerRequests().Resolve(&Response{ID: requestByHost["deny.example"].ID, Result: map[string]any{"decision": string(CommandExecutionApprovalDecline)}}); err != nil || !resolved {
+		t.Fatalf("Resolve(deny) = %t, %v", resolved, err)
+	}
+	if decision := <-results["deny.example"]; decision.Allow {
+		t.Fatalf("deny decision = %#v", decision)
+	}
+	select {
+	case decision := <-results["allow.example"]:
+		t.Fatalf("allow host completed with deny host: %#v", decision)
+	default:
+	}
+	if resolved, err := router.requireServerRequests().Resolve(&Response{ID: requestByHost["allow.example"].ID, Result: map[string]any{"decision": string(CommandExecutionApprovalAccept)}}); err != nil || !resolved {
+		t.Fatalf("Resolve(allow) = %t, %v", resolved, err)
+	}
+	if decision := <-results["allow.example"]; !decision.Allow {
+		t.Fatalf("allow decision = %#v", decision)
+	}
+}
+
 func TestThreadScopedNetworkDeciderDoesNotBecomeAmbiguousAcrossThreadsLikeRust(t *testing.T) {
 	router := newNetworkApprovalTestRouter(t, "on-request")
 	home := router.services.DefaultCWD

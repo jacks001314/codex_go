@@ -746,6 +746,74 @@ func TestRequiredMCPServerUnavailableErrors(t *testing.T) {
 	}
 }
 
+func TestValidateRequiredServersAggregatesFailuresAndIgnoresOptional(t *testing.T) {
+	helperCommand, helperArgs := helperMCPServerCommand(t)
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"required-ready": {
+			Config: ServerConfig{Command: helperCommand, Args: helperArgs, Env: map[string]string{"GO_WANT_MCP_HELPER": "1"}, Enabled: true, Required: true},
+		},
+		"required-zeta": {
+			Config: ServerConfig{Command: "codex-required-zeta-does-not-exist", Enabled: true, Required: true},
+		},
+		"required-alpha": {
+			Config: ServerConfig{Command: "codex-required-alpha-does-not-exist", Enabled: true, Required: true},
+		},
+		"optional-broken": {
+			Config: ServerConfig{Command: "codex-optional-does-not-exist", Enabled: true},
+		},
+	}})
+	t.Cleanup(func() { _ = service.Close() })
+
+	err := service.ValidateRequiredServers("thread-required")
+	if err == nil {
+		t.Fatal("ValidateRequiredServers() error = nil")
+	}
+	message := err.Error()
+	if !strings.HasPrefix(message, "required MCP servers failed to initialize: ") {
+		t.Fatalf("error = %q", message)
+	}
+	alpha := strings.Index(message, "required-alpha:")
+	zeta := strings.Index(message, "required-zeta:")
+	if alpha < 0 || zeta < 0 || alpha >= zeta {
+		t.Fatalf("required failures are not sorted: %q", message)
+	}
+	if strings.Contains(message, "optional-broken") || strings.Contains(message, "required-ready") {
+		t.Fatalf("error includes healthy/optional servers: %q", message)
+	}
+}
+
+func TestValidateRequiredServersAllowsOptionalFailure(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"optional-broken": {
+			Config: ServerConfig{Command: "codex-optional-does-not-exist", Enabled: true},
+		},
+	}})
+	t.Cleanup(func() { _ = service.Close() })
+	if err := service.ValidateRequiredServers("thread-optional"); err != nil {
+		t.Fatalf("ValidateRequiredServers(optional) error = %v", err)
+	}
+}
+
+func TestValidateRequiredServersSkipsOptionalInventoryWhenNoneAreRequired(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"optional": {
+			Config: ServerConfig{Command: "codex-optional-does-not-exist", Enabled: true},
+		},
+	}})
+	t.Cleanup(func() { _ = service.Close() })
+	before := service.Generation()
+	if err := service.ValidateRequiredServers("thread-optional"); err != nil {
+		t.Fatalf("ValidateRequiredServers(optional) error = %v", err)
+	}
+	if after := service.Generation(); after != before {
+		t.Fatalf("optional-only validation changed generation: before=%d after=%d", before, after)
+	}
+	status := service.ConfiguredStatuses()
+	if len(status) != 1 || len(status[0].Tools) != 0 || status[0].Error != nil {
+		t.Fatalf("optional-only validation performed inventory: %#v", status)
+	}
+}
+
 func TestOptionalMCPServerMissingKeepsFallback(t *testing.T) {
 	service := NewMCPService(nil)
 	call, err := service.CallTool(&MCPToolCallParams{ServerName: "optional", ToolName: "read", Arguments: map[string]any{"path": "a"}})

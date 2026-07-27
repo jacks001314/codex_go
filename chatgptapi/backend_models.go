@@ -81,6 +81,7 @@ const (
 	PlanTeam                        PlanType = "team"
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
 	PlanBusiness                    PlanType = "business"
+	PlanEnt26                       PlanType = "ent26"
 	PlanEnterpriseCbpUsageBased     PlanType = "enterprise_cbp_usage_based"
 	PlanEducation                   PlanType = "education"
 	PlanQuorum                      PlanType = "quorum"

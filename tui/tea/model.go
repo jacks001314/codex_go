@@ -17,12 +17,14 @@ import (
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/filesearch"
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/review"
 	codextui "codex_go/tui"
 	"codex_go/tui/anim"
 	bottompane "codex_go/tui/bottom_pane"
+	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
 	execcell "codex_go/tui/exec_cell"
 	historycell "codex_go/tui/history_cell"
@@ -147,6 +149,8 @@ type HooksListReaderFunc func(cwd string) ([]chatwidget.HookRun, error)
 type PluginListReaderFunc func() (plugin.PluginListResponse, error)
 
 type SkillsListReaderFunc func(cwd string) (appserver.SkillsListResponse, error)
+
+type FuzzyFileSearchReaderFunc func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error)
 
 type AppListReaderFunc func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error)
 
@@ -306,6 +310,18 @@ type PluginListResultMsg struct {
 	Err      error
 }
 
+type MentionPluginInventoryResultMsg struct {
+	Response plugin.PluginListResponse
+	Err      error
+}
+
+type MentionFileSearchResultMsg struct {
+	Generation uint64
+	Query      string
+	Matches    []filesearch.FileMatch
+	Err        error
+}
+
 type AppListResultMsg struct {
 	ThreadID     string
 	ForceRefetch bool
@@ -409,6 +425,7 @@ type Options struct {
 	OnReadHooks                   HooksListReaderFunc
 	OnReadPlugins                 PluginListReaderFunc
 	OnReadSkills                  SkillsListReaderFunc
+	OnFuzzyFileSearch             FuzzyFileSearchReaderFunc
 	OnReadApps                    AppListReaderFunc
 	OnStartReview                 ReviewStartFunc
 	OnStartSide                   SideStartFunc
@@ -498,6 +515,13 @@ type Model struct {
 	composerMentionBindings          []string
 	modal                            *modalState
 	skillPopup                       skillPopupState
+	mentionPopup                     *mentionsv2.Popup
+	mentionDismissedToken            string
+	mentionFileSearchGeneration      uint64
+	mentionPluginInventory           []plugin.PluginSummary
+	mentionPluginInventoryReady      bool
+	mentionPluginInventoryLoading    bool
+	mentionPluginInventoryErr        string
 	modelPickerOpts                  []codextui.ModelPickerOption
 	serviceTierCommands              []bottompane.ServiceTierCommand
 	sessionItems                     []codextui.SessionSummary
@@ -522,6 +546,8 @@ type Model struct {
 	onInterruptMCPStartup            InterruptFunc
 	onExternalEditor                 ExternalEditorFunc
 	keymapConfig                     *codextui.KeymapConfig
+	keymapSelectedContext            string
+	keymapSelectedAction             string
 	onKeymapEdit                     KeymapEditFunc
 	onModalResponse                  ModalResponseFunc
 	onSessionAction                  SessionActionFunc
@@ -556,6 +582,7 @@ type Model struct {
 	hookLifecycle                    chatwidget.HookLifecycleState
 	onReadPlugins                    PluginListReaderFunc
 	onReadSkills                     SkillsListReaderFunc
+	onFuzzyFileSearch                FuzzyFileSearchReaderFunc
 	onReadApps                       AppListReaderFunc
 	onStartReview                    ReviewStartFunc
 	onStartSide                      SideStartFunc
@@ -710,6 +737,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadHooks:                    options.OnReadHooks,
 		onReadPlugins:                  options.OnReadPlugins,
 		onReadSkills:                   options.OnReadSkills,
+		onFuzzyFileSearch:              options.OnFuzzyFileSearch,
 		onReadApps:                     options.OnReadApps,
 		onStartReview:                  options.OnStartReview,
 		onStartSide:                    options.OnStartSide,
@@ -881,7 +909,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.finishMCPStartupAfterLag(msg.Generation)
 	case ExternalEditorFinishedMsg:
 		m.applyExternalEditorFinished(msg)
-		return m, nil
+		return m, m.refreshSkillPopup()
 	case ThreadEventMsg:
 		cmd := m.applyThreadEvent(msg.Event)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
@@ -949,6 +977,12 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case PluginListResultMsg:
 		m.applyPluginListResult(msg)
+		return m, nil
+	case MentionPluginInventoryResultMsg:
+		m.applyMentionPluginInventoryResult(msg)
+		return m, nil
+	case MentionFileSearchResultMsg:
+		m.applyMentionFileSearchResult(msg)
 		return m, nil
 	case AppListResultMsg:
 		m.applyAppListResult(msg)
@@ -1067,7 +1101,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, nil
 		}
 		if m.applyInputHistoryKey(msg) {
-			return m, nil
+			return m, m.refreshSkillPopup()
 		}
 		now := m.currentTime()
 		if msg.Type == bubbletea.KeyRunes {

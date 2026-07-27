@@ -132,12 +132,14 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 	oldCapture := runWindowsShellSandboxCapture
 	oldCodexHome := defaultShellRunnerCodexHome
 	called := false
-	runWindowsShellSandboxCapture = func(req *windowssandbox.ElevatedSandboxProfileCaptureRequest) (*windowssandbox.CaptureResult, error) {
+	runWindowsShellSandboxCapture = func(capture *windowssandbox.CaptureRequest, elevated bool) (*windowssandbox.CaptureResult, error) {
 		called = true
-		if req == nil {
+		if capture == nil {
 			t.Fatalf("capture request is nil")
 		}
-		capture := req.Capture
+		if elevated {
+			t.Fatal("unelevated Windows sandbox request selected elevated backend")
+		}
 		if capture.PermissionProfile == nil || capture.PermissionProfile.Disabled {
 			t.Fatalf("PermissionProfile = %#v, want sandboxed profile", capture.PermissionProfile)
 		}
@@ -159,6 +161,9 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 		if capture.Env["CODEX_PERMISSION_PROFILE"] != ":workspace" || capture.Env["CODEX_RUNNER_ENV"] != "runner" {
 			t.Fatalf("Env = %#v", capture.Env)
 		}
+		if !capture.UsePrivateDesktop || !capture.DisallowSetupElevation {
+			t.Fatalf("capture privateDesktop/disallowElevation = %t/%t", capture.UsePrivateDesktop, capture.DisallowSetupElevation)
+		}
 		return &windowssandbox.CaptureResult{ExitCode: 0, Stdout: []byte("sandboxed")}, nil
 	}
 	defaultShellRunnerCodexHome = func() string { return codexHome }
@@ -169,11 +174,14 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 
 	profile := sandbox.WorkspaceWritePermissionProfile()
 	result, err := NewLocalShellRunner().Run(context.Background(), &ShellRequest{
-		Command:             []string{"cmd", "/c", "echo sandboxed"},
-		CWD:                 cwd,
-		Env:                 map[string]string{"CODEX_RUNNER_ENV": "runner"},
-		PermissionProfileID: ":workspace",
-		PermissionProfile:   &profile,
+		Command:                      []string{"cmd", "/c", "echo sandboxed"},
+		CWD:                          cwd,
+		Env:                          map[string]string{"CODEX_RUNNER_ENV": "runner"},
+		PermissionProfileID:          ":workspace",
+		PermissionProfile:            &profile,
+		WindowsSandboxLevel:          sandbox.WindowsSandboxUnelevated,
+		WindowsSandboxPrivateDesktop: true,
+		ApprovalPolicy:               sandbox.ApprovalNever,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -183,5 +191,22 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 	}
 	if result.ExitCode != 0 || result.Stdout != "sandboxed" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestWindowsShellSandboxUsesElevatedLikeRust(t *testing.T) {
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	if windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, false) {
+		t.Fatal("ordinary unelevated profile selected elevated backend")
+	}
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxElevated, false) {
+		t.Fatal("explicit elevated profile did not select elevated backend")
+	}
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, true) {
+		t.Fatal("managed proxy did not select elevated backend")
+	}
+	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{}}
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, false) {
+		t.Fatal("deny-read profile did not select elevated backend")
 	}
 }

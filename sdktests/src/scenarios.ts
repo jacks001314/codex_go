@@ -69,6 +69,9 @@ export type Scenario = {
     workspaceRequiredPaths?: string[];
     uniqueCompletedItemTypes?: string[];
     uniqueCommandExecutions?: boolean;
+    requireStartedCompletedPairs?: string[];
+    requireSingleFinalAgentMessagePerTurn?: boolean;
+    forbidEmptyCommandExecutions?: boolean;
     requireCommentaryBeforeTool?: boolean;
   };
 };
@@ -91,6 +94,8 @@ export const scenarios: Scenario[] = [
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       exactAgentMessages: ["CODE_MODE_SINGLE_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
       commandExecutions: [{ status: "completed", exitCode: 0, output: "CODE_MODE_SINGLE_OK" }], uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true,
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
     },
   },
@@ -112,6 +117,8 @@ export const scenarios: Scenario[] = [
         { status: "completed", exitCode: 0, output: "SERIAL_TWO" },
         { status: "completed", exitCode: 0, output: "SERIAL_THREE" },
       ], uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true,
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
     },
   },
@@ -134,6 +141,8 @@ export const scenarios: Scenario[] = [
         { status: "completed", exitCode: 0, output: "PARALLEL_C" },
         { status: "completed", exitCode: 0, output: "PARALLEL_D" },
       ], uniqueCommandExecutions: true, commandOutputComparison: "unordered",
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true,
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
     },
   },
@@ -154,6 +163,8 @@ export const scenarios: Scenario[] = [
         { status: "failed", exitCode: 1 },
         { status: "completed", exitCode: 0, output: "RECOVERY_OK" },
       ], uniqueCommandExecutions: true, commandOutputComparison: "status-exit-code",
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true,
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
     },
   },

@@ -33,7 +33,7 @@ func (e *PluginBundleUnpackError) Error() string {
 // PackPluginBundleTarGz creates a gzipped tar archive from a plugin directory.
 // It enforces a maximum archive size and validates the plugin structure.
 //
-// pluginPath must be a directory containing .codex-plugin/plugin.json.
+// pluginPath must be a directory containing a supported plugin manifest.
 // maxBytes is the maximum allowed archive size in bytes.
 func PackPluginBundleTarGz(pluginPath string, maxBytes int) ([]byte, error) {
 	info, err := os.Stat(pluginPath)
@@ -43,10 +43,10 @@ func PackPluginBundleTarGz(pluginPath string, maxBytes int) ([]byte, error) {
 		}
 	}
 
-	manifestPath := filepath.Join(pluginPath, ".codex-plugin", "plugin.json")
-	if _, err := os.Stat(manifestPath); err != nil {
+	manifestPath, manifestErr := findPluginManifestPath(pluginPath)
+	if manifestErr != nil || manifestPath == "" {
 		return nil, &PluginBundlePackError{
-			message: fmt.Sprintf("invalid plugin path %q: missing .codex-plugin/plugin.json", pluginPath),
+			message: fmt.Sprintf("invalid plugin path %q: missing supported plugin manifest", pluginPath),
 		}
 	}
 

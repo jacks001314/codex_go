@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	pathpkg "path"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	execserverclient "codex_go/execserver"
+	"codex_go/plugin"
 
 	"github.com/coder/websocket"
 	"gopkg.in/yaml.v3"
@@ -25,7 +27,10 @@ const (
 var remoteDiscoverablePluginManifestPaths = []string{
 	".codex-plugin/plugin.json",
 	".claude-plugin/plugin.json",
+	".cursor-plugin/plugin.json",
 }
+
+const remoteAgentPluginManifestPath = "plugin.json"
 
 type remoteFSWalkEntry struct {
 	Path string `json:"path"`
@@ -180,6 +185,10 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 		if entry.Kind != "file" || remotePathBase(entry.Path) != SkillFilename {
 			continue
 		}
+		pluginDescriptor, _ := remotePluginDescriptorForSkill(entry.Path, pluginNamespaces)
+		if pluginDescriptor.Agent && !remoteAgentPluginDirectChildSkill(pluginDescriptor.Root, entry.Path) {
+			continue
+		}
 		contents, err := readRemoteEnvironmentText(ctx, caller, &nextID, entry.Path)
 		if err != nil {
 			return nil, warnings, err
@@ -189,7 +198,7 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 		if remoteFiles[remoteNormalizePathKey(metadataPath)] {
 			metadataContents, _ = readRemoteEnvironmentText(ctx, caller, &nextID, metadataPath)
 		}
-		pluginNamespace := remotePluginNamespaceForSkill(entry.Path, pluginNamespaces)
+		pluginNamespace := pluginDescriptor.Name
 		if skillEntry, warning, ok := remoteSkillEntryFromContents(record.EnvironmentID, entry.Path, contents, metadataContents, pluginNamespace); ok {
 			if !skillMatchesCodexProductRestriction(&skillEntry) {
 				continue
@@ -206,6 +215,41 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 		return entries[i].Path < entries[j].Path
 	})
 	return entries, warnings, nil
+}
+
+func readRemoteEnvironmentSkillText(ctx context.Context, record *EnvironmentRecord, resourcePath string) (string, error) {
+	if record == nil {
+		return "", errors.New("remote environment is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	defer cancel()
+	var caller remoteEnvironmentFSCaller
+	if record.NoiseProvider != nil {
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		if err != nil {
+			return "", err
+		}
+		defer client.Close()
+		caller = clientRemoteEnvironmentFSCaller{client: client}
+	} else {
+		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
+		if err != nil {
+			return "", err
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{JSONRPC: "2.0", ID: 1, Method: "initialize", Params: map[string]any{"clientName": "codex-go"}}); err != nil {
+			return "", err
+		}
+		if _, err := readExecServerResponse(ctx, conn, 1); err != nil {
+			return "", err
+		}
+		if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{JSONRPC: "2.0", Method: "initialized"}); err != nil {
+			return "", err
+		}
+		caller = websocketRemoteEnvironmentFSCaller{conn: conn}
+	}
+	nextID := 2
+	return readRemoteEnvironmentText(ctx, caller, &nextID, resourcePath)
 }
 
 func remoteEnvironmentSkillWalkWarnings(rootPath string, walk remoteFSWalkResponse) []string {
@@ -226,27 +270,31 @@ func remoteEnvironmentSkillWalkWarnings(rootPath string, walk remoteFSWalkRespon
 type remotePluginManifestCandidate struct {
 	path     string
 	priority int
+	agent    bool
 }
 
 type remotePluginManifestName struct {
 	Name string `json:"name"`
 }
 
-func remotePluginNamespacesFromInventory(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, remoteFiles map[string]bool) map[string]string {
+type remotePluginDescriptor struct {
+	Root  string
+	Name  string
+	Agent bool
+}
+
+func remotePluginNamespacesFromInventory(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, remoteFiles map[string]bool) map[string]remotePluginDescriptor {
 	if len(remoteFiles) == 0 {
 		return nil
 	}
-	candidates := map[string]remotePluginManifestCandidate{}
+	candidates := map[string][]remotePluginManifestCandidate{}
 	for path := range remoteFiles {
-		root, priority, ok := remotePluginRootFromManifestPath(path)
+		root, priority, agentManifest, ok := remotePluginRootFromManifestPath(path)
 		if !ok {
 			continue
 		}
 		key := remoteNormalizePathKey(root)
-		existing, exists := candidates[key]
-		if !exists || priority < existing.priority {
-			candidates[key] = remotePluginManifestCandidate{path: path, priority: priority}
-		}
+		candidates[key] = append(candidates[key], remotePluginManifestCandidate{path: path, priority: priority, agent: agentManifest})
 	}
 	if len(candidates) == 0 {
 		return nil
@@ -256,22 +304,11 @@ func remotePluginNamespacesFromInventory(ctx context.Context, caller remoteEnvir
 		roots = append(roots, root)
 	}
 	sort.Strings(roots)
-	namespaces := make(map[string]string, len(roots))
+	namespaces := make(map[string]remotePluginDescriptor, len(roots))
 	for _, root := range roots {
-		contents, err := readRemoteEnvironmentText(ctx, caller, nextID, candidates[root].path)
-		if err != nil {
-			continue
-		}
-		var manifest remotePluginManifestName
-		if err := json.Unmarshal([]byte(contents), &manifest); err != nil {
-			continue
-		}
-		name := manifest.Name
-		if strings.TrimSpace(name) == "" {
-			name = remotePluginNamespaceFallbackName(root)
-		}
-		if name != "" {
-			namespaces[root] = name
+		sort.SliceStable(candidates[root], func(i, j int) bool { return candidates[root][i].priority < candidates[root][j].priority })
+		if descriptor, ok := remotePluginDescriptorFromCandidates(ctx, caller, nextID, root, candidates[root]); ok {
+			namespaces[root] = descriptor
 		}
 	}
 	if len(namespaces) == 0 {
@@ -280,15 +317,15 @@ func remotePluginNamespacesFromInventory(ctx context.Context, caller remoteEnvir
 	return namespaces
 }
 
-func remotePluginNamespacesFromRootAncestors(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, rootPath string, existing map[string]string) map[string]string {
+func remotePluginNamespacesFromRootAncestors(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, rootPath string, existing map[string]remotePluginDescriptor) map[string]remotePluginDescriptor {
 	current := remoteNormalizePathKey(rootPath)
 	for i := 0; current != "" && i < 64; i++ {
 		if _, ok := existing[current]; !ok {
-			if namespace, ok := remotePluginNamespaceForRoot(ctx, caller, nextID, current); ok {
+			if descriptor, ok := remotePluginNamespaceForRoot(ctx, caller, nextID, current); ok {
 				if existing == nil {
-					existing = map[string]string{}
+					existing = map[string]remotePluginDescriptor{}
 				}
-				existing[current] = namespace
+				existing[current] = descriptor
 			}
 		}
 		parent := remoteNormalizePathKey(remoteSkillDir(current))
@@ -300,34 +337,31 @@ func remotePluginNamespacesFromRootAncestors(ctx context.Context, caller remoteE
 	return existing
 }
 
-func remotePluginNamespaceForRoot(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, pluginRoot string) (string, bool) {
-	for _, relativePath := range remoteDiscoverablePluginManifestPaths {
+func remotePluginNamespaceForRoot(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, pluginRoot string) (remotePluginDescriptor, bool) {
+	candidates := make([]remotePluginManifestCandidate, 0, len(remoteDiscoverablePluginManifestPaths)+1)
+	for priority, relativePath := range append([]string{remoteAgentPluginManifestPath}, remoteDiscoverablePluginManifestPaths...) {
 		manifestPath := remoteJoin(pluginRoot, relativePath)
 		metadata, err := getRemoteEnvironmentMetadata(ctx, caller, nextID, manifestPath)
 		if err != nil || metadata == nil || !metadata.IsFile {
 			continue
 		}
-		contents, err := readRemoteEnvironmentText(ctx, caller, nextID, manifestPath)
-		if err != nil {
-			return "", false
-		}
-		var manifest remotePluginManifestName
-		if err := json.Unmarshal([]byte(contents), &manifest); err != nil {
-			return "", false
-		}
-		name := manifest.Name
-		if strings.TrimSpace(name) == "" {
-			name = remotePluginNamespaceFallbackName(pluginRoot)
-		}
-		return name, name != ""
+		candidates = append(candidates, remotePluginManifestCandidate{path: manifestPath, priority: priority, agent: relativePath == remoteAgentPluginManifestPath})
 	}
-	return "", false
+	return remotePluginDescriptorFromCandidates(ctx, caller, nextID, pluginRoot, candidates)
 }
 
-func remotePluginRootFromManifestPath(manifestPath string) (string, int, bool) {
+func remotePluginRootFromManifestPath(manifestPath string) (string, int, bool, bool) {
 	normalized := remoteNormalizePathKey(manifestPath)
 	parsed, err := url.Parse(normalized)
-	for priority, relativePath := range remoteDiscoverablePluginManifestPaths {
+	// Match the longer legacy paths before the root plugin.json suffix. The
+	// latter is otherwise also a suffix of .codex-plugin/plugin.json.
+	paths := append([]string(nil), remoteDiscoverablePluginManifestPaths...)
+	paths = append(paths, remoteAgentPluginManifestPath)
+	for index, relativePath := range paths {
+		priority := index + 1
+		if relativePath == remoteAgentPluginManifestPath {
+			priority = 0
+		}
 		suffix := "/" + relativePath
 		if err == nil && parsed.Scheme != "" {
 			cleanPath := "/" + strings.TrimPrefix(pathpkg.Clean(parsed.Path), "/")
@@ -341,38 +375,88 @@ func remotePluginRootFromManifestPath(manifestPath string) (string, int, bool) {
 			root := *parsed
 			root.Path = rootPath
 			root.RawPath = ""
-			return root.String(), priority, true
+			return root.String(), priority, relativePath == remoteAgentPluginManifestPath, true
 		}
 		cleanPath := strings.TrimPrefix(pathpkg.Clean(strings.ReplaceAll(normalized, "\\", "/")), "/")
 		if cleanPath == relativePath {
-			return ".", priority, true
+			return ".", priority, relativePath == remoteAgentPluginManifestPath, true
 		}
 		if strings.HasSuffix(cleanPath, suffix) {
 			root := strings.TrimSuffix(cleanPath, suffix)
 			if root == "" {
 				root = "."
 			}
-			return root, priority, true
+			return root, priority, relativePath == remoteAgentPluginManifestPath, true
 		}
 	}
-	return "", 0, false
+	return "", 0, false, false
 }
 
-func remotePluginNamespaceForSkill(skillPath string, pluginNamespaces map[string]string) string {
+func remotePluginDescriptorFromCandidates(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, pluginRoot string, candidates []remotePluginManifestCandidate) (remotePluginDescriptor, bool) {
+	for _, candidate := range candidates {
+		contents, err := readRemoteEnvironmentText(ctx, caller, nextID, candidate.path)
+		if err != nil {
+			continue
+		}
+		if candidate.agent {
+			status, _ := plugin.AgentPluginSchemaStatusForContents([]byte(contents))
+			switch status {
+			case plugin.AgentPluginSchemaUnsupported:
+				return remotePluginDescriptor{}, false
+			case plugin.AgentPluginSchemaUnrelated:
+				continue
+			}
+		}
+		var manifest remotePluginManifestName
+		if err := json.Unmarshal([]byte(contents), &manifest); err != nil {
+			continue
+		}
+		name := strings.TrimSpace(manifest.Name)
+		if name == "" {
+			name = remotePluginNamespaceFallbackName(pluginRoot)
+		}
+		if name != "" {
+			return remotePluginDescriptor{Root: remoteNormalizePathKey(pluginRoot), Name: name, Agent: candidate.agent}, true
+		}
+	}
+	return remotePluginDescriptor{}, false
+}
+
+func remotePluginDescriptorForSkill(skillPath string, pluginNamespaces map[string]remotePluginDescriptor) (remotePluginDescriptor, bool) {
 	if len(pluginNamespaces) == 0 {
-		return ""
+		return remotePluginDescriptor{}, false
 	}
 	current := remoteNormalizePathKey(remoteSkillDir(skillPath))
 	for {
-		if namespace := pluginNamespaces[current]; namespace != "" {
-			return namespace
+		if descriptor, ok := pluginNamespaces[current]; ok && descriptor.Name != "" {
+			return descriptor, true
 		}
 		parent := remoteNormalizePathKey(remoteSkillDir(current))
 		if parent == "" || parent == current {
-			return ""
+			return remotePluginDescriptor{}, false
 		}
 		current = parent
 	}
+}
+
+func remotePluginNamespaceForSkill(skillPath string, pluginNamespaces map[string]remotePluginDescriptor) string {
+	descriptor, _ := remotePluginDescriptorForSkill(skillPath, pluginNamespaces)
+	return descriptor.Name
+}
+
+func remoteAgentPluginDirectChildSkill(pluginRoot string, skillPath string) bool {
+	root := strings.TrimSuffix(remoteNormalizePathKey(pluginRoot), "/")
+	path := remoteNormalizePathKey(skillPath)
+	prefix := root + "/"
+	if root == "." {
+		prefix = ""
+	}
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	relative := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(relative, "/")
+	return len(parts) == 3 && parts[0] == "skills" && parts[1] != "" && parts[2] == SkillFilename
 }
 
 func remotePluginNamespaceFallbackName(pluginRoot string) string {
@@ -454,6 +538,8 @@ func remoteSkillEntryFromContents(environmentID string, skillPath string, conten
 		ShortDescription: parsed.ShortDescription,
 		Enabled:          true,
 		Contents:         contents,
+		EnvironmentID:    environmentID,
+		SourcePath:       skillPath,
 	}
 	if strings.TrimSpace(metadataContents) != "" {
 		var parsed skillMetadataFile

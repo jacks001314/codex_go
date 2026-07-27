@@ -48,9 +48,7 @@ func (r *RuntimeRouter) hookRunAnalyticsContext(threadID string, turnID string) 
 	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil
 	}
-	r.turnsMu.Lock()
-	defer r.turnsMu.Unlock()
-	active := r.active[threadID]
+	active := r.threads.ActiveTurn(threadID)
 	if active == nil || active.TurnID != turnID || active.RunConfig == nil {
 		return nil
 	}

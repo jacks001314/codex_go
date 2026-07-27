@@ -1,6 +1,7 @@
 package codexapi
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -52,6 +53,26 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	}
 }
 
+func TestClientCompatibilityHeadersOmitUnboundedCodeModeToolNames(t *testing.T) {
+	value := map[string]any{
+		"thread_id": "thread",
+		CodeModeToolNamesKey: map[string]any{
+			"view_image": map[string]any{"name": "view_image", "namespace": nil},
+		},
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounded, ok := clientCompatibilityTurnMetadataJSON(value)
+	if !ok || strings.Contains(bounded, CodeModeToolNamesKey) || !strings.Contains(bounded, `"thread_id":"thread"`) {
+		t.Fatalf("bounded metadata = %q", bounded)
+	}
+	if !strings.Contains(string(encoded), CodeModeToolNamesKey) {
+		t.Fatalf("canonical metadata unexpectedly missing mapping: %s", encoded)
+	}
+}
+
 func TestClientMetadataMemoryRequestOmitsTurnIdentity(t *testing.T) {
 	metadata := NewClientMetadata("install", "session", "thread", "window")
 	metadata.RequestKind = ClientRequestMemory
@@ -66,10 +87,11 @@ func TestClientMetadataMemoryRequestOmitsTurnIdentity(t *testing.T) {
 
 func TestClientFilterExtraMetadata(t *testing.T) {
 	got := ClientFilterExtraMetadata(map[string]string{
-		"thread_id":      "bad",
-		"workspace_kind": "git",
+		"thread_id":          "bad",
+		CodeModeToolNamesKey: "bad",
+		"workspace_kind":     "git",
 	})
-	if got["thread_id"] != "" || got["workspace_kind"] != "git" {
+	if got["thread_id"] != "" || got[CodeModeToolNamesKey] != "" || got["workspace_kind"] != "git" {
 		t.Fatalf("ClientFilterExtraMetadata() = %v", got)
 	}
 }

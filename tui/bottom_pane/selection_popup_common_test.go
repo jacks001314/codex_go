@@ -2,6 +2,7 @@ package bottompane
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/tui"
@@ -80,4 +81,49 @@ func TestMeasureGenericRowsHeightEmptyPlaceholderMatchesRust(t *testing.T) {
 	if got := MeasureGenericRowsHeight(nil, ScrollState{}, 8, 80, ColumnWidthConfig{}); got != 1 {
 		t.Fatalf("empty measured height = %d, want 1", got)
 	}
+}
+
+func TestGenericRowsStackDescriptionsWhenNarrowMatchesRust(t *testing.T) {
+	layout := NewStackBelowWhenNarrowDescriptionLayout(24)
+	rows := []GenericDisplayRow{
+		{NamePrefix: "› 1. ", Name: "Replace binding", Description: "Capture one key and replace `ctrl-t`."},
+		{NamePrefix: "  –  ", Name: "Remove custom binding", DisabledReason: "No custom root override to remove.", IsDisabled: true},
+	}
+
+	narrow := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 8, "", 48, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil), layout)
+	wantNarrow := []string{
+		"› 1. Replace binding",
+		"     Capture one key and replace `ctrl-t`.",
+		"  –  Remove custom binding (disabled)",
+		"     No custom root override to remove.",
+	}
+	if !reflect.DeepEqual(narrow, wantNarrow) {
+		t.Fatalf("narrow responsive rows = %#v, want %#v", narrow, wantNarrow)
+	}
+
+	wide := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 8, "", 96, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil), layout)
+	if len(wide) != 2 || !strings.Contains(wide[0], "Replace binding") || !strings.Contains(wide[0], "Capture one key") {
+		t.Fatalf("wide responsive rows = %#v", wide)
+	}
+	if strings.HasPrefix(wide[1], "  2.") || !strings.HasPrefix(wide[1], "  –  ") {
+		t.Fatalf("disabled gutter marker missing from wide rows = %#v", wide)
+	}
+	for _, line := range append(narrow, wide...) {
+		limit := 96
+		if containsStringSelectionTest(narrow, line) {
+			limit = 48
+		}
+		if got := tui.DisplayWidth(line); got > limit {
+			t.Fatalf("responsive line %q width=%d exceeds %d", line, got, limit)
+		}
+	}
+}
+
+func containsStringSelectionTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

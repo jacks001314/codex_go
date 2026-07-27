@@ -1745,11 +1745,30 @@ func addCompatibilityMetadataHeaders(headers http.Header, metadata map[string]st
 		codexapi.ClientOpenAISubagentHeader,
 	} {
 		value := strings.TrimSpace(metadata[key])
+		if key == codexapi.ClientCodexTurnMetadataHeader {
+			value = boundedCompatibilityTurnMetadata(value)
+		}
 		if value == "" || strings.ContainsAny(value, "\r\n") {
 			continue
 		}
 		headers.Set(key, value)
 	}
+}
+
+func boundedCompatibilityTurnMetadata(value string) string {
+	if value == "" {
+		return ""
+	}
+	var metadata map[string]any
+	if json.Unmarshal([]byte(value), &metadata) != nil || metadata == nil {
+		return value
+	}
+	delete(metadata, codexapi.CodeModeToolNamesKey)
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return value
+	}
+	return string(encoded)
 }
 
 func (i *responsesAgentOutputItem) text() string {

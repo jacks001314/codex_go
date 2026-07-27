@@ -39,6 +39,40 @@ func RequireLogonSandboxCredsForPermissions(
 	proxyEnforced bool,
 	proxySettingsMode ProxySettingsMode,
 ) (*SandboxCredentials, error) {
+	return requireLogonSandboxCredsForPermissions(
+		permissions,
+		commandCWD,
+		envMap,
+		codexHome,
+		readRootsOverride,
+		readRootsOverrideSet,
+		readRootsIncludePlatformDefaults,
+		writeRootsOverride,
+		writeRootsOverrideSet,
+		denyReadPathsOverride,
+		denyWritePathsOverride,
+		proxyEnforced,
+		proxySettingsMode,
+		true,
+	)
+}
+
+func requireLogonSandboxCredsForPermissions(
+	permissions *ResolvedWindowsSandboxPermissions,
+	commandCWD string,
+	envMap map[string]string,
+	codexHome string,
+	readRootsOverride []string,
+	readRootsOverrideSet bool,
+	readRootsIncludePlatformDefaults bool,
+	writeRootsOverride []string,
+	writeRootsOverrideSet bool,
+	denyReadPathsOverride []string,
+	denyWritePathsOverride []string,
+	proxyEnforced bool,
+	proxySettingsMode ProxySettingsMode,
+	allowSetupElevation bool,
+) (*SandboxCredentials, error) {
 	if permissions == nil || codexHome == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -98,6 +132,9 @@ func RequireLogonSandboxCredsForPermissions(
 		} else {
 			_ = LogNoteInDir(SandboxDir(codexHome), "sandbox setup required")
 		}
+		if !allowSetupElevation {
+			return nil, fmt.Errorf("%w: Windows sandbox setup is missing or out of date; run the Windows sandbox setup explicitly", ErrSetupElevationDisallowed)
+		}
 		if err := runElevatedSetupForCredentials(request); err != nil {
 			return nil, err
 		}
@@ -130,10 +167,7 @@ func RefreshLogonSandboxCredsForPermissions(
 	proxyEnforced bool,
 	proxySettingsMode ProxySettingsMode,
 ) (*SandboxCredentials, error) {
-	if err := RemoveSandboxUsersFile(codexHome); err != nil {
-		return nil, err
-	}
-	return RequireLogonSandboxCredsForPermissions(
+	return refreshLogonSandboxCredsForPermissions(
 		permissions,
 		commandCWD,
 		envMap,
@@ -147,6 +181,44 @@ func RefreshLogonSandboxCredsForPermissions(
 		denyWritePathsOverride,
 		proxyEnforced,
 		proxySettingsMode,
+		true,
+	)
+}
+
+func refreshLogonSandboxCredsForPermissions(
+	permissions *ResolvedWindowsSandboxPermissions,
+	commandCWD string,
+	envMap map[string]string,
+	codexHome string,
+	readRootsOverride []string,
+	readRootsOverrideSet bool,
+	readRootsIncludePlatformDefaults bool,
+	writeRootsOverride []string,
+	writeRootsOverrideSet bool,
+	denyReadPathsOverride []string,
+	denyWritePathsOverride []string,
+	proxyEnforced bool,
+	proxySettingsMode ProxySettingsMode,
+	allowSetupElevation bool,
+) (*SandboxCredentials, error) {
+	if err := RemoveSandboxUsersFile(codexHome); err != nil {
+		return nil, err
+	}
+	return requireLogonSandboxCredsForPermissions(
+		permissions,
+		commandCWD,
+		envMap,
+		codexHome,
+		readRootsOverride,
+		readRootsOverrideSet,
+		readRootsIncludePlatformDefaults,
+		writeRootsOverride,
+		writeRootsOverrideSet,
+		denyReadPathsOverride,
+		denyWritePathsOverride,
+		proxyEnforced,
+		proxySettingsMode,
+		allowSetupElevation,
 	)
 }
 

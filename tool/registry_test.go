@@ -40,6 +40,25 @@ func TestRegistryRegisterAndModelVisibleSpecs(t *testing.T) {
 	}
 }
 
+func TestRegistryDeferredToolNamespacesPrefersFirstNonEmptyDescription(t *testing.T) {
+	registry := NewRegistry()
+	for _, spec := range []Spec{
+		{Name: NamespacedName("mcp__drive", "a"), Exposure: ExposureDiscoverable},
+		{Name: NamespacedName("mcp__drive", "b"), Exposure: ExposureDiscoverable, NamespaceDescription: "Drive tools"},
+		{Name: NamespacedName("mcp__drive", "c"), Exposure: ExposureDiscoverable, NamespaceDescription: "later description"},
+		{Name: PlainName("plain"), Exposure: ExposureDiscoverable, NamespaceDescription: "ignored"},
+		{Name: NamespacedName("visible", "tool"), Exposure: ExposureModelVisible, NamespaceDescription: "ignored"},
+	} {
+		if err := registry.Register(NewExecutorFunc(spec, noopExecutor)); err != nil {
+			t.Fatalf("register %s: %v", spec.Name.Key(), err)
+		}
+	}
+	got := NewRouter(registry).DeferredToolNamespaces()
+	if !reflect.DeepEqual(got, map[string]string{"mcp__drive": "Drive tools"}) {
+		t.Fatalf("namespaces = %#v", got)
+	}
+}
+
 func TestRouterBuildToolCall(t *testing.T) {
 	router := NewRouter(NewRegistry())
 	invocation, ok, err := router.BuildToolCall(ResponseItem{Type: "function_call", Name: "shell", CallID: "call-a", Arguments: `{"cmd":"date"}`})

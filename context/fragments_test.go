@@ -73,6 +73,21 @@ func TestSkillInstructions(t *testing.T) {
 	}
 }
 
+func TestExecutorSkillInstructionsIncludeResourceAccessLikeRust(t *testing.T) {
+	rendered := Render(NewSkillInstructionsWithExecutorResourceAccess("deploy", "skill://demo/root/SKILL.md", "Use it.", &ExecutorSkillResourceAccess{
+		AuthorityID:  "demo@1",
+		Package:      "skill://demo@1/root",
+		MainResource: "skill://demo@1/root/SKILL.md",
+	}))
+	if rendered == nil {
+		t.Fatal("Render() = nil")
+	}
+	want := `<resource_access>{"authority":{"kind":"executor","id":"demo@1"},"package":"skill://demo@1/root","main_resource":"skill://demo@1/root/SKILL.md"}</resource_access>`
+	if !strings.Contains(rendered.Content, want) {
+		t.Fatalf("content missing resource access:\n%s", rendered.Content)
+	}
+}
+
 func TestImagegenSkillInstructionsPreserveContentsLikeRust(t *testing.T) {
 	rendered := Render(NewSkillInstructions("imagegen", "/tmp/SKILL.md", "Use the skill."))
 	if rendered == nil {

@@ -14,6 +14,7 @@ const (
 	WindowIDKey            = "window_id"
 	RequestKindKey         = "request_kind"
 	CompactionKey          = "compaction"
+	CodeModeToolNamesKey   = "code_mode_tool_names"
 	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
 	ForkedFromThreadIDKey  = "forked_from_thread_id"
 	ParentThreadIDKey      = "parent_thread_id"
@@ -45,6 +46,7 @@ var reservedMetadataKeys = map[string]bool{
 	OpenAISubagentHeader:   true,
 	RequestKindKey:         true,
 	CompactionKey:          true,
+	CodeModeToolNamesKey:   true,
 	TurnStartedAtUnixMSKey: true,
 	ForkedFromThreadIDKey:  true,
 	ParentThreadIDKey:      true,
@@ -189,7 +191,10 @@ func (m *ResponsesMetadata) CompatibilityHeaders() map[string]string {
 	}
 	out := map[string]string{WindowIDHeader: m.WindowID}
 	if m.HasTurnMetadata() {
-		if encoded, ok := m.TurnMetadataJSON(); ok {
+		value := m.TurnMetadataValue()
+		delete(value, CodeModeToolNamesKey)
+		if data, err := json.Marshal(value); err == nil {
+			encoded := string(data)
 			out[TurnMetadataHeader] = encoded
 		}
 	}

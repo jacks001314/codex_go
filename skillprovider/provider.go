@@ -176,6 +176,29 @@ func (r *Registry) ListCustom(ctx context.Context, query ListQuery) Catalog {
 	return catalog
 }
 
+func (r *Registry) ListKind(ctx context.Context, kind SourceKind, query ListQuery) Catalog {
+	var catalog Catalog
+	if r == nil {
+		return catalog
+	}
+	for _, source := range r.sources {
+		if source.Kind != kind {
+			continue
+		}
+		listed, err := source.Provider.List(contextOrBackground(ctx), query)
+		if err != nil {
+			label := source.Label
+			if label == "" {
+				label = string(kind)
+			}
+			catalog.Warnings = append(catalog.Warnings, fmt.Sprintf("%s skills unavailable: %s", label, err))
+			continue
+		}
+		catalog.Extend(listed)
+	}
+	return catalog
+}
+
 func (r *Registry) Read(ctx context.Context, request ReadRequest) (ReadResult, error) {
 	if r == nil {
 		return ReadResult{}, fmt.Errorf("%s skill provider is not configured", request.Authority.Kind)

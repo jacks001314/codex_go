@@ -310,6 +310,17 @@ func TestMergeConnectorsAndPluginPlaceholders(t *testing.T) {
 	}
 }
 
+func TestMergeConnectorsKeepsDirectoryAppsWhenAccessibleListIsEmptyLikeRust(t *testing.T) {
+	merged := MergeConnectors([]AppEntry{{
+		ID:           "beta",
+		Name:         "Beta",
+		IsAccessible: false,
+	}}, nil)
+	if len(merged) != 1 || merged[0].ID != "beta" || merged[0].IsAccessible {
+		t.Fatalf("merged apps = %#v, want inaccessible beta directory entry", merged)
+	}
+}
+
 func appByIDForTest(apps []AppEntry, id string) *AppEntry {
 	for i := range apps {
 		if apps[i].ID == id {
@@ -395,7 +406,7 @@ func TestListMergesProvidersPluginConnectorsAndCache(t *testing.T) {
 	}
 }
 
-func TestListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust(t *testing.T) {
+func TestListKeepsDirectoryWhileAccessibleProviderIsNotReadyLikeRust(t *testing.T) {
 	directory := &fakeDirectoryProvider{apps: []AppEntry{{ID: "alpha", Name: "Alpha"}, {ID: "beta", Name: "Beta Directory"}}}
 	accessible := &readyAccessibleProvider{
 		apps: []AppEntry{{
@@ -414,8 +425,8 @@ func TestListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust(t *testing.T)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(response.Apps) != 2 || response.Apps[0].ID != "beta" || !response.Apps[0].IsAccessible || response.Apps[1].ID != "gamma" {
-		t.Fatalf("unready apps = %#v, want accessible beta and plugin gamma", response.Apps)
+	if len(response.Apps) != 3 || response.Apps[0].ID != "beta" || !response.Apps[0].IsAccessible || response.Apps[1].ID != "alpha" || response.Apps[2].ID != "gamma" {
+		t.Fatalf("unready apps = %#v, want merged beta, alpha, gamma", response.Apps)
 	}
 
 	accessible.ready = true
@@ -431,7 +442,7 @@ func TestListWaitsForAccessibleReadyBeforeMergingDirectoryLikeRust(t *testing.T)
 	}
 }
 
-func TestCachedListForNotificationSkipsDirectoryWhenAccessibleNotReadyLikeRust(t *testing.T) {
+func TestCachedListForNotificationKeepsDirectoryWhenAccessibleNotReadyLikeRust(t *testing.T) {
 	directory := &fakeDirectoryProvider{apps: []AppEntry{{ID: "alpha", Name: "Alpha"}, {ID: "beta", Name: "Beta Directory"}}}
 	accessible := &readyAccessibleProvider{
 		apps: []AppEntry{{
@@ -450,8 +461,8 @@ func TestCachedListForNotificationSkipsDirectoryWhenAccessibleNotReadyLikeRust(t
 	}
 
 	cached := service.CachedListForNotification()
-	if len(cached) != 2 || cached[0].ID != "beta" || !cached[0].IsAccessible || cached[1].ID != "gamma" {
-		t.Fatalf("cached notification list = %#v, want accessible beta and plugin gamma", cached)
+	if len(cached) != 3 || cached[0].ID != "beta" || !cached[0].IsAccessible || cached[1].ID != "alpha" || cached[2].ID != "gamma" {
+		t.Fatalf("cached notification list = %#v, want merged beta, alpha, gamma", cached)
 	}
 }
 

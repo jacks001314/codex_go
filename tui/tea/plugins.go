@@ -33,6 +33,12 @@ func (m *Model) applyPluginListResult(message PluginListResultMsg) {
 		m.openSelectionViewModal(ModalKindGeneric, chatwidget.PluginErrorView("Plugins: "+strings.TrimSpace(message.Err.Error()), false))
 		return
 	}
+	m.mentionPluginInventory = pluginSummariesFromResponse(message.Response)
+	m.mentionPluginInventoryReady = true
+	m.mentionPluginInventoryErr = ""
+	if m.mentionPopup != nil {
+		m.mentionPopup.SetCandidates(m.mentionCandidates())
+	}
 	m.openPluginsView(message.Response)
 }
 

@@ -8,18 +8,50 @@ import (
 	"strings"
 
 	"codex_go/mcp"
+	"codex_go/sandbox"
 	"codex_go/state"
 )
 
 type appserverMCPElicitationHandler struct {
-	broker   *ServerRequestBroker
-	reviewer GuardianReviewer
+	broker    *ServerRequestBroker
+	reviewer  GuardianReviewer
+	authority func(string) mcpElicitationAuthority
+}
+
+type mcpElicitationAuthority struct {
+	ApprovalPolicy        sandbox.AskForApproval
+	ApprovalsReviewer     string
+	PermissionProfile     *sandbox.PermissionProfile
+	AllowsMCPElicitations bool
 }
 
 func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
+	authority := mcpElicitationAuthority{ApprovalPolicy: sandbox.ApprovalOnRequest, ApprovalsReviewer: "user", AllowsMCPElicitations: true}
+	legacyAuthority := h == nil || h.authority == nil
+	if h != nil && h.authority != nil {
+		threadID := ""
+		if request != nil {
+			threadID = strings.TrimSpace(request.ThreadID)
+		}
+		authority = h.authority(threadID)
+	}
+	switch authority.ApprovalPolicy {
+	case sandbox.ApprovalNever:
+		if mcpElicitationPermissionAutoApproved(authority.PermissionProfile) && mcpElicitationHasEmptyForm(request) {
+			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionAccept, Content: map[string]any{}}, nil
+		}
+		return mcpElicitationAutoDecline(), nil
+	case sandbox.ApprovalGranular:
+		if !authority.AllowsMCPElicitations {
+			return mcpElicitationAutoDecline(), nil
+		}
+	}
 	if guardianMCPApprovalRequested(request) {
+		if !legacyAuthority && ((authority.ApprovalPolicy != sandbox.ApprovalOnRequest && authority.ApprovalPolicy != sandbox.ApprovalGranular) || !strings.EqualFold(strings.TrimSpace(authority.ApprovalsReviewer), "auto_review")) {
+			return h.requestMCPElicitation(ctx, request)
+		}
 		if reason := validateGuardianMCPElicitation(request); reason != "" {
-			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: map[string]any{"approvals_reviewer": "auto_review"}}, nil
+			return mcpElicitationAutoDecline(), nil
 		}
 		if h != nil && h.reviewer != nil {
 			decision, reason, err := h.reviewer.Review(ctx, request.ThreadID, request.TurnID, appserverMCPElicitationID(request), guardianMCPAction(request))
@@ -33,6 +65,10 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: meta}, nil
 		}
 	}
+	return h.requestMCPElicitation(ctx, request)
+}
+
+func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
 	if h == nil || h.broker == nil {
 		return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 	}
@@ -50,6 +86,29 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		Content: response.Content,
 		Meta:    response.Meta,
 	}, nil
+}
+
+func mcpElicitationAutoDecline() *mcp.MCPElicitationResponse {
+	return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: map[string]any{"approvals_reviewer": "auto_review"}}
+}
+
+func mcpElicitationPermissionAutoApproved(profile *sandbox.PermissionProfile) bool {
+	if profile == nil {
+		return false
+	}
+	return profile.Disabled || profile.LegacySandboxPolicy().HasFullDiskWriteAccess()
+}
+
+func mcpElicitationHasEmptyForm(request *mcp.MCPElicitationRequest) bool {
+	if request == nil || strings.TrimSpace(request.Method) != "elicitation/create" || strings.TrimSpace(request.URL) != "" {
+		return false
+	}
+	schema, ok := request.RequestedSchema.(map[string]any)
+	if !ok {
+		return request.RequestedSchema == nil
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	return !ok || len(properties) == 0
 }
 
 func guardianMCPAction(request *mcp.MCPElicitationRequest) state.Action {

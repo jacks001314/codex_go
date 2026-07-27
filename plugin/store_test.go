@@ -245,6 +245,32 @@ func TestPluginVersionForSource(t *testing.T) {
 	}
 }
 
+func TestPluginStoreInstallsAgentPluginManifestLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store, err := NewPluginStore(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginID, err := NewPluginId("sample", "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"$schema":"`+AgentPluginSchemaURI+`","name":"sample","version":"1.2.3"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Install(source, pluginID)
+	if err != nil {
+		t.Fatalf("Install(agent plugin) error = %v", err)
+	}
+	if result.PluginVersion != "1.2.3" {
+		t.Fatalf("version = %q", result.PluginVersion)
+	}
+	if _, err := os.Stat(filepath.Join(result.InstalledPath, "plugin.json")); err != nil {
+		t.Fatalf("installed root manifest missing: %v", err)
+	}
+}
+
 func TestValidatePluginVersionSegment(t *testing.T) {
 	valid := []string{"1.0.0", "local", "v2", "dev-build", "1.2.3-alpha+001"}
 	for _, v := range valid {

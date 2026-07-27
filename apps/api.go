@@ -658,7 +658,7 @@ func (s *AppService) CachedListForNotification() []AppEntry {
 	directoryCacheValid := s.directoryCacheValid
 	directoryCache := cloneApps(s.directoryCache)
 	directoryAllLoaded := s.directoryAllLoaded
-	accessibleCache, accessibleCacheValid, accessibleReady := s.accessibleCacheSnapshotLocked()
+	accessibleCache, accessibleCacheValid, _ := s.accessibleCacheSnapshotLocked()
 	s.mu.Unlock()
 	if !directoryCacheValid && !accessibleCacheValid {
 		return nil
@@ -679,15 +679,6 @@ func (s *AppService) CachedListForNotification() []AppEntry {
 	accessible := accessibleStaticApps(snapshot.staticApps)
 	if accessibleCacheValid {
 		accessible = mergeAccessibleSnapshots(accessibleCache, accessible)
-	}
-	if accessibleCacheValid && !accessibleReady {
-		directory = MergePluginConnectors(cloneApps(snapshot.staticApps), snapshot.pluginConnectors)
-		list := MergeConnectors(directory, accessible)
-		list = WithAppEnabledState(list, AppsConfigFromValues(snapshot.configValues), nil)
-		if len(list) == 0 {
-			return nil
-		}
-		return cloneApps(list)
 	}
 	if allLoaded {
 		accessible = filterAccessibleAppsForDirectory(accessible, directory)
@@ -738,16 +729,12 @@ func (s *AppService) listMerged(params *AppListParams, snapshot *appServiceSnaps
 		directory = mergeDirectorySnapshots(directory, snapshot.staticApps)
 	}
 	directory = MergePluginConnectors(directory, snapshot.pluginConnectors)
-	accessible, accessibleReady, err := s.accessibleAppsForList(snapshot.accessibleProvider, &AppAccessibleListParams{
+	accessible, _, err := s.accessibleAppsForList(snapshot.accessibleProvider, &AppAccessibleListParams{
 		ThreadID:     threadID,
 		ForceRefetch: params.ForceRefetch,
 	}, snapshot.staticApps)
 	if err != nil {
 		return nil, err
-	}
-	if snapshot.accessibleProvider != nil && !accessibleReady {
-		directory = MergePluginConnectors(cloneApps(snapshot.staticApps), snapshot.pluginConnectors)
-		allLoaded = false
 	}
 	if allLoaded {
 		accessible = filterAccessibleAppsForDirectory(accessible, directory)

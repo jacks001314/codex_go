@@ -27,6 +27,7 @@ type SamplingFollowUpContext struct {
 
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
 type AssistantMessageCallback func(response *model.AgentResponse, iteration int, hasToolCalls bool)
+type ClientMetadataTransform func(map[string]string) map[string]string
 
 type AgentLoop struct {
 	agent        model.AgentRunner
@@ -61,6 +62,7 @@ type AgentLoopRequest struct {
 	ServiceTier                  string
 	PromptCacheKey               string
 	ClientMetadata               map[string]string
+	ClientMetadataTransform      ClientMetadataTransform
 	AttestationProvider          codexapi.AttestationProvider
 	OutputSchema                 any
 	DisableHostedImageGeneration bool
@@ -147,14 +149,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	prompt := strings.TrimSpace(request.Prompt)
 	promptAppended := false
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
-	clientMetadata := cloneStringMap(request.ClientMetadata)
+	clientMetadata := transformClientMetadata(request.ClientMetadata, request.ClientMetadataTransform)
 	for iteration := 0; ; iteration++ {
 		if steer := drainSteer(l.steerMailbox, request); steer != nil {
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
 			}
 			if len(steer.ClientMetadata) > 0 {
-				clientMetadata = cloneStringMap(steer.ClientMetadata)
+				clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
 			}
 		}
 		inputItems := append([]any(nil), result.InputItems...)
@@ -266,6 +268,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 	}
+}
+
+func transformClientMetadata(metadata map[string]string, transform ClientMetadataTransform) map[string]string {
+	out := cloneStringMap(metadata)
+	if transform != nil {
+		out = transform(out)
+	}
+	return out
 }
 
 func combineResponsesStreamHandlers(handlers ...model.ResponsesStreamHandler) model.ResponsesStreamHandler {
