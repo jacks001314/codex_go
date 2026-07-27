@@ -43,6 +43,24 @@ npm --prefix sdktests run test:parity -- --scenario workspace-structured-read --
 npm --prefix sdktests run test:parity -- --all --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
 ```
 
+Start an approved matrix at a named scenario, or resume an interrupted suite:
+
+```powershell
+npm --prefix sdktests run test:parity -- --all --from persistent-resume --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+npm --prefix sdktests run test:parity -- --resume <suite-directory> --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+```
+
+Each matrix writes `suite-summary.json`. Resume verifies the platform and the
+Rust, Go, and SDK hashes, marks a previously running scenario incomplete, and
+skips scenarios already completed. Each scenario artifact also has a
+`run-state.json` with its running, completed, or incomplete state.
+
+Only one live runner can own the repository-wide lock. A second runner exits
+without disturbing the active process. Use `--recover-lock` only when the
+recorded owner is known to be stuck; recovery terminates that recorded process
+tree before acquiring the lock. Unreadable lock ownership is never removed
+automatically.
+
 Use `--order go-rust` to alternate which implementation runs first during repeated sampling.
 
 The approved matrix covers single-turn streaming, schema-constrained workspace

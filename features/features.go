@@ -96,6 +96,7 @@ var Registry = []Spec{
 	{Key: "executor_capability_discovery", Stage: StageUnderDevelopment},
 	{Key: "plugin_hooks", Stage: StageRemoved},
 	{Key: "in_app_browser", Stage: StageStable, DefaultEnabled: true},
+	{Key: "in_app_updates", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use_full_cdp_access", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use_external", Stage: StageStable, DefaultEnabled: true},

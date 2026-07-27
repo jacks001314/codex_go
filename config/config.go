@@ -384,7 +384,7 @@ var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, 
 
 var knownStrictFeatureFields = map[string]bool{
 	"mcp_2026_07_28": true,
-	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "plugins": true, "in_app_browser": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
+	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "plugins": true, "in_app_browser": true, "in_app_updates": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
 }
 
 func ProjectConfigPath(cwd string) string {
@@ -591,7 +591,7 @@ func (c *Config) ToolOutputTokenLimit() *int {
 }
 
 func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featureflags.LegacyFeatureUsage) {
-	if c == nil || c.Values == nil {
+	if c == nil {
 		return map[string]bool{}, nil
 	}
 	values := map[string]any{}
@@ -603,7 +603,24 @@ func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featurefl
 	if enabled, ok := c.Values["experimental_use_unified_exec_tool"].(bool); ok {
 		values["experimental_use_unified_exec_tool"] = enabled
 	}
-	return featureflags.ResolveSettings(values)
+	settings, usages := featureflags.ResolveSettings(values)
+	if c.Requirements != nil {
+		requirementValues := make(map[string]any, len(c.Requirements.FeatureRequirements))
+		for key, enabled := range c.Requirements.FeatureRequirements {
+			requirementValues[key] = enabled
+		}
+		if autoReview, ok := c.Requirements.FeatureRequirements["auto_review"]; ok {
+			if _, hasCanonical := c.Requirements.FeatureRequirements["guardian_approval"]; !hasCanonical {
+				requirementValues["guardian_approval"] = autoReview
+			}
+			delete(requirementValues, "auto_review")
+		}
+		requirementSettings, _ := featureflags.ResolveSettings(requirementValues)
+		for key, enabled := range requirementSettings {
+			settings[key] = enabled
+		}
+	}
+	return settings, usages
 }
 
 func (c *Config) LegacyFeatureUsages() []featureflags.LegacyFeatureUsage {

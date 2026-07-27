@@ -2260,6 +2260,30 @@ service_tier = "fast"
 	}
 }
 
+func TestRuntimeRouterConfigRequirementsReadIncludesInAppUpdatesPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := `
+[features]
+in_app_updates = false
+`
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodConfigRequirementsRead, map[string]any{}))
+	if response.Error != nil {
+		t.Fatalf("configRequirements/read error: %+v", response.Error)
+	}
+	read, ok := response.Result.(*config.ConfigRequirementsReadResponse)
+	if !ok || read.Requirements == nil {
+		t.Fatalf("configRequirements/read result = %#v", response.Result)
+	}
+	if enabled, exists := read.Requirements.FeatureRequirements["in_app_updates"]; !exists || enabled {
+		t.Fatalf("featureRequirements = %#v, want in_app_updates=false", read.Requirements.FeatureRequirements)
+	}
+}
+
 func TestRuntimeRouterConfigReadWebSearchToolConfigMatchesRust(t *testing.T) {
 	readConfigJSON := func(t *testing.T, body string) map[string]any {
 		t.Helper()

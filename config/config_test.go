@@ -155,6 +155,41 @@ model = "gpt-5.4-mini"
 	}
 }
 
+func TestFeatureRequirementsOverrideDefaultAndCLISettingsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[features]\nin_app_updates = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements returned error: %v", err)
+	}
+	cfg, err := LoadEffectiveWithOptions(home, &EffectiveOptions{
+		EnableFeatures: []string{"in_app_updates"},
+		StrictConfig:   true,
+	})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions returned error: %v", err)
+	}
+	if cfg.FeatureSettings()["in_app_updates"] {
+		t.Fatalf("in_app_updates = true, want managed requirement to override the default and CLI setting")
+	}
+}
+
+func TestFeatureRequirementsCanonicalizeAliasesAndIgnoreUnknownLikeRust(t *testing.T) {
+	cfg := &Config{
+		Values: map[string]any{},
+		Requirements: &ConfigRequirements{FeatureRequirements: map[string]bool{
+			"auto_review":          false,
+			"web_search":           true,
+			"unknown_managed_flag": true,
+		}},
+	}
+	settings := cfg.FeatureSettings()
+	if settings["guardian_approval"] || !settings["web_search_request"] {
+		t.Fatalf("FeatureSettings = %#v, want normalized managed aliases", settings)
+	}
+	if _, ok := settings["unknown_managed_flag"]; ok {
+		t.Fatalf("FeatureSettings = %#v, want unknown managed feature ignored", settings)
+	}
+}
+
 func TestFeatureSettingsTracksLegacyUsage(t *testing.T) {
 	dir := t.TempDir()
 	body := `
