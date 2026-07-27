@@ -2,12 +2,14 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -62,6 +64,33 @@ func TestThreadManagerShutdownCancelsAndWaitsForTrackedTurns(t *testing.T) {
 	}
 }
 
+func TestThreadManagerShutdownWaitsForTrackedTerminalWorker(t *testing.T) {
+	manager := NewThreadManager(nil)
+	if err := manager.RegisterTurn("thread-1", "turn-1", nil, 1, &turn.TurnStartParams{ThreadID: "thread-1"}); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	if _, ok := manager.ConsumeTurnTracked("thread-1", "turn-1", true); !ok {
+		t.Fatal("ConsumeTurnTracked() = false")
+	}
+
+	waitReturned := make(chan error, 1)
+	go func() {
+		manager.BeginShutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		waitReturned <- manager.WaitForTurnWorkers(ctx)
+	}()
+	select {
+	case err := <-waitReturned:
+		t.Fatalf("WaitForTurnWorkers() returned before terminal worker completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	manager.TurnWorkerDone()
+	if err := <-waitReturned; err != nil {
+		t.Fatalf("WaitForTurnWorkers() error = %v", err)
+	}
+}
+
 func TestThreadManagerEphemeralRecordConcurrentAppendReturnsSnapshot(t *testing.T) {
 	manager := NewThreadManager(nil)
 	if !manager.SaveEphemeralRecord(&session.Record{
@@ -101,6 +130,144 @@ func TestThreadManagerEphemeralRecordConcurrentAppendReturnsSnapshot(t *testing.
 	record, ok := manager.EphemeralRecord("thread-ephemeral", true)
 	if !ok || len(record.Items) != 250 {
 		t.Fatalf("final item count = %d, ok = %v, want 250, true", len(record.Items), ok)
+	}
+}
+
+func TestRuntimeRouterPaginatedPersistenceDoesNotBypassClosedLiveThread(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	record := &session.Record{
+		ID:        "thread-live-persistence",
+		CreatedAt: time.Now().UTC(),
+		Metadata:  session.Metadata{HistoryMode: string(ThreadHistoryPaginated)},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	threadRouter := NewRouter(store)
+	if err := threadRouter.retainLiveThread(record); err != nil {
+		t.Fatalf("retainLiveThread() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter})
+	t.Cleanup(func() { _ = router.Close() })
+	liveThread := router.threads.LiveThread(record.ID)
+	if liveThread == nil {
+		t.Fatal("paginated thread was not registered as a live thread")
+	}
+	if err := liveThread.Close(); err != nil {
+		t.Fatalf("liveThread.Close() error = %v", err)
+	}
+	if _, err := router.runtimeAppendItem(record.ID, session.Item{ID: "must-not-persist"}); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("runtimeAppendItem() error = %v, want closed live-thread conflict", err)
+	}
+	if _, err := router.runtimeUpdateThreadMetadata(record.ID, &session.MetadataPatch{}, true); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("runtimeUpdateThreadMetadata() error = %v, want closed live-thread conflict", err)
+	}
+	if _, err := threadRouter.readThreadRecord(record.ID, true, true); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("readThreadRecord() error = %v, want closed live-thread conflict", err)
+	}
+	if err := threadRouter.saveThreadRecord(&session.Record{ID: record.ID, Title: "must-not-persist"}); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("saveThreadRecord() error = %v, want closed live-thread conflict", err)
+	}
+	metadataTitle := "must-not-persist"
+	if _, err := threadRouter.updateThreadMetadata(record.ID, &session.MetadataPatch{Title: &metadataTitle}, true); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("updateThreadMetadata() error = %v, want closed live-thread conflict", err)
+	}
+	if _, err := threadRouter.appendThreadItems(record.ID, []session.Item{{ID: "also-must-not-persist"}}); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("appendThreadItems() error = %v, want closed live-thread conflict", err)
+	}
+	loaded, err := store.Read(record.ID, true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(loaded.Items) != 0 {
+		t.Fatalf("closed live thread append bypassed manager: %#v", loaded.Items)
+	}
+	if loaded.Title != "" {
+		t.Fatalf("closed live thread metadata bypassed manager: title=%q", loaded.Title)
+	}
+}
+
+func TestThreadManagerLegacyLiveThreadStillAcquiresLifecycleWriter(t *testing.T) {
+	root := t.TempDir()
+	store := session.NewStore(root)
+	record := &session.Record{ID: "thread-legacy-live", Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy)}}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	manager := NewThreadManager(nil)
+	if err := manager.RetainLiveThread(store, record); err != nil {
+		t.Fatalf("RetainLiveThread() error = %v", err)
+	}
+	defer func() { _ = manager.CloseLiveThreads() }()
+	liveThread := manager.LiveThread(record.ID)
+	if liveThread == nil || liveThread.OwnsWriter() {
+		t.Fatalf("legacy live thread = %#v, ownsWriter = %v", liveThread, liveThread != nil && liveThread.OwnsWriter())
+	}
+	locks, err := manager.AcquireLifecycleWriters(store, []session.ThreadID{record.ID})
+	if err != nil {
+		t.Fatalf("AcquireLifecycleWriters() error = %v", err)
+	}
+	if len(locks) != 1 {
+		t.Fatalf("lifecycle writer count = %d, want 1", len(locks))
+	}
+	if _, err := session.NewStore(root).AcquireWriter(record.ID); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("competing AcquireWriter() error = %v, want ErrConflict", err)
+	}
+	closeTemporaryWriters(locks)
+}
+
+func TestThreadManagerSerializesRolloutRecorderLifecycle(t *testing.T) {
+	root := t.TempDir()
+	store := session.NewStore(root)
+	record := &session.Record{ID: "thread-managed-rollout", SessionID: "thread-managed-rollout", CreatedAt: time.Now().UTC()}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	manager := NewThreadManager(nil)
+	if err := manager.RetainLiveThread(store, record); err != nil {
+		t.Fatalf("RetainLiveThread() error = %v", err)
+	}
+	openCount := 0
+	var rolloutPath string
+	open := func() (*rollout.Recorder, error) {
+		openCount++
+		if rolloutPath != "" {
+			return rollout.Resume(rolloutPath)
+		}
+		recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+			CodexHome: root,
+			SessionID: string(record.ID),
+			ThreadID:  string(record.ID),
+			Now:       record.CreatedAt,
+		})
+		if recorder != nil {
+			rolloutPath = recorder.Path()
+		}
+		return recorder, err
+	}
+	for _, message := range []string{"first", "second"} {
+		handled, err := manager.WithRolloutRecorder(record.ID, open, func(recorder *rollout.Recorder) error {
+			return recorder.AppendTurnError(message, time.Now().UTC())
+		})
+		if !handled || err != nil {
+			t.Fatalf("WithRolloutRecorder(%q) = %v, %v", message, handled, err)
+		}
+	}
+	if openCount != 2 {
+		t.Fatalf("rollout recorder opens = %d, want one short-lived handle per append", openCount)
+	}
+	if err := manager.CloseLiveThreads(); err != nil {
+		t.Fatalf("CloseLiveThreads() error = %v", err)
+	}
+	lines, _, err := rollout.Load(rolloutPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("rollout line count = %d, want session meta plus two errors", len(lines))
+	}
+	if handled, err := manager.WithRolloutRecorder(record.ID, open, nil); handled || err != nil {
+		t.Fatalf("WithRolloutRecorder() after close = %v, %v", handled, err)
 	}
 }
 

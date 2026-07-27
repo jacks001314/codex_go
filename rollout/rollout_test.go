@@ -376,6 +376,45 @@ func TestRecordFromPathReplaysRustErrorTurn(t *testing.T) {
 	}
 }
 
+func TestRecordFromPathReplaysTurnCompleteEmbeddedError(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-07-27T01-02-03-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-07-27T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-07-27T01:02:03Z"}}`,
+		`{"timestamp":"2026-07-27T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a","started_at":10}}`,
+		`{"timestamp":"2026-07-27T01:02:05Z","type":"event_msg","payload":{"type":"user_message","message":"first"}}`,
+		`{"timestamp":"2026-07-27T01:02:06Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b","started_at":30}}`,
+		`{"timestamp":"2026-07-27T01:02:07Z","type":"event_msg","payload":{"type":"user_message","message":"second"}}`,
+		`{"timestamp":"2026-07-27T01:02:08Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a","error":{"message":"Selected model is at capacity.","codex_error_info":"serverOverloaded"},"completed_at":20,"duration_ms":10000}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Metadata.RolloutTurns) != 2 {
+		t.Fatalf("rollout turns = %#v", record.Metadata.RolloutTurns)
+	}
+	failed := record.Metadata.RolloutTurns[0]
+	if failed.ID != "turn-a" || failed.Status != "failed" || failed.ErrorMessage != "Selected model is at capacity." || failed.CodexErrorInfo != "serverOverloaded" {
+		t.Fatalf("failed rollout turn = %#v", failed)
+	}
+	if failed.CompletedAt == nil || *failed.CompletedAt != 20 || failed.DurationMS == nil || *failed.DurationMS != 10000 {
+		t.Fatalf("failed rollout turn timing = %#v", failed)
+	}
+	active := record.Metadata.RolloutTurns[1]
+	if active.ID != "turn-b" || active.Status != "inProgress" || active.ErrorMessage != "" {
+		t.Fatalf("active rollout turn = %#v", active)
+	}
+}
+
 func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
@@ -385,8 +424,8 @@ func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
 	data := strings.Join([]string{
 		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
 		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":1700000000}}`,
-		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","completed_at_ms":1000,"item":{"type":"Sleep","id":"sleep-1","duration_ms":1000}}}`,
-		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","completed_at_ms":2000,"item":{"type":"CommandExecution","id":"exec-1","process_id":"pid-1","command":["echo","hello world"],"cwd":"/tmp","parsed_cmd":[{"type":"unknown","cmd":"echo hello world"}],"source":"agent","status":"completed","stdout":"hello world\n","stderr":"","aggregated_output":"hello world\n","exit_code":0,"duration":{"secs":0,"nanos":12000000},"formatted_output":"hello world\n"}}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","started_at_ms":900,"completed_at_ms":1000,"item":{"type":"Sleep","id":"sleep-1","duration_ms":1000}}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","startedAtMs":1500,"completedAtMs":2000,"item":{"type":"CommandExecution","id":"exec-1","process_id":"pid-1","command":["echo","hello world"],"cwd":"/tmp","parsed_cmd":[{"type":"unknown","cmd":"echo hello world"}],"source":"agent","status":"completed","stdout":"hello world\n","stderr":"","aggregated_output":"hello world\n","exit_code":0,"duration":{"secs":0,"nanos":12000000},"formatted_output":"hello world\n"}}}`,
 		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":1700000006,"duration_ms":6000}}`,
 		``,
 	}, "\n")
@@ -408,6 +447,12 @@ func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
 	if duration, ok := rolloutInt64FromAny(sleep.Data["duration_ms"]); !ok || duration != 1000 {
 		t.Fatalf("sleep duration = %#v", sleep.Data)
 	}
+	if started, ok := rolloutInt64FromAny(sleep.Data["startedAtMs"]); !ok || started != 900 {
+		t.Fatalf("sleep startedAtMs = %#v", sleep.Data)
+	}
+	if completed, ok := rolloutInt64FromAny(sleep.Data["completed_at_ms"]); !ok || completed != 1000 {
+		t.Fatalf("sleep completed_at_ms = %#v", sleep.Data)
+	}
 	command := record.Items[1]
 	if command.Type != "commandExecution" || command.ID != "exec-1" || command.Metadata["turnId"] != "turn-1" || command.CreatedAt.UnixMilli() != 2000 {
 		t.Fatalf("command item = %#v", command)
@@ -417,6 +462,12 @@ func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
 	}
 	if duration, ok := rolloutInt64FromAny(command.Data["durationMs"]); !ok || duration != 12 {
 		t.Fatalf("command duration = %#v", command.Data)
+	}
+	if started, ok := rolloutInt64FromAny(command.Data["started_at_ms"]); !ok || started != 1500 {
+		t.Fatalf("command started_at_ms = %#v", command.Data)
+	}
+	if completed, ok := rolloutInt64FromAny(command.Data["completedAtMs"]); !ok || completed != 2000 {
+		t.Fatalf("command completedAtMs = %#v", command.Data)
 	}
 	actions, ok := command.Data["commandActions"].([]map[string]any)
 	if !ok || len(actions) != 1 || actions[0]["type"] != "unknown" || actions[0]["command"] != "echo hello world" {

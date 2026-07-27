@@ -84,6 +84,33 @@ func TestApplyPatchExecutorIncludesDeleteContentInFileChange(t *testing.T) {
 	}
 }
 
+func TestApplyPatchExecutorApplicationFailureKeepsFileChangeData(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "blocker"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile blocker: %v", err)
+	}
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
+	invocation := &Invocation{
+		CallID:   "call-apply-failed",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: "*** Begin Patch\n*** Add File: blocker/child.txt\n+content\n*** End Patch\n"},
+	}
+	output, err := executor.Execute(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || output.Success || !strings.Contains(output.Error, "apply_patch failed:") {
+		t.Fatalf("failed output = %#v", output)
+	}
+	if output.Data["fileChange"] != true || output.Data["status"] != "failed" {
+		t.Fatalf("failed file change data = %#v", output.Data)
+	}
+	changes, ok := output.Data["changes"].([]map[string]any)
+	if !ok || len(changes) != 1 || changes[0]["path"] != filepath.Join(cwd, "blocker", "child.txt") {
+		t.Fatalf("failed file changes = %#v", output.Data["changes"])
+	}
+}
+
 func TestApplyPatchExecutorAcceptsAbsolutePathLikeRust(t *testing.T) {
 	cwd := t.TempDir()
 	external := t.TempDir()
@@ -307,23 +334,32 @@ func TestApplyPatchExecutorComplexChangeMatrix(t *testing.T) {
 }
 
 func TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace(t *testing.T) {
-	for name, patch := range map[string]string{
-		"missing_end":      "*** Begin Patch\n*** Add File: bad.txt\n+bad",
-		"delete_missing":   "*** Begin Patch\n*** Delete File: absent.txt\n*** End Patch",
-		"context_mismatch": "*** Begin Patch\n*** Update File: keep.txt\n@@\n-not-present\n+changed\n*** End Patch",
-	} {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name             string
+		patch            string
+		applicationError bool
+	}{
+		{name: "missing_end", patch: "*** Begin Patch\n*** Add File: bad.txt\n+bad"},
+		{name: "delete_missing", patch: "*** Begin Patch\n*** Delete File: absent.txt\n*** End Patch"},
+		{name: "context_mismatch", patch: "*** Begin Patch\n*** Update File: keep.txt\n@@\n-not-present\n+changed\n*** End Patch", applicationError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			cwd := t.TempDir()
 			if err := os.WriteFile(filepath.Join(cwd, "keep.txt"), []byte("keep\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd})
-			_, err := executor.Execute(context.Background(), &Invocation{
+			output, err := executor.Execute(context.Background(), &Invocation{
 				CallID: "call-invalid", ToolName: PlainName(DefaultApplyPatchToolName),
-				Payload: Payload{Kind: PayloadCustom, Input: patch},
+				Payload: Payload{Kind: PayloadCustom, Input: test.patch},
 			})
-			if err == nil {
-				t.Fatal("Execute() error = nil")
+			if test.applicationError {
+				if err != nil || output == nil || output.Success || output.Data["fileChange"] != true || output.Data["status"] != "failed" {
+					t.Fatalf("Execute() = %#v, %v; want structured failed file change", output, err)
+				}
+			} else if err == nil {
+				t.Fatalf("Execute() = %#v, nil; want verification error", output)
 			}
 			assertApplyPatchFile(t, filepath.Join(cwd, "keep.txt"), "keep\n")
 			assertApplyPatchMissing(t, filepath.Join(cwd, "bad.txt"))

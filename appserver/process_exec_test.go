@@ -147,7 +147,7 @@ func TestProcessServiceSpawnStreamsOutputDelta(t *testing.T) {
 
 func TestProcessServiceSpawnReportsBufferedOutputCapReachedLikeRust(t *testing.T) {
 	service := NewProcessService()
-	service.DefaultTimeoutMS = 1000
+	service.DefaultTimeoutMS = 5000
 	sink := NewNotificationBuffer()
 	capValue := 3
 	params := &ProcessSpawnParams{

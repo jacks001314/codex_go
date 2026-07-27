@@ -350,6 +350,14 @@ func validateKnownFeatureFields(value any) error {
 			}
 		}
 	}
+	if codeModeHost, ok := features["code_mode_host"].(map[string]any); ok {
+		known := map[string]bool{"enabled": true, "disable_in_process_fallback": true}
+		for key := range codeModeHost {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.code_mode_host.%s`", key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -553,6 +561,22 @@ func (c *Config) OmitLegacyMCPToolPrefix(serverName string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Config) DisableCodeModeInProcessFallback() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	featureValues, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	codeModeHost, ok := featureValues["code_mode_host"].(map[string]any)
+	if !ok {
+		return false
+	}
+	disabled, _ := codeModeHost["disable_in_process_fallback"].(bool)
+	return disabled
 }
 
 func (c *Config) ToolOutputTokenLimit() *int {

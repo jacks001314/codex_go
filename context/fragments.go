@@ -63,6 +63,17 @@ func Render(fragment Fragment) *RenderedFragment {
 	}
 }
 
+func RenderStandalone(fragment Fragment) *RenderedFragment {
+	if fragment == nil {
+		return nil
+	}
+	open, close := fragment.Markers()
+	return &RenderedFragment{
+		Role:    fragment.Role(),
+		Content: open + fragment.Body() + close,
+	}
+}
+
 func RenderMany(fragments []Fragment) []RenderedFragment {
 	out := make([]RenderedFragment, 0, len(fragments))
 	for _, fragment := range fragments {
@@ -437,8 +448,9 @@ func (u *UserInstructions) Body() string {
 }
 
 type ModelSwitchInstructions struct {
-	From string
-	To   string
+	From         string
+	To           string
+	Instructions string
 }
 
 func (m *ModelSwitchInstructions) Role() string {
@@ -450,10 +462,29 @@ func (m *ModelSwitchInstructions) Markers() (string, string) {
 }
 
 func (m *ModelSwitchInstructions) Body() string {
+	if m.Instructions != "" {
+		return fmt.Sprintf("\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n%s\n", m.Instructions)
+	}
 	if m.From == "" {
 		return fmt.Sprintf("The active model is `%s`.", m.To)
 	}
 	return fmt.Sprintf("The active model changed from `%s` to `%s`.", m.From, m.To)
+}
+
+type PersonalitySpecInstructions struct {
+	Spec string
+}
+
+func (p *PersonalitySpecInstructions) Role() string {
+	return RoleDeveloper
+}
+
+func (p *PersonalitySpecInstructions) Markers() (string, string) {
+	return "<personality_spec>", "</personality_spec>"
+}
+
+func (p *PersonalitySpecInstructions) Body() string {
+	return fmt.Sprintf(" The user has requested a new communication style. Future messages should adhere to the following personality: \n%s ", p.Spec)
 }
 
 type TokenBudgetContext struct {

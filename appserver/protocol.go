@@ -4818,7 +4818,10 @@ func applyTurnSnapshot(turn *Turn, snapshot session.TurnSnapshot) {
 	turn.DurationMS = cloneInt64PtrAppserver(snapshot.DurationMS)
 	turn.Error = nil
 	if turn.Status == TurnStatusFailed && strings.TrimSpace(snapshot.ErrorMessage) != "" {
-		turn.Error = &TurnError{Message: strings.TrimSpace(snapshot.ErrorMessage)}
+		turn.Error = &TurnError{
+			Message:        strings.TrimSpace(snapshot.ErrorMessage),
+			CodexErrorInfo: snapshot.CodexErrorInfo,
+		}
 	}
 }
 

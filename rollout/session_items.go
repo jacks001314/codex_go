@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -320,10 +321,12 @@ type rolloutEventPayload struct {
 	CompletedAtCamel   *int64          `json:"completedAt"`
 	DurationMS         *int64          `json:"duration_ms"`
 	DurationMSCamel    *int64          `json:"durationMs"`
+	StartedAtMS        *int64          `json:"started_at_ms"`
+	StartedAtMSCamel   *int64          `json:"startedAtMs"`
 	CompletedAtMS      *int64          `json:"completed_at_ms"`
 	CompletedAtMSCamel *int64          `json:"completedAtMs"`
 	Message            string          `json:"message"`
-	Error              string          `json:"error"`
+	Error              json.RawMessage `json:"error"`
 	Item               json.RawMessage `json:"item"`
 	Info               map[string]any  `json:"info"`
 	ClientID           *string         `json:"client_id"`
@@ -428,6 +431,7 @@ func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, li
 
 func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
+	errorMessage, codexErrorInfo, hasTerminalError := rolloutEventError(payload.Error)
 	if b.current != nil && turnID != "" && b.current.snapshot.ID != turnID && strings.HasPrefix(b.current.snapshot.ID, "rollout-") {
 		b.current.snapshot.ID = turnID
 	}
@@ -435,7 +439,11 @@ func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 		if snapshot == nil {
 			return
 		}
-		if snapshot.Status == "" || snapshot.Status == "completed" || snapshot.Status == "inProgress" {
+		if hasTerminalError {
+			snapshot.Status = "failed"
+			snapshot.ErrorMessage = errorMessage
+			snapshot.CodexErrorInfo = codexErrorInfo
+		} else if snapshot.Status == "" || snapshot.Status == "completed" || snapshot.Status == "inProgress" {
 			snapshot.Status = "completed"
 		}
 		snapshot.CompletedAt = firstNonNilInt64(payload.CompletedAt, payload.CompletedAtCamel)
@@ -494,20 +502,59 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 }
 
 func (b *rolloutReplayBuilder) handleTurnError(payload rolloutEventPayload, lineIndex int) {
-	message := firstNonEmptyString(payload.Message, payload.Error)
+	errorMessage, codexErrorInfo, _ := rolloutEventError(payload.Error)
+	message := firstNonEmptyString(payload.Message, errorMessage)
 	turn := b.ensureTurn(lineIndex)
 	turn.snapshot.Status = "failed"
 	turn.snapshot.ErrorMessage = message
+	turn.snapshot.CodexErrorInfo = codexErrorInfo
 	turn.openedExplicitly = true
+}
+
+func rolloutEventError(raw json.RawMessage) (message string, codexErrorInfo any, present bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil, false
+	}
+	present = true
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return text, nil, true
+	}
+	var value struct {
+		Message             string `json:"message"`
+		CodexErrorInfo      any    `json:"codex_error_info"`
+		CodexErrorInfoCamel any    `json:"codexErrorInfo"`
+	}
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return "", nil, true
+	}
+	if value.CodexErrorInfo != nil {
+		return value.Message, value.CodexErrorInfo, true
+	}
+	return value.Message, value.CodexErrorInfoCamel, true
 }
 
 func (b *rolloutReplayBuilder) handleItemCompleted(payload rolloutEventPayload, line *Line, lineIndex int) {
 	if len(payload.Item) == 0 {
 		return
 	}
-	item, ok := sessionItemFromRolloutEventItem(payload.Item, line, lineIndex, firstNonNilInt64(payload.CompletedAtMS, payload.CompletedAtMSCamel))
+	startedAtMS := firstNonNilInt64(payload.StartedAtMS, payload.StartedAtMSCamel)
+	completedAtMS := firstNonNilInt64(payload.CompletedAtMS, payload.CompletedAtMSCamel)
+	item, ok := sessionItemFromRolloutEventItem(payload.Item, line, lineIndex, completedAtMS)
 	if !ok {
 		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	if startedAtMS != nil {
+		item.Data["startedAtMs"] = *startedAtMS
+		item.Data["started_at_ms"] = *startedAtMS
+	}
+	if completedAtMS != nil {
+		item.Data["completedAtMs"] = *completedAtMS
+		item.Data["completed_at_ms"] = *completedAtMS
 	}
 	if item.Metadata == nil {
 		item.Metadata = map[string]any{}

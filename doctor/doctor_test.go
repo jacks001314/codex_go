@@ -1621,7 +1621,7 @@ func TestWebsocketReachabilitySkipsUnsupportedProvider(t *testing.T) {
 }
 
 func TestWebsocketReachabilityReportsEndpointForSupportedProvider(t *testing.T) {
-	timeout := uint64(34)
+	timeout := uint64(500)
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -1657,7 +1657,7 @@ func TestWebsocketReachabilityReportsEndpointForSupportedProvider(t *testing.T) 
 	}
 	endpoint := strings.Replace(server.URL, "http://", "ws://", 1) + "/v1/responses?api-version=2026-01-01"
 	for _, want := range []string{
-		"connect timeout: 34 ms",
+		"connect timeout: 500 ms",
 		"endpoint: " + endpoint,
 		"DNS: 1 IPv4, 0 IPv6, first IPv4",
 		"handshake result: HTTP 101",

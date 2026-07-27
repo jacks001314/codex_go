@@ -167,6 +167,7 @@ func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 		runMCPHelperServer()
 		return
 	}
+	releaseFile := t.TempDir() + string(os.PathSeparator) + "release-slow"
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("Executable() error = %v", err)
@@ -176,9 +177,9 @@ func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 			Config: ServerConfig{
 				Command:        executable,
 				Args:           []string{"-test.run=TestListStatusCheckedInitializesServersConcurrently", "--"},
-				Env:            map[string]string{"MCP_CONCURRENT_FAST_HELPER": "1", "MCP_CONCURRENT_SLOW_HELPER": "1"},
+				Env:            map[string]string{"MCP_CONCURRENT_FAST_HELPER": "1", "MCP_CONCURRENT_SLOW_HELPER": "1", "MCP_CONCURRENT_RELEASE_FILE": releaseFile},
 				Enabled:        true,
-				StartupTimeout: 100 * time.Millisecond,
+				StartupTimeout: 5 * time.Second,
 			},
 		},
 		"fast": {
@@ -197,6 +198,11 @@ func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 		Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull},
 	}, func(name string, status MCPServerStartupState, startupErr error) {
 		updates = append(updates, mcpStartupTestUpdate{name: name, status: status})
+		if name == "fast" && status == MCPServerReady {
+			if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
+				t.Fatalf("release slow helper: %v", err)
+			}
+		}
 	})
 	if err != nil || response == nil {
 		t.Fatalf("ListStatusCheckedWithObserver response=%#v err=%v", response, err)
@@ -878,8 +884,13 @@ func helperMCPServerCommand(t *testing.T) (string, []string) {
 
 func runMCPHelperServer() {
 	if os.Getenv("MCP_CONCURRENT_SLOW_HELPER") == "1" {
-		time.Sleep(time.Second)
-		return
+		releaseFile := os.Getenv("MCP_CONCURRENT_RELEASE_FILE")
+		for {
+			if _, err := os.Stat(releaseFile); err == nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 	reader := bufio.NewReader(os.Stdin)
 	for {

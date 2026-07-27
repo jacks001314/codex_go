@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/rollout"
 	"codex_go/runtimeutil"
 	"codex_go/session"
 	"codex_go/turn"
@@ -30,8 +31,8 @@ type ThreadManager struct {
 	subscriptionsMu sync.Mutex
 	subscriptions   map[string]map[string]struct{}
 
-	writersMu sync.Mutex
-	writers   map[session.ThreadID]*session.WriterLock
+	liveThreadsMu sync.Mutex
+	liveThreads   map[session.ThreadID]*managedLiveThread
 
 	terminalMu sync.Mutex
 	terminals  map[string]struct{}
@@ -49,7 +50,7 @@ func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 		diffs:         map[string]*runtimeutil.DiffTracker{},
 		ephemeral:     map[string]*session.Record{},
 		subscriptions: map[string]map[string]struct{}{},
-		writers:       map[session.ThreadID]*session.WriterLock{},
+		liveThreads:   map[session.ThreadID]*managedLiveThread{},
 		terminals:     map[string]struct{}{},
 		status:        status,
 	}
@@ -76,20 +77,21 @@ func (m *ThreadManager) StatusManager() *ThreadStatusManager {
 	return m.status
 }
 
-func (m *ThreadManager) RetainPaginatedWriter(store *session.Store, record *session.Record) error {
-	if m == nil || !threadUsesPaginatedHistory(record) {
+func (m *ThreadManager) RetainLiveThread(store *session.Store, record *session.Record) error {
+	if m == nil || record == nil {
 		return nil
 	}
-	m.writersMu.Lock()
-	defer m.writersMu.Unlock()
-	if _, ok := m.writers[record.ID]; ok {
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	if _, ok := m.liveThreads[record.ID]; ok {
 		return nil
 	}
-	lock, err := store.AcquireWriter(record.ID)
+	guard, err := session.OpenLiveThread(store, record, threadUsesPaginatedHistory(record))
 	if err != nil {
 		return writerOwnershipError(err)
 	}
-	m.writers[record.ID] = lock
+	defer func() { _ = guard.Discard() }()
+	m.liveThreads[record.ID] = &managedLiveThread{persistence: guard.Commit()}
 	return nil
 }
 
@@ -97,11 +99,11 @@ func (m *ThreadManager) AcquireLifecycleWriters(store *session.Store, threadIDs 
 	if m == nil {
 		return nil, fmt.Errorf("%w: thread manager is nil", ErrInvalidRequest)
 	}
-	m.writersMu.Lock()
-	defer m.writersMu.Unlock()
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
 	missing := make([]session.ThreadID, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
-		if _, ok := m.writers[threadID]; !ok {
+		if liveThread := m.liveThreads[threadID]; liveThread == nil || !liveThread.persistence.OwnsWriter() {
 			missing = append(missing, threadID)
 		}
 	}
@@ -112,36 +114,139 @@ func (m *ThreadManager) AcquireLifecycleWriters(store *session.Store, threadIDs 
 	return locks, nil
 }
 
-func (m *ThreadManager) ReleaseRetainedWriters(threadIDs []session.ThreadID) {
+func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 	if m == nil {
 		return
 	}
-	m.writersMu.Lock()
-	locks := make([]*session.WriterLock, 0, len(threadIDs))
+	m.liveThreadsMu.Lock()
+	liveThreads := make([]*managedLiveThread, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
-		if lock := m.writers[threadID]; lock != nil {
-			locks = append(locks, lock)
-			delete(m.writers, threadID)
+		if liveThread := m.liveThreads[threadID]; liveThread != nil {
+			liveThreads = append(liveThreads, liveThread)
+			delete(m.liveThreads, threadID)
 		}
 	}
-	m.writersMu.Unlock()
-	closeTemporaryWriters(locks)
+	m.liveThreadsMu.Unlock()
+	for i := len(liveThreads) - 1; i >= 0; i-- {
+		_ = liveThreads[i].Close()
+	}
 }
 
-func (m *ThreadManager) CloseWriters() error {
+func (m *ThreadManager) CloseLiveThreads() error {
 	if m == nil {
 		return nil
 	}
-	m.writersMu.Lock()
-	locks := make([]*session.WriterLock, 0, len(m.writers))
-	for threadID, lock := range m.writers {
-		locks = append(locks, lock)
-		delete(m.writers, threadID)
+	m.liveThreadsMu.Lock()
+	threadIDs := make([]session.ThreadID, 0, len(m.liveThreads))
+	for threadID := range m.liveThreads {
+		threadIDs = append(threadIDs, threadID)
 	}
-	m.writersMu.Unlock()
+	sort.Slice(threadIDs, func(i, j int) bool { return threadIDs[i] < threadIDs[j] })
+	liveThreads := make([]*managedLiveThread, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		liveThreads = append(liveThreads, m.liveThreads[threadID])
+		delete(m.liveThreads, threadID)
+	}
+	m.liveThreadsMu.Unlock()
 	var closeErr error
-	for _, lock := range locks {
-		if err := lock.Close(); closeErr == nil && err != nil {
+	for _, liveThread := range liveThreads {
+		if err := liveThread.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (m *ThreadManager) LiveThreadCount() int {
+	if m == nil {
+		return 0
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	return len(m.liveThreads)
+}
+
+func (m *ThreadManager) LiveThread(threadID session.ThreadID) *session.LiveThread {
+	if m == nil || strings.TrimSpace(string(threadID)) == "" {
+		return nil
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	liveThread := m.liveThreads[threadID]
+	if liveThread == nil {
+		return nil
+	}
+	return liveThread.persistence
+}
+
+func (m *ThreadManager) WithRolloutRecorder(threadID session.ThreadID, open func() (*rollout.Recorder, error), apply func(*rollout.Recorder) error) (bool, error) {
+	if m == nil || strings.TrimSpace(string(threadID)) == "" {
+		return false, nil
+	}
+	m.liveThreadsMu.Lock()
+	liveThread := m.liveThreads[threadID]
+	m.liveThreadsMu.Unlock()
+	if liveThread == nil {
+		return false, nil
+	}
+	return true, liveThread.withRolloutRecorder(open, apply)
+}
+
+type managedLiveThread struct {
+	persistence *session.LiveThread
+	rolloutMu   sync.Mutex
+	closed      bool
+}
+
+func (t *managedLiveThread) withRolloutRecorder(open func() (*rollout.Recorder, error), apply func(*rollout.Recorder) error) error {
+	if t == nil {
+		return fmt.Errorf("%w: managed live thread is nil", session.ErrConflict)
+	}
+	t.rolloutMu.Lock()
+	defer t.rolloutMu.Unlock()
+	if t.closed {
+		return fmt.Errorf("%w: managed live thread is closed", session.ErrConflict)
+	}
+	if open == nil {
+		return nil
+	}
+	recorder, err := open()
+	if err != nil || recorder == nil {
+		return err
+	}
+	if apply == nil {
+		return recorder.Close()
+	}
+	applyErr := apply(recorder)
+	flushErr := recorder.Flush()
+	closeErr := recorder.Close()
+	if applyErr != nil {
+		return applyErr
+	}
+	if flushErr != nil {
+		return flushErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return nil
+}
+
+func (t *managedLiveThread) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.rolloutMu.Lock()
+	if t.closed {
+		t.rolloutMu.Unlock()
+		return nil
+	}
+	t.closed = true
+	t.rolloutMu.Unlock()
+
+	var closeErr error
+	if t.persistence != nil {
+		if err := t.persistence.Close(); closeErr == nil && err != nil {
 			closeErr = err
 		}
 	}
@@ -328,6 +433,27 @@ func (m *ThreadManager) ConsumeTurn(threadID string, turnID string, clearDiff bo
 	if clearDiff {
 		delete(m.diffs, activeTurnDiffKey(threadID, active.TurnID))
 	}
+	m.turnsMu.Unlock()
+	return active, true
+}
+
+// ConsumeTurnTracked atomically transfers an active turn to a terminal worker.
+// Shutdown either consumes the turn first or observes the worker in turnWG.
+func (m *ThreadManager) ConsumeTurnTracked(threadID string, turnID string, clearDiff bool) (*activeRuntimeTurn, bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.turnsMu.Lock()
+	active := m.active[threadID]
+	if active == nil || active.TurnID != turnID {
+		m.turnsMu.Unlock()
+		return nil, false
+	}
+	delete(m.active, threadID)
+	if clearDiff {
+		delete(m.diffs, activeTurnDiffKey(threadID, active.TurnID))
+	}
+	m.turnWG.Add(1)
 	m.turnsMu.Unlock()
 	return active, true
 }

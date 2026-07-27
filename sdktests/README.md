@@ -28,6 +28,14 @@ Replay the latest saved artifact without another model call:
 npm --prefix sdktests run report
 ```
 
+Run the model-free raw app-server paginated fork audit. This is a protocol
+audit rather than an SDK parity scenario because the TypeScript SDK does not
+expose `thread/fork`:
+
+```powershell
+npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex.exe>
+```
+
 Run one expanded scenario or the approved matrix:
 
 ```powershell

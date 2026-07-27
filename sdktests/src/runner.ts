@@ -180,6 +180,12 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
   const goStatus = maybeRunText("git", ["status", "--short"], repoRoot);
   const sdkPackagePath = path.join(args.sdkPath, "package.json");
   const sdkPackage = existsSync(sdkPackagePath) ? readJson(sdkPackagePath) : {};
+  const rustBinary = binaryInfo(args.rustPath);
+  const goBinary = binaryInfo(args.goPath);
+  const expectedRustBinary = parity.rustE2EBinary ?? {};
+  const rustBaselineDrift =
+    (Boolean(expectedRustBinary.version) && rustBinary.version !== expectedRustBinary.version) ||
+    (Boolean(expectedRustBinary.sha256) && rustBinary.sha256 !== expectedRustBinary.sha256);
   return {
     generatedAt: new Date().toISOString(),
     platform: {
@@ -197,15 +203,19 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
       parityRustBaseline: parity.rustBaseline,
       parityRustUpstreamHead: parity.rustUpstreamHead,
       rustUpstreamCommit,
-      rustBaselineDrift: false,
+      rustBaselineDrift,
+      expectedRustBinary: {
+        version: expectedRustBinary.version,
+        sha256: expectedRustBinary.sha256,
+      },
       parityRecordDrift:
         Boolean(rustUpstreamCommit) &&
         Boolean(parity.rustUpstreamHead) &&
         rustUpstreamCommit !== parity.rustUpstreamHead,
     },
     binaries: {
-      rust: binaryInfo(args.rustPath),
-      go: binaryInfo(args.goPath),
+      rust: rustBinary,
+      go: goBinary,
     },
     sdk: {
       path: args.sdkPath,

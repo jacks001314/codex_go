@@ -14,6 +14,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1236,7 +1237,7 @@ func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnI
 		r.saveEphemeralThreadRecord(record)
 		return nil
 	}
-	return r.services.ThreadRouter.store.Save(record)
+	return r.runtimeSaveThreadRecord(record)
 }
 
 func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *appTurnRunConfig) turn.SamplingFollowUp {
@@ -2248,6 +2249,25 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	return active, true
 }
 
+func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID string) (*activeRuntimeTurn, bool) {
+	if r == nil {
+		return nil, false
+	}
+	active, ok := r.threads.ConsumeTurnTracked(threadID, turnID, true)
+	if !ok {
+		return nil, false
+	}
+	if active.Cancel != nil {
+		active.Cancel()
+	}
+	if r.networkApproval != nil {
+		r.networkApproval.cancelPendingForTurn(threadID, turnID)
+		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
+	}
+	r.clearPendingUnifiedExecItems(threadID, turnID)
+	return active, true
+}
+
 func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 	if r == nil {
 		return
@@ -2293,12 +2313,9 @@ func (r *RuntimeRouter) hasRuntimeThreadStore() bool {
 }
 
 func (r *RuntimeRouter) appendRuntimeRollout(threadID string, items []session.Item, now time.Time) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
-	if err != nil || recorder == nil {
-		return err
-	}
-	defer recorder.Close()
-	return rollout.AppendSessionItems(recorder, items, now)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return rollout.AppendSessionItems(recorder, items, now)
+	})
 }
 
 func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string, params *turn.TurnStartParams, createdAt time.Time) bool {
@@ -2324,45 +2341,50 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnStarted(threadID string, turnID string, startedAt time.Time) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
-	if err != nil || recorder == nil {
-		return err
-	}
-	defer recorder.Close()
-	return recorder.AppendTurnStarted(turnID, startedAt)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnStarted(turnID, startedAt)
+	})
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnComplete(threadID string, turnID string, completedAt time.Time, durationMS int64) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
-	if err != nil || recorder == nil {
-		return err
-	}
-	defer recorder.Close()
-	return recorder.AppendTurnComplete(turnID, completedAt, durationMS)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnComplete(turnID, completedAt, durationMS)
+	})
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnError(threadID string, message string, now time.Time) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
-	if err != nil || recorder == nil {
-		return err
-	}
-	defer recorder.Close()
-	return recorder.AppendTurnError(message, now)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnError(message, now)
+	})
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnAborted(threadID string, turnID string, reason string, completedAt time.Time, durationMS int64) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnAborted(turnID, reason, completedAt, durationMS)
+	})
+}
+
+func (r *RuntimeRouter) withRuntimeRollout(threadID string, apply func(*rollout.Recorder) error) error {
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
+		return nil
+	}
+	open := func() (*rollout.Recorder, error) { return r.openRuntimeRollout(threadID) }
+	if handled, err := r.threads.WithRolloutRecorder(session.ThreadID(threadID), open, apply); handled {
+		return err
+	}
+	recorder, err := open()
 	if err != nil || recorder == nil {
 		return err
 	}
-	defer recorder.Close()
-	return recorder.AppendTurnAborted(turnID, reason, completedAt, durationMS)
+	applyErr := apply(recorder)
+	closeErr := recorder.Close()
+	if applyErr != nil {
+		return applyErr
+	}
+	return closeErr
 }
 
-func (r *RuntimeRouter) resumeRuntimeRollout(threadID string) (*rollout.Recorder, error) {
-	if _, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
-		return nil, nil
-	}
+func (r *RuntimeRouter) openRuntimeRollout(threadID string) (*rollout.Recorder, error) {
 	codexHome := r.codexHomeForRollout()
 	if codexHome == "" {
 		return nil, nil
@@ -2370,7 +2392,7 @@ func (r *RuntimeRouter) resumeRuntimeRollout(threadID string) (*rollout.Recorder
 	var record *session.Record
 	var readErr error
 	if r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
-		record, readErr = r.services.ThreadRouter.store.Read(session.ThreadID(threadID), true, true)
+		record, readErr = r.services.ThreadRouter.readThreadRecord(session.ThreadID(threadID), true, true)
 	}
 	path, err := rollout.FindThreadPath(codexHome, threadID, false)
 	if err == nil {
@@ -2458,11 +2480,6 @@ func (r *RuntimeRouter) clearRuntimeSeedRolloutMarker(record *session.Record) {
 }
 
 func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, message string, replacement []session.Item, now time.Time) error {
-	recorder, err := r.resumeRuntimeRollout(threadID)
-	if err != nil || recorder == nil {
-		return err
-	}
-	defer recorder.Close()
 	items := make([]rollout.Item, 0, len(replacement))
 	for i := range replacement {
 		item := rollout.ItemFromSessionItem(&replacement[i])
@@ -2471,7 +2488,9 @@ func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, message string, 
 		}
 		items = append(items, *item)
 	}
-	return recorder.AppendCompacted(message, items, now)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendCompacted(message, items, now)
+	})
 }
 
 func (r *RuntimeRouter) codexHomeForRollout() string {
@@ -3569,7 +3588,7 @@ func (r *RuntimeRouter) persistLastResponseID(threadID string, result *turn.Agen
 		r.saveEphemeralThreadRecord(record)
 		return nil
 	}
-	_, err := r.services.ThreadRouter.store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{
+	_, err := r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{
 		LastResponseID: stringPointerIfNotEmpty(responseID),
 	}, true)
 	return err
@@ -3612,7 +3631,7 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 		r.saveEphemeralThreadRecord(record)
 		return &status, info, nil
 	}
-	_, err = r.services.ThreadRouter.store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
+	_, err = r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3772,7 +3791,7 @@ func (r *RuntimeRouter) persistContextWindowExceededStatus(threadID string) erro
 		r.saveEphemeralThreadRecord(record)
 		return nil
 	}
-	return r.services.ThreadRouter.store.Save(record)
+	return r.runtimeSaveThreadRecord(record)
 }
 
 func (r *RuntimeRouter) recordAutoCompactFallbackPrompt(threadID string, turnID string, status *compact.TokenStatus) (bool, error) {
@@ -3800,7 +3819,7 @@ func (r *RuntimeRouter) recordAutoCompactFallbackPrompt(threadID string, turnID 
 		r.saveEphemeralThreadRecord(record)
 		return true, nil
 	}
-	if err := r.services.ThreadRouter.store.Save(record); err != nil {
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return false, err
 	}
 	_ = r.services.ThreadRouter.appendThreadRollout(record.ID, []session.Item{item}, now)
@@ -4723,12 +4742,20 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if instructions == "" && !baseInstructionsExplicit {
 		instructions = modelInfo.ModelInstructions(personality)
 	}
-	if personalitySpec := explicitPersonalitySpecInstructions(modelInfo, params); personalitySpec != "" {
-		instructions = strings.Join(nonEmpty([]string{personalitySpec, instructions}), "\n\n")
-	}
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
-	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
 	inputItems := append([]any(nil), historyItems...)
+	modelPersonalityItems, err := r.modelPersonalityWorldStateInputItems(
+		threadID,
+		modelInfo,
+		personality,
+		instructions,
+		features.Enabled(cfg.FeatureSettings(), "personality"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	inputItems = append(inputItems, modelPersonalityItems...)
+	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
 	if item := r.turnEnvironmentContextInputItem(params); item != nil {
 		inputItems = append(inputItems, item)
 	}
@@ -7219,20 +7246,6 @@ func appPersonalityForTurn(cfg *config.Config, params *turn.TurnStartParams) str
 	return stringConfigValue(cfg, "personality")
 }
 
-func explicitPersonalitySpecInstructions(info *model.ModelInfo, params *turn.TurnStartParams) string {
-	if params == nil || !params.PersonalitySet || params.Personality == nil || info == nil {
-		return ""
-	}
-	message, ok := info.PersonalityMessage(*params.Personality)
-	if !ok || strings.TrimSpace(message) == "" {
-		return ""
-	}
-	return fmt.Sprintf(
-		"<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n%s </personality_spec>",
-		message,
-	)
-}
-
 func turnParamModel(params *turn.TurnStartParams) string {
 	if params == nil {
 		return ""
@@ -7965,6 +7978,157 @@ func appToolOutputIsDynamic(output *tool.Output) bool {
 
 const explicitRequestOnlyMultiAgentModeText = "Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
 const proactiveMultiAgentModeText = "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it."
+
+type personalityWorldStateSnapshot struct {
+	Model       string  `json:"model"`
+	Personality *string `json:"personality,omitempty"`
+}
+
+func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, info *model.ModelInfo, personality string, baseInstructions string, personalityEnabled bool) ([]any, error) {
+	if info == nil || strings.TrimSpace(info.Slug) == "" {
+		return nil, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+
+	currentModel := strings.TrimSpace(info.Slug)
+	modelInstructions := info.ModelInstructions(personality)
+	previousModel, modelKnown := decodeWorldStateModel(state.Model)
+	if !modelKnown {
+		contextModel, _, contextKnown := previousTurnContextModelPersonality(record.Metadata.TurnContext)
+		previousModel = firstNonEmpty(contextModel, record.Metadata.Model)
+		modelKnown = contextKnown || strings.TrimSpace(previousModel) != ""
+	}
+	items := []any{}
+	if modelKnown && previousModel != currentModel && strings.TrimSpace(modelInstructions) != "" {
+		rendered := contextfrag.RenderStandalone(&contextfrag.ModelSwitchInstructions{Instructions: modelInstructions})
+		items = append(items, renderedFragmentInputItem(rendered))
+	}
+	modelSnapshot, err := json.Marshal(currentModel)
+	if err != nil {
+		return nil, err
+	}
+	changed := !sameJSONValue(state.Model, modelSnapshot)
+	state.Model = modelSnapshot
+
+	if personalityEnabled {
+		currentPersonality := worldStateOptionalString(personality)
+		current := personalityWorldStateSnapshot{Model: currentModel, Personality: currentPersonality}
+		previous, previousKnown := decodePersonalityWorldState(state.Personality)
+		if !previousKnown {
+			if contextModel, contextPersonality, contextKnown := previousTurnContextModelPersonality(record.Metadata.TurnContext); contextKnown {
+				previous = personalityWorldStateSnapshot{Model: contextModel, Personality: contextPersonality}
+				previousKnown = true
+			}
+		}
+		personalityChanged := previousKnown && previous.Model == current.Model && !sameOptionalString(previous.Personality, current.Personality)
+		personalityAbsent := !previousKnown && len(state.Personality) == 0
+		personalityIsBaked := info.SupportsPersonality() && baseInstructions == modelInstructions
+		if (personalityChanged || (personalityAbsent && !personalityIsBaked)) && current.Personality != nil {
+			if spec, ok := info.PersonalityMessage(*current.Personality); ok && strings.TrimSpace(spec) != "" {
+				rendered := contextfrag.RenderStandalone(&contextfrag.PersonalitySpecInstructions{Spec: spec})
+				items = append(items, renderedFragmentInputItem(rendered))
+			}
+		}
+		personalitySnapshot, err := json.Marshal(current)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || !sameJSONValue(state.Personality, personalitySnapshot)
+		state.Personality = personalitySnapshot
+	} else if len(state.Personality) > 0 {
+		state.Personality = nil
+		changed = true
+	}
+
+	if !changed {
+		return items, nil
+	}
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func sameJSONValue(left json.RawMessage, right json.RawMessage) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == len(right)
+	}
+	var leftValue any
+	if err := json.Unmarshal(left, &leftValue); err != nil {
+		return false
+	}
+	var rightValue any
+	if err := json.Unmarshal(right, &rightValue); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func decodeWorldStateModel(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(value), true
+}
+
+func decodePersonalityWorldState(raw json.RawMessage) (personalityWorldStateSnapshot, bool) {
+	if len(raw) == 0 {
+		return personalityWorldStateSnapshot{}, false
+	}
+	var value personalityWorldStateSnapshot
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value.Model) == "" {
+		return personalityWorldStateSnapshot{}, false
+	}
+	value.Model = strings.TrimSpace(value.Model)
+	if value.Personality != nil {
+		value.Personality = worldStateOptionalString(*value.Personality)
+	}
+	return value, true
+}
+
+func previousTurnContextModelPersonality(raw json.RawMessage) (string, *string, bool) {
+	if len(raw) == 0 {
+		return "", nil, false
+	}
+	var value personalityWorldStateSnapshot
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value.Model) == "" {
+		return "", nil, false
+	}
+	if value.Personality == nil {
+		return strings.TrimSpace(value.Model), nil, true
+	}
+	return strings.TrimSpace(value.Model), worldStateOptionalString(*value.Personality), true
+}
+
+func worldStateOptionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func sameOptionalString(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
 
 func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.TurnStartParams) (any, error) {
 	mode := string(MultiAgentModeExplicitRequestOnly)

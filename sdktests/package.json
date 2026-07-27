@@ -7,6 +7,7 @@
     "test:smoke": "node --experimental-strip-types src/cli.ts smoke",
     "test:parity": "node --experimental-strip-types src/cli.ts parity",
     "test:unit": "node --experimental-strip-types --test src/*_test.ts",
+    "test:raw:fork": "node --experimental-strip-types src/raw_fork_audit.ts",
     "test:go": "node --experimental-strip-types src/go_only.ts",
     "report": "node --experimental-strip-types src/cli.ts report"
   },

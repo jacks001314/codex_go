@@ -228,12 +228,13 @@ type Metadata struct {
 }
 
 type TurnSnapshot struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	StartedAt    *int64 `json:"started_at,omitempty"`
-	CompletedAt  *int64 `json:"completed_at,omitempty"`
-	DurationMS   *int64 `json:"duration_ms,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
+	ID             string `json:"id"`
+	Status         string `json:"status"`
+	StartedAt      *int64 `json:"started_at,omitempty"`
+	CompletedAt    *int64 `json:"completed_at,omitempty"`
+	DurationMS     *int64 `json:"duration_ms,omitempty"`
+	ErrorMessage   string `json:"error_message,omitempty"`
+	CodexErrorInfo any    `json:"codex_error_info,omitempty"`
 }
 
 type Record struct {
@@ -1029,7 +1030,7 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	}
 	if record.HistoryBase != nil {
 		record.InheritedItems = len(items)
-		record.InheritedTurns = len(metadata.RolloutTurns)
+		record.InheritedTurns = record.HistoryBase.TurnEnd
 	}
 	if options.Ephemeral {
 		if record.Metadata.Extra == nil {
@@ -1080,11 +1081,15 @@ func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*Prepared
 	if err := validateForkLastTurnSnapshot(source.Metadata.RolloutTurns, lastTurnID); err != nil {
 		return nil, err
 	}
+	if err := validateForkBeforeTurnSnapshot(source.Metadata.RolloutTurns, source.Items, beforeTurnID); err != nil {
+		return nil, err
+	}
 	items, err := forkItems(source.Items, mode, params.LastN, lastTurnID, beforeTurnID)
 	if err != nil {
 		return nil, err
 	}
-	snapshots := forkTurnSnapshots(source.Metadata.RolloutTurns, items)
+	inheritedSnapshots := forkTurnSnapshots(source.Metadata.RolloutTurns, items)
+	snapshots := inheritedSnapshots
 	if len(snapshots) == 0 {
 		snapshots = syntheticForkTurnSnapshots(items, lastTurnID != "")
 	}
@@ -1093,7 +1098,7 @@ func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*Prepared
 		historyBase = &HistoryPosition{
 			ThreadID: source.ID,
 			ItemEnd:  len(items),
-			TurnEnd:  len(snapshots),
+			TurnEnd:  len(inheritedSnapshots),
 		}
 	}
 	return &PreparedFork{
@@ -1473,7 +1478,8 @@ func validateForkLastTurnSnapshot(snapshots []TurnSnapshot, lastTurnID string) e
 	if lastTurnID == "" {
 		return nil
 	}
-	for _, snapshot := range snapshots {
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		snapshot := snapshots[i]
 		if strings.TrimSpace(snapshot.ID) != lastTurnID {
 			continue
 		}
@@ -1482,6 +1488,24 @@ func validateForkLastTurnSnapshot(snapshots []TurnSnapshot, lastTurnID string) e
 			return fmt.Errorf("%w: lastTurnId '%s' identifies an in-progress turn", ErrInvalidThreadID, lastTurnID)
 		}
 		return nil
+	}
+	return nil
+}
+
+func validateForkBeforeTurnSnapshot(snapshots []TurnSnapshot, items []Item, beforeTurnID string) error {
+	beforeTurnID = strings.TrimSpace(beforeTurnID)
+	if beforeTurnID == "" {
+		return nil
+	}
+	for i := range items {
+		if turnID, explicit := itemTurnIDWithExplicit(&items[i], i); explicit && turnID == beforeTurnID {
+			return nil
+		}
+	}
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		if strings.TrimSpace(snapshots[i].ID) == beforeTurnID {
+			return fmt.Errorf("%w: turn %s does not have a persisted start boundary", ErrInvalidThreadID, beforeTurnID)
+		}
 	}
 	return nil
 }

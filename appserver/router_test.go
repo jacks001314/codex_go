@@ -713,7 +713,7 @@ func TestRouterStartWithoutPromptReturnsUnmaterializedPath(t *testing.T) {
 	}
 }
 
-func TestRouterThreadSetNameMaterializesEmptyThreadForFork(t *testing.T) {
+func TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	router.SetClock(func() time.Time { return fixedTime() })
@@ -733,20 +733,30 @@ func TestRouterThreadSetNameMaterializesEmptyThreadForFork(t *testing.T) {
 	if named.Error != nil {
 		t.Fatalf("thread/name/set error: %+v", named.Error)
 	}
-	if _, err := rollout.FindThreadPath(store.Root(), threadID, false); err != nil {
-		t.Fatalf("named thread rollout path error: %v", err)
+	if _, err := rollout.FindThreadPath(store.Root(), threadID, false); err == nil {
+		t.Fatal("thread/name/set unexpectedly materialized a rollout")
+	}
+	read := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: threadID}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error: %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	if readThread.Name == nil || *readThread.Name != "SDK lifecycle example" {
+		t.Fatalf("thread/read name = %+v", readThread.Name)
+	}
+	list := router.Handle(requestWithParams(t, IntID(4), MethodThreadList, ThreadListParams{}))
+	if list.Error != nil {
+		t.Fatalf("thread/list error: %+v", list.Error)
+	}
+	for _, listed := range list.Result.(*ThreadListResponse).Data {
+		if listed.ID == threadID {
+			t.Fatalf("unmaterialized named thread appeared in thread/list: %+v", listed)
+		}
 	}
 
-	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{ThreadID: threadID}))
-	if fork.Error != nil {
-		t.Fatalf("thread/fork error: %+v", fork.Error)
-	}
-	forked := fork.Result.(*ThreadForkResponse).Thread
-	if forked.ForkedFromID == nil || *forked.ForkedFromID != threadID {
-		t.Fatalf("fork lineage = %+v, want source %s", forked, threadID)
-	}
-	if forked.Name == nil || *forked.Name != "SDK lifecycle example" {
-		t.Fatalf("fork name = %+v", forked.Name)
+	fork := router.Handle(requestWithParams(t, IntID(5), MethodThreadFork, ThreadForkParams{ThreadID: threadID}))
+	if fork.Error == nil || fork.Error.Code != -32600 || !strings.Contains(fork.Error.Message, "no rollout found for thread id") {
+		t.Fatalf("thread/fork response = %+v", fork)
 	}
 }
 
@@ -2511,8 +2521,8 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	}
 
 	readTurns := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: "thread-paginated", IncludeTurns: true}))
-	if readTurns.Error != nil {
-		t.Fatalf("read turns error = %+v", readTurns.Error)
+	if readTurns.Error == nil || readTurns.Error.Code != -32600 || readTurns.Error.Message != "paginated threads do not support thread/read(includeTurns=true)" {
+		t.Fatalf("read turns response = %+v", readTurns)
 	}
 	itemsList := router.Handle(requestWithParams(t, IntID(21), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-paginated"}))
 	if itemsList.Error != nil || len(itemsList.Result.(*ThreadItemsListResponse).Data) != 1 {
@@ -2545,8 +2555,16 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 		ThreadID:  "thread-paginated",
 		Ephemeral: true,
 	}))
-	if runtimeFork.Error != nil || runtimeFork.Result.(*ThreadForkResponse).Thread.HistoryMode != ThreadHistoryPaginated {
+	if runtimeFork.Error == nil || runtimeFork.Error.Code != -32600 || runtimeFork.Error.Message != "ephemeral paginated thread/fork requires `excludeTurns: true`" {
 		t.Fatalf("runtime fork = %+v", runtimeFork)
+	}
+	runtimeFork = runtimeRouter.Handle(requestWithParams(t, IntID(9), MethodThreadFork, ThreadForkParams{
+		ThreadID:     "thread-paginated",
+		Ephemeral:    true,
+		ExcludeTurns: true,
+	}))
+	if runtimeFork.Error != nil || runtimeFork.Result.(*ThreadForkResponse).Thread.HistoryMode != ThreadHistoryPaginated || len(runtimeFork.Result.(*ThreadForkResponse).Thread.Turns) != 0 {
+		t.Fatalf("runtime fork with excludeTurns = %+v", runtimeFork)
 	}
 }
 
@@ -3308,6 +3326,115 @@ func TestRouterForkEphemeralDoesNotPersistOrCreateRollout(t *testing.T) {
 	}
 	if _, err := rollout.FindThreadPath(store.Root(), thread.ID, false); err == nil {
 		t.Fatalf("ephemeral fork unexpectedly created rollout")
+	}
+}
+
+func TestRouterEphemeralPaginatedForkRequiresExcludeTurns(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
+	source := &session.Record{
+		ID:        "thread-paginated-ephemeral",
+		SessionID: "thread-paginated-ephemeral",
+		CreatedAt: fixedTime(),
+		UpdatedAt: fixedTime(),
+		RecencyAt: fixedTime(),
+		Metadata: session.Metadata{
+			HistoryMode:  string(ThreadHistoryPaginated),
+			RolloutTurns: []session.TurnSnapshot{{ID: "turn-1", Status: string(TurnStatusCompleted)}},
+		},
+		Items: []session.Item{{ID: "item-1", Type: "message", Role: "user", Text: "source", Metadata: map[string]any{"turnId": "turn-1"}}},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+
+	invalid := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{
+		ThreadID:  string(source.ID),
+		Ephemeral: true,
+	}))
+	if invalid.Error == nil || invalid.Error.Code != -32600 || invalid.Error.Message != "ephemeral paginated thread/fork requires `excludeTurns: true`" {
+		t.Fatalf("invalid fork response = %+v", invalid)
+	}
+	valid := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+		ThreadID:     string(source.ID),
+		Ephemeral:    true,
+		ExcludeTurns: true,
+	}))
+	if valid.Error != nil {
+		t.Fatalf("valid fork error = %+v", valid.Error)
+	}
+	forked := valid.Result.(*ThreadForkResponse).Thread
+	if !forked.Ephemeral || forked.Path != nil || len(forked.Turns) != 0 {
+		t.Fatalf("valid paginated ephemeral fork = %+v", forked)
+	}
+}
+
+func TestRouterFreshPaginatedThreadAllowsExcludedEphemeralFork(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:         t.TempDir(),
+		HistoryMode: ThreadHistoryPaginated,
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error = %+v", start.Error)
+	}
+	source := start.Result.(*ThreadStartResponse).Thread
+	if source.Path == nil {
+		t.Fatal("thread/start omitted the planned rollout path")
+	}
+	if _, err := os.Stat(*source.Path); !os.IsNotExist(err) {
+		t.Fatalf("fresh paginated source unexpectedly materialized: %v", err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, ThreadForkParams{
+		ThreadID:     source.ID,
+		Ephemeral:    true,
+		ExcludeTurns: true,
+	}))
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error = %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if !forked.Ephemeral || forked.Path != nil || forked.HistoryMode != ThreadHistoryPaginated || len(forked.Turns) != 0 {
+		t.Fatalf("fresh paginated fork = %+v", forked)
+	}
+}
+
+func TestRouterForkReservesSourceWriterBeforeCreatingTarget(t *testing.T) {
+	root := t.TempDir()
+	store := session.NewStore(root)
+	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
+	source := &session.Record{
+		ID:        "thread-fork-writer-conflict",
+		SessionID: "thread-fork-writer-conflict",
+		CreatedAt: fixedTime(),
+		UpdatedAt: fixedTime(),
+		RecencyAt: fixedTime(),
+		Items:     []session.Item{{ID: "item-1", Type: "message", Role: "user", Text: "source"}},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	competingWriter, err := session.NewStore(root).AcquireWriter(source.ID)
+	if err != nil {
+		t.Fatalf("AcquireWriter(source) error = %v", err)
+	}
+	defer func() { _ = competingWriter.Close() }()
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: string(source.ID)}))
+	if response.Error == nil || !strings.Contains(response.Error.Message, "already has an active writer") {
+		t.Fatalf("fork response = %+v", response)
+	}
+	records, err := store.AllRecords()
+	if err != nil {
+		t.Fatalf("AllRecords() error = %v", err)
+	}
+	if len(records) != 1 || records[0].ID != source.ID {
+		t.Fatalf("fork conflict left target side effects: %#v", records)
 	}
 }
 

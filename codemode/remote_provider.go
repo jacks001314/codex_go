@@ -466,15 +466,13 @@ func (c *remoteConnection) handle(message HostToClient) {
 func (c *remoteConnection) handleDelegate(message HostToClient) {
 	c.mu.Lock()
 	delegate := c.delegates[message.SessionID]
-	ctx, cancel := context.WithCancel(context.Background())
-	c.cancels[message.DelegateID] = cancel
 	c.mu.Unlock()
-	defer func() {
-		cancel()
-		c.mu.Lock()
-		delete(c.cancels, message.DelegateID)
-		c.mu.Unlock()
-	}()
+	ctx, cancel, ok := c.reserveDelegate(message.DelegateID)
+	if !ok {
+		_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse](fmt.Sprintf("code-mode host exceeded the limit of %d pending delegate calls", MaxPendingDelegateCalls))))
+		return
+	}
+	defer c.releaseDelegate(message.DelegateID, cancel)
 	if delegate == nil || message.Request == nil {
 		_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse]("code-mode session delegate is unavailable")))
 		return
@@ -510,6 +508,32 @@ func (c *remoteConnection) handleDelegate(message HostToClient) {
 		return
 	}
 	_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultOK(response)))
+}
+
+func (c *remoteConnection) reserveDelegate(id DelegateRequestID) (context.Context, context.CancelFunc, bool) {
+	if c == nil {
+		return nil, nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.cancels) >= MaxPendingDelegateCalls {
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancels[id] = cancel
+	return ctx, cancel, true
+}
+
+func (c *remoteConnection) releaseDelegate(id DelegateRequestID, cancel context.CancelFunc) {
+	if cancel != nil {
+		cancel()
+	}
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.cancels, id)
+	c.mu.Unlock()
 }
 
 func (c *remoteConnection) fail(err error) {

@@ -1343,6 +1343,29 @@ func TestParseAppServerListenValidation(t *testing.T) {
 	}
 }
 
+func TestParseAppServerCodeModeHostValidation(t *testing.T) {
+	parsed, err := Parse([]string{
+		"app-server",
+		"--code-mode-host", "wss://example.test/code-mode",
+		"--listen", "ws://127.0.0.1:4500",
+	})
+	if err != nil {
+		t.Fatalf("Parse code-mode host returned error: %v", err)
+	}
+	if parsed.AppServer.CodeModeHostURL != "wss://example.test/code-mode" || parsed.AppServer.Listen != "ws://127.0.0.1:4500" {
+		t.Fatalf("app-server options = %#v", parsed.AppServer)
+	}
+	for _, endpoint := range []string{
+		"http://127.0.0.1:8765",
+		"ws://",
+		"wss://example.test/code-mode#fragment",
+	} {
+		if _, err := Parse([]string{"app-server", "--code-mode-host", endpoint}); err == nil {
+			t.Fatalf("Parse accepted invalid code-mode host %q", endpoint)
+		}
+	}
+}
+
 func TestParseAppServerWebSocketAuthFlags(t *testing.T) {
 	parsed, err := Parse([]string{
 		"app-server",

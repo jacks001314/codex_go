@@ -2,9 +2,18 @@ import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readJson, writeJson } from "./util.ts";
 
+export type CompareClassification =
+  | "parity"
+  | "go-bug"
+  | "sdk-assumption"
+  | "baseline-drift"
+  | "model-nondeterminism"
+  | "platform-difference"
+  | "infra-failure";
+
 export type CompareResult = {
   status: "pass" | "behavior_mismatch" | "infra_failure";
-  classification: "parity" | "go-bug" | "baseline-drift" | "model-nondeterminism" | "infra-failure";
+  classification: CompareClassification;
   confidence: "low" | "medium" | "high";
   checks: { name: string; ok: boolean; detail?: string }[];
   eventTypes: Record<string, string[]>;
@@ -72,7 +81,9 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkWorkspaceSideEffects(rust, go, expected.compareWorkspacePaths),
   ];
   const firstFailure = checks.find((check) => !check.ok);
-  const baselineDrift = Boolean(manifest?.baseline?.rustBaselineDrift);
+  const baselineDrift = Boolean(
+    manifest?.baseline?.rustBaselineDrift || manifest?.baseline?.parityRecordDrift,
+  );
   const infraFailure = !expectsFailure && checks.slice(0, 4).some((check) => !check.ok);
   const parityFailure = checks.some(
     (check) =>
@@ -86,17 +97,17 @@ export function compareArtifact(artifactDir: string): CompareResult {
         check.name === "workspace side effects match"),
   );
   const status = infraFailure ? "infra_failure" : firstFailure ? "behavior_mismatch" : "pass";
+  const classification = classifyResult({
+    infraFailure,
+    baselineDrift,
+    firstFailure,
+    parityFailure,
+    checks,
+    hint: expected.mismatchClassification,
+  });
   const result: CompareResult = {
     status,
-    classification: infraFailure
-      ? "infra-failure"
-      : parityFailure
-        ? "go-bug"
-        : firstFailure
-          ? "model-nondeterminism"
-          : baselineDrift
-            ? "baseline-drift"
-            : "parity",
+    classification,
     confidence: firstFailure ? "medium" : "high",
     checks,
     eventTypes: {
@@ -108,6 +119,35 @@ export function compareArtifact(artifactDir: string): CompareResult {
   writeJson(path.join(artifactDir, "comparison.json"), result);
   writeFileSync(path.join(artifactDir, "report.md"), renderReport(result, artifactDir, manifest), "utf8");
   return result;
+}
+
+function classifyResult(input: {
+  infraFailure: boolean;
+  baselineDrift: boolean;
+  firstFailure: { name: string } | undefined;
+  parityFailure: boolean;
+  checks: { name: string; ok: boolean }[];
+  hint: unknown;
+}): CompareClassification {
+  if (input.infraFailure) return "infra-failure";
+  if (!input.firstFailure) return input.baselineDrift ? "baseline-drift" : "parity";
+
+  const hint = parseMismatchClassification(input.hint);
+  if (hint) return hint;
+  if (hasSymmetricImplementationFailure(input.checks)) return "sdk-assumption";
+  if (input.baselineDrift) return "baseline-drift";
+  return input.parityFailure ? "go-bug" : "model-nondeterminism";
+}
+
+function parseMismatchClassification(value: unknown): "sdk-assumption" | "platform-difference" | undefined {
+  return value === "sdk-assumption" || value === "platform-difference" ? value : undefined;
+}
+
+function hasSymmetricImplementationFailure(checks: { name: string; ok: boolean }[]): boolean {
+  const failed = checks.filter((check) => !check.ok).map((check) => check.name);
+  const rust = new Set(failed.filter((name) => name.startsWith("rust: ")).map((name) => name.slice("rust: ".length)));
+  const go = new Set(failed.filter((name) => name.startsWith("go: ")).map((name) => name.slice("go: ".length)));
+  return rust.size > 0 && [...rust].some((name) => go.has(name));
 }
 
 function checkOutcome(label: string, recording: any, expectsFailure: boolean, errorPattern: unknown) {
@@ -476,6 +516,7 @@ function checkStartedCompletedPairs(label: string, recording: any, expected: unk
     return { name: `${label}: started/completed pairs`, ok: true, detail: "scenario has no pair contract" };
   }
   const required = new Set(expected.map(String));
+  const observedTypes = new Set<string>();
   const failures: string[] = [];
   for (const turn of turnsForChecks(recording)) {
     const counts = new Map<string, { type: string; started: number; completed: number; firstStarted: number; firstCompleted: number }>();
@@ -496,14 +537,14 @@ function checkStartedCompletedPairs(label: string, recording: any, expected: unk
       counts.set(key, count);
     }
     for (const [key, count] of counts) {
+      observedTypes.add(count.type);
       if (count.started !== 1 || count.completed !== 1 || count.firstStarted >= count.firstCompleted) {
         failures.push(`turn${turn.index}:${key}:started=${count.started},completed=${count.completed},order=${count.firstStarted}<${count.firstCompleted}`);
       }
     }
-    for (const type of required) {
-      const observed = [...counts.values()].some((count) => count.type === type);
-      if (!observed) failures.push(`turn${turn.index}:${type}:missing`);
-    }
+  }
+  for (const type of required) {
+    if (!observedTypes.has(type)) failures.push(`${type}:missing`);
   }
   return { name: `${label}: started/completed pairs`, ok: failures.length === 0, detail: failures.length === 0 ? undefined : failures.join("; ") };
 }
@@ -652,8 +693,23 @@ function errorItems(recording: any): any[] {
 
 function renderReport(result: CompareResult, artifactDir: string, manifest: any): string {
   const checks = result.checks.map((check) => `- ${check.ok ? "PASS" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`).join("\n");
-  const baseline = manifest?.baseline?.rustBaselineDrift
-    ? `Baseline drift: local Rust ${manifest.baseline.rustUpstreamCommit} differs from parity.json ${manifest.baseline.parityRustUpstreamHead ?? manifest.baseline.parityRustBaseline}.`
+  const baselineDrift: string[] = [];
+  if (manifest?.baseline?.rustBaselineDrift) {
+    const actual = manifest?.binaries?.rust ?? {};
+    const expected = manifest?.baseline?.expectedRustBinary ?? {};
+    baselineDrift.push(
+      `Rust binary is ${actual.version ?? "<unknown>"} (${actual.sha256 ?? "<unknown hash>"}); ` +
+      `parity.json expects ${expected.version ?? "<unknown>"} (${expected.sha256 ?? "<unknown hash>"}).`,
+    );
+  }
+  if (manifest?.baseline?.parityRecordDrift) {
+    baselineDrift.push(
+      `local SDK/Rust checkout ${manifest.baseline.rustUpstreamCommit ?? "<unknown>"} differs from parity.json ` +
+      `${manifest.baseline.parityRustUpstreamHead ?? manifest.baseline.parityRustBaseline ?? "<unknown>"}.`,
+    );
+  }
+  const baseline = baselineDrift.length > 0
+    ? `Baseline drift: ${baselineDrift.join(" ")}`
     : "Baseline drift: none recorded.";
   return `# SDK Parity Report
 

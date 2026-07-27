@@ -73,6 +73,7 @@ export type Scenario = {
     requireSingleFinalAgentMessagePerTurn?: boolean;
     forbidEmptyCommandExecutions?: boolean;
     requireCommentaryBeforeTool?: boolean;
+    mismatchClassification?: "sdk-assumption" | "platform-difference";
   };
 };
 
@@ -166,6 +167,169 @@ export const scenarios: Scenario[] = [
       requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
       forbidEmptyCommandExecutions: true,
       eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_single_trace",
+    description: "Runs one deterministic JavaScript-dispatched command and audits its complete SDK lifecycle.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: `Use exec exactly once with this exact JavaScript: const result = await tools.shell_command({command: ${JSON.stringify(commands.jsExecSingle)}}); text(result.output); Then reply exactly JS_EXEC_DONE. Do not use any other tool or send commentary.` }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["JS_EXEC_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "completed", exitCode: 0, output: "JS_EXEC_OK" }], uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_two_commands",
+    description: "Runs two deterministic nested commands sequentially and rejects missing or duplicate command items.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: `Use exec exactly once with this exact JavaScript: const first = await tools.shell_command({command: ${JSON.stringify(commands.jsExecStepOne)}}); text(first.output); const second = await tools.shell_command({command: ${JSON.stringify(commands.jsExecStepTwo)}}); text(second.output); Then reply exactly TWO_COMMANDS_DONE. Do not use any other tool or send commentary.` }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["TWO_COMMANDS_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "STEP_1" },
+        { status: "completed", exitCode: 0, output: "STEP_2" },
+      ], uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_rejection_catch",
+    description: "Catches a read-only sandbox write rejection in JavaScript without leaving a workspace side effect.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: `Use exec exactly once with this exact JavaScript: try { await tools.shell_command({command: ${JSON.stringify(commands.jsExecRejectedWrite)}}); text("UNEXPECTED_SUCCESS"); } catch (error) { text("CAUGHT"); } Then reply exactly CAUGHT. Do not use any other tool or send commentary.` }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["CAUGHT"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "failed", exitCode: 1 }], commandOutputComparison: "status-exit-code", uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+      compareWorkspacePaths: ["should-not-exist.txt"],
+    },
+  },
+  {
+    name: "js_exec_failure_no_retry",
+    description: "Runs one exit-seven command, catches its rejection, and rejects silent retry or duplicate completion.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: `Use exec exactly once with this exact JavaScript: try { await tools.shell_command({command: ${JSON.stringify(commands.commandExitSeven)}}); text("UNEXPECTED_SUCCESS"); } catch (error) { text("EXIT_7"); } Then reply exactly EXIT_7_CAUGHT. Do not retry, use another tool, or send commentary.` }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["EXIT_7_CAUGHT"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "failed", exitCode: commands.commandExitSevenCode }], commandOutputComparison: "status-exit-code", uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_no_empty_dispatch",
+    description: "Performs a local JavaScript calculation and forbids any nested command dispatch.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Use exec exactly once with this exact JavaScript: text(String(6 * 7)); Do not call tools or dispatch a command. Then reply exactly 42. Do not use any other tool or send commentary." }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["42"], requiredCompletedItemTypes: ["agent_message"], forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      commandExecutions: [], requireSingleFinalAgentMessagePerTurn: true, forbidEmptyCommandExecutions: true,
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_resume_no_replay",
+    description: "Resumes a JavaScript code-mode thread and verifies that its first command is not replayed.",
+    optIn: true, timeoutMs: 240000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      { prompt: `Use exec exactly once with this exact JavaScript: const result = await tools.shell_command({command: ${JSON.stringify(commands.jsExecSingle)}}); text(result.output); Then reply exactly RESUME_TOKEN_READY. Do not use any other tool or send commentary.` },
+      { resume: true, prompt: "Do not use exec or any tool. Recall the exact token from the prior answer and reply exactly RESUME_TOKEN_READY." },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+      exactAgentMessages: ["RESUME_TOKEN_READY", "RESUME_TOKEN_READY"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "completed", exitCode: 0, output: "JS_EXEC_OK" }], uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true, requireStableThreadId: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "js_exec_interrupt_once",
+    description: "Interrupts one JavaScript-dispatched long command, resumes, and verifies it never completes later.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: `Use exec exactly once with this exact JavaScript: await tools.shell_command({command: ${JSON.stringify(commands.jsExecInterrupt)}}); Do not use any other tool or send commentary.`,
+        abortAfterEventType: "item.started", continueAfterError: true, timeoutMs: 30000,
+      },
+      {
+        resume: true,
+        prompt: `Use exec exactly once with this exact JavaScript: const result = await tools.shell_command({command: ${JSON.stringify(commands.jsExecInterruptProbe)}}); text(result.output); Then reply exactly INTERRUPT_ONCE_OK. Do not use any other tool or send commentary.`,
+      },
+    ],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["INTERRUPT_ONCE_OK"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [{ status: "completed", exitCode: 0, output: "MARKER_ABSENT" }], commandOutputComparison: "status-exit-code", uniqueCommandExecutions: true,
+      requireStableThreadId: true, forbidEmptyCommandExecutions: true,
+      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+      compareWorkspacePaths: ["interrupted-marker.txt"],
+    },
+  },
+  {
+    name: "js_exec_parallel_join",
+    description: "Joins two differently delayed nested commands while allowing only their completion order to vary.",
+    optIn: true, timeoutMs: 180000,
+    codexConfig: { features: { deferred_executor: false, code_mode: true }, web_search: "disabled", suppress_unstable_features_warning: true },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{ prompt: `Use exec exactly once with this exact JavaScript: const results = await Promise.all([tools.shell_command({command: ${JSON.stringify(commands.jsExecParallelSlow)}}), tools.shell_command({command: ${JSON.stringify(commands.jsExecParallelFast)}})]); results.forEach(result => text(result.output)); Then reply exactly PARALLEL_JOIN_DONE. Do not use any other tool or send commentary.` }],
+    expected: {
+      terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+      exactAgentMessages: ["PARALLEL_JOIN_DONE"], requiredCompletedItemTypes: ["command_execution", "agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+      commandExecutions: [
+        { status: "completed", exitCode: 0, output: "PARALLEL_SLOW" },
+        { status: "completed", exitCode: 0, output: "PARALLEL_FAST" },
+      ], commandOutputComparison: "unordered", uniqueCommandExecutions: true,
+      requireStartedCompletedPairs: ["command_execution"], requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
     },
   },
   {
@@ -913,6 +1077,8 @@ export const scenarios: Scenario[] = [
       exactAgentMessages: ["CODING_MODIFY_OK"],
       requiredCompletedItemTypes: ["file_change", "command_execution", "agent_message"],
       commandExecutions: [{ status: "completed", exitCode: 0 }, { status: "completed", exitCode: 0 }],
+      eventSequenceComparison: "semantic-tools",
+      agentMessageComparison: "final-per-turn",
       workspaceMutation: "required",
       workspaceRequiredPaths: ["calculator.py", "test_calculator.py"],
       compareWorkspacePaths: ["calculator.py", "test_calculator.py"],
@@ -947,9 +1113,11 @@ export const scenarios: Scenario[] = [
       ],
       commandOutputComparison: "status-exit-code",
       requireStableThreadId: true,
+      eventSequenceComparison: "semantic-tools",
+      agentMessageComparison: "final-per-turn",
       workspaceMutation: "required",
       workspaceRequiredPaths: ["calculator.py", "test_calculator.py"],
-      compareWorkspacePaths: ["calculator.py", "test_calculator.py"],
+      compareWorkspacePaths: ["README.txt"],
     },
   },
   {
@@ -980,7 +1148,7 @@ export const scenarios: Scenario[] = [
     expected: {
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       exactAgentMessages: ["MISSING_FILE_OBSERVED"], requiredCompletedItemTypes: ["command_execution", "agent_message"],
-      commandExecutions: [{ status: "failed", exitCode: 1, outputPattern: "Cannot find path|does not exist" }],
+      commandExecutions: [{ status: "failed", exitCode: 1, outputPattern: "definitely-missing-sdk-file\\.txt" }],
       commandOutputComparison: "status-exit-code",
       workspaceMutation: "none",
     },

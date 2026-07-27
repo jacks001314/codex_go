@@ -71,6 +71,26 @@ func TestThreadEventStoreSideParentPendingStatusMatchRust(t *testing.T) {
 	}
 }
 
+func TestPendingInactiveThreadRequestsSkipsThreadsWithoutPendingInteractionMatchRust(t *testing.T) {
+	active := NewThreadEventStore(4)
+	active.EnqueueRequest(ServerRequest{ID: "active-approval", Kind: ServerRequestCommandExecutionApproval, ThreadID: "thread-active"})
+
+	quiet := NewThreadEventStore(4)
+	quiet.EnqueueRequest(ServerRequest{ID: "quiet-dynamic-tool", Kind: ServerRequestDynamicToolCall, ThreadID: "thread-quiet"})
+
+	pending := NewThreadEventStore(4)
+	pending.EnqueueRequest(ServerRequest{ID: "pending-approval", Kind: ServerRequestCommandExecutionApproval, ThreadID: "thread-pending"})
+
+	requests := PendingInactiveThreadRequests("thread-active", map[string]*ThreadEventStore{
+		"thread-active":  active,
+		"thread-quiet":   quiet,
+		"thread-pending": pending,
+	})
+	if len(requests) != 1 || requests[0].ID != "pending-approval" {
+		t.Fatalf("pending inactive requests = %#v, want pending-approval only", requests)
+	}
+}
+
 func TestThreadEventStoreSnapshotClonesEvents(t *testing.T) {
 	store := NewThreadEventStore(4)
 	request := ServerRequest{ID: "req-1", Kind: ServerRequestUserInput, TurnID: "turn-1", ItemID: "call-1"}

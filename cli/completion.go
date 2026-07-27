@@ -214,6 +214,7 @@ func appServerCompletionOptions() []string {
 		"--listen",
 		"--stdio",
 		"--analytics-default-enabled",
+		"--code-mode-host",
 		"--ws-auth",
 		"--ws-token-file",
 		"--ws-token-sha256",

@@ -399,7 +399,7 @@ func TestRuntimeRouterThreadResumeRejectsUnmaterializedThread(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterThreadSetNameMaterializesStartRolloutPathForFork(t *testing.T) {
+func TestRuntimeRouterThreadSetNameKeepsStartRolloutPathUnmaterialized(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	threadRouter := NewRouter(store)
 	now := fixedTime()
@@ -424,17 +424,21 @@ func TestRuntimeRouterThreadSetNameMaterializesStartRolloutPathForFork(t *testin
 	if named.Error != nil {
 		t.Fatalf("thread/name/set error: %+v", named.Error)
 	}
-	if _, err := os.Stat(startPath); err != nil {
-		t.Fatalf("stat start rollout path %s: %v", startPath, err)
+	if _, err := os.Stat(startPath); !os.IsNotExist(err) {
+		t.Fatalf("thread/name/set unexpectedly materialized %s: %v", startPath, err)
 	}
 
 	fork := router.Handle(requestWithParams(t, IntID(3), MethodThreadFork, ThreadForkParams{ThreadID: thread.ID}))
-	if fork.Error != nil {
-		t.Fatalf("thread/fork error: %+v", fork.Error)
+	if fork.Error == nil || fork.Error.Code != -32600 || !strings.Contains(fork.Error.Message, "no rollout found for thread id") {
+		t.Fatalf("thread/fork response = %+v", fork)
 	}
-	forked := fork.Result.(*ThreadForkResponse).Thread
-	if forked.ForkedFromID == nil || *forked.ForkedFromID != thread.ID {
-		t.Fatalf("fork lineage = %+v, want source %s", forked, thread.ID)
+	read := router.Handle(requestWithParams(t, IntID(4), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error: %+v", read.Error)
+	}
+	readThread := read.Result.(*ThreadReadResponse).Thread
+	if readThread.Name == nil || *readThread.Name != "SDK lifecycle example" {
+		t.Fatalf("thread/read name = %+v", readThread.Name)
 	}
 }
 
@@ -6616,6 +6620,7 @@ func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	t.Cleanup(func() { _ = router.Close() })
 	featureSet := router.Handle(requestWithParams(t, IntID(1), MethodExperimentalFeatureSet, features.FeatureEnablementSetParams{Enablement: map[string]bool{"alpha": true, "missing": true}}))
 	if featureSet.Error != nil {
 		t.Fatalf("feature set = %+v", featureSet)
@@ -10248,6 +10253,58 @@ func TestRuntimeRouterTurnStartFileChangeApprovalLikeRust(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterTurnStartFileChangeApplyFailureLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "blocker"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile blocker: %v", err)
+	}
+	patch := `*** Begin Patch
+*** Add File: blocker/child.txt
++content
+*** End Patch
+`
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        &applyPatchRuntimeAgent{patch: patch, callID: "patch-failed"},
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "hello failed file change",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "apply failing patch",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalNever),
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	started := waitForItemStarted(t, sink, "patch-failed")
+	if started.Item["type"] != "fileChange" || started.Item["status"] != string(PatchApplyInProgress) {
+		t.Fatalf("started failed file change item = %#v", started.Item)
+	}
+	completed := waitForItemCompleted(t, sink, "patch-failed")
+	if completed.Item["type"] != "fileChange" || completed.Item["status"] != string(PatchApplyFailed) {
+		t.Fatalf("completed failed file change item = %#v", completed.Item)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if _, err := os.Stat(filepath.Join(workspace, "blocker", "child.txt")); err == nil {
+		t.Fatal("failed patch unexpectedly created child")
+	}
+}
+
 func TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -11907,6 +11964,93 @@ func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *tes
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterModelPersonalityWorldStateDiffs(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := session.ThreadID("thread-model-personality-world-state")
+	if err := store.Create(&session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			Model:         "gpt-old",
+			ModelProvider: "openai",
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
+	modelMessages := &model.ModelMessages{
+		InstructionsTemplate: "BASE {{ personality }}",
+		PersonalityFriendly:  "friendly spec",
+		PersonalityPragmatic: "pragmatic spec",
+	}
+	oldModel := &model.ModelInfo{Slug: "gpt-old", ModelMessages: modelMessages}
+
+	items, err := router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "friendly", "custom base", true)
+	if err != nil {
+		t.Fatalf("initial world state: %v", err)
+	}
+	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "<personality_spec>") || !strings.Contains(texts[0], "friendly spec") {
+		t.Fatalf("initial world-state items = %#v", items)
+	}
+	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "friendly", "custom base", true)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("unchanged world state items = %#v, error = %v", items, err)
+	}
+	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "pragmatic", "custom base", true)
+	if err != nil {
+		t.Fatalf("personality change world state: %v", err)
+	}
+	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "pragmatic spec") || strings.Contains(texts[0], "<model_switch>") {
+		t.Fatalf("personality change items = %#v", items)
+	}
+
+	newModel := &model.ModelInfo{Slug: "gpt-new", ModelMessages: modelMessages}
+	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), newModel, "pragmatic", "custom base", true)
+	if err != nil {
+		t.Fatalf("model change world state: %v", err)
+	}
+	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "<model_switch>") || !strings.Contains(texts[0], "BASE pragmatic spec") || strings.Contains(texts[0], "<personality_spec>") {
+		t.Fatalf("model change items = %#v", items)
+	}
+	record, err := store.Load(threadID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatalf("DecodeWorldState() error = %v", err)
+	}
+	persistedModel, modelKnown := decodeWorldStateModel(state.Model)
+	persistedPersonality, personalityKnown := decodePersonalityWorldState(state.Personality)
+	if !modelKnown || persistedModel != "gpt-new" || !personalityKnown || persistedPersonality.Model != "gpt-new" || persistedPersonality.Personality == nil || *persistedPersonality.Personality != "pragmatic" {
+		t.Fatalf("persisted model/personality world state = %s", record.Metadata.WorldState)
+	}
+}
+
+func TestSameJSONValueIgnoresFormatting(t *testing.T) {
+	compact := json.RawMessage(`{"model":"gpt-test","personality":"friendly"}`)
+	formatted := json.RawMessage("{\n  \"model\": \"gpt-test\",\n  \"personality\": \"friendly\"\n}")
+	if !sameJSONValue(compact, formatted) {
+		t.Fatal("equivalent JSON values should compare equal")
+	}
+	reordered := json.RawMessage(`{"personality":"friendly","model":"gpt-test"}`)
+	if !sameJSONValue(compact, reordered) {
+		t.Fatal("equivalent JSON objects should compare equal regardless of key order")
+	}
+	if sameJSONValue(compact, json.RawMessage(`{"model":"gpt-test","personality":"pragmatic"}`)) {
+		t.Fatal("different JSON values should not compare equal")
+	}
+	if sameJSONValue(compact, json.RawMessage(`{"model":`)) {
+		t.Fatal("invalid JSON should not compare equal")
+	}
+}
+
 func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -12202,8 +12346,10 @@ func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "Base friendly personality") || !strings.Contains(request.Instructions, "<personality_spec>") {
-		t.Fatalf("instructions = %q", request.Instructions)
+	if !strings.Contains(request.Instructions, "Base friendly personality") ||
+		strings.Contains(request.Instructions, "<personality_spec>") ||
+		agentRequestInputItemsContain(request, "<personality_spec>") {
+		t.Fatalf("initial baked personality should not emit an update: %#v", request)
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
@@ -12251,8 +12397,10 @@ func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T)
 		t.Fatalf("second turn start error: %+v", secondTurn.Error)
 	}
 	secondRequest := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(secondRequest.Instructions, "Base friendly personality") || !strings.Contains(secondRequest.Instructions, "<personality_spec>") {
-		t.Fatalf("second instructions = %q", secondRequest.Instructions)
+	if !strings.Contains(secondRequest.Instructions, "Base friendly personality") ||
+		strings.Contains(secondRequest.Instructions, "<personality_spec>") ||
+		!agentRequestInputItemsContain(secondRequest, "<personality_spec>") {
+		t.Fatalf("personality change should emit a standalone developer item: %#v", secondRequest)
 	}
 	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
@@ -12308,7 +12456,8 @@ func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.
 	request := waitForRuntimeAgentRequest(t, agent)
 	if request.Model != modelID ||
 		!strings.Contains(request.Instructions, "Base friendly personality") ||
-		!strings.Contains(request.Instructions, "<personality_spec>") {
+		strings.Contains(request.Instructions, "<personality_spec>") ||
+		agentRequestInputItemsContain(request, "<personality_spec>") {
 		t.Fatalf("agent request = %#v", request)
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
@@ -19678,6 +19827,7 @@ func TestRuntimeRouterThreadForkActiveTurnAddsInterruptedMarker(t *testing.T) {
 	routerStore := NewRouter(store)
 	routerStore.SetClock(func() time.Time { return now })
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	t.Cleanup(func() { _ = router.Close() })
 	if err := router.registerActiveRuntimeTurn("thread-active-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
 		ThreadID: "thread-active-fork",
 		Prompt:   "active prompt",
@@ -19692,6 +19842,9 @@ func TestRuntimeRouterThreadForkActiveTurnAddsInterruptedMarker(t *testing.T) {
 	forked := fork.Result.(*ThreadForkResponse).Thread
 	if forked == nil {
 		t.Fatal("forked thread is nil")
+	}
+	if router.threads.LiveThread(session.ThreadID(forked.ID)) == nil {
+		t.Fatal("active persistent fork was not registered as a live thread")
 	}
 	if forked.Source != SessionSourceCli {
 		t.Fatalf("fork source = %q", forked.Source)
@@ -19732,6 +19885,131 @@ func TestRuntimeRouterThreadForkActiveTurnAddsInterruptedMarker(t *testing.T) {
 	if rolloutActive == nil || rolloutActive.Status != TurnStatusInterrupted || !turnHasItemText(rolloutActive, "<turn_aborted>") {
 		t.Fatalf("rollout active turn = %+v", rolloutActive)
 	}
+}
+
+func TestRuntimeRouterThreadForkActivePaginatedTurnStoresInterruptedDelta(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime().Add(10 * time.Second)
+	startedAt := now.Add(-2 * time.Second)
+	createRecordWithHistoryMode(t, store, "thread-active-paginated-fork", fixedTime(), string(ThreadHistoryPaginated))
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	t.Cleanup(func() { _ = router.Close() })
+	if err := router.registerActiveRuntimeTurn("thread-active-paginated-fork", "turn-active", func() {}, startedAt.UnixMilli(), &turn.TurnStartParams{
+		ThreadID: "thread-active-paginated-fork",
+		Prompt:   "active prompt",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+
+	fork := router.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: "thread-active-paginated-fork"}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse).Thread
+	if forked == nil {
+		t.Fatal("forked thread is nil")
+	}
+	materialized, err := store.Read(session.ThreadID(forked.ID), true, true)
+	if err != nil {
+		t.Fatalf("Read(fork) error = %v", err)
+	}
+	if materialized.HistoryBase == nil || materialized.HistoryBase.ThreadID != "thread-active-paginated-fork" {
+		t.Fatalf("fork history base = %#v", materialized.HistoryBase)
+	}
+	activeTurn := turnByID(BuildThread(materialized, "", true).Turns, "turn-active")
+	if activeTurn == nil || activeTurn.Status != TurnStatusInterrupted || !turnHasItemText(activeTurn, "<turn_aborted>") {
+		t.Fatalf("materialized active turn = %+v", activeTurn)
+	}
+	physical, err := store.Load(session.ThreadID(forked.ID))
+	if err != nil {
+		t.Fatalf("Load(fork) error = %v", err)
+	}
+	if sessionItemByID(physical.Items, runtimeUserPromptSessionItemID("turn-active")) == nil || sessionItemByID(physical.Items, "turn-aborted-turn-active") == nil {
+		t.Fatalf("active fork delta was not persisted locally: %+v", physical.Items)
+	}
+	source, err := store.Read("thread-active-paginated-fork", true, true)
+	if err != nil {
+		t.Fatalf("Read(source) error = %v", err)
+	}
+	if sessionItemByID(source.Items, runtimeUserPromptSessionItemID("turn-active")) != nil || sessionItemByID(source.Items, "turn-aborted-turn-active") != nil {
+		t.Fatalf("active paginated source was mutated: %+v", source.Items)
+	}
+}
+
+func TestRuntimeRouterPaginatedForkColdResumeDoesNotReplayInheritedItems(t *testing.T) {
+	root := t.TempDir()
+	store := session.NewStore(root)
+	now := fixedTime()
+	source := &session.Record{
+		ID:        "thread-paginated-replay-source",
+		SessionID: "thread-paginated-replay-source",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			HistoryMode:  string(ThreadHistoryPaginated),
+			RolloutTurns: []session.TurnSnapshot{{ID: "turn-source", Status: string(TurnStatusCompleted)}},
+		},
+		Items: []session.Item{
+			{ID: "user-source", Type: "message", Role: "user", Text: "FORK_REPLAY_USER_NEEDLE", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-source"}},
+			{ID: "final-source", Type: "agent_message", Role: "assistant", Text: "FORK_REPLAY_FINAL_NEEDLE", CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-source", "phase": "final_answer"}},
+		},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	firstThreadRouter := NewRouter(store)
+	if err := firstThreadRouter.createThreadRollout(source, now); err != nil {
+		t.Fatalf("createThreadRollout(source) error = %v", err)
+	}
+	first := NewRuntimeRouter(RuntimeServices{ThreadRouter: firstThreadRouter, ThreadStatus: NewThreadStatusManager()})
+	fork := first.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{ThreadID: string(source.ID)}))
+	if fork.Error != nil {
+		t.Fatalf("thread/fork error = %+v", fork.Error)
+	}
+	forkedID := fork.Result.(*ThreadForkResponse).Thread.ID
+	if err := first.Close(); err != nil {
+		t.Fatalf("first.Close() error = %v", err)
+	}
+
+	agent := newRecordingRuntimeAgent("continued")
+	sink := NewNotificationBuffer()
+	second := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(root)),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	t.Cleanup(func() { _ = second.Close() })
+	second.SetNotificationSink(sink)
+	resume := second.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: forkedID}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error = %+v", resume.Error)
+	}
+	resumed := resume.Result.(*ThreadResumeResponse).Thread
+	if len(resumed.Turns) != 1 || len(resumed.Turns[0].Items) != 2 {
+		t.Fatalf("resumed inherited history = %+v", resumed.Turns)
+	}
+	started := second.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: forkedID,
+		Prompt:   "continue after fork",
+	}))
+	if started.Error != nil {
+		t.Fatalf("turn/start error = %+v", started.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	input, err := json.Marshal(request.InputItems)
+	if err != nil {
+		t.Fatalf("Marshal(InputItems) error = %v", err)
+	}
+	for _, marker := range []string{"FORK_REPLAY_USER_NEEDLE", "FORK_REPLAY_FINAL_NEEDLE"} {
+		if count := strings.Count(string(input), marker); count != 1 {
+			t.Fatalf("inherited marker %q count = %d in %s", marker, count, input)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, started.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterEphemeralForkRejectsArchivedSourceByIDAndPath(t *testing.T) {

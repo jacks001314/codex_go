@@ -887,7 +887,10 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		return err
 	}
 	remoteControlDisabledByRequirements := appServerRemoteControlDisabledByRequirements(requirements)
-	runtimeOptions := appServerRuntimeOptionsFromCLI(opts)
+	runtimeOptions, err := appServerRuntimeOptionsFromCLI(opts, loadedConfig)
+	if err != nil {
+		return err
+	}
 	runtimeOptions.Requirements = requirements
 	runtimeOptions.RemoteControlDisabledByRequirements = remoteControlDisabledByRequirements
 	runtimeOptions.RemoteControlBackendEnabled = true
@@ -1019,7 +1022,7 @@ func appServerRemoteControlDisabledByRequirements(requirements *config.ConfigReq
 	return requirements != nil && requirements.AllowRemoteControl != nil && !*requirements.AllowRemoteControl
 }
 
-func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions) *appserver.RuntimeRouterOptions {
+func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *config.Config) (*appserver.RuntimeRouterOptions, error) {
 	disabledByEnv := appserver.TakeRemoteControlDisabledEnv()
 	mode := appserver.RemoteControlStartupResolvePersisted
 	switch {
@@ -1028,10 +1031,23 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions) *appserver.Runtim
 	case disabledByEnv:
 		mode = appserver.RemoteControlStartupDisabledEphemeral
 	}
-	return &appserver.RuntimeRouterOptions{
+	options := &appserver.RuntimeRouterOptions{
 		RemoteControlStartupMode: mode,
 		AnalyticsDefaultEnabled:  opts.AnalyticsDefaultEnabled,
 	}
+	hostURL := strings.TrimSpace(opts.CodeModeHostURL)
+	if hostURL != "" {
+		if loadedConfig == nil || !features.Enabled(loadedConfig.FeatureSettings(), "code_mode_host") {
+			return nil, errors.New("remote code-mode host requires the code_mode_host feature to be enabled")
+		}
+		options.CodeModeHostURL = hostURL
+		options.CodeModeHostHTTPClient = codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)
+		// Rust's explicitly selected WebSocket provider never falls back to the local host.
+		options.DisableCodeModeInProcessFallback = true
+	} else if loadedConfig != nil {
+		options.DisableCodeModeInProcessFallback = loadedConfig.DisableCodeModeInProcessFallback()
+	}
+	return options, nil
 }
 
 func webSocketAuthSettingsFromCLI(opts cli.AppServerOptions) *appserver.WebSocketAuthSettings {

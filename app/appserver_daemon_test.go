@@ -12,6 +12,8 @@ import (
 	"time"
 
 	codexauth "codex_go/auth"
+	"codex_go/cli"
+	"codex_go/config"
 )
 
 const testRemoteControlWebSocketURL = "wss://chatgpt.com/backend-api/wham/remote/control/server"
@@ -301,6 +303,21 @@ func runAppServerUntilCanceled(args []string) error {
 	case <-timer.C:
 		cancel()
 		return <-done
+	}
+}
+
+func TestAppServerRuntimeOptionsRequireFeatureForRemoteCodeModeHost(t *testing.T) {
+	opts := cli.AppServerOptions{CodeModeHostURL: "ws://127.0.0.1:8765"}
+	if _, err := appServerRuntimeOptionsFromCLI(opts, &config.Config{Values: map[string]any{}}); err == nil || !strings.Contains(err.Error(), "requires the code_mode_host feature") {
+		t.Fatalf("disabled feature error = %v", err)
+	}
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"code_mode_host": map[string]any{"enabled": true}}}}
+	got, err := appServerRuntimeOptionsFromCLI(opts, cfg)
+	if err != nil {
+		t.Fatalf("appServerRuntimeOptionsFromCLI() error = %v", err)
+	}
+	if got.CodeModeHostURL != opts.CodeModeHostURL || got.CodeModeHostHTTPClient == nil || !got.DisableCodeModeInProcessFallback {
+		t.Fatalf("runtime options = %#v", got)
 	}
 }
 

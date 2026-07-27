@@ -126,7 +126,14 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	}
 	result, err := action.Apply(applyOptions)
 	if err != nil {
-		return nil, RespondToModel("apply_patch failed: " + applypatch.FormatError(err))
+		body := "apply_patch failed: " + applypatch.FormatError(err)
+		return &Output{
+			Success:    false,
+			Body:       body,
+			Error:      body,
+			Data:       applyPatchApprovalData("failed", changes),
+			LogPreview: shellLogPreview(body),
+		}, nil
 	}
 	body := result.Summary()
 	return &Output{

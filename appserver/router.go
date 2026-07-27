@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"codex_go/agent"
@@ -27,42 +26,67 @@ type Router struct {
 	now        func() time.Time
 	spawnGraph agent.Store
 	threads    *ThreadManager
-	// Deprecated test aliases. Production access goes through threads.
-	writersMu *sync.Mutex
-	writers   map[session.ThreadID]*session.WriterLock
 }
 
 func NewRouter(store *session.Store) *Router {
 	threads := NewThreadManager(nil)
-	return &Router{store: store, now: time.Now, threads: threads, writersMu: &threads.writersMu, writers: threads.writers}
+	return &Router{store: store, now: time.Now, threads: threads}
 }
 
 func (r *Router) Close() error {
 	if r == nil {
 		return nil
 	}
-	return r.threadManager().CloseWriters()
+	return r.threadManager().CloseLiveThreads()
 }
 
 func (r *Router) threadManager() *ThreadManager {
 	if r.threads == nil {
 		r.threads = NewThreadManager(nil)
-		r.writersMu = &r.threads.writersMu
-		r.writers = r.threads.writers
 	}
 	return r.threads
 }
 
-func (r *Router) retainPaginatedWriter(record *session.Record) error {
-	return r.threadManager().RetainPaginatedWriter(r.store, record)
+func (r *Router) retainLiveThread(record *session.Record) error {
+	return r.threadManager().RetainLiveThread(r.store, record)
 }
 
 func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*session.WriterLock, error) {
 	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
 
-func (r *Router) releaseRetainedWriters(threadIDs []session.ThreadID) {
-	r.threadManager().ReleaseRetainedWriters(threadIDs)
+func (r *Router) releaseLiveThreads(threadIDs []session.ThreadID) {
+	r.threadManager().ReleaseLiveThreads(threadIDs)
+}
+
+func (r *Router) readThreadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
+	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
+		return liveThread.Read(includeArchived, includeHistory)
+	}
+	return r.store.Read(threadID, includeArchived, includeHistory)
+}
+
+func (r *Router) saveThreadRecord(record *session.Record) error {
+	if record != nil {
+		if liveThread := r.threadManager().LiveThread(record.ID); liveThread != nil {
+			return liveThread.Save(record)
+		}
+	}
+	return r.store.Save(record)
+}
+
+func (r *Router) updateThreadMetadata(threadID session.ThreadID, patch *session.MetadataPatch, includeArchived bool) (*session.Record, error) {
+	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
+		return liveThread.UpdateMetadata(patch, includeArchived)
+	}
+	return r.store.UpdateMetadata(threadID, patch, includeArchived)
+}
+
+func (r *Router) appendThreadItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
+	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
+		return liveThread.AppendItems(items)
+	}
+	return r.store.AppendItems(threadID, items)
 }
 
 func closeTemporaryWriters(locks []*session.WriterLock) {
@@ -778,13 +802,13 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
-	if err := r.retainPaginatedWriter(record); err != nil {
+	if err := r.retainLiveThread(record); err != nil {
 		_ = r.store.Delete(record.ID)
 		return nil, err
 	}
 	if len(record.Items) > 0 {
 		if err := r.createThreadRollout(record, now); err != nil {
-			r.releaseRetainedWriters([]session.ThreadID{record.ID})
+			r.releaseLiveThreads([]session.ThreadID{record.ID})
 			_ = r.store.Delete(record.ID)
 			return nil, err
 		}
@@ -866,7 +890,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		if err != nil {
 			return nil, err
 		}
-		record, err = r.store.Read(sourceID, true, includeTurns)
+		record, err = r.readThreadRecord(sourceID, true, includeTurns)
 		if err == nil && record != nil && record.Archived {
 			return nil, threadResumeArchivedError(sourceID)
 		}
@@ -886,7 +910,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	if includeTurns {
 		r.attachRolloutTurnSnapshots(record)
 	}
-	if err := r.retainPaginatedWriter(record); err != nil {
+	if err := r.retainLiveThread(record); err != nil {
 		return nil, err
 	}
 	path := r.threadRolloutPath(record)
@@ -917,7 +941,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 			cursorRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
 		} else {
-			cursorRecord, err = r.store.Read(sourceID, true, true)
+			cursorRecord, err = r.readThreadRecord(sourceID, true, true)
 			if err != nil {
 				cursorRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
 			}
@@ -940,7 +964,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 					return nil, err
 				}
 			} else {
-				pageRecord, err = r.store.Read(sourceID, true, true)
+				pageRecord, err = r.readThreadRecord(sourceID, true, true)
 				if err != nil {
 					pageRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
 					if err != nil {
@@ -1305,7 +1329,7 @@ func (r *Router) repairThreadRecordFromRollout(threadID session.ThreadID) (*sess
 	if err != nil {
 		return nil, err
 	}
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -1316,7 +1340,7 @@ func (r *Router) repairThreadRecordFromActiveRollout(threadID session.ThreadID) 
 	if err != nil {
 		return nil, err
 	}
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -1330,7 +1354,7 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, params.IncludeTurns)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, params.IncludeTurns)
 	if err != nil {
 		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, params.IncludeTurns)
 		if err != nil {
@@ -1338,6 +1362,9 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 		}
 	}
 	if params.IncludeTurns {
+		if threadUsesPaginatedHistory(record) {
+			return nil, jsonRPCInvalidRequest("paginated threads do not support thread/read(includeTurns=true)")
+		}
 		if unmaterializedThread(record) {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; includeTurns is unavailable before first user message", record.ID))
 		}
@@ -1369,19 +1396,23 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if mode == "" {
 		mode = session.ForkAll
 	}
+	sourceID, err := threadForkSourceID(&params)
+	if err != nil {
+		return nil, err
+	}
+	sourceLocks, err := r.acquireLifecycleWriters([]session.ThreadID{sourceID})
+	if err != nil {
+		return nil, err
+	}
+	defer closeTemporaryWriters(sourceLocks)
 	var sourceRecord *session.Record
-	var err error
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		sourceRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		sourceID, err := threadForkSourceID(&params)
-		if err != nil {
-			return nil, err
-		}
-		sourceRecord, err = r.store.Read(sourceID, true, true)
+		sourceRecord, err = r.readThreadRecord(sourceID, true, true)
 		if err != nil {
 			sourceRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
 			if err != nil {
@@ -1392,8 +1423,11 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if sourceRecord != nil && sourceRecord.Archived {
 		return nil, threadResumeArchivedError(sourceRecord.ID)
 	}
-	if unmaterializedThread(sourceRecord) {
+	if unmaterializedThread(sourceRecord) && !threadUsesPaginatedHistory(sourceRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
+	}
+	if err := validatePaginatedForkParams(sourceRecord, &params); err != nil {
+		return nil, err
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
 	record, err := r.store.ForkRecord(sourceRecord, session.ForkOptions{
@@ -1408,7 +1442,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		return nil, threadForkRecordError(err)
 	}
 	if !params.Ephemeral {
-		if err := r.retainPaginatedWriter(record); err != nil {
+		if err := r.retainLiveThread(record); err != nil {
 			_ = r.store.Delete(record.ID)
 			return nil, err
 		}
@@ -1422,12 +1456,14 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
 	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil)
 	if !params.Ephemeral {
-		if err := r.store.Save(record); err != nil {
+		if err := r.saveThreadRecord(record); err != nil {
+			r.rollbackThreadForkInitialization(record)
 			return nil, err
 		}
 	}
 	if !params.Ephemeral {
 		if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
+			r.rollbackThreadForkInitialization(record)
 			return nil, err
 		}
 	}
@@ -1454,6 +1490,22 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}, nil
+}
+
+func validatePaginatedForkParams(source *session.Record, params *ThreadForkParams) error {
+	if threadUsesPaginatedHistory(source) && params != nil && params.Ephemeral && !params.ExcludeTurns {
+		return jsonRPCInvalidRequest("ephemeral paginated thread/fork requires `excludeTurns: true`")
+	}
+	return nil
+}
+
+func (r *Router) rollbackThreadForkInitialization(record *session.Record) {
+	if r == nil || r.store == nil || record == nil {
+		return
+	}
+	r.releaseLiveThreads([]session.ThreadID{record.ID})
+	r.deleteThreadRollouts(record.ID)
+	_ = r.store.Delete(record.ID)
 }
 
 func threadForkRecordError(err error) error {
@@ -1545,7 +1597,15 @@ func threadForkSourceID(params *ThreadForkParams) (session.ThreadID, error) {
 		return "", fmt.Errorf("%w: threadId or path is required", ErrInvalidRequest)
 	}
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
-		threadID, err := rollout.ThreadIDFromPath(*params.Path)
+		path := strings.TrimSpace(*params.Path)
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("%w: path is a directory: %s", ErrInvalidRequest, path)
+		}
+		threadID, err := rollout.ThreadIDFromPath(path)
 		if err != nil {
 			return "", err
 		}
@@ -1631,7 +1691,7 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 		return nil, err
 	}
 	defer closeTemporaryWriters(lifecycleLocks)
-	if rootRecord, readErr := r.store.Read(session.ThreadID(params.ThreadID), true, false); readErr == nil && unmaterializedThread(rootRecord) {
+	if rootRecord, readErr := r.readThreadRecord(session.ThreadID(params.ThreadID), true, false); readErr == nil && unmaterializedThread(rootRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", params.ThreadID))
 	} else if readErr != nil && !errors.Is(readErr, session.ErrThreadNotFound) {
 		return nil, readErr
@@ -1655,7 +1715,7 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 			archivedThreadIDs = append(archivedThreadIDs, threadID)
 		}
 	}
-	r.releaseRetainedWriters(archivedThreadIDs)
+	r.releaseLiveThreads(archivedThreadIDs)
 	return &ThreadArchiveResponse{archivedThreadIDs: archivedThreadIDs}, nil
 }
 
@@ -1733,7 +1793,7 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 		}
 		r.deleteThreadRollouts(threadID)
 	}
-	r.releaseRetainedWriters(threadIDs)
+	r.releaseLiveThreads(threadIDs)
 	return &ThreadDeleteResponse{}, nil
 }
 
@@ -1785,7 +1845,7 @@ func (r *Router) handleThreadIncrementElicitation(request *Request) (*ThreadIncr
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -1800,7 +1860,7 @@ func (r *Router) handleThreadIncrementElicitation(request *Request) (*ThreadIncr
 	if record.UpdatedAt.IsZero() {
 		record.UpdatedAt = time.Now().UTC()
 	}
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	count := record.Metadata.ElicitationCount
@@ -1815,7 +1875,7 @@ func (r *Router) handleThreadDecrementElicitation(request *Request) (*ThreadDecr
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -1833,7 +1893,7 @@ func (r *Router) handleThreadDecrementElicitation(request *Request) (*ThreadDecr
 	if record.UpdatedAt.IsZero() {
 		record.UpdatedAt = time.Now().UTC()
 	}
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	count := record.Metadata.ElicitationCount
@@ -1850,7 +1910,7 @@ func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, 
 	}
 	patch := &session.MetadataPatch{Title: &params.Name}
 	threadID := session.ThreadID(params.ThreadID)
-	record, err := r.store.UpdateMetadata(threadID, patch, false)
+	record, err := r.updateThreadMetadata(threadID, patch, false)
 	if err != nil {
 		if errors.Is(err, session.ErrThreadArchived) {
 			return nil, threadResumeArchivedError(threadID)
@@ -1861,7 +1921,7 @@ func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, 
 		if _, repairErr := r.repairThreadRecordFromActiveRollout(threadID); repairErr != nil {
 			return nil, threadMetadataWriteError(params.ThreadID, repairErr)
 		}
-		record, err = r.store.UpdateMetadata(threadID, patch, false)
+		record, err = r.updateThreadMetadata(threadID, patch, false)
 		if err != nil {
 			if errors.Is(err, session.ErrThreadArchived) {
 				return nil, threadResumeArchivedError(threadID)
@@ -1872,11 +1932,6 @@ func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, 
 	if err := r.markExplicitThreadName(record); err != nil {
 		return nil, err
 	}
-	if unmaterializedThread(record) {
-		if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
-			return nil, err
-		}
-	}
 	return &ThreadSetNameResponse{}, nil
 }
 
@@ -1886,7 +1941,7 @@ func (r *Router) markExplicitThreadName(record *session.Record) error {
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	record.Metadata.Extra[explicitThreadNameExtraKey] = true
-	return r.store.Save(record)
+	return r.saveThreadRecord(record)
 }
 
 func threadMetadataWriteError(threadID string, err error) error {
@@ -1922,7 +1977,7 @@ func (r *Router) handleThreadMemoryModeSet(request *Request) (*ThreadMemoryModeS
 		return nil, err
 	}
 	threadID := session.ThreadID(params.ThreadID)
-	record, err := r.store.Read(threadID, false, true)
+	record, err := r.readThreadRecord(threadID, false, true)
 	if err != nil {
 		if errors.Is(err, session.ErrThreadArchived) {
 			return nil, threadResumeArchivedError(threadID)
@@ -1938,7 +1993,7 @@ func (r *Router) handleThreadMemoryModeSet(request *Request) (*ThreadMemoryModeS
 	record.Metadata.MemoryMode = string(params.Mode)
 	record.UpdatedAt = r.now().UTC()
 	record.RecencyAt = record.UpdatedAt
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
@@ -1993,7 +2048,7 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2022,7 +2077,7 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	}
 	record.Metadata.Extra["compacted_at"] = now.Format(time.RFC3339Nano)
 	record.Metadata.Extra["compaction_summary"] = compacted.Summary
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	_ = r.appendThreadCompacted(record.ID, compacted.Summary, record.Items, now)
@@ -2051,7 +2106,7 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	current, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	current, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2065,7 +2120,7 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	if err != nil {
 		return nil, err
 	}
-	record, err := r.store.UpdateMetadata(session.ThreadID(params.ThreadID), &patch, true)
+	record, err := r.updateThreadMetadata(session.ThreadID(params.ThreadID), &patch, true)
 	if err != nil {
 		return nil, threadMetadataWriteError(params.ThreadID, err)
 	}
@@ -2156,7 +2211,7 @@ func (r *Router) handleThreadItemsList(request *Request) (*ThreadItemsListRespon
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, true)
 		if err != nil {
@@ -2177,7 +2232,7 @@ func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, true)
 		if err != nil {
@@ -2264,7 +2319,7 @@ func (r *Router) handleThreadSearchOccurrences(request *Request) (*ThreadSearchO
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(strings.TrimSpace(params.ThreadID)), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2335,7 +2390,7 @@ func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	record, err := r.store.Read(session.ThreadID(params.ThreadID), true, true)
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2351,7 +2406,7 @@ func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse
 	record.Items = rollbackItems(record.Items, params.NumTurns)
 	record.UpdatedAt = r.now().UTC()
 	record.RecencyAt = record.UpdatedAt
-	if err := r.store.Save(record); err != nil {
+	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
 	_ = r.appendThreadRollback(record.ID, params.NumTurns, record.UpdatedAt)
@@ -2382,7 +2437,7 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 		}
 		items = append(items, item)
 	}
-	record, err := r.store.AppendItems(session.ThreadID(params.ThreadID), items)
+	record, err := r.appendThreadItems(session.ThreadID(params.ThreadID), items)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2390,7 +2445,7 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 		if _, repairErr := r.repairThreadRecordFromRollout(session.ThreadID(params.ThreadID)); repairErr != nil {
 			return nil, repairErr
 		}
-		record, err = r.store.AppendItems(session.ThreadID(params.ThreadID), items)
+		record, err = r.appendThreadItems(session.ThreadID(params.ThreadID), items)
 		if err != nil {
 			return nil, err
 		}

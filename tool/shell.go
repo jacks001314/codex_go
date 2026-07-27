@@ -12,6 +12,7 @@ import (
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
+	shellutil "codex_go/shell"
 )
 
 const (
@@ -276,6 +277,9 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	}
 	if err := validateWindowsShellSafety(args.Cmd, resolved.ShellType, cwd); err != nil {
 		return nil, err
+	}
+	if resolved.ShellType == ShellPowerShell {
+		resolved.Command = shellutil.PrefixPowerShellScriptWithUTF8(resolved.Command)
 	}
 	sandboxPermissions := args.SandboxPermissions
 	if sandboxPermissions == "" {

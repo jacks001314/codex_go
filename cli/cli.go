@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -260,6 +261,7 @@ type AppServerOptions struct {
 	Stdio                   bool
 	RemoteControl           bool
 	AnalyticsDefaultEnabled bool
+	CodeModeHostURL         string
 	WSAuth                  string
 	WSAuthSet               bool
 	WSTokenFile             string
@@ -2108,6 +2110,22 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			appServer.RemoteControl = true
 		case arg == "--analytics-default-enabled":
 			appServer.AnalyticsDefaultEnabled = true
+		case arg == "--code-mode-host":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := validateAppServerCodeModeHostURL(value); err != nil {
+				return err
+			}
+			appServer.CodeModeHostURL = value
+			i = next
+		case strings.HasPrefix(arg, "--code-mode-host="):
+			value := strings.TrimPrefix(arg, "--code-mode-host=")
+			if err := validateAppServerCodeModeHostURL(value); err != nil {
+				return err
+			}
+			appServer.CodeModeHostURL = value
 		case arg == "--ws-auth":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2223,6 +2241,20 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 	}
 	if err := appServer.ValidateWebsocketAuthFlags(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateAppServerCodeModeHostURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("invalid websocket URL: %w", err)
+	}
+	if (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Hostname() == "" {
+		return errors.New("code-mode host URL must use ws:// or wss:// with a host")
+	}
+	if parsed.Fragment != "" {
+		return errors.New("code-mode host URL must not contain a fragment")
 	}
 	return nil
 }

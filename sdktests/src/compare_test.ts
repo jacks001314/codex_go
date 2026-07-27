@@ -18,11 +18,18 @@ function recording(events: any[]) {
   };
 }
 
-function writeArtifact(root: string, rust: any, go: any) {
+function writeArtifact(
+  root: string,
+  rust: any,
+  go: any,
+  baseline?: Record<string, unknown>,
+  expectedOverrides?: Record<string, unknown>,
+) {
   mkdirSync(path.join(root, "raw"), { recursive: true });
   writeFileSync(path.join(root, "raw", "rust.json"), JSON.stringify(rust));
   writeFileSync(path.join(root, "raw", "go.json"), JSON.stringify(go));
   writeFileSync(path.join(root, "run-manifest.json"), JSON.stringify({
+    baseline,
     scenario: { expected: {
       expectedTurns: 1,
       requireUsage: false,
@@ -32,6 +39,7 @@ function writeArtifact(root: string, rust: any, go: any) {
       requireStartedCompletedPairs: ["command_execution"],
       requireSingleFinalAgentMessagePerTurn: true,
       forbidEmptyCommandExecutions: true,
+      ...expectedOverrides,
     } },
   }));
 }
@@ -75,6 +83,30 @@ test("compareArtifact reports the first missing started event", () => {
   }
 });
 
+test("compareArtifact permits a resumed turn without the paired tool type", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const firstTurn = validEvents();
+    const secondTurn = [
+      event("thread.started"),
+      event("turn.started"),
+      event("item.completed", { id: "msg-2", type: "agent_message", text: "DONE" }),
+      event("turn.completed"),
+    ];
+    const resumed = {
+      status: "ok",
+      events: [...firstTurn, ...secondTurn],
+      turns: [{ index: 0, events: firstTurn }, { index: 1, events: secondTurn }],
+      workspace: { before: {}, after: {} },
+    };
+    writeArtifact(root, resumed, resumed, undefined, { expectedTurns: 2 });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "pass");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact rejects duplicate finals and empty commands", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {
@@ -89,6 +121,67 @@ test("compareArtifact rejects duplicate finals and empty commands", () => {
     assert.equal(result.checks.find((check) => check.name === "go: single final agent message")?.ok, false);
     assert.equal(result.checks.find((check) => check.name === "go: non-empty command executions")?.ok, false);
     assert.match(readFileSync(path.join(root, "report.md"), "utf8"), /FAIL go: single final agent message/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compareArtifact reports parity record drift", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const valid = recording(validEvents());
+    writeArtifact(root, valid, valid, {
+      parityRecordDrift: true,
+      rustUpstreamCommit: "new-commit",
+      parityRustUpstreamHead: "frozen-commit",
+    });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "pass");
+    assert.equal(result.classification, "baseline-drift");
+    const report = readFileSync(path.join(root, "report.md"), "utf8");
+    assert.match(report, /Baseline drift: local SDK\/Rust checkout new-commit differs from parity\.json frozen-commit\./);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compareArtifact classifies symmetric contract failures as SDK assumptions", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const events = validEvents().filter((entry) => entry.type !== "item.started");
+    const result = (() => {
+      writeArtifact(root, recording(events), recording(events));
+      return compareArtifact(root);
+    })();
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.classification, "sdk-assumption");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compareArtifact keeps symmetric failures as SDK assumptions during baseline drift", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const events = validEvents().filter((entry) => entry.type !== "item.started");
+    writeArtifact(root, recording(events), recording(events), { parityRecordDrift: true });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.classification, "sdk-assumption");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compareArtifact preserves an explicit platform-difference diagnosis", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const rust = recording(validEvents());
+    const goEvents = validEvents().filter((entry) => entry.type !== "item.started");
+    writeArtifact(root, rust, recording(goEvents), undefined, { mismatchClassification: "platform-difference" });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.classification, "platform-difference");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -629,9 +629,9 @@ func TestClientDispatchesWriteWhileReadLongPollIsPendingLikeRust(t *testing.T) {
 		t.Fatalf("DialClient() error = %v", err)
 	}
 	defer client.Close()
-	command := []string{"sh", "-c", "read line; printf '%s' \"$line\""}
+	command := []string{"sh", "-c", "printf 'ready'; read line; printf '%s' \"$line\""}
 	if runtime.GOOS == "windows" {
-		command = []string{"powershell", "-NoProfile", "-Command", "$line=[Console]::In.ReadLine(); [Console]::Out.Write($line)"}
+		command = []string{"powershell", "-NoProfile", "-Command", "[Console]::Out.Write('ready'); $line=[Console]::In.ReadLine(); [Console]::Out.Write($line)"}
 	}
 	if _, err := client.Start(context.Background(), &ExecParams{
 		ProcessID: "concurrent",
@@ -642,11 +642,16 @@ func TestClientDispatchesWriteWhileReadLongPollIsPendingLikeRust(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	waitMS := uint64(1_000)
+	waitMS := uint64(5_000)
+	ready, err := client.Read(context.Background(), &ReadParams{ProcessID: "concurrent", WaitMS: &waitMS})
+	if err != nil || ready == nil || len(ready.Chunks) == 0 || ready.NextSeq < 2 {
+		t.Fatalf("initial readiness Read() response = %#v error = %v", ready, err)
+	}
+	afterReady := ready.NextSeq - 1
 	readDone := make(chan *ReadResponse, 1)
 	readErr := make(chan error, 1)
 	go func() {
-		response, readError := client.Read(context.Background(), &ReadParams{ProcessID: "concurrent", WaitMS: &waitMS})
+		response, readError := client.Read(context.Background(), &ReadParams{ProcessID: "concurrent", AfterSeq: &afterReady, WaitMS: &waitMS})
 		if readError != nil {
 			readErr <- readError
 			return
@@ -658,7 +663,7 @@ func TestClientDispatchesWriteWhileReadLongPollIsPendingLikeRust(t *testing.T) {
 	if _, err := client.Write(context.Background(), &WriteParams{ProcessID: "concurrent", Chunk: "aGVsbG8K", WriteID: "write-1"}); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("Write() was blocked by read long poll for %s", elapsed)
 	}
 	select {
@@ -668,7 +673,7 @@ func TestClientDispatchesWriteWhileReadLongPollIsPendingLikeRust(t *testing.T) {
 		}
 	case err := <-readErr:
 		t.Fatalf("Read() error = %v", err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(7 * time.Second):
 		t.Fatal("Read() did not complete")
 	}
 

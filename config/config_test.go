@@ -76,6 +76,24 @@ func TestOmitLegacyMCPToolPrefixSupportsGlobalAndServerModes(t *testing.T) {
 	}
 }
 
+func TestCodeModeHostConfigSupportsFallbackPolicy(t *testing.T) {
+	cfg := &Config{Values: map[string]any{
+		"features": map[string]any{"code_mode_host": map[string]any{
+			"enabled": true, "disable_in_process_fallback": true,
+		}},
+	}}
+	if !cfg.FeatureSettings()["code_mode_host"] || !cfg.DisableCodeModeInProcessFallback() {
+		t.Fatalf("code-mode host config was not resolved: %#v", cfg.Values)
+	}
+	if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
+		t.Fatalf("strict code-mode host config error = %v", err)
+	}
+	invalid := map[string]any{"features": map[string]any{"code_mode_host": map[string]any{"future": true}}}
+	if err := validateKnownTopLevelConfigFields(invalid); err == nil || !strings.Contains(err.Error(), "features.code_mode_host.future") {
+		t.Fatalf("strict unknown code-mode host field error = %v", err)
+	}
+}
+
 func TestToolEnablementUsesRustDefaultsAndNestedConfig(t *testing.T) {
 	defaults := &Config{Values: map[string]any{}}
 	if !defaults.UpdatePlanEnabled() || !defaults.WaitAgentEnabled() {

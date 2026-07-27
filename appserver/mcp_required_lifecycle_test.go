@@ -350,11 +350,8 @@ func assertNoThreadInitializationResources(t *testing.T, router *RuntimeRouter) 
 	if router == nil {
 		t.Fatal("router is nil")
 	}
-	router.threads.writersMu.Lock()
-	writers := len(router.threads.writers)
-	router.threads.writersMu.Unlock()
-	if writers != 0 {
-		t.Fatalf("retained writers after failed initialization = %d", writers)
+	if liveThreads := router.threads.LiveThreadCount(); liveThreads != 0 {
+		t.Fatalf("retained live threads after failed initialization = %d", liveThreads)
 	}
 	router.threads.ephemeralMu.RLock()
 	ephemeral := len(router.threads.ephemeral)

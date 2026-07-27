@@ -1,6 +1,10 @@
 package app
 
-import "codex_go/appserver"
+import (
+	"sort"
+
+	"codex_go/appserver"
+)
 
 // Rust parity subset: codex-rs/tui/src/app/thread_routing.rs.
 
@@ -222,6 +226,27 @@ func (s *ThreadEventStore) SideParentPendingStatus() (SideParentStatus, bool) {
 		return SideParentStatusNeedsApproval, true
 	}
 	return "", false
+}
+
+func PendingInactiveThreadRequests(activeThreadID string, stores map[string]*ThreadEventStore) []ServerRequest {
+	threadIDs := make([]string, 0, len(stores))
+	for threadID := range stores {
+		threadIDs = append(threadIDs, threadID)
+	}
+	sort.Strings(threadIDs)
+
+	var requests []ServerRequest
+	for _, threadID := range threadIDs {
+		if threadID == activeThreadID {
+			continue
+		}
+		store := stores[threadID]
+		if _, ok := store.SideParentPendingStatus(); !ok {
+			continue
+		}
+		requests = append(requests, store.PendingReplayRequests()...)
+	}
+	return requests
 }
 
 func (s *ThreadEventStore) appendEvent(event ThreadBufferedEvent) {

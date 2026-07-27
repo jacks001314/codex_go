@@ -9,6 +9,7 @@ import (
 
 	"codex_go/network"
 	"codex_go/sandbox"
+	shellutil "codex_go/shell"
 )
 
 func TestBuildShellRequestCarriesManagedNetworkContextLikeRust(t *testing.T) {
@@ -185,6 +186,26 @@ func TestBuildShellRequestDefaults(t *testing.T) {
 	}
 	if req.Env["A"] != "B" {
 		t.Fatalf("Env = %#v", req.Env)
+	}
+}
+
+func TestBuildShellRequestForcesPowerShellUTF8OutputLikeRust(t *testing.T) {
+	req, err := BuildShellRequest(&ExecCommandArgs{
+		Cmd: "Get-Content -LiteralPath .\\unicode.txt -Raw -Encoding UTF8",
+	}, &Shell{Type: ShellPowerShell, Path: "powershell.exe"}, ShellValidationOptions{
+		ApprovalPolicy: sandbox.ApprovalNever,
+		CWD:            t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest returned error: %v", err)
+	}
+	wantScript := shellutil.UTF8OutputPrefix + "Get-Content -LiteralPath .\\unicode.txt -Raw -Encoding UTF8"
+	want := []string{"powershell.exe", "-NoProfile", "-Command", wantScript}
+	if !reflect.DeepEqual(req.Command, want) {
+		t.Fatalf("Command = %#v, want %#v", req.Command, want)
+	}
+	if req.HookCommand != "Get-Content -LiteralPath .\\unicode.txt -Raw -Encoding UTF8" {
+		t.Fatalf("HookCommand = %q", req.HookCommand)
 	}
 }
 

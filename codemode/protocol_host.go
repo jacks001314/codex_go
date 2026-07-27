@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const MaxPendingDelegateCalls = 1024
+
 type RequestID int64
 
 type DelegateRequestID int64
