@@ -466,7 +466,6 @@ type Model struct {
 	StatusBar  StatusBarComponent
 
 	// Animation
-	spinner    *anim.Spinner
 	animEngine *anim.Engine
 
 	// Overlay stack (new architecture)
@@ -768,7 +767,6 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 	model.syncTaskRunningTimer()
 	model.animEngine = anim.NewEngine(20)
-	model.spinner = anim.NewSpinner(anim.SpinnerConfig{Label: "Thinking", Mode: anim.SpinnerDots}, model.animEngine)
 	model.overlays = overlay.NewOverlay(true)
 	model.statusControls = chatwidget.NewStatusControlsState(model.statusControlsRuntime())
 	if options.StatusLineItems != nil {
@@ -827,8 +825,8 @@ func resolveStyles(custom *styles.Styles) styles.Styles {
 }
 func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}
-	if m.spinner != nil {
-		commands = append(commands, m.spinner.InitCmd())
+	if m.animEngine != nil {
+		commands = append(commands, m.animEngine.TickCmd())
 	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
@@ -848,8 +846,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	}
 	switch msg := message.(type) {
 	case anim.TickMsg:
-		if m.spinner != nil {
-			cmd := m.spinner.Update(msg)
+		if m.animEngine != nil {
+			cmd := m.animEngine.Advance()
 			if m.retryActivityActive {
 				m.renderRetryActivity()
 			}
@@ -1629,12 +1627,56 @@ func (m *Model) renderWorkingIndicator() string {
 	if len(lines) == 0 {
 		return ""
 	}
+	header := strings.TrimSpace(indicator.Header)
 	lines[0] = "\u2022 " + lines[0]
 	lines[0] = fitTerminalLine(lines[0], m.width)
-	if m.spinner != nil && !m.mcpStartupActive {
-		lines = append(lines, m.spinner.View())
+	if !m.mcpStartupActive {
+		plainPrefix := "\u2022 " + header
+		if strings.HasPrefix(lines[0], plainPrefix) {
+			lines[0] = "\u2022 " + m.renderWorkingHeader(header) + strings.TrimPrefix(lines[0], plainPrefix)
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+const workingHighlightTicksPerLetter = 3
+
+func (m *Model) renderWorkingHeader(header string) string {
+	runes := []rune(header)
+	if len(runes) == 0 {
+		return ""
+	}
+	tick := 0
+	if m != nil && m.animEngine != nil {
+		tick = m.animEngine.CurrentTick()
+	}
+	active := (tick / workingHighlightTicksPerLetter) % len(runes)
+	reset := "\x1b[0m"
+	dim := "\x1b[2m"
+	if m != nil {
+		if m.Styles.ExecCell.Reset != "" {
+			reset = m.Styles.ExecCell.Reset
+		}
+		if m.Styles.Chat.DimText != "" {
+			dim = m.Styles.Chat.DimText
+		}
+	}
+
+	var out strings.Builder
+	if active > 0 {
+		out.WriteString(dim)
+		out.WriteString(string(runes[:active]))
+		out.WriteString(reset)
+	}
+	out.WriteString("\x1b[1m")
+	out.WriteRune(runes[active])
+	out.WriteString(reset)
+	if active+1 < len(runes) {
+		out.WriteString(dim)
+		out.WriteString(string(runes[active+1:]))
+		out.WriteString(reset)
+	}
+	return out.String()
 }
 
 func (m *Model) interruptHintBinding() string {

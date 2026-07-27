@@ -8264,6 +8264,29 @@ func TestRuntimeRouterUnifiedExecToolSurfaceFollowsEffectiveFeatureConfigLikeRus
 	}
 }
 
+func TestRuntimeRouterRegistersViewImageForImageCapableModel(t *testing.T) {
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{})
+	defer router.Close()
+	params := &turn.TurnStartParams{
+		ThreadID: "thread-view-image",
+		Model:    defaultModelForAppTurn(),
+	}
+
+	options := router.viewImageOptionsForTurn(nil, params, cwd)
+	if options == nil || options.CWD != cwd {
+		t.Fatalf("viewImageOptionsForTurn() = %#v", options)
+	}
+	toolRouter, err := router.toolRouterForTurn(cwd, params, "turn-view-image")
+	if err != nil {
+		t.Fatalf("toolRouterForTurn() error = %v", err)
+	}
+	visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+	if !visible[tool.ViewImageToolName] {
+		t.Fatalf("model-visible specs = %#v, missing view_image", visible)
+	}
+}
+
 func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
 	if err := store.Save(&session.Record{ID: "thread-unified", CreatedAt: time.Now().UTC()}); err != nil {

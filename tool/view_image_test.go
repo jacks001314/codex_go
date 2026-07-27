@@ -34,10 +34,17 @@ func TestViewImageReadsRelativePathAndReturnsRustWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if out.Data["detail"] != "original" || !strings.HasPrefix(out.Data["image_url"].(string), "data:application/octet-stream;base64,") {
+	if out.Data["detail"] != "original" || !strings.HasPrefix(out.Data["image_url"].(string), "data:image/png;base64,") {
 		t.Fatalf("view_image output = %#v", out)
 	}
-	encoded := strings.TrimPrefix(out.Data["image_url"].(string), "data:application/octet-stream;base64,")
+	contentItems, ok := out.Data["content_items"].([]map[string]any)
+	if !ok || len(contentItems) != 1 || contentItems[0]["type"] != "input_image" || contentItems[0]["detail"] != "original" {
+		t.Fatalf("view_image content items = %#v", out.Data["content_items"])
+	}
+	if contentItems[0]["image_url"] != out.Data["image_url"] {
+		t.Fatal("view_image content item does not carry the returned image URL")
+	}
+	encoded := strings.TrimPrefix(out.Data["image_url"].(string), "data:image/png;base64,")
 	got, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil || string(got) != string(want) {
 		t.Fatalf("decoded image = %q, %v", got, err)

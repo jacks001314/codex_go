@@ -91,6 +91,13 @@ Scenarios marked `optIn` are excluded from `--all`. Run them explicitly with
 `--scenario`; they may require interactive approval or elevated Windows sandbox
 setup that is unsuitable for an unattended matrix.
 
+The Windows-only screen capture scenario exercises the complete live path from
+desktop capture through `view_image` inspection to a structured description:
+
+```powershell
+npm --prefix sdktests run test:parity -- --scenario windows-screen-capture-description --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+```
+
 The CLI exits with `0` for parity, `1` for a behavior mismatch, and `2` for an
 infrastructure failure.
 

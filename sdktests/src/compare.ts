@@ -78,6 +78,8 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkExpectedWorkspaceChanges("go", go, expected.workspaceChanges),
     checkWorkspaceRequiredPaths("rust", rust, expected.workspaceRequiredPaths),
     checkWorkspaceRequiredPaths("go", go, expected.workspaceRequiredPaths),
+    checkRequiredRolloutItemTypes("rust", rust, expected.requiredRolloutItemTypes),
+    checkRequiredRolloutItemTypes("go", go, expected.requiredRolloutItemTypes),
     checkWorkspaceSideEffects(rust, go, expected.compareWorkspacePaths),
   ];
   const firstFailure = checks.find((check) => !check.ok);
@@ -605,6 +607,48 @@ function checkWorkspaceUnchanged(label: string, recording: any, required: boolea
     ok,
     detail: ok ? undefined : `${label} changes: ${JSON.stringify(workspaceChanges(before, after))}`,
   };
+}
+
+function checkRequiredRolloutItemTypes(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: required rollout item types`, ok: true, detail: "scenario has no rollout-item contract" };
+  }
+  const actual = rolloutItemTypes(recording);
+  const missing = expected.map(String).filter((type) => !actual.includes(type));
+  return {
+    name: `${label}: required rollout item types`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label} missing: ${missing.join(", ")}; actual: ${actual.join(", ")}`,
+  };
+}
+
+function rolloutItemTypes(recording: any): string[] {
+  const found = new Set<string>();
+  for (const line of String(recording?.rolloutJsonl ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const itemType = String(entry?.item?.type ?? "");
+    const itemName = String(entry?.item?.name ?? "");
+    const eventType = String(entry?.payload?.type ?? "");
+    const responseToolName = String(entry?.payload?.name ?? "");
+    const responseToolInput = String(entry?.payload?.input ?? "");
+    if (["imageView", "image_view", "imageview"].includes(itemType)) found.add("image_view");
+    if (entry?.type === "item" && itemName === "view_image") found.add("image_view");
+    if (["view_image_tool_call", "image_view"].includes(eventType)) found.add("image_view");
+    if (entry?.type === "response_item" && responseToolName === "view_image") found.add("image_view");
+    if (
+      entry?.type === "response_item" &&
+      eventType === "custom_tool_call" &&
+      responseToolName === "exec" &&
+      /\btools\.view_image\s*\(/.test(responseToolInput)
+    ) found.add("image_view");
+  }
+  return [...found].sort();
 }
 
 function checkWorkspaceSideEffects(rust: any, go: any, selectedPaths?: unknown) {

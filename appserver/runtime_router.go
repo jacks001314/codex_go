@@ -8682,6 +8682,7 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	if err != nil {
 		return nil, err
 	}
+	viewImageOptions := r.viewImageOptionsForTurn(cfg, params, cwd)
 	requestUserInputModes := requestUserInputAvailableModesForTurn(cfg)
 	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
 	waitForEnvironmentEnabled := cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_executor")
@@ -8711,6 +8712,11 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	mcpService := r.mcpServiceForThread(threadID, cfg)
 	mcpTools, mcpConnectors := r.mcpRuntimeInputsForService(threadID, cfg, mcpService)
 	executorSkillProviders := r.executorSkillProviderForThread(threadID)
+	if r != nil && r.services.ToolRouter != nil && viewImageOptions != nil {
+		if err := r.services.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*viewImageOptions)); err != nil {
+			return nil, err
+		}
+	}
 	if r != nil && r.services.ToolRouter != nil && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
@@ -8847,9 +8853,27 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	}
 	options.WebSearch = webSearchOptions
 	options.ImageGeneration = imageGenerationOptions
+	options.ViewImage = viewImageOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string) *tool.ViewImageOptions {
+	modelID := ""
+	if params != nil {
+		modelID = strings.TrimSpace(params.Model)
+	}
+	modelID = firstNonEmpty(modelID, stringConfigValue(cfg, "model"), defaultModelForAppTurn())
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if !appModelInfoSupportsImageInput(info) {
+		return nil
+	}
+	return &tool.ViewImageOptions{
+		CWD:                      cwd,
+		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
+		IncludeEnvironmentID:     len(selectedEnvironmentIDs(params)) > 1,
+	}
 }
 
 func (r *RuntimeRouter) configBaseDirForAgents() string {

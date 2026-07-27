@@ -276,6 +276,39 @@ func TestToolResponseFromOutputStillPrefersContentItems(t *testing.T) {
 	}
 }
 
+func TestToolResponseFromViewImageOutputUsesInputImageContent(t *testing.T) {
+	invocation := &tool.Invocation{
+		CallID:   "call-view-image",
+		ToolName: tool.PlainName(tool.ViewImageToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction},
+	}
+	response := ToolResponseFromOutput(invocation, &tool.Output{
+		Success: true,
+		Body:    `{"image_url":"data:image/png;base64,aW1hZ2U="}`,
+		Data: map[string]any{"content_items": []map[string]any{{
+			"type":      "input_image",
+			"image_url": "data:image/png;base64,aW1hZ2U=",
+			"detail":    "original",
+		}}},
+	})
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	items, ok := wire["output"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("view_image output = %#v", wire["output"])
+	}
+	image, _ := items[0].(map[string]any)
+	if image["type"] != "input_image" || image["detail"] != "original" {
+		t.Fatalf("view_image content item = %#v", image)
+	}
+}
+
 func TestToolDispatcherRespondToModelBecomesFailedOutput(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("reject")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {

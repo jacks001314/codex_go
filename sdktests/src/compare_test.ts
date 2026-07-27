@@ -68,6 +68,37 @@ test("compareArtifact accepts paired command and one final message", () => {
   }
 });
 
+test("compareArtifact recognizes Rust and Go image-view rollout records", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const rust = {
+      ...recording(validEvents()),
+      rolloutJsonl: `${JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          input: 'const result = await tools.view_image({ path: "screenshot.png" }); image(result.image_url);',
+        },
+      })}\n`,
+    };
+    const go = {
+      ...recording(validEvents()),
+      rolloutJsonl: `${JSON.stringify({
+        type: "item",
+        item: { type: "function_call", name: "view_image", arguments: '{"path":"screenshot.png"}' },
+      })}\n`,
+    };
+    writeArtifact(root, rust, go, undefined, { requiredRolloutItemTypes: ["image_view"] });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "pass");
+    assert.equal(result.checks.find((check) => check.name === "rust: required rollout item types")?.ok, true);
+    assert.equal(result.checks.find((check) => check.name === "go: required rollout item types")?.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact reports the first missing started event", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {

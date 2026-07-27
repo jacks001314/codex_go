@@ -40,6 +40,23 @@ func TestRegistryRegisterAndModelVisibleSpecs(t *testing.T) {
 	}
 }
 
+func TestRouterRegisterIfAbsentUpdatesSharedCodeModeRegistry(t *testing.T) {
+	registry := NewRegistry()
+	router := NewRouter(registry)
+	executor := NewExecutorFunc(Spec{Name: PlainName("view_image")}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true}, nil
+	})
+	if err := router.RegisterIfAbsent(executor); err != nil {
+		t.Fatalf("RegisterIfAbsent() error = %v", err)
+	}
+	if err := router.RegisterIfAbsent(executor); err != nil {
+		t.Fatalf("duplicate RegisterIfAbsent() error = %v", err)
+	}
+	if _, ok := registry.Lookup(PlainName("view_image")); !ok {
+		t.Fatal("shared registry is missing view_image")
+	}
+}
+
 func TestRegistryDeferredToolNamespacesPrefersFirstNonEmptyDescription(t *testing.T) {
 	registry := NewRegistry()
 	for _, spec := range []Spec{

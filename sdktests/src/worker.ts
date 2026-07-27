@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { selectRolloutJsonl } from "./util.ts";
 
 const [inputPath, outputPath] = process.argv.slice(2);
 if (!inputPath || !outputPath) throw new Error("worker requires input and output paths");
@@ -34,7 +35,7 @@ function rolloutJsonl(): string {
     }
   };
   visit(root);
-  return files.map((file) => readFileSync(file, "utf8")).find((text) => !currentThreadId || text.includes(currentThreadId)) ?? "";
+  return selectRolloutJsonl(files.map((file) => readFileSync(file, "utf8")), currentThreadId);
 }
 
 try {

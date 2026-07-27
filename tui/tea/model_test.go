@@ -204,12 +204,49 @@ func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
 	model.taskStartedAt = start
 	model.now = func() time.Time { return now }
 
-	view := model.View()
+	view := utils.StripANSI(model.View())
 	if !strings.Contains(view, "\u2022 Working (12s \u2022 esc to interrupt)") {
 		t.Fatalf("Working indicator missing or not Rust-like:\n%s", view)
 	}
+	if strings.Contains(view, "Thinking") {
+		t.Fatalf("Working indicator should not render a separate Thinking line:\n%s", view)
+	}
 	if !strings.Contains(view, "Ask Codex") {
 		t.Fatalf("composer should remain visible below Working indicator:\n%s", view)
+	}
+}
+
+func TestModelWorkingIndicatorHighlightsLettersInSequence(t *testing.T) {
+	start := time.Unix(100, 0)
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	model := NewModel(state, Options{Width: 80, Height: 18})
+	model.taskStartedAt = start
+	model.now = func() time.Time { return start }
+
+	first := model.renderWorkingIndicator()
+	for range workingHighlightTicksPerLetter {
+		model.animEngine.Advance()
+	}
+	second := model.renderWorkingIndicator()
+	if first == second {
+		t.Fatalf("Working highlight did not advance to the next letter: %q", first)
+	}
+	if got := utils.StripANSI(first); got != utils.StripANSI(second) {
+		t.Fatalf("animation changed the status text or layout: %q != %q", got, utils.StripANSI(second))
+	}
+	if !strings.Contains(first, "\x1b[1mW\x1b[0m") {
+		t.Fatalf("first frame should highlight W: %q", first)
+	}
+	if !strings.Contains(second, "\x1b[1mo\x1b[0m") {
+		t.Fatalf("second frame should highlight o: %q", second)
+	}
+
+	for range workingHighlightTicksPerLetter * (len([]rune("Working")) - 1) {
+		model.animEngine.Advance()
+	}
+	if cycled := model.renderWorkingIndicator(); cycled != first {
+		t.Fatalf("Working highlight did not cycle back to W: %q", cycled)
 	}
 }
 
@@ -225,7 +262,7 @@ func TestModelWorkingIndicatorUsesRemappedInterruptHint(t *testing.T) {
 	model.taskStartedAt = start
 	model.now = func() time.Time { return start }
 
-	view := model.View()
+	view := utils.StripANSI(model.View())
 	if !strings.Contains(view, "\u2022 Working (0s \u2022 ctrl-x to interrupt)") {
 		t.Fatalf("remapped Working indicator missing:\n%s", view)
 	}

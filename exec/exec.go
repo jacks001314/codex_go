@@ -170,6 +170,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		installationID, _ = install.ResolveInstallationID(codexHome)
 	}
 	modelID := effectiveModel(req, cfg)
+	modelInfo := execModelInfo(modelID, cfg)
 	parallelToolCalls := modelSupportsParallelToolCalls(modelID)
 	useResponsesLite := modelUsesResponsesLite(modelID)
 	reasoningEffort := effectiveReasoningEffort(req, cfg)
@@ -299,6 +300,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		MCPTools:                     mcpTools,
 		MCPConnectors:                mcpConnectors,
 		ImageGeneration:              imageGenerationOptions,
+		ViewImage:                    execViewImageOptions(requestCWD(req), &modelInfo),
 		HostedTools:                  hostedTools,
 		DisableHostedImageGeneration: req.Exec.Subcommand == "review",
 		ToolOutputTokenLimit:         cfg.ToolOutputTokenLimit(),
@@ -411,6 +413,7 @@ type agentRunConfig struct {
 	MCPTools                     []mcp.RuntimeToolInfo
 	MCPConnectors                []mcp.RuntimeConnector
 	ImageGeneration              *turn.ImageGenerationOptions
+	ViewImage                    *tool.ViewImageOptions
 	HostedTools                  []any
 	DisableHostedImageGeneration bool
 	ToolOutputTokenLimit         *int
@@ -804,6 +807,11 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		return nil, errors.New("exec runner is nil")
 	}
 	if r.ToolRouter != nil {
+		if run != nil && run.ViewImage != nil {
+			if err := r.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*run.ViewImage)); err != nil {
+				return nil, err
+			}
+		}
 		return r.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(requestCWD(req))
@@ -846,6 +854,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	}
 	if run != nil {
 		options.ImageGeneration = run.ImageGeneration
+		options.ViewImage = run.ViewImage
 	}
 	options.EnableAgents = false
 	return turn.BuildToolRouter(options)
@@ -999,6 +1008,16 @@ func modelInfoSupportsImageInputExec(info *model.ModelInfo) bool {
 		}
 	}
 	return false
+}
+
+func execViewImageOptions(cwd string, info *model.ModelInfo) *tool.ViewImageOptions {
+	if !modelInfoSupportsImageInputExec(info) {
+		return nil
+	}
+	return &tool.ViewImageOptions{
+		CWD:                      cwd,
+		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
+	}
 }
 
 func authSnapshotUsesCodexBackendExec(snapshot *auth.AuthDotJSON) bool {
@@ -2130,6 +2149,9 @@ func todoListIDFromPlanUpdateExecution(execution *turn.ToolExecutionResult) stri
 }
 
 func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
+	if isViewImageExecution(execution) {
+		return nil
+	}
 	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
 		// Rust keeps nested code-mode tool calls inside the outer exec delegate
 		// boundary. They are observable in the exec result and rollout trace, but
@@ -2153,6 +2175,9 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 
 func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
 	if execution == nil || execution.Invocation == nil {
+		return nil
+	}
+	if isViewImageExecution(execution) {
 		return nil
 	}
 	if isCollabExecution(execution) {
@@ -2208,6 +2233,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	if execution == nil || execution.Invocation == nil || execution.Output == nil {
 		return protocol.ThreadEvent{}, false
 	}
+	if isViewImageExecution(execution) {
+		return protocol.ThreadEvent{}, false
+	}
 	if isPlanUpdateExecution(execution) {
 		items := todoItemsFromPlanUpdateOutput(execution.Output)
 		return protocol.ItemCompleted(protocol.TodoListItem("todo-list-"+safeSessionItemID(execution.Invocation.CallID), items)), true
@@ -2258,6 +2286,10 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	callID := execution.Invocation.CallID
 	toolName := execution.Invocation.ToolName.Key()
 	return protocol.ItemCompleted(protocol.ToolOutputItemWithCallID("tool-output-"+safeSessionItemID(callID), callID, toolName, execution.Output.Body, execution.Output.Success, cloneEventMetadata(execution.Output.Data))), true
+}
+
+func isViewImageExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && execution.Invocation != nil && execution.Invocation.ToolName.Key() == tool.ViewImageToolName
 }
 
 func cloneEventMetadata(metadata map[string]any) map[string]any {

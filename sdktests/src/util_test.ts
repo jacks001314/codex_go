@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { snapshotFiles } from "./util.ts";
+import { selectRolloutJsonl, snapshotFiles } from "./util.ts";
 
 test("workspace snapshots ignore Python bytecode caches", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-snapshot-"));
@@ -19,4 +19,11 @@ test("workspace snapshots ignore Python bytecode caches", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("rollout selection prefers the complete matching thread record", () => {
+  const threadId = "thread-screen-capture";
+  const initial = `${threadId}\nuser`;
+  const complete = `${threadId}\nuser\nassistant\nimageView`;
+  assert.equal(selectRolloutJsonl([initial, "another-thread\nlonger-unrelated-record", complete], threadId), complete);
 });

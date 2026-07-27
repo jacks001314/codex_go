@@ -2288,6 +2288,40 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	}
 }
 
+func TestToolRouterRegistersViewImageForImageCapableModel(t *testing.T) {
+	cwd := t.TempDir()
+	info := &model.ModelInfo{
+		InputModalities:             []string{"text", "image"},
+		SupportsImageDetailOriginal: true,
+	}
+	viewImage := execViewImageOptions(cwd, info)
+	if viewImage == nil || viewImage.CWD != cwd || !viewImage.CanRequestOriginalDetail {
+		t.Fatalf("execViewImageOptions() = %#v", viewImage)
+	}
+	if got := execViewImageOptions(cwd, &model.ModelInfo{InputModalities: []string{"text"}}); got != nil {
+		t.Fatalf("text-only execViewImageOptions() = %#v, want nil", got)
+	}
+
+	runner := NewLocalRunner(cwd)
+	router, err := runner.toolRouterForRequest(
+		&Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{CWD: cwd}, Prompt: "inspect image"}},
+		&agentRunConfig{ViewImage: viewImage},
+	)
+	if err != nil {
+		t.Fatalf("toolRouterForRequest returned error: %v", err)
+	}
+	found := false
+	for _, spec := range router.ModelVisibleSpecs() {
+		if spec.Name.Key() == tool.ViewImageToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("view_image is missing from the exec model-visible tool surface")
+	}
+}
+
 func TestInteractiveExplicitOnRequestReachesShellApproval(t *testing.T) {
 	runner := NewLocalRunner(t.TempDir())
 	req := &Request{
@@ -3614,6 +3648,23 @@ func TestCodeModeDoesNotExposeNestedCommandsAsTopLevelEvents(t *testing.T) {
 	}
 	if events := eventsFromToolExecution(execution); len(events) != 0 {
 		t.Fatalf("nested command events = %#v, want none", events)
+	}
+}
+
+func TestViewImageExecutionDoesNotExposeImageDataAsGenericSDKToolOutput(t *testing.T) {
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "view-image-call",
+			ToolName: tool.PlainName(tool.ViewImageToolName),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"path":"screenshot.png"}`},
+		},
+		Output: &tool.Output{
+			Success: true,
+			Body:    `{"image_url":"data:image/png;base64,large"}`,
+		},
+	}
+	if events := eventsFromToolExecution(execution); len(events) != 0 {
+		t.Fatalf("view_image SDK events = %#v, want none", events)
 	}
 }
 

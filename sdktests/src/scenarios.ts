@@ -67,6 +67,7 @@ export type Scenario = {
       hash?: string;
     }[];
     workspaceRequiredPaths?: string[];
+    requiredRolloutItemTypes?: string[];
     uniqueCompletedItemTypes?: string[];
     uniqueCommandExecutions?: boolean;
     requireStartedCompletedPairs?: string[];
@@ -1440,6 +1441,51 @@ export const scenarios: Scenario[] = [
       expectedTurns: 1,
       structuredAgentMessages: [{ imageAttached: true }],
       workspaceMutation: "none",
+    },
+  },
+  {
+    name: "windows-screen-capture-description",
+    description: "Captures the live Windows desktop, inspects the PNG with view_image, and describes what is visible.",
+    platforms: ["windows"],
+    optIn: true,
+    timeoutMs: 180000,
+    threadOptions: {
+      sandboxMode: "danger-full-access",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "截屏，然后告诉我你看到了什么",
+        outputSchema: {
+          type: "object",
+          properties: {
+            screenshotPath: { type: "string", const: "screenshot.png" },
+            description: { type: "string", minLength: 1 },
+          },
+          required: ["screenshotPath", "description"],
+          additionalProperties: false,
+        },
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["command_execution", "agent_message"],
+      requiredRolloutItemTypes: ["image_view"],
+      requireStartedCompletedPairs: ["command_execution"],
+      forbidEmptyCommandExecutions: true,
+      commandOutputComparison: "informational",
+      eventSequenceComparison: "model-selected-tools",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "required",
+      workspaceChanges: [{ path: "screenshot.png", change: "added" }],
+      workspaceRequiredPaths: ["screenshot.png"],
+      compareWorkspacePaths: [],
     },
   },
   {

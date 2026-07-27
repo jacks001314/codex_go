@@ -269,6 +269,22 @@ func (r *Router) SetClock(clock func() time.Time) {
 	r.now = clock
 }
 
+func (r *Router) RegisterIfAbsent(executor Executor) error {
+	if r == nil || r.registry == nil {
+		return fmt.Errorf("%w: tool router is nil", ErrToolInvalidCall)
+	}
+	if executor == nil {
+		return fmt.Errorf("%w: executor is nil", ErrToolInvalidCall)
+	}
+	if _, ok := r.registry.Lookup(executor.Spec().Name); ok {
+		return nil
+	}
+	if err := r.registry.Register(executor); err != nil && !errors.Is(err, ErrDuplicateToolName) {
+		return err
+	}
+	return nil
+}
+
 func (r *Router) ModelVisibleSpecs() []Spec {
 	if r == nil || r.registry == nil {
 		return nil

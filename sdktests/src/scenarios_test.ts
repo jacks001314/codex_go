@@ -27,3 +27,15 @@ test("multifile refactor compares deterministic paths and contracts the generate
     { path: "service.py", change: "modified" },
   ]);
 });
+
+test("Windows screen capture scenario preserves the requested prompt and audits image inspection", () => {
+  const scenario = getScenario("windows-screen-capture-description");
+  assert.equal(scenario.optIn, true);
+  assert.deepEqual(scenario.platforms, ["windows"]);
+  assert.equal(scenario.turns[0]?.prompt, "截屏，然后告诉我你看到了什么");
+  assert.deepEqual(scenario.expected.requiredRolloutItemTypes, ["image_view"]);
+  assert.equal(scenario.expected.commandOutputComparison, "informational");
+  assert.equal(scenario.expected.requireSingleFinalAgentMessagePerTurn, undefined);
+  assert.deepEqual(scenario.expected.workspaceChanges, [{ path: "screenshot.png", change: "added" }]);
+  assert.deepEqual(scenario.expected.compareWorkspacePaths, []);
+});

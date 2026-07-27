@@ -126,6 +126,12 @@ export function snapshotFiles(root: string): Record<string, string> {
   return out;
 }
 
+export function selectRolloutJsonl(contents: string[], threadId?: string | null): string {
+  return contents
+    .filter((text) => !threadId || text.includes(threadId))
+    .sort((left, right) => right.length - left.length)[0] ?? "";
+}
+
 export function latestArtifactDir(): string {
   const artifacts = path.join(sdktestsRoot, "artifacts");
   const dirs = existsSync(artifacts)

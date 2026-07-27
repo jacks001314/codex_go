@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,12 +117,33 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if err != nil {
 		return nil, RespondToModel(fmt.Sprintf("unable to read image at `%s`: %v", path, err))
 	}
-	result := ViewImageResult{ImageURL: utils.DataURLFromBytes("application/octet-stream", data), Detail: detail}
+	mimeType := strings.TrimSpace(strings.SplitN(http.DetectContentType(data), ";", 2)[0])
+	if !strings.HasPrefix(mimeType, "image/") {
+		mimeType = strings.TrimSpace(strings.SplitN(mime.TypeByExtension(filepath.Ext(path)), ";", 2)[0])
+	}
+	if !strings.HasPrefix(mimeType, "image/") {
+		return nil, RespondToModel(fmt.Sprintf("file at `%s` is not a supported image", path))
+	}
+	result := ViewImageResult{ImageURL: utils.DataURLFromBytes(mimeType, data), Detail: detail}
 	body, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
 	}
-	return &Output{Success: true, Body: string(body), Data: map[string]any{"image_url": result.ImageURL, "detail": result.Detail}, LogPreview: fmt.Sprintf("<image data URL omitted: %d bytes>", len(result.ImageURL))}, nil
+	contentItems := []map[string]any{{
+		"type":      "input_image",
+		"image_url": result.ImageURL,
+		"detail":    result.Detail,
+	}}
+	return &Output{
+		Success: true,
+		Body:    string(body),
+		Data: map[string]any{
+			"image_url":     result.ImageURL,
+			"detail":        result.Detail,
+			"content_items": contentItems,
+		},
+		LogPreview: fmt.Sprintf("<image data URL omitted: %d bytes>", len(result.ImageURL)),
+	}, nil
 }
 
 var _ Executor = (*ViewImageHandler)(nil)
