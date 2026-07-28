@@ -93,6 +93,21 @@ func TestBuildPromptFromOptionsBaseUsesMergeBaseLikeRust(t *testing.T) {
 	}
 }
 
+func TestPromptForTargetInDirUsesThreadRepository(t *testing.T) {
+	dir := initGitRepo(t)
+	initialBranch := strings.TrimSpace(git(t, dir, "branch", "--show-current"))
+	baseSHA := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD"))
+	git(t, dir, "checkout", "-b", "feature/review-cwd")
+	writeFile(t, dir, "feature.txt", "feature\n")
+	git(t, dir, "add", "feature.txt")
+	git(t, dir, "commit", "-m", "feature change")
+
+	prompt := PromptForTargetInDir(Target{Kind: "base", Base: initialBranch}, dir)
+	if !strings.Contains(prompt, "The merge base commit for this comparison is "+baseSHA+".") {
+		t.Fatalf("prompt = %q, want merge-base SHA %s", prompt, baseSHA)
+	}
+}
+
 func TestBuildPromptFromOptionsSkipsDiffForCustomPrompt(t *testing.T) {
 	provider := &errorDiffProvider{err: errors.New("provider should not be called")}
 	prompt, target, err := BuildPromptFromOptions(cli.ReviewOptions{Prompt: "check auth"}, strings.NewReader(""), provider)

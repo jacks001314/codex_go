@@ -65,6 +65,37 @@ func TestTurnStartResponseMarshalRustShape(t *testing.T) {
 	}
 }
 
+func TestTurnStartParamsMarshalIncludesCollaborationMode(t *testing.T) {
+	params := TurnStartParams{
+		ThreadID: "thread-plan",
+		Input:    []TurnUserInput{{Type: "text", Text: "make a plan"}},
+		CollaborationMode: map[string]any{
+			"mode": "plan",
+			"settings": map[string]any{
+				"model":                  "gpt-5.4",
+				"reasoning_effort":       "medium",
+				"developer_instructions": "plan carefully",
+			},
+		},
+	}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		t.Fatalf("Marshal TurnStartParams error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal TurnStartParams error = %v", err)
+	}
+	mode, ok := payload["collaborationMode"].(map[string]any)
+	if !ok || mode["mode"] != "plan" {
+		t.Fatalf("collaborationMode = %#v", payload["collaborationMode"])
+	}
+	settings, ok := mode["settings"].(map[string]any)
+	if !ok || settings["reasoning_effort"] != "medium" || settings["developer_instructions"] != "plan carefully" {
+		t.Fatalf("collaboration settings = %#v", mode["settings"])
+	}
+}
+
 func TestInterruptRequiresActiveTurn(t *testing.T) {
 	service := NewTurnService()
 	if _, err := service.Interrupt(nil); !errors.Is(err, ErrInvalidTurnRequest) {

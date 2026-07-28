@@ -26,6 +26,65 @@ type proposedPlanStreamParser struct {
 	inPlan bool
 }
 
+type ProposedPlanSegmentKind string
+
+const (
+	ProposedPlanSegmentNormal ProposedPlanSegmentKind = "normal"
+	ProposedPlanSegmentStart  ProposedPlanSegmentKind = "start"
+	ProposedPlanSegmentDelta  ProposedPlanSegmentKind = "delta"
+	ProposedPlanSegmentEnd    ProposedPlanSegmentKind = "end"
+)
+
+type ProposedPlanSegment struct {
+	Kind ProposedPlanSegmentKind
+	Text string
+}
+
+type ProposedPlanStreamParser struct {
+	parser *proposedPlanStreamParser
+}
+
+func NewProposedPlanStreamParser() *ProposedPlanStreamParser {
+	return &ProposedPlanStreamParser{parser: newProposedPlanStreamParser()}
+}
+
+func (p *ProposedPlanStreamParser) Push(delta string) []ProposedPlanSegment {
+	if p == nil {
+		return nil
+	}
+	if p.parser == nil {
+		p.parser = newProposedPlanStreamParser()
+	}
+	return exportedProposedPlanSegments(p.parser.push(delta))
+}
+
+func (p *ProposedPlanStreamParser) Finish() []ProposedPlanSegment {
+	if p == nil {
+		return nil
+	}
+	if p.parser == nil {
+		p.parser = newProposedPlanStreamParser()
+	}
+	return exportedProposedPlanSegments(p.parser.finish())
+}
+
+func exportedProposedPlanSegments(segments []proposedPlanSegment) []ProposedPlanSegment {
+	out := make([]ProposedPlanSegment, 0, len(segments))
+	for _, segment := range segments {
+		kind := ProposedPlanSegmentNormal
+		switch segment.Kind {
+		case proposedPlanSegmentStart:
+			kind = ProposedPlanSegmentStart
+		case proposedPlanSegmentDelta:
+			kind = ProposedPlanSegmentDelta
+		case proposedPlanSegmentEnd:
+			kind = ProposedPlanSegmentEnd
+		}
+		out = append(out, ProposedPlanSegment{Kind: kind, Text: segment.Text})
+	}
+	return out
+}
+
 func newProposedPlanStreamParser() *proposedPlanStreamParser {
 	return &proposedPlanStreamParser{}
 }

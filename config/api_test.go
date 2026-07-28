@@ -579,14 +579,25 @@ func TestServiceBatchWritePreservesQuotedHookStateKeys(t *testing.T) {
 		KeyPath: "hooks.state",
 		Value: map[string]any{
 			hookKey: map[string]any{
-				"enabled":      false,
 				"trusted_hash": "sha256:abc",
 			},
 		},
 		MergeStrategy: MergeUpsert,
 	}}})
 	if err != nil {
-		t.Fatalf("BatchWrite() error = %v", err)
+		t.Fatalf("BatchWrite(trust) error = %v", err)
+	}
+	_, err = service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{{
+		KeyPath: "hooks.state",
+		Value: map[string]any{
+			hookKey: map[string]any{
+				"enabled": false,
+			},
+		},
+		MergeStrategy: MergeUpsert,
+	}}})
+	if err != nil {
+		t.Fatalf("BatchWrite(disable) error = %v", err)
 	}
 	read, err := service.Read(&ConfigReadParams{})
 	if err != nil {
@@ -784,10 +795,18 @@ func TestConfigWarningsClone(t *testing.T) {
 }
 
 func TestExternalAgentConfigDetectAndImport(t *testing.T) {
-	service := NewConfigService(t.TempDir())
-	service.SetExternalAgentHome(t.TempDir())
+	codexHome := t.TempDir()
+	externalHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(externalHome, "settings.json"), []byte(`{"env":{"FOO":"bar"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigService(codexHome)
+	service.SetExternalAgentHome(externalHome)
 	service.SetClock(func() time.Time { return time.UnixMilli(1234) })
 	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("Use Claude Code with CLAUDE.md.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	detected := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true, CWDs: []string{cwd}})
 	if len(detected.Items) != 2 || detected.Items[0].ItemType != MigrationConfig || detected.Items[1].ItemType != MigrationAgentsMD {
 		t.Fatalf("detected = %+v", detected.Items)
@@ -806,6 +825,14 @@ func TestExternalAgentConfigDetectAndImport(t *testing.T) {
 	histories := service.ImportHistories()
 	if len(histories.Data) != 1 || histories.Data[0].ProviderID == nil || *histories.Data[0].ProviderID != providerID || histories.Data[0].CompletedAtMS != 1234 || len(histories.Data[0].Successes) != 2 {
 		t.Fatalf("histories = %+v", histories.Data)
+	}
+	configData, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil || !strings.Contains(string(configData), `FOO = 'bar'`) && !strings.Contains(string(configData), `FOO = "bar"`) {
+		t.Fatalf("imported config = %q err=%v", configData, err)
+	}
+	agentsData, err := os.ReadFile(filepath.Join(cwd, "AGENTS.md"))
+	if err != nil || string(agentsData) != "Use Codex with AGENTS.md.\n" {
+		t.Fatalf("imported AGENTS.md = %q err=%v", agentsData, err)
 	}
 
 	recorded := service.RecordExternalAgentImportHistory(&ExternalAgentConfigImportHistoryRecordParams{

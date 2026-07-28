@@ -127,6 +127,18 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Execution: firstAgentItemValue(i.Execution, "client"),
 			Arguments: agentItemSearchArguments(i),
 		})
+	case "web_search_call":
+		return json.Marshal(struct {
+			ID     string         `json:"id,omitempty"`
+			Type   string         `json:"type"`
+			Status string         `json:"status,omitempty"`
+			Action map[string]any `json:"action,omitempty"`
+		}{
+			ID:     i.ID,
+			Type:   i.Type,
+			Status: i.Status,
+			Action: cloneAgentItemMap(i.Search),
+		})
 	case "reasoning":
 		return json.Marshal(struct {
 			ID               string                          `json:"id,omitempty"`

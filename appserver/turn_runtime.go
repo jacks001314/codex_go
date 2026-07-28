@@ -960,7 +960,6 @@ func (r *RuntimeRouter) reviewRuntimeTurnStartParams(params *review.StartParams,
 	baseInstructions := review.ReviewPrompt
 	turnParams := &turn.TurnStartParams{
 		ThreadID:         threadID,
-		Prompt:           review.PromptForTarget(params.Target.ToTarget()),
 		BaseInstructions: &baseInstructions,
 		Originator:       "review",
 		ApprovalPolicy:   string(sandbox.ApprovalNever),
@@ -973,6 +972,7 @@ func (r *RuntimeRouter) reviewRuntimeTurnStartParams(params *review.StartParams,
 			turnParams.Config["model_provider"] = providerID
 		}
 	}
+	turnParams.Prompt = review.PromptForTargetInDir(params.Target.ToTarget(), turnParams.CWD)
 	if override := r.reviewModelOverride(); override != nil {
 		turnParams.Model = *override
 	}
@@ -1017,7 +1017,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Do this before persisting/sending the new prompt so the prompt is retained
 	// and the sampling request sees the compacted history.
 	if status := r.compactTokenStatusForTurn(threadID, runConfig.Model, params); status.ShouldCompact {
-		notification, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
+		_, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
 			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
 			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
 			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(status.ActiveContextTokens),
@@ -1029,9 +1029,6 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			}
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
 			return
-		}
-		if notification != nil {
-			r.notify(NotificationContextCompacted, notification)
 		}
 		// appTurnConfig contains the session history; reload it after compaction.
 		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
@@ -1183,9 +1180,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
 			if !fallbackRecorded && fallbackErr == nil && status.ShouldCompact {
-				if notification, err := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); err == nil && notification != nil {
-					r.notify(NotificationContextCompacted, notification)
-				}
+				_, _ = r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status)
 			}
 		}
 	}
@@ -1372,7 +1367,6 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
 	}
 	r.unifiedExecPersistMu.Unlock()
-	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
 		r.notify(NotificationThreadTokenUsageUpdated, &ThreadTokenUsageUpdatedNotification{
@@ -1381,6 +1375,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 			TokenUsage: *usage,
 		})
 	}
+	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
@@ -1504,12 +1499,6 @@ func (r *RuntimeRouter) notifyReviewRuntimeItems(threadID string, turnID string,
 				CompletedAtMS: completedAtMS,
 			})
 		case "agentMessage":
-			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
-				Item:          payload,
-				ThreadID:      threadID,
-				TurnID:        turnID,
-				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
-			})
 			if strings.TrimSpace(threadItem.Text) != "" {
 				r.notify(NotificationAgentMessageDelta, &AgentMessageDeltaNotification{
 					ThreadID: threadID,
@@ -1518,6 +1507,12 @@ func (r *RuntimeRouter) notifyReviewRuntimeItems(threadID string, turnID string,
 					Delta:    threadItem.Text,
 				})
 			}
+			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+				Item:          payload,
+				ThreadID:      threadID,
+				TurnID:        turnID,
+				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+			})
 		}
 	}
 }
@@ -3037,6 +3032,21 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					}
 					continue
 				}
+				if item.Type == "web_search_call" {
+					action, query := appWebSearchActionFromAgentItem(&item)
+					raw, _ := json.Marshal(&item)
+					items = append(items, session.Item{
+						ID:         firstNonEmpty(item.ID, item.CallID, "web-search-"+safeIdentifier(turnID)),
+						Type:       "webSearch",
+						Text:       query,
+						CreatedAt:  createdAt,
+						Data:       map[string]any{"query": query, "action": action},
+						Metadata:   metadata,
+						Raw:        raw,
+						ResponseID: response.ResponseID,
+					})
+					continue
+				}
 				text := firstNonEmpty(item.Text, response.Message)
 				if strings.TrimSpace(text) == "" && item.Type != "reasoning" {
 					continue
@@ -3864,8 +3874,6 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	r.notifyCompactionActivity(params.ThreadID, true)
-	defer r.notifyCompactionActivity(params.ThreadID, false)
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil || record == nil {
 		return nil, err
@@ -3890,12 +3898,25 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	if request.Phase == "" {
 		request.Phase = compact.PhaseStandaloneTurn
 	}
+	if request.TurnID == "" {
+		request.TurnID = string(newThreadID())
+	}
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, err
 	}
+	compactionItem := session.Item{
+		ID:        string(newThreadID()),
+		Type:      "contextCompaction",
+		CreatedAt: startedAt,
+		Metadata: appTurnMetadata(request.TurnID, map[string]any{
+			"kind":    "context_compaction",
+			"compact": true,
+		}),
+	}
+	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
 		Runner:               r.compactRunnerForRecord(record),
 		MaxSummaryChars:      4000,
@@ -3916,6 +3937,8 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	}
 	now := time.Now().UTC()
 	record.Items = sessionItemsFromCompactItems(compacted.NewHistory, now)
+	compactionItem.CreatedAt = now
+	record.Items = append(record.Items, compactionItem)
 	record.UpdatedAt = now
 	record.RecencyAt = now
 	extra := cloneAnyMap(record.Metadata.Extra)
@@ -3962,6 +3985,7 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		return nil, err
 	}
 	_ = r.appendRuntimeCompacted(request.ThreadID, compacted.Summary, record.Items, now)
+	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
 	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
 	return &ContextCompactedNotification{
 		ThreadID:    request.ThreadID,
@@ -3979,6 +4003,26 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		CompletedAt: compacted.CompletedAt.Format(time.RFC3339Nano),
 		TokenUsage:  compactUsageNotificationValue(compacted.Usage),
 	}, nil
+}
+
+func (r *RuntimeRouter) notifyContextCompactionItemStarted(threadID string, turnID string, item session.Item) {
+	threadItem := BuildThreadItem(item)
+	r.notify(NotificationItemStarted, &ItemStartedNotification{
+		ThreadID:    strings.TrimSpace(threadID),
+		TurnID:      strings.TrimSpace(turnID),
+		Item:        threadItemPayload(threadItem),
+		StartedAtMS: item.CreatedAt.UTC().UnixMilli(),
+	})
+}
+
+func (r *RuntimeRouter) notifyContextCompactionItemCompleted(threadID string, turnID string, item session.Item) {
+	threadItem := BuildThreadItem(item)
+	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+		ThreadID:      strings.TrimSpace(threadID),
+		TurnID:        strings.TrimSpace(turnID),
+		Item:          threadItemPayload(threadItem),
+		CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+	})
 }
 
 func compactUsageNotificationValue(usage *compact.Usage) any {
@@ -4329,22 +4373,27 @@ func sessionItemForWebSearchExecution(turnID string, execution *turn.ToolExecuti
 	}
 	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
 	metadata["toolName"] = "web.run"
+	results := webSearchResultsForExecution(execution)
 	if execution.Output != nil {
 		metadata["success"] = execution.Output.Success
 		if strings.TrimSpace(execution.Output.Error) != "" {
 			metadata["error"] = execution.Output.Error
 		}
 	}
+	data := map[string]any{
+		"query":  query,
+		"action": action,
+	}
+	if results != nil {
+		data["results"] = results
+	}
 	return session.Item{
 		ID:        callID,
 		Type:      "webSearch",
 		Text:      query,
 		CreatedAt: itemCreatedAt,
-		Data: map[string]any{
-			"query":  query,
-			"action": action,
-		},
-		Metadata: metadata,
+		Data:      data,
+		Metadata:  metadata,
 	}, true
 }
 
@@ -4473,6 +4522,18 @@ func webSearchActionForExecution(execution *turn.ToolExecutionResult) any {
 		}
 	}
 	return map[string]any{"type": "other"}
+}
+
+func webSearchResultsForExecution(execution *turn.ToolExecutionResult) []any {
+	if execution == nil || execution.Output == nil || execution.Output.Data == nil {
+		return nil
+	}
+	for _, key := range []string{"web_search_results", "webSearchResults", "results"} {
+		if values, ok := execution.Output.Data[key].([]any); ok {
+			return append([]any(nil), values...)
+		}
+	}
+	return nil
 }
 
 func webSearchQueryFromAction(action any) string {
@@ -7682,6 +7743,12 @@ func threadItemFromStreamAgentItem(item *model.AgentItem, turnID string, respons
 			threadItem.Data["revised_prompt"] = revised
 		}
 	}
+	if item.Type == "web_search_call" {
+		action, query := appWebSearchActionFromAgentItem(item)
+		threadItem.Type = "webSearch"
+		threadItem.Text = query
+		threadItem.Data = map[string]any{"query": query, "action": action}
+	}
 	if isAppToolItem(item) {
 		if threadItem.Data == nil {
 			threadItem.Data = map[string]any{}
@@ -7693,6 +7760,17 @@ func threadItemFromStreamAgentItem(item *model.AgentItem, turnID string, respons
 		}
 	}
 	return threadItem
+}
+
+func appWebSearchActionFromAgentItem(item *model.AgentItem) (any, string) {
+	if item == nil {
+		return map[string]any{"type": "other"}, ""
+	}
+	action := threadItemWebSearchActionFromAny(item.Search)
+	if action == nil {
+		action = map[string]any{"type": "other"}
+	}
+	return action, webSearchQueryFromAction(action)
 }
 
 func streamAgentItemLooksLikeMCP(item *model.AgentItem) bool {

@@ -3,6 +3,7 @@ package turn
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,8 @@ const (
 type WebSearchOptions struct {
 	SessionID       string
 	Model           string
+	Originator      string
+	TurnMetadata    string
 	Provider        model.APIProvider
 	Auth            model.AuthHeaders
 	HTTPClient      model.HTTPDoer
@@ -78,17 +81,22 @@ func (h *WebSearchHandler) Execute(ctx context.Context, invocation *tool.Invocat
 		Type: "input_text",
 		Text: response.Output,
 	}}
+	data := map[string]any{
+		"content_items":             contentItems,
+		"contains_external_context": true,
+		"web_search":                true,
+		"web_search_action":         webSearchCommandAction(&commands),
+	}
+	if response.Results != nil {
+		data["web_search_results"] = append([]any(nil), response.Results...)
+	}
 	return &tool.Output{
-		CallID:     invocation.CallID,
-		ToolName:   invocation.ToolName,
-		Success:    true,
-		Body:       response.Output,
-		LogPreview: response.Output,
-		Data: map[string]any{
-			"content_items":     contentItems,
-			"web_search":        true,
-			"web_search_action": webSearchCommandAction(&commands),
-		},
+		CallID:      invocation.CallID,
+		ToolName:    invocation.ToolName,
+		Success:     true,
+		Body:        response.Output,
+		LogPreview:  "[standalone web search output]",
+		Data:        data,
 		CompletedAt: time.Now().UTC(),
 	}, nil
 }
@@ -118,6 +126,12 @@ func (h *WebSearchHandler) search(ctx context.Context, commands *codexapi.Search
 	}
 	req.Header.Set("Content-Type", "application/json")
 	addHeaderValues(req.Header, h.options.Provider.Headers)
+	if originator := strings.TrimSpace(h.options.Originator); originator != "" && !strings.ContainsAny(originator, "\r\n") {
+		req.Header.Set("originator", originator)
+	}
+	if metadata := strings.TrimSpace(h.options.TurnMetadata); metadata != "" && !strings.ContainsAny(metadata, "\r\n") {
+		req.Header.Set(codexapi.ClientCodexTurnMetadataHeader, metadata)
+	}
 	signed, err := h.options.Auth.ApplyRequest(ctx, req, body)
 	if err != nil {
 		return nil, err
@@ -157,6 +171,25 @@ func (h *WebSearchHandler) search(ctx context.Context, commands *codexapi.Search
 		return nil, err
 	}
 	return &decoded, nil
+}
+
+func WebSearchMaxOutputTokens(info *model.ModelInfo, configured *int) *uint64 {
+	if configured != nil && *configured > 0 {
+		value := uint64(*configured)
+		return &value
+	}
+	if info == nil || info.TruncationPolicy.Limit <= 0 {
+		return nil
+	}
+	limit := info.TruncationPolicy.Limit
+	if info.TruncationPolicy.Mode == model.TruncationModeBytes {
+		limit = (limit + 3) / 4
+	}
+	if limit <= 0 {
+		return nil
+	}
+	value := uint64(limit)
+	return &value
 }
 
 func webSearchCommandAction(commands *codexapi.SearchCommands) map[string]any {
@@ -504,80 +537,93 @@ func addHeaderValues(dst http.Header, src http.Header) {
 
 func webSearchCommandsSchema() map[string]any {
 	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
+		"type": "object",
 		"properties": map[string]any{
 			"search_query": map[string]any{
 				"type":        "array",
-				"description": "query internet search engine for a given list of queries",
+				"description": "Query the internet search engine for a given list of queries.",
 				"items":       webSearchQuerySchema(),
 			},
 			"image_query": map[string]any{
 				"type":        "array",
-				"description": "query image search engine for a given list of queries",
+				"description": "Query the image search engine for a given list of queries.",
 				"items":       webSearchQuerySchema(),
 			},
 			"open": map[string]any{
 				"type":        "array",
-				"description": "Open the page indicated by ref_id.",
-				"items":       webSearchObjectSchema(map[string]any{"ref_id": stringSchema(""), "lineno": nullableIntegerSchema()}),
+				"description": "Open pages by reference id or URL.",
+				"items": webSearchObjectSchema(map[string]any{
+					"ref_id": webSearchStringSchema("Reference id or URL to open."),
+					"lineno": webSearchIntegerSchema("Line number to position the page at."),
+				}, "ref_id"),
 			},
 			"click": map[string]any{
 				"type":        "array",
-				"description": "Open the link id from the page indicated by ref_id.",
-				"items":       webSearchObjectSchema(map[string]any{"ref_id": stringSchema(""), "id": map[string]any{"type": "integer", "minimum": 0}}),
+				"description": "Open links from previously opened pages.",
+				"items": webSearchObjectSchema(map[string]any{
+					"ref_id": webSearchStringSchema("Reference id containing the numbered link."),
+					"id":     webSearchIntegerSchema("Numbered link id to open."),
+				}, "id", "ref_id"),
 			},
 			"find": map[string]any{
 				"type":        "array",
-				"description": "Find the text pattern in the page indicated by ref_id.",
-				"items":       webSearchObjectSchema(map[string]any{"ref_id": stringSchema(""), "pattern": stringSchema("")}),
+				"description": "Find text patterns in pages.",
+				"items": webSearchObjectSchema(map[string]any{
+					"ref_id":  webSearchStringSchema("Reference id or URL to search within."),
+					"pattern": webSearchStringSchema("Text pattern to find."),
+				}, "pattern", "ref_id"),
 			},
 			"screenshot": map[string]any{
 				"type":        "array",
-				"description": "Take a screenshot of the page pageno indicated by ref_id.",
-				"items":       webSearchObjectSchema(map[string]any{"ref_id": stringSchema(""), "pageno": map[string]any{"type": "integer", "minimum": 0}}),
+				"description": "Take screenshots of PDF pages.",
+				"items": webSearchObjectSchema(map[string]any{
+					"ref_id": webSearchStringSchema("Reference id or URL to screenshot."),
+					"pageno": webSearchIntegerSchema("Zero-indexed PDF page number."),
+				}, "pageno", "ref_id"),
 			},
 			"finance": map[string]any{
 				"type":        "array",
-				"description": "Look up prices for a given list of stock symbols.",
+				"description": "Look up prices for the given stock symbols.",
 				"items": webSearchObjectSchema(map[string]any{
-					"ticker": stringSchema(""),
-					"type":   map[string]any{"type": "string", "enum": []any{"equity", "fund", "crypto", "index"}},
-					"market": nullableStringSchema(),
-				}),
+					"ticker": webSearchStringSchema("Ticker symbol to look up."),
+					"type":   webSearchEnumSchema("Asset type to look up.", "equity", "fund", "crypto", "index"),
+					"market": webSearchStringSchema(`ISO 3166-1 alpha-3 country code, "OTC", or "" for cryptocurrency.`),
+				}, "ticker", "type"),
 			},
 			"weather": map[string]any{
 				"type":        "array",
-				"description": "Look up weather for a given list of locations.",
+				"description": "Look up weather forecasts.",
 				"items": webSearchObjectSchema(map[string]any{
-					"location": stringSchema(""),
-					"start":    nullableStringSchema(),
-					"duration": nullableIntegerSchema(),
-				}),
+					"location": webSearchStringSchema(`Location in "Country, Area, City" format.`),
+					"start":    webSearchStringSchema("Start date in YYYY-MM-DD format. Defaults to today."),
+					"duration": webSearchIntegerSchema("Number of days to return. Defaults to 7."),
+				}, "location"),
 			},
 			"sports": map[string]any{
 				"type":        "array",
-				"description": "Look up sports schedules and standings for games in a given league.",
+				"description": "Look up sports schedules and standings.",
 				"items": webSearchObjectSchema(map[string]any{
-					"tool":      map[string]any{"type": "string", "enum": []any{"sports"}},
-					"fn":        map[string]any{"type": "string", "enum": []any{"schedule", "standings"}},
-					"league":    map[string]any{"type": "string", "enum": []any{"nba", "wnba", "nfl", "nhl", "mlb", "epl", "ncaamb", "ncaawb", "ipl"}},
-					"team":      nullableStringSchema(),
-					"opponent":  nullableStringSchema(),
-					"date_from": nullableStringSchema(),
-					"date_to":   nullableStringSchema(),
-					"num_games": nullableIntegerSchema(),
-					"locale":    nullableStringSchema(),
-				}),
+					"tool":      webSearchEnumSchema("Tool name for sports requests.", "sports"),
+					"fn":        webSearchEnumSchema("Sports function to call.", "schedule", "standings"),
+					"league":    webSearchEnumSchema("League to look up.", "nba", "wnba", "nfl", "nhl", "mlb", "epl", "ncaamb", "ncaawb", "ipl"),
+					"team":      webSearchStringSchema("Team to look up, using the common 3 or 4 letter alias used in broadcasts."),
+					"opponent":  webSearchStringSchema("Opponent to use with `team` when narrowing the lookup."),
+					"date_from": webSearchStringSchema("Start date in YYYY-MM-DD format."),
+					"date_to":   webSearchStringSchema("End date in YYYY-MM-DD format."),
+					"num_games": webSearchIntegerSchema("Number of games to return."),
+					"locale":    webSearchStringSchema("Locale for the lookup."),
+				}, "fn", "league"),
 			},
 			"time": map[string]any{
 				"type":        "array",
 				"description": "Get time for the given UTC offsets.",
-				"items":       webSearchObjectSchema(map[string]any{"utc_offset": stringSchema("")}),
+				"items": webSearchObjectSchema(map[string]any{
+					"utc_offset": webSearchStringSchema(`UTC offset formatted like "+03:00".`),
+				}, "utc_offset"),
 			},
 			"response_length": map[string]any{
 				"type":        "string",
-				"description": "The length of the response to be returned.",
+				"description": "Set the length of the response to be returned.",
 				"enum":        []any{"short", "medium", "long"},
 			},
 		},
@@ -586,21 +632,28 @@ func webSearchCommandsSchema() map[string]any {
 
 func webSearchQuerySchema() map[string]any {
 	return webSearchObjectSchema(map[string]any{
-		"q":       stringSchema("Search query."),
-		"recency": nullableIntegerSchema(),
-		"domains": map[string]any{"type": []any{"array", "null"}, "items": stringSchema("")},
-	})
+		"q":       webSearchStringSchema("Search query."),
+		"recency": webSearchIntegerSchema("Whether to filter by recency, as a number of recent days."),
+		"domains": map[string]any{
+			"type":        "array",
+			"description": "Whether to filter by a specific list of domains.",
+			"items":       webSearchStringSchema(""),
+		},
+	}, "q")
 }
 
-func webSearchObjectSchema(properties map[string]any) map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"properties":           properties,
-		"additionalProperties": false,
+func webSearchObjectSchema(properties map[string]any, required ...string) map[string]any {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
 	}
+	if len(required) != 0 {
+		schema["required"] = append([]string(nil), required...)
+	}
+	return schema
 }
 
-func stringSchema(description string) map[string]any {
+func webSearchStringSchema(description string) map[string]any {
 	schema := map[string]any{"type": "string"}
 	if strings.TrimSpace(description) != "" {
 		schema["description"] = description
@@ -608,14 +661,25 @@ func stringSchema(description string) map[string]any {
 	return schema
 }
 
-func nullableStringSchema() map[string]any {
-	return map[string]any{"type": []any{"string", "null"}}
+func webSearchIntegerSchema(description string) map[string]any {
+	schema := map[string]any{"type": "integer"}
+	if strings.TrimSpace(description) != "" {
+		schema["description"] = description
+	}
+	return schema
 }
 
-func nullableIntegerSchema() map[string]any {
-	return map[string]any{"type": []any{"integer", "null"}, "minimum": 0}
+func webSearchEnumSchema(description string, values ...string) map[string]any {
+	enum := make([]any, 0, len(values))
+	for _, value := range values {
+		enum = append(enum, value)
+	}
+	return map[string]any{
+		"type":        "string",
+		"description": description,
+		"enum":        enum,
+	}
 }
 
-const webRunDescription = `Tool for accessing the internet.
-
-Use this when a current, external lookup is needed. Accepts search, image, open, click, find, screenshot, finance, weather, sports, time, and response_length commands.`
+//go:embed web_run_description.md
+var webRunDescription string

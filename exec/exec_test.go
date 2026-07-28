@@ -3347,6 +3347,36 @@ func TestExecSessionItemsPersistHostedImageGeneration(t *testing.T) {
 	}
 }
 
+func TestExecSessionItemsSplitProposedPlanInPlanMode(t *testing.T) {
+	createdAt := time.Unix(1700000000, 0).UTC()
+	result := &turn.AgentLoopResult{
+		Responses: []*model.AgentResponse{{
+			ResponseID: "resp-plan",
+			Items: []model.AgentItem{{
+				ID:   "msg-plan",
+				Type: "agent_message",
+				Text: "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro",
+			}},
+		}},
+	}
+	result.Response = result.Responses[0]
+
+	items := sessionItemsForTurnWithMode("turn-plan", "make a plan", nil, result, createdAt, nil, nil, true)
+	agent := execSessionItemByID(items, "msg-plan")
+	if agent == nil || agent.Text != "Intro\nOutro" || len(agent.Content) != 1 || agent.Content[0].Text != "Intro\nOutro" {
+		t.Fatalf("visible agent item = %#v", agent)
+	}
+	planIndex := execSessionItemIndexByType(items, "plan")
+	if planIndex < 0 || items[planIndex].Text != "- Step 1\n" || items[planIndex].ResponseID != "resp-plan" {
+		t.Fatalf("plan items = %#v", items)
+	}
+	for _, item := range items {
+		if strings.Contains(item.Text, "proposed_plan") {
+			t.Fatalf("persisted item leaked plan tags: %#v", item)
+		}
+	}
+}
+
 func TestEmitFinalEventsFromAgentResultPreservesLoopOrder(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Responses: []*model.AgentResponse{{
@@ -4603,6 +4633,96 @@ func TestExecStreamEventCollectorEmitsWebSearchStartedOnToolStarted(t *testing.T
 	}
 	if events[0].Item.Type != "web_search" || events[0].Item.ID != "call-web-search" {
 		t.Fatalf("web search start item = %#v", events[0].Item)
+	}
+}
+
+func TestExecStreamEventCollectorEmitsCanonicalStandaloneWebSearchLifecycle(t *testing.T) {
+	collector := &execStreamEventCollector{}
+	invocation := &tool.Invocation{
+		CallID:   "call-web-search",
+		ToolName: tool.NamespacedName(turn.WebSearchNamespace, turn.WebSearchRunTool),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"search_query":[{"q":"rust"}]}`},
+	}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{
+			ID:        "fc-web-search",
+			Type:      "function_call",
+			Name:      turn.WebSearchRunTool,
+			Namespace: turn.WebSearchNamespace,
+			CallID:    invocation.CallID,
+			Arguments: invocation.Payload.Arguments,
+		},
+	})
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("model function call should not emit a generic tool item: %#v", events)
+	}
+
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{
+			CallID:   invocation.CallID,
+			ToolName: invocation.ToolName,
+			Success:  true,
+			Data: map[string]any{
+				"web_search": true,
+				"web_search_action": map[string]any{
+					"type":  "search",
+					"query": "rust",
+				},
+			},
+		},
+	})
+	events := collector.Events()
+	if len(events) != 2 {
+		t.Fatalf("web search lifecycle = %#v", events)
+	}
+	if events[0].Type != "item.started" || events[1].Type != "item.completed" {
+		t.Fatalf("web search event types = %#v", events)
+	}
+	for _, event := range events {
+		if event.Item == nil || event.Item.Type != "web_search" || event.Item.ID != invocation.CallID {
+			t.Fatalf("web search item = %#v", event.Item)
+		}
+	}
+	if events[1].Item.Query != "rust" || events[1].Item.Action["type"] != "search" {
+		t.Fatalf("completed web search item = %#v", events[1].Item)
+	}
+
+	flattened := *invocation
+	flattened.ToolName = tool.PlainName("web.run")
+	flattenedEvents := eventsFromToolExecution(&turn.ToolExecutionResult{
+		Invocation: &flattened,
+		Output: &tool.Output{
+			CallID:   flattened.CallID,
+			ToolName: flattened.ToolName,
+			Success:  true,
+			Data: map[string]any{
+				"web_search_action": map[string]any{"type": "search", "query": "rust"},
+			},
+		},
+	})
+	if len(flattenedEvents) != 1 || flattenedEvents[0].Item == nil || flattenedEvents[0].Item.Type != "web_search" {
+		t.Fatalf("flattened web.run lifecycle = %#v", flattenedEvents)
+	}
+	flattenedStart := eventsFromToolCallExecution(&turn.ToolExecutionResult{Invocation: &flattened})
+	if len(flattenedStart) != 1 || flattenedStart[0].Item == nil || flattenedStart[0].Item.Type != "web_search" {
+		t.Fatalf("flattened web.run start mapping = %#v", flattenedStart)
+	}
+	flattenedCompleted, ok := eventFromToolOutputExecution(&turn.ToolExecutionResult{
+		Invocation: &flattened,
+		Output: &tool.Output{
+			CallID:   flattened.CallID,
+			ToolName: flattened.ToolName,
+			Success:  true,
+			Data: map[string]any{
+				"web_search_action": map[string]any{"type": "search", "query": "rust"},
+			},
+		},
+	})
+	if !ok || flattenedCompleted.Item == nil || flattenedCompleted.Item.Type != "web_search" {
+		t.Fatalf("flattened web.run completion mapping = %#v, ok=%v", flattenedCompleted, ok)
 	}
 }
 

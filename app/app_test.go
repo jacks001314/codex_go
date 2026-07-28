@@ -41,6 +41,7 @@ import (
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	idecontext "codex_go/tui/ide_context"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -1067,6 +1068,13 @@ func TestInteractiveTurnCommandUsesPlanModeReasoningOverride(t *testing.T) {
 	if captured.Exec.Shared.ModelReasoningEffort != "high" || captured.Root.Shared.ModelReasoningEffort != "high" {
 		t.Fatalf("captured shared exec=%#v root=%#v", captured.Exec.Shared, captured.Root.Shared)
 	}
+	if captured.CollaborationMode["mode"] != "plan" {
+		t.Fatalf("captured collaboration mode = %#v", captured.CollaborationMode)
+	}
+	settings, _ := captured.CollaborationMode["settings"].(map[string]any)
+	if settings["reasoning_effort"] != "high" || !strings.Contains(captured.AdditionalInstructions, "# Plan Mode (Conversational)") || !strings.Contains(captured.AdditionalInstructions, "## Finalization rule") {
+		t.Fatalf("captured plan settings=%#v instructions=%q", settings, captured.AdditionalInstructions)
+	}
 	if state.ReasoningEffort != "medium" {
 		t.Fatalf("global reasoning = %q, want medium", state.ReasoningEffort)
 	}
@@ -1123,6 +1131,100 @@ func TestInteractiveTurnCommandPassesStructuredAttachments(t *testing.T) {
 	}
 	if captured.Input[3].Type != "text" || captured.Input[3].Text != "review these" {
 		t.Fatalf("prompt input = %#v", captured.Input[3])
+	}
+}
+
+func TestInteractiveTurnCommandInjectsIDEContextBeforeVisiblePrompt(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := codextui.NewState(nil)
+	var captured *codexexec.Request
+	runner := interactiveTurnRunnerFunc(func(ctx context.Context, req *codexexec.Request, stdin io.Reader, stdout, stderr io.Writer) (*codexexec.Result, error) {
+		captured = req
+		return &codexexec.Result{ThreadID: "thread-ide", LastMessage: "ok"}, nil
+	})
+	request := codextea.SubmitRequest{
+		Prompt: "review this",
+		Attachments: []bottompane.ComposerAttachment{{
+			Kind: bottompane.AttachmentImage,
+			Path: `D:\repo\screen.png`,
+		}},
+		IDEContext: &idecontext.IdeContext{
+			ActiveFile: &idecontext.ActiveFile{FileDescriptor: idecontext.FileDescriptor{Path: `D:\repo\main.go`}},
+		},
+	}
+
+	msg := interactiveTurnCommandWithRequest(context.Background(), &cli.RootOptions{}, runner, state, request, nil, nil, nil)()
+	started, ok := msg.(codextea.StreamStartedMsg)
+	if !ok {
+		t.Fatalf("message = %T, want StreamStartedMsg", msg)
+	}
+	completed, _, _ := collectInteractiveStream(t, started)
+	if completed.Err != nil {
+		t.Fatalf("completed error = %v", completed.Err)
+	}
+	if captured == nil || len(captured.Input) != 2 {
+		t.Fatalf("captured request = %#v", captured)
+	}
+	if captured.Input[0].Type != "text" || !strings.Contains(captured.Input[0].Text, `## Active file: D:\repo\main.go`) || !strings.Contains(captured.Input[0].Text, idecontext.PromptRequestBegin+"\nreview this") {
+		t.Fatalf("IDE prompt input = %#v", captured.Input[0])
+	}
+	if captured.Input[1].Type != "localImage" || captured.Input[1].Path != `D:\repo\screen.png` {
+		t.Fatalf("IDE attachment input = %#v", captured.Input[1])
+	}
+}
+
+func TestRemoteTurnStartParamsInjectsIDEContextBeforeVisiblePrompt(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := codextui.NewState(nil)
+	request := codextea.SubmitRequest{
+		Prompt: "explain this",
+		Attachments: []bottompane.ComposerAttachment{{
+			Kind: bottompane.AttachmentRemoteImage,
+			URL:  "https://example.test/screen.png",
+		}},
+		IDEContext: &idecontext.IdeContext{
+			OpenTabs: []idecontext.FileDescriptor{{Path: "/repo/main.go"}},
+		},
+	}
+	params, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-ide", request)
+	if err != nil {
+		t.Fatalf("remoteTurnStartParams() error = %v", err)
+	}
+	if len(params.Input) != 2 || params.Input[0].Type != "text" {
+		t.Fatalf("remote IDE inputs = %#v", params.Input)
+	}
+	if !strings.Contains(params.Input[0].Text, "## Open tabs:") || !strings.Contains(params.Input[0].Text, idecontext.PromptRequestBegin+"\nexplain this") {
+		t.Fatalf("remote IDE prompt = %#v", params.Input[0])
+	}
+	if params.Input[1].Type != "image" || params.Input[1].URL != "https://example.test/screen.png" {
+		t.Fatalf("remote IDE attachment = %#v", params.Input[1])
+	}
+}
+
+func TestRemoteTurnStartParamsCarriesPlanCollaborationMode(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5.4", ReasoningEffort: "high", PlanMode: true})
+	params, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-plan", codextea.SubmitRequest{Prompt: "make a plan"})
+	if err != nil {
+		t.Fatalf("remoteTurnStartParams() error = %v", err)
+	}
+	if params.CollaborationMode["mode"] != "plan" {
+		t.Fatalf("collaborationMode = %#v", params.CollaborationMode)
+	}
+	settings, _ := params.CollaborationMode["settings"].(map[string]any)
+	if settings["model"] != "gpt-5.4" || settings["reasoning_effort"] != "medium" {
+		t.Fatalf("plan settings = %#v", settings)
+	}
+	instructions, _ := settings["developer_instructions"].(string)
+	if !strings.Contains(instructions, "## PHASE 3") || !strings.Contains(instructions, "<proposed_plan>") {
+		t.Fatalf("plan instructions incomplete: %q", instructions)
+	}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		t.Fatalf("Marshal(params) error = %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"collaborationMode":{"mode":"plan"`)) {
+		t.Fatalf("wire params dropped collaboration mode: %s", data)
 	}
 }
 
@@ -1284,6 +1386,46 @@ func TestInteractiveStreamEventWriterParsesJSONLines(t *testing.T) {
 	third, ok := messages[2].(codextea.ThreadEventMsg)
 	if !ok || third.Event.RateLimit == nil || third.Event.RateLimit.Primary == nil || third.Event.RateLimit.Primary.UsedPercent != 90 {
 		t.Fatalf("third message = %#v", messages[2])
+	}
+}
+
+func TestInteractiveStreamEventWriterMapsProposedPlanLifecycle(t *testing.T) {
+	var events []protocol.ThreadEvent
+	writer := newInteractiveStreamEventWriter(func(message bubbletea.Msg) {
+		if event, ok := message.(codextea.ThreadEventMsg); ok {
+			events = append(events, event.Event)
+		}
+	}, true)
+
+	writer.HandleEvent(protocol.ItemStarted(protocol.AgentMessageItem("msg-plan", "")))
+	writer.HandleEvent(protocol.AgentMessageDelta("msg-plan", "Intro\n<proposed"))
+	writer.HandleEvent(protocol.AgentMessageDelta("msg-plan", "_plan>\n- Step 1\n"))
+	writer.HandleEvent(protocol.AgentMessageDelta("msg-plan", "</proposed_plan>\nOutro"))
+	writer.HandleEvent(protocol.ItemCompleted(protocol.AgentMessageItem("msg-plan", "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro")))
+
+	var normal strings.Builder
+	var plan strings.Builder
+	started := false
+	completed := false
+	for _, event := range events {
+		switch event.Type {
+		case "item.delta":
+			normal.WriteString(event.Delta.Text)
+		case "item.plan.delta":
+			plan.WriteString(event.Delta.Text)
+		case "item.started":
+			started = started || event.Item != nil && event.Item.Type == "plan"
+		case "item.completed":
+			if event.Item != nil && event.Item.Type == "plan" {
+				completed = event.Item.Text == "- Step 1\n"
+			}
+		}
+	}
+	if normal.String() != "Intro\nOutro" || plan.String() != "- Step 1\n" || !started || !completed {
+		t.Fatalf("plan lifecycle normal=%q plan=%q started=%v completed=%v events=%#v", normal.String(), plan.String(), started, completed, events)
+	}
+	if !writer.SawAssistantOutput() {
+		t.Fatal("plan output should count as assistant output")
 	}
 }
 
@@ -1508,7 +1650,13 @@ func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
 	hidden := true
 	settings := interactiveSettingsFromConfig(&config.Config{Values: map[string]any{
 		"personality": "pragmatic",
-		"notices":     map[string]any{"hide_rate_limit_model_nudge": hidden},
+		"memories":    map[string]any{"use_memories": false, "generate_memories": true},
+		"feedback":    map[string]any{"enabled": false},
+		"marketplaces": map[string]any{
+			"git-team":   map[string]any{"source_type": "git"},
+			"local-team": map[string]any{"source_type": "local"},
+		},
+		"notices": map[string]any{"hide_rate_limit_model_nudge": hidden},
 		"tui": map[string]any{
 			"notifications":          []any{"approval-requested", "agent-turn-complete", "approval-requested", ""},
 			"notification_method":    "bel",
@@ -1532,6 +1680,12 @@ func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
 	if settings.Personality != chatwidget.PersonalityPragmatic {
 		t.Fatalf("personality = %q", settings.Personality)
 	}
+	if settings.UseMemories == nil || *settings.UseMemories || settings.GenerateMemories == nil || !*settings.GenerateMemories {
+		t.Fatalf("memory settings = use %#v generate %#v", settings.UseMemories, settings.GenerateMemories)
+	}
+	if settings.FeedbackEnabled == nil || *settings.FeedbackEnabled {
+		t.Fatalf("feedback enabled = %#v", settings.FeedbackEnabled)
+	}
 	if settings.Notifications == nil || !settings.Notifications.CustomSet ||
 		len(settings.Notifications.Custom) != 4 ||
 		settings.Notifications.Custom[0] != "approval-requested" ||
@@ -1551,6 +1705,9 @@ func TestInteractiveSettingsFromConfigParsesTUINotifications(t *testing.T) {
 	}
 	if settings.TUITheme != "dracula" || settings.TUIPet != "dewey" || settings.SessionPickerView != "dense" {
 		t.Fatalf("tui theme/pet/session picker = %q/%q/%q", settings.TUITheme, settings.TUIPet, settings.SessionPickerView)
+	}
+	if !settings.PluginUserMarketplaces["git-team"] || !settings.PluginUserMarketplaces["local-team"] || !settings.PluginGitMarketplaces["git-team"] || settings.PluginGitMarketplaces["local-team"] {
+		t.Fatalf("plugin marketplace settings = user %#v git %#v", settings.PluginUserMarketplaces, settings.PluginGitMarketplaces)
 	}
 	if settings.PermissionRequirements == nil ||
 		len(settings.PermissionRequirements.AllowedApprovalPolicies) != 1 ||
@@ -1575,6 +1732,12 @@ func TestInteractiveSettingsFromConfigDefaultsTUINotifications(t *testing.T) {
 	}
 	if settings.NotificationCondition != codextui.NotificationConditionUnfocused {
 		t.Fatalf("default notification condition = %q", settings.NotificationCondition)
+	}
+	if settings.UseMemories == nil || !*settings.UseMemories || settings.GenerateMemories == nil || !*settings.GenerateMemories {
+		t.Fatalf("default memory settings = use %#v generate %#v", settings.UseMemories, settings.GenerateMemories)
+	}
+	if settings.FeedbackEnabled == nil || !*settings.FeedbackEnabled {
+		t.Fatalf("default feedback enabled = %#v", settings.FeedbackEnabled)
 	}
 }
 
@@ -1737,6 +1900,51 @@ func TestInteractiveRemoteStartWindowsSandboxSetupCallsAppServer(t *testing.T) {
 	}
 }
 
+func TestInteractiveRunWindowsSandboxSetupWaitsForCompletionAndPersistsMode(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	router := appserver.NewRuntimeRouter(appserver.RuntimeServices{
+		Windows: sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured),
+		Config:  config.NewConfigService(home),
+		WindowsSetupRunner: func(request *appserver.WindowsSandboxSetupRuntimeRequest) error {
+			if request == nil || request.CWD != filepath.Clean(cwd) || request.Mode != sandbox.WindowsSetupElevated {
+				return fmt.Errorf("unexpected setup request: %#v", request)
+			}
+			return nil
+		},
+	})
+	defer router.Close()
+
+	outcome, err := interactiveRunWindowsSandboxSetup(router, chatwidget.WindowsSandboxModeElevated, cwd)
+	if err != nil {
+		t.Fatalf("interactiveRunWindowsSandboxSetup error = %v", err)
+	}
+	if !outcome.Started || outcome.Completion == nil || !outcome.Completion.Success || outcome.Completion.Mode != chatwidget.WindowsSandboxModeElevated {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	read, err := config.NewConfigService(home).Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	windowsConfig, _ := read.Config["windows"].(map[string]any)
+	if windowsConfig["sandbox"] != "elevated" {
+		t.Fatalf("windows config = %#v", windowsConfig)
+	}
+}
+
+func TestInteractiveRemoteSandboxReadDirRejectsNonLocalEndpoint(t *testing.T) {
+	handler := interactiveRemoteSandboxReadDirHandler(&cli.RootOptions{}, appserverdaemon.NewWebSocketEndpoint("wss://example.com/rpc", nil))
+	if handler == nil {
+		t.Fatal("remote handler is nil")
+	}
+	if _, err := handler(`D:\data`); err == nil || !strings.Contains(err.Error(), "remote app-server") {
+		t.Fatalf("remote handler error = %v", err)
+	}
+	if !interactiveRemoteEndpointIsLocal(appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:4500/rpc", nil)) {
+		t.Fatal("loopback endpoint was not considered local")
+	}
+}
+
 func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1794,6 +2002,22 @@ func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 					}}},
 				})
 				return
+			case string(appserver.MethodConfigBatchWrite):
+				var params config.ConfigBatchWriteParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if len(params.Edits) != 1 || params.Edits[0].KeyPath != "hooks.state" || params.Edits[0].MergeStrategy != config.MergeUpsert || !params.ReloadUserConfig {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("hook config params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  config.ConfigWriteResponse{Status: config.WriteOK},
+				})
+				return
 			default:
 				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
 				return
@@ -1803,29 +2027,42 @@ func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	runs, err := interactiveRemoteReadHooks(ctx, endpoint, `D:\repo`)
+	listed, err := interactiveRemoteReadHooks(ctx, endpoint, `D:\repo`)
 	if err != nil {
 		t.Fatalf("interactiveRemoteReadHooks error = %v", err)
 	}
-	if len(runs) != 2 {
-		t.Fatalf("runs = %#v, want hook plus warning", runs)
+	if len(listed.Data) != 1 || len(listed.Data[0].Hooks) != 1 {
+		t.Fatalf("hooks/list response = %#v", listed)
 	}
-	if runs[0].ID != "hook-1" || runs[0].Name != "preToolUse / Bash" || runs[0].Command != "echo ok" {
-		t.Fatalf("hook run = %#v", runs[0])
+	hook := listed.Data[0].Hooks[0]
+	if hook.Key != "hook-1" || hook.EventName != appserver.HookEventPreToolUse || hook.Command == nil || *hook.Command != "echo ok" {
+		t.Fatalf("hook metadata = %#v", hook)
 	}
-	for _, want := range []string{`cwd: D:\repo`, "source: project", `path: D:\repo\.codex\hooks.json`, "trust: trusted"} {
-		if !strings.Contains(runs[0].Issue, want) {
-			t.Fatalf("hook issue missing %q: %q", want, runs[0].Issue)
-		}
+	if len(listed.Data[0].Warnings) != 1 || listed.Data[0].Warnings[0] != "review hook trust" {
+		t.Fatalf("hook warnings = %#v", listed.Data[0].Warnings)
 	}
-	if runs[1].Name != "Hook warning" || !strings.Contains(runs[1].Issue, "review hook trust") {
-		t.Fatalf("warning run = %#v", runs[1])
+	write := config.ConfigBatchWriteParams{
+		Edits: []config.ConfigEdit{{
+			KeyPath:       "hooks.state",
+			Value:         map[string]any{"hook-1": map[string]any{"enabled": false}},
+			MergeStrategy: config.MergeUpsert,
+		}},
+		ReloadUserConfig: true,
+	}
+	if err := interactiveRemoteHookConfigWriter(ctx, endpoint)(write); err != nil {
+		t.Fatalf("interactiveRemoteHookConfigWriter error = %v", err)
 	}
 	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
 		t.Fatalf("first request = %q", got.Method)
 	}
 	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodHooksList) {
 		t.Fatalf("second request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("third request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodConfigBatchWrite) {
+		t.Fatalf("fourth request = %q", got.Method)
 	}
 	select {
 	case err := <-serverErrs:
@@ -1865,8 +2102,8 @@ func TestInteractiveRemoteReadPluginsCallsAppServer(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if !params.IncludeInstalled {
-					remoteTUITestSendErr(serverErrs, fmt.Errorf("plugin list params = %#v, want include installed", params))
+				if !params.IncludeInstalled || !params.ForceRefetch || len(params.CWDs) != 1 || params.CWDs[0] != `D:\repo` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("plugin list params = %#v, want cwd/include installed/force refetch", params))
 					return
 				}
 				display := "Docs"
@@ -1900,7 +2137,7 @@ func TestInteractiveRemoteReadPluginsCallsAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	response, err := interactiveRemoteReadPlugins(ctx, endpoint)
+	response, err := interactiveRemoteReadPlugins(ctx, endpoint, `D:\repo`, true)
 	if err != nil {
 		t.Fatalf("interactiveRemoteReadPlugins error = %v", err)
 	}
@@ -1912,6 +2149,131 @@ func TestInteractiveRemoteReadPluginsCallsAppServer(t *testing.T) {
 	}
 	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodPluginList) {
 		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveRemotePluginActionsUseAppServerMethods(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 32)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			if req.Method == string(appserver.MethodInitialize) {
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+				continue
+			}
+			var result any = map[string]any{}
+			switch req.Method {
+			case string(appserver.MethodPluginRead):
+				result = plugin.PluginReadResponse{Plugin: plugin.PluginDetail{MarketplaceName: "team"}}
+			case string(appserver.MethodPluginInstall):
+				result = plugin.PluginInstallResponse{}
+			case string(appserver.MethodPluginUninstall):
+				result = plugin.PluginUninstallResponse{}
+			case string(appserver.MethodMarketplaceAdd):
+				result = plugin.MarketplaceAddResponse{MarketplaceName: "team", InstalledRoot: `D:\plugins\team`}
+			case string(appserver.MethodMarketplaceRemove):
+				result = plugin.MarketplaceRemoveResponse{MarketplaceName: "team"}
+			case string(appserver.MethodMarketplaceUpgrade):
+				result = plugin.MarketplaceUpgradeResponse{SelectedMarketplaces: []string{"team"}}
+			case string(appserver.MethodConfigValueWrite):
+				result = config.ConfigWriteResponse{Status: config.WriteOK}
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+			remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+			return
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	marketplaceName := "team"
+	actions := []struct {
+		method appserver.Method
+		call   func() error
+		check  func(t *testing.T, raw json.RawMessage)
+	}{
+		{appserver.MethodPluginRead, func() error {
+			_, err := interactiveRemotePluginCall[plugin.PluginReadResponse](ctx, endpoint, appserver.MethodPluginRead, plugin.PluginReadParams{MarketplacePath: `D:\plugins\team`, PluginName: "docs"})
+			return err
+		}, func(t *testing.T, raw json.RawMessage) {
+			var params plugin.PluginReadParams
+			if err := json.Unmarshal(raw, &params); err != nil || params.PluginName != "docs" || params.MarketplacePath != `D:\plugins\team` {
+				t.Fatalf("plugin/read params = %#v, err=%v", params, err)
+			}
+		}},
+		{appserver.MethodPluginInstall, func() error {
+			_, err := interactiveRemotePluginCall[plugin.PluginInstallResponse](ctx, endpoint, appserver.MethodPluginInstall, plugin.PluginInstallParams{MarketplacePath: `D:\plugins\team`, PluginName: "docs"})
+			return err
+		}, nil},
+		{appserver.MethodPluginUninstall, func() error {
+			_, err := interactiveRemotePluginCall[plugin.PluginUninstallResponse](ctx, endpoint, appserver.MethodPluginUninstall, plugin.PluginUninstallParams{PluginID: "docs@team"})
+			return err
+		}, nil},
+		{appserver.MethodMarketplaceAdd, func() error {
+			_, err := interactiveRemotePluginCall[plugin.MarketplaceAddResponse](ctx, endpoint, appserver.MethodMarketplaceAdd, plugin.MarketplaceAddParams{Source: "owner/repo"})
+			return err
+		}, nil},
+		{appserver.MethodMarketplaceRemove, func() error {
+			_, err := interactiveRemotePluginCall[plugin.MarketplaceRemoveResponse](ctx, endpoint, appserver.MethodMarketplaceRemove, plugin.MarketplaceRemoveParams{MarketplaceName: "team"})
+			return err
+		}, nil},
+		{appserver.MethodMarketplaceUpgrade, func() error {
+			_, err := interactiveRemotePluginCall[plugin.MarketplaceUpgradeResponse](ctx, endpoint, appserver.MethodMarketplaceUpgrade, plugin.MarketplaceUpgradeParams{MarketplaceName: &marketplaceName})
+			return err
+		}, nil},
+		{appserver.MethodConfigValueWrite, func() error {
+			_, err := interactiveRemotePluginCall[config.ConfigWriteResponse](ctx, endpoint, appserver.MethodConfigValueWrite, config.ConfigValueWriteParams{
+				KeyPath:       "plugins.docs@team",
+				Value:         map[string]any{"enabled": false},
+				MergeStrategy: config.MergeUpsert,
+			})
+			return err
+		}, func(t *testing.T, raw json.RawMessage) {
+			var params config.ConfigValueWriteParams
+			if err := json.Unmarshal(raw, &params); err != nil || params.KeyPath != "plugins.docs@team" || params.MergeStrategy != config.MergeUpsert {
+				t.Fatalf("config/value/write params = %#v, err=%v", params, err)
+			}
+		}},
+	}
+
+	for _, action := range actions {
+		if err := action.call(); err != nil {
+			t.Fatalf("%s: %v", action.method, err)
+		}
+		if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+			t.Fatalf("before %s got %s", action.method, got.Method)
+		}
+		request := remoteTUITestReadCapturedRequest(t, requests)
+		if request.Method != string(action.method) {
+			t.Fatalf("method = %s, want %s", request.Method, action.method)
+		}
+		if action.check != nil {
+			action.check(t, request.Params)
+		}
 	}
 	select {
 	case err := <-serverErrs:
@@ -2399,6 +2761,26 @@ func TestRemoteAgentDeltaClearsRetryBeforeOutput(t *testing.T) {
 	}
 }
 
+func TestRemotePlanDeltaMapsToPlanThreadEvent(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-plan")
+	messages := make(chan bubbletea.Msg, 1)
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	payload, err := json.Marshal(appserver.PlanDeltaNotification{
+		ThreadID: "thread-plan", TurnID: "turn-plan", ItemID: "plan-1", Delta: "- Step 1\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{Method: string(appserver.NotificationPlanDelta), Params: payload}); err != nil {
+		t.Fatal(err)
+	}
+	delta, ok := (<-messages).(codextea.ThreadEventMsg)
+	if !ok || delta.Event.Type != "item.plan.delta" || delta.Event.Delta == nil || delta.Event.Delta.ItemID != "plan-1" || delta.Event.Delta.Text != "- Step 1\n" {
+		t.Fatalf("plan delta message = %#v", delta)
+	}
+}
+
 func TestRemoteAgentMessagePreservesCommentaryPhase(t *testing.T) {
 	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
 		"id": "msg-commentary", "type": "agentMessage", "text": "我先查询天气。", "phase": "commentary",
@@ -2468,7 +2850,7 @@ func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	response, err := interactiveRemoteReadSkills(ctx, endpoint, `D:\repo`)
+	response, err := interactiveRemoteReadSkills(ctx, endpoint, `D:\repo`, false)
 	if err != nil {
 		t.Fatalf("interactiveRemoteReadSkills error = %v", err)
 	}
@@ -2485,6 +2867,181 @@ func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
 	case err := <-serverErrs:
 		t.Fatalf("server error: %v", err)
 	default:
+	}
+}
+
+func TestInteractiveSkillEnabledWriterPersistsConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	skillDir := filepath.Join(home, "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("---\nname: review\ndescription: Review code\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+
+	effective, err := interactiveSkillEnabledWriter(nil)(skillPath, false)
+	if err != nil {
+		t.Fatalf("interactiveSkillEnabledWriter error = %v", err)
+	}
+	if effective {
+		t.Fatalf("effective enabled = true, want false")
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	configText := string(data)
+	if !strings.Contains(configText, "[[skills.config]]") || !strings.Contains(configText, "enabled = false") || !strings.Contains(configText, "SKILL.md") {
+		t.Fatalf("config.toml missing disabled skill override:\n%s", configText)
+	}
+}
+
+func TestInteractiveRemoteSkillEnabledWriterCallsAppServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodSkillsConfigWrite):
+				var params appserver.SkillsConfigWriteParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.Path != skillPath || params.Enabled {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("skills config write params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  appserver.SkillsConfigWriteResponse{EffectiveEnabled: false},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	effective, err := interactiveRemoteSkillEnabledWriter(ctx, endpoint)(skillPath, false)
+	if err != nil {
+		t.Fatalf("interactiveRemoteSkillEnabledWriter error = %v", err)
+	}
+	if effective {
+		t.Fatalf("effective enabled = true, want false")
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodSkillsConfigWrite) {
+		t.Fatalf("second request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+func TestInteractiveExternalAgentMigrationHandlersUseEmbeddedAppServer(t *testing.T) {
+	userHome := t.TempDir()
+	home := filepath.Join(userHome, ".codex")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	externalHome := filepath.Join(userHome, ".claude")
+	if err := os.MkdirAll(externalHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalHome, "settings.json"), []byte(`{"env":{"IMPORT_TEST":"yes"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("Claude Code project instructions.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detected, err := interactiveExternalAgentDetectHandler(nil)(cwd, "claude-code")
+	if err != nil {
+		t.Fatalf("external agent detect error = %v", err)
+	}
+	if len(detected.Items) < 2 || detected.Items[0].ItemType != config.MigrationConfig || detected.Items[1].ItemType != config.MigrationAgentsMD {
+		t.Fatalf("detected items = %#v", detected.Items)
+	}
+
+	response, completed, err := interactiveExternalAgentImportHandler(nil)(detected.Items[:2], "claude-code")
+	if err != nil {
+		t.Fatalf("external agent import error = %v", err)
+	}
+	if response.ImportID == "" || completed.ImportID != response.ImportID {
+		t.Fatalf("import response/completion = %#v / %#v", response, completed)
+	}
+	if len(completed.ItemTypeResults) != 2 {
+		t.Fatalf("completed item results = %#v", completed.ItemTypeResults)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.toml")); err != nil {
+		t.Fatalf("imported config missing: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(cwd, "AGENTS.md")); err != nil || !strings.Contains(string(data), "Codex project instructions") {
+		t.Fatalf("imported AGENTS.md = %q err=%v", data, err)
+	}
+
+	cursorHome := filepath.Join(userHome, ".cursor")
+	if err := os.MkdirAll(cursorHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cursorHome, "cli-config.json"), []byte(`{"env":{"CURSOR_IMPORT_TEST":"yes"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cursorDetected, err := interactiveExternalAgentDetectHandler(nil)(cwd, "cursor")
+	if err != nil || len(cursorDetected.Items) != 1 || cursorDetected.Items[0].ItemType != config.MigrationConfig {
+		t.Fatalf("Cursor detect = %#v err=%v", cursorDetected.Items, err)
+	}
+	if _, cursorCompleted, err := interactiveExternalAgentImportHandler(nil)(cursorDetected.Items, "cursor"); err != nil || len(cursorCompleted.ItemTypeResults) != 1 || len(cursorCompleted.ItemTypeResults[0].Successes) != 1 {
+		t.Fatalf("Cursor import = %#v err=%v", cursorCompleted, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "config.toml")); err != nil || !strings.Contains(string(data), "CURSOR_IMPORT_TEST") {
+		t.Fatalf("Cursor config import = %q err=%v", data, err)
+	}
+}
+
+func TestInteractiveRemoteExternalAgentImportMatchesRustAvailabilityErrors(t *testing.T) {
+	localEndpoint := appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:1", nil)
+	if _, err := interactiveRemoteExternalAgentDetectHandler(localEndpoint)(`D:\repo`, "claude-code"); err == nil || err.Error() != interactiveExternalAgentImportDaemonUnavailable {
+		t.Fatalf("local daemon import error = %v", err)
+	}
+	remoteEndpoint := appserverdaemon.NewWebSocketEndpoint("wss://codex.example.test", nil)
+	if _, err := interactiveRemoteExternalAgentDetectHandler(remoteEndpoint)(`D:\repo`, "cursor"); err == nil || err.Error() != interactiveExternalAgentImportRemoteUnavailable {
+		t.Fatalf("remote import error = %v", err)
 	}
 }
 
@@ -2607,6 +3164,13 @@ func collectInteractiveStream(t *testing.T, started codextea.StreamStartedMsg) (
 	for message := range started.Messages {
 		switch msg := message.(type) {
 		case codextea.ThreadEventMsg:
+			if msg.Event.Type == "thread.started" {
+				sawThreadStarted = true
+			}
+			if msg.Event.Delta != nil && msg.Event.Delta.Text != "" {
+				sawDelta = true
+			}
+		case codextea.ThreadScopedEventMsg:
 			if msg.Event.Type == "thread.started" {
 				sawThreadStarted = true
 			}
@@ -4281,6 +4845,61 @@ func TestRemoteAppServerTUIClientMapsGoalNotifications(t *testing.T) {
 	}
 	if state.ThreadID != "thread-goal" {
 		t.Fatalf("state threadID = %q, want thread-goal", state.ThreadID)
+	}
+}
+
+func TestRemoteAppServerTUIClientMapsGuardianDenialWithExactAction(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 1)
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-guardian")
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	rationale := "Command writes outside the sandbox."
+	targetItemID := "command-1"
+	payload, err := json.Marshal(appserver.ItemGuardianApprovalReviewCompletedNotification{
+		ThreadID:      "thread-guardian",
+		TurnID:        "turn-guardian",
+		StartedAtMS:   100,
+		CompletedAtMS: 150,
+		ReviewID:      "review-guardian",
+		TargetItemID:  &targetItemID,
+		Review: appserver.GuardianApprovalReview{
+			Status:    appserver.GuardianApprovalReviewDenied,
+			Rationale: &rationale,
+		},
+		Action: appserver.GuardianApprovalReviewAction{
+			Type:    "command",
+			Source:  appserver.GuardianCommandSourceShell,
+			Command: "rm -rf build",
+			CWD:     `D:\repo`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal Guardian notification: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{Method: string(appserver.NotificationItemGuardianApprovalReviewCompleted), Params: payload}); err != nil {
+		t.Fatalf("handle Guardian notification: %v", err)
+	}
+
+	message, ok := (<-messages).(codextea.GuardianReviewMsg)
+	if !ok {
+		t.Fatalf("Guardian notification message = %#v", message)
+	}
+	if message.ThreadID != "thread-guardian" || message.Event.ID != "review-guardian" || message.Event.Status != chatwidget.GuardianAssessmentDenied || message.Event.Action.Command != "rm -rf build" || message.Event.Rationale != rationale {
+		t.Fatalf("Guardian review message = %#v", message)
+	}
+	var raw struct {
+		Status string `json:"status"`
+		Action struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+			CWD     string `json:"cwd"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(message.Event.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal cached Guardian event: %v", err)
+	}
+	if raw.Status != "denied" || raw.Action.Type != "command" || raw.Action.Command != "rm -rf build" || raw.Action.CWD != `D:\repo` {
+		t.Fatalf("cached Guardian event = %#v raw=%s", raw, message.Event.Raw)
 	}
 }
 

@@ -117,12 +117,12 @@ func filterSessionRecordsForPicker(records []session.Record, options SessionSour
 	if len(records) == 0 {
 		return nil
 	}
-	if options.IncludeNonInteractive {
-		return append([]session.Record(nil), records...)
-	}
 	filtered := make([]session.Record, 0, len(records))
 	for i := range records {
-		if sessionRecordIsInteractive(&records[i]) {
+		if ephemeral, _ := records[i].Metadata.Extra["ephemeral"].(bool); ephemeral {
+			continue
+		}
+		if options.IncludeNonInteractive || sessionRecordIsInteractive(&records[i]) {
 			filtered = append(filtered, records[i])
 		}
 	}

@@ -1,6 +1,8 @@
 package tea
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,6 +14,7 @@ import (
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/config"
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/review"
@@ -20,6 +23,7 @@ import (
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	idecontext "codex_go/tui/ide_context"
 	"codex_go/utils"
 )
 
@@ -56,6 +60,93 @@ func TestModelTokenUsageEventUpdatesStatusCard(t *testing.T) {
 	for _, want := range []string{"45,000 total", "80% left (50,000 used / 200,000)"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card missing %q:\n%s", want, card)
+		}
+	}
+}
+
+func TestModelStatusRefreshesRateLimitsForFutureOutput(t *testing.T) {
+	state := codextui.NewState(nil)
+	reads := 0
+	model := NewModel(state, Options{HasChatGPTAccount: true, OnReadRateLimits: func() ([]codextui.RateLimitStatus, error) {
+		reads++
+		return []codextui.RateLimitStatus{{Label: "5h", UsedPercent: 92}}, nil
+	}})
+	typeText(t, model, "/status")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("ChatGPT /status did not request a rate-limit refresh")
+	}
+	if view := model.View(); strings.Contains(view, "8% left") || strings.Contains(view, "refreshing limits") {
+		t.Fatalf("initial status used in-flight limits:\n%s", view)
+	}
+	model.Update(cmd())
+	if reads != 1 || len(state.RateLimits) != 1 || state.RateLimits[0].UsedPercent != 92 {
+		t.Fatalf("refreshed limits reads=%d limits=%#v", reads, state.RateLimits)
+	}
+	typeText(t, model, "/status")
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "5h 8% left") {
+		t.Fatalf("future status did not use refreshed limits:\n%s", view)
+	}
+}
+
+func TestModelStatusDoesNotRefreshRateLimitsWithoutChatGPTAccount(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{OnReadRateLimits: func() ([]codextui.RateLimitStatus, error) {
+		t.Fatal("non-ChatGPT /status unexpectedly refreshed rate limits")
+		return nil, nil
+	}})
+	typeText(t, model, "/status")
+	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+		t.Fatal("non-ChatGPT /status returned a rate-limit refresh command")
+	}
+}
+
+func TestModelStatusTracksOverlappingRateLimitRefreshesIndependently(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{HasChatGPTAccount: true, OnReadRateLimits: func() ([]codextui.RateLimitStatus, error) {
+		return nil, nil
+	}})
+	first := model.applyStatusCommand()
+	second := model.applyStatusCommand()
+	if len(model.pendingStatusRateLimitRequests) != 2 {
+		t.Fatalf("pending status refreshes = %#v", model.pendingStatusRateLimitRequests)
+	}
+	firstMessage := first().(RateLimitsResultMsg)
+	secondMessage := second().(RateLimitsResultMsg)
+	model.applyRateLimitsResult(RateLimitsResultMsg{
+		RequestID: firstMessage.RequestID,
+		Limits:    []codextui.RateLimitStatus{{Label: "5h", UsedPercent: 10}},
+	})
+	if len(model.pendingStatusRateLimitRequests) != 1 || len(state.RateLimits) != 1 || state.RateLimits[0].UsedPercent != 10 {
+		t.Fatalf("first completion pending=%#v limits=%#v", model.pendingStatusRateLimitRequests, state.RateLimits)
+	}
+	model.applyRateLimitsResult(RateLimitsResultMsg{RequestID: secondMessage.RequestID})
+	if len(model.pendingStatusRateLimitRequests) != 0 || len(state.RateLimits) != 1 || state.RateLimits[0].UsedPercent != 10 {
+		t.Fatalf("empty completion pending=%#v limits=%#v", model.pendingStatusRateLimitRequests, state.RateLimits)
+	}
+}
+
+func TestModelStatusCommandAddsRustStyleHistoryCell(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5.4", CWD: `D:\repo`})
+	state.SetThreadID("thread-status")
+	state.SetThreadName("Status parity")
+	model := NewModel(state, Options{SessionHeaderVersion: "0.145.0"})
+
+	typeText(t, model, "/status")
+	model.Update(key(bubbletea.KeyEnter))
+	if len(state.Messages) != 1 || state.Messages[0].Role != codextui.RoleHistory {
+		t.Fatalf("status messages = %#v", state.Messages)
+	}
+	raw := state.Messages[0].RawText
+	for _, want := range []string{"OpenAI Codex (v0.145.0)", "Thread name:", "Status parity", "Session:", "thread-status"} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("status output missing %q:\n%s", want, raw)
+		}
+	}
+	for _, notWant := range []string{"OpenAI Codex (Go)", "API key configured", "Session:             new"} {
+		if strings.Contains(raw, notWant) {
+			t.Fatalf("status output contains stale %q:\n%s", notWant, raw)
 		}
 	}
 }
@@ -332,10 +423,10 @@ func TestModelSlashEditorOpensExternalEditor(t *testing.T) {
 	}
 }
 
-func TestModelKeymapListCommandRendersCatalog(t *testing.T) {
+func TestModelKeymapDebugCommandRendersCatalog(t *testing.T) {
 	model := NewModel(nil, Options{})
 
-	typeText(t, model, "/keymap list")
+	typeText(t, model, "/keymap debug")
 	model.Update(key(bubbletea.KeyEnter))
 	if got := len(model.State.Messages); got != 1 {
 		t.Fatalf("messages len = %d, want 1", got)
@@ -351,11 +442,24 @@ func TestModelKeymapListCommandRendersCatalog(t *testing.T) {
 		"Approve For Session",
 	} {
 		if !strings.Contains(catalog, want) {
-			t.Fatalf("/keymap catalog missing %q:\n%s", want, catalog)
+			t.Fatalf("/keymap debug catalog missing %q:\n%s", want, catalog)
 		}
 	}
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("/keymap should not submit prompts: %#v", model.SubmittedPrompts())
+	}
+}
+
+func TestModelKeymapCommandRejectsNonRustArguments(t *testing.T) {
+	model := NewModel(nil, Options{})
+
+	typeText(t, model, "/keymap list")
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Usage: /keymap [debug]") {
+		t.Fatalf("invalid /keymap argument missing Rust usage error:\n%s", view)
+	}
+	if len(model.SubmittedPrompts()) != 0 {
+		t.Fatalf("recognized /keymap inline command should not submit a prompt: %#v", model.SubmittedPrompts())
 	}
 }
 
@@ -419,7 +523,7 @@ func modelKeymapConfigAfterEdit(t *testing.T, current *codextui.KeymapConfig, ed
 	return next
 }
 
-func TestModelKeymapCommandAppliesRuntimeRemap(t *testing.T) {
+func TestModelKeymapEditAppliesRuntimeRemap(t *testing.T) {
 	var seeds []string
 	model := NewModel(nil, Options{
 		OnExternalEditor: func(seed string) bubbletea.Cmd {
@@ -428,11 +532,16 @@ func TestModelKeymapCommandAppliesRuntimeRemap(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/keymap set global.open_external_editor ctrl-e")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.State.Messages[0].Text, "ctrl-e") {
-		t.Fatalf("keymap set message = %#v", model.State.Messages)
+	next, _, err := model.applyKeymapEdit(codextui.KeymapEdit{
+		Operation: codextui.KeymapEditSet,
+		Context:   "global",
+		Action:    "open_external_editor",
+		Bindings:  []string{"ctrl-e"},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	model.keymapConfig = next
 
 	typeText(t, model, "draft")
 	_, cmd := model.Update(key(bubbletea.KeyCtrlG))
@@ -557,8 +666,8 @@ func TestModelPasteBurstDoesNotBlockSlashCommandEnter(t *testing.T) {
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer after slash command = %q, want empty", got)
 	}
-	if countRole(model.State.Messages, codextui.RoleSystem) != 1 {
-		t.Fatalf("system messages = %#v, want one status message", model.State.Messages)
+	if countRole(model.State.Messages, codextui.RoleHistory) != 1 {
+		t.Fatalf("history messages = %#v, want one status message", model.State.Messages)
 	}
 }
 
@@ -1021,7 +1130,7 @@ func TestModelCopiesLastAgentResponse(t *testing.T) {
 	if copied != "second" {
 		t.Fatalf("copied = %q, want second", copied)
 	}
-	if !strings.Contains(model.View(), "Copied last agent response.") {
+	if !strings.Contains(model.View(), "Copied last message to clipboard") {
 		t.Fatalf("copy notice missing:\n%s", model.View())
 	}
 }
@@ -1039,7 +1148,7 @@ func TestModelCopyLastAgentResponseHandlesEmpty(t *testing.T) {
 	if called {
 		t.Fatal("clipboard writer should not be called without an agent response")
 	}
-	if !strings.Contains(model.View(), "No agent response to copy.") {
+	if !strings.Contains(model.View(), "No agent response to copy") {
 		t.Fatalf("empty copy notice missing:\n%s", model.View())
 	}
 }
@@ -1063,7 +1172,7 @@ func TestModelSlashCopyLastAgentResponse(t *testing.T) {
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("slash copy should not submit a prompt")
 	}
-	if !strings.Contains(model.View(), "Copied last agent response.") {
+	if !strings.Contains(model.View(), "Copied last message to clipboard") {
 		t.Fatalf("copy notice missing:\n%s", model.View())
 	}
 }
@@ -1105,7 +1214,7 @@ func TestModelRawCommandTogglesScrollback(t *testing.T) {
 	if model.rawOutput {
 		t.Fatal("/raw off did not disable raw output")
 	}
-	if rich := model.transcript.View(); !strings.Contains(rich, "• final answer") || !strings.Contains(rich, "Tool call") {
+	if rich := renderTranscript(state, false, 80, model.activeTUITheme()); !strings.Contains(rich, "• final answer") || !strings.Contains(rich, "Tool call") {
 		t.Fatalf("rich transcript was not restored:\n%s", rich)
 	}
 
@@ -1186,7 +1295,7 @@ func TestModelDiffCommandHandlesNoRepoAndEmptyDiff(t *testing.T) {
 	}
 	updated, _ := model.Update(cmd())
 	model = updated.(*Model)
-	if !strings.Contains(model.View(), "`/diff` - not inside a git repository") {
+	if !strings.Contains(model.View(), "`/diff` \u2014 _not inside a git repository_") {
 		t.Fatalf("no-repo diff message missing:\n%s", model.View())
 	}
 
@@ -1366,6 +1475,33 @@ func TestModelKeepsWeatherCommentaryBeforeCommand(t *testing.T) {
 	}
 	if got := strings.Count(view, "我先查询河北各城市天气。"); got != 1 {
 		t.Fatalf("commentary count = %d, want 1:\n%s", got, view)
+	}
+}
+
+func TestModelRendersWebSearchLifecycleLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 100, Height: 30})
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.WebSearchItem("search-1", "", map[string]any{"type": "other"}))})
+	started := utils.StripANSI(model.View())
+	if !strings.Contains(started, "Searching the web") || strings.Contains(started, "Searched the web") {
+		t.Fatalf("started web search lifecycle missing or completed early:\n%s", started)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.WebSearchItem("search-1", "Yunnan weather", map[string]any{
+		"type":  "search",
+		"query": "Yunnan weather",
+	}))})
+	completed := utils.StripANSI(model.View())
+	if !strings.Contains(completed, "Searched the web for Yunnan weather") {
+		t.Fatalf("completed web search lifecycle missing query:\n%s", completed)
+	}
+	if strings.Contains(completed, "Searching the web") {
+		t.Fatalf("completed web search retained stale running row:\n%s", completed)
+	}
+	if got := strings.Count(completed, "Searched the web"); got != 1 {
+		t.Fatalf("completed web search count = %d, want 1:\n%s", got, completed)
 	}
 }
 
@@ -2093,22 +2229,32 @@ func TestModelAppliesHookRunMessages(t *testing.T) {
 func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 	state := codextui.NewState(nil)
 	calls := 0
+	command := "echo ok"
+	matcher := "Bash"
 	model := NewModel(state, Options{
 		Width:            80,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadHooks: func(cwd string) ([]chatwidget.HookRun, error) {
+		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
 			calls++
 			if cwd != `D:\repo` {
 				t.Fatalf("cwd = %q, want D:\\repo", cwd)
 			}
-			return []chatwidget.HookRun{{
-				ID:      "hook-1",
-				Name:    "preToolUse / Bash",
-				Command: "echo ok",
-				Issue:   "source: project\ntrust: trusted",
-				Managed: true,
-			}}, nil
+			return appserver.HookListResponse{Data: []appserver.HookListEntry{{
+				CWD: `D:\repo`,
+				Hooks: []appserver.HookMetadata{{
+					Key:         "hook-1",
+					EventName:   appserver.HookEventPreToolUse,
+					HandlerType: appserver.HookHandlerCommand,
+					Matcher:     &matcher,
+					Command:     &command,
+					TimeoutSec:  10,
+					SourcePath:  `D:\repo\.codex\hooks.json`,
+					Source:      appserver.HookSourceProject,
+					Enabled:     true,
+					TrustStatus: appserver.HookTrustTrusted,
+				}},
+			}}}, nil
 		},
 	})
 
@@ -2122,38 +2268,172 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 		t.Fatalf("hooks reader calls = %d, want 1", calls)
 	}
 	view := model.View()
-	for _, want := range []string{"Hooks", "preToolUse / Bash", "echo ok", "source: project", "trust: trusted", "managed"} {
+	for _, want := range []string{"Hooks", "Lifecycle hooks from config", "PreToolUse", "Before a tool executes"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("hooks view missing %q:\n%s", want, view)
+			t.Fatalf("hooks event view missing %q:\n%s", want, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	view = model.View()
+	for _, want := range []string{"PreToolUse hooks", "Matcher", "Bash", "Command", "echo ok", "Trust", "Trusted"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("hooks handler view missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestModelHooksCommandUsesLifecycleFallback(t *testing.T) {
+func TestModelHooksCommandWithoutReaderMatchesRustLoadFailure(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
-
-	model.Update(HookRunMsg{
-		ID:            "run-1",
-		EventName:     "preToolUse",
-		Status:        "running",
-		StatusMessage: "checking command",
-		Running:       true,
-	})
-	model.Update(HookRunMsg{
-		ID:            "run-1",
-		EventName:     "preToolUse",
-		Status:        "failed",
-		StatusMessage: "hook exited with code 7",
-	})
-
 	typeText(t, model, "/hooks")
 	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
-	for _, want := range []string{"Hooks", "preToolUse", "(failed)", "hook exited with code 7"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("lifecycle hooks view missing %q:\n%s", want, view)
-		}
+	want := "Failed to load hooks: hooks/list is unavailable in this runtime"
+	if !strings.Contains(model.View(), want) {
+		t.Fatalf("hooks load failure missing %q:\n%s", want, model.View())
+	}
+	if len(state.Messages) != 1 || !strings.Contains(state.Messages[0].RawText, want) {
+		t.Fatalf("hooks load failure history = %#v", state.Messages)
+	}
+}
+
+func TestModelHooksBrowserWritesRustConfigEdits(t *testing.T) {
+	command := "echo ok"
+	response := func(status appserver.HookTrustStatus) appserver.HookListResponse {
+		return appserver.HookListResponse{Data: []appserver.HookListEntry{{
+			CWD: `D:\repo`,
+			Hooks: []appserver.HookMetadata{{
+				Key:         "hook-1",
+				EventName:   appserver.HookEventPreToolUse,
+				HandlerType: appserver.HookHandlerCommand,
+				Command:     &command,
+				SourcePath:  `D:\repo\.codex\hooks.json`,
+				Source:      appserver.HookSourceProject,
+				Enabled:     true,
+				CurrentHash: "sha256:current",
+				TrustStatus: status,
+			}},
+		}}}
+	}
+	tests := []struct {
+		name      string
+		status    appserver.HookTrustStatus
+		openEvent bool
+		action    bubbletea.KeyMsg
+		wantField string
+		wantValue any
+	}{
+		{name: "toggle", status: appserver.HookTrustTrusted, openEvent: true, action: key(bubbletea.KeySpace), wantField: "enabled", wantValue: false},
+		{name: "trust one", status: appserver.HookTrustUntrusted, openEvent: true, action: runes("t"), wantField: "trusted_hash", wantValue: "sha256:current"},
+		{name: "trust all", status: appserver.HookTrustModified, action: runes("t"), wantField: "trusted_hash", wantValue: "sha256:current"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var writes []config.ConfigBatchWriteParams
+			model := NewModel(codextui.NewState(nil), Options{
+				Width:            100,
+				SessionPickerCWD: `D:\repo`,
+				OnReadHooks: func(string) (appserver.HookListResponse, error) {
+					return response(test.status), nil
+				},
+				OnWriteHookConfig: func(params config.ConfigBatchWriteParams) error {
+					writes = append(writes, params)
+					return nil
+				},
+			})
+			typeText(t, model, "/hooks")
+			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			runTeaCmd(t, model, cmd)
+			if test.openEvent {
+				model.Update(key(bubbletea.KeyEnter))
+			}
+			_, cmd = model.Update(test.action)
+			runTeaCmd(t, model, cmd)
+			if len(writes) != 1 || len(writes[0].Edits) != 1 {
+				t.Fatalf("writes = %#v, want one edit", writes)
+			}
+			write := writes[0]
+			if !write.ReloadUserConfig || write.Edits[0].KeyPath != "hooks.state" || write.Edits[0].MergeStrategy != config.MergeUpsert {
+				t.Fatalf("write params = %#v", write)
+			}
+			states, ok := write.Edits[0].Value.(map[string]any)
+			if !ok {
+				t.Fatalf("hook state value = %#v", write.Edits[0].Value)
+			}
+			hookState, ok := states["hook-1"].(map[string]any)
+			if !ok || !reflect.DeepEqual(hookState[test.wantField], test.wantValue) {
+				t.Fatalf("hook state = %#v, want %s=%#v", hookState, test.wantField, test.wantValue)
+			}
+		})
+	}
+}
+
+func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    appserver.HookTrustStatus
+		openEvent bool
+		action    bubbletea.KeyMsg
+		prefix    string
+	}{
+		{name: "enable", status: appserver.HookTrustTrusted, openEvent: true, action: key(bubbletea.KeySpace), prefix: "Failed to update hook config: "},
+		{name: "trust one", status: appserver.HookTrustUntrusted, openEvent: true, action: runes("t"), prefix: "Failed to trust hook: "},
+		{name: "trust all", status: appserver.HookTrustModified, action: runes("t"), prefix: "Failed to trust hooks: "},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := "echo ok"
+			state := codextui.NewState(nil)
+			model := NewModel(state, Options{
+				SessionPickerCWD: `D:\repo`,
+				OnReadHooks: func(string) (appserver.HookListResponse, error) {
+					return appserver.HookListResponse{Data: []appserver.HookListEntry{
+						{
+							CWD: `D:\repo`,
+							Hooks: []appserver.HookMetadata{{
+								Key: "hook-1", EventName: appserver.HookEventPreToolUse, HandlerType: appserver.HookHandlerCommand,
+								Command: &command, SourcePath: `D:\repo\.codex\hooks.json`, Source: appserver.HookSourceProject,
+								Enabled: true, CurrentHash: "sha256:current", TrustStatus: test.status,
+							}},
+						},
+					}}, nil
+				},
+				OnWriteHookConfig: func(config.ConfigBatchWriteParams) error { return errors.New("denied") },
+			})
+			typeText(t, model, "/hooks")
+			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			runTeaCmd(t, model, cmd)
+			if test.openEvent {
+				model.Update(key(bubbletea.KeyEnter))
+			}
+			_, cmd = model.Update(test.action)
+			runTeaCmd(t, model, cmd)
+			want := test.prefix + "denied"
+			if len(state.Messages) != 1 || !strings.Contains(state.Messages[0].RawText, want) {
+				t.Fatalf("history = %#v, want %q", state.Messages, want)
+			}
+		})
+	}
+}
+
+func TestModelHooksBrowserConsumesCtrlDForPageDown(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		SessionPickerCWD: `D:\repo`,
+		OnReadHooks: func(string) (appserver.HookListResponse, error) {
+			return appserver.HookListResponse{Data: []appserver.HookListEntry{{CWD: `D:\repo`}}}, nil
+		},
+	})
+	typeText(t, model, "/hooks")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if model.modal == nil || model.modal.hooksBrowser == nil {
+		t.Fatal("hooks browser did not open")
+	}
+	_, cmd = model.Update(key(bubbletea.KeyCtrlD))
+	if cmd != nil {
+		t.Fatal("Ctrl+D returned a quit command while hooks browser was open")
+	}
+	if model.modal == nil || model.modal.hooksBrowser == nil {
+		t.Fatal("Ctrl+D closed hooks browser")
 	}
 }
 
@@ -2165,8 +2445,11 @@ func TestModelPluginsCommandReadsRuntimeCatalog(t *testing.T) {
 	model := NewModel(state, Options{
 		Width:  80,
 		Height: 24,
-		OnReadPlugins: func() (plugin.PluginListResponse, error) {
+		OnReadPlugins: func(cwd string, forceRefetch bool) (plugin.PluginListResponse, error) {
 			calls++
+			if cwd != "" || forceRefetch {
+				t.Fatalf("plugin reader got cwd=%q forceRefetch=%v", cwd, forceRefetch)
+			}
 			return plugin.PluginListResponse{Marketplaces: []plugin.PluginMarketplaceEntry{{
 				Name: "team",
 				Plugins: []plugin.PluginSummary{{
@@ -2282,10 +2565,83 @@ func TestModelReviewCustomStartsRuntimeReview(t *testing.T) {
 		t.Fatalf("review target = %#v", captured.Target)
 	}
 	view := model.View()
-	for _, want := range []string{"Review started.", "target: custom instructions", "turn: review-turn"} {
+	for _, want := range []string{">> Code review started: check security <<"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("review view missing %q:\n%s", want, view)
 		}
+	}
+	if state.Status != "running" {
+		t.Fatalf("review status = %q, want running", state.Status)
+	}
+	for _, notWant := range []string{"Review started.", "target: custom instructions", "turn: review-turn"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("review view contains stale %q:\n%s", notWant, view)
+		}
+	}
+}
+
+func TestModelReviewLifecycleMatchesRustAndRestoresTokenUsage(t *testing.T) {
+	window := int64(200000)
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-review")
+	state.TotalTokenUsage = codextui.TokenUsage{TotalTokens: 1200}
+	state.LastTokenUsage = codextui.TokenUsage{TotalTokens: 300}
+	state.ModelContextWindow = &window
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	entered := protocol.ThreadItem{ID: "review-turn", Type: "enteredReviewMode", Text: "changes against 'main'"}
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(entered)})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(entered)})
+	if count := strings.Count(model.View(), ">> Code review started: changes against 'main' <<"); count != 1 {
+		t.Fatalf("review start banner count = %d:\n%s", count, model.View())
+	}
+
+	reviewWindow := int64(64000)
+	model.Update(ThreadEventMsg{Event: protocol.TokenUsageUpdated(protocol.ThreadTokenUsage{
+		Total: protocol.Usage{TotalTokens: 9999}, Last: protocol.Usage{TotalTokens: 8888}, ModelContextWindow: &reviewWindow,
+	})})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.ThreadItem{ID: "review-turn", Type: "exitedReviewMode", Text: "review output"})})
+
+	if state.TotalTokenUsage.TotalTokens != 1200 || state.LastTokenUsage.TotalTokens != 300 || state.ModelContextWindow == nil || *state.ModelContextWindow != window {
+		t.Fatalf("token usage was not restored: total=%#v last=%#v window=%v", state.TotalTokenUsage, state.LastTokenUsage, state.ModelContextWindow)
+	}
+	if count := strings.Count(model.View(), "<< Code review finished >>"); count != 1 {
+		t.Fatalf("review finish banner count = %d:\n%s", count, model.View())
+	}
+}
+
+func TestModelReviewCustomPresetOpensPromptAndStartsRuntimeReview(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-review")
+	var captured review.StartParams
+	model := NewModel(state, Options{
+		Width: 80, Height: 24,
+		OnStartReview: func(params review.StartParams) (review.StartResponse, error) {
+			captured = params
+			return review.StartResponse{Turn: review.Turn{ID: "review-turn"}, ReviewThreadID: "thread-review"}, nil
+		},
+	})
+	now := fixedTeaTime()
+	model.now = func() time.Time { return now }
+
+	typeText(t, model, "/review")
+	model.Update(key(bubbletea.KeyEnter))
+	for range 3 {
+		model.Update(key(bubbletea.KeyDown))
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Custom review instructions") || !strings.Contains(view, "Type instructions and press Enter") {
+		t.Fatalf("custom review prompt missing:\n%s", view)
+	}
+	typeText(t, model, "focus auth boundaries")
+	now = now.Add(100 * time.Millisecond)
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("custom review prompt did not return review/start command")
+	}
+	runTeaCmd(t, model, cmd)
+	if captured.Target.Type != "custom" || captured.Target.Instructions != "focus auth boundaries" {
+		t.Fatalf("custom review target = %#v", captured.Target)
 	}
 }
 
@@ -2573,8 +2929,83 @@ func TestModelSideCommandRequiresStartedThread(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("side starter called %d times", calls)
 	}
-	if len(state.Messages) == 0 || !strings.Contains(state.Messages[0].RawText, SideNoStartedConversationMessage) {
+	if len(state.Messages) == 0 || !strings.Contains(state.Messages[0].RawText, "'/side' is unavailable before the session starts.") {
 		t.Fatalf("missing no-started-thread message: %#v", state.Messages)
+	}
+}
+
+func TestModelSideCommandsAreUnavailableDuringReview(t *testing.T) {
+	for _, command := range []string{"/side", "/btw inspect"} {
+		t.Run(command, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-review")
+			calls := 0
+			model := NewModel(state, Options{
+				Width: 80, Height: 24,
+				OnStartSide: func(params SideStartParams) (SideStartResponse, error) {
+					calls++
+					return SideStartResponse{}, nil
+				},
+			})
+			model.reviewState.IsReviewMode = true
+			typeText(t, model, command)
+			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			if cmd != nil || calls != 0 {
+				t.Fatalf("review side command returned cmd=%#v calls=%d", cmd, calls)
+			}
+			name := strings.Fields(command)[0]
+			if view := model.View(); !strings.Contains(view, "'"+name+"' is unavailable while code review is running.") {
+				t.Fatalf("missing review rejection:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestModelSideRenameUsesEphemeralMessage(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-parent")
+	model := NewModel(state, Options{
+		Width: 80, Height: 24,
+		OnStartSide: func(params SideStartParams) (SideStartResponse, error) {
+			return SideStartResponse{ParentThreadID: params.ParentThreadID, SideThreadID: "thread-side"}, nil
+		},
+	})
+	typeText(t, model, "/side")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	typeText(t, model, "/rename temporary")
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	if cmd != nil {
+		t.Fatalf("side rename returned cmd %#v", cmd)
+	}
+	if view := model.View(); !strings.Contains(view, SideRenameBlockMessage) {
+		t.Fatalf("missing side rename message:\n%s", view)
+	}
+}
+
+func TestModelInactiveParentCompletionStaysInSide(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-parent")
+	state.SetStatus("running")
+	model := NewModel(state, Options{
+		Width: 80, Height: 24,
+		OnStartSide: func(params SideStartParams) (SideStartResponse, error) {
+			return SideStartResponse{ParentThreadID: params.ParentThreadID, SideThreadID: "thread-side"}, nil
+		},
+	})
+	typeText(t, model, "/side")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	model.Update(TurnCompletedMsg{ThreadID: "thread-parent", AssistantMessage: "parent finished"})
+	if state.ThreadID != "thread-side" || state.Status != "idle" {
+		t.Fatalf("inactive completion changed side state thread=%q status=%q", state.ThreadID, state.Status)
+	}
+	if view := model.View(); !strings.Contains(view, "main finished") || strings.Contains(view, "parent finished") {
+		t.Fatalf("inactive parent completion was not isolated:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyCtrlC))
+	if state.ThreadID != "thread-parent" || !strings.Contains(model.View(), "parent finished") {
+		t.Fatalf("parent completion was not restored with parent:\n%s", model.View())
 	}
 }
 
@@ -2711,7 +3142,7 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 		Width:            80,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			calls++
 			if cwd != `D:\repo` {
 				t.Fatalf("skills cwd = %q, want D:\\repo", cwd)
@@ -2745,10 +3176,109 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 		t.Fatalf("skills reader calls = %d, want 1", calls)
 	}
 	view := model.View()
-	for _, want := range []string{"Skills", "review (Docs)", "Review code", "1 enabled of 1 skills."} {
+	for _, want := range []string{"Enable/Disable Skills", "Turn skills on or off", "[x] review (Docs)", "Review code"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("skills view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
+	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	enabled := true
+	readCalls := 0
+	writeCalls := 0
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:            80,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
+			if forceReload != (readCalls > 0) {
+				t.Fatalf("forceReload = %v on read %d", forceReload, readCalls+1)
+			}
+			readCalls++
+			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+				CWD: cwd,
+				Skills: []appserver.SkillsListEntry{{
+					Name: "review", Path: skillPath, Description: "Review code", Enabled: enabled,
+				}},
+			}}}, nil
+		},
+		OnWriteSkillEnabled: func(path string, requested bool) (bool, error) {
+			writeCalls++
+			if path != skillPath {
+				t.Fatalf("skill path = %q, want %q", path, skillPath)
+			}
+			enabled = requested
+			return requested, nil
+		},
+	})
+
+	typeText(t, model, "/skills")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+
+	_, cmd = model.Update(key(bubbletea.KeySpace))
+	if cmd == nil {
+		t.Fatal("skill toggle did not return config write command")
+	}
+	runTeaCmd(t, model, cmd)
+	if writeCalls != 1 || enabled {
+		t.Fatalf("write calls/enabled = %d/%v, want 1/false", writeCalls, enabled)
+	}
+
+	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	if cmd == nil {
+		t.Fatal("closing skills manager did not force inventory reload")
+	}
+	runTeaCmd(t, model, cmd)
+	if readCalls != 2 {
+		t.Fatalf("skills read calls = %d, want initial load plus forced reload", readCalls)
+	}
+	if model.modal != nil {
+		t.Fatalf("skills manager remained open after close")
+	}
+	if view := model.View(); !strings.Contains(view, "0 skills enabled, 1 skills disabled") {
+		t.Fatalf("skills change summary missing:\n%s", view)
+	}
+}
+
+func TestModelSkillsManageWriteFailureDoesNotCountAsChange(t *testing.T) {
+	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:            80,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
+			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+				CWD:    cwd,
+				Skills: []appserver.SkillsListEntry{{Name: "review", Path: skillPath, Enabled: true}},
+			}}}, nil
+		},
+		OnWriteSkillEnabled: func(path string, enabled bool) (bool, error) {
+			return false, errors.New("permission denied")
+		},
+	})
+
+	typeText(t, model, "/skills")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	runTeaCmd(t, model, cmd)
+
+	view := model.View()
+	want := "Failed to update skill config for " + skillPath + ": permission denied"
+	if !strings.Contains(view, want) {
+		t.Fatalf("skills write error missing %q:\n%s", want, view)
+	}
+	if strings.Contains(view, "skills disabled") {
+		t.Fatalf("failed skill write was included in summary:\n%s", view)
 	}
 }
 
@@ -2759,7 +3289,7 @@ func TestModelSkillPopupReadsRuntimeInventoryAndInsertsSkill(t *testing.T) {
 		Width:            90,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			calls++
 			if cwd != `D:\repo` {
 				t.Fatalf("skills cwd = %q, want D:\\repo", cwd)
@@ -2808,7 +3338,7 @@ func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) 
 		Width:            90,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
@@ -2959,7 +3489,7 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 		Width:            90,
 		Height:           24,
 		SessionPickerCWD: `D:\repo`,
-		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			return appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
@@ -2980,8 +3510,8 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("/skills list did not request skills inventory")
 	}
-	if got := model.ComposerValue(); got != "$" {
-		t.Fatalf("composer = %q, want $", got)
+	if got := model.ComposerValue(); got != "@" {
+		t.Fatalf("composer = %q, want @", got)
 	}
 	runTeaCmd(t, model, cmd)
 	view := model.View()
@@ -2989,6 +3519,23 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("/skills list popup missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestModelSkillsListMenuUsesLegacyDollarShortcutWhenMentionsV2Disabled(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:           90,
+		Height:          24,
+		FeatureSettings: map[string]bool{"mentions_v2": false},
+	})
+	typeText(t, model, "/skills")
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "press $ to open") {
+		t.Fatalf("legacy skills shortcut hint missing:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	if got := model.ComposerValue(); got != "$" {
+		t.Fatalf("composer = %q, want $", got)
 	}
 }
 
@@ -3316,8 +3863,7 @@ func TestModelSlashCommands(t *testing.T) {
 	state.AddMessage(codextui.RoleUser, "old")
 	model := NewModel(state, Options{})
 
-	typeText(t, model, "/model gpt-5")
-	model.Update(key(bubbletea.KeyEnter))
+	model.applyModelSetting("gpt-5")
 	if state.Model != "gpt-5" {
 		t.Fatalf("Model = %q, want gpt-5", state.Model)
 	}
@@ -3364,6 +3910,154 @@ func TestModelSlashCommands(t *testing.T) {
 	}
 }
 
+func TestModelRenameCommandOpensPrefilledPromptAndPersists(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-rename")
+	state.SetThreadName("Current project title")
+	var renamedThreadID string
+	var renamedName string
+	model := NewModel(state, Options{
+		OnRenameThread: func(threadID string, name string) error {
+			renamedThreadID = threadID
+			renamedName = name
+			return nil
+		},
+	})
+
+	typeText(t, model, "/rename")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	if !strings.Contains(view, "Rename thread") || !strings.Contains(view, "Current project title") || !strings.Contains(view, "Press enter to submit or esc to cancel") {
+		t.Fatalf("rename prompt view:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal != nil {
+		t.Fatalf("modal = %#v, want closed after rename", model.modal)
+	}
+	if renamedThreadID != "thread-rename" || renamedName != "Current project title" {
+		t.Fatalf("rename callback = (%q, %q)", renamedThreadID, renamedName)
+	}
+	if state.ThreadName != "Current project title" || !strings.Contains(model.View(), "Thread renamed to Current project title.") {
+		t.Fatalf("renamed state=%q view:\n%s", state.ThreadName, model.View())
+	}
+}
+
+func TestModelRenameCommandAcceptsInlineName(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-inline-rename")
+	var calls int
+	model := NewModel(state, Options{
+		OnRenameThread: func(threadID string, name string) error {
+			calls++
+			if threadID != "thread-inline-rename" || name != "Release triage" {
+				t.Fatalf("rename callback = (%q, %q)", threadID, name)
+			}
+			return nil
+		},
+	})
+
+	typeText(t, model, "/rename Release triage")
+	model.Update(key(bubbletea.KeyEnter))
+	if calls != 1 || state.ThreadName != "Release triage" {
+		t.Fatalf("calls=%d ThreadName=%q", calls, state.ThreadName)
+	}
+}
+
+func TestModelRenamePromptStartsEmptyAndCanCancel(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-empty-rename")
+	model := NewModel(state, Options{
+		OnRenameThread: func(threadID string, name string) error {
+			t.Fatalf("unexpected rename callback = (%q, %q)", threadID, name)
+			return nil
+		},
+	})
+
+	typeText(t, model, "/rename")
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Name thread") || !strings.Contains(view, "Type a name and press Enter") {
+		t.Fatalf("empty rename prompt:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil {
+		t.Fatal("empty Enter unexpectedly closed rename prompt")
+	}
+	model.Update(key(bubbletea.KeyEsc))
+	if model.modal != nil {
+		t.Fatalf("modal = %#v, want cancelled", model.modal)
+	}
+}
+
+func TestModelNamedNewSessionPersistsNameWhenThreadStarts(t *testing.T) {
+	state := codextui.NewState(nil)
+	var renamedThreadID string
+	var renamedName string
+	model := NewModel(state, Options{
+		OnRenameThread: func(threadID string, name string) error {
+			renamedThreadID = threadID
+			renamedName = name
+			return nil
+		},
+	})
+
+	typeText(t, model, "/new Follow-up")
+	model.Update(key(bubbletea.KeyEnter))
+	if renamedThreadID != "" || !model.pendingThreadName {
+		t.Fatalf("rename before thread start = (%q, %q), pending=%v", renamedThreadID, renamedName, model.pendingThreadName)
+	}
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "thread.started", ThreadID: "thread-new"}})
+	if renamedThreadID != "thread-new" || renamedName != "Follow-up" || model.pendingThreadName {
+		t.Fatalf("rename after thread start = (%q, %q), pending=%v", renamedThreadID, renamedName, model.pendingThreadName)
+	}
+}
+
+func TestModelLogoutExitsOnlyAfterCleanupSucceeds(t *testing.T) {
+	var calls int
+	model := NewModel(nil, Options{
+		OnLogout: func() error {
+			calls++
+			return nil
+		},
+	})
+
+	typeText(t, model, "/logout")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil || calls != 0 {
+		t.Fatalf("logout command = %v calls=%d, want asynchronous cleanup", cmd, calls)
+	}
+	result := cmd()
+	if calls != 1 {
+		t.Fatalf("logout calls = %d, want 1", calls)
+	}
+	_, quitCmd := model.Update(result)
+	if quitCmd == nil {
+		t.Fatal("successful logout did not request exit")
+	}
+	if _, ok := quitCmd().(bubbletea.QuitMsg); !ok {
+		t.Fatalf("successful logout returned %T, want QuitMsg", quitCmd())
+	}
+}
+
+func TestModelLogoutFailureStaysOpenAndShowsError(t *testing.T) {
+	model := NewModel(nil, Options{
+		OnLogout: func() error {
+			return errors.New("credentials store is locked")
+		},
+	})
+
+	typeText(t, model, "/logout")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, quitCmd := model.Update(cmd())
+	if quitCmd != nil {
+		if _, ok := quitCmd().(bubbletea.QuitMsg); ok {
+			t.Fatal("failed logout unexpectedly requested exit")
+		}
+	}
+	if view := model.View(); !strings.Contains(view, "Logout failed: credentials store is locked") {
+		t.Fatalf("logout failure view:\n%s", view)
+	}
+}
+
 func TestModelInputHistoryUpDownRestoresDraft(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{})
 	for _, prompt := range []string{"first prompt", "second prompt"} {
@@ -3390,11 +4084,6 @@ func TestModelInputHistoryUpDownRestoresDraft(t *testing.T) {
 }
 
 func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
-	state := codextui.NewState(nil)
-	state.SetThreadID("thread-visible")
-	state.AddMessage(codextui.RoleAssistant, "last response")
-	model := NewModel(state, Options{Width: 100, Height: 30})
-
 	skip := map[string]bool{
 		"exit": true,
 		"quit": true,
@@ -3404,6 +4093,10 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 			continue
 		}
 		t.Run(frame.Name, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-visible")
+			state.AddMessage(codextui.RoleAssistant, "last response")
+			model := NewModel(state, Options{Width: 100, Height: 30})
 			beforeView := utils.StripANSI(model.View())
 			beforeNotice := model.notice
 			beforeModal := model.modal
@@ -3414,7 +4107,7 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 			if !ok {
 				t.Fatalf("ParseCommand failed for /%s", frame.Name)
 			}
-			_ = model.applyCommand(invocation)
+			runTeaCmd(t, model, model.applyCommand(invocation))
 
 			afterView := utils.StripANSI(model.View())
 			changed := afterView != beforeView ||
@@ -3441,6 +4134,15 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	}
 	if len(model.slashPopup.Items) == 0 || model.slashPopup.Items[0].Name != "model" {
 		t.Fatalf("first slash popup item = %#v, want model first", model.slashPopup.Items)
+	}
+	for _, item := range model.slashPopup.Items {
+		switch item.Name {
+		case "help", "approval", "sandbox", "unarchive", "attach", "image", "url-image", "clear-attachments", "editor", "quit", "btw", "apps":
+			t.Fatalf("Rust-aligned default popup contains hidden or Go-only command /%s", item.Name)
+		}
+		if strings.HasPrefix(item.Name, "debug") {
+			t.Fatalf("Rust-aligned default popup contains hidden command /%s", item.Name)
+		}
 	}
 	view := model.View()
 	for _, want := range []string{codextui.SelectionPrefix(true) + "/model", "choose what model and reasoning effort to use"} {
@@ -3482,6 +4184,357 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	}
 	if view := model.View(); !strings.Contains(view, "Select Model") {
 		t.Fatalf("Enter on /model should open model picker:\n%s", view)
+	}
+
+	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
+	typeText(t, model, "/qu")
+	if len(model.slashPopup.Items) != 1 || model.slashPopup.Items[0].Name != "quit" {
+		t.Fatalf("filtered /qu popup items = %#v, want quit", model.slashPopup.Items)
+	}
+
+	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
+	typeText(t, model, "/bt")
+	if len(model.slashPopup.Items) != 1 || model.slashPopup.Items[0].Name != "btw" {
+		t.Fatalf("filtered /bt popup items = %#v, want btw", model.slashPopup.Items)
+	}
+
+	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24, FeatureSettings: map[string]bool{"collaboration_modes": true}})
+	typeText(t, model, "/sub")
+	if len(model.slashPopup.Items) != 1 || model.slashPopup.Items[0].Name != "subagents" {
+		t.Fatalf("filtered /sub popup items = %#v, want subagents", model.slashPopup.Items)
+	}
+}
+
+func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
+	goCompatibilityArgs := map[codextui.Command]bool{
+		codextui.CommandApproval: true,
+		codextui.CommandSandbox:  true,
+		codextui.CommandAttach:   true,
+		codextui.CommandImage:    true,
+		codextui.CommandURLImage: true,
+	}
+	for _, frame := range codextui.SlashCommandFrames() {
+		invocation, ok := codextui.ParseCommand("/" + frame.Name + " argument")
+		if !ok {
+			t.Fatalf("ParseCommand(/%s argument) failed", frame.Name)
+		}
+		want := chatwidget.CommandSupportsInlineArgs(invocation.Command) || goCompatibilityArgs[invocation.Command]
+		if got := slashInvocationDispatchable(invocation); got != want {
+			t.Fatalf("/%s inline dispatchable = %v, want %v", frame.Name, got, want)
+		}
+	}
+
+	state := codextui.NewState(nil)
+	var requests []SubmitRequest
+	model := NewModel(state, Options{OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+		requests = append(requests, request)
+		return nil
+	}})
+	typeText(t, model, "/model gpt-new")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.Model != "" || len(requests) != 1 || requests[0].Prompt != "/model gpt-new" {
+		t.Fatalf("unsupported /model args should submit as a prompt: model=%q requests=%#v", state.Model, requests)
+	}
+
+	state = codextui.NewState(nil)
+	model = NewModel(state, Options{OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+		t.Fatalf("supported inline slash command submitted as prompt: %#v", request)
+		return nil
+	}})
+	typeText(t, model, "/raw on")
+	model.Update(key(bubbletea.KeyEnter))
+	if !model.rawOutput {
+		t.Fatal("supported /raw on did not dispatch")
+	}
+
+	typeText(t, model, "/approval never")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.ApprovalPolicy != "never" {
+		t.Fatalf("Go compatibility /approval args did not dispatch: %q", state.ApprovalPolicy)
+	}
+}
+
+func TestModelSlashInitSubmitsRustPromptRegardlessOfLoadedInstructions(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.AgentsSummary = "project-instructions.md"
+	var requests []SubmitRequest
+	model := NewModel(state, Options{OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+		requests = append(requests, request)
+		return nil
+	}})
+
+	typeText(t, model, "/init")
+	model.Update(key(bubbletea.KeyEnter))
+
+	if len(requests) != 1 || requests[0].Prompt != initCommandPrompt() {
+		t.Fatalf("/init requests = %#v", requests)
+	}
+	for _, want := range []string{
+		"Before writing, check whether AGENTS.md already exists",
+		"do not overwrite or modify it",
+		"200-400 words is optimal",
+		"Commit & Pull Request Guidelines",
+	} {
+		if !strings.Contains(requests[0].Prompt, want) {
+			t.Fatalf("/init prompt missing %q:\n%s", want, requests[0].Prompt)
+		}
+	}
+	if got := model.ComposerValue(); got != "" {
+		t.Fatalf("composer after /init = %q, want empty", got)
+	}
+	normalizedPrompt := strings.ReplaceAll(initCommandPrompt(), "\r\n", "\n")
+	if got, want := fmt.Sprintf("%x", sha256.Sum256([]byte(normalizedPrompt))), "b1f4f6bba488110435f76970e2be3095209f32cf767f7a438b54eab76163d51a"; got != want {
+		t.Fatalf("/init prompt SHA-256 = %s, want Rust source %s", got, want)
+	}
+}
+
+func TestModelSlashCompactStartsRuntimeClearsUsageAndDrainsQueuedInput(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-compact")
+	state.TotalTokenUsage = codextui.TokenUsage{TotalTokens: 1200}
+	state.LastTokenUsage = codextui.TokenUsage{TotalTokens: 300}
+	window := int64(4096)
+	state.ModelContextWindow = &window
+	var compactThreadID string
+	var requests []SubmitRequest
+	model := NewModel(state, Options{
+		OnStartCompactCommand: func(threadID string) bubbletea.Cmd {
+			compactThreadID = threadID
+			return func() bubbletea.Msg { return CompactStartResultMsg{} }
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			requests = append(requests, request)
+			return nil
+		},
+	})
+
+	typeText(t, model, "/compact")
+	_, compactCmd := model.Update(key(bubbletea.KeyEnter))
+	if compactCmd == nil || compactThreadID != "thread-compact" || state.Status != "running" {
+		t.Fatalf("compact cmd=%v thread=%q status=%q", compactCmd, compactThreadID, state.Status)
+	}
+	if !state.TotalTokenUsage.IsZero() || !state.LastTokenUsage.IsZero() || state.ModelContextWindow != nil {
+		t.Fatalf("token usage was not cleared: total=%#v last=%#v window=%v", state.TotalTokenUsage, state.LastTokenUsage, state.ModelContextWindow)
+	}
+	for _, message := range state.Messages {
+		if strings.Contains(message.Text, "Compaction requested") {
+			t.Fatalf("Go-only compaction history leaked: %#v", state.Messages)
+		}
+	}
+
+	typeText(t, model, "queued after compact")
+	model.Update(key(bubbletea.KeyEnter))
+	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "queued after compact" {
+		t.Fatalf("queued requests = %#v", got)
+	}
+	model.Update(compactCmd())
+	if state.Status != "running" || len(requests) != 1 || requests[0].Prompt != "queued after compact" {
+		t.Fatalf("post-compact status=%q requests=%#v", state.Status, requests)
+	}
+}
+
+func TestModelSlashCompactFailureReturnsIdleAndShowsError(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-compact")
+	model := NewModel(state, Options{OnStartCompactCommand: func(string) bubbletea.Cmd {
+		return func() bubbletea.Msg { return CompactStartResultMsg{Err: errors.New("summary failed")} }
+	}})
+
+	typeText(t, model, "/compact")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(cmd())
+
+	if state.Status != "idle" || !strings.Contains(utils.StripANSI(model.View()), "Compaction: summary failed") {
+		t.Fatalf("status=%q view=%s", state.Status, model.View())
+	}
+}
+
+func TestModelContextCompactionCompletionAddsRustHistoryMarker(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-item", Type: "contextCompaction"})
+	if !strings.Contains(utils.StripANSI(model.View()), "Context compacted") {
+		t.Fatalf("compaction marker missing:\n%s", model.View())
+	}
+}
+
+func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
+	var requests []SubmitRequest
+	reads := 0
+	model := NewModel(state, Options{
+		OnReadIDEContext: func(cwd string) (*idecontext.IdeContext, error) {
+			reads++
+			if cwd != `D:\repo` {
+				t.Fatalf("IDE context cwd = %q", cwd)
+			}
+			return &idecontext.IdeContext{
+				ActiveFile: &idecontext.ActiveFile{FileDescriptor: idecontext.FileDescriptor{Path: `D:\repo\main.go`}},
+			}, nil
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			requests = append(requests, request)
+			return nil
+		},
+	})
+
+	typeText(t, model, "/ide on")
+	model.Update(key(bubbletea.KeyEnter))
+	if !model.ideContext.Enabled || reads != 1 {
+		t.Fatalf("IDE enabled=%v reads=%d", model.ideContext.Enabled, reads)
+	}
+	view := utils.StripANSI(model.View())
+	for _, want := range []string{"IDE context is on.", "Future messages will include", "IDE context"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("enabled IDE view missing %q:\n%s", want, view)
+		}
+	}
+
+	typeText(t, model, "review this")
+	model.Update(key(bubbletea.KeyEnter))
+	if reads != 2 || len(requests) != 1 || requests[0].IDEContext == nil {
+		t.Fatalf("IDE submission reads=%d requests=%#v", reads, requests)
+	}
+	if requests[0].Prompt != "review this" || state.Messages[len(state.Messages)-1].Text != "review this" {
+		t.Fatalf("visible prompt changed: request=%q messages=%#v", requests[0].Prompt, state.Messages)
+	}
+
+	model.setStatus("idle")
+	typeText(t, model, "/ide off")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.ideContext.Enabled || reads != 2 || !strings.Contains(model.View(), "IDE context is off.") {
+		t.Fatalf("IDE disable enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	}
+}
+
+func TestModelIDECommandFailureAndPromptWarningMatchRust(t *testing.T) {
+	reads := 0
+	model := NewModel(codextui.NewState(nil), Options{
+		OnReadIDEContext: func(string) (*idecontext.IdeContext, error) {
+			reads++
+			if reads == 1 {
+				return &idecontext.IdeContext{}, nil
+			}
+			return nil, &idecontext.IdeContextError{Kind: idecontext.IdeContextErrorRequestFailed, Message: "request-timeout"}
+		},
+	})
+
+	typeText(t, model, "/ide status")
+	model.Update(key(bubbletea.KeyEnter))
+	if reads != 0 || !strings.Contains(model.View(), "IDE context is off.") {
+		t.Fatalf("disabled status reads=%d view=%s", reads, model.View())
+	}
+	typeText(t, model, "/ide on")
+	model.Update(key(bubbletea.KeyEnter))
+	if !model.ideContext.Enabled || reads != 1 || !strings.Contains(model.View(), "Connected to your IDE.") {
+		t.Fatalf("enable result enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	}
+
+	first := SubmitRequest{Prompt: "first"}
+	model.captureIDEContext(&first)
+	second := SubmitRequest{Prompt: "second"}
+	model.captureIDEContext(&second)
+	view := utils.StripANSI(model.View())
+	if strings.Count(view, "IDE context was skipped for this message.") != 1 {
+		t.Fatalf("IDE prompt warning should render once:\n%s", view)
+	}
+	raw := ""
+	for _, message := range model.State.Messages {
+		raw += message.RawText
+	}
+	if !strings.Contains(raw, "did not answer in time") || first.IDEContext != nil || second.IDEContext != nil {
+		t.Fatalf("IDE prompt failure result first=%#v second=%#v view=%s", first, second, view)
+	}
+}
+
+func TestModelIDECommandUnavailableAndInvalidArgs(t *testing.T) {
+	reads := 0
+	model := NewModel(codextui.NewState(nil), Options{OnReadIDEContext: func(string) (*idecontext.IdeContext, error) {
+		reads++
+		return nil, &idecontext.IdeContextError{Kind: idecontext.IdeContextErrorConnect}
+	}})
+
+	typeText(t, model, "/ide maybe")
+	model.Update(key(bubbletea.KeyEnter))
+	if reads != 0 || !strings.Contains(model.View(), "Usage: /ide [on|off|status]") {
+		t.Fatalf("invalid /ide reads=%d view=%s", reads, model.View())
+	}
+	typeText(t, model, "/ide")
+	model.Update(key(bubbletea.KeyEnter))
+	raw := ""
+	for _, message := range model.State.Messages {
+		raw += message.RawText
+	}
+	if reads != 1 || model.ideContext.Enabled || !strings.Contains(model.View(), "IDE context could not be enabled.") || !strings.Contains(raw, idecontext.OpenIDEHint) {
+		t.Fatalf("unavailable /ide enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	}
+}
+
+func TestModelApproveCommandEmptyAndDeniedSelectionMatchRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-approve")
+	var approvedThreadID string
+	var approvedEntry chatwidget.AutoReviewDenialEntry
+	model := NewModel(state, Options{OnApproveAutoReviewDenial: func(threadID string, entry chatwidget.AutoReviewDenialEntry) error {
+		approvedThreadID = threadID
+		approvedEntry = entry
+		return nil
+	}})
+
+	typeText(t, model, "/approve")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal != nil || !strings.Contains(model.View(), "No recent auto-review denials in this thread.") {
+		t.Fatalf("empty /approve modal=%#v view=%s", model.modal, model.View())
+	}
+
+	raw := json.RawMessage(`{"id":"review-1","turnId":"turn-1","status":"denied","action":{"type":"command","command":"go test ./...","cwd":"D:\\repo"}}`)
+	model.Update(GuardianReviewMsg{ThreadID: "thread-approve", Event: chatwidget.GuardianAssessmentEvent{
+		ID:        "review-1",
+		Status:    chatwidget.GuardianAssessmentDenied,
+		Action:    chatwidget.GuardianAssessmentAction{Kind: chatwidget.GuardianActionCommand, Command: "go test ./..."},
+		Rationale: "Writes outside the allowed sandbox.",
+		Raw:       raw,
+	}})
+	if len(model.toolRequestRuntime.RecentAutoReviewDenials) != 1 {
+		t.Fatalf("auto-review denials = %#v", model.toolRequestRuntime.RecentAutoReviewDenials)
+	}
+
+	typeText(t, model, "/approve")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.kind != ModalKindAutoReview || model.modal.selected != 1 {
+		t.Fatalf("approve modal = %#v", model.modal)
+	}
+	view := utils.StripANSI(model.View())
+	for _, want := range []string{"Auto-review Denials", "Select a denied action to approve.", "go test ./...", "Writes outside"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("approve view missing %q:\n%s", want, view)
+		}
+	}
+
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if approvedThreadID != "thread-approve" || approvedEntry.ID != "review-1" || string(approvedEntry.Event) != string(raw) {
+		t.Fatalf("approved thread=%q entry=%#v", approvedThreadID, approvedEntry)
+	}
+	if len(model.toolRequestRuntime.RecentAutoReviewDenials) != 0 || !strings.Contains(model.View(), "Approval recorded for one retry") {
+		t.Fatalf("post-approval denials=%#v view=%s", model.toolRequestRuntime.RecentAutoReviewDenials, model.View())
+	}
+}
+
+func TestModelApproveCommandReportsCallbackFailure(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-approve")
+	model := NewModel(state, Options{OnApproveAutoReviewDenial: func(string, chatwidget.AutoReviewDenialEntry) error {
+		return errors.New("rpc unavailable")
+	}})
+	model.toolRequestRuntime.RecentAutoReviewDenials = []chatwidget.AutoReviewDenialEntry{{
+		ID: "review-1", Summary: "curl example.test", Rationale: "Network denied.", Event: json.RawMessage(`{"id":"review-1","status":"denied","action":{"type":"network_access"}}`),
+	}}
+	typeText(t, model, "/approve")
+	model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if !strings.Contains(model.View(), "Failed to approve auto-review denial: rpc unavailable") {
+		t.Fatalf("approval failure missing:\n%s", model.View())
 	}
 }
 
@@ -3581,15 +4634,18 @@ func TestModelPermissionsMenuAppliesRuntimeState(t *testing.T) {
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Full Access") || !strings.Contains(view, "Yes, continue anyway") {
+	if view := model.View(); !strings.Contains(view, "Enable full access?") || !strings.Contains(view, "Yes, continue anyway") || !strings.Contains(view, "Cancel") {
 		t.Fatalf("full access confirmation missing:\n%s", view)
+	}
+	if view := model.View(); strings.Contains(view, "don't ask again") {
+		t.Fatalf("full access confirmation contains obsolete remember choice:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyEnter))
 	if state.ApprovalPolicy != string(chatwidget.ApprovalNever) || state.Sandbox != chatwidget.DangerFullAccessProfile {
 		t.Fatalf("full-access state approval=%q sandbox=%q", state.ApprovalPolicy, state.Sandbox)
 	}
-	if !strings.Contains(model.View(), "Permissions: Full Access") {
-		t.Fatalf("permissions notice missing:\n%s", model.View())
+	if !strings.Contains(model.View(), "Permissions updated to Full Access") {
+		t.Fatalf("permissions history event missing:\n%s", model.View())
 	}
 }
 
@@ -3783,6 +4839,66 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 	}
 }
 
+func TestModelMCPCommandRefreshesInventory(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 24,
+		MCPServers: []historycell.McpServerStatus{{
+			Name:  "stale",
+			Tools: []string{"old"},
+		}},
+		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
+			if !detail {
+				t.Fatal("/mcp verbose did not request full inventory detail")
+			}
+			return []historycell.McpServerStatus{{
+				Name:      "fresh",
+				Auth:      "OAuth",
+				Tools:     []string{"read"},
+				Resources: []historycell.McpResource{{Name: "guide", URI: "file://guide"}},
+			}}, nil
+		},
+	})
+
+	typeText(t, model, "/mcp verbose")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/mcp verbose did not start an inventory request")
+	}
+	if view := model.View(); !strings.Contains(view, "Loading MCP inventory") || strings.Contains(view, "stale") {
+		t.Fatalf("MCP loading state mismatch:\n%s", view)
+	}
+	model.Update(cmd())
+	view := model.View()
+	for _, want := range []string{"MCP Tools", "fresh", "Tools: read", "Resources: guide (file://guide)"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("refreshed MCP output missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Loading MCP inventory") || strings.Contains(view, "stale") {
+		t.Fatalf("refreshed MCP output retained stale/loading state:\n%s", view)
+	}
+}
+
+func TestModelMCPCommandReportsRefreshFailure(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		OnReadMCPInventory: func(bool) ([]historycell.McpServerStatus, error) {
+			return nil, errors.New("offline")
+		},
+	})
+
+	typeText(t, model, "/mcp")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/mcp did not start an inventory request")
+	}
+	model.Update(cmd())
+	if view := model.View(); !strings.Contains(view, "Failed to load MCP inventory: offline") || strings.Contains(view, "Loading MCP inventory") {
+		t.Fatalf("MCP refresh failure mismatch:\n%s", view)
+	}
+}
+
 func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
 	var writes [][]SettingsEdit
@@ -3801,8 +4917,7 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/personality pragmatic")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	cmd := model.applyPersonalityCommand("pragmatic")
 	runTeaCmd(t, model, cmd)
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "personality" || writes[0][0].Value != "pragmatic" {
 		t.Fatalf("personality writes = %#v", writes)
@@ -3811,8 +4926,7 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 		t.Fatalf("personality state/view mismatch: state=%q view=\n%s", state.Personality, model.View())
 	}
 
-	typeText(t, model, "/experimental memories off")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	cmd = model.applyExperimentalCommand("memories off")
 	runTeaCmd(t, model, cmd)
 	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.memories" || writes[1][0].Value != false {
 		t.Fatalf("experimental writes = %#v", writes)
@@ -3843,8 +4957,7 @@ func TestModelThemeAndPetsCommandsPersistSelections(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/theme dracula")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	cmd := model.applyThemeCommand("dracula")
 	runTeaCmd(t, model, cmd)
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "tui.theme" || writes[0][0].Value != "dracula" {
 		t.Fatalf("theme writes = %#v", writes)
@@ -4076,8 +5189,8 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 		t.Fatalf("skills modal missing:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyEnter))
-	if model.ComposerValue() != "$" {
-		t.Fatalf("skills list should insert $, got %q", model.ComposerValue())
+	if model.ComposerValue() != "@" {
+		t.Fatalf("skills list should insert @ when mentions_v2 is enabled, got %q", model.ComposerValue())
 	}
 	model.composer.Reset()
 
@@ -4104,29 +5217,113 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 	}
 }
 
+func TestModelPlanCommandAppliesRustCollaborationMode(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5.4", ReasoningEffort: "high"})
+	state.SetThreadID("thread-plan")
+	updatedThreadID := ""
+	var updatedMode chatwidget.CollaborationMode
+	model := NewModel(state, Options{
+		Width:           100,
+		Height:          24,
+		FeatureSettings: map[string]bool{"collaboration_modes": true},
+		OnUpdateCollaborationMode: func(threadID string, mode chatwidget.CollaborationMode) error {
+			updatedThreadID = threadID
+			updatedMode = mode
+			return nil
+		},
+	})
+
+	typeText(t, model, "/plan investigate architecture")
+	model.Update(key(bubbletea.KeyEnter))
+
+	if !state.PlanMode || state.EffectiveReasoningEffort() != chatwidget.CollaborationPlanDefaultReasoningEffort {
+		t.Fatalf("plan state = mode %v effort %q", state.PlanMode, state.EffectiveReasoningEffort())
+	}
+	if updatedThreadID != "thread-plan" || updatedMode.Mode != chatwidget.CollaborationModeKindPlan {
+		t.Fatalf("updated collaboration mode thread=%q mode=%#v", updatedThreadID, updatedMode)
+	}
+	requests := model.SubmittedRequests()
+	if len(requests) != 1 || requests[0].CollaborationMode == nil || requests[0].CollaborationMode.Mode != chatwidget.CollaborationModeKindPlan {
+		t.Fatalf("plan requests = %#v", requests)
+	}
+	mode := requests[0].CollaborationMode
+	if mode.Settings.ReasoningEffort == nil || *mode.Settings.ReasoningEffort != "medium" || mode.Settings.DeveloperInstructions == nil || !strings.Contains(*mode.Settings.DeveloperInstructions, "## Finalization rule") {
+		t.Fatalf("plan request mode = %#v", mode)
+	}
+	if !strings.Contains(model.View(), "Model changed to gpt-5.4 medium for Plan mode.") {
+		t.Fatalf("plan mode change message missing:\n%s", model.View())
+	}
+}
+
+func TestModelPlanCommandHonorsDisabledCollaborationModes(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 90, Height: 24, FeatureSettings: map[string]bool{"collaboration_modes": false}})
+	typeText(t, model, "/plan investigate")
+	model.Update(key(bubbletea.KeyEnter))
+	if state.PlanMode || len(model.SubmittedRequests()) != 0 {
+		t.Fatalf("disabled /plan changed state=%v requests=%#v", state.PlanMode, model.SubmittedRequests())
+	}
+	if view := model.View(); !strings.Contains(view, "Collaboration modes are disabled.") || !strings.Contains(view, "Enable collaboration modes to use /plan.") {
+		t.Fatalf("disabled /plan message missing:\n%s", view)
+	}
+}
+
+func TestModelRendersProposedPlanLifecycle(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 90, Height: 24})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.PlanItem("plan-1", ""))})
+	model.Update(ThreadEventMsg{Event: protocol.PlanDelta("plan-1", "1. Inspect\n")})
+	model.Update(ThreadEventMsg{Event: protocol.PlanDelta("plan-1", "2. Verify\n")})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.PlanItem("plan-1", "1. Inspect\n2. Verify\n"))})
+
+	if len(state.Messages) != 1 || state.Messages[0].Role != codextui.RoleHistory || state.Messages[0].RawText != "1. Inspect\n2. Verify" || !strings.Contains(state.Messages[0].Text, "Proposed Plan") {
+		t.Fatalf("proposed plan transcript = %#v", state.Messages)
+	}
+	if len(model.activeProposedPlans) != 0 {
+		t.Fatalf("active proposed plans = %#v", model.activeProposedPlans)
+	}
+}
+
 func TestModelRuntimeBackedSlashCommands(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
 	state.SetThreadID("thread-runtime")
 	opened := ""
 	granted := ""
-	imported := ""
 	model := NewModel(state, Options{
 		OnOpenDesktopThread: func(threadID string) error { opened = threadID; return nil },
 		OnReadRolloutPath:   func(threadID string) (string, error) { return `D:\rollouts\thread-runtime.jsonl`, nil },
-		OnSandboxReadDir:    func(path string) error { granted = path; return nil },
-		OnImportExternalAgent: func(cwd string) (string, error) {
-			imported = cwd
-			return "External agent import started: import-1", nil
-		},
-		FeatureSettings: map[string]bool{"memories": true, "memory_generation": false},
+		OnSandboxReadDir:    func(path string) (string, error) { granted = path; return `D:\canonical-data`, nil },
+		FeatureSettings:     map[string]bool{"memories": true, "memory_generation": false},
 	})
 
-	for _, command := range []string{"/app", "/rollout", `/sandbox-add-read-dir D:\data`, "/import", "/memories"} {
+	for _, command := range []string{"/app", "/rollout", `/sandbox-add-read-dir D:\data`, "/memories"} {
 		invocation, ok := codextui.ParseCommand(command)
 		if !ok {
 			t.Fatalf("ParseCommand(%q) failed", command)
 		}
-		_ = model.applyCommand(invocation)
+		runTeaCmd(t, model, model.applyCommand(invocation))
+	}
+	rolloutHistoryFound := false
+	for _, message := range state.Messages {
+		if message.Role == codextui.RoleHistory && strings.Contains(message.RawText, `Current rollout path: D:\rollouts\thread-runtime.jsonl`) {
+			rolloutHistoryFound = true
+			break
+		}
+	}
+	if !rolloutHistoryFound {
+		t.Fatalf("/rollout did not add a Rust-style info history event: %#v", state.Messages)
+	}
+	sandboxStartFound := false
+	sandboxCompletedFound := false
+	for _, message := range state.Messages {
+		if message.Role != codextui.RoleHistory {
+			continue
+		}
+		sandboxStartFound = sandboxStartFound || strings.Contains(message.RawText, `Granting sandbox read access to D:\data ...`)
+		sandboxCompletedFound = sandboxCompletedFound || strings.Contains(message.RawText, `Sandbox read access granted for D:\canonical-data`)
+	}
+	if !sandboxStartFound || !sandboxCompletedFound {
+		t.Fatalf("sandbox read-root history start=%v completed=%v messages=%#v", sandboxStartFound, sandboxCompletedFound, state.Messages)
 	}
 	if opened != "thread-runtime" {
 		t.Fatalf("opened thread = %q", opened)
@@ -4134,14 +5331,413 @@ func TestModelRuntimeBackedSlashCommands(t *testing.T) {
 	if granted != `D:\data` {
 		t.Fatalf("granted path = %q", granted)
 	}
-	if imported != `D:\repo` {
-		t.Fatalf("import cwd = %q", imported)
-	}
 	if model.modal == nil || model.modal.kind != ModalKindMemories {
 		t.Fatalf("memories modal = %#v", model.modal)
 	}
 	if !strings.Contains(model.View(), "Memories") {
 		t.Fatalf("view missing memories popup:\n%s", model.View())
+	}
+}
+
+func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
+	item := config.ExternalAgentConfigMigrationItem{
+		ItemType:    config.MigrationSkills,
+		Description: "Migrate Claude Code skills",
+		Details: &config.MigrationDetails{
+			Skills: []config.NamedMigration{{Name: "review"}, {Name: "docs"}},
+		},
+	}
+	detectedCWD := ""
+	var detectedSources []string
+	importedSource := ""
+	importedItems := []config.ExternalAgentConfigMigrationItem{}
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 30,
+		OnDetectExternalAgent: func(cwd string, source string) (config.ExternalAgentConfigDetectResponse, error) {
+			detectedCWD = cwd
+			detectedSources = append(detectedSources, source)
+			if source != "claude-code" {
+				return config.ExternalAgentConfigDetectResponse{}, nil
+			}
+			return config.ExternalAgentConfigDetectResponse{Items: []config.ExternalAgentConfigMigrationItem{item}}, nil
+		},
+		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error) {
+			importedSource = source
+			importedItems = append(importedItems, items...)
+			return config.ExternalAgentConfigImportResponse{ImportID: "import-1"}, config.ExternalAgentConfigImportCompletedNotification{
+				ImportID: "import-1",
+				ItemTypeResults: []config.ExternalAgentConfigImportTypeResult{{
+					ItemType: config.MigrationSkills,
+					Successes: []config.ExternalAgentConfigImportItemTypeSuccess{
+						{ItemType: config.MigrationSkills},
+						{ItemType: config.MigrationSkills},
+					},
+				}},
+			}, nil
+		},
+	})
+
+	typeText(t, model, "/import")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil || !strings.Contains(model.View(), "Checking for compatible setup") {
+		t.Fatalf("import detection state missing:\n%s", model.View())
+	}
+	runTeaCmd(t, model, cmd)
+	if detectedCWD != `D:\repo` {
+		t.Fatalf("detected cwd = %q, want D:\\repo", detectedCWD)
+	}
+	if diff := strings.Join(detectedSources, ","); diff != "claude-code,cursor" {
+		t.Fatalf("detected sources = %q", diff)
+	}
+	view := model.View()
+	for _, want := range []string{"Import setup", "Bring over supported setup", "Skills 2", "Selected 1 of 1 item", "Import selected"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("import picker missing %q:\n%s", want, view)
+		}
+	}
+
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("import selection did not return import command")
+	}
+	runTeaCmd(t, model, cmd)
+	if len(importedItems) != 1 || importedItems[0].ItemType != config.MigrationSkills {
+		t.Fatalf("imported items = %#v", importedItems)
+	}
+	if importedSource != "claude-code" {
+		t.Fatalf("imported source = %q", importedSource)
+	}
+	if model.modal != nil {
+		t.Fatalf("import modal remained open after success")
+	}
+	view = model.View()
+	for _, want := range []string{"Import started", "Skills: 2 - review, docs", "Import finished: 2 imported, 0 failed", "Run /import again"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("import result missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModelExternalAgentImportNoItemsAndFailureMatchRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		OnDetectExternalAgent: func(cwd string, source string) (config.ExternalAgentConfigDetectResponse, error) {
+			return config.ExternalAgentConfigDetectResponse{}, nil
+		},
+	})
+	typeText(t, model, "/import")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if view := model.View(); !strings.Contains(view, "No compatible setup was found to import.") {
+		t.Fatalf("no-items message missing:\n%s", view)
+	}
+
+	model = NewModel(codextui.NewState(nil), Options{
+		OnDetectExternalAgent: func(cwd string, source string) (config.ExternalAgentConfigDetectResponse, error) {
+			return config.ExternalAgentConfigDetectResponse{}, errors.New("Import from other apps is unavailable in remote sessions. Start Codex locally and run /import.")
+		},
+	})
+	typeText(t, model, "/import")
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if view := model.View(); !strings.Contains(view, "Import from other apps is unavailable in remote sessions") {
+		t.Fatalf("import detection failure missing:\n%s", view)
+	}
+	if model.notice != "Import from other apps is unavailable in remote sessions. Start Codex locally and run /import." {
+		t.Fatalf("remote import notice = %q", model.notice)
+	}
+}
+
+func TestModelExternalAgentImportChoosesBetweenDetectedSources(t *testing.T) {
+	claudeItem := config.ExternalAgentConfigMigrationItem{ItemType: config.MigrationConfig, Description: "Claude config"}
+	cursorItem := config.ExternalAgentConfigMigrationItem{ItemType: config.MigrationHooks, Description: "Cursor hooks"}
+	importedSource := ""
+	model := NewModel(codextui.NewState(nil), Options{
+		Width: 80, Height: 24,
+		OnDetectExternalAgent: func(_ string, source string) (config.ExternalAgentConfigDetectResponse, error) {
+			if source == "cursor" {
+				return config.ExternalAgentConfigDetectResponse{Items: []config.ExternalAgentConfigMigrationItem{cursorItem}}, nil
+			}
+			return config.ExternalAgentConfigDetectResponse{Items: []config.ExternalAgentConfigMigrationItem{claudeItem}}, nil
+		},
+		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error) {
+			importedSource = source
+			return config.ExternalAgentConfigImportResponse{ImportID: "import-cursor"}, config.ExternalAgentConfigImportCompletedNotification{ImportID: "import-cursor"}, nil
+		},
+	})
+	typeText(t, model, "/import")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	view := model.View()
+	for _, want := range []string{"Choose an import source", "Claude Code", "Cursor", "Press Enter to continue"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("source picker missing %q:\n%s", want, view)
+		}
+	}
+	_, _ = model.Update(key(bubbletea.KeyDown))
+	_, _ = model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Importing: Hooks 1") {
+		t.Fatalf("Cursor migration picker missing:\n%s", view)
+	}
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if importedSource != "cursor" {
+		t.Fatalf("imported source = %q", importedSource)
+	}
+}
+
+func TestModelSandboxReadDirUsageAndFailureMatchRustHistory(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{
+		OnSandboxReadDir: func(path string) (string, error) {
+			return "", errors.New("access denied")
+		},
+	})
+
+	usage, ok := codextui.ParseCommand("/sandbox-add-read-dir")
+	if !ok {
+		t.Fatal("ParseCommand usage failed")
+	}
+	runTeaCmd(t, model, model.applyCommand(usage))
+
+	failure, ok := codextui.ParseCommand(`/sandbox-add-read-dir D:\private`)
+	if !ok {
+		t.Fatal("ParseCommand failure failed")
+	}
+	runTeaCmd(t, model, model.applyCommand(failure))
+
+	want := []string{
+		"Usage: /sandbox-add-read-dir <absolute-directory-path>",
+		`Granting sandbox read access to D:\private ...`,
+		"Error: access denied",
+	}
+	for _, text := range want {
+		found := false
+		for _, message := range state.Messages {
+			if message.Role == codextui.RoleHistory && strings.Contains(message.RawText, text) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("history missing %q: %#v", text, state.Messages)
+		}
+	}
+}
+
+func TestModelMemoriesEnablePromptPersistsFeatureBeforeNotice(t *testing.T) {
+	state := codextui.NewState(nil)
+	var writes [][]SettingsEdit
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 24,
+		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+			writes = append(writes, append([]SettingsEdit(nil), edits...))
+			return SettingsWriteResult{FeatureSettings: map[string]bool{"memories": true}, FilePath: `D:\codex\config.toml`}, nil
+		},
+	})
+
+	typeText(t, model, "/memories")
+	model.Update(key(bubbletea.KeyEnter))
+	for _, want := range []string{"Enable memories?", "Memories are currently disabled", "Yes, enable", "Not now"} {
+		if view := model.View(); !strings.Contains(view, want) {
+			t.Fatalf("enable prompt missing %q:\n%s", want, view)
+		}
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "features.memories" || writes[0][0].Value != true {
+		t.Fatalf("memory enable writes = %#v", writes)
+	}
+	if !strings.Contains(model.View(), "Memories will be enabled in the next session.") {
+		t.Fatalf("memory enable notice missing:\n%s", model.View())
+	}
+}
+
+func TestModelMemoriesSettingsToggleAndSaveAtomically(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.ThreadID = "thread-memory"
+	useMemories := true
+	generateMemories := false
+	var gotThread string
+	var gotUse, gotGenerate, gotChanged bool
+	model := NewModel(state, Options{
+		Width:            90,
+		Height:           24,
+		FeatureSettings:  map[string]bool{"memories": true},
+		UseMemories:      &useMemories,
+		GenerateMemories: &generateMemories,
+		OnWriteMemorySettings: func(threadID string, use bool, generate bool, changed bool) (SettingsWriteResult, error) {
+			gotThread, gotUse, gotGenerate, gotChanged = threadID, use, generate, changed
+			return SettingsWriteResult{UseMemories: &use, GenerateMemories: &generate, FilePath: `D:\codex\config.toml`}, nil
+		},
+	})
+
+	typeText(t, model, "/memories")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	for _, want := range []string{"[x] Use memories", "[ ] Generate memories", "Reset all memories"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("memory settings missing %q:\n%s", want, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeySpace))
+	if view := model.View(); !strings.Contains(view, "[x] Generate memories") {
+		t.Fatalf("generate toggle not reflected:\n%s", view)
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if gotThread != "thread-memory" || !gotUse || !gotGenerate || !gotChanged {
+		t.Fatalf("memory write = thread %q use=%v generate=%v changed=%v", gotThread, gotUse, gotGenerate, gotChanged)
+	}
+	if !strings.Contains(model.View(), "Memory settings saved to") {
+		t.Fatalf("memory save result missing:\n%s", model.View())
+	}
+}
+
+func TestModelMemoriesResetRequiresConfirmationAndRunsCallback(t *testing.T) {
+	state := codextui.NewState(nil)
+	called := 0
+	model := NewModel(state, Options{
+		Width:           90,
+		Height:          24,
+		FeatureSettings: map[string]bool{"memories": true},
+		OnResetMemories: func() error {
+			called++
+			return nil
+		},
+	})
+
+	typeText(t, model, "/memories")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyEnter))
+	for _, want := range []string{"Reset all memories?", "current Codex home", "Go back"} {
+		if view := model.View(); !strings.Contains(view, want) {
+			t.Fatalf("reset confirmation missing %q:\n%s", want, view)
+		}
+	}
+	if called != 0 {
+		t.Fatalf("reset called before confirmation: %d", called)
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if called != 1 || !strings.Contains(model.View(), "Reset local memories.") {
+		t.Fatalf("reset result called=%d view=\n%s", called, model.View())
+	}
+}
+
+func TestModelFeedbackFlowSubmitsOptionalNoteWithoutLogs(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.ThreadID = "thread-feedback"
+	var submitted appserver.FeedbackUploadParams
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 28,
+		OnSubmitFeedback: func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+			submitted = params
+			return appserver.FeedbackUploadResponse{ThreadID: "thread-feedback"}, nil
+		},
+	})
+
+	typeText(t, model, "/feedback")
+	model.Update(key(bubbletea.KeyEnter))
+	for _, want := range []string{"How was this?", "bug", "bad result", "good result", "safety check", "other"} {
+		if view := model.View(); !strings.Contains(view, want) {
+			t.Fatalf("feedback category picker missing %q:\n%s", want, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	for _, want := range []string{"Upload logs?", "codex-logs.log", "codex-doctor-report.json", "Yes", "No"} {
+		if view := model.View(); !strings.Contains(view, want) {
+			t.Fatalf("feedback consent missing %q:\n%s", want, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Tell us more (bug)") || !strings.Contains(view, "(optional)") {
+		t.Fatalf("feedback note view missing:\n%s", view)
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if submitted.Classification != "bug" || submitted.IncludeLogs || submitted.Reason != nil || submitted.ThreadID == nil || *submitted.ThreadID != "thread-feedback" {
+		t.Fatalf("feedback params = %#v", submitted)
+	}
+	view := model.View()
+	for _, want := range []string{"Feedback recorded (no logs).", "github.com/openai/codex/issues", "thread-feedback"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("feedback result missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModelFeedbackFlowIncludesNoteAndLogs(t *testing.T) {
+	var submitted appserver.FeedbackUploadParams
+	model := NewModel(codextui.NewState(nil), Options{
+		OnSubmitFeedback: func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+			submitted = params
+			return appserver.FeedbackUploadResponse{ThreadID: "feedback-1"}, nil
+		},
+	})
+	typeText(t, model, "/feedback")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+	typeText(t, model, "hung after approval")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if !submitted.IncludeLogs || submitted.Reason == nil || *submitted.Reason != "hung after approval" {
+		t.Fatalf("feedback params = %#v", submitted)
+	}
+	if !strings.Contains(model.View(), "Feedback uploaded.") {
+		t.Fatalf("feedback upload result missing:\n%s", model.View())
+	}
+}
+
+func TestModelFeedbackDisabledByConfiguration(t *testing.T) {
+	disabled := false
+	model := NewModel(codextui.NewState(nil), Options{FeedbackEnabled: &disabled})
+	typeText(t, model, "/feedback")
+	model.Update(key(bubbletea.KeyEnter))
+	for _, want := range []string{"Sending feedback is disabled", "disabled by configuration", "Close"} {
+		if view := model.View(); !strings.Contains(view, want) {
+			t.Fatalf("disabled feedback view missing %q:\n%s", want, view)
+		}
+	}
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal != nil {
+		t.Fatalf("disabled feedback modal did not close: %#v", model.modal)
+	}
+}
+
+func TestModelAppCommandUsesRustHistoryMessages(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{})
+	typeText(t, model, "/app")
+	model.Update(key(bubbletea.KeyEnter))
+	if len(state.Messages) != 1 || state.Messages[0].Role != codextui.RoleHistory || !strings.Contains(state.Messages[0].RawText, "Session is still starting; try /app again in a moment.") {
+		t.Fatalf("missing-thread messages = %#v", state.Messages)
+	}
+
+	state.SetThreadID("thread-app")
+	model.onOpenDesktopThread = func(threadID string) error {
+		return errors.New("launcher failed")
+	}
+	typeText(t, model, "/app")
+	model.Update(key(bubbletea.KeyEnter))
+	want := "Failed to open this session in the Desktop app: launcher failed. Install or launch the Desktop app and try again."
+	if got := state.Messages[len(state.Messages)-1]; got.Role != codextui.RoleHistory || !strings.Contains(got.RawText, want) {
+		t.Fatalf("open failure message = %#v", got)
+	}
+
+	model.onOpenDesktopThread = func(threadID string) error { return nil }
+	typeText(t, model, "/app")
+	model.Update(key(bubbletea.KeyEnter))
+	if got := state.Messages[len(state.Messages)-1]; got.Role != codextui.RoleHistory || !strings.Contains(got.RawText, "Opened this session in the Desktop app.") {
+		t.Fatalf("open success message = %#v", got)
 	}
 }
 
@@ -4164,8 +5760,7 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/statusline model-with-reasoning current-dir run-state")
-	model.Update(key(bubbletea.KeyEnter))
+	_ = model.applyStatusLineCommand("model-with-reasoning current-dir run-state")
 	view := model.View()
 	for _, want := range []string{"gpt-5", "high", "repo", "idle"} {
 		if !strings.Contains(view, want) {
@@ -4173,8 +5768,7 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 		}
 	}
 
-	typeText(t, model, "/title app-name project-name run-state")
-	model.Update(key(bubbletea.KeyEnter))
+	_ = model.applyTerminalTitleCommand("app-name project-name run-state")
 	if len(writes) != 1 {
 		t.Fatalf("terminal title writes = %#v, want one write", writes)
 	}
@@ -4184,8 +5778,7 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 		}
 	}
 
-	typeText(t, model, "/title off")
-	model.Update(key(bubbletea.KeyEnter))
+	_ = model.applyTerminalTitleCommand("off")
 	if len(writes) != 2 || writes[1] != codextui.ClearTerminalTitleOSC() {
 		t.Fatalf("terminal title clear writes = %#v", writes)
 	}
@@ -4205,8 +5798,7 @@ func TestModelStatusControlsSetupHistoryAndInvalidItem(t *testing.T) {
 	}
 	model.Update(key(bubbletea.KeyEsc))
 
-	typeText(t, model, "/title does-not-exist")
-	model.Update(key(bubbletea.KeyEnter))
+	_ = model.applyTerminalTitleCommand("does-not-exist")
 	if !strings.Contains(model.View(), "Unknown terminal title item: does-not-exist") {
 		t.Fatalf("invalid title item notice missing:\n%s", model.View())
 	}
@@ -4220,8 +5812,7 @@ func TestModelStatusLineCommandConfiguresHeader(t *testing.T) {
 	})
 	model := NewModel(state, Options{Width: 100, Height: 24})
 
-	typeText(t, model, "/statusline model permissions approval-mode")
-	model.Update(key(bubbletea.KeyEnter))
+	_ = model.applyStatusLineCommand("model permissions approval-mode")
 	view := model.View()
 	for _, want := range []string{"gpt-5", "workspace-write"} {
 		if !strings.Contains(view, want) {
@@ -4259,8 +5850,7 @@ func TestModelTerminalTitleCommandWritesOSC(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/title app-name model")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	cmd := model.applyTerminalTitleCommand("app-name model")
 	if cmd != nil {
 		cmd()
 	}
@@ -4268,8 +5858,7 @@ func TestModelTerminalTitleCommandWritesOSC(t *testing.T) {
 		t.Fatalf("terminal title writes = %#v", writes)
 	}
 
-	typeText(t, model, "/title off")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	cmd = model.applyTerminalTitleCommand("off")
 	if cmd != nil {
 		cmd()
 	}
@@ -4283,10 +5872,14 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	state.SetThreadID("thread-goal")
 	var setCalls []appserver.GoalSetParams
 	var clearCalls []string
+	var storedGoal *appserver.Goal
 	model := NewModel(state, Options{
 		Width:           100,
 		Height:          24,
 		StatusLineItems: []string{"task-progress"},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			return cloneGoalTea(storedGoal), nil
+		},
 		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
 			setCalls = append(setCalls, appserver.GoalSetParams{
 				ThreadID:    threadID,
@@ -4302,35 +5895,42 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 			if objective != nil {
 				goalObjective = *objective
 			}
-			return appserver.Goal{
+			goal := appserver.Goal{
 				ThreadID:        threadID,
 				Objective:       goalObjective,
 				TokenBudget:     cloneInt64PtrTea(tokenBudget),
 				TokensUsed:      1234,
 				TimeUsedSeconds: 90,
 				Status:          goalStatus,
-			}, nil
+			}
+			storedGoal = cloneGoalTea(&goal)
+			return goal, nil
 		},
 		OnClearGoal: func(threadID string) (bool, error) {
 			clearCalls = append(clearCalls, threadID)
+			storedGoal = nil
 			return true, nil
 		},
 	})
 
-	typeText(t, model, "/goal set finish parity --budget 50000")
+	typeText(t, model, "/goal finish parity")
 	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	if cmd == nil {
-		t.Fatal("/goal set did not return runtime command")
+		t.Fatal("/goal objective did not return preflight command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd == nil {
+		t.Fatal("/goal objective did not return set command")
 	}
 	model.Update(cmd())
-	if len(setCalls) != 1 || setCalls[0].ThreadID != "thread-goal" || setCalls[0].Objective == nil || *setCalls[0].Objective != "finish parity" || setCalls[0].TokenBudget == nil || *setCalls[0].TokenBudget != 50000 || setCalls[0].Status == nil || *setCalls[0].Status != appserver.GoalActive {
+	if len(setCalls) != 1 || setCalls[0].ThreadID != "thread-goal" || setCalls[0].Objective == nil || *setCalls[0].Objective != "finish parity" || setCalls[0].TokenBudget != nil || setCalls[0].Status == nil || *setCalls[0].Status != appserver.GoalActive {
 		t.Fatalf("set goal calls = %#v", setCalls)
 	}
 	if model.currentGoal == nil || model.currentGoal.Objective != "finish parity" {
 		t.Fatalf("current goal = %#v", model.currentGoal)
 	}
-	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Objective: finish parity") || !strings.Contains(raw, "Token budget: 50K") {
-		t.Fatalf("goal history missing summary:\n%s", raw)
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Goal active") || !strings.Contains(raw, "Objective: finish parity") {
+		t.Fatalf("goal history missing Rust success event:\n%s", raw)
 	}
 	if !strings.Contains(model.View(), "Goal active") {
 		t.Fatalf("status line missing goal progress:\n%s", model.View())
@@ -4345,7 +5945,7 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	if len(setCalls) != 2 || setCalls[1].Status == nil || *setCalls[1].Status != appserver.GoalPaused {
 		t.Fatalf("pause calls = %#v", setCalls)
 	}
-	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Paused goal") || !strings.Contains(raw, "Status: paused") {
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Goal paused") || !strings.Contains(raw, "Objective: finish parity") {
 		t.Fatalf("paused goal history missing:\n%s", raw)
 	}
 
@@ -4361,7 +5961,7 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	if model.currentGoal != nil {
 		t.Fatalf("current goal after clear = %#v, want nil", model.currentGoal)
 	}
-	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "No goal set.") {
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Goal cleared") {
 		t.Fatalf("clear goal history missing empty state:\n%s", raw)
 	}
 }
@@ -4391,7 +5991,7 @@ func TestModelGoalReadAndNotifications(t *testing.T) {
 	if model.currentGoal != nil {
 		t.Fatalf("current goal after nil read = %#v, want nil", model.currentGoal)
 	}
-	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "No goal set.") {
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Usage: /goal [<objective>|clear|edit|pause|resume]") || !strings.Contains(raw, "No goal is currently set.") {
 		t.Fatalf("goal read empty history missing:\n%s", raw)
 	}
 
@@ -4411,6 +6011,121 @@ func TestModelGoalReadAndNotifications(t *testing.T) {
 	model.Update(GoalClearedMsg{ThreadID: "thread-goal"})
 	if model.currentGoal != nil {
 		t.Fatalf("current goal after clear notification = %#v", model.currentGoal)
+	}
+}
+
+func TestModelGoalObjectiveUsesRustSyntaxAndReplacementConfirmation(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	existing := appserver.Goal{ThreadID: "thread-goal", Objective: "old objective", Status: appserver.GoalActive}
+	var cleared int
+	var setParams appserver.GoalSetParams
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadGoal: func(string) (*appserver.Goal, error) {
+			return cloneGoalTea(&existing), nil
+		},
+		OnClearGoal: func(string) (bool, error) {
+			cleared++
+			return true, nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			setParams = appserver.GoalSetParams{ThreadID: threadID, Objective: cloneStringPtrTea(objective), TokenBudget: cloneInt64PtrTea(tokenBudget), Status: cloneGoalStatusPtr(status)}
+			return appserver.Goal{ThreadID: threadID, Objective: stringPtrValueTea(objective), Status: *status}, nil
+		},
+	})
+
+	typeText(t, model, "/goal set finish parity --budget 50000")
+	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	if readCmd == nil {
+		t.Fatal("goal objective did not start replacement preflight")
+	}
+	model.Update(readCmd())
+	if model.modal == nil || model.modal.kind != ModalKindGoal || model.modal.title != "Replace goal?" || !strings.Contains(model.modal.body, "set finish parity --budget 50000") {
+		t.Fatalf("replacement modal = %#v", model.modal)
+	}
+	_, setCmd := model.Update(key(bubbletea.KeyEnter))
+	if setCmd == nil {
+		t.Fatal("replacement confirmation did not start goal set")
+	}
+	model.Update(setCmd())
+	if cleared != 1 || setParams.Objective == nil || *setParams.Objective != "set finish parity --budget 50000" || setParams.TokenBudget != nil || setParams.Status == nil || *setParams.Status != appserver.GoalActive {
+		t.Fatalf("replacement clear=%d params=%#v", cleared, setParams)
+	}
+}
+
+func TestModelGoalEditPromptPreservesRustStatusAndBudget(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	budget := int64(80_000)
+	existing := appserver.Goal{ThreadID: "thread-goal", Objective: "edit this goal", Status: appserver.GoalPaused, TokenBudget: &budget}
+	var setParams appserver.GoalSetParams
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadGoal: func(string) (*appserver.Goal, error) {
+			return cloneGoalTea(&existing), nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			setParams = appserver.GoalSetParams{ThreadID: threadID, Objective: cloneStringPtrTea(objective), TokenBudget: cloneInt64PtrTea(tokenBudget), Status: cloneGoalStatusPtr(status)}
+			return existing, nil
+		},
+	})
+
+	typeText(t, model, "/goal edit")
+	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(readCmd())
+	if model.modal == nil || model.modal.customPrompt == nil || model.modal.customPrompt.Text != "edit this goal" {
+		t.Fatalf("goal edit prompt = %#v", model.modal)
+	}
+	_, setCmd := model.Update(key(bubbletea.KeyEnter))
+	if setCmd == nil {
+		t.Fatal("goal edit prompt did not submit")
+	}
+	model.Update(setCmd())
+	if setParams.Status == nil || *setParams.Status != appserver.GoalPaused || setParams.TokenBudget == nil || *setParams.TokenBudget != budget || setParams.Objective == nil || *setParams.Objective != "edit this goal" {
+		t.Fatalf("goal edit params = %#v", setParams)
+	}
+}
+
+func TestModelGoalWithoutThreadMatchesRustUsageAndQueuesObjective(t *testing.T) {
+	state := codextui.NewState(nil)
+	readCalls := 0
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			readCalls++
+			if threadID != "thread-started" {
+				t.Fatalf("goal read thread = %q", threadID)
+			}
+			return nil, nil
+		},
+	})
+
+	typeText(t, model, "/goal")
+	model.Update(key(bubbletea.KeyEnter))
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Example: /goal improve benchmark coverage") {
+		t.Fatalf("bare goal usage = %q", raw)
+	}
+	typeText(t, model, "/goal pause")
+	model.Update(key(bubbletea.KeyEnter))
+	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "The session must start before you can change a goal.") {
+		t.Fatalf("goal control usage = %q", raw)
+	}
+	typeText(t, model, "/goal queued objective")
+	model.Update(key(bubbletea.KeyEnter))
+	if model.pendingGoalObjective != "queued objective" {
+		t.Fatalf("pending goal objective = %q", model.pendingGoalObjective)
+	}
+	readCmd := model.applyThreadEvent(protocol.ThreadEvent{Type: "thread.started", ThreadID: "thread-started"})
+	if readCmd == nil || model.pendingGoalObjective != "" {
+		t.Fatalf("thread-start goal cmd=%v pending=%q", readCmd, model.pendingGoalObjective)
+	}
+	model.Update(readCmd())
+	if readCalls != 1 || model.modal != nil {
+		t.Fatalf("queued goal read calls=%d modal=%#v", readCalls, model.modal)
 	}
 }
 
@@ -4447,7 +6162,7 @@ func TestModelUsageCommandOpensMenuAndShowsTokenActivity(t *testing.T) {
 
 func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
+	model := NewModel(state, Options{Width: 80, Height: 24, HasChatGPTAccount: true})
 
 	typeText(t, model, "/usage year")
 	model.Update(key(bubbletea.KeyEnter))
@@ -4465,12 +6180,27 @@ func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 	}
 }
 
+func TestModelUsageCommandRequiresChatGPTLogin(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	typeText(t, model, "/usage weekly")
+	model.Update(key(bubbletea.KeyEnter))
+	if !strings.Contains(model.View(), usageChatGPTLoginRequired) {
+		t.Fatalf("signed-out usage command missing login error:\n%s", model.View())
+	}
+	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
+		t.Fatalf("history count = %d, want one login error; messages=%#v", got, state.Messages)
+	}
+}
+
 func TestModelUsageCommandReadsTokenActivity(t *testing.T) {
 	state := codextui.NewState(nil)
 	lifetime := int64(12345)
 	model := NewModel(state, Options{
-		Width:  80,
-		Height: 24,
+		Width:             80,
+		Height:            24,
+		HasChatGPTAccount: true,
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
 			if view != chatwidget.TokenActivityWeekly {
 				t.Fatalf("read token activity view = %q, want weekly", view)
@@ -4503,7 +6233,13 @@ func TestModelUsageCommandReadsTokenActivity(t *testing.T) {
 
 func TestModelUsageMenuResetStates(t *testing.T) {
 	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
+	zero := int64(0)
+	model := NewModel(state, Options{
+		Width:                          80,
+		Height:                         24,
+		HasChatGPTAccount:              true,
+		AvailableRateLimitResetCredits: &zero,
+	})
 
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
@@ -4640,6 +6376,11 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 				t.Fatalf("resume target = %#v", selection.Target)
 			}
 			return SessionResumeResponse{
+				Summary: &codextui.SessionSummary{
+					ThreadID: "thread-resume",
+					Title:    "Resume Me",
+					CWD:      `D:\repo\restored`,
+				},
 				Messages: []codextui.Message{
 					{Role: codextui.RoleUser, Text: "restored prompt"},
 					{Role: codextui.RoleAssistant, Text: "restored answer"},
@@ -4678,6 +6419,9 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	model.Update(key(bubbletea.KeyEnter))
 	if state.ThreadID != "thread-resume" {
 		t.Fatalf("ThreadID = %q, want thread-resume", state.ThreadID)
+	}
+	if state.ThreadName != "Resume Me" || state.CWD != `D:\repo\restored` || model.sessionCWD != `D:\repo\restored` {
+		t.Fatalf("restored name/cwd = %q/%q (picker %q)", state.ThreadName, state.CWD, model.sessionCWD)
 	}
 	if len(state.Messages) != 2 || state.Messages[0].Text != "restored prompt" || state.Messages[1].Text != "restored answer" {
 		t.Fatalf("restored messages = %#v", state.Messages)
@@ -4852,7 +6596,7 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 		t.Fatalf("read current = %q, want thread-main", readCurrent)
 	}
 	view := model.View()
-	for _, want := range []string{"Subagents", "Main [default] (current)", "Scout [review]", "running", "thread-worker"} {
+	for _, want := range []string{"Subagents", "Main [default]", "Scout [review]", "Select an agent to watch.", "thread-worker"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("agent picker missing %q:\n%s", want, view)
 		}
@@ -4878,18 +6622,107 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 	}
 }
 
-func TestModelForkCommandUsesSessionAction(t *testing.T) {
+func TestModelAgentFastNavigationLoadsAndWraps(t *testing.T) {
 	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	var switched []string
+	model := NewModel(state, Options{
+		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
+			return []codextui.AgentThreadEntry{
+				{ThreadID: "thread-main", IsPrimary: true},
+				{ThreadID: "thread-worker", AgentNickname: "Scout"},
+			}, nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			switched = append(switched, threadID)
+			return AgentThreadSwitchResponse{Entry: codextui.AgentThreadEntry{ThreadID: threadID}, Status: "idle"}, nil
+		},
+	})
+
+	_, loadCmd := model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	if loadCmd == nil {
+		t.Fatal("alt+right did not load agent threads")
+	}
+	_, switchCmd := model.Update(loadCmd())
+	if switchCmd == nil {
+		t.Fatal("loaded navigation did not switch agents")
+	}
+	model.Update(switchCmd())
+	if len(switched) != 1 || switched[0] != "thread-worker" || state.ThreadID != "thread-worker" {
+		t.Fatalf("first navigation switched=%#v thread=%q", switched, state.ThreadID)
+	}
+
+	_, switchCmd = model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	if switchCmd == nil {
+		t.Fatal("cached alt+right did not switch agents")
+	}
+	model.Update(switchCmd())
+	if len(switched) != 2 || switched[1] != "thread-main" || state.ThreadID != "thread-main" {
+		t.Fatalf("wrapped navigation switched=%#v thread=%q", switched, state.ThreadID)
+	}
+
+	typeText(t, model, "draft")
+	_, cmd := model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	if cmd != nil || len(switched) != 2 {
+		t.Fatalf("non-empty draft triggered navigation cmd=%#v switched=%#v", cmd, switched)
+	}
+}
+
+func TestModelMentionCommandOpensUnifiedMentionPopup(t *testing.T) {
+	queries := []string{}
+	model := NewModel(codextui.NewState(nil), Options{
+		FeatureSettings: map[string]bool{"mentions_v2": true},
+		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
+			queries = append(queries, query)
+			return appserver.FuzzyFileSearchResponse{}, nil
+		},
+	})
+	typeText(t, model, "/mention")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if model.ComposerValue() != "@" || model.mentionPopup == nil {
+		t.Fatalf("mention command composer=%q popup=%#v", model.ComposerValue(), model.mentionPopup)
+	}
+	if !reflect.DeepEqual(queries, []string{""}) {
+		t.Fatalf("mention queries = %#v", queries)
+	}
+}
+
+func TestModelTestApprovalMatchesPatchApprovalFixture(t *testing.T) {
+	var responses []ModalResponse
+	model := NewModel(codextui.NewState(nil), Options{
+		OnModalResponse: func(response ModalResponse) bubbletea.Cmd {
+			responses = append(responses, response)
+			return nil
+		},
+	})
+	typeText(t, model, "/test-approval")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	for _, want := range []string{"Would you like to make the following edits?", "Yes, proceed", "don't ask again for these files", "No, and tell Codex what to do differently"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("test approval missing %q:\n%s", want, view)
+		}
+	}
+	for _, unexpected := range []string{"Grant root", "/tmp/test.txt", "/tmp/test2.txt"} {
+		if strings.Contains(view, unexpected) {
+			t.Fatalf("test approval unexpectedly contains %q:\n%s", unexpected, view)
+		}
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if len(responses) != 1 || responses[0].ID != "1" || responses[0].Kind != ModalKindApproval || responses[0].OptionID != "accept" || responses[0].Cancelled {
+		t.Fatalf("test approval response = %#v", responses)
+	}
+}
+
+func TestModelForkCommandForksCurrentSessionImmediately(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-source")
 	now := fixedTeaTime()
 	var responses []ModalResponse
 	var actions []codextui.SessionSelection
 	model := NewModel(state, Options{
-		SessionPickerItems: []codextui.SessionSummary{{
-			ThreadID:  "thread-source",
-			Title:     "Source",
-			CWD:       `D:\repo\a`,
-			UpdatedAt: now,
-		}},
 		OnSessionAction: func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
 			actions = append(actions, selection)
 			return &codextui.SessionSummary{
@@ -4906,11 +6739,8 @@ func TestModelForkCommandUsesSessionAction(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Fork a previous session") || !strings.Contains(view, "Source") {
-		t.Fatalf("fork picker view:\n%s", view)
-	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
 	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionFork || actions[0].Target.ThreadID != "thread-source" {
 		t.Fatalf("actions = %#v", actions)
 	}
@@ -4920,13 +6750,18 @@ func TestModelForkCommandUsesSessionAction(t *testing.T) {
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionFork) || responses[0].Picker.Value != "thread-forked" {
 		t.Fatalf("responses = %#v", responses)
 	}
+	if model.modal != nil {
+		t.Fatalf("fork opened modal = %#v, want immediate action", model.modal)
+	}
 }
 
-func TestModelDeleteCommandConfirmsAndRemovesSession(t *testing.T) {
+func TestModelDeleteCommandConfirmsCurrentSessionAndExits(t *testing.T) {
 	now := fixedTeaTime()
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-delete")
 	var responses []ModalResponse
 	var actions []codextui.SessionSelection
-	model := NewModel(nil, Options{
+	model := NewModel(state, Options{
 		SessionPickerItems: []codextui.SessionSummary{{
 			ThreadID:  "thread-delete",
 			Title:     "Delete Me",
@@ -4944,14 +6779,11 @@ func TestModelDeleteCommandConfirmsAndRemovesSession(t *testing.T) {
 
 	typeText(t, model, "/delete")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
-	if len(responses) != 0 {
-		t.Fatalf("responses before confirmation = %#v", responses)
-	}
-	if view := model.View(); !strings.Contains(view, "Confirm session delete") || !strings.Contains(view, "This cannot be undone.") {
+	if view := model.View(); !strings.Contains(view, "Delete this session?") || !strings.Contains(view, "Cannot be undone. Subagent threads will also be deleted.") || !strings.Contains(view, "No, keep this session") {
 		t.Fatalf("delete confirmation view:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(key(bubbletea.KeyDown))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionDelete || actions[0].Target.ThreadID != "thread-delete" {
 		t.Fatalf("actions = %#v", actions)
 	}
@@ -4960,6 +6792,55 @@ func TestModelDeleteCommandConfirmsAndRemovesSession(t *testing.T) {
 	}
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionDelete) || responses[0].Picker.Value != "thread-delete" {
 		t.Fatalf("responses = %#v", responses)
+	}
+	if state.ThreadID != "" {
+		t.Fatalf("ThreadID = %q, want reset after delete", state.ThreadID)
+	}
+	if !batchContainsMessageType(cmd, bubbletea.QuitMsg{}) {
+		t.Fatal("delete confirmation did not request exit")
+	}
+}
+
+func TestModelArchiveCommandConfirmsCurrentSessionAndExits(t *testing.T) {
+	now := fixedTeaTime()
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-archive")
+	var responses []ModalResponse
+	var actions []codextui.SessionSelection
+	model := NewModel(state, Options{
+		SessionPickerItems: []codextui.SessionSummary{{
+			ThreadID:  "thread-archive",
+			Title:     "Archive Me",
+			UpdatedAt: now,
+		}},
+		OnSessionAction: func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
+			actions = append(actions, selection)
+			return nil, nil
+		},
+		OnModalResponse: func(response ModalResponse) bubbletea.Cmd {
+			responses = append(responses, response)
+			return nil
+		},
+	})
+
+	typeText(t, model, "/archive")
+	model.Update(key(bubbletea.KeyEnter))
+	if view := model.View(); !strings.Contains(view, "Archive this session?") || !strings.Contains(view, "This will archive the current session and exit Codex") || !strings.Contains(view, "No, keep this session") {
+		t.Fatalf("archive confirmation view:\n%s", view)
+	}
+	model.Update(key(bubbletea.KeyDown))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionArchive || actions[0].Target.ThreadID != "thread-archive" {
+		t.Fatalf("actions = %#v", actions)
+	}
+	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionArchive) || responses[0].Picker.Value != "thread-archive" {
+		t.Fatalf("responses = %#v", responses)
+	}
+	if len(model.sessionItems) != 1 || !model.sessionItems[0].Archived {
+		t.Fatalf("sessionItems = %#v, want archived current session", model.sessionItems)
+	}
+	if !batchContainsMessageType(cmd, bubbletea.QuitMsg{}) {
+		t.Fatal("archive confirmation did not request exit")
 	}
 }
 

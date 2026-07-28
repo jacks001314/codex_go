@@ -199,16 +199,35 @@ func (s *ExternalAgentConfigMigrationScreen) Rows() []string {
 	if s == nil {
 		return nil
 	}
-	rows := []string{"Import settings from another coding agent"}
+	title := "Import setup"
+	intro := []string{
+		"Bring over supported setup from another coding agent.",
+		"Codex may add files to your current project folder.",
+		"Your existing setup will not be changed.",
+	}
+	footer := "Use up/down to move, enter to select, c to customize"
+	if s.view == ExternalAgentMigrationViewCustomize {
+		title = "Choose what to import"
+		intro[0] = "Choose items to import."
+		footer = "Use up/down to move, space to toggle, b to go back"
+		if s.focus == ExternalAgentMigrationFocusActions {
+			footer = "Press enter to continue, up/down to move, b to go back"
+		}
+	}
+	rows := append([]string{"> " + title}, intro...)
 	if s.errorMessage != "" {
-		rows = append(rows, "Error: "+s.errorMessage)
+		rows = append(rows, s.errorMessage)
 	}
 	if s.view == ExternalAgentMigrationViewSummary {
 		rows = append(rows, s.summaryRows()...)
 	} else {
 		rows = append(rows, s.customizeRows()...)
 	}
-	rows = append(rows, "", "Actions:")
+	itemLabel := "items"
+	if len(s.items) == 1 {
+		itemLabel = "item"
+	}
+	rows = append(rows, "", "Selected "+strconv.Itoa(len(s.SelectedItems()))+" of "+strconv.Itoa(len(s.items))+" "+itemLabel+".")
 	for idx, action := range s.availableActions() {
 		selected := s.focus == ExternalAgentMigrationFocusActions && s.highlightedAction == action
 		row := NumberedSelectionPrefix(idx, selected) + action.Label()
@@ -217,6 +236,7 @@ func (s *ExternalAgentConfigMigrationScreen) Rows() []string {
 		}
 		rows = append(rows, row)
 	}
+	rows = append(rows, footer)
 	return rows
 }
 

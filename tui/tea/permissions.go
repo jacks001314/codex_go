@@ -6,6 +6,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 )
 
 const fullAccessConfirmationPrefix = "full-access-confirm:"
@@ -95,8 +96,8 @@ func (m *Model) openFullAccessConfirmation() {
 	m.openModal(ModalRequestMsg{
 		ID:      "permissions-full-access",
 		Kind:    ModalKindPermissions,
-		Title:   "Full Access",
-		Body:    "Full access can edit files outside this workspace and access the internet without asking.",
+		Title:   "Enable full access?",
+		Body:    "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.",
 		Options: options,
 	})
 }
@@ -110,9 +111,6 @@ func (m *Model) applyFullAccessConfirmation(optionID string) bubbletea.Cmd {
 		m.notice = "Cancelled"
 		m.refreshTranscript()
 		return nil
-	}
-	if optionID == "remember" {
-		m.hideFullAccessWarning = true
 	}
 	item := *m.pendingPermissionItem
 	m.pendingPermissionItem = nil
@@ -132,8 +130,8 @@ func (m *Model) applyPermissionSelection(item chatwidget.PermissionMenuItem) bub
 	if strings.TrimSpace(item.ProfileID) != "" {
 		m.State.Sandbox = strings.TrimSpace(item.ProfileID)
 	}
-	m.notice = "Permissions: " + strings.TrimSpace(item.Name)
-	m.refreshTranscript()
+	m.notice = ""
+	m.applyHistoryCell(historycell.NewInfoEvent("Permissions updated to "+strings.TrimSpace(item.Name), ""))
 	return m.refreshStatusControlsCmd()
 }
 

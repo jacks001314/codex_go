@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
@@ -139,7 +140,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		loopRequest.SteerMailbox = r.steerMailbox
 	}
 	if len(loopRequest.Tools) == 0 {
-		loopRequest.Tools = model.ResponsesToolsFromSpecs(r.router.ModelVisibleSpecs())
+		visibleSpecs := r.router.ModelVisibleSpecs()
+		if codemode.HasExecTool(visibleSpecs) {
+			visibleSpecs = codemode.AugmentToolSpecs(visibleSpecs)
+		}
+		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
 	loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router)
 	loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)

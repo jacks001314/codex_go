@@ -100,9 +100,9 @@ func (m *Model) defaultDebugConfigLines() []string {
 	}
 }
 
-func (m *Model) applyMCPCommand(args string) {
+func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	detail := false
 	switch strings.ToLower(strings.TrimSpace(args)) {
@@ -112,15 +112,65 @@ func (m *Model) applyMCPCommand(args string) {
 	default:
 		m.notice = "Usage: /mcp [verbose]"
 		m.refreshTranscript()
-		return
+		return nil
+	}
+	if m.onReadMCPInventory != nil {
+		m.clearPendingMCPInventoryLoading()
+		m.nextMCPInventoryRequestID++
+		requestID := m.nextMCPInventoryRequestID
+		m.pendingMCPInventoryRequestID = requestID
+		m.pendingMCPInventoryMessageIndex = len(m.State.Messages)
+		m.pendingMCPInventoryDetail = detail
+		m.applyHistoryCell(historycell.NewMcpInventoryLoading())
+		m.notice = "Loading MCP inventory..."
+		return func() bubbletea.Msg {
+			servers, err := m.onReadMCPInventory(detail)
+			return MCPInventoryResultMsg{RequestID: requestID, Servers: servers, Err: err}
+		}
 	}
 	if len(m.mcpServers) == 0 {
 		m.applyHistoryCell(historycell.EmptyMCPOutput())
 		m.notice = "MCP"
-		return
+		return nil
 	}
 	m.applyHistoryCell(historycell.NewMCPToolsOutputFromStatuses(m.mcpServers, detail))
 	m.notice = "MCP"
+	return nil
+}
+
+func (m *Model) applyMCPInventoryResult(msg MCPInventoryResultMsg) {
+	if m == nil || msg.RequestID == 0 || msg.RequestID != m.pendingMCPInventoryRequestID {
+		return
+	}
+	detail := m.pendingMCPInventoryDetail
+	m.clearPendingMCPInventoryLoading()
+	if msg.Err != nil {
+		m.notice = "Failed to load MCP inventory: " + msg.Err.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return
+	}
+	m.mcpServers = cloneMcpServerStatuses(msg.Servers)
+	if len(m.mcpServers) == 0 {
+		m.applyHistoryCell(historycell.EmptyMCPOutput())
+	} else {
+		m.applyHistoryCell(historycell.NewMCPToolsOutputFromStatuses(m.mcpServers, detail))
+	}
+	m.notice = "MCP"
+}
+
+func (m *Model) clearPendingMCPInventoryLoading() {
+	if m == nil {
+		return
+	}
+	index := m.pendingMCPInventoryMessageIndex
+	if index >= 0 && index < len(m.State.Messages) {
+		m.State.Messages = append(m.State.Messages[:index], m.State.Messages[index+1:]...)
+	}
+	m.pendingMCPInventoryRequestID = 0
+	m.pendingMCPInventoryMessageIndex = -1
+	m.pendingMCPInventoryDetail = false
+	m.refreshTranscript()
 }
 
 func cloneMcpServerStatuses(values []historycell.McpServerStatus) []historycell.McpServerStatus {

@@ -15,6 +15,7 @@ import (
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	idecontext "codex_go/tui/ide_context"
 )
 
 func pasteImageFromClipboard() (string, error) {
@@ -181,12 +182,37 @@ func pluralS(count int) string {
 
 func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 	return SubmitRequest{
-		Prompt:          request.Prompt,
-		ServiceTier:     request.ServiceTier,
-		Attachments:     cloneComposerAttachments(request.Attachments),
-		MentionBindings: append([]string(nil), request.MentionBindings...),
-		MentionCatalog:  cloneSubmissionMentionCatalog(request.MentionCatalog),
+		Prompt:                 request.Prompt,
+		ServiceTier:            request.ServiceTier,
+		AdditionalInstructions: request.AdditionalInstructions,
+		Attachments:            cloneComposerAttachments(request.Attachments),
+		MentionBindings:        append([]string(nil), request.MentionBindings...),
+		MentionCatalog:         cloneSubmissionMentionCatalog(request.MentionCatalog),
+		IDEContext:             cloneIDEContext(request.IDEContext),
+		CollaborationMode:      cloneCollaborationMode(request.CollaborationMode),
 	}
+}
+
+func cloneCollaborationMode(mode *chatwidget.CollaborationMode) *chatwidget.CollaborationMode {
+	if mode == nil {
+		return nil
+	}
+	cloned := mode.Clone()
+	return &cloned
+}
+
+func cloneIDEContext(context *idecontext.IdeContext) *idecontext.IdeContext {
+	if context == nil {
+		return nil
+	}
+	cloned := *context
+	cloned.OpenTabs = append([]idecontext.FileDescriptor(nil), context.OpenTabs...)
+	if context.ActiveFile != nil {
+		activeFile := *context.ActiveFile
+		activeFile.Selections = append([]idecontext.Range(nil), context.ActiveFile.Selections...)
+		cloned.ActiveFile = &activeFile
+	}
+	return &cloned
 }
 
 func cloneSubmissionMentionCatalog(catalog chatwidget.SubmissionMentionCatalog) chatwidget.SubmissionMentionCatalog {

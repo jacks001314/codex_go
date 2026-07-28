@@ -30,20 +30,19 @@ type keymapCaptureState struct {
 }
 
 func (m *Model) applyKeymapCommand(args string) {
-	if strings.TrimSpace(args) == "" {
+	switch strings.ToLower(strings.TrimSpace(args)) {
+	case "":
 		m.openKeymapPicker("", "")
 		return
-	}
-	result, err := codextui.HandleKeymapCommand(args, m.keymapConfig, func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
-		return m.applyKeymapEdit(edit)
-	})
-	if err != nil {
-		m.notice = "Keymap: " + err.Error()
+	case "debug":
+		m.State.AddMessage(codextui.RoleSystem, strings.TrimSpace(codextui.RenderKeymapCatalogWithConfig(codextui.KeymapActionFilter{FastModeEnabled: m.featureSettings["fast_mode"]}, m.keymapConfig)))
+		m.notice = "Keymap debug"
+		return
+	default:
+		m.notice = "Usage: /keymap [debug]"
+		m.addErrorHistoryMessage(m.notice)
 		return
 	}
-	m.keymapConfig = result.Config.Clone()
-	m.State.AddMessage(codextui.RoleSystem, result.Text)
-	m.notice = ""
 }
 
 func (m *Model) applyKeymapEdit(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {

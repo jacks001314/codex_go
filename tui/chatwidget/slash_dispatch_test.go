@@ -68,13 +68,17 @@ func TestQueuedSlashPromptBareCommandServiceTierUnknownAndSubmitMatchRust(t *tes
 	}
 
 	clearWithArgs := DecideQueuedSlashPrompt(NewQueuedUserMessage(NewUserMessage("/clear now"), QueuedInputParseSlash), flags, nil, false, false)
-	if clearWithArgs.Kind != QueuedSlashDispatchSubmit || clearWithArgs.Message.Text != "/clear now" || clearWithArgs.QueueDrain != QueueDrainStop {
+	if clearWithArgs.Kind != QueuedSlashDispatchCommandWithArgs || clearWithArgs.Command != codextui.CommandClear || clearWithArgs.Args != "now" || clearWithArgs.QueueDrain != QueueDrainStop {
 		t.Fatalf("clear with args decision = %#v", clearWithArgs)
+	}
+	newWithArgs := DecideQueuedSlashPrompt(NewQueuedUserMessage(NewUserMessage("/new Add User"), QueuedInputParseSlash), flags, nil, false, false)
+	if newWithArgs.Kind != QueuedSlashDispatchCommandWithArgs || newWithArgs.Command != codextui.CommandNew || newWithArgs.Args != "Add User" || newWithArgs.QueueDrain != QueueDrainStop {
+		t.Fatalf("new with args decision = %#v", newWithArgs)
 	}
 }
 
 func TestSlashCommandCapabilityTablesMatchRust(t *testing.T) {
-	for _, command := range []codextui.Command{codextui.CommandReview, codextui.CommandRename, codextui.CommandPlan, codextui.CommandGoal, codextui.CommandIde, codextui.CommandKeymap, codextui.CommandMcp, codextui.CommandRaw, codextui.CommandUsage, codextui.CommandPets, codextui.CommandSide, codextui.CommandResume, codextui.CommandSandboxReadRoot} {
+	for _, command := range []codextui.Command{codextui.CommandReview, codextui.CommandRename, codextui.CommandNew, codextui.CommandClear, codextui.CommandPlan, codextui.CommandGoal, codextui.CommandIde, codextui.CommandKeymap, codextui.CommandMcp, codextui.CommandRaw, codextui.CommandUsage, codextui.CommandPets, codextui.CommandSide, codextui.CommandResume, codextui.CommandSandboxReadRoot} {
 		if !CommandSupportsInlineArgs(command) {
 			t.Fatalf("%s should support inline args", command)
 		}

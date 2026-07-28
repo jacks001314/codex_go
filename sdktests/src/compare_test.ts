@@ -68,6 +68,24 @@ test("compareArtifact accepts paired command and one final message", () => {
   }
 });
 
+test("compareArtifact enforces exact completed item type counts", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const rust = recording(validEvents());
+    const goEvents = validEvents();
+    goEvents.splice(4, 0, event("item.completed", { id: "cmd-2", type: "command_execution", command: "Write-Output OK", status: "completed", exit_code: 0, aggregated_output: "OK" }));
+    writeArtifact(root, rust, recording(goEvents), undefined, {
+      exactCompletedItemTypeCounts: { command_execution: 1, agent_message: 1 },
+    });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.checks.find((check) => check.name === "rust: exact completed item type counts")?.ok, true);
+    assert.equal(result.checks.find((check) => check.name === "go: exact completed item type counts")?.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact enforces linked subagent rollouts and the final semantic result", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {

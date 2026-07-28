@@ -29,11 +29,79 @@ func TestNameForToolNameAndCollectDefinitions(t *testing.T) {
 	if !reflect.DeepEqual(names, []string{"a", "b", "patch"}) {
 		t.Fatalf("definitions = %#v", definitions)
 	}
-	if !strings.Contains(definitions[0].Description, "await a({});") {
+	if !strings.Contains(definitions[0].Description, "declare const tools: { a(args: unknown): Promise<unknown>; };") {
 		t.Fatalf("description was not augmented: %q", definitions[0].Description)
 	}
-	if definitions[2].Kind != ToolKindFreeform || definitions[2].InputSchema["syntax"] != "lark" || !strings.Contains(definitions[2].Description, "await patch(`...`);") {
+	if definitions[2].Kind != ToolKindFreeform || definitions[2].InputSchema["syntax"] != "lark" || !strings.Contains(definitions[2].Description, "patch(input: string): Promise<unknown>;") {
 		t.Fatalf("freeform definition = %#v", definitions[2])
+	}
+}
+
+func TestAugmentToolDefinitionRendersRustTypedDeclaration(t *testing.T) {
+	definition := AugmentToolDefinition(ToolDefinition{
+		Name:        "weather_tool",
+		Description: "Weather tool",
+		Kind:        ToolKindFunction,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"weather": map[string]any{
+					"type":        "array",
+					"description": "look up weather for a given list of locations",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"location": map[string]any{"type": "string"},
+						},
+						"required": []string{"location"},
+					},
+				},
+			},
+			"required": []string{"weather"},
+		},
+		OutputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"forecast": map[string]any{
+					"type":        "string",
+					"description": "human readable weather forecast",
+				},
+			},
+			"required": []string{"forecast"},
+		},
+	})
+	want := `weather_tool(args: {
+  // look up weather for a given list of locations
+  weather: Array<{ location: string; }>;
+}): Promise<{
+  // human readable weather forecast
+  forecast: string;
+}>;`
+	if !strings.Contains(definition.Description, "exec tool declaration:\n```ts\n") || !strings.Contains(definition.Description, want) {
+		t.Fatalf("description = %q", definition.Description)
+	}
+}
+
+func TestAugmentToolSpecUsesNestedNamespaceName(t *testing.T) {
+	spec := AugmentToolSpec(tool.Spec{
+		Name:        tool.NamespacedName("web", "run"),
+		Description: "Search the web",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"weather": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type":       "object",
+						"properties": map[string]any{"location": map[string]any{"type": "string"}},
+						"required":   []string{"location"},
+					},
+				},
+			},
+		},
+	})
+	if !strings.Contains(spec.Description, "web__run(args: { weather?: Array<{ location: string; }>; }): Promise<unknown>;") {
+		t.Fatalf("description = %q", spec.Description)
 	}
 }
 

@@ -51,6 +51,8 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkForbiddenCompletedItemTypes("go", go, expected.forbiddenCompletedItemTypes),
     checkUniqueCompletedItems("rust", rust, expected.uniqueCompletedItemTypes),
     checkUniqueCompletedItems("go", go, expected.uniqueCompletedItemTypes),
+    checkExactCompletedItemTypeCounts("rust", rust, expected.exactCompletedItemTypeCounts),
+    checkExactCompletedItemTypeCounts("go", go, expected.exactCompletedItemTypeCounts),
     checkUniqueCommandExecutions("rust", rust, expected.uniqueCommandExecutions),
     checkUniqueCommandExecutions("go", go, expected.uniqueCommandExecutions),
     checkStartedCompletedPairs("rust", rust, expected.requireStartedCompletedPairs),
@@ -519,6 +521,25 @@ function normalizeCommandOrder(items: any[], comparison: unknown) {
   if (comparison !== "parallel-prefix-unordered" || items.length < 2) return items;
   const prefix = items.slice(0, 2).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   return [...prefix, ...items.slice(2)];
+}
+
+function checkExactCompletedItemTypeCounts(label: string, recording: any, expected: unknown) {
+  if (!expected || typeof expected !== "object" || Array.isArray(expected)) {
+    return { name: `${label}: exact completed item type counts`, ok: true, detail: "artifact has no exact-count contract" };
+  }
+  const actual = itemTypes(recording);
+  const mismatches = Object.entries(expected as Record<string, unknown>).flatMap(([type, rawCount]) => {
+    const wanted = Number(rawCount);
+    const count = actual.filter((actualType) => actualType === type).length;
+    return Number.isInteger(wanted) && wanted >= 0 && count === wanted
+      ? []
+      : [`${type}=${count}, expected=${String(rawCount)}`];
+  });
+  return {
+    name: `${label}: exact completed item type counts`,
+    ok: mismatches.length === 0,
+    detail: mismatches.length === 0 ? undefined : `${label}: ${mismatches.join(", ")}`,
+  };
 }
 
 function checkCollaborationContract(label: string, recording: any, minimumSpawnCalls: unknown, requiredTools: unknown) {

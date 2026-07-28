@@ -9,9 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,8 +31,8 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	codextui "codex_go/tui"
-	tuiapp "codex_go/tui/app"
 	chatwidget "codex_go/tui/chatwidget"
+	idecontext "codex_go/tui/ide_context"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -283,6 +280,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	if remoteKeymap, err := interactiveRemoteKeymapConfig(ctx, endpoint); err == nil {
 		keymapConfig = remoteKeymap
 	}
+	accountDisplay, hasChatGPTAccount := interactiveRemoteStatusAccount(ctx, endpoint)
+	state.AccountDisplay = accountDisplay
+	state.HasChatGPTAccount = hasChatGPTAccount
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	options := codextea.Options{
@@ -294,6 +294,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionHeaderVersion: doctor.Version(),
 		OnSessionAction:      interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:      interactiveRemoteResumeSessionHandler(ctx, endpoint),
+		OnRenameThread:       interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnLogout:             interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:         keymapConfig,
 		OnKeymapEdit:         interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
@@ -305,18 +307,27 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
 			return interactiveRemoteSwitchAgentThread(ctx, endpoint, threadID)
 		},
-		OnWriteSettings:         interactiveRemoteSettingsWriteHandler(ctx, endpoint),
-		FeatureSettings:         settings.FeatureSettings,
-		ServiceTierCommands:     interactiveServiceTierCommands(state.Model),
-		Personality:             settings.Personality,
-		Notifications:           settings.Notifications,
-		NotificationMethod:      settings.NotificationMethod,
-		NotificationCondition:   settings.NotificationCondition,
-		PermissionRequirements:  settings.PermissionRequirements,
-		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
-		TUITheme:                settings.TUITheme,
-		TUIPet:                  settings.TUIPet,
-		OnPostNotification:      interactiveNotificationPoster(stdout),
+		OnWriteSettings:           interactiveRemoteSettingsWriteHandler(ctx, endpoint),
+		OnUpdateCollaborationMode: interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
+		OnWriteMemorySettings:     interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
+		OnResetMemories:           interactiveRemoteMemoryResetHandler(ctx, endpoint),
+		OnSubmitFeedback:          interactiveRemoteFeedbackSubmitHandler(ctx, endpoint),
+		OnReadIDEContext:          interactiveIDEContextReader,
+		OnApproveAutoReviewDenial: interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
+		FeatureSettings:           settings.FeatureSettings,
+		UseMemories:               settings.UseMemories,
+		GenerateMemories:          settings.GenerateMemories,
+		FeedbackEnabled:           settings.FeedbackEnabled,
+		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
+		Personality:               settings.Personality,
+		Notifications:             settings.Notifications,
+		NotificationMethod:        settings.NotificationMethod,
+		NotificationCondition:     settings.NotificationCondition,
+		PermissionRequirements:    settings.PermissionRequirements,
+		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
+		TUITheme:                  settings.TUITheme,
+		TUIPet:                    settings.TUIPet,
+		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommand(ctx, root, endpoint, state, request, brokers, interrupts)
 		},
@@ -336,6 +347,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnConsumeRateLimitResetCredit: func(idempotencyKey string) (chatwidget.RateLimitResetConsumeOutcome, error) {
 			return interactiveRemoteConsumeRateLimitResetCredit(ctx, endpoint, idempotencyKey)
 		},
+		OnReadRateLimits: interactiveRemoteRateLimitsReader(ctx, endpoint),
 		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
 			return interactiveRemoteReadGoal(ctx, endpoint, threadID)
 		},
@@ -352,13 +364,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return interactiveRemoteStartWindowsSandboxSetup(ctx, endpoint, mode, setupCWD)
 		},
-		OnOpenDesktopThread: func(threadID string) error {
-			command := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", tuiapp.WindowsDesktopAppLaunchScript(tuiapp.DesktopThreadURL(threadID)))
-			if output, err := command.CombinedOutput(); err != nil {
-				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
-			}
-			return nil
-		},
+		OnOpenDesktopThread: interactiveOpenDesktopThread,
 		OnReadRolloutPath: func(threadID string) (string, error) {
 			if strings.TrimSpace(threadID) == "" {
 				return "", nil
@@ -377,66 +383,60 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return *thread.Path, nil
 		},
-		OnSandboxReadDir: func(path string) error {
-			absolute, err := filepath.Abs(strings.TrimSpace(path))
-			if err != nil {
-				return err
-			}
-			info, err := os.Stat(absolute)
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() {
-				return fmt.Errorf("%s is not a directory", absolute)
-			}
-			for _, current := range root.Shared.AddDirs {
-				if strings.EqualFold(filepath.Clean(current), filepath.Clean(absolute)) {
-					return nil
-				}
-			}
-			root.Shared.AddDirs = append(root.Shared.AddDirs, absolute)
-			return nil
-		},
-		OnImportExternalAgent: func(cwd string) (string, error) {
-			client, err := openRemoteSessionClient(ctx, endpoint)
-			if err != nil {
-				return "", err
-			}
-			defer client.close()
-			params := config.ExternalAgentConfigDetectParams{IncludeHome: true}
-			if strings.TrimSpace(cwd) != "" {
-				params.CWDs = []string{cwd}
-			}
-			var detected config.ExternalAgentConfigDetectResponse
-			if err := remoteSessionRequest(ctx, client, appserver.MethodExternalAgentConfigDetect, params, &detected); err != nil {
-				return "", err
-			}
-			if len(detected.Items) == 0 {
-				return "No external agent configuration found.", nil
-			}
-			var imported config.ExternalAgentConfigImportResponse
-			if err := remoteSessionRequest(ctx, client, appserver.MethodExternalAgentConfigImport, config.ExternalAgentConfigImportParams{MigrationItems: detected.Items}, &imported); err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("External agent import started: %s", imported.ImportID), nil
-		},
-		OnReadHooks: func(cwd string) ([]chatwidget.HookRun, error) {
+		OnSandboxReadDir:      interactiveRemoteSandboxReadDirHandler(root, endpoint),
+		OnDetectExternalAgent: interactiveRemoteExternalAgentDetectHandler(endpoint),
+		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
 			hooksCWD := strings.TrimSpace(cwd)
 			if hooksCWD == "" {
 				hooksCWD = interactiveSessionPickerCWD(root)
 			}
 			return interactiveRemoteReadHooks(ctx, endpoint, hooksCWD)
 		},
-		OnReadPlugins: func() (plugin.PluginListResponse, error) {
-			return interactiveRemoteReadPlugins(ctx, endpoint)
+		OnWriteHookConfig: interactiveRemoteHookConfigWriter(ctx, endpoint),
+		OnReadPlugins: func(cwd string, forceRefetch bool) (plugin.PluginListResponse, error) {
+			pluginCWD := strings.TrimSpace(cwd)
+			if pluginCWD == "" {
+				pluginCWD = interactiveSessionPickerCWD(root)
+			}
+			return interactiveRemoteReadPlugins(ctx, endpoint, pluginCWD, forceRefetch)
 		},
-		OnReadSkills: func(cwd string) (appserver.SkillsListResponse, error) {
+		OnReadPlugin: func(params plugin.PluginReadParams) (plugin.PluginReadResponse, error) {
+			return interactiveRemotePluginCall[plugin.PluginReadResponse](ctx, endpoint, appserver.MethodPluginRead, params)
+		},
+		OnInstallPlugin: func(params plugin.PluginInstallParams) (plugin.PluginInstallResponse, error) {
+			return interactiveRemotePluginCall[plugin.PluginInstallResponse](ctx, endpoint, appserver.MethodPluginInstall, params)
+		},
+		OnUninstallPlugin: func(params plugin.PluginUninstallParams) (plugin.PluginUninstallResponse, error) {
+			return interactiveRemotePluginCall[plugin.PluginUninstallResponse](ctx, endpoint, appserver.MethodPluginUninstall, params)
+		},
+		OnWritePluginEnabled: func(pluginID string, enabled bool) error {
+			_, err := interactiveRemotePluginCall[config.ConfigWriteResponse](ctx, endpoint, appserver.MethodConfigValueWrite, config.ConfigValueWriteParams{
+				KeyPath:       "plugins." + strings.TrimSpace(pluginID),
+				Value:         map[string]any{"enabled": enabled},
+				MergeStrategy: config.MergeUpsert,
+			})
+			return err
+		},
+		OnAddMarketplace: func(params plugin.MarketplaceAddParams) (plugin.MarketplaceAddResponse, error) {
+			return interactiveRemotePluginCall[plugin.MarketplaceAddResponse](ctx, endpoint, appserver.MethodMarketplaceAdd, params)
+		},
+		OnRemoveMarketplace: func(params plugin.MarketplaceRemoveParams) (plugin.MarketplaceRemoveResponse, error) {
+			return interactiveRemotePluginCall[plugin.MarketplaceRemoveResponse](ctx, endpoint, appserver.MethodMarketplaceRemove, params)
+		},
+		OnUpgradeMarketplace: func(params plugin.MarketplaceUpgradeParams) (plugin.MarketplaceUpgradeResponse, error) {
+			return interactiveRemotePluginCall[plugin.MarketplaceUpgradeResponse](ctx, endpoint, appserver.MethodMarketplaceUpgrade, params)
+		},
+		OnOpenPluginURL:        auth.OpenBrowser,
+		PluginUserMarketplaces: settings.PluginUserMarketplaces,
+		PluginGitMarketplaces:  settings.PluginGitMarketplaces,
+		OnReadSkills: func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 			skillsCWD := strings.TrimSpace(cwd)
 			if skillsCWD == "" {
 				skillsCWD = interactiveSessionPickerCWD(root)
 			}
-			return interactiveRemoteReadSkills(ctx, endpoint, skillsCWD)
+			return interactiveRemoteReadSkills(ctx, endpoint, skillsCWD, forceReload)
 		},
+		OnWriteSkillEnabled: interactiveRemoteSkillEnabledWriter(ctx, endpoint),
 		OnFuzzyFileSearch: func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
 			searchCWD := strings.TrimSpace(cwd)
 			if searchCWD == "" {
@@ -450,19 +450,33 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return interactiveRemoteReadApps(ctx, endpoint, threadID, forceRefetch)
 		},
-		OnStartReview: func(params review.StartParams) (review.StartResponse, error) {
-			return interactiveRemoteStartReview(ctx, endpoint, params)
-		},
+		OnStartReviewCommand:  interactiveRemoteReviewStartCommand(ctx, root, endpoint, state, brokers, interrupts),
+		OnStartCompactCommand: interactiveRemoteCompactStartCommand(ctx, root, endpoint, state, brokers),
 		OnStartSide: func(params codextea.SideStartParams) (codextea.SideStartResponse, error) {
 			return interactiveRemoteStartSide(ctx, root, endpoint, state, params)
 		},
 		OnCloseSide: func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
 			return interactiveRemoteCloseSide(ctx, endpoint, params)
 		},
-		HasChatGPTAccount: true,
+		HasChatGPTAccount: hasChatGPTAccount,
 	}
 	_, err := codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return "", false
+	}
+	defer client.close()
+	var response auth.GetAccountResponse
+	if err := remoteSessionRequest(reqCtx, client, appserver.MethodGetAccount, auth.GetAccountParams{}, &response); err != nil {
+		return "", false
+	}
+	return interactiveAccountDisplay(response.Account)
 }
 
 func interactiveRemoteKeymapConfig(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*codextui.KeymapConfig, error) {
@@ -670,6 +684,102 @@ func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appser
 	}
 }
 
+func interactiveRemoteCollaborationModeUpdateHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.CollaborationModeUpdateFunc {
+	return func(threadID string, mode chatwidget.CollaborationMode) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return nil
+		}
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		var response appserver.SettingsUpdateResponse
+		return remoteSessionRequest(reqCtx, client, appserver.MethodThreadSettingsUpdate, appserver.SettingsUpdateParams{
+			ThreadID:          threadID,
+			CollaborationMode: interactiveCollaborationModePayload(&mode),
+		}, &response)
+	}
+}
+
+func interactiveRemoteMemorySettingsWriteHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.MemorySettingsWriteFunc {
+	return func(threadID string, useMemories bool, generateMemories bool, generateChanged bool) (codextea.SettingsWriteResult, error) {
+		result, err := interactiveRemoteSettingsWriteHandler(ctx, endpoint)([]codextea.SettingsEdit{
+			{KeyPath: "memories.use_memories", Value: useMemories},
+			{KeyPath: "memories.generate_memories", Value: generateMemories},
+		})
+		if err != nil || !generateChanged || strings.TrimSpace(threadID) == "" {
+			return result, err
+		}
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return result, fmt.Errorf("Saved memory settings, but failed to update the current thread: %w", err)
+		}
+		defer client.close()
+		params := appserver.ThreadMemoryModeSetParams{ThreadID: strings.TrimSpace(threadID), Mode: interactiveThreadMemoryMode(generateMemories)}
+		var response appserver.ThreadMemoryModeSetResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadMemoryModeSet, params, &response); err != nil {
+			return result, fmt.Errorf("Saved memory settings, but failed to update the current thread: %w", err)
+		}
+		return result, nil
+	}
+}
+
+func interactiveRemoteMemoryResetHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.MemoryResetFunc {
+	return func() error {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		var response appserver.MemoryResetResponse
+		return remoteSessionRequest(reqCtx, client, appserver.MethodMemoryReset, map[string]any{}, &response)
+	}
+}
+
+func interactiveRemoteFeedbackSubmitHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.FeedbackSubmitFunc {
+	return func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return appserver.FeedbackUploadResponse{}, err
+		}
+		defer client.close()
+		var response appserver.FeedbackUploadResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodFeedbackUpload, params, &response); err != nil {
+			return appserver.FeedbackUploadResponse{}, err
+		}
+		return response, nil
+	}
+}
+
+func interactiveRemoteApproveAutoReviewDenialHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AutoReviewDenialApproveFunc {
+	return func(threadID string, entry chatwidget.AutoReviewDenialEntry) error {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		params := appserver.ThreadApproveGuardianDeniedActionParams{
+			ThreadID: strings.TrimSpace(threadID),
+			Event:    append(json.RawMessage(nil), entry.Event...),
+			ActionID: strings.TrimSpace(entry.ID),
+		}
+		var response appserver.ThreadApproveGuardianDeniedActionResponse
+		return remoteSessionRequest(reqCtx, client, appserver.MethodThreadApproveGuardianDeniedAction, params, &response)
+	}
+}
+
 func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerTUIClient) (codextea.SettingsWriteResult, error) {
 	var response config.ConfigReadResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
@@ -712,12 +822,12 @@ func remoteWindowsSandboxSetupMode(mode chatwidget.WindowsSandboxMode) sandbox.W
 	}
 }
 
-func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string) ([]chatwidget.HookRun, error) {
+func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string) (appserver.HookListResponse, error) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
 	if err != nil {
-		return nil, err
+		return appserver.HookListResponse{}, err
 	}
 	defer client.close()
 	params := appserver.HookListParams{}
@@ -726,127 +836,44 @@ func interactiveRemoteReadHooks(ctx context.Context, endpoint *appserverdaemon.R
 	}
 	var response appserver.HookListResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodHooksList, params, &response); err != nil {
-		return nil, err
+		return appserver.HookListResponse{}, err
 	}
-	return remoteHookRunsFromAppServer(response), nil
+	return response, nil
 }
 
-func remoteHookRunsFromAppServer(response appserver.HookListResponse) []chatwidget.HookRun {
-	runs := []chatwidget.HookRun{}
-	for _, entry := range response.Data {
-		cwd := strings.TrimSpace(entry.CWD)
-		for _, hook := range entry.Hooks {
-			runs = append(runs, remoteHookRunFromMetadata(cwd, hook))
+func interactiveRemoteHookConfigWriter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.HookConfigWriteFunc {
+	return func(params config.ConfigBatchWriteParams) error {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return err
 		}
-		for i, warning := range entry.Warnings {
-			if strings.TrimSpace(warning) == "" {
-				continue
-			}
-			runs = append(runs, chatwidget.HookRun{
-				ID:      fmt.Sprintf("warning:%s:%d", cwd, i),
-				Name:    "Hook warning",
-				Command: cwd,
-				Issue:   strings.TrimSpace(warning),
-			})
-		}
-		for i, hookErr := range entry.Errors {
-			message := strings.TrimSpace(hookErr.Message)
-			path := strings.TrimSpace(hookErr.Path)
-			if message == "" && path == "" {
-				continue
-			}
-			runs = append(runs, chatwidget.HookRun{
-				ID:      fmt.Sprintf("error:%s:%s:%d", cwd, path, i),
-				Name:    "Hook error",
-				Command: firstNonEmptyLocal(path, cwd),
-				Status:  chatwidget.HookStatusFailed,
-				Issue:   message,
-			})
-		}
-	}
-	return runs
-}
-
-func remoteHookRunFromMetadata(cwd string, hook appserver.HookMetadata) chatwidget.HookRun {
-	id := strings.TrimSpace(hook.Key)
-	nameParts := []string{}
-	if strings.TrimSpace(string(hook.EventName)) != "" {
-		nameParts = append(nameParts, strings.TrimSpace(string(hook.EventName)))
-	}
-	if hook.Matcher != nil && strings.TrimSpace(*hook.Matcher) != "" {
-		nameParts = append(nameParts, strings.TrimSpace(*hook.Matcher))
-	}
-	name := strings.Join(nameParts, " / ")
-	if name == "" {
-		name = id
-	}
-	command := strings.TrimSpace(string(hook.HandlerType))
-	if hook.Command != nil && strings.TrimSpace(*hook.Command) != "" {
-		command = strings.TrimSpace(*hook.Command)
-	}
-	issueLines := []string{}
-	if cwd != "" {
-		issueLines = append(issueLines, "cwd: "+cwd)
-	}
-	if strings.TrimSpace(string(hook.Source)) != "" {
-		issueLines = append(issueLines, "source: "+strings.TrimSpace(string(hook.Source)))
-	}
-	if strings.TrimSpace(hook.SourcePath) != "" {
-		issueLines = append(issueLines, "path: "+strings.TrimSpace(hook.SourcePath))
-	}
-	if hook.PluginID != nil && strings.TrimSpace(*hook.PluginID) != "" {
-		issueLines = append(issueLines, "plugin: "+strings.TrimSpace(*hook.PluginID))
-	}
-	if strings.TrimSpace(string(hook.TrustStatus)) != "" {
-		issueLines = append(issueLines, "trust: "+strings.TrimSpace(string(hook.TrustStatus)))
-	}
-	if !hook.Enabled {
-		issueLines = append(issueLines, "disabled")
-	}
-	if hook.StatusMessage != nil && strings.TrimSpace(*hook.StatusMessage) != "" {
-		issueLines = append(issueLines, strings.TrimSpace(*hook.StatusMessage))
-	}
-	return chatwidget.HookRun{
-		ID:      id,
-		Name:    firstNonEmptyLocal(name, id),
-		Command: command,
-		Issue:   strings.Join(issueLines, "\n"),
-		Output: strings.Join([]string{
-			cwd,
-			strings.TrimSpace(string(hook.Source)),
-			strings.TrimSpace(hook.SourcePath),
-			strings.TrimSpace(stringPtrValue(hook.Matcher)),
-			strings.TrimSpace(stringPtrValue(hook.PluginID)),
-			strings.TrimSpace(string(hook.TrustStatus)),
-		}, " "),
-		Managed: remoteHookManaged(hook),
-		Review:  hook.EventName == appserver.HookEventPermissionRequest,
+		defer client.close()
+		var response config.ConfigWriteResponse
+		return remoteSessionRequest(reqCtx, client, appserver.MethodConfigBatchWrite, params, &response)
 	}
 }
 
-func remoteHookManaged(hook appserver.HookMetadata) bool {
-	if hook.IsManaged {
-		return true
+func interactiveRemoteReadPlugins(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string, forceRefetch bool) (plugin.PluginListResponse, error) {
+	params := plugin.PluginListParams{IncludeInstalled: true, ForceRefetch: forceRefetch}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		params.CWDs = []string{cwd}
 	}
-	switch hook.Source {
-	case appserver.HookSourceMDM, appserver.HookSourceCloudRequirements, appserver.HookSourceCloudManagedConfig, appserver.HookSourceLegacyConfigMDM:
-		return true
-	default:
-		return false
-	}
+	return interactiveRemotePluginCall[plugin.PluginListResponse](ctx, endpoint, appserver.MethodPluginList, params)
 }
 
-func interactiveRemoteReadPlugins(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (plugin.PluginListResponse, error) {
+func interactiveRemotePluginCall[T any](ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, method appserver.Method, params any) (T, error) {
+	var response T
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
 	if err != nil {
-		return plugin.PluginListResponse{}, err
+		return response, err
 	}
 	defer client.close()
-	var response plugin.PluginListResponse
-	if err := remoteSessionRequest(reqCtx, client, appserver.MethodPluginList, plugin.PluginListParams{IncludeInstalled: true}, &response); err != nil {
-		return plugin.PluginListResponse{}, err
+	if err := remoteSessionRequest(reqCtx, client, method, params, &response); err != nil {
+		return response, err
 	}
 	return response, nil
 }
@@ -947,7 +974,7 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
 	return codextea.SideCloseResponse{}, nil
 }
 
-func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string) (appserver.SkillsListResponse, error) {
+func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
@@ -955,7 +982,7 @@ func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.
 		return appserver.SkillsListResponse{}, err
 	}
 	defer client.close()
-	params := appserver.SkillsListParams{}
+	params := appserver.SkillsListParams{ForceReload: forceReload}
 	if strings.TrimSpace(cwd) != "" {
 		params.CWDs = []string{strings.TrimSpace(cwd)}
 	}
@@ -964,6 +991,24 @@ func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.
 		return appserver.SkillsListResponse{}, err
 	}
 	return response, nil
+}
+
+func interactiveRemoteSkillEnabledWriter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SkillEnabledWriteFunc {
+	return func(path string, enabled bool) (bool, error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return false, err
+		}
+		defer client.close()
+		params := appserver.SkillsConfigWriteParams{Path: strings.TrimSpace(path), Enabled: enabled}
+		var response appserver.SkillsConfigWriteResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodSkillsConfigWrite, params, &response); err != nil {
+			return false, err
+		}
+		return response.EffectiveEnabled, nil
+	}
 }
 
 func interactiveRemoteFuzzyFileSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error) {
@@ -1160,6 +1205,35 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 		default:
 			return nil, nil
 		}
+	}
+}
+
+func interactiveRemoteRenameThreadHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ThreadRenameFunc {
+	return func(threadID string, name string) error {
+		threadID = strings.TrimSpace(threadID)
+		name = strings.TrimSpace(name)
+		if threadID == "" {
+			return errors.New("remote rename requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		var response appserver.ThreadSetNameResponse
+		return remoteSessionRequest(ctx, client, appserver.MethodThreadNameSet, appserver.ThreadSetNameParams{ThreadID: threadID, Name: name}, &response)
+	}
+}
+
+func interactiveRemoteLogoutHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.LogoutFunc {
+	return func() error {
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		var response auth.LogoutAccountResponse
+		return remoteSessionRequest(ctx, client, appserver.MethodLogoutAccount, map[string]any{}, &response)
 	}
 }
 
@@ -1452,8 +1526,35 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 		return nil
 	}
 	messages := []codextui.Message{}
+	inReviewMode := false
 	for _, turn := range thread.Turns {
 		for _, item := range turn.Items {
+			itemType := remoteTUINormalizedThreadItemType(item.Type)
+			switch itemType {
+			case "enteredreviewmode":
+				hint := strings.TrimSpace(firstNonEmptyLocal(item.Text, remoteTUIAnyString(item.Data["review"])))
+				if hint == "" {
+					hint = "current changes"
+				}
+				text := ">> Code review started: " + hint + " <<"
+				messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+				inReviewMode = true
+				continue
+			case "exitedreviewmode":
+				if inReviewMode {
+					text := "<< Code review finished >>"
+					messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+				}
+				inReviewMode = false
+				continue
+			case "contextcompaction":
+				text := "Context compacted"
+				messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+				continue
+			}
+			if remoteTUIThreadItemIsReviewUserMessage(item) || (inReviewMode && remoteTUINormalizedThreadItemRole(item.Role) == "user") {
+				continue
+			}
 			message, ok := remoteTUIMessageFromThreadItem(item)
 			if ok {
 				messages = append(messages, message)
@@ -1464,6 +1565,10 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 		}
 	}
 	return messages
+}
+
+func remoteTUIThreadItemIsReviewUserMessage(item appserver.ThreadItem) bool {
+	return strings.TrimSpace(remoteTUIAnyString(item.Data["kind"])) == "review_rollout_user"
 }
 
 func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message, bool) {
@@ -2815,6 +2920,24 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
 		c.send(codextea.ThreadEventMsg{Event: protocol.TokenUsageUpdated(remoteThreadTokenUsage(payload.TokenUsage))})
+	case appserver.NotificationItemGuardianApprovalReviewStarted:
+		var payload appserver.ItemGuardianApprovalReviewStartedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.send(remoteGuardianReviewStartedMsg(payload))
+	case appserver.NotificationItemGuardianApprovalReviewCompleted:
+		var payload appserver.ItemGuardianApprovalReviewCompletedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.send(remoteGuardianReviewCompletedMsg(payload))
 	case appserver.NotificationAgentMessageDelta:
 		var payload appserver.AgentMessageDeltaNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -2826,6 +2949,16 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.send(codextea.ModelRetryStatusMsg{Active: false})
 		c.send(codextea.ThreadEventMsg{Event: protocol.AgentMessageDelta(payload.ItemID, payload.Delta)})
+	case appserver.NotificationPlanDelta:
+		var payload appserver.PlanDeltaNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.PlanDelta(payload.ItemID, payload.Delta)})
+			return nil
+		}
+		c.send(codextea.ThreadEventMsg{Event: protocol.PlanDelta(payload.ItemID, payload.Delta)})
 	case appserver.NotificationItemStarted:
 		var payload appserver.ItemStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -2972,6 +3105,106 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 	return nil
 }
 
+func remoteGuardianReviewStartedMsg(payload appserver.ItemGuardianApprovalReviewStartedNotification) codextea.GuardianReviewMsg {
+	status := remoteGuardianAssessmentStatus(payload.Review.Status)
+	return codextea.GuardianReviewMsg{
+		ThreadID: payload.ThreadID,
+		Event: chatwidget.GuardianAssessmentEvent{
+			ID:        strings.TrimSpace(payload.ReviewID),
+			Status:    status,
+			Action:    remoteGuardianAssessmentAction(payload.Action),
+			Rationale: strings.TrimSpace(stringPtrValue(payload.Review.Rationale)),
+			Raw:       remoteGuardianReviewEventJSON(payload.ThreadID, payload.TurnID, payload.ReviewID, payload.TargetItemID, payload.StartedAtMS, nil, payload.Review, payload.Action, ""),
+		},
+	}
+}
+
+func remoteGuardianReviewCompletedMsg(payload appserver.ItemGuardianApprovalReviewCompletedNotification) codextea.GuardianReviewMsg {
+	completedAt := payload.CompletedAtMS
+	return codextea.GuardianReviewMsg{
+		ThreadID: payload.ThreadID,
+		Event: chatwidget.GuardianAssessmentEvent{
+			ID:        strings.TrimSpace(payload.ReviewID),
+			Status:    remoteGuardianAssessmentStatus(payload.Review.Status),
+			Action:    remoteGuardianAssessmentAction(payload.Action),
+			Rationale: strings.TrimSpace(stringPtrValue(payload.Review.Rationale)),
+			Raw:       remoteGuardianReviewEventJSON(payload.ThreadID, payload.TurnID, payload.ReviewID, payload.TargetItemID, payload.StartedAtMS, &completedAt, payload.Review, payload.Action, string(payload.DecisionSource)),
+		},
+	}
+}
+
+func remoteGuardianAssessmentStatus(status appserver.GuardianApprovalReviewStatus) chatwidget.GuardianAssessmentStatus {
+	switch status {
+	case appserver.GuardianApprovalReviewInProgress:
+		return chatwidget.GuardianAssessmentInProgress
+	case appserver.GuardianApprovalReviewApproved:
+		return chatwidget.GuardianAssessmentApproved
+	case appserver.GuardianApprovalReviewDenied:
+		return chatwidget.GuardianAssessmentDenied
+	case appserver.GuardianApprovalReviewTimedOut:
+		return chatwidget.GuardianAssessmentTimedOut
+	default:
+		return chatwidget.GuardianAssessmentStatus(status)
+	}
+}
+
+func remoteGuardianAssessmentAction(action appserver.GuardianApprovalReviewAction) chatwidget.GuardianAssessmentAction {
+	kind := chatwidget.GuardianAssessmentActionKind(action.Type)
+	switch action.Type {
+	case "applyPatch":
+		kind = chatwidget.GuardianActionApplyPatch
+	case "networkAccess":
+		kind = chatwidget.GuardianActionNetworkAccess
+	case "mcpToolCall":
+		kind = chatwidget.GuardianActionMcpToolCall
+	case "requestPermissions":
+		kind = chatwidget.GuardianActionRequestPermissions
+	}
+	target := firstNonEmptyLocal(strings.TrimSpace(action.Target), strings.TrimSpace(action.Host))
+	return chatwidget.GuardianAssessmentAction{
+		Kind:          kind,
+		Command:       strings.TrimSpace(action.Command),
+		Program:       strings.TrimSpace(action.Program),
+		Argv:          append([]string(nil), action.Argv...),
+		Files:         append([]string(nil), action.Files...),
+		Target:        target,
+		Server:        strings.TrimSpace(action.Server),
+		ToolName:      strings.TrimSpace(action.ToolName),
+		ConnectorName: strings.TrimSpace(stringPtrValue(action.ConnectorName)),
+		Reason:        strings.TrimSpace(stringPtrValue(action.Reason)),
+	}
+}
+
+func remoteGuardianReviewEventJSON(threadID string, turnID string, reviewID string, targetItemID *string, startedAt uint64, completedAt *uint64, review appserver.GuardianApprovalReview, action appserver.GuardianApprovalReviewAction, decisionSource string) json.RawMessage {
+	event := map[string]any{
+		"id":          strings.TrimSpace(reviewID),
+		"turnId":      strings.TrimSpace(turnID),
+		"startedAtMs": startedAt,
+		"status":      string(remoteGuardianAssessmentStatus(review.Status)),
+		"action":      action,
+	}
+	if targetItemID != nil && strings.TrimSpace(*targetItemID) != "" {
+		event["targetItemId"] = strings.TrimSpace(*targetItemID)
+	}
+	if completedAt != nil {
+		event["completedAtMs"] = *completedAt
+	}
+	if review.RiskLevel != nil {
+		event["riskLevel"] = *review.RiskLevel
+	}
+	if review.UserAuthorization != nil {
+		event["userAuthorization"] = *review.UserAuthorization
+	}
+	if review.Rationale != nil {
+		event["rationale"] = *review.Rationale
+	}
+	if strings.TrimSpace(decisionSource) != "" {
+		event["decisionSource"] = strings.TrimSpace(decisionSource)
+	}
+	raw, _ := json.Marshal(event)
+	return raw
+}
+
 func remoteThreadTokenUsage(usage appserver.TokenUsage) protocol.ThreadTokenUsage {
 	return protocol.ThreadTokenUsage{Total: remoteUsageBreakdown(usage.Total), Last: remoteUsageBreakdown(usage.Last), ModelContextWindow: usage.ModelContextWindow}
 }
@@ -3098,11 +3331,23 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires a thread id")
 	}
 	inputs := interactiveSubmitInputs(request)
-	if prompt := strings.TrimSpace(request.Prompt); prompt != "" {
-		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt != "" {
+		textInput := turn.TurnUserInput{Type: "text", Text: prompt}
+		if request.IDEContext != nil {
+			inputs = append([]turn.TurnUserInput{textInput}, inputs...)
+		} else {
+			inputs = append(inputs, textInput)
+		}
+	}
+	if request.IDEContext != nil {
+		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	}
 	if len(inputs) == 0 {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires user input")
+	}
+	if request.CollaborationMode == nil {
+		request.CollaborationMode = interactiveCollaborationModeFromState(state)
 	}
 	shared := remoteSharedOptions(root, state)
 	configValues, err := remoteConfigValues(root, shared)
@@ -3119,6 +3364,7 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		Config:                configValues,
 		ExperimentalRawEvents: true,
 	}
+	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		personality := strings.TrimSpace(state.Personality)
 		params.Personality = &personality
@@ -3210,6 +3456,13 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			remoteMCPToolError(payload["error"]),
 			status,
 		)
+	case "webSearch", "web_search":
+		action, _ := payload["action"].(map[string]any)
+		return protocol.WebSearchItem(
+			id,
+			remotePayloadString(payload, "query"),
+			action,
+		)
 	default:
 		itemType := strings.TrimSpace(wireType)
 		if itemType == "" {
@@ -3218,7 +3471,7 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		return protocol.ThreadItem{
 			ID:   id,
 			Type: itemType,
-			Text: remoteFirstPayloadString(payload, "text", "message"),
+			Text: remoteFirstPayloadString(payload, "text", "message", "review"),
 		}
 	}
 }

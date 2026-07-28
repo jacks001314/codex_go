@@ -993,15 +993,17 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 		})
 	case "webSearch":
 		return json.Marshal(struct {
-			Type   string `json:"type"`
-			ID     string `json:"id"`
-			Query  string `json:"query"`
-			Action any    `json:"action"`
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Query   string `json:"query"`
+			Action  any    `json:"action"`
+			Results []any  `json:"results,omitempty"`
 		}{
-			Type:   "webSearch",
-			ID:     i.ID,
-			Query:  threadItemWebSearchQuery(i),
-			Action: threadItemWebSearchAction(i),
+			Type:    "webSearch",
+			ID:      i.ID,
+			Query:   threadItemWebSearchQuery(i),
+			Action:  threadItemWebSearchAction(i),
+			Results: threadItemWebSearchResults(i),
 		})
 	case "imageView":
 		return json.Marshal(struct {
@@ -3155,7 +3157,7 @@ func normalizeThreadItemType(itemType string) string {
 		return "collabAgentToolCall"
 	case "sub_agent_activity", "subAgentActivity":
 		return "subAgentActivity"
-	case "web_search", "webSearch":
+	case "web_search", "webSearch", "web_search_call":
 		return "webSearch"
 	case "image_view", "imageView":
 		return "imageView"
@@ -4405,6 +4407,18 @@ func threadItemWebSearchAction(item *ThreadItem) any {
 	return nil
 }
 
+func threadItemWebSearchResults(item *ThreadItem) []any {
+	if item == nil || item.Data == nil {
+		return nil
+	}
+	for _, key := range []string{"results", "webSearchResults", "web_search_results"} {
+		if values, ok := item.Data[key].([]any); ok {
+			return append([]any(nil), values...)
+		}
+	}
+	return nil
+}
+
 func threadItemWebSearchActionFromAny(value any) any {
 	switch typed := value.(type) {
 	case nil:
@@ -4418,9 +4432,9 @@ func threadItemWebSearchActionFromAny(value any) any {
 				"query":   threadItemNullableStringFromAnyMap(typed, "query"),
 				"queries": threadItemNullableStringSliceFromAnyMap(typed, "queries"),
 			}
-		case "openPage":
+		case "openPage", "open_page":
 			return map[string]any{"type": "openPage", "url": threadItemNullableStringFromAnyMap(typed, "url")}
-		case "findInPage":
+		case "findInPage", "find_in_page":
 			return map[string]any{
 				"type":    "findInPage",
 				"url":     threadItemNullableStringFromAnyMap(typed, "url"),

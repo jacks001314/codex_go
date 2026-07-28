@@ -8,14 +8,17 @@ import (
 
 func TestDetectExternalSessionMigration(t *testing.T) {
 	home := t.TempDir()
+	codexHome := t.TempDir()
+	cwd := t.TempDir()
 	path := filepath.Join(home, "projects", "repo", "session.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"type":"user","cwd":"/repo","message":{"content":"hi"}}`), 0o600); err != nil {
+	body := `{"type":"user","cwd":` + jsonQuoted(cwd) + `,"timestamp":"2026-07-28T10:00:00Z","message":{"content":"hi"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := NewConfigService(t.TempDir())
+	service := NewConfigService(codexHome)
 	service.SetExternalAgentHome(home)
 	detected := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true})
 	var sessions []SessionMigration
@@ -24,7 +27,20 @@ func TestDetectExternalSessionMigration(t *testing.T) {
 			sessions = item.Details.Sessions
 		}
 	}
-	if len(sessions) != 1 || sessions[0].Path != path || sessions[0].CWD != "/repo" {
+	if len(sessions) != 1 || sessions[0].Path != path || sessions[0].CWD != cwd || sessions[0].Title == nil || *sessions[0].Title != "hi" {
 		t.Fatalf("sessions = %#v", sessions)
+	}
+	if err := RecordExternalSessionImport(codexHome, path, "thread-1"); err != nil {
+		t.Fatal(err)
+	}
+	if detectedAgain := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true}); len(detectedAgain.Items) != 0 {
+		t.Fatalf("imported session detected again = %#v", detectedAgain.Items)
+	}
+	changedBody := `{"type":"user","cwd":` + jsonQuoted(cwd) + `,"timestamp_ms":1800000000000,"message":{"content":"changed"}}`
+	if err := os.WriteFile(path, []byte(changedBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if changed := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true}); len(changed.Items) != 1 || changed.Items[0].ItemType != MigrationSessions {
+		t.Fatalf("changed imported session not redetected = %#v", changed.Items)
 	}
 }

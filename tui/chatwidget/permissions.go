@@ -223,8 +223,7 @@ func PermissionModeActionDecisionForPreset(context PermissionModeActionContext) 
 		ReturnToPermissions: context.ReturnToPermissions,
 	}
 	if context.Reviewer == ApprovalsReviewerUser &&
-		context.Preset.ID == "full-access" &&
-		!context.HideFullAccessWarning {
+		context.Preset.ID == "full-access" {
 		base.Kind = PermissionModeActionOpenFullAccessConfirmation
 		return base
 	}
@@ -263,12 +262,6 @@ func FullAccessConfirmationView() PermissionMenuView {
 				DismissOnSelect: true,
 			},
 			{
-				ID:              "remember",
-				Name:            "Yes, and don't ask again",
-				Description:     "Enable full access and remember this choice",
-				DismissOnSelect: true,
-			},
-			{
 				ID:              "cancel",
 				Name:            "Cancel",
 				Description:     "Go back without enabling full access",
@@ -291,7 +284,7 @@ func builtinPermissionModeSelectionItem(config PermissionMenuConfig, preset Appr
 		Description:          description,
 		Current:              PermissionPresetMatchesCurrent(config, profileID, approval, reviewer),
 		DismissOnSelect:      true,
-		RequiresConfirmation: reviewer == ApprovalsReviewerUser && preset.ID == "full-access" && !config.HideFullAccessWarning,
+		RequiresConfirmation: reviewer == ApprovalsReviewerUser && preset.ID == "full-access",
 		DisabledReason:       permissionRequirementsDisabledReason(config.Requirements, profileID, approval, reviewer),
 		ApprovalPolicy:       &approvalCopy,
 		Reviewer:             &reviewerCopy,

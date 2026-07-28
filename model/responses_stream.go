@@ -935,7 +935,7 @@ func agentItemRecordKey(item *AgentItem) string {
 
 func isToolAgentItemType(itemType string) bool {
 	switch itemType {
-	case "function_call", "custom_tool_call", "tool_search_call":
+	case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
 		return true
 	default:
 		return false

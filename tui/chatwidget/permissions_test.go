@@ -155,8 +155,8 @@ func TestPermissionModeActionDecisionOrderMatchesRust(t *testing.T) {
 		IsWindows:             true,
 		WindowsSandboxLevel:   WindowsSandboxLevelDisabled,
 	})
-	if hiddenWarning.Kind != PermissionModeActionApply {
-		t.Fatalf("hidden warning decision = %#v", hiddenWarning)
+	if hiddenWarning.Kind != PermissionModeActionOpenFullAccessConfirmation {
+		t.Fatalf("hidden warning must not bypass full-access confirmation: %#v", hiddenWarning)
 	}
 
 	setupPrompt := PermissionModeActionDecisionForPreset(PermissionModeActionContext{
@@ -206,10 +206,10 @@ func TestPermissionModeActionDecisionOrderMatchesRust(t *testing.T) {
 
 func TestFullAccessConfirmationView(t *testing.T) {
 	view := FullAccessConfirmationView()
-	if len(view.Items) != 3 {
+	if len(view.Items) != 2 {
 		t.Fatalf("items = %#v", view.Items)
 	}
-	if view.Items[0].Name != "Yes, continue anyway" || view.Items[1].Name != "Yes, and don't ask again" || view.Items[2].Name != "Cancel" {
+	if view.Items[0].Name != "Yes, continue anyway" || view.Items[1].Name != "Cancel" {
 		t.Fatalf("confirmation items = %#v", view.Items)
 	}
 }

@@ -874,8 +874,12 @@ type ExternalAgentConfigMigrationItem struct {
 }
 
 type ExternalAgentConfigDetectParams struct {
-	IncludeHome bool     `json:"includeHome,omitempty"`
-	CWDs        []string `json:"cwds,omitempty"`
+	IncludeHome       bool     `json:"includeHome,omitempty"`
+	CWDs              []string `json:"cwds,omitempty"`
+	MaxSessionAgeDays *uint32  `json:"maxSessionAgeDays,omitempty"`
+	MaxSessions       *uint32  `json:"maxSessions,omitempty"`
+	Source            *string  `json:"source,omitempty"`
+	MigrationSource   *string  `json:"migrationSource,omitempty"`
 }
 
 type ExternalAgentConfigDetectResponse struct {
@@ -1888,32 +1892,34 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 	if params == nil {
 		params = &ExternalAgentConfigDetectParams{}
 	}
+	migrationSource := normalizeExternalMigrationSource(params.MigrationSource)
 	items := make([]ExternalAgentConfigMigrationItem, 0, len(params.CWDs)+1)
 	if params.IncludeHome {
-		items = append(items, ExternalAgentConfigMigrationItem{
-			ItemType:    MigrationConfig,
-			Description: "Home-scoped config migration",
-			Details:     NewMigrationDetails(),
-		})
+		if migrationSource == externalMigrationSourceCursor {
+			items = append(items, s.detectExternalCursorMigrations(externalMigrationScope{})...)
+		} else {
+			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{})...)
+		}
+		if item, ok := s.detectExternalSessionMigrationForSource(migrationSource, params); ok {
+			items = append(items, item)
+		}
 	}
 	for _, cwd := range params.CWDs {
-		cwd = strings.TrimSpace(cwd)
-		if cwd == "" {
+		root := externalRepoRoot(cwd)
+		if root == "" {
 			continue
 		}
-		items = append(items, ExternalAgentConfigMigrationItem{
-			ItemType:    MigrationAgentsMD,
-			Description: "Project instructions migration",
-			CWD:         &cwd,
-			Details:     NewMigrationDetails(),
-		})
+		if migrationSource == externalMigrationSourceCursor {
+			items = append(items, s.detectExternalCursorMigrations(externalMigrationScope{repoRoot: root})...)
+		} else {
+			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{repoRoot: root})...)
+		}
 	}
 	if params.IncludeHome {
-		if item, ok := s.detectExternalMemoryMigration(params.CWDs); ok {
-			items = append(items, item)
-		}
-		if item, ok := s.detectExternalSessionMigration(); ok {
-			items = append(items, item)
+		if migrationSource == externalMigrationSourceClaude {
+			if item, ok := s.detectExternalMemoryMigration(params.CWDs); ok {
+				items = append(items, item)
+			}
 		}
 	}
 	return &ExternalAgentConfigDetectResponse{Items: items}
@@ -1930,6 +1936,7 @@ func (s *ConfigService) ImportExternalAgentConfigWithResults(params *ExternalAge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	importID := fmt.Sprintf("import-%d", len(s.importHistory)+1)
+	migrationSource := normalizeExternalMigrationSource(params.MigrationSource)
 	var successes []ExternalAgentConfigImportItemTypeSuccess
 	var typeResults []ExternalAgentConfigImportTypeResult
 	for i := range params.MigrationItems {
@@ -1939,6 +1946,36 @@ func (s *ConfigService) ImportExternalAgentConfigWithResults(params *ExternalAge
 		}
 		if item.ItemType == MigrationMemory {
 			result := s.importExternalMemory(&item, params.Source)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
+		if migrationSource == externalMigrationSourceCursor {
+			result := s.importExternalCursorMigration(item)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
+		if item.ItemType == MigrationConfig || item.ItemType == MigrationSkills || item.ItemType == MigrationAgentsMD {
+			result := s.importExternalCoreMigration(item)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
+		if item.ItemType == MigrationMCPServerConfig || item.ItemType == MigrationCommands || item.ItemType == MigrationSubagents {
+			result := s.importExternalToolsMigration(item)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
+		if item.ItemType == MigrationHooks {
+			result := s.importExternalHooksMigration(item)
+			typeResults = append(typeResults, result)
+			successes = append(successes, result.Successes...)
+			continue
+		}
+		if item.ItemType == MigrationPlugins {
+			result := s.importExternalPluginsMigration(item)
 			typeResults = append(typeResults, result)
 			successes = append(successes, result.Successes...)
 			continue
@@ -2011,9 +2048,7 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 		incoming, incomingOK := edit.Value.(map[string]any)
 		if ok && incomingOK {
 			merged := cloneMap(existing)
-			for key, value := range incoming {
-				merged[key] = value
-			}
+			cloudConfigMergeMap(merged, cloneMap(incoming))
 			setAtPath(root, parts, merged)
 			return
 		}

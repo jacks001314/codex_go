@@ -64,7 +64,7 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		m.skillsInventoryLoading = true
 		reader := m.onReadSkills
 		return func() bubbletea.Msg {
-			response, err := reader(cwd)
+			response, err := reader(cwd, false)
 			return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}
 		}
 	}
@@ -124,7 +124,7 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 		m.skillsInventoryLoading = true
 		reader := m.onReadSkills
 		commands = append(commands, func() bubbletea.Msg {
-			response, err := reader(cwd)
+			response, err := reader(cwd, false)
 			return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}
 		})
 	}
@@ -132,7 +132,7 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 		m.mentionPluginInventoryLoading = true
 		reader := m.onReadPlugins
 		commands = append(commands, func() bubbletea.Msg {
-			response, err := reader()
+			response, err := reader(cwd, false)
 			return MentionPluginInventoryResultMsg{Response: response, Err: err}
 		})
 	}

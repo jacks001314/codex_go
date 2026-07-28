@@ -90,6 +90,8 @@ func ExternalAgentConfigMigrationItemLabel(item config.ExternalAgentConfigMigrat
 		return "Hooks"
 	case config.MigrationCommands:
 		return "Slash commands"
+	case config.MigrationMemory:
+		return "Memory"
 	case config.MigrationSessions:
 		return "Recent chat sessions"
 	default:
@@ -115,6 +117,8 @@ func ExternalAgentConfigMigrationTypeLabel(itemType config.MigrationItemType) st
 		return "Hooks"
 	case config.MigrationCommands:
 		return "Slash commands"
+	case config.MigrationMemory:
+		return "Memory"
 	case config.MigrationSessions:
 		return "Chat sessions"
 	default:
@@ -168,6 +172,8 @@ func ExternalAgentConfigMigrationItemCount(item config.ExternalAgentConfigMigrat
 		return defaultOne(len(item.Details.Hooks))
 	case config.MigrationCommands:
 		return defaultOne(len(item.Details.Commands))
+	case config.MigrationMemory:
+		return len(item.Details.MemoryFiles)
 	case config.MigrationSessions:
 		return defaultOne(len(item.Details.Sessions))
 	case config.MigrationSkills:
@@ -194,6 +200,24 @@ func ExternalAgentConfigMigrationItemDetail(item config.ExternalAgentConfigMigra
 		return formatCountedMigrationDetails("hook", len(item.Details.Hooks), namedMigrationNames(item.Details.Hooks)), true
 	case config.MigrationCommands:
 		return formatCountedMigrationDetails("slash command", len(item.Details.Commands), namedMigrationNames(item.Details.Commands)), true
+	case config.MigrationMemory:
+		names := make([]string, 0, len(item.Details.MemoryFiles))
+		for _, memory := range item.Details.MemoryFiles {
+			names = append(names, memory.SourceFile)
+		}
+		count := len(item.Details.MemoryFiles)
+		noun := "memories"
+		if count == 1 {
+			noun = "memory"
+		}
+		visible := names
+		if len(visible) > 4 {
+			visible = visible[:4]
+		}
+		if len(visible) == 0 {
+			return fmt.Sprintf("%d %s", count, noun), true
+		}
+		return fmt.Sprintf("%d %s: %s", count, noun, strings.Join(visible, ", ")), true
 	case config.MigrationSessions:
 		names := []string{}
 		for _, session := range item.Details.Sessions {

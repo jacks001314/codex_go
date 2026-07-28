@@ -68,7 +68,9 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
       const home = path.join(tmpDir, impl, "home");
       copyFixture(
         workspace,
-        scenario.name === "real-coding-unittest"
+        scenario.name === "init-existing-agents-md"
+          ? "init_existing"
+          : scenario.name === "real-coding-unittest"
           ? "coding"
           : scenario.name === "real-coding-modify"
             ? "coding_modify"

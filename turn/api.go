@@ -233,6 +233,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		Summary             *string         `json:"summary,omitempty"`
 		Personality         *string         `json:"personality,omitempty"`
 		OutputSchema        any             `json:"outputSchema,omitempty"`
+		CollaborationMode   map[string]any  `json:"collaborationMode,omitempty"`
 	}{
 		ThreadID:            p.ThreadID,
 		ClientUserMessageID: p.ClientUserMessageID,
@@ -247,6 +248,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		Summary:             p.Summary,
 		Personality:         p.Personality,
 		OutputSchema:        p.OutputSchema,
+		CollaborationMode:   p.CollaborationMode,
 	})
 }
 

@@ -187,6 +187,17 @@ func TestLoadSessionSummariesFromStoreFiltersSortsAndLimits(t *testing.T) {
 			Metadata:  session.Metadata{CWD: cwd, Source: "exec", ModelProvider: "openai"},
 		},
 		{
+			ID:        "thread-ephemeral",
+			Title:     "Side",
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now.Add(-time.Minute),
+			RecencyAt: now.Add(-time.Minute),
+			Metadata: session.Metadata{
+				CWD: cwd, Source: "cli", ModelProvider: "openai",
+				Extra: map[string]any{"ephemeral": true},
+			},
+		},
+		{
 			ID:        "thread-archived",
 			Title:     "Archived",
 			Archived:  true,

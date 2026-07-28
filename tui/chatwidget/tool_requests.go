@@ -1,6 +1,7 @@
 package chatwidget
 
 import (
+	"encoding/json"
 	"strings"
 
 	historycell "codex_go/tui/history_cell"
@@ -62,9 +63,11 @@ type GuardianAssessmentAction struct {
 }
 
 type GuardianAssessmentEvent struct {
-	ID     string
-	Status GuardianAssessmentStatus
-	Action GuardianAssessmentAction
+	ID        string
+	Status    GuardianAssessmentStatus
+	Action    GuardianAssessmentAction
+	Rationale string
+	Raw       json.RawMessage
 }
 
 type GuardianAssessmentResult struct {
@@ -138,10 +141,15 @@ func (s *ToolRequestRuntimeState) OnGuardianAssessment(event GuardianAssessmentE
 		Redraw:              event.Status == GuardianAssessmentApproved || event.Status == GuardianAssessmentDenied || event.Status == GuardianAssessmentTimedOut || finished,
 	}
 	if event.Status == GuardianAssessmentDenied {
+		rationale := strings.TrimSpace(event.Rationale)
+		if rationale == "" {
+			rationale = "Auto-review did not include a rationale."
+		}
 		denial := AutoReviewDenialEntry{
 			ID:        id,
 			Summary:   detail,
-			Rationale: "Auto-review denied this action.",
+			Rationale: rationale,
+			Event:     append(json.RawMessage(nil), event.Raw...),
 		}
 		s.RecentAutoReviewDenials = append(s.RecentAutoReviewDenials, denial)
 		result.RecentAutoReviewDenial = &denial

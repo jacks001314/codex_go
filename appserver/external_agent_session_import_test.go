@@ -43,3 +43,68 @@ func TestExternalAgentSessionImportPersistsSourceChronology(t *testing.T) {
 		t.Fatalf("record chronology = %+v", record)
 	}
 }
+
+func TestExternalAgentSessionImportParsesCursorTranscriptByMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewDefaultRuntimeRouter(store, home)
+	sourcePath := filepath.Join(t.TempDir(), "cursor-session.jsonl")
+	body := `{"role":"user","cwd":"C:\\repo","timestamp_ms":1704164645000,"message":{"content":[{"type":"text","text":"<user_query>first request</user_query>"}]}}
+{"role":"assistant","timestamp_ms":1709265906000,"message":{"content":[{"type":"text","text":"first answer"}]}}`
+	if err := os.WriteFile(sourcePath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	title := "Cursor chat"
+	migrationSource := "cursor"
+	details := config.NewMigrationDetails()
+	details.Sessions = []config.SessionMigration{{Path: sourcePath, CWD: `C:\repo`, Title: &title}}
+	response := router.Handle(requestWithParams(t, IntID(1), MethodExternalAgentConfigImport, config.ExternalAgentConfigImportParams{
+		MigrationSource: &migrationSource,
+		MigrationItems: []config.ExternalAgentConfigMigrationItem{{
+			ItemType: config.MigrationSessions, Details: details,
+		}},
+	}))
+	if response.Error != nil {
+		t.Fatalf("import response = %+v", response)
+	}
+	page, err := store.List(session.ListOptions{PageSize: 10, IncludeHistory: true})
+	if err != nil || len(page.Records) != 1 {
+		t.Fatalf("imported records = %+v err=%v", page, err)
+	}
+	record := page.Records[0]
+	if record.Title != title || record.Metadata.CWD != `C:\repo` || len(record.Items) != 2 {
+		t.Fatalf("record = %+v", record)
+	}
+	if record.Items[0].Role != "user" || record.Items[0].Text != "first request" || record.Items[1].Role != "assistant" || record.Items[1].Text != "first answer" {
+		t.Fatalf("record items = %+v", record.Items)
+	}
+	if record.CreatedAt.Format(time.RFC3339) != "2024-01-02T03:04:05Z" || record.UpdatedAt.Format(time.RFC3339) != "2024-03-01T04:05:06Z" {
+		t.Fatalf("record chronology = %+v", record)
+	}
+}
+
+func TestExternalAgentSessionImportReportsLedgerFailureAfterSuccess(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	blockedHome := filepath.Join(t.TempDir(), "not-a-directory")
+	router := NewDefaultRuntimeRouter(store, blockedHome)
+	sourcePath := filepath.Join(t.TempDir(), "source.jsonl")
+	if err := os.WriteFile(sourcePath, []byte(`{"type":"user","cwd":"/repo","timestamp":"2024-01-02T03:04:05Z","message":{"content":"request"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(blockedHome, "external_agent_session_imports.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	details := config.NewMigrationDetails()
+	details.Sessions = []config.SessionMigration{{Path: sourcePath, CWD: "/repo"}}
+	results := router.importExternalAgentSessions(&config.ExternalAgentConfigImportParams{
+		MigrationItems: []config.ExternalAgentConfigMigrationItem{{ItemType: config.MigrationSessions, Details: details}},
+	})
+	if len(results) != 1 || len(results[0].Successes) != 1 || len(results[0].Failures) != 1 {
+		t.Fatalf("session import results = %#v", results)
+	}
+	failure := results[0].Failures[0]
+	if failure.FailureStage != "session_ledger_update" || externalAgentStringValue(failure.SubErrorType) != "failed_to_update_session_ledger" || failure.Source != nil {
+		t.Fatalf("ledger failure = %#v", failure)
+	}
+}

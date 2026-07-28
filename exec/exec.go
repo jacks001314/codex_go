@@ -48,6 +48,7 @@ type Request struct {
 	Root                   cli.RootOptions
 	Exec                   cli.ExecOptions
 	Input                  []turn.TurnUserInput
+	CollaborationMode      map[string]any
 	AdditionalInstructions string
 	AdditionalInputItems   []any
 	// InternalEventHandler receives the complete in-process event before its
@@ -249,16 +250,27 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	streamCollector := &execStreamEventCollector{sink: eventSink, workingDirectory: requestCWD(req)}
 	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
+	var webSearchOptions *turn.WebSearchOptions
 	var imageGenerationOptions *turn.ImageGenerationOptions
 	var hostedTools []any
 	if req.Exec.Subcommand != "review" {
+		webSearchInputItems := append([]any(nil), inputItems...)
+		if current := model.UserMessageInputItem(runPrompt); current != nil {
+			webSearchInputItems = append(webSearchInputItems, current)
+		}
+		webSearchOptions, err = r.webSearchOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, webSearchInputItems, req.Root.Shared.Search)
+		if err != nil {
+			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+			return nil, err
+		}
 		imageGenerationOptions, err = r.imageGenerationOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, inputItems)
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 			return nil, err
 		}
-		hostedTools, err = r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, imageGenerationOptions)
+		hostedTools, err = r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, req.Root.Shared.Search, webSearchOptions, imageGenerationOptions)
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
@@ -277,39 +289,46 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		instructions = strings.Join(nonEmptyStrings([]string{instructions, usageHint}), "\n\n")
 	}
 	agentWaitDefault, agentWaitMin, agentWaitMax, agentHideSpawnMetadata, agentExposeSpawnOverrides := execAgentWaitConfigFromTools(multiAgentTools)
+	clientMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		InstallationID:   installationID,
+		SessionID:        execSessionID(req, threadID),
+		ThreadID:         threadID,
+		TurnID:           turnID,
+		WindowID:         threadID + ":1",
+		RequestKind:      codexapi.ClientRequestTurn,
+		SubagentHeader:   subagentHeader,
+		SubagentKind:     subagentKind,
+		ParentThreadID:   execParentThreadID(req),
+		ThreadSource:     execThreadSource(req),
+		Extra:            cfg.ResponsesAPIClientMetadata(),
+		UseResponsesLite: useResponsesLite,
+	})
+	originator := execAgentOriginator(req)
+	if webSearchOptions != nil {
+		webSearchOptions.Originator = originator
+		webSearchOptions.TurnMetadata = clientMetadata[codexapi.ClientCodexTurnMetadataHeader]
+	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
-		Prompt:                       runPrompt,
-		InputItems:                   inputItems,
-		Model:                        modelID,
-		ProviderID:                   providerID,
-		TaskKind:                     taskKind,
-		ThreadID:                     threadID,
-		TurnID:                       turnID,
-		PreviousResponseID:           resumePreviousResponseID(resumeContext),
-		ParallelToolCalls:            parallelToolCalls,
-		ReasoningEffort:              reasoningEffort,
-		ConcurrentReasoningSummaries: concurrentReasoningSummaries,
-		ModelVerbosity:               modelVerbosity,
-		IncludeTimingMetrics:         includeTimingMetrics,
-		BetaFeaturesHeader:           betaFeaturesHeader,
-		ItemIDsEnabled:               itemIDsEnabled,
-		PromptCacheKey:               threadID,
-		ServiceTier:                  serviceTier,
-		Instructions:                 instructions,
-		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:   installationID,
-			SessionID:        execSessionID(req, threadID),
-			ThreadID:         threadID,
-			TurnID:           turnID,
-			WindowID:         threadID + ":1",
-			RequestKind:      codexapi.ClientRequestTurn,
-			SubagentHeader:   subagentHeader,
-			SubagentKind:     subagentKind,
-			ParentThreadID:   execParentThreadID(req),
-			ThreadSource:     execThreadSource(req),
-			Extra:            cfg.ResponsesAPIClientMetadata(),
-			UseResponsesLite: useResponsesLite,
-		}),
+		Prompt:                         runPrompt,
+		InputItems:                     inputItems,
+		Model:                          modelID,
+		ProviderID:                     providerID,
+		TaskKind:                       taskKind,
+		ThreadID:                       threadID,
+		TurnID:                         turnID,
+		Originator:                     originator,
+		PreviousResponseID:             resumePreviousResponseID(resumeContext),
+		ParallelToolCalls:              parallelToolCalls,
+		ReasoningEffort:                reasoningEffort,
+		ConcurrentReasoningSummaries:   concurrentReasoningSummaries,
+		ModelVerbosity:                 modelVerbosity,
+		IncludeTimingMetrics:           includeTimingMetrics,
+		BetaFeaturesHeader:             betaFeaturesHeader,
+		ItemIDsEnabled:                 itemIDsEnabled,
+		PromptCacheKey:                 threadID,
+		ServiceTier:                    serviceTier,
+		Instructions:                   instructions,
+		ClientMetadata:                 clientMetadata,
 		OutputSchema:                   outputSchema,
 		ApprovalPolicy:                 approvalPolicy,
 		StreamEvents:                   streamCollector,
@@ -318,6 +337,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		MCPService:                     mcpService,
 		MCPTools:                       mcpTools,
 		MCPConnectors:                  mcpConnectors,
+		WebSearch:                      webSearchOptions,
 		ImageGeneration:                imageGenerationOptions,
 		ViewImage:                      execViewImageOptions(requestCWD(req), &modelInfo),
 		HostedTools:                    hostedTools,
@@ -427,6 +447,7 @@ type agentRunConfig struct {
 	TaskKind                       model.AgentTaskKind
 	ThreadID                       string
 	TurnID                         string
+	Originator                     string
 	PreviousResponseID             string
 	ParallelToolCalls              bool
 	ReasoningEffort                string
@@ -447,6 +468,7 @@ type agentRunConfig struct {
 	MCPService                     *mcp.MCPService
 	MCPTools                       []mcp.RuntimeToolInfo
 	MCPConnectors                  []mcp.RuntimeConnector
+	WebSearch                      *turn.WebSearchOptions
 	ImageGeneration                *turn.ImageGenerationOptions
 	ViewImage                      *tool.ViewImageOptions
 	HostedTools                    []any
@@ -498,6 +520,11 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 			return
 		}
 		if event.Item.Type == "tool_search_call" {
+			return
+		}
+		if streamAgentItemLooksLikeWebSearch(event.Item) {
+			// Standalone web.run uses the canonical web_search lifecycle emitted
+			// by ToolStarted/ToolCompleted, not a generic function-call cell.
 			return
 		}
 		// Rust creates command cells from the execution lifecycle, after the
@@ -653,9 +680,14 @@ func (c *execStreamEventCollector) AssistantMessage(response *model.AgentRespons
 }
 
 func isExecWebSearchInvocation(invocation *tool.Invocation) bool {
-	return invocation != nil &&
-		invocation.ToolName.Namespace == turn.WebSearchNamespace &&
-		invocation.ToolName.Name == turn.WebSearchRunTool
+	if invocation == nil {
+		return false
+	}
+	if invocation.ToolName.Namespace == turn.WebSearchNamespace &&
+		invocation.ToolName.Name == turn.WebSearchRunTool {
+		return true
+	}
+	return strings.TrimSpace(invocation.ToolName.Key()) == turn.WebSearchNamespace+"."+turn.WebSearchRunTool
 }
 
 func isExecImageGenerationInvocation(invocation *tool.Invocation) bool {
@@ -828,6 +860,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		TaskKind:                     run.TaskKind,
 		ThreadID:                     run.ThreadID,
 		TurnID:                       run.TurnID,
+		Originator:                   run.Originator,
 		PreviousResponseID:           run.PreviousResponseID,
 		ParallelToolCalls:            run.ParallelToolCalls,
 		ReasoningEffort:              run.ReasoningEffort,
@@ -901,6 +934,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.MCPConnectors = mcpConnectors
 	}
 	if run != nil {
+		options.WebSearch = run.WebSearch
 		options.ImageGeneration = run.ImageGeneration
 		options.ViewImage = run.ViewImage
 	}
@@ -983,8 +1017,8 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 	}, nil
 }
 
-func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
-	if r == nil || !r.UseResponsesAPI || standaloneImageGeneration != nil {
+func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, forceLiveWebSearch bool, standaloneWebSearch *turn.WebSearchOptions, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
+	if r == nil || !r.UseResponsesAPI {
 		return nil, nil
 	}
 	var snapshot *auth.AuthDotJSON
@@ -997,10 +1031,18 @@ func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.Resolv
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
 	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
-	if !imageGenerationHostedEnabledExec(*provider, runtimeProvider.Capabilities(), &modelInfo, snapshot, cfg.FeatureSettings()) {
-		return nil, nil
+	capabilities := runtimeProvider.Capabilities()
+	tools := []any{}
+	if standaloneWebSearch == nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
+		mode := execWebSearchMode(cfg, forceLiveWebSearch)
+		if hosted := turn.HostedWebSearchTool(mode, codexapi.SearchSettingsForMode(mode, execWebSearchToolConfig(cfg)), modelInfo.WebSearchToolType); hosted != nil {
+			tools = append(tools, hosted)
+		}
 	}
-	return []any{turn.HostedImageGenerationTool("png")}, nil
+	if standaloneImageGeneration == nil && imageGenerationHostedEnabledExec(*provider, capabilities, &modelInfo, snapshot, cfg.FeatureSettings()) {
+		tools = append(tools, turn.HostedImageGenerationTool("png"))
+	}
+	return tools, nil
 }
 
 func imageGenerationStandaloneEnabled(provider model.ProviderInfo, capabilities model.ProviderCapabilities, info *model.ModelInfo, snapshot *auth.AuthDotJSON, featureSettings map[string]bool) bool {
@@ -1974,7 +2016,7 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 		return protocol.ThreadItem{}
 	}
 	switch item.Type {
-	case "tool_search_call":
+	case "tool_search_call", "web_search_call":
 		return protocolWebSearchItemFromAgentItem(item)
 	case "function_call", "custom_tool_call":
 		return protocol.ToolCallItemWithCallID(
@@ -2024,6 +2066,12 @@ func streamAgentItemLooksLikeMCP(item *model.AgentItem) bool {
 	}
 	return strings.HasPrefix(strings.TrimSpace(item.Namespace), mcp.LegacyMCPToolNamePrefix) ||
 		strings.HasPrefix(strings.TrimSpace(item.Name), mcp.LegacyMCPToolNamePrefix)
+}
+
+func streamAgentItemLooksLikeWebSearch(item *model.AgentItem) bool {
+	return item != nil &&
+		strings.TrimSpace(item.Namespace) == turn.WebSearchNamespace &&
+		strings.TrimSpace(item.Name) == turn.WebSearchRunTool
 }
 
 func invocationLooksLikeMCP(invocation *tool.Invocation) bool {
@@ -2226,6 +2274,14 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 	if isViewImageExecution(execution) {
 		return nil
 	}
+	if isExecWebSearchExecution(execution) {
+		query, action := webSearchActionFromToolExecution(execution)
+		return []protocol.ThreadEvent{protocol.ItemCompleted(protocol.WebSearchItem(
+			firstNonEmpty(execution.Invocation.CallID, "web-search"),
+			query,
+			action,
+		))}
+	}
 	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
 		// Rust keeps nested code-mode tool calls inside the outer exec delegate
 		// boundary. They are observable in the exec result and rollout trace, but
@@ -2247,12 +2303,44 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 	return events
 }
 
+func isExecWebSearchExecution(execution *turn.ToolExecutionResult) bool {
+	return execution != nil && isExecWebSearchInvocation(execution.Invocation)
+}
+
+func webSearchActionFromToolExecution(execution *turn.ToolExecutionResult) (string, map[string]any) {
+	if execution == nil || execution.Output == nil {
+		return "", map[string]any{"type": "other"}
+	}
+	action, _ := execution.Output.Data["web_search_action"].(map[string]any)
+	action = cloneMap(action)
+	switch execStringFromAny(action["type"]) {
+	case "openPage":
+		action["type"] = "open_page"
+	case "findInPage":
+		action["type"] = "find_in_page"
+	}
+	query := execStringFromAny(action["query"])
+	if query == "" {
+		if queries := stringListFromAny(action["queries"]); len(queries) != 0 {
+			query = queries[0]
+		}
+	}
+	return query, webSearchActionWithDefault(action)
+}
+
 func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
 	if execution == nil || execution.Invocation == nil {
 		return nil
 	}
 	if isViewImageExecution(execution) {
 		return nil
+	}
+	if isExecWebSearchExecution(execution) {
+		return []protocol.ThreadEvent{protocol.ItemStarted(protocol.WebSearchItem(
+			firstNonEmpty(execution.Invocation.CallID, "web-search"),
+			"",
+			map[string]any{"type": "other"},
+		))}
 	}
 	if isCollabExecution(execution) {
 		item := collabToolCallProtocolItem(execution, "in_progress")
@@ -2309,6 +2397,14 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	}
 	if isViewImageExecution(execution) {
 		return protocol.ThreadEvent{}, false
+	}
+	if isExecWebSearchExecution(execution) {
+		query, action := webSearchActionFromToolExecution(execution)
+		return protocol.ItemCompleted(protocol.WebSearchItem(
+			firstNonEmpty(execution.Invocation.CallID, "web-search"),
+			query,
+			action,
+		)), true
 	}
 	if isPlanUpdateExecution(execution) {
 		items := todoItemsFromPlanUpdateOutput(execution.Output)
@@ -3187,10 +3283,10 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		resumeRecord := resumeContext.Record
 		newUserPrompt := firstNonEmpty(resumeContext.UserPrompt, userPrompt)
 		items := execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, map[string]any{"resumed": true})
-		items = append(items, sessionItemsForTurn(turnID, newUserPrompt, userInputs, result, now, map[string]any{"resumed": true}, &execImageGenerationContext{
+		items = append(items, sessionItemsForTurnWithMode(turnID, newUserPrompt, userInputs, result, now, map[string]any{"resumed": true}, &execImageGenerationContext{
 			CodexHome: r.CodexHome,
 			ThreadID:  string(resumeRecord.ID),
-		})...)
+		}, execRequestPlanMode(req))...)
 		updated, err := store.AppendItems(resumeRecord.ID, items)
 		if err != nil {
 			return "", err
@@ -3240,10 +3336,10 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 			MultiAgentVersion: execMultiAgentVersionForRequest(req),
 			Extra:             execTokenUsageMetadata(nil, tokenUsage),
 		},
-		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
+		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurnWithMode(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
 			CodexHome: r.CodexHome,
 			ThreadID:  threadID,
-		})...),
+		}, execRequestPlanMode(req))...),
 	}
 	if existing != nil {
 		record.CreatedAt = existing.CreatedAt
@@ -4140,6 +4236,10 @@ type execImageGenerationContext struct {
 }
 
 func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext) []session.Item {
+	return sessionItemsForTurnWithMode(turnID, userPrompt, userInputs, result, createdAt, extraMetadata, imageContext, false)
+}
+
+func sessionItemsForTurnWithMode(turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext, planMode bool) []session.Item {
 	suffix := strings.TrimPrefix(turnID, "turn-")
 	items := []session.Item{}
 	if content := sessionContentForTurnInputs(userPrompt, userInputs); len(content) > 0 {
@@ -4171,7 +4271,7 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 				}
 				item := sessionItemFromAgentItem(turnID, fallbackAssistantID, response.ResponseID, &response.Items[i], result.TimingProfile, createdAt, responseExtraMetadata, imageContext)
 				if item.ID != "" {
-					items = append(items, item)
+					items = append(items, execSessionItemsForCollaborationMode(turnID, item, planMode)...)
 					if instructions, ok := execImageGenerationInstructionsSessionItem(turnID, &item, createdAt, responseExtraMetadata); ok {
 						items = append(items, instructions)
 					}
@@ -4179,7 +4279,7 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 			}
 		}
 		if len(response.Items) == 0 && strings.TrimSpace(response.Message) != "" {
-			items = append(items, session.Item{
+			item := session.Item{
 				ID:         fallbackAssistantID,
 				Type:       "agent_message",
 				Role:       "assistant",
@@ -4188,7 +4288,8 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 				CreatedAt:  createdAt,
 				ResponseID: response.ResponseID,
 				Metadata:   addTimingProfileMetadata(sessionMetadata(turnID, responseExtraMetadata), result.TimingProfile),
-			})
+			}
+			items = append(items, execSessionItemsForCollaborationMode(turnID, item, planMode)...)
 		}
 		toolExecutions := execToolExecutionsForResponse(result.ToolExecutions, executionIndex, toolItemCount)
 		for i := range toolExecutions {
@@ -4203,6 +4304,82 @@ func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.Tur
 		executionIndex++
 	}
 	return items
+}
+
+func execRequestPlanMode(req *Request) bool {
+	if req == nil || req.CollaborationMode == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(req.CollaborationMode["mode"])), "plan")
+}
+
+func execSessionItemsForCollaborationMode(turnID string, item session.Item, planMode bool) []session.Item {
+	if !planMode || item.Type != "agent_message" {
+		return []session.Item{item}
+	}
+	visible, plan, ok := splitExecProposedPlanText(item.Text)
+	if !ok {
+		return []session.Item{item}
+	}
+	out := make([]session.Item, 0, 2)
+	if strings.TrimSpace(visible) != "" {
+		item.Text = visible
+		item.Content = []session.ContentPart{{Type: "output_text", Text: visible}}
+		out = append(out, item)
+	}
+	out = append(out, session.Item{
+		ID:         safeSessionItemID(turnID) + "-plan",
+		Type:       "plan",
+		Text:       plan,
+		CreatedAt:  item.CreatedAt,
+		ResponseID: item.ResponseID,
+		Metadata:   cloneExecAnyMap(item.Metadata),
+	})
+	return out
+}
+
+func splitExecProposedPlanText(text string) (string, string, bool) {
+	openStart, openEnd, ok := findExecPlanTagLine(text, "<proposed_plan>")
+	if !ok {
+		return text, "", false
+	}
+	closeStart, closeEnd, closed := findExecPlanTagLine(text[openEnd:], "</proposed_plan>")
+	if !closed {
+		return text[:openStart], text[openEnd:], true
+	}
+	closeStart += openEnd
+	closeEnd += openEnd
+	return text[:openStart] + text[closeEnd:], text[openEnd:closeStart], true
+}
+
+func findExecPlanTagLine(text string, tag string) (int, int, bool) {
+	searchFrom := 0
+	for {
+		index := strings.Index(text[searchFrom:], tag)
+		if index < 0 {
+			return 0, 0, false
+		}
+		index += searchFrom
+		if index > 0 && text[index-1] != '\n' {
+			searchFrom = index + 1
+			continue
+		}
+		after := index + len(tag)
+		if after == len(text) {
+			return index, after, true
+		}
+		switch text[after] {
+		case '\n':
+			return index, after + 1, true
+		case '\r':
+			if after+1 < len(text) && text[after+1] == '\n' {
+				return index, after + 2, true
+			}
+			return index, after + 1, true
+		default:
+			searchFrom = index + 1
+		}
+	}
 }
 
 func sessionContentForTurnInputs(userPrompt string, inputs []turn.TurnUserInput) []session.ContentPart {
@@ -4389,6 +4566,21 @@ func sessionItemFromAgentItem(turnID string, fallbackID string, responseID strin
 	}
 	if item.Type == "image_generation_call" {
 		return sessionItemFromImageGenerationAgentItem(turnID, fallbackID, responseID, item, timingProfile, createdAt, extraMetadata, imageContext)
+	}
+	if item.Type == "web_search_call" {
+		query, action := webSearchActionFromAgentItem(item)
+		raw, _ := json.Marshal(item)
+		return session.Item{
+			ID:         firstNonEmpty(item.ID, item.CallID, fallbackID),
+			Type:       "webSearch",
+			Role:       "assistant",
+			Text:       query,
+			CreatedAt:  createdAt,
+			Data:       map[string]any{"query": query, "action": action},
+			Metadata:   addTimingProfileMetadata(sessionMetadata(turnID, extraMetadata), timingProfile),
+			Raw:        raw,
+			ResponseID: responseID,
+		}
 	}
 	text := firstNonEmpty(item.Text, item.Arguments, item.Input)
 	metadata := addTimingProfileMetadata(sessionMetadata(turnID, extraMetadata), timingProfile)

@@ -4,12 +4,55 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestFetchIDEContextFromStreamRoundTrip(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		request, err := ReadFrame(server)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if request["method"] != "ide-context" {
+			serverErr <- errors.New("unexpected IDE context method")
+			return
+		}
+		params, _ := request["params"].(map[string]any)
+		if params["workspaceRoot"] != "/repo" {
+			serverErr <- errors.New("unexpected IDE workspace root")
+			return
+		}
+		serverErr <- WriteFrame(server, map[string]any{
+			"type":       "response",
+			"requestId":  request["requestId"],
+			"resultType": "success",
+			"result": map[string]any{"ideContext": map[string]any{
+				"activeFile": map[string]any{"path": "/repo/main.go", "label": "main.go", "selection": map[string]any{"start": map[string]any{"line": 0, "character": 0}, "end": map[string]any{"line": 0, "character": 0}}},
+			}},
+		})
+	}()
+
+	context, err := fetchIDEContextFromStream(client, "/repo", time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatalf("fetchIDEContextFromStream() error = %v", err)
+	}
+	if context.ActiveFile == nil || context.ActiveFile.Path != "/repo/main.go" {
+		t.Fatalf("IDE context = %#v", context)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("IDE context server error = %v", err)
+	}
+}
 
 type frameReadWriter struct {
 	reader *bytes.Reader

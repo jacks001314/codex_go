@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getScenario } from "./scenarios.ts";
 
+test("init scenario preserves an existing AGENTS.md with the Rust prompt", () => {
+  const scenario = getScenario("init-existing-agents-md");
+  assert.equal(scenario.optIn, true);
+  assert.match(scenario.turns[0]?.prompt ?? "", /do not overwrite or modify it/);
+  assert.match(scenario.turns[0]?.prompt ?? "", /200-400 words is optimal/);
+  assert.deepEqual(scenario.expected.forbiddenCompletedItemTypes, ["file_change"]);
+  assert.deepEqual(scenario.expected.compareWorkspacePaths, ["AGENTS.md"]);
+  assert.equal(scenario.expected.workspaceMutation, "none");
+});
+
 test("long-context structured output uses a strict service-compatible schema", () => {
   const scenario = getScenario("resume-long-context-tools");
   const schema: any = scenario.turns.at(-1)?.outputSchema;
@@ -61,4 +71,18 @@ test("Windows screen capture scenario preserves the requested prompt and audits 
   assert.equal(scenario.expected.requireSingleFinalAgentMessagePerTurn, undefined);
   assert.deepEqual(scenario.expected.workspaceChanges, [{ path: "screenshot.png", change: "added" }]);
   assert.deepEqual(scenario.expected.compareWorkspacePaths, []);
+});
+
+test("standalone weather search scenario exercises one web lifecycle without shell fallback", () => {
+  const scenario = getScenario("standalone-web-search-weather");
+  assert.equal(scenario.optIn, true);
+  assert.equal(scenario.codexConfig?.features?.standalone_web_search, true);
+  assert.equal(scenario.codexConfig?.features?.code_mode, true);
+  assert.equal(scenario.codexConfig?.features?.web_search_request, true);
+  assert.deepEqual(scenario.expected.exactCompletedItemTypeCounts, { web_search: 1, agent_message: 1 });
+  assert.equal(scenario.threadOptions.webSearchMode, undefined);
+  assert.match(scenario.turns[0]?.prompt ?? "", /one weather operation containing all four locations/);
+  assert.deepEqual(scenario.expected.requiredCompletedItemTypes, ["web_search", "agent_message"]);
+  assert.deepEqual(scenario.expected.forbiddenCompletedItemTypes, ["command_execution", "file_change"]);
+  assert.equal(scenario.expected.workspaceMutation, "none");
 });

@@ -1,142 +1,136 @@
 package tea
 
 import (
-	"strconv"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/appserver"
+	"codex_go/features"
+	tuiapp "codex_go/tui/app"
+	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 )
 
 const (
-	goalActionRead   = "read"
-	goalActionSet    = "set"
-	goalActionEdit   = "edit"
-	goalActionPause  = "pause"
-	goalActionResume = "resume"
-	goalActionClear  = "clear"
+	goalActionRead       = "read"
+	goalActionPrepareSet = "prepare_set"
+	goalActionSet        = "set"
+	goalActionEditRead   = "edit_read"
+	goalActionEdit       = "edit"
+	goalActionPause      = "pause"
+	goalActionResume     = "resume"
+	goalActionClear      = "clear"
 )
 
 func (m *Model) applyGoalCommand(args string) bubbletea.Cmd {
-	if m == nil {
+	if m == nil || !features.Enabled(m.featureSettings, "goals") {
 		return nil
 	}
-	action, rest := splitGoalCommandArgs(args)
-	switch action {
-	case "", "show", "status":
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
 		return m.readGoal()
-	case goalActionSet, "start":
-		objective, budget, ok := parseGoalObjectiveAndBudget(rest)
-		if !ok {
-			m.notice = "Usage: /goal set OBJECTIVE [--budget TOKENS]"
+	}
+	switch strings.ToLower(trimmed) {
+	case goalActionClear:
+		if _, ok := m.goalThreadIDForChange(); !ok {
 			return nil
 		}
-		status := appserver.GoalActive
-		return m.setGoal(goalActionSet, &objective, budget, &status)
-	case goalActionEdit:
-		objective, budget, ok := parseGoalObjectiveAndBudget(rest)
-		if !ok {
-			m.notice = "Usage: /goal edit OBJECTIVE [--budget TOKENS]"
-			return nil
-		}
-		status := appserver.GoalActive
-		if m.currentGoal != nil {
-			status = chatwidget.EditedGoalStatus(m.currentGoal.Status)
-		}
-		return m.setGoal(goalActionEdit, &objective, budget, &status)
-	case goalActionPause:
-		status := appserver.GoalPaused
-		return m.setGoal(goalActionPause, nil, nil, &status)
-	case goalActionResume:
-		status := appserver.GoalActive
-		return m.setGoal(goalActionResume, nil, nil, &status)
-	case goalActionClear, "delete":
 		return m.clearGoal()
+	case goalActionEdit:
+		return m.editGoal()
+	case goalActionPause:
+		if _, ok := m.goalThreadIDForChange(); !ok {
+			return nil
+		}
+		status := appserver.GoalPaused
+		return m.setGoal(goalActionPause, nil, nil, &status, false)
+	case goalActionResume:
+		if _, ok := m.goalThreadIDForChange(); !ok {
+			return nil
+		}
+		status := appserver.GoalActive
+		return m.setGoal(goalActionResume, nil, nil, &status, false)
 	default:
-		m.notice = "Usage: /goal [status|set|edit|pause|resume|clear]"
-		m.refreshTranscript()
-		return nil
+		return m.prepareGoalSet(trimmed)
 	}
-}
-
-func splitGoalCommandArgs(args string) (string, string) {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return "", ""
-	}
-	fields := strings.Fields(args)
-	if len(fields) == 0 {
-		return "", ""
-	}
-	action := strings.ToLower(fields[0])
-	rest := strings.TrimSpace(strings.TrimPrefix(args, fields[0]))
-	return action, rest
-}
-
-func parseGoalObjectiveAndBudget(args string) (string, *int64, bool) {
-	fields := strings.Fields(strings.TrimSpace(args))
-	if len(fields) == 0 {
-		return "", nil, false
-	}
-	objectiveParts := make([]string, 0, len(fields))
-	var budget *int64
-	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-		if field == "--budget" || field == "-b" {
-			if i+1 >= len(fields) {
-				return "", nil, false
-			}
-			parsed, err := strconv.ParseInt(strings.ReplaceAll(fields[i+1], "_", ""), 10, 64)
-			if err != nil || parsed <= 0 {
-				return "", nil, false
-			}
-			budget = &parsed
-			i++
-			continue
-		}
-		if strings.HasPrefix(field, "--budget=") {
-			raw := strings.TrimPrefix(field, "--budget=")
-			parsed, err := strconv.ParseInt(strings.ReplaceAll(raw, "_", ""), 10, 64)
-			if err != nil || parsed <= 0 {
-				return "", nil, false
-			}
-			budget = &parsed
-			continue
-		}
-		objectiveParts = append(objectiveParts, field)
-	}
-	objective := strings.TrimSpace(strings.Join(objectiveParts, " "))
-	return objective, budget, objective != ""
 }
 
 func (m *Model) readGoal() bubbletea.Cmd {
-	threadID, ok := m.goalThreadID()
-	if !ok {
+	threadID := m.goalThreadID()
+	if threadID == "" {
+		m.showGoalUsage("Example: /goal improve benchmark coverage")
 		return nil
 	}
-	if m.onReadGoal == nil {
-		m.showGoal(m.currentGoal, "Goal")
+	return m.readGoalForAction(goalActionRead, threadID, "")
+}
+
+func (m *Model) editGoal() bubbletea.Cmd {
+	threadID := m.goalThreadID()
+	if threadID == "" {
+		m.showNoGoalToEdit()
+		return nil
+	}
+	return m.readGoalForAction(goalActionEditRead, threadID, "")
+}
+
+func (m *Model) prepareGoalSet(objective string) bubbletea.Cmd {
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		return nil
+	}
+	threadID := m.goalThreadID()
+	if threadID == "" {
+		m.pendingGoalObjective = objective
+		m.notice = ""
+		m.refreshTranscript()
+		return nil
+	}
+	return m.readGoalForAction(goalActionPrepareSet, threadID, objective)
+}
+
+func (m *Model) readGoalForAction(action string, threadID string, objective string) bubbletea.Cmd {
+	requestID := m.nextGoalRequest()
+	m.pendingGoalRequestID = requestID
+	reader := m.onReadGoal
+	current := cloneGoalTea(m.currentGoal)
+	return func() bubbletea.Msg {
+		if reader == nil {
+			return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Objective: objective, Goal: current}
+		}
+		goal, err := reader(threadID)
+		return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Objective: objective, Goal: goal, Err: err}
+	}
+}
+
+func (m *Model) setGoal(action string, objective *string, tokenBudget *int64, status *appserver.GoalStatus, replacing bool) bubbletea.Cmd {
+	threadID := m.goalThreadID()
+	if threadID == "" {
 		return nil
 	}
 	requestID := m.nextGoalRequest()
 	m.pendingGoalRequestID = requestID
-	m.notice = "Loading goal..."
-	m.refreshTranscript()
+	objective = cloneStringPtrTea(objective)
+	tokenBudget = cloneInt64PtrTea(tokenBudget)
+	status = cloneGoalStatusPtr(status)
+	setter := m.onSetGoal
+	clearer := m.onClearGoal
+	current := cloneGoalTea(m.currentGoal)
 	return func() bubbletea.Msg {
-		goal, err := m.onReadGoal(threadID)
-		return GoalResultMsg{RequestID: requestID, Action: goalActionRead, ThreadID: threadID, Goal: goal, Err: err}
-	}
-}
-
-func (m *Model) setGoal(action string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) bubbletea.Cmd {
-	threadID, ok := m.goalThreadID()
-	if !ok {
-		return nil
-	}
-	if m.onSetGoal == nil {
-		goal := m.localGoal(threadID)
+		if replacing && clearer != nil {
+			if _, err := clearer(threadID); err != nil {
+				return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Objective: stringPtrValueTea(objective), Replacing: true, Err: err}
+			}
+		}
+		if setter != nil {
+			goal, err := setter(threadID, objective, tokenBudget, status)
+			return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Objective: stringPtrValueTea(objective), Goal: &goal, Replacing: replacing, Err: err}
+		}
+		goal := appserver.Goal{ThreadID: threadID, Status: appserver.GoalActive}
+		if !replacing && current != nil {
+			goal = *current
+		}
 		if objective != nil {
 			goal.Objective = strings.TrimSpace(*objective)
 		}
@@ -146,74 +140,175 @@ func (m *Model) setGoal(action string, objective *string, tokenBudget *int64, st
 		if status != nil {
 			goal.Status = *status
 		}
-		if goal.Objective == "" {
-			m.notice = "Goal objective is required."
-			m.refreshTranscript()
-			return nil
+		if strings.TrimSpace(goal.Objective) == "" {
+			return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Replacing: replacing, Err: appserver.ErrInvalidThreadExtraRequest}
 		}
-		m.applyGoalUpdated(goal, false)
-		m.showGoal(m.currentGoal, goalNotice(action))
-		return nil
-	}
-	requestID := m.nextGoalRequest()
-	m.pendingGoalRequestID = requestID
-	m.notice = goalLoadingNotice(action)
-	m.refreshTranscript()
-	objective = cloneStringPtrTea(objective)
-	tokenBudget = cloneInt64PtrTea(tokenBudget)
-	status = cloneGoalStatusPtr(status)
-	return func() bubbletea.Msg {
-		goal, err := m.onSetGoal(threadID, objective, tokenBudget, status)
-		if err != nil {
-			return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Err: err}
-		}
-		return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Goal: &goal}
+		return GoalResultMsg{RequestID: requestID, Action: action, ThreadID: threadID, Objective: stringPtrValueTea(objective), Goal: &goal, Replacing: replacing}
 	}
 }
 
 func (m *Model) clearGoal() bubbletea.Cmd {
-	threadID, ok := m.goalThreadID()
-	if !ok {
-		return nil
-	}
-	if m.onClearGoal == nil {
-		m.applyGoalCleared(threadID, false)
-		m.showGoal(nil, "Cleared goal")
+	threadID := m.goalThreadID()
+	if threadID == "" {
 		return nil
 	}
 	requestID := m.nextGoalRequest()
 	m.pendingGoalRequestID = requestID
-	m.notice = "Clearing goal..."
-	m.refreshTranscript()
+	clearer := m.onClearGoal
+	hadGoal := m.currentGoal != nil
 	return func() bubbletea.Msg {
-		cleared, err := m.onClearGoal(threadID)
+		if clearer == nil {
+			return GoalResultMsg{RequestID: requestID, Action: goalActionClear, ThreadID: threadID, Cleared: hadGoal}
+		}
+		cleared, err := clearer(threadID)
 		return GoalResultMsg{RequestID: requestID, Action: goalActionClear, ThreadID: threadID, Cleared: cleared, Err: err}
 	}
 }
 
-func (m *Model) applyGoalResult(msg GoalResultMsg) {
+func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 	if m == nil || m.pendingGoalRequestID != msg.RequestID {
-		return
+		return nil
 	}
 	m.pendingGoalRequestID = 0
 	if msg.Err != nil {
-		m.notice = "Goal error: " + strings.TrimSpace(msg.Err.Error())
-		m.refreshTranscript()
-		return
+		action := "read"
+		switch msg.Action {
+		case goalActionPause, goalActionResume:
+			action = "update"
+		case goalActionClear:
+			action = "clear"
+		case goalActionSet, goalActionEdit:
+			action = "set"
+			if msg.Replacing {
+				action = "replace"
+			}
+		}
+		m.showGoalError(tuiapp.ThreadGoalErrorMessage(action, msg.Err))
+		return nil
 	}
-	if msg.Action == goalActionClear {
+
+	switch msg.Action {
+	case goalActionRead:
+		if msg.Goal == nil {
+			m.applyGoalCleared(msg.ThreadID, false)
+			m.showGoalUsage("No goal is currently set.")
+			return nil
+		}
+		m.applyGoalUpdated(*msg.Goal, false)
+		m.showGoal(msg.Goal)
+	case goalActionEditRead:
+		if msg.Goal == nil {
+			m.showNoGoalToEdit()
+			return nil
+		}
+		m.applyGoalUpdated(*msg.Goal, false)
+		m.openGoalEditPrompt(*msg.Goal)
+	case goalActionPrepareSet:
+		decision := tuiapp.SetThreadGoalDraftPreflightDecision(true, msg.Goal, nil, tuiapp.ThreadGoalSetConfirmIfExists, "", nil)
+		if decision.ShowReplaceConfirmation {
+			m.openGoalReplaceConfirmation(msg.Objective)
+			return nil
+		}
+		status := appserver.GoalActive
+		return m.setGoal(goalActionSet, &msg.Objective, nil, &status, decision.ReplacingGoal)
+	case goalActionClear:
 		if msg.Cleared {
 			m.applyGoalCleared(msg.ThreadID, false)
 		}
-		m.showGoal(nil, "Cleared goal")
+		decision := tuiapp.ThreadGoalClearDecision(true, msg.Cleared, nil)
+		m.showGoalInfo(decision.InfoMessage, decision.Hint)
+	case goalActionSet, goalActionEdit:
+		if msg.Goal == nil {
+			return nil
+		}
+		m.applyGoalUpdated(*msg.Goal, false)
+		decision := tuiapp.ThreadGoalSetSuccessDecision(true, *msg.Goal)
+		m.showGoalInfo(decision.InfoMessage, decision.Hint)
+	case goalActionPause, goalActionResume:
+		if msg.Goal == nil {
+			return nil
+		}
+		m.applyGoalUpdated(*msg.Goal, false)
+		decision := tuiapp.ThreadGoalStatusUpdateDecision(true, msg.Goal, nil)
+		m.showGoalInfo(decision.InfoMessage, decision.Hint)
+	}
+	return nil
+}
+
+func (m *Model) openGoalReplaceConfirmation(objective string) {
+	view := tuiapp.ReplaceThreadGoalConfirmation(m.goalThreadID(), objective)
+	m.modal = &modalState{
+		id:            "replace-goal",
+		kind:          ModalKindGoal,
+		title:         view.Title,
+		body:          view.Subtitle,
+		footerHint:    view.FooterHint,
+		goalObjective: objective,
+		options: []ModalOption{
+			{ID: "replace", Label: view.ReplaceName, Description: view.ReplaceHint},
+			{ID: "cancel", Label: view.CancelName, Description: view.CancelHint},
+		},
+	}
+	m.notice = ""
+}
+
+func (m *Model) applyGoalModalOption(optionID string, objective string) bubbletea.Cmd {
+	if strings.TrimSpace(optionID) != "replace" {
+		return nil
+	}
+	status := appserver.GoalActive
+	return m.setGoal(goalActionSet, &objective, nil, &status, true)
+}
+
+func (m *Model) openGoalEditPrompt(goal appserver.Goal) {
+	view := chatwidget.NewGoalEditPromptView(goal)
+	prompt := bottompane.NewCustomPromptView(view.Title, view.Placeholder, view.InitialText, "")
+	m.modal = &modalState{
+		id:           "edit-goal",
+		kind:         ModalKindGoal,
+		customPrompt: prompt,
+		customPromptSubmit: func(objective string) bubbletea.Cmd {
+			return m.setGoal(goalActionEdit, &objective, view.TokenBudget, &view.Status, false)
+		},
+	}
+	m.notice = ""
+}
+
+func (m *Model) showGoal(goal *appserver.Goal) {
+	if m == nil || m.State == nil || goal == nil {
 		return
 	}
-	if msg.Goal != nil {
-		m.applyGoalUpdated(*msg.Goal, false)
-	} else if msg.Action == goalActionRead {
-		m.applyGoalCleared(msg.ThreadID, false)
+	lines := chatwidget.GoalSummaryLines(*goal)
+	m.State.AddHistoryLines(lines, lines)
+	m.notice = ""
+	m.refreshTranscript()
+}
+
+func (m *Model) showGoalUsage(hint string) {
+	m.showGoalInfo(tuiapp.ThreadGoalUsageMessage, hint)
+}
+
+func (m *Model) showNoGoalToEdit() {
+	m.showGoalError("No goal is currently set.")
+	m.showGoalUsage("Create a goal before editing it.")
+}
+
+func (m *Model) showGoalInfo(message string, hint string) {
+	if m == nil {
+		return
 	}
-	m.showGoal(msg.Goal, goalNotice(msg.Action))
+	m.addHistoryCell(historycell.NewInfoEvent(strings.TrimSpace(message), strings.TrimSpace(hint)))
+	m.notice = strings.TrimSpace(message)
+	m.refreshTranscript()
+}
+
+func (m *Model) showGoalError(message string) {
+	if m == nil {
+		return
+	}
+	m.addErrorHistoryMessage(message)
+	m.notice = strings.TrimSpace(message)
+	m.refreshTranscript()
 }
 
 func (m *Model) applyGoalUpdated(goal appserver.Goal, notify bool) {
@@ -250,62 +345,20 @@ func (m *Model) applyGoalCleared(threadID string, notify bool) {
 	}
 }
 
-func (m *Model) showGoal(goal *appserver.Goal, title string) {
-	if m == nil {
-		return
+func (m *Model) goalThreadID() string {
+	if m == nil || m.State == nil {
+		return ""
 	}
-	lines := []string{strings.TrimSpace(title)}
-	if lines[0] == "" {
-		lines[0] = "Goal"
-	}
-	if goal == nil {
-		lines = append(lines, "No goal set.", "", "Commands: /goal set OBJECTIVE [--budget TOKENS]")
-	} else {
-		lines = chatwidget.GoalSummaryLines(*goal)
-		if strings.TrimSpace(title) != "" && strings.TrimSpace(title) != "Goal" {
-			lines = append([]string{strings.TrimSpace(title), ""}, lines...)
-		}
-	}
-	m.State.AddHistoryLines(lines, lines)
-	m.notice = strings.TrimSpace(title)
-	if m.notice == "" {
-		m.notice = "Goal"
-	}
-	m.refreshTranscript()
+	return strings.TrimSpace(m.State.ThreadID)
 }
 
-func (m *Model) goalThreadID() (string, bool) {
-	if m == nil || m.State == nil {
-		return "", false
-	}
-	threadID := strings.TrimSpace(m.State.ThreadID)
+func (m *Model) goalThreadIDForChange() (string, bool) {
+	threadID := m.goalThreadID()
 	if threadID == "" {
-		m.notice = "Goal requires an active thread."
-		m.refreshTranscript()
+		m.showGoalUsage("The session must start before you can change a goal.")
 		return "", false
 	}
 	return threadID, true
-}
-
-func (m *Model) localGoal(threadID string) appserver.Goal {
-	if m != nil && m.currentGoal != nil {
-		goal := *m.currentGoal
-		goal.ThreadID = strings.TrimSpace(firstNonEmpty(goal.ThreadID, threadID))
-		if goal.Status == "" {
-			goal.Status = appserver.GoalActive
-		}
-		return goal
-	}
-	now := int64(0)
-	if m != nil {
-		now = m.currentTime().Unix()
-	}
-	return appserver.Goal{
-		ThreadID:  strings.TrimSpace(threadID),
-		Status:    appserver.GoalActive,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
 }
 
 func (m *Model) goalTaskProgress() string {
@@ -330,34 +383,6 @@ func (m *Model) nextGoalRequest() uint64 {
 	return m.nextGoalRequestID
 }
 
-func goalLoadingNotice(action string) string {
-	switch action {
-	case goalActionPause:
-		return "Pausing goal..."
-	case goalActionResume:
-		return "Resuming goal..."
-	case goalActionEdit:
-		return "Updating goal..."
-	default:
-		return "Setting goal..."
-	}
-}
-
-func goalNotice(action string) string {
-	switch action {
-	case goalActionPause:
-		return "Paused goal"
-	case goalActionResume:
-		return "Resumed goal"
-	case goalActionEdit:
-		return "Updated goal"
-	case goalActionSet:
-		return "Set goal"
-	default:
-		return "Goal"
-	}
-}
-
 func cloneGoalTea(goal *appserver.Goal) *appserver.Goal {
 	if goal == nil {
 		return nil
@@ -373,4 +398,11 @@ func cloneGoalStatusPtr(status *appserver.GoalStatus) *appserver.GoalStatus {
 	}
 	clone := *status
 	return &clone
+}
+
+func stringPtrValueTea(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }

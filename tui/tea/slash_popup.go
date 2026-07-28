@@ -16,7 +16,6 @@ const slashPopupMaxRows = 8
 type slashCommandPopupItem struct {
 	Name        string
 	Description string
-	Aliases     []string
 }
 
 type slashCommandPopup struct {
@@ -35,12 +34,13 @@ func (m *Model) refreshSlashPopup() {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
+	previousQuery := m.slashPopup.Query
 	previous := m.selectedSlashPopupName()
 	items := filterSlashPopupItems(m.slashPopupCatalog(), query)
 	selected := 0
 	if len(items) == 0 {
 		selected = -1
-	} else if previous != "" {
+	} else if previous != "" && previousQuery == query {
 		for i, item := range items {
 			if item.Name == previous {
 				selected = i
@@ -84,74 +84,53 @@ func slashPopupQuery(text string) (string, bool) {
 func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashCommandPopupItem {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
-		return append([]slashCommandPopupItem(nil), items...)
+		out := make([]slashCommandPopupItem, 0, len(items))
+		for _, item := range items {
+			if popupAliasCommandTea(item.Name) {
+				continue
+			}
+			out = append(out, item)
+		}
+		return out
 	}
 	exact := []slashCommandPopupItem{}
 	prefix := []slashCommandPopupItem{}
 	for _, item := range items {
-		names := append([]string{item.Name}, item.Aliases...)
-		for _, name := range names {
-			name = strings.ToLower(strings.TrimSpace(name))
-			switch {
-			case name == query:
-				exact = append(exact, item)
-				goto next
-			case strings.HasPrefix(name, query):
-				prefix = append(prefix, item)
-				goto next
-			}
+		name := strings.ToLower(strings.TrimSpace(item.Name))
+		switch {
+		case name == query:
+			exact = append(exact, item)
+		case strings.HasPrefix(name, query):
+			prefix = append(prefix, item)
 		}
-	next:
 	}
 	return append(exact, prefix...)
 }
 
-func slashPopupCatalog() []slashCommandPopupItem {
-	frames := map[string]codextui.SlashCommandFrame{}
-	for _, frame := range codextui.SlashCommandFrames() {
-		frames[frame.Name] = frame
-	}
-
-	seen := map[string]bool{}
-	out := []slashCommandPopupItem{}
-	for _, name := range rustSlashPopupOrder {
-		frame, ok := frames[name]
-		if !ok {
-			continue
-		}
-		out = append(out, slashPopupItemFromFrame(frame))
-		seen[name] = true
-	}
-	for _, frame := range codextui.SlashCommandFrames() {
-		if seen[frame.Name] {
-			continue
-		}
-		out = append(out, slashPopupItemFromFrame(frame))
-	}
-	return out
-}
-
 func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
-	items := slashPopupCatalog()
-	if fastTier := m.fastServiceTierCommand(); m != nil && features.Enabled(m.featureSettings, "fast_mode") && fastTier != nil {
-		fast := slashCommandPopupItem{Name: strings.ToLower(fastTier.Name), Description: fastTier.Description}
-		if len(items) > 0 && items[0].Name == "model" {
-			items = append(items[:1], append([]slashCommandPopupItem{fast}, items[1:]...)...)
-		} else {
-			items = append([]slashCommandPopupItem{fast}, items...)
+	if m == nil {
+		return nil
+	}
+	flags := bottompane.BuiltinCommandFlags{
+		CollaborationModesEnabled:   features.Enabled(m.featureSettings, "collaboration_modes"),
+		ConnectorsEnabled:           features.Enabled(m.featureSettings, "apps") && m.hasChatGPTAccount,
+		PluginsCommandEnabled:       features.Enabled(m.featureSettings, "plugins"),
+		TokenActivityCommandEnabled: m.hasChatGPTAccount,
+		ServiceTierCommandsEnabled:  features.Enabled(m.featureSettings, "fast_mode"),
+		GoalCommandEnabled:          features.Enabled(m.featureSettings, "goals"),
+		PersonalityCommandEnabled:   features.Enabled(m.featureSettings, "personality"),
+		AllowElevateSandbox:         m.windowsSandboxSetup != nil,
+		SideConversationActive:      m.inSideConversation(),
+	}
+	commands := bottompane.CommandsForInput(flags, m.serviceTierCommands)
+	items := make([]slashCommandPopupItem, 0, len(commands))
+	for _, command := range commands {
+		if command.Kind == bottompane.SlashCommandItemBuiltin && slashPopupHiddenCommand(command.Name) {
+			continue
 		}
+		items = append(items, slashPopupItemFromCommand(command))
 	}
-	if m == nil || !m.inSideConversation() {
-		return items
-	}
-	out := make([]slashCommandPopupItem, 0, len(items))
-	for _, item := range items {
-		invocation, ok := codextui.ParseCommand("/" + item.Name)
-		if ok && sideSlashCommandAllowed(invocation.Command) {
-			out = append(out, item)
-		}
-	}
-	return out
+	return items
 }
 
 func (m *Model) fastServiceTierCommand() *bottompane.ServiceTierCommand {
@@ -167,93 +146,28 @@ func (m *Model) fastServiceTierCommand() *bottompane.ServiceTierCommand {
 	return nil
 }
 
-func slashPopupItemFromFrame(frame codextui.SlashCommandFrame) slashCommandPopupItem {
-	description := frame.Description
-	if override := rustSlashPopupDescriptions[frame.Name]; override != "" {
-		description = override
+func slashPopupItemFromCommand(command bottompane.SlashCommandItem) slashCommandPopupItem {
+	description := command.Description
+	if command.Kind == bottompane.SlashCommandItemServiceTier && command.ServiceTier != nil {
+		description = command.ServiceTier.Description
 	}
 	return slashCommandPopupItem{
-		Name:        frame.Name,
+		Name:        command.CommandText(),
 		Description: description,
-		Aliases:     append([]string(nil), frame.Aliases...),
 	}
 }
 
-func slashPopupHiddenCommand(string) bool { return false }
-
-var rustSlashPopupOrder = []string{
-	"model",
-	"ide",
-	"permissions",
-	"keymap",
-	"vim",
-	"sandbox-add-read-dir",
-	"setup-default-sandbox",
-	"experimental",
-	"approve",
-	"memories",
-	"skills",
-	"import",
-	"hooks",
-	"review",
-	"rename",
-	"new",
-	"archive",
-	"delete",
-	"resume",
-	"fork",
-	"app",
-	"init",
-	"compact",
-	"plan",
-	"goal",
-	"agent",
-	"side",
-	"btw",
-	"copy",
-	"raw",
-	"diff",
-	"mention",
-	"status",
-	"usage",
-	"debug-config",
-	"title",
-	"statusline",
-	"theme",
-	"pets",
-	"mcp",
-	"apps",
-	"plugins",
-	"logout",
-	"quit",
-	"exit",
-	"feedback",
-	"rollout",
-	"ps",
-	"stop",
-	"clear",
-	"personality",
-	"test-approval",
-	"multi-agents",
-	"debug-m-drop",
-	"debug-m-update",
+func slashPopupHiddenCommand(name string) bool {
+	return name == "apps" || strings.HasPrefix(name, "debug")
 }
 
-var rustSlashPopupDescriptions = map[string]string{
-	"model":                "choose what model and reasoning effort to use",
-	"ide":                  "include current selection, open files, and other context from your IDE",
-	"permissions":          "choose what Codex is allowed to do",
-	"keymap":               "remap TUI shortcuts",
-	"vim":                  "toggle Vim mode for the composer",
-	"sandbox-add-read-dir": "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>",
-	"experimental":         "toggle experimental features",
-	"review":               "review my current changes and find issues",
-	"side":                 "start a side conversation in an ephemeral fork",
-	"copy":                 "copy last response as markdown",
-	"raw":                  "toggle raw scrollback mode for copy-friendly terminal selection",
-	"diff":                 "show git diff (including untracked files)",
-	"status":               "show current session configuration and token usage",
-	"mcp":                  "list configured MCP tools; use /mcp verbose for details",
+func popupAliasCommandTea(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "quit", "btw":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) updateSlashPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {

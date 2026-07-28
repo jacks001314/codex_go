@@ -157,6 +157,64 @@ func TestRuntimeInjectsToolsAndRunsLoop(t *testing.T) {
 	}
 }
 
+func TestRuntimeAugmentsWebRunDescriptionOnlyWithCodeMode(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		codeMode bool
+	}{
+		{name: "code_mode", codeMode: true},
+		{name: "direct_tools"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			agent := &singleTurnAgent{response: &model.AgentResponse{
+				Message: "done",
+				Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "done"}},
+			}}
+			registry := tool.NewRegistry()
+			if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+				Name:                 tool.NamespacedName(WebSearchNamespace, WebSearchRunTool),
+				Description:          "Search the web",
+				NamespaceDescription: "Tool for accessing the internet.",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"weather": map[string]any{
+							"type": "array",
+							"items": map[string]any{
+								"type":       "object",
+								"properties": map[string]any{"location": map[string]any{"type": "string"}},
+								"required":   []string{"location"},
+							},
+						},
+					},
+				},
+			}, nil)); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.codeMode {
+				exec, wait := tool.NewCodeModeExecutors(registry)
+				if err := registry.Register(exec); err != nil {
+					t.Fatal(err)
+				}
+				if err := registry.Register(wait); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "weather"}); err != nil {
+				t.Fatal(err)
+			}
+			description := runtimeNamespacedToolDescription(agent.requests[0].Tools, WebSearchNamespace, WebSearchRunTool)
+			if testCase.codeMode && !strings.Contains(description, "declare const tools: { web__run(args:") {
+				t.Fatalf("code-mode description = %q", description)
+			}
+			if !testCase.codeMode && description != "Search the web" {
+				t.Fatalf("direct description = %q", description)
+			}
+		})
+	}
+}
+
 func TestRuntimeWithoutRouterPreservesPromptAndResponseInputItems(t *testing.T) {
 	agent := &singleTurnAgent{response: &model.AgentResponse{
 		Message: "assistant answer",
@@ -398,4 +456,21 @@ func runtimeRequestToolsContainType(tools []any, toolType string) bool {
 		}
 	}
 	return false
+}
+
+func runtimeNamespacedToolDescription(tools []any, namespace string, name string) string {
+	for _, value := range tools {
+		namespaceTool, ok := value.(map[string]any)
+		if !ok || namespaceTool["type"] != "namespace" || namespaceTool["name"] != namespace {
+			continue
+		}
+		children, _ := namespaceTool["tools"].([]map[string]any)
+		for _, child := range children {
+			if child["name"] == name {
+				description, _ := child["description"].(string)
+				return description
+			}
+		}
+	}
+	return ""
 }

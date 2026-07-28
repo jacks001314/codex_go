@@ -1,6 +1,7 @@
 package bottompane
 
 import (
+	"runtime"
 	"strings"
 
 	codextui "codex_go/tui"
@@ -47,6 +48,8 @@ func (i SlashCommandItem) SupportsInlineArgs() bool {
 	switch i.Command {
 	case codextui.CommandReview,
 		codextui.CommandRename,
+		codextui.CommandNew,
+		codextui.CommandClear,
 		codextui.CommandPlan,
 		codextui.CommandGoal,
 		codextui.CommandIde,
@@ -117,27 +120,13 @@ type BuiltinCommandFlags struct {
 
 func BuiltinsForInput(flags BuiltinCommandFlags) []SlashCommandItem {
 	frames := slashCommandFramesByName()
-	seen := map[string]bool{}
 	out := []SlashCommandItem{}
 	for _, name := range rustSlashCommandOrder {
 		frame, ok := frames[name]
 		if !ok {
 			continue
 		}
-		seen[name] = true
 		out = appendBuiltinFrameIfAvailable(out, frame, false, flags)
-		for _, alias := range frame.Aliases {
-			out = appendBuiltinFrameIfAvailable(out, aliasFrame(frame, alias), true, flags)
-		}
-	}
-	for _, frame := range codextui.SlashCommandFrames() {
-		if seen[frame.Name] {
-			continue
-		}
-		out = appendBuiltinFrameIfAvailable(out, frame, false, flags)
-		for _, alias := range frame.Aliases {
-			out = appendBuiltinFrameIfAvailable(out, aliasFrame(frame, alias), true, flags)
-		}
 	}
 	return out
 }
@@ -179,18 +168,33 @@ func FindBuiltinCommand(name string, flags BuiltinCommandFlags) (SlashCommandIte
 	lookupFlags := flags
 	lookupFlags.TokenActivityCommandEnabled = true
 	lookupFlags.SideConversationActive = false
-	for _, item := range BuiltinsForInput(lookupFlags) {
-		if item.CommandText() == name {
-			return item, true
-		}
-		for _, alias := range item.Aliases {
-			if alias == name {
-				aliasItem := item
-				aliasItem.Name = alias
-				aliasItem.IsAlias = true
-				return aliasItem, true
+	for _, frame := range codextui.SlashCommandFrames() {
+		isAlias := false
+		matches := frame.Name == name
+		if !matches {
+			for _, alias := range frame.Aliases {
+				if alias == name {
+					matches = true
+					isAlias = true
+					break
+				}
 			}
 		}
+		if !matches || !builtinFrameAvailable(frame, lookupFlags) {
+			continue
+		}
+		item := SlashCommandItem{
+			Kind:        SlashCommandItemBuiltin,
+			Name:        frame.Name,
+			Command:     frame.Command,
+			Aliases:     append([]string(nil), frame.Aliases...),
+			Description: slashCommandDescription(frame),
+			IsAlias:     isAlias,
+		}
+		if isAlias {
+			item.Name = name
+		}
+		return item, true
 	}
 	return SlashCommandItem{}, false
 }
@@ -247,6 +251,14 @@ func appendBuiltinFrameIfAvailable(out []SlashCommandItem, frame codextui.SlashC
 
 func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinCommandFlags) bool {
 	switch frame.Command {
+	case codextui.CommandSandboxReadRoot:
+		if runtime.GOOS != "windows" {
+			return false
+		}
+	case codextui.CommandApp:
+		if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+			return false
+		}
 	case codextui.CommandElevateSandbox:
 		if !flags.AllowElevateSandbox {
 			return false
@@ -288,12 +300,6 @@ func slashCommandFramesByName() map[string]codextui.SlashCommandFrame {
 		frames[frame.Name] = frame
 	}
 	return frames
-}
-
-func aliasFrame(frame codextui.SlashCommandFrame, alias string) codextui.SlashCommandFrame {
-	frame.Name = alias
-	frame.Aliases = nil
-	return frame
 }
 
 func slashCommandDescription(frame codextui.SlashCommandFrame) string {
@@ -409,7 +415,7 @@ var rustSlashCommandOrder = []string{
 	"clear",
 	"personality",
 	"test-approval",
-	"multi-agents",
+	"subagents",
 	"debug-m-drop",
 	"debug-m-update",
 }
@@ -467,7 +473,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"clear":                 "clear the terminal and start a new chat",
 	"personality":           "choose a communication style for Codex",
 	"test-approval":         "test approval request",
-	"multi-agents":          "switch the active agent thread",
+	"subagents":             "switch the active agent thread",
 	"debug-m-drop":          "DO NOT USE",
 	"debug-m-update":        "DO NOT USE",
 }

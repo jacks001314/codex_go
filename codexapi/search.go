@@ -214,4 +214,5 @@ const (
 type SearchResponse struct {
 	EncryptedOutput *string `json:"encrypted_output,omitempty"`
 	Output          string  `json:"output"`
+	Results         []any   `json:"results,omitempty"`
 }

@@ -230,6 +230,7 @@ type responsesAgentOutputItem struct {
 	Result    string                       `json:"result"`
 	Execution string                       `json:"execution"`
 	Search    map[string]any               `json:"search"`
+	Action    map[string]any               `json:"action"`
 }
 
 type responsesAgentContentBlock struct {
@@ -1554,7 +1555,7 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		return nil, false
 	}
 	switch output.Type {
-	case "function_call", "custom_tool_call", "tool_search_call":
+	case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
 	default:
 		return nil, false
 	}
@@ -1576,9 +1577,13 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		Input:     output.Input,
 		Execution: output.Execution,
 		Search:    cloneResponseSearch(output.Search),
+		Status:    output.Status,
 	}
 	if item.Type == "tool_search_call" && len(item.Search) == 0 {
 		item.Search = responseArgumentsMap(output.Arguments)
+	}
+	if item.Type == "web_search_call" {
+		item.Search = cloneResponseSearch(output.Action)
 	}
 	return item, true
 }

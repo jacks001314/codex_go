@@ -41,6 +41,18 @@ func TestExternalAgentConfigMigrationModelHelpersMatchRust(t *testing.T) {
 	if !ok || detail != "5 skills: alpha, beta, gamma, delta" {
 		t.Fatalf("skill detail = %q, %v", detail, ok)
 	}
+	memory := config.ExternalAgentConfigMigrationItem{
+		ItemType: config.MigrationMemory,
+		Details: &config.MigrationDetails{MemoryFiles: []config.MemoryFileMigration{
+			{SourceFile: "MEMORY.md"}, {SourceFile: "notes.md"},
+		}},
+	}
+	if got := ExternalAgentConfigMigrationItemLabel(memory); got != "Memory" {
+		t.Fatalf("memory label = %q", got)
+	}
+	if detail, ok := ExternalAgentConfigMigrationItemDetail(memory); !ok || detail != "2 memories: MEMORY.md, notes.md" {
+		t.Fatalf("memory detail = %q, %v", detail, ok)
+	}
 }
 
 func TestExternalAgentConfigMigrationScreenProceedAndToggleMatchRust(t *testing.T) {

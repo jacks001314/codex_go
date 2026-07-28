@@ -8,6 +8,7 @@ import (
 	"codex_go/features"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 )
 
 const (
@@ -375,6 +376,12 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Err != nil {
 		if msg.Kind == settingsWriteKindServiceTier {
 			m.notice = "Failed to save default service tier: " + msg.Err.Error()
+		} else if msg.Kind == settingsWriteKindMemories {
+			if strings.HasPrefix(msg.Err.Error(), "Saved memory settings,") {
+				m.notice = msg.Err.Error()
+			} else {
+				m.notice = "Failed to save memory settings: " + msg.Err.Error()
+			}
 		} else {
 			m.notice = "Failed to save settings: " + msg.Err.Error()
 		}
@@ -383,6 +390,15 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if msg.Result.FeatureSettings != nil {
 		m.featureSettings = cloneBoolMapTea(msg.Result.FeatureSettings)
+	}
+	if msg.Result.UseMemories != nil {
+		m.useMemories = *msg.Result.UseMemories
+	}
+	if msg.Result.GenerateMemories != nil {
+		m.generateMemories = *msg.Result.GenerateMemories
+	}
+	if msg.Result.FeedbackEnabled != nil {
+		m.feedbackEnabled = *msg.Result.FeedbackEnabled
 	}
 	if strings.TrimSpace(string(msg.Result.Personality)) != "" {
 		m.personality = normalizePersonalityTea(msg.Result.Personality)
@@ -417,12 +433,22 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if strings.TrimSpace(msg.Result.SessionPickerView) != "" {
 		m.sessionPickerDensity = normalizeSessionPickerDensityTea(msg.Result.SessionPickerView)
 	}
+	if msg.Kind == settingsWriteKindMemoriesEnable {
+		m.notice = ""
+		m.applyHistoryCell(historycell.NewWarningEvent("Memories will be enabled in the next session."))
+		return
+	}
+	if msg.Kind == settingsWriteKindMemories && strings.TrimSpace(msg.Result.FilePath) == "" {
+		m.notice = "Memory settings updated."
+	}
 	if strings.TrimSpace(msg.Result.FilePath) != "" {
 		switch msg.Kind {
 		case settingsWriteKindPersonality:
 			m.notice = "Personality set to " + chatwidget.PersonalityLabel(m.personality) + ". Saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		case settingsWriteKindExperimental:
 			m.notice = "Experimental features saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
+		case settingsWriteKindMemories:
+			m.notice = "Memory settings saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		case settingsWriteKindRateLimitModelNudge:
 			m.notice = "Rate limit model switch reminders hidden. Saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		case settingsWriteKindTheme:

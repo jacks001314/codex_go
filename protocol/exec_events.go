@@ -187,6 +187,14 @@ func AgentMessageItemWithPhase(id, text, phase string) ThreadItem {
 	}
 }
 
+func PlanItem(id, text string) ThreadItem {
+	return ThreadItem{ID: id, Type: "plan", Text: text}
+}
+
+func PlanDelta(itemID, text string) ThreadEvent {
+	return ThreadEvent{Type: "item.plan.delta", Delta: &Delta{ItemID: itemID, Text: text}}
+}
+
 func ImageGenerationItem(id string, status string, revisedPrompt string, savedPath string) ThreadItem {
 	return ThreadItem{
 		ID:            id,

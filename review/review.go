@@ -61,7 +61,15 @@ func BuildPromptFromOptions(opts cli.ReviewOptions, stdin io.Reader, provider Di
 }
 
 func PromptForTarget(target Target) string {
-	prompt, err := promptForReviewTarget(target, nil)
+	return PromptForTargetInDir(target, "")
+}
+
+func PromptForTargetInDir(target Target, dir string) string {
+	var provider DiffProvider
+	if strings.TrimSpace(dir) != "" {
+		provider = &GitDiffProvider{Dir: strings.TrimSpace(dir)}
+	}
+	prompt, err := promptForReviewTarget(target, provider)
 	if err != nil {
 		return ""
 	}

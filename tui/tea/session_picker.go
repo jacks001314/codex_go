@@ -184,6 +184,72 @@ func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelectio
 	m.notice = ""
 }
 
+func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelectionKind) {
+	if m == nil || m.State == nil {
+		return
+	}
+	selection := codextui.SessionSelection{
+		Kind: kind,
+		Target: codextui.SessionTarget{
+			ThreadID: strings.TrimSpace(m.State.ThreadID),
+		},
+	}
+	title := "Archive this session?"
+	body := "Are you sure? This will archive the current session and exit Codex"
+	confirmLabel := "Yes, archive and exit"
+	confirmDescription := "Archive this session now"
+	if kind == codextui.SessionSelectionDelete {
+		title = "Delete this session?"
+		body = "Cannot be undone. Subagent threads will also be deleted."
+		confirmLabel = "Yes, delete and exit"
+		confirmDescription = "Permanently delete this session now"
+	}
+	m.modal = &modalState{
+		id:                     "current-session-action-" + string(kind),
+		kind:                   ModalKindPicker,
+		title:                  title,
+		body:                   body,
+		sessionAction:          &selection,
+		exitAfterSessionAction: true,
+		options: []ModalOption{
+			{ID: "cancel", Label: "No, keep this session", Description: "Return to the current session"},
+			{ID: "confirm", Label: confirmLabel, Description: confirmDescription},
+		},
+	}
+	m.notice = ""
+}
+
+func (m *Model) applyForkCurrentSession() bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	selection := codextui.SessionSelection{
+		Kind: codextui.SessionSelectionFork,
+		Target: codextui.SessionTarget{
+			ThreadID: strings.TrimSpace(m.State.ThreadID),
+		},
+	}
+	decision, notice, _ := m.applySessionSelection(selection)
+	if strings.TrimSpace(notice) != "" {
+		m.notice = strings.TrimSpace(notice)
+	}
+	if decision == nil {
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	m.refreshTranscript()
+	if m.onModalResponse != nil {
+		return m.onModalResponse(ModalResponse{
+			ID:       "fork-current-session",
+			Kind:     ModalKindPicker,
+			OptionID: selection.Target.ThreadID,
+			Picker:   decision,
+		})
+	}
+	return nil
+}
+
 func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
 	threadID := strings.TrimSpace(selection.Target.ThreadID)
 	decision := &PickerDecision{Kind: string(selection.Kind), Value: threadID}
@@ -268,6 +334,13 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}
 	m.State.SetThreadID(threadID)
+	if response.Summary != nil {
+		m.State.SetThreadName(response.Summary.Title)
+		if cwd := strings.TrimSpace(response.Summary.CWD); cwd != "" {
+			m.State.CWD = cwd
+			m.sessionCWD = cwd
+		}
+	}
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	if response.TokenUsage != nil {
 		m.applyTokenUsage(response.TokenUsage)

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,9 +36,11 @@ import (
 	"codex_go/session"
 	"codex_go/tool"
 	codextui "codex_go/tui"
+	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	idecontext "codex_go/tui/ide_context"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -561,10 +564,20 @@ func isRealTerminal(value any) bool {
 func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
+	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
+	state.AccountDisplay = accountDisplay
+	state.HasChatGPTAccount = hasChatGPTAccount
 	runner := newCodexExecRunner(auth.DefaultCodexHome())
+	sideRunner := newCodexExecRunner(auth.DefaultCodexHome())
+	sideCoordinator := newInteractiveLocalSideCoordinator(newSessionStore())
+	defer sideCoordinator.CloseAll()
+	pluginService := interactivePluginService()
 	mcpService, mcpStatuses, mcpExpectedServers := interactiveMCPRuntime(root)
 	if runner != nil && mcpService != nil {
 		runner.MCPService = mcpService
+	}
+	if sideRunner != nil && mcpService != nil {
+		sideRunner.MCPService = mcpService
 	}
 	var initialMessages <-chan bubbletea.Msg
 	var cancelMCPStartup context.CancelFunc
@@ -580,26 +593,61 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	elicitationBroker := newInteractiveElicitationBroker()
 	userInputBroker := newInteractiveUserInputBroker()
 	interrupts := newInteractiveInterruptController()
+	readGoal, setGoal, clearGoal := interactiveLocalGoalCallbacks(nil)
+	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	options := codextea.Options{
-		NoAltScreen:               root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems:        interactiveSessionPickerItems(root),
-		SessionPickerCWD:          interactiveSessionPickerCWD(root),
-		SessionPickerView:         settings.SessionPickerView,
-		ShowSessionHeader:         true,
-		SessionHeaderVersion:      doctor.Version(),
-		OnSessionAction:           interactiveSessionActionHandler(root),
-		OnResumeSession:           interactiveResumeSessionHandler(root),
-		KeymapConfig:              interactiveKeymapConfig(root),
-		OnKeymapEdit:              interactiveKeymapEditHandler(root),
-		OnWriteSettings:           interactiveSettingsWriteHandler(root),
-		FeatureSettings:           settings.FeatureSettings,
-		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
-		Personality:               settings.Personality,
-		Notifications:             settings.Notifications,
-		NotificationMethod:        settings.NotificationMethod,
-		NotificationCondition:     settings.NotificationCondition,
-		PermissionRequirements:    settings.PermissionRequirements,
-		MCPServers:                mcpStatuses,
+		NoAltScreen:                root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:         interactiveSessionPickerItems(root),
+		SessionPickerCWD:           interactiveSessionPickerCWD(root),
+		SessionPickerView:          settings.SessionPickerView,
+		ShowSessionHeader:          true,
+		SessionHeaderVersion:       doctor.Version(),
+		OnSessionAction:            interactiveSessionActionHandler(root),
+		OnResumeSession:            interactiveResumeSessionHandler(root),
+		OnRenameThread:             interactiveRenameThreadHandler(),
+		OnLogout:                   interactiveLogoutHandler(ctx, root),
+		OnOpenDesktopThread:        interactiveOpenDesktopThread,
+		KeymapConfig:               interactiveKeymapConfig(root),
+		OnKeymapEdit:               interactiveKeymapEditHandler(root),
+		OnWriteSettings:            interactiveSettingsWriteHandler(root),
+		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
+		OnResetMemories:            interactiveMemoryResetHandler(),
+		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),
+		OnReadIDEContext:           interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
+		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
+		OnSandboxReadDir:           interactiveSandboxReadDirHandler(root),
+		FeatureSettings:            settings.FeatureSettings,
+		UseMemories:                settings.UseMemories,
+		GenerateMemories:           settings.GenerateMemories,
+		FeedbackEnabled:            settings.FeedbackEnabled,
+		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
+		Personality:                settings.Personality,
+		Notifications:              settings.Notifications,
+		NotificationMethod:         settings.NotificationMethod,
+		NotificationCondition:      settings.NotificationCondition,
+		PermissionRequirements:     settings.PermissionRequirements,
+		MCPServers:                 mcpStatuses,
+		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
+			if mcpService == nil {
+				return nil, nil
+			}
+			mode := mcp.MCPServerStatusDetailToolsAndAuthOnly
+			if detail {
+				mode = mcp.MCPServerStatusDetailFull
+			}
+			response, err := mcpService.ListStatusChecked(&mcp.MCPListServerStatusParams{
+				Detail: &mcp.MCPServerStatusDetail{Mode: mode},
+			})
+			if err != nil {
+				return nil, err
+			}
+			if response == nil {
+				return nil, nil
+			}
+			return interactiveHistoryMCPStatuses(response.Data), nil
+		},
+		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
 		MCPStartupExpectedServers: mcpExpectedServers,
 		InitialMessages:           initialMessages,
 		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
@@ -607,11 +655,40 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		TUIPet:                    settings.TUIPet,
 		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnReadDebugConfig:         interactiveDebugConfigReader(root),
-		OnReadPlugins:             interactivePluginReader(),
+		OnReadGoal:                readGoal,
+		OnSetGoal:                 setGoal,
+		OnClearGoal:               clearGoal,
+		OnReadAgents:              readAgents,
+		OnSwitchAgent:             switchAgent,
+		OnDetectExternalAgent:     interactiveExternalAgentDetectHandler(root),
+		OnImportExternalAgent:     interactiveExternalAgentImportHandler(root),
+		OnReadHooks:               interactiveHooksReader(root),
+		OnWriteHookConfig:         interactiveHookConfigWriter(root),
+		OnReadPlugins:             interactivePluginReader(root, pluginService),
+		OnReadPlugin:              interactivePluginReaderByID(pluginService),
+		OnInstallPlugin:           interactivePluginInstaller(pluginService),
+		OnUninstallPlugin:         interactivePluginUninstaller(pluginService),
+		OnWritePluginEnabled:      interactivePluginEnabledWriter(root),
+		OnAddMarketplace:          interactiveMarketplaceAdder(pluginService),
+		OnRemoveMarketplace:       interactiveMarketplaceRemover(pluginService),
+		OnUpgradeMarketplace:      interactiveMarketplaceUpgrader(pluginService),
+		OnOpenPluginURL:           auth.OpenBrowser,
+		PluginUserMarketplaces:    settings.PluginUserMarketplaces,
+		PluginGitMarketplaces:     settings.PluginGitMarketplaces,
 		OnReadSkills:              interactiveSkillsReader(root),
+		OnWriteSkillEnabled:       interactiveSkillEnabledWriter(root),
 		OnFuzzyFileSearch:         interactiveFuzzyFileSearchReader(root),
+		OnStartReviewCommand:      interactiveLocalReviewStartCommand(ctx, state, interrupts, nil),
+		OnStartCompactCommand:     interactiveLocalCompactStartCommand(ctx, state, nil),
+		OnStartSide:               sideCoordinator.Start,
+		OnCloseSide:               sideCoordinator.Close,
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
-			return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+			turnRunner := interactiveTurnRunner(runner)
+			if instructions, side := sideCoordinator.Instructions(state.ThreadID); side {
+				request.AdditionalInstructions = strings.Join(nonEmptyStringsApp([]string{instructions, request.AdditionalInstructions}), "\n\n")
+				turnRunner = sideRunner
+			}
+			return interactiveTurnCommandWithRequest(ctx, root, turnRunner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
@@ -628,6 +705,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			userInputBroker.respond(response)
 			return nil
 		},
+		HasChatGPTAccount: hasChatGPTAccount,
 	}
 	_, err := codextea.Run(ctx, state, options, stdin, stdout)
 	return err
@@ -658,6 +736,51 @@ func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycel
 		}
 	}
 	return service, statuses, expectedServers
+}
+
+func interactiveStatusAccount(root *cli.RootOptions) (string, bool) {
+	codexHome := auth.DefaultCodexHome()
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return "", false
+	}
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+	if err != nil || resolved == nil {
+		return "", false
+	}
+	return interactiveAccountDisplay(auth.AccountFromAuth(&resolved.Auth))
+}
+
+func interactiveAccountDisplay(account *auth.Account) (string, bool) {
+	if account == nil {
+		return "", false
+	}
+	switch account.Type {
+	case auth.AccountAPIKey:
+		return "API key configured (run codex login to use ChatGPT)", false
+	case auth.AccountChatGPT:
+		email := ""
+		if account.Email != nil {
+			email = strings.TrimSpace(*account.Email)
+		}
+		plan := strings.TrimSpace(string(account.PlanType))
+		if plan == "" || account.PlanType == auth.PlanUnknown {
+			plan = ""
+		}
+		switch {
+		case email != "" && plan != "":
+			return email + " (" + plan + ")", true
+		case email != "":
+			return email, true
+		case plan != "":
+			return plan, true
+		default:
+			return "ChatGPT", true
+		}
+	default:
+		return "", false
+	}
 }
 
 func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService, runner *codexexec.Runner, expectedServers []string) <-chan bubbletea.Msg {
@@ -908,6 +1031,71 @@ func interactiveSettingsWriteHandler(root *cli.RootOptions) codextea.SettingsWri
 	}
 }
 
+func interactiveMemorySettingsWriteHandler(root *cli.RootOptions) codextea.MemorySettingsWriteFunc {
+	return func(threadID string, useMemories bool, generateMemories bool, generateChanged bool) (codextea.SettingsWriteResult, error) {
+		result, err := interactiveSettingsWriteHandler(root)([]codextea.SettingsEdit{
+			{KeyPath: "memories.use_memories", Value: useMemories},
+			{KeyPath: "memories.generate_memories", Value: generateMemories},
+		})
+		if err != nil || !generateChanged || strings.TrimSpace(threadID) == "" {
+			return result, err
+		}
+		params, err := json.Marshal(appserver.ThreadMemoryModeSetParams{
+			ThreadID: strings.TrimSpace(threadID),
+			Mode:     interactiveThreadMemoryMode(generateMemories),
+		})
+		if err != nil {
+			return result, fmt.Errorf("Saved memory settings, but failed to update the current thread: %w", err)
+		}
+		router := appserver.NewRouter(newSessionStore())
+		defer router.Close()
+		response := router.Handle(&appserver.Request{JSONRPC: "2.0", ID: appserver.IntID(1), Method: appserver.MethodThreadMemoryModeSet, Params: params})
+		if response.Error != nil {
+			return result, fmt.Errorf("Saved memory settings, but failed to update the current thread: %s", response.Error.Message)
+		}
+		return result, nil
+	}
+}
+
+func interactiveMemoryResetHandler() codextea.MemoryResetFunc {
+	return func() error {
+		router := appserver.NewRouter(newSessionStore())
+		defer router.Close()
+		response := router.Handle(&appserver.Request{JSONRPC: "2.0", ID: appserver.IntID(1), Method: appserver.MethodMemoryReset})
+		if response.Error != nil {
+			return errors.New(response.Error.Message)
+		}
+		return nil
+	}
+}
+
+func interactiveFeedbackSubmitHandler() codextea.FeedbackSubmitFunc {
+	return func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+		if err := params.Validate(); err != nil {
+			return appserver.FeedbackUploadResponse{}, err
+		}
+		threadID := "feedback-local"
+		if params.ThreadID != nil && strings.TrimSpace(*params.ThreadID) != "" {
+			threadID = strings.TrimSpace(*params.ThreadID)
+		}
+		snapshot := &appserver.FeedbackSnapshot{ThreadID: threadID}
+		snapshot.PrepareUpload(&appserver.FeedbackUploadOptions{
+			Classification: params.Classification,
+			Reason:         params.Reason,
+			ClientTags:     params.Tags,
+			IncludeLogs:    params.IncludeLogs,
+		})
+		return appserver.FeedbackUploadResponse{ThreadID: threadID}, nil
+	}
+}
+
+func interactiveThreadMemoryMode(enabled bool) appserver.ThreadMemoryMode {
+	if enabled {
+		return appserver.ThreadMemoryModeEnabled
+	}
+	return appserver.ThreadMemoryModeDisabled
+}
+
 func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResult, error) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
@@ -923,8 +1111,12 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		values = loaded.Values
 		featureSettings = loaded.FeatureSettings()
 	}
+	userMarketplaces, gitMarketplaces := interactivePluginMarketplacesFromConfig(values)
 	return codextea.SettingsWriteResult{
 		FeatureSettings:         featureSettings,
+		UseMemories:             interactiveMemoryBoolFromConfig(values, "use_memories"),
+		GenerateMemories:        interactiveMemoryBoolFromConfig(values, "generate_memories"),
+		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -934,7 +1126,45 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		TUITheme:                interactiveTUIStringFromConfig(values, "theme"),
 		TUIPet:                  interactiveTUIStringFromConfig(values, "pet"),
 		SessionPickerView:       interactiveTUIStringFromConfig(values, "session_picker_view"),
+		PluginUserMarketplaces:  userMarketplaces,
+		PluginGitMarketplaces:   gitMarketplaces,
 	}
+}
+
+func interactivePluginMarketplacesFromConfig(values map[string]any) (map[string]bool, map[string]bool) {
+	userMarketplaces := map[string]bool{}
+	gitMarketplaces := map[string]bool{}
+	marketplaces, _ := values["marketplaces"].(map[string]any)
+	for name, raw := range marketplaces {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		userMarketplaces[name] = true
+		entry, _ := raw.(map[string]any)
+		gitMarketplaces[name] = strings.TrimSpace(fmt.Sprint(entry["source_type"])) == string(plugin.MarketplaceSourceGit)
+	}
+	return userMarketplaces, gitMarketplaces
+}
+
+func interactiveMemoryBoolFromConfig(values map[string]any, key string) *bool {
+	value := true
+	if memories, ok := values["memories"].(map[string]any); ok {
+		if configured, ok := memories[key].(bool); ok {
+			value = configured
+		}
+	}
+	return &value
+}
+
+func interactiveFeedbackEnabledFromConfig(values map[string]any) *bool {
+	value := true
+	if feedback, ok := values["feedback"].(map[string]any); ok {
+		if configured, ok := feedback["enabled"].(bool); ok {
+			value = configured
+		}
+	}
+	return &value
 }
 
 func interactiveConfigService(root *cli.RootOptions) *config.ConfigService {
@@ -952,12 +1182,12 @@ func interactiveSkillsReader(root *cli.RootOptions) codextea.SkillsListReaderFun
 		CodexHome:           codexHome,
 		IncludeDefaultRoots: true,
 	})
-	return func(cwd string) (appserver.SkillsListResponse, error) {
+	return func(cwd string, forceReload bool) (appserver.SkillsListResponse, error) {
 		cwd = strings.TrimSpace(cwd)
 		if cwd == "" {
 			cwd = interactiveSessionPickerCWD(root)
 		}
-		params := &appserver.SkillsListParams{}
+		params := &appserver.SkillsListParams{ForceReload: forceReload}
 		if cwd != "" {
 			params.CWDs = []string{cwd}
 		}
@@ -969,11 +1199,134 @@ func interactiveSkillsReader(root *cli.RootOptions) codextea.SkillsListReaderFun
 	}
 }
 
-func interactivePluginReader() codextea.PluginListReaderFunc {
+func interactiveSkillEnabledWriter(root *cli.RootOptions) codextea.SkillEnabledWriteFunc {
+	service := appserver.NewSkillsServiceWithOptions(&appserver.SkillsServiceOptions{
+		Config:              interactiveConfigService(root),
+		CodexHome:           auth.DefaultCodexHome(),
+		IncludeDefaultRoots: true,
+	})
+	return func(path string, enabled bool) (bool, error) {
+		response, err := service.WriteConfig(&appserver.SkillsConfigWriteParams{
+			Path:    strings.TrimSpace(path),
+			Enabled: enabled,
+		})
+		if err != nil {
+			return false, err
+		}
+		if response == nil {
+			return false, errors.New("skills/config/write returned no response")
+		}
+		return response.EffectiveEnabled, nil
+	}
+}
+
+func interactivePluginService() *plugin.PluginService {
 	service := plugin.NewPluginService()
 	service.SetCodexHome(auth.DefaultCodexHome())
-	return func() (plugin.PluginListResponse, error) {
-		return *service.List(&plugin.PluginListParams{IncludeInstalled: true}), nil
+	return service
+}
+
+func interactivePluginReader(root *cli.RootOptions, service *plugin.PluginService) codextea.PluginListReaderFunc {
+	return func(cwd string, forceRefetch bool) (plugin.PluginListResponse, error) {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			cwd = interactiveSessionPickerCWD(root)
+		}
+		params := &plugin.PluginListParams{IncludeInstalled: true, ForceRefetch: forceRefetch}
+		if cwd != "" {
+			params.CWDs = []string{cwd}
+		}
+		return *service.List(params), nil
+	}
+}
+
+func interactivePluginReaderByID(service *plugin.PluginService) codextea.PluginReadFunc {
+	return func(params plugin.PluginReadParams) (plugin.PluginReadResponse, error) {
+		response, err := service.Read(&params)
+		if err != nil {
+			return plugin.PluginReadResponse{}, err
+		}
+		if response == nil {
+			return plugin.PluginReadResponse{}, errors.New("plugin/read returned no response")
+		}
+		return *response, nil
+	}
+}
+
+func interactivePluginInstaller(service *plugin.PluginService) codextea.PluginInstallFunc {
+	return func(params plugin.PluginInstallParams) (plugin.PluginInstallResponse, error) {
+		response, err := service.Install(&params)
+		if err != nil {
+			return plugin.PluginInstallResponse{}, err
+		}
+		if response == nil {
+			return plugin.PluginInstallResponse{}, errors.New("plugin/install returned no response")
+		}
+		return *response, nil
+	}
+}
+
+func interactivePluginUninstaller(service *plugin.PluginService) codextea.PluginUninstallFunc {
+	return func(params plugin.PluginUninstallParams) (plugin.PluginUninstallResponse, error) {
+		response, err := service.Uninstall(&params)
+		if err != nil {
+			return plugin.PluginUninstallResponse{}, err
+		}
+		if response == nil {
+			return plugin.PluginUninstallResponse{}, errors.New("plugin/uninstall returned no response")
+		}
+		return *response, nil
+	}
+}
+
+func interactivePluginEnabledWriter(root *cli.RootOptions) codextea.PluginEnabledWriteFunc {
+	service := interactiveConfigService(root)
+	return func(pluginID string, enabled bool) error {
+		_, err := service.WriteValue(&config.ConfigValueWriteParams{
+			KeyPath:       "plugins." + strings.TrimSpace(pluginID),
+			Value:         map[string]any{"enabled": enabled},
+			MergeStrategy: config.MergeUpsert,
+		})
+		return err
+	}
+}
+
+func interactiveMarketplaceAdder(service *plugin.PluginService) codextea.MarketplaceAddFunc {
+	return func(params plugin.MarketplaceAddParams) (plugin.MarketplaceAddResponse, error) {
+		response, err := service.AddMarketplace(&params)
+		if err != nil {
+			return plugin.MarketplaceAddResponse{}, err
+		}
+		if response == nil {
+			return plugin.MarketplaceAddResponse{}, errors.New("marketplace/add returned no response")
+		}
+		return *response, nil
+	}
+}
+
+func interactiveMarketplaceRemover(service *plugin.PluginService) codextea.MarketplaceRemoveFunc {
+	return func(params plugin.MarketplaceRemoveParams) (plugin.MarketplaceRemoveResponse, error) {
+		response, err := service.RemoveMarketplace(&params)
+		if err != nil {
+			return plugin.MarketplaceRemoveResponse{}, err
+		}
+		if response == nil {
+			return plugin.MarketplaceRemoveResponse{}, errors.New("marketplace/remove returned no response")
+		}
+		return *response, nil
+	}
+}
+
+func interactiveMarketplaceUpgrader(service *plugin.PluginService) codextea.MarketplaceUpgradeFunc {
+	return func(params plugin.MarketplaceUpgradeParams) (plugin.MarketplaceUpgradeResponse, error) {
+		response, err := service.UpgradeMarketplace(&params)
+		if err != nil {
+			return plugin.MarketplaceUpgradeResponse{}, err
+		}
+		if response == nil {
+			return plugin.MarketplaceUpgradeResponse{}, errors.New("marketplace/upgrade returned no response")
+		}
+		return *response, nil
 	}
 }
 
@@ -1419,6 +1772,67 @@ func interactiveSessionActionHandler(root *cli.RootOptions) codextea.SessionActi
 	}
 }
 
+func interactiveRenameThreadHandler() codextea.ThreadRenameFunc {
+	return func(threadID string, name string) error {
+		threadID = strings.TrimSpace(threadID)
+		name = strings.TrimSpace(name)
+		if threadID == "" {
+			return errors.New("rename requires a thread id")
+		}
+		if name == "" {
+			return errors.New("thread name must not be empty")
+		}
+		store := newSessionStore()
+		record, err := store.Read(session.ThreadID(threadID), false, true)
+		if err != nil {
+			return err
+		}
+		extra := make(map[string]any, len(record.Metadata.Extra)+1)
+		for key, value := range record.Metadata.Extra {
+			extra[key] = value
+		}
+		extra["thread_name_explicit"] = true
+		_, err = store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Title: &name, Extra: extra}, false)
+		return err
+	}
+}
+
+func interactiveLogoutHandler(ctx context.Context, root *cli.RootOptions) codextea.LogoutFunc {
+	return func() error {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var overrides []string
+		if root != nil {
+			overrides = root.ConfigOverrides
+		}
+		codexHome := auth.DefaultCodexHome()
+		storeOptions, err := authStoreOptionsFromConfig(codexHome, overrides)
+		if err != nil {
+			return err
+		}
+		_, err = auth.LogoutWithRevoke(ctx, codexHome, storeOptions)
+		return err
+	}
+}
+
+func interactiveOpenDesktopThread(threadID string) error {
+	url := tuiapp.DesktopThreadURL(strings.TrimSpace(threadID))
+	command := exec.Command("powershell.exe", "-NoProfile", "-Command", tuiapp.WindowsDesktopAppLaunchScript(url))
+	_, err := command.Output()
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+			return errors.New(stderr)
+		}
+		return fmt.Errorf("failed to launch the Desktop app through PowerShell with %s", exitErr.ProcessState)
+	}
+	return fmt.Errorf("failed to launch the Desktop app through PowerShell: %w", err)
+}
+
 func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {
 	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
 		store := newSessionStore()
@@ -1463,16 +1877,46 @@ func interactiveSessionMessagesFromRecord(record *session.Record) []codextui.Mes
 		return nil
 	}
 	messages := make([]codextui.Message, 0, len(record.Items))
+	inReviewMode := false
 	for i := range record.Items {
-		if interactiveSessionItemIsHiddenContextInstruction(record.Items[i]) {
+		item := record.Items[i]
+		itemType := normalizeInteractiveSessionItemType(item.Type)
+		switch itemType {
+		case "enteredreviewmode":
+			hint := strings.TrimSpace(firstNonEmptyLocal(item.Text, interactiveSessionItemDataString(item, "review"), remoteTUIAnyString(item.Metadata["review"])))
+			if hint == "" {
+				hint = "current changes"
+			}
+			text := ">> Code review started: " + hint + " <<"
+			messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+			inReviewMode = true
+			continue
+		case "exitedreviewmode":
+			if inReviewMode {
+				text := "<< Code review finished >>"
+				messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+			}
+			inReviewMode = false
+			continue
+		case "contextcompaction":
+			text := "Context compacted"
+			messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
 			continue
 		}
-		message, ok := interactiveSessionMessageFromItem(record.Items[i])
+		if interactiveSessionItemIsHiddenContextInstruction(item) || interactiveSessionItemIsReviewUserMessage(item) || (inReviewMode && normalizeInteractiveSessionItemRole(item.Role) == "user") {
+			continue
+		}
+		message, ok := interactiveSessionMessageFromItem(item)
 		if ok {
 			messages = append(messages, message)
 		}
 	}
 	return messages
+}
+
+func interactiveSessionItemIsReviewUserMessage(item session.Item) bool {
+	kind := firstNonEmptyLocal(interactiveSessionItemDataString(item, "kind"), remoteTUIAnyString(item.Metadata["kind"]))
+	return strings.TrimSpace(kind) == "review_rollout_user"
 }
 
 func interactiveSessionItemIsHiddenContextInstruction(item session.Item) bool {
@@ -1714,11 +2158,44 @@ func interactiveSessionPickerCWD(root *cli.RootOptions) string {
 	return strings.TrimSpace(cwd)
 }
 
+func interactiveIDEContextReader(cwd string) (*idecontext.IdeContext, error) {
+	return idecontext.FetchIDEContext(cwd, auth.DefaultCodexHome())
+}
+
+func interactiveApproveAutoReviewDenialHandler() codextea.AutoReviewDenialApproveFunc {
+	return func(threadID string, entry chatwidget.AutoReviewDenialEntry) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return errors.New("auto-review approval requires a thread id")
+		}
+		if len(entry.Event) == 0 {
+			return errors.New("auto-review denial event is unavailable")
+		}
+		threadRouter := appserver.NewRouter(newSessionStore())
+		router := appserver.NewRuntimeRouter(appserver.RuntimeServices{ThreadRouter: threadRouter, SteerMailbox: turn.NewSteerMailbox()})
+		defer router.Close()
+		params, err := json.Marshal(appserver.ThreadApproveGuardianDeniedActionParams{ThreadID: threadID, Event: entry.Event})
+		if err != nil {
+			return err
+		}
+		response := router.Handle(&appserver.Request{JSONRPC: "2.0", ID: appserver.IntID(1), Method: appserver.MethodThreadApproveGuardianDeniedAction, Params: params})
+		if response.Error != nil {
+			return errors.New(response.Error.Message)
+		}
+		return nil
+	}
+}
+
 func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, prompt string, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) bubbletea.Cmd {
 	return interactiveTurnCommandWithRequest(ctx, root, runner, state, codextea.SubmitRequest{Prompt: prompt}, approvalBroker, elicitationBroker, userInputBroker)
 }
 
 func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts ...*interactiveInterruptController) bubbletea.Cmd {
+	turnState := cloneInteractiveTurnState(state)
+	threadID := ""
+	if turnState != nil {
+		threadID = strings.TrimSpace(turnState.ThreadID)
+	}
 	return func() bubbletea.Msg {
 		messages := make(chan bubbletea.Msg, 256)
 		turnCtx := ctx
@@ -1730,13 +2207,13 @@ func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOption
 			if done != nil {
 				defer done()
 			}
-			runInteractiveTurn(turnCtx, root, runner, state, request, messages, approvalBroker, elicitationBroker, userInputBroker)
+			runInteractiveTurn(turnCtx, root, runner, turnState, request, threadID, messages, approvalBroker, elicitationBroker, userInputBroker)
 		}()
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
 }
 
-func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, messages chan<- bubbletea.Msg, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) {
+func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, requestedThreadID string, messages chan<- bubbletea.Msg, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) {
 	defer close(messages)
 	send := func(message bubbletea.Msg) {
 		select {
@@ -1757,8 +2234,11 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		root = &cli.RootOptions{}
 	}
 	if runner == nil {
-		send(codextea.TurnCompletedMsg{Err: errors.New("interactive runner is nil")})
+		send(codextea.TurnCompletedMsg{ThreadID: requestedThreadID, Err: errors.New("interactive runner is nil")})
 		return
+	}
+	if request.CollaborationMode == nil {
+		request.CollaborationMode = interactiveCollaborationModeFromState(state)
 	}
 	if concrete, ok := runner.(*codexexec.Runner); ok && approvalBroker != nil {
 		previousApproval := concrete.ShellApproval
@@ -1803,7 +2283,18 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 			return
 		}
 	}
-	if len(inputs) > 0 && prompt != "" {
+	additionalInstructions = strings.Join(nonEmptyStringsApp([]string{
+		request.AdditionalInstructions,
+		interactiveCollaborationModeInstructions(request.CollaborationMode),
+		additionalInstructions,
+	}), "\n\n")
+	if request.IDEContext != nil {
+		if prompt != "" {
+			inputs = append([]turn.TurnUserInput{{Type: "text", Text: prompt}}, inputs...)
+			prompt = ""
+		}
+		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
+	} else if len(inputs) > 0 && prompt != "" {
 		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
 		prompt = ""
 	}
@@ -1822,7 +2313,8 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		}
 		execOpts.Prompt = ""
 	}
-	streamWriter := newInteractiveStreamEventWriter(send)
+	streamWriter := newInteractiveStreamEventWriter(send, interactivePlanMode(request.CollaborationMode))
+	streamWriter.threadID = strings.TrimSpace(requestedThreadID)
 	streamOutput := io.Writer(streamWriter)
 	var internalEventHandler func(protocol.ThreadEvent)
 	if _, ok := runner.(*codexexec.Runner); ok {
@@ -1833,6 +2325,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		Root:                   turnRoot,
 		Exec:                   execOpts,
 		Input:                  inputs,
+		CollaborationMode:      interactiveCollaborationModePayload(request.CollaborationMode),
 		AdditionalInstructions: additionalInstructions,
 		AdditionalInputItems:   additionalInputItems,
 		InternalEventHandler:   internalEventHandler,
@@ -1840,17 +2333,19 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	streamWriter.Flush()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-			sendAfterCancel(codextea.TurnInterruptedMsg{Err: ctx.Err()})
+			sendAfterCancel(codextea.TurnInterruptedMsg{ThreadID: requestedThreadID, Err: ctx.Err()})
 			return
 		}
-		send(codextea.TurnCompletedMsg{Err: err})
+		send(codextea.TurnCompletedMsg{ThreadID: requestedThreadID, Err: err})
 		return
 	}
-	msg := codextea.TurnCompletedMsg{}
+	msg := codextea.TurnCompletedMsg{ThreadID: requestedThreadID}
 	if result != nil {
-		msg.ThreadID = result.ThreadID
+		if strings.TrimSpace(msg.ThreadID) == "" {
+			msg.ThreadID = result.ThreadID
+		}
 		if result.TokenUsage != nil && !streamWriter.SawTokenUsage() {
-			send(codextea.ThreadEventMsg{Event: protocol.TokenUsageUpdated(*result.TokenUsage)})
+			streamWriter.HandleEvent(protocol.TokenUsageUpdated(*result.TokenUsage))
 		}
 		if !streamWriter.SawAssistantOutput() {
 			msg.AssistantMessage = result.LastMessage
@@ -2029,10 +2524,22 @@ type interactiveStreamEventWriter struct {
 	send               func(bubbletea.Msg)
 	sawAssistantOutput bool
 	sawTokenUsage      bool
+	planMode           bool
+	planStreams        map[string]*interactivePlanStreamState
+	threadID           string
 }
 
-func newInteractiveStreamEventWriter(send func(bubbletea.Msg)) *interactiveStreamEventWriter {
-	return &interactiveStreamEventWriter{send: send}
+type interactivePlanStreamState struct {
+	parser      *appserver.ProposedPlanStreamParser
+	planItemID  string
+	planText    strings.Builder
+	planStarted bool
+	sawDelta    bool
+}
+
+func newInteractiveStreamEventWriter(send func(bubbletea.Msg), planMode ...bool) *interactiveStreamEventWriter {
+	enabled := len(planMode) > 0 && planMode[0]
+	return &interactiveStreamEventWriter{send: send, planMode: enabled, planStreams: map[string]*interactivePlanStreamState{}}
 }
 
 func (w *interactiveStreamEventWriter) Write(data []byte) (int, error) {
@@ -2089,7 +2596,7 @@ func (w *interactiveStreamEventWriter) emitLine(line []byte) {
 	}
 	var event protocol.ThreadEvent
 	if err := json.Unmarshal(line, &event); err != nil {
-		w.send(codextea.ThreadEventMsg{Event: protocol.ErrorEvent("failed to parse stream event: " + err.Error())})
+		w.sendEvent(protocol.ErrorEvent("failed to parse stream event: " + err.Error()))
 		return
 	}
 	w.handleEventLocked(event)
@@ -2105,13 +2612,102 @@ func (w *interactiveStreamEventWriter) HandleEvent(event protocol.ThreadEvent) {
 }
 
 func (w *interactiveStreamEventWriter) handleEventLocked(event protocol.ThreadEvent) {
+	if w.planMode && w.handlePlanModeEventLocked(event) {
+		return
+	}
 	if interactiveThreadEventHasAssistantOutput(event) {
 		w.sawAssistantOutput = true
 	}
 	if event.Type == "thread.token_usage.updated" && event.TokenUsage != nil {
 		w.sawTokenUsage = true
 	}
+	w.sendEvent(event)
+}
+
+func (w *interactiveStreamEventWriter) handlePlanModeEventLocked(event protocol.ThreadEvent) bool {
+	if event.Type == "item.delta" && event.Delta != nil && event.Delta.Text != "" {
+		state := w.planStreamState(event.Delta.ItemID)
+		state.sawDelta = true
+		w.emitPlanSegmentsLocked(event.Delta.ItemID, state, state.parser.Push(event.Delta.Text))
+		return true
+	}
+	if event.Type != "item.completed" || event.Item == nil || event.Item.Type != "agent_message" {
+		return false
+	}
+	itemID := strings.TrimSpace(event.Item.ID)
+	state := w.planStreamState(itemID)
+	if !state.sawDelta && event.Item.Text != "" {
+		w.emitPlanSegmentsLocked(itemID, state, state.parser.Push(event.Item.Text))
+	}
+	w.emitPlanSegmentsLocked(itemID, state, state.parser.Finish())
+	if state.planStarted {
+		w.sendEvent(protocol.ItemCompleted(protocol.PlanItem(state.planItemID, state.planText.String())))
+	}
+	delete(w.planStreams, itemID)
+	return true
+}
+
+func (w *interactiveStreamEventWriter) planStreamState(itemID string) *interactivePlanStreamState {
+	itemID = strings.TrimSpace(itemID)
+	if state := w.planStreams[itemID]; state != nil {
+		return state
+	}
+	planItemID := itemID + "-plan"
+	if itemID == "" {
+		planItemID = "proposed-plan"
+	}
+	state := &interactivePlanStreamState{parser: appserver.NewProposedPlanStreamParser(), planItemID: planItemID}
+	w.planStreams[itemID] = state
+	return state
+}
+
+func (w *interactiveStreamEventWriter) emitPlanSegmentsLocked(itemID string, state *interactivePlanStreamState, segments []appserver.ProposedPlanSegment) {
+	for _, segment := range segments {
+		switch segment.Kind {
+		case appserver.ProposedPlanSegmentNormal:
+			if segment.Text != "" {
+				w.sawAssistantOutput = true
+				w.sendEvent(protocol.AgentMessageDelta(itemID, segment.Text))
+			}
+		case appserver.ProposedPlanSegmentStart:
+			if !state.planStarted {
+				state.planStarted = true
+				w.sawAssistantOutput = true
+				w.sendEvent(protocol.ItemStarted(protocol.PlanItem(state.planItemID, "")))
+			}
+		case appserver.ProposedPlanSegmentDelta:
+			if segment.Text != "" {
+				state.planText.WriteString(segment.Text)
+				w.sawAssistantOutput = true
+				w.sendEvent(protocol.PlanDelta(state.planItemID, segment.Text))
+			}
+		}
+	}
+}
+
+func (w *interactiveStreamEventWriter) sendEvent(event protocol.ThreadEvent) {
+	if w == nil || w.send == nil {
+		return
+	}
+	if threadID := strings.TrimSpace(w.threadID); threadID != "" {
+		w.send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: event})
+		return
+	}
 	w.send(codextea.ThreadEventMsg{Event: event})
+}
+
+func cloneInteractiveTurnState(state *codextui.State) *codextui.State {
+	if state == nil {
+		return nil
+	}
+	cloned := *state
+	cloned.Messages = append([]codextui.Message(nil), state.Messages...)
+	cloned.RateLimits = append([]codextui.RateLimitStatus(nil), state.RateLimits...)
+	if state.ModelContextWindow != nil {
+		value := *state.ModelContextWindow
+		cloned.ModelContextWindow = &value
+	}
+	return &cloned
 }
 
 func interactiveThreadEventHasAssistantOutput(event protocol.ThreadEvent) bool {
@@ -2139,6 +2735,69 @@ func interactiveSharedOptionsFromState(base cli.SharedOptions, state *codextui.S
 	base.Search = state.Search
 	base.NoAltScreen = state.NoAltScreen
 	return base
+}
+
+func interactiveCollaborationModePayload(mode *chatwidget.CollaborationMode) map[string]any {
+	if mode == nil {
+		return nil
+	}
+	settings := map[string]any{
+		"model":                  strings.TrimSpace(mode.Settings.Model),
+		"reasoning_effort":       nil,
+		"developer_instructions": nil,
+	}
+	if mode.Settings.ReasoningEffort != nil {
+		settings["reasoning_effort"] = strings.TrimSpace(*mode.Settings.ReasoningEffort)
+	}
+	if mode.Settings.DeveloperInstructions != nil {
+		settings["developer_instructions"] = strings.TrimSpace(*mode.Settings.DeveloperInstructions)
+	}
+	return map[string]any{
+		"mode":     string(mode.Mode),
+		"settings": settings,
+	}
+}
+
+func interactiveCollaborationModeFromState(state *codextui.State) *chatwidget.CollaborationMode {
+	if state == nil {
+		return nil
+	}
+	kind := chatwidget.CollaborationModeKindDefault
+	if state.PlanMode {
+		kind = chatwidget.CollaborationModeKindPlan
+	}
+	mode := chatwidget.NewCollaborationMode(
+		kind,
+		state.Model,
+		state.EffectiveReasoningEffort(),
+		chatwidget.CollaborationModeInstructions(kind),
+	)
+	return &mode
+}
+
+func interactiveCollaborationModeInstructions(mode *chatwidget.CollaborationMode) string {
+	if mode == nil || mode.Settings.DeveloperInstructions == nil {
+		return ""
+	}
+	instructions := strings.TrimSpace(*mode.Settings.DeveloperInstructions)
+	if instructions == "" {
+		return ""
+	}
+	return "<collaboration_mode>\n" + instructions + "\n</collaboration_mode>"
+}
+
+func interactivePlanMode(mode *chatwidget.CollaborationMode) bool {
+	return mode != nil && mode.Mode == chatwidget.CollaborationModeKindPlan
+}
+
+func nonEmptyStringsApp(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func interactiveUIState(root *cli.RootOptions) *codextui.State {

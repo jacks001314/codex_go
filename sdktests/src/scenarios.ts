@@ -1,4 +1,5 @@
 import { platformCommands, type PlatformSuite } from "./platform/index.ts";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export type Scenario = {
@@ -18,7 +19,7 @@ export type Scenario = {
     skipGitRepoCheck: boolean;
     approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
     networkAccessEnabled: boolean;
-    webSearchMode: "disabled" | "cached" | "live";
+    webSearchMode?: "disabled" | "cached" | "live";
     additionalDirectories?: string[];
   };
   turns: {
@@ -69,6 +70,7 @@ export type Scenario = {
     workspaceRequiredPaths?: string[];
     requiredRolloutItemTypes?: string[];
     uniqueCompletedItemTypes?: string[];
+    exactCompletedItemTypeCounts?: Record<string, number>;
     uniqueCommandExecutions?: boolean;
     requireStartedCompletedPairs?: string[];
     requireSingleFinalAgentMessagePerTurn?: boolean;
@@ -85,8 +87,31 @@ export type Scenario = {
 
 const commands = platformCommands();
 const localMCPServer = fileURLToPath(new URL("./fixtures/mcp_server.mjs", import.meta.url));
+const initCommandPrompt = readFileSync(
+  fileURLToPath(new URL("../../tui/tea/prompt_for_init_command.md", import.meta.url)),
+  "utf8",
+).trim();
 
 export const scenarios: Scenario[] = [
+	{
+		name: "init-existing-agents-md",
+		description: "Expands the Rust-aligned /init prompt against an existing AGENTS.md and verifies that neither implementation overwrites it.",
+		optIn: true,
+		timeoutMs: 180000,
+		codexConfig: { web_search: "disabled", suppress_unstable_features_warning: true },
+		threadOptions: {
+			sandboxMode: "workspace-write", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{ prompt: initCommandPrompt }],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+			requiredCompletedItemTypes: ["agent_message"], forbiddenCompletedItemTypes: ["file_change"],
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+			compareWorkspacePaths: ["AGENTS.md"], workspaceRequiredPaths: ["AGENTS.md"],
+		},
+	},
 	{
 		name: "multi-agent-v2-lifecycle",
 		description: "Exercises named V2 spawn, mailbox wait, completed-agent follow-up, and canonical agent listing.",
@@ -1815,6 +1840,81 @@ export const scenarios: Scenario[] = [
           hash: "22f219456a7255a49dd673a20a667062a91ef1d6c721650f47584101474387d2",
         },
       ],
+    },
+  },
+  {
+    name: "standalone-web-search",
+    description: "Forces one standalone web.run call and verifies SDK lifecycle parity without workspace side effects.",
+    optIn: true,
+    timeoutMs: 180000,
+    codexConfig: {
+      features: { standalone_web_search: true },
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: true,
+      webSearchMode: "live",
+    },
+    turns: [
+      {
+        prompt:
+          "Call web.run exactly once with search_query q OpenAI Codex official documentation. After the tool completes, reply with exactly WEB_SEARCH_SDK_OK.",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      exactAgentMessages: ["WEB_SEARCH_SDK_OK"],
+      requiredCompletedItemTypes: ["web_search", "agent_message"],
+      exactCompletedItemTypeCounts: { web_search: 1, agent_message: 1 },
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      requireStartedCompletedPairs: ["web_search"],
+      requireSingleFinalAgentMessagePerTurn: true,
+      eventSequenceComparison: "semantic-tools",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "standalone-web-search-weather",
+    description: "Uses standalone weather operations to audit code-mode web.run planning and SDK lifecycle parity.",
+    optIn: true,
+    timeoutMs: 180000,
+    codexConfig: {
+      features: { standalone_web_search: true, code_mode: true, web_search_request: true },
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: true,
+    },
+    turns: [
+      {
+        prompt:
+          "Use web search to get today's weather for Kunming, Dali, Lijiang, and Shangri-La in Yunnan, China. Use one weather operation containing all four locations; do not use search queries or shell commands. After the tool completes, reply with exactly WEB_SEARCH_WEATHER_SDK_OK.",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      exactAgentMessages: ["WEB_SEARCH_WEATHER_SDK_OK"],
+      requiredCompletedItemTypes: ["web_search", "agent_message"],
+      exactCompletedItemTypeCounts: { web_search: 1, agent_message: 1 },
+      forbiddenCompletedItemTypes: ["command_execution", "file_change"],
+      requireStartedCompletedPairs: ["web_search"],
+      requireSingleFinalAgentMessagePerTurn: true,
+      eventSequenceComparison: "semantic-tools",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
     },
   },
   {

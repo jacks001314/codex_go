@@ -7,6 +7,8 @@ import (
 
 type MessageRole string
 
+const planModeDefaultReasoningEffort = "medium"
+
 const (
 	RoleUser      MessageRole = "user"
 	RoleAssistant MessageRole = "assistant"
@@ -33,6 +35,10 @@ type Options struct {
 	CWD                     string
 	Search                  bool
 	NoAltScreen             bool
+	CLIVersion              string
+	AccountDisplay          string
+	AgentsSummary           string
+	HasChatGPTAccount       bool
 }
 
 type State struct {
@@ -56,6 +62,10 @@ type State struct {
 	LastTokenUsage          TokenUsage
 	ModelContextWindow      *int64
 	RateLimits              []RateLimitStatus
+	CLIVersion              string
+	AccountDisplay          string
+	AgentsSummary           string
+	HasChatGPTAccount       bool
 }
 
 type RateLimitStatus struct {
@@ -80,6 +90,10 @@ func NewState(options *Options) *State {
 		state.CWD = strings.TrimSpace(options.CWD)
 		state.Search = options.Search
 		state.NoAltScreen = options.NoAltScreen
+		state.CLIVersion = strings.TrimSpace(options.CLIVersion)
+		state.AccountDisplay = strings.TrimSpace(options.AccountDisplay)
+		state.AgentsSummary = strings.TrimSpace(options.AgentsSummary)
+		state.HasChatGPTAccount = options.HasChatGPTAccount
 	}
 	return state
 }
@@ -175,7 +189,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	if s == nil {
 		s = NewState(nil)
 	}
-	provider := displayValue(s.Provider, "default")
+	provider := strings.TrimSpace(s.Provider)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
 	mode := "Default"
 	if s.PlanMode {
@@ -183,20 +197,41 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	permission := displayValue(s.Sandbox, "default") + ", " + displayValue(s.ApprovalPolicy, "default")
 	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
-	account := "API key configured (run codex login to use ChatGPT)"
-	rows := []string{
-		">_ OpenAI Codex (Go)", "",
-		"Visit https://chatgpt.com/codex/settings/usage for up-to-date",
-		"information on rate limits and credits", "",
+	header := ">_ OpenAI Codex"
+	if version := strings.TrimSpace(s.CLIVersion); version != "" {
+		header += " (v" + version + ")"
+	}
+	agentsSummary := displayValue(s.AgentsSummary, "<none>")
+	rows := []string{header, ""}
+	providerLower := strings.ToLower(provider)
+	if providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex") {
+		rows = append(rows,
+			"Visit https://chatgpt.com/codex/settings/usage for up-to-date",
+			"information on rate limits and credits", "",
+		)
+	}
+	rows = append(rows,
 		statusField("Model", model),
-		statusField("Model provider", provider),
 		statusField("Directory", displayValue(s.CWD, "-")),
 		statusField("Permissions", "Custom ("+permission+")"),
-		statusField("Agents.md", "<none>"),
-		statusField("Account", account),
-		statusField("Collaboration mode", mode),
-		statusField("Session", displayValue(s.ThreadID, "new")), "",
-		statusField("Token usage", s.statusTokenUsage()),
+		statusField("Agents.md", agentsSummary),
+	)
+	if provider != "" {
+		rows = append(rows, statusField("Model provider", provider))
+	}
+	if account := strings.TrimSpace(s.AccountDisplay); account != "" {
+		rows = append(rows, statusField("Account", account))
+	}
+	if threadName := strings.TrimSpace(s.ThreadName); threadName != "" {
+		rows = append(rows, statusField("Thread name", threadName))
+	}
+	rows = append(rows, statusField("Collaboration mode", mode))
+	if threadID := strings.TrimSpace(s.ThreadID); threadID != "" {
+		rows = append(rows, statusField("Session", threadID))
+	}
+	rows = append(rows, "")
+	if !s.HasChatGPTAccount {
+		rows = append(rows, statusField("Token usage", s.statusTokenUsage()))
 	}
 	if contextWindow := s.statusContextWindow(); contextWindow != "" {
 		rows = append(rows, statusField("Context window", contextWindow))
@@ -298,6 +333,7 @@ func (s *State) EffectiveReasoningEffort() string {
 		if effort := strings.TrimSpace(s.PlanModeReasoningEffort); effort != "" {
 			return effort
 		}
+		return planModeDefaultReasoningEffort
 	}
 	return strings.TrimSpace(s.ReasoningEffort)
 }
@@ -344,7 +380,7 @@ func (s *State) RenderFrame() string {
 		}
 	}
 	builder.WriteString("----------------------------------------\n")
-	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /personality /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /multi-agents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
+	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /personality /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /subagents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
 	return builder.String()
 }
 
@@ -547,7 +583,7 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandPersonality, Args: args, Name: name}, true
 	case "/plan":
 		return &CommandInvocation{Command: CommandPlan, Args: args, Name: name}, true
-	case "/agent", "/agents", "/multi-agents", "/subagents":
+	case "/agent", "/subagents":
 		return &CommandInvocation{Command: CommandAgent, Args: args, Name: name}, true
 	case "/side", "/btw":
 		return &CommandInvocation{Command: CommandSide, Args: args, Name: name}, true

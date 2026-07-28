@@ -93,6 +93,15 @@ func IsPublicToolName(name tool.ToolName) bool {
 	return name.Namespace == "" && name.Name == PublicToolName
 }
 
+func HasExecTool(specs []tool.Spec) bool {
+	for _, spec := range specs {
+		if IsPublicToolName(spec.Name) && spec.Freeform != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func NameForToolName(name tool.ToolName) string {
 	if name.Namespace == "" {
 		return name.Name
@@ -205,10 +214,7 @@ func AugmentToolDefinition(definition ToolDefinition) ToolDefinition {
 	if definition.Name == PublicToolName {
 		return definition
 	}
-	sample := RenderSample(definition)
-	if sample != "" && !strings.Contains(definition.Description, sample) {
-		definition.Description = strings.TrimSpace(definition.Description + "\n\n" + sample)
-	}
+	definition.Description = RenderSample(definition)
 	return definition
 }
 
@@ -216,12 +222,310 @@ func RenderSample(definition ToolDefinition) string {
 	if definition.Name == "" {
 		return ""
 	}
-	switch definition.Kind {
-	case ToolKindFreeform:
-		return fmt.Sprintf("Code mode sample:\nawait %s(`...`);", definition.Name)
-	default:
-		return fmt.Sprintf("Code mode sample:\nawait %s({});", definition.Name)
+	inputName := "args"
+	inputType := RenderJSONSchemaToTypeScript(definition.InputSchema)
+	if definition.Kind == ToolKindFreeform {
+		inputName = "input"
+		inputType = "string"
 	}
+	outputType := RenderJSONSchemaToTypeScript(definition.OutputSchema)
+	if structured, ok := mcpStructuredContentSchema(definition.OutputSchema); ok {
+		structuredType := RenderJSONSchemaToTypeScript(structured)
+		if structuredType == "unknown" {
+			outputType = "CallToolResult"
+		} else {
+			outputType = "CallToolResult<" + structuredType + ">"
+		}
+	}
+	declaration := fmt.Sprintf(
+		"declare const tools: { %s(%s: %s): Promise<%s>; };",
+		NormalizeIdentifier(definition.Name), inputName, inputType, outputType,
+	)
+	description := strings.TrimSpace(definition.Description)
+	if description == "" {
+		return "exec tool declaration:\n```ts\n" + declaration + "\n```"
+	}
+	return description + "\n\nexec tool declaration:\n```ts\n" + declaration + "\n```"
+}
+
+func AugmentToolSpec(spec tool.Spec) tool.Spec {
+	if spec.Name.Key() == tool.ToolSearchName {
+		return spec
+	}
+	definition := ToolDefinition{
+		Name:         NameForToolName(spec.Name),
+		ToolName:     spec.Name,
+		Description:  spec.Description,
+		Kind:         ToolKindFunction,
+		InputSchema:  spec.InputSchema,
+		OutputSchema: spec.OutputSchema,
+	}
+	if spec.Freeform != nil {
+		definition.Kind = ToolKindFreeform
+		definition.InputSchema = nil
+	}
+	if !IsNestedTool(definition.Name) {
+		return spec
+	}
+	spec.Description = AugmentToolDefinition(definition).Description
+	return spec
+}
+
+func AugmentToolSpecs(specs []tool.Spec) []tool.Spec {
+	out := append([]tool.Spec(nil), specs...)
+	for index := range out {
+		out[index] = AugmentToolSpec(out[index])
+	}
+	return out
+}
+
+func RenderJSONSchemaToTypeScript(schema any) string {
+	return renderJSONSchemaToTypeScript(schema)
+}
+
+func renderJSONSchemaToTypeScript(schema any) string {
+	if schema == nil {
+		return "unknown"
+	}
+	if boolean, ok := schema.(bool); ok {
+		if boolean {
+			return "unknown"
+		}
+		return "never"
+	}
+	object, ok := schemaObject(schema)
+	if !ok {
+		return "unknown"
+	}
+	if value, exists := object["const"]; exists {
+		return renderJSONSchemaLiteral(value)
+	}
+	if values := schemaArray(object["enum"]); len(values) > 0 {
+		rendered := make([]string, 0, len(values))
+		for _, value := range values {
+			rendered = append(rendered, renderJSONSchemaLiteral(value))
+		}
+		return strings.Join(rendered, " | ")
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		if variants := schemaArray(object[key]); len(variants) > 0 {
+			rendered := make([]string, 0, len(variants))
+			for _, variant := range variants {
+				rendered = append(rendered, renderJSONSchemaToTypeScript(variant))
+			}
+			return strings.Join(rendered, " | ")
+		}
+	}
+	if variants := schemaArray(object["allOf"]); len(variants) > 0 {
+		rendered := make([]string, 0, len(variants))
+		for _, variant := range variants {
+			rendered = append(rendered, renderJSONSchemaToTypeScript(variant))
+		}
+		return strings.Join(rendered, " & ")
+	}
+	if schemaTypes := schemaArray(object["type"]); len(schemaTypes) > 0 {
+		rendered := make([]string, 0, len(schemaTypes))
+		for _, value := range schemaTypes {
+			if schemaType, ok := value.(string); ok {
+				rendered = append(rendered, renderJSONSchemaType(object, schemaType))
+			}
+		}
+		if len(rendered) > 0 {
+			return strings.Join(rendered, " | ")
+		}
+	}
+	if schemaType, ok := object["type"].(string); ok {
+		return renderJSONSchemaType(object, schemaType)
+	}
+	if _, ok := object["properties"]; ok {
+		return renderJSONSchemaObject(object)
+	}
+	if _, ok := object["additionalProperties"]; ok {
+		return renderJSONSchemaObject(object)
+	}
+	if _, ok := object["required"]; ok {
+		return renderJSONSchemaObject(object)
+	}
+	if _, ok := object["items"]; ok {
+		return renderJSONSchemaArray(object)
+	}
+	if _, ok := object["prefixItems"]; ok {
+		return renderJSONSchemaArray(object)
+	}
+	return "unknown"
+}
+
+func renderJSONSchemaType(object map[string]any, schemaType string) string {
+	switch schemaType {
+	case "string":
+		return "string"
+	case "number", "integer":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "null":
+		return "null"
+	case "array":
+		return renderJSONSchemaArray(object)
+	case "object":
+		return renderJSONSchemaObject(object)
+	default:
+		return "unknown"
+	}
+}
+
+func renderJSONSchemaArray(object map[string]any) string {
+	if items, ok := object["items"]; ok {
+		return "Array<" + renderJSONSchemaToTypeScript(items) + ">"
+	}
+	if items := schemaArray(object["prefixItems"]); len(items) > 0 {
+		rendered := make([]string, 0, len(items))
+		for _, item := range items {
+			rendered = append(rendered, renderJSONSchemaToTypeScript(item))
+		}
+		return "[" + strings.Join(rendered, ", ") + "]"
+	}
+	return "unknown[]"
+}
+
+func renderJSONSchemaObject(object map[string]any) string {
+	required := map[string]bool{}
+	for _, value := range schemaArray(object["required"]) {
+		if name, ok := value.(string); ok {
+			required[name] = true
+		}
+	}
+	properties, _ := schemaObject(object["properties"])
+	names := make([]string, 0, len(properties))
+	hasDescription := false
+	for name, value := range properties {
+		names = append(names, name)
+		if property, ok := schemaObject(value); ok {
+			if description, ok := property["description"].(string); ok && description != "" {
+				hasDescription = true
+			}
+		}
+	}
+	sort.Strings(names)
+	if hasDescription {
+		lines := []string{"{"}
+		for _, name := range names {
+			value := properties[name]
+			if property, ok := schemaObject(value); ok {
+				if description, ok := property["description"].(string); ok {
+					for _, line := range strings.Split(description, "\n") {
+						if line = strings.TrimSpace(line); line != "" {
+							lines = append(lines, "  // "+line)
+						}
+					}
+				}
+			}
+			lines = append(lines, "  "+renderJSONSchemaProperty(name, value, required))
+		}
+		appendAdditionalProperties(&lines, object, properties, "  ")
+		lines = append(lines, "}")
+		return strings.Join(lines, "\n")
+	}
+	lines := make([]string, 0, len(names)+1)
+	for _, name := range names {
+		lines = append(lines, renderJSONSchemaProperty(name, properties[name], required))
+	}
+	appendAdditionalProperties(&lines, object, properties, "")
+	if len(lines) == 0 {
+		return "{}"
+	}
+	return "{ " + strings.Join(lines, " ") + " }"
+}
+
+func appendAdditionalProperties(lines *[]string, object map[string]any, properties map[string]any, prefix string) {
+	additional, exists := object["additionalProperties"]
+	if exists {
+		switch value := additional.(type) {
+		case bool:
+			if value {
+				*lines = append(*lines, prefix+"[key: string]: unknown;")
+			}
+		default:
+			*lines = append(*lines, prefix+"[key: string]: "+renderJSONSchemaToTypeScript(value)+";")
+		}
+	} else if len(properties) == 0 {
+		*lines = append(*lines, prefix+"[key: string]: unknown;")
+	}
+}
+
+func renderJSONSchemaProperty(name string, schema any, required map[string]bool) string {
+	optional := "?"
+	if required[name] {
+		optional = ""
+	}
+	return renderJSONSchemaPropertyName(name) + optional + ": " + renderJSONSchemaToTypeScript(schema) + ";"
+}
+
+func renderJSONSchemaPropertyName(name string) string {
+	if NormalizeIdentifier(name) == name {
+		return name
+	}
+	encoded, err := json.Marshal(name)
+	if err != nil {
+		return fmt.Sprintf("%q", name)
+	}
+	return string(encoded)
+}
+
+func renderJSONSchemaLiteral(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "unknown"
+	}
+	return string(encoded)
+}
+
+func schemaObject(value any) (map[string]any, bool) {
+	object, ok := value.(map[string]any)
+	return object, ok
+}
+
+func schemaArray(value any) []any {
+	switch values := value.(type) {
+	case []any:
+		return values
+	case []string:
+		out := make([]any, len(values))
+		for index := range values {
+			out[index] = values[index]
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mcpStructuredContentSchema(outputSchema map[string]any) (any, bool) {
+	properties, ok := schemaObject(outputSchema["properties"])
+	if !ok {
+		return nil, false
+	}
+	content, ok := schemaObject(properties["content"])
+	if !ok || content["type"] != "array" {
+		return nil, false
+	}
+	items, ok := schemaObject(content["items"])
+	if !ok || items["type"] != "object" {
+		return nil, false
+	}
+	isError, ok := schemaObject(properties["isError"])
+	if !ok || isError["type"] != "boolean" {
+		return nil, false
+	}
+	metadata, ok := schemaObject(properties["_meta"])
+	if !ok || metadata["type"] != "object" {
+		return nil, false
+	}
+	structured, exists := properties["structuredContent"]
+	if !exists {
+		return true, true
+	}
+	return structured, true
 }
 
 func CollectDefinitions(specs []tool.Spec) []ToolDefinition {
@@ -229,11 +533,12 @@ func CollectDefinitions(specs []tool.Spec) []ToolDefinition {
 	for _, spec := range specs {
 		name := spec.Name
 		definition := ToolDefinition{
-			Name:        NameForToolName(name),
-			ToolName:    name,
-			Description: spec.Description,
-			Kind:        ToolKindFunction,
-			InputSchema: spec.InputSchema,
+			Name:         NameForToolName(name),
+			ToolName:     name,
+			Description:  spec.Description,
+			Kind:         ToolKindFunction,
+			InputSchema:  spec.InputSchema,
+			OutputSchema: spec.OutputSchema,
 		}
 		if spec.Freeform != nil {
 			definition.Kind = ToolKindFreeform

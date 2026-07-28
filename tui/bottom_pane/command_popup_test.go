@@ -13,7 +13,7 @@ func TestCommandPopupFiltersExactPrefixAndKeepsRustOrder(t *testing.T) {
 	popup.OnComposerTextChange("/m")
 
 	got := commandPopupItemNames(popup.FilteredItems())
-	want := []string{"model", "memories", "mention", "mcp", "multi-agents"}
+	want := []string{"model", "memories", "mention", "mcp"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filtered names = %#v, want %#v", got, want)
 	}
@@ -22,6 +22,11 @@ func TestCommandPopupFiltersExactPrefixAndKeepsRustOrder(t *testing.T) {
 	selected, ok := popup.SelectedItem()
 	if !ok || selected.Name != "model" {
 		t.Fatalf("selected = %#v ok=%v, want model", selected, ok)
+	}
+
+	popup.OnComposerTextChange("/su")
+	if selected, ok := popup.SelectedItem(); !ok || selected.Name != "subagents" {
+		t.Fatalf("selected = %#v ok=%v, want subagents", selected, ok)
 	}
 }
 
@@ -49,9 +54,14 @@ func TestCommandPopupCanonicalCompanionsAndDispatchOnlyAliases(t *testing.T) {
 	popup := NewCommandPopup(CommandPopupFlags{}, nil)
 	popup.OnComposerTextChange("/")
 	names := commandPopupItemNames(popup.FilteredItems())
-	for _, name := range []string{"quit", "btw", "multi-agents"} {
+	for _, name := range []string{"exit", "side", "subagents"} {
 		if !containsString(names, name) {
 			t.Fatalf("canonical command %q missing for empty filter: %#v", name, names)
+		}
+	}
+	for _, name := range []string{"quit", "btw"} {
+		if containsString(names, name) {
+			t.Fatalf("alias command %q should be hidden for empty filter: %#v", name, names)
 		}
 	}
 
@@ -68,6 +78,16 @@ func TestCommandPopupCanonicalCompanionsAndDispatchOnlyAliases(t *testing.T) {
 	popup.OnComposerTextChange("/keys")
 	if selected, ok := popup.SelectedItem(); ok {
 		t.Fatalf("dispatch-only keymap alias should not appear in popup, selected=%#v", selected)
+	}
+}
+
+func TestCommandPopupHidesRustInternalAndAppsCommands(t *testing.T) {
+	popup := NewCommandPopup(CommandPopupFlags{ConnectorsEnabled: true}, nil)
+	for _, query := range []string{"/apps", "/debug-config", "/debug-m-drop"} {
+		popup.OnComposerTextChange(query)
+		if selected, ok := popup.SelectedItem(); ok {
+			t.Fatalf("%s should be hidden from the popup, selected=%#v", query, selected)
+		}
 	}
 }
 
@@ -219,7 +239,7 @@ func TestRustCanonicalCompanionCommandsRemainVisible(t *testing.T) {
 	for _, command := range commands {
 		seen[command.Name] = true
 	}
-	for _, name := range []string{"btw", "multi-agents", "quit", "apps", "debug-config", "debug-m-drop", "debug-m-update"} {
+	for _, name := range []string{"btw", "subagents", "quit", "apps", "debug-config", "debug-m-drop", "debug-m-update"} {
 		if !seen[name] {
 			t.Fatalf("canonical Rust command %q missing from popup: %#v", name, commands)
 		}

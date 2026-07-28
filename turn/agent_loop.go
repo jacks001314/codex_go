@@ -387,7 +387,7 @@ func agentItemRecordsTTFT(item *model.AgentItem) bool {
 	switch item.Type {
 	case "", "message", "agent_message", "reasoning":
 		return strings.TrimSpace(item.Text) != ""
-	case "function_call", "custom_tool_call", "tool_search_call":
+	case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
 		return true
 	case "image_generation_call":
 		return true

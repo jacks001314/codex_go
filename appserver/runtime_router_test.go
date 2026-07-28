@@ -6781,6 +6781,20 @@ func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {
 	if !reflect.DeepEqual(completedItem, startedItem) {
 		t.Fatalf("completed item = %#v, want %#v", completedItem, startedItem)
 	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("read review thread record: %v", err)
+	}
+	var persisted *session.Item
+	for i := range record.Items {
+		if record.Items[i].Type == "enteredReviewMode" && record.Items[i].ID == turnID {
+			persisted = &record.Items[i]
+			break
+		}
+	}
+	if persisted == nil || persisted.Text != "changes against 'main'" || persisted.Metadata["kind"] != "review_enter" {
+		t.Fatalf("persisted entered review item = %#v", persisted)
+	}
 }
 
 func TestRuntimeRouterReviewStartDetachedForksThreadLikeRust(t *testing.T) {
@@ -6967,6 +6981,43 @@ func TestRuntimeRouterReviewStartRunsReviewTurnAndEmitsExitLikeRust(t *testing.T
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 	assertNoItemNotification(t, sink, "msg-1")
+
+	tokenUsageIndex := -1
+	exitedIndex := -1
+	assistantDeltaIndex := -1
+	assistantCompletedIndex := -1
+	for i, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationThreadTokenUsageUpdated:
+			payload, ok := notification.Params.(*ThreadTokenUsageUpdatedNotification)
+			if ok && payload.TurnID == turnID {
+				tokenUsageIndex = i
+			}
+		case NotificationAgentMessageDelta:
+			payload, ok := notification.Params.(*AgentMessageDeltaNotification)
+			if ok && payload.TurnID == turnID && payload.ItemID == review.ReviewRolloutAssistantMessageID {
+				assistantDeltaIndex = i
+			}
+		case NotificationItemCompleted:
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if !ok || payload.TurnID != turnID {
+				continue
+			}
+			item := notificationItemMap(t, payload.Item)
+			switch item["type"] {
+			case "exitedReviewMode":
+				exitedIndex = i
+			case "agentMessage":
+				if item["id"] == review.ReviewRolloutAssistantMessageID {
+					assistantCompletedIndex = i
+				}
+			}
+		}
+	}
+	if tokenUsageIndex < 0 || exitedIndex < 0 || assistantDeltaIndex < 0 || assistantCompletedIndex < 0 ||
+		!(tokenUsageIndex < exitedIndex && exitedIndex < assistantDeltaIndex && assistantDeltaIndex < assistantCompletedIndex) {
+		t.Fatalf("review notification order: token=%d exited=%d assistant-delta=%d assistant-completed=%d", tokenUsageIndex, exitedIndex, assistantDeltaIndex, assistantCompletedIndex)
+	}
 }
 
 func TestRuntimeRouterReviewStartInterruptEmitsInterruptedExitLikeRust(t *testing.T) {
@@ -9617,7 +9668,7 @@ func TestRuntimeRouterTurnStartUsesThreadFeatureOverridesForRequestUserInputTool
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterStandaloneWebSearchMatchesRustFixture(t *testing.T) {
+func TestRuntimeRouterStandaloneWebSearchLegacyLiveModeMatchesRustFixture(t *testing.T) {
 	home := t.TempDir()
 	searchServerPath := ""
 	searchHeaders := http.Header{}
@@ -9629,7 +9680,7 @@ func TestRuntimeRouterStandaloneWebSearchMatchesRustFixture(t *testing.T) {
 			t.Fatalf("Decode(search body) error = %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"encrypted_output":"ciphertext","output":"Search result"}`))
+		_, _ = w.Write([]byte(`{"encrypted_output":"ciphertext","output":"Search result","results":[{"type":"future","new_field":{"x":1}}]}`))
 	}))
 	defer server.Close()
 	configBody := fmt.Sprintf(`
@@ -9639,9 +9690,6 @@ sandbox_mode = "read-only"
 model_provider = "openai-custom"
 chatgpt_base_url = "%s"
 
-[features]
-standalone_web_search = true
-
 [model_providers.openai-custom]
 name = "OpenAI"
 base_url = "%s/api/codex"
@@ -9650,6 +9698,9 @@ request_max_retries = 0
 stream_max_retries = 0
 supports_websockets = false
 requires_openai_auth = true
+
+[features]
+web_search_request = true
 `, server.URL, server.URL)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
@@ -9662,12 +9713,23 @@ requires_openai_auth = true
 	analyticsSink := newRecordingTurnEventSink()
 	agent := newStandaloneWebSearchRuntimeAgent()
 	router := NewRuntimeRouter(RuntimeServices{
-		ThreadRouter:          NewRouter(store),
-		Turns:                 turn.NewTurnService(),
-		Agent:                 agent,
-		ThreadStatus:          NewThreadStatusManager(),
-		Config:                config.NewConfigService(home),
-		Account:               auth.NewAccountManager(),
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+		Account:      auth.NewAccountManager(),
+		Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+			Slug:              "mock-model",
+			DisplayName:       "mock-model",
+			Visibility:        model.VisibilityVisible,
+			SupportedInAPI:    true,
+			UseResponsesLite:  true,
+			WebSearchToolType: "text",
+			TruncationPolicy:  model.TruncationPolicy{Mode: model.TruncationModeTokens, Limit: 10000},
+			InputModalities:   []string{"text", "image"},
+			BaseInstructions:  model.BaseInstructions,
+		}}})),
 		Analytics:             analyticsSink,
 		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
 	})
@@ -9693,8 +9755,12 @@ requires_openai_auth = true
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	turnStartRequest := requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Prompt:   "Search the web",
+		ThreadID:   threadID,
+		Prompt:     "Search the web",
+		Originator: "codex_vscode",
+		ResponsesAPIMetadata: map[string]string{
+			"mcp_request_meta": `{"request_id":"req-1"}`,
+		},
 	})
 	turnStartRequest.ConnectionID = connectionID
 	turnStart := router.Handle(turnStartRequest)
@@ -9727,7 +9793,17 @@ requires_openai_auth = true
 	if searchHeaders.Get("Authorization") != "Bearer chatgpt-token" || searchHeaders.Get("ChatGPT-Account-ID") != "account-1" {
 		t.Fatalf("search auth headers = %#v", searchHeaders)
 	}
-	assertStandaloneWebSearchBody(t, searchBody)
+	if searchHeaders.Get("originator") != "codex_vscode" {
+		t.Fatalf("search originator = %q", searchHeaders.Get("originator"))
+	}
+	var searchTurnMetadata map[string]any
+	if err := json.Unmarshal([]byte(searchHeaders.Get(codexapi.ClientCodexTurnMetadataHeader)), &searchTurnMetadata); err != nil {
+		t.Fatalf("search turn metadata = %q: %v", searchHeaders.Get(codexapi.ClientCodexTurnMetadataHeader), err)
+	}
+	if searchTurnMetadata["mcp_request_meta"] != `{"request_id":"req-1"}` {
+		t.Fatalf("search turn metadata = %#v", searchTurnMetadata)
+	}
+	assertStandaloneWebSearchBody(t, searchBody, true)
 
 	started := waitForItemStarted(t, sink, "call_web_run")
 	if started.Item["type"] != "webSearch" || started.Item["query"] != "" {
@@ -9741,6 +9817,10 @@ requires_openai_auth = true
 	if !ok || action["type"] != "search" || action["query"] != "standalone web search" {
 		t.Fatalf("completed action = %#v", completed.Item["action"])
 	}
+	results, ok := completed.Item["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("completed results = %#v", completed.Item["results"])
+	}
 	record := waitForSessionItem(t, store, threadID, "webSearch")
 	webSearchCount := 0
 	for i := range record.Items {
@@ -9748,6 +9828,9 @@ requires_openai_auth = true
 			webSearchCount++
 			if record.Items[i].ID != "call_web_run" || record.Items[i].Text != "standalone web search" {
 				t.Fatalf("webSearch session item = %#v", record.Items[i])
+			}
+			if results, ok := record.Items[i].Data["results"].([]any); !ok || len(results) != 1 {
+				t.Fatalf("webSearch persisted results = %#v", record.Items[i].Data["results"])
 			}
 		}
 		if record.Items[i].CallID == "call_web_run" && (record.Items[i].Type == "function_call" || record.Items[i].Type == "tool_output") {
@@ -11752,14 +11835,24 @@ func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
 	effort := "high"
 	summary := "auto"
 	personality := "friendly"
+	planInstructions := "plan collaboration instructions with <proposed_plan> output"
+	collaborationMode := map[string]any{
+		"mode": "plan",
+		"settings": map[string]any{
+			"model":                  modelID,
+			"reasoning_effort":       effort,
+			"developer_instructions": planInstructions,
+		},
+	}
 	settingsUpdate := router.Handle(requestWithParams(t, IntID(2), MethodThreadSettingsUpdate, SettingsUpdateParams{
-		ThreadID:    threadID,
-		CWD:         &updatedProject,
-		Model:       &modelID,
-		ServiceTier: &ThreadExtraOptionalString{Set: true, Value: &serviceTierID},
-		Effort:      &effort,
-		Summary:     &summary,
-		Personality: &personality,
+		ThreadID:          threadID,
+		CWD:               &updatedProject,
+		Model:             &modelID,
+		ServiceTier:       &ThreadExtraOptionalString{Set: true, Value: &serviceTierID},
+		Effort:            &effort,
+		Summary:           &summary,
+		CollaborationMode: collaborationMode,
+		Personality:       &personality,
 	}))
 	if settingsUpdate.Error != nil {
 		t.Fatalf("settings update error: %+v", settingsUpdate.Error)
@@ -11779,6 +11872,9 @@ func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
 		request.ReasoningEffort != effort ||
 		request.ReasoningSummary != summary {
 		t.Fatalf("agent request = %#v", request)
+	}
+	if !agentRequestInputItemsContain(request, planInstructions) {
+		t.Fatalf("agent input items missing updated collaboration instructions: %#v", request.InputItems)
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
@@ -12349,7 +12445,9 @@ func TestRuntimeRouterWaitForEnvironmentUsesFeatureGateSelectedEnvironmentAndHos
 					t.Fatalf("wait tool visible while feature disabled: %#v", waitTool)
 				}
 			} else {
-				if waitTool == nil || waitTool["description"] != "Host wait description" {
+				description, _ := waitTool["description"].(string)
+				if waitTool == nil || !strings.HasPrefix(description, "Host wait description\n\n") ||
+					!strings.Contains(description, "declare const tools: { wait_for_environment(args:") {
 					t.Fatalf("wait tool = %#v", waitTool)
 				}
 				parameters, _ := mapAnyFromValue(waitTool["parameters"])
@@ -15080,11 +15178,6 @@ func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
-	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
-	compacted, ok := notification.Params.(*ContextCompactedNotification)
-	if !ok || compacted.ThreadID != threadID || compacted.TurnID != turnID || compacted.Summary == "" {
-		t.Fatalf("compacted notification = %#v", notification.Params)
-	}
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		t.Fatalf("Read thread error = %v", err)
@@ -19017,10 +19110,58 @@ func TestRuntimeRouterThreadCompactStartNotifies(t *testing.T) {
 	if response.Error != nil {
 		t.Fatalf("compact error: %+v", response.Error)
 	}
-	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
-	compacted, ok := notification.Params.(*ContextCompactedNotification)
-	if !ok || compacted.Summary == "" || compacted.ItemCount == 0 {
-		t.Fatalf("notification = %#v", notification.Params)
+	var started *ItemStartedNotification
+	var completed *ItemCompletedNotification
+	turnStartedIndex := -1
+	itemStartedIndex := -1
+	itemCompletedIndex := -1
+	turnCompletedIndex := -1
+	for i, candidate := range sink.List() {
+		if candidate.Method == NotificationContextCompacted {
+			t.Fatalf("deprecated thread/compacted notification emitted: %#v", candidate)
+		}
+		switch candidate.Method {
+		case NotificationTurnStarted:
+			payload, ok := candidate.Params.(*TurnStartedNotification)
+			if ok && payload.ThreadID == "thread-compact" {
+				turnStartedIndex = i
+			}
+		case NotificationItemStarted:
+			payload, ok := candidate.Params.(*ItemStartedNotification)
+			if ok && notificationItemMap(t, payload.Item)["type"] == "contextCompaction" {
+				started = payload
+				itemStartedIndex = i
+			}
+		case NotificationItemCompleted:
+			payload, ok := candidate.Params.(*ItemCompletedNotification)
+			if ok && notificationItemMap(t, payload.Item)["type"] == "contextCompaction" {
+				completed = payload
+				itemCompletedIndex = i
+			}
+		case NotificationTurnCompleted:
+			payload, ok := candidate.Params.(*TurnCompletedNotification)
+			if ok && payload.ThreadID == "thread-compact" {
+				turnCompletedIndex = i
+			}
+		}
+	}
+	if started == nil || completed == nil || started.TurnID == "" || completed.TurnID != started.TurnID {
+		t.Fatalf("context compaction lifecycle started=%#v completed=%#v", started, completed)
+	}
+	startedItem := notificationItemMap(t, started.Item)
+	completedItem := notificationItemMap(t, completed.Item)
+	if startedItem["id"] == "" || completedItem["id"] != startedItem["id"] {
+		t.Fatalf("context compaction items started=%#v completed=%#v", startedItem, completedItem)
+	}
+	if turnStartedIndex < 0 || turnCompletedIndex < 0 || !(turnStartedIndex < itemStartedIndex && itemStartedIndex < itemCompletedIndex && itemCompletedIndex < turnCompletedIndex) {
+		t.Fatalf("manual compaction order: turn-started=%d item-started=%d item-completed=%d turn-completed=%d", turnStartedIndex, itemStartedIndex, itemCompletedIndex, turnCompletedIndex)
+	}
+	record, err := store.Read("thread-compact", true, true)
+	if err != nil {
+		t.Fatalf("read compacted thread: %v", err)
+	}
+	if len(record.Items) == 0 || record.Items[len(record.Items)-1].Type != "contextCompaction" || record.Items[len(record.Items)-1].ID != startedItem["id"] {
+		t.Fatalf("persisted context compaction item = %#v", record.Items)
 	}
 }
 
@@ -19071,7 +19212,7 @@ func TestRuntimeRouterThreadCompactStartEmitsCompactionAnalyticsLikeRust(t *test
 	params := event.EventParams
 	if event.EventType != telemetry.CodexCompactionEventType ||
 		params.SessionID != "session-compact-analytics" ||
-		params.TurnID != "" ||
+		params.TurnID == "" ||
 		params.Trigger != telemetry.CompactionTriggerManual ||
 		params.Reason != telemetry.CompactionReasonUserRequested ||
 		params.Implementation != telemetry.CompactionImplementationResponses ||
@@ -19161,14 +19302,6 @@ func TestRuntimeRouterThreadCompactStartUsesRemoteRunner(t *testing.T) {
 	}
 	if runner.request == nil || runner.request.ThreadID != "thread-remote-compact" {
 		t.Fatalf("remote request = %#v", runner.request)
-	}
-	notification := waitForNotificationMethod(t, sink, NotificationContextCompacted)
-	compacted := notification.Params.(*ContextCompactedNotification)
-	if compacted.Summary != "remote compact summary" {
-		t.Fatalf("notification summary = %q", compacted.Summary)
-	}
-	if compacted.Source != string(compact.SourceRemote) || compacted.ResponseID != "resp-compact" || compacted.Model != "gpt-compact" {
-		t.Fatalf("notification metadata = %#v", compacted)
 	}
 	record, err := store.Read("thread-remote-compact", true, true)
 	if err != nil {
@@ -23035,7 +23168,7 @@ func modelToolsContainHostedImageGeneration(tools []any) bool {
 	return false
 }
 
-func assertStandaloneWebSearchBody(t *testing.T, body map[string]any) {
+func assertStandaloneWebSearchBody(t *testing.T, body map[string]any, externalWebAccess bool) {
 	t.Helper()
 	if body["model"] != "mock-model" {
 		t.Fatalf("search model = %#v body=%#v", body["model"], body)
@@ -23059,6 +23192,12 @@ func assertStandaloneWebSearchBody(t *testing.T, body map[string]any) {
 	allowedCallers, ok := sliceAnyFromValue(settings["allowed_callers"])
 	if !ok || len(allowedCallers) != 1 || allowedCallers[0] != "direct" {
 		t.Fatalf("allowed_callers = %#v", settings["allowed_callers"])
+	}
+	if settings["external_web_access"] != externalWebAccess {
+		t.Fatalf("external_web_access = %#v", settings["external_web_access"])
+	}
+	if maxOutputTokens, ok := body["max_output_tokens"].(float64); !ok || maxOutputTokens <= 0 {
+		t.Fatalf("max_output_tokens = %#v", body["max_output_tokens"])
 	}
 	input, ok := sliceAnyFromValue(body["input"])
 	if !ok || len(input) == 0 {

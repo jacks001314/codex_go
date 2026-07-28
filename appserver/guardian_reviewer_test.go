@@ -309,6 +309,42 @@ func TestApproveGuardianDeniedActionInjectsExactAction(t *testing.T) {
 	}
 }
 
+func TestGuardianReviewNotificationPreservesExactAction(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: t.TempDir()})
+	defer router.Close()
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	completedAt := int64(150)
+	rationale := state.RiskHigh
+	event := state.Event{
+		ID:            "review-command",
+		TurnID:        "turn-command",
+		StartedAtMS:   100,
+		CompletedAtMS: &completedAt,
+		Status:        state.StatusDenied,
+		RiskLevel:     &rationale,
+		Rationale:     "Writes outside the sandbox.",
+		Action: state.Action{
+			Type:    "command",
+			Source:  state.CommandSourceShell,
+			Command: "rm -rf build",
+			CWD:     `D:\repo`,
+		},
+	}
+	router.notifyGuardianReviewEvent("thread-command", &event)
+	notifications := sink.List()
+	if len(notifications) != 1 || notifications[0].Method != NotificationItemGuardianApprovalReviewCompleted {
+		t.Fatalf("Guardian notifications = %#v", notifications)
+	}
+	payload, ok := notifications[0].Params.(*ItemGuardianApprovalReviewCompletedNotification)
+	if !ok {
+		t.Fatalf("Guardian notification payload = %T", notifications[0].Params)
+	}
+	if payload.ThreadID != "thread-command" || payload.ReviewID != "review-command" || payload.Action.Type != "command" || payload.Action.Command != "rm -rf build" || payload.Action.CWD != `D:\repo` || payload.Action.Source != GuardianCommandSourceShell {
+		t.Fatalf("Guardian notification payload = %#v", payload)
+	}
+}
+
 func TestApproveGuardianDeniedActionIgnoresNonDeniedAndRejectsInvalidJSON(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: t.TempDir()})
 	router.ephemeralThreads["thread-1"] = &session.Record{ID: "thread-1"}

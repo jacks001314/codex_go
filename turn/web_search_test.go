@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
@@ -43,6 +44,88 @@ func TestBuildToolRegistryRegistersStandaloneWebSearchRunTool(t *testing.T) {
 	}
 }
 
+func TestWebSearchRunSchemaMatchesRustReservedToolShape(t *testing.T) {
+	spec := NewWebSearchHandler(&WebSearchOptions{}).Spec()
+	encoded, err := json.Marshal(spec.InputSchema)
+	if err != nil {
+		t.Fatalf("Marshal(schema) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "additionalProperties") {
+		t.Fatalf("reserved web.run schema must not set additionalProperties: %s", encoded)
+	}
+	if strings.Contains(string(encoded), `"null"`) {
+		t.Fatalf("optional web.run fields must be omitted instead of nullable: %s", encoded)
+	}
+
+	properties := spec.InputSchema["properties"].(map[string]any)
+	expectedRequired := map[string][]string{
+		"search_query": {"q"},
+		"image_query":  {"q"},
+		"open":         {"ref_id"},
+		"click":        {"id", "ref_id"},
+		"find":         {"pattern", "ref_id"},
+		"screenshot":   {"pageno", "ref_id"},
+		"finance":      {"ticker", "type"},
+		"weather":      {"location"},
+		"sports":       {"fn", "league"},
+		"time":         {"utc_offset"},
+	}
+	for command, expected := range expectedRequired {
+		commandSchema := properties[command].(map[string]any)
+		itemSchema := commandSchema["items"].(map[string]any)
+		if got := itemSchema["required"]; !reflect.DeepEqual(got, expected) {
+			t.Fatalf("%s required = %#v, want %#v", command, got, expected)
+		}
+	}
+
+	expectedDescriptions := map[string]string{
+		"search_query":    "Query the internet search engine for a given list of queries.",
+		"image_query":     "Query the image search engine for a given list of queries.",
+		"open":            "Open pages by reference id or URL.",
+		"click":           "Open links from previously opened pages.",
+		"find":            "Find text patterns in pages.",
+		"screenshot":      "Take screenshots of PDF pages.",
+		"finance":         "Look up prices for the given stock symbols.",
+		"weather":         "Look up weather forecasts.",
+		"sports":          "Look up sports schedules and standings.",
+		"time":            "Get time for the given UTC offsets.",
+		"response_length": "Set the length of the response to be returned.",
+	}
+	for command, expected := range expectedDescriptions {
+		if got := properties[command].(map[string]any)["description"]; got != expected {
+			t.Fatalf("%s description = %#v, want %q", command, got, expected)
+		}
+	}
+	if !strings.Contains(spec.Description, "<situations_where_you_must_browse_the_internet>") ||
+		!strings.Contains(spec.Description, "## Word limits") {
+		t.Fatalf("web.run description is incomplete: %q", spec.Description)
+	}
+}
+
+func TestWebSearchRunCodeModeDescriptionDeclaresTypedNestedTool(t *testing.T) {
+	description := codemode.AugmentToolSpec(NewWebSearchHandler(&WebSearchOptions{}).Spec()).Description
+	for _, expected := range []string{
+		"exec tool declaration:",
+		"declare const tools: { web__run(args:",
+		"weather?: Array<",
+		"location: string;",
+		"start?: string;",
+		"duration?: number;",
+		"response_length?: \"short\" | \"medium\" | \"long\";",
+		"): Promise<unknown>; };",
+	} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("code-mode web.run description missing %q:\n%s", expected, description)
+		}
+	}
+}
+
+func TestHostedWebSearchItemIsNotDispatchedAsClientTool(t *testing.T) {
+	if isToolAgentItem(&model.AgentItem{Type: "web_search_call"}) {
+		t.Fatal("hosted web_search_call must not be dispatched through the client tool router")
+	}
+}
+
 func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T) {
 	var searchBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,17 +141,28 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 		if got := r.Header.Get("X-Provider-Test"); got != "provider" {
 			t.Fatalf("provider header = %q", got)
 		}
+		if got := r.Header.Get("originator"); got != "codex_vscode" {
+			t.Fatalf("originator = %q", got)
+		}
+		if got := r.Header.Get(codexapi.ClientCodexTurnMetadataHeader); got != `{"thread_id":"thread-1"}` {
+			t.Fatalf("turn metadata = %q", got)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&searchBody); err != nil {
 			t.Fatalf("Decode(body) error = %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(codexapi.SearchResponse{Output: "Search result"})
+		_ = json.NewEncoder(w).Encode(codexapi.SearchResponse{
+			Output:  "Search result",
+			Results: []any{map[string]any{"type": "future", "new_field": "kept"}},
+		})
 	}))
 	defer server.Close()
 
 	handler := NewWebSearchHandler(&WebSearchOptions{
-		SessionID: "thread-1",
-		Model:     "mock-model",
+		SessionID:    "thread-1",
+		Model:        "mock-model",
+		Originator:   "codex_vscode",
+		TurnMetadata: `{"thread_id":"thread-1"}`,
 		Provider: model.APIProvider{
 			BaseURL: server.URL + "/api/codex",
 			Headers: http.Header{
@@ -83,6 +177,7 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 		Settings: &codexapi.SearchSettings{
 			AllowedCallers: []codexapi.AllowedCaller{codexapi.AllowedCallerDirect},
 		},
+		MaxOutputTokens: uint64PtrWebSearch(2500),
 	})
 	invocation := &tool.Invocation{
 		CallID:   "call-web-search",
@@ -99,8 +194,18 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 	if output == nil || !output.Success || output.Body != "Search result" {
 		t.Fatalf("output = %#v", output)
 	}
+	if output.LogPreview != "[standalone web search output]" || output.Data["contains_external_context"] != true {
+		t.Fatalf("output logging/context = %#v", output)
+	}
+	results, ok := output.Data["web_search_results"].([]any)
+	if !ok || len(results) != 1 || results[0].(map[string]any)["new_field"] != "kept" {
+		t.Fatalf("results = %#v", output.Data["web_search_results"])
+	}
 	if searchBody["model"] != "mock-model" || searchBody["id"] != "thread-1" {
 		t.Fatalf("search body model/id = %#v", searchBody)
+	}
+	if searchBody["max_output_tokens"] != float64(2500) {
+		t.Fatalf("max_output_tokens = %#v", searchBody["max_output_tokens"])
 	}
 	commands := searchBody["commands"].(map[string]any)
 	searchQuery := commands["search_query"].([]any)[0].(map[string]any)
@@ -138,6 +243,8 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 		t.Fatalf("response json = %s", data)
 	}
 }
+
+func uint64PtrWebSearch(value uint64) *uint64 { return &value }
 
 func TestWebSearchRecentInputKeepsPreviousVisibleTurnLikeRust(t *testing.T) {
 	items := []any{

@@ -14,7 +14,7 @@ func (m *Model) startReview(target chatwidget.ReviewTarget) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
-	if m.onStartReview == nil {
+	if m.onStartReviewCommand == nil && m.onStartReview == nil {
 		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"/review", "", "Review start requires app-server review/start.", reviewTargetSummary(target)}))
 		m.notice = "Review"
 		return nil
@@ -31,9 +31,12 @@ func (m *Model) startReview(target chatwidget.ReviewTarget) bubbletea.Cmd {
 		Target:   reviewAPITarget(target),
 		Delivery: &delivery,
 	}
+	m.setStatus("running")
+	m.notice = ""
+	if m.onStartReviewCommand != nil {
+		return m.onStartReviewCommand(params)
+	}
 	starter := m.onStartReview
-	m.addBottomLine("Review starting: " + reviewTargetSummary(target))
-	m.notice = "Review"
 	return func() bubbletea.Msg {
 		response, err := starter(params)
 		return ReviewStartResultMsg{Target: target, Response: response, Err: err}
@@ -77,19 +80,71 @@ func (m *Model) applyReviewStartResult(message ReviewStartResultMsg) {
 		return
 	}
 	if message.Err != nil {
+		m.setStatus("idle")
 		m.applyHistoryCell(historycell.NewErrorEvent("Review: " + strings.TrimSpace(message.Err.Error())))
 		m.notice = "Review failed"
 		return
 	}
-	lines := []string{"/review", "", "Review started.", reviewTargetSummary(message.Target)}
-	if turnID := strings.TrimSpace(message.Response.Turn.ID); turnID != "" {
-		lines = append(lines, "turn: "+turnID)
+	m.reviewTurnID = strings.TrimSpace(message.Response.Turn.ID)
+	if !m.reviewState.IsReviewMode {
+		apiTarget := reviewAPITarget(message.Target)
+		m.enterReviewMode(review.UserFacingHintForTarget(apiTarget.ToTarget()))
 	}
-	if reviewThreadID := strings.TrimSpace(message.Response.ReviewThreadID); reviewThreadID != "" {
-		lines = append(lines, "review thread: "+reviewThreadID)
+	m.notice = ""
+}
+
+func (m *Model) enterReviewMode(hint string) {
+	if m == nil || m.State == nil || m.reviewState.IsReviewMode {
+		return
 	}
-	m.applyHistoryCell(historycell.NewPlainHistoryCell(lines))
-	m.notice = "Review"
+	window := (*int64)(nil)
+	if m.State.ModelContextWindow != nil {
+		value := *m.State.ModelContextWindow
+		window = &value
+	}
+	m.reviewTokenSnapshot = &reviewTokenSnapshot{
+		Total:         m.State.TotalTokenUsage,
+		Last:          m.State.LastTokenUsage,
+		ContextWindow: window,
+	}
+	m.reviewState.EnterReviewMode(nil)
+	m.setStatus("running")
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		hint = "current changes"
+	}
+	m.applyHistoryCell(historycell.NewReviewStatusLine(">> Code review started: " + hint + " <<"))
+	m.notice = ""
+}
+
+func (m *Model) exitReviewMode() {
+	if m == nil || m.State == nil || !m.reviewState.IsReviewMode {
+		return
+	}
+	m.reviewState.ExitReviewMode()
+	if snapshot := m.reviewTokenSnapshot; snapshot != nil {
+		m.State.TotalTokenUsage = snapshot.Total
+		m.State.LastTokenUsage = snapshot.Last
+		if snapshot.ContextWindow == nil {
+			m.State.ModelContextWindow = nil
+		} else {
+			value := *snapshot.ContextWindow
+			m.State.ModelContextWindow = &value
+		}
+	}
+	m.reviewTokenSnapshot = nil
+	m.reviewTurnID = ""
+	m.applyHistoryCell(historycell.NewReviewStatusLine("<< Code review finished >>"))
+	m.notice = ""
+}
+
+func (m *Model) resetReviewModeState() {
+	if m == nil {
+		return
+	}
+	m.reviewState.ResetForThreadChange()
+	m.reviewTokenSnapshot = nil
+	m.reviewTurnID = ""
 }
 
 func (m *Model) applyReviewBranchesResult(message ReviewBranchesResultMsg) {

@@ -11,8 +11,16 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 )
 
+const usageChatGPTLoginRequired = "Sign in with ChatGPT to use /usage."
+
 func (m *Model) applyUsageCommand(args string) bubbletea.Cmd {
 	if m == nil {
+		return nil
+	}
+	if !m.hasChatGPTAccount {
+		m.notice = usageChatGPTLoginRequired
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
 		return nil
 	}
 	args = strings.TrimSpace(args)

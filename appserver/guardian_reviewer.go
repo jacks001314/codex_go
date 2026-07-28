@@ -277,8 +277,24 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 	}
 	targetItemID := optionalStringPointer(event.TargetItemID)
 	action := GuardianApprovalReviewAction{
-		Type: event.Action.Type, Server: event.Action.Server, ToolName: event.Action.ToolName,
-		ConnectorID: optionalStringPointer(event.Action.ConnectorID), ConnectorName: optionalStringPointer(event.Action.ConnectorName), ToolTitle: optionalStringPointer(event.Action.ToolTitle),
+		Type:          event.Action.Type,
+		Source:        GuardianCommandSource(event.Action.Source),
+		Command:       event.Action.Command,
+		Program:       event.Action.Program,
+		Argv:          append([]string(nil), event.Action.Argv...),
+		CWD:           event.Action.CWD,
+		Files:         append([]string(nil), event.Action.Files...),
+		Target:        event.Action.Target,
+		Host:          event.Action.Host,
+		Protocol:      NetworkApprovalProtocol(event.Action.Protocol),
+		Port:          event.Action.Port,
+		Server:        event.Action.Server,
+		ToolName:      event.Action.ToolName,
+		ConnectorID:   optionalStringPointer(event.Action.ConnectorID),
+		ConnectorName: optionalStringPointer(event.Action.ConnectorName),
+		ToolTitle:     optionalStringPointer(event.Action.ToolTitle),
+		Reason:        optionalStringPointer(event.Action.Reason),
+		Permissions:   guardianRequestPermissionProfile(event.Action.Permissions),
 	}
 	review := guardianApprovalReviewFromState(event)
 	if event.Status == state.StatusInProgress {
@@ -295,6 +311,21 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 		ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS), CompletedAtMS: uint64(completedAt), ReviewID: event.ID, TargetItemID: targetItemID,
 		DecisionSource: AutoReviewDecisionSourceAgent, Review: review, Action: action,
 	})
+}
+
+func guardianRequestPermissionProfile(values map[string]any) *RequestPermissionProfile {
+	if len(values) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil
+	}
+	var profile RequestPermissionProfile
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		return nil
+	}
+	return &profile
 }
 
 func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID string) {

@@ -29,10 +29,17 @@ const (
 	ModalKindRateLimitSwitch ModalKind = "rate_limit_switch"
 	ModalKindReview          ModalKind = "review"
 	ModalKindSkills          ModalKind = "skills"
+	ModalKindManageSkills    ModalKind = "manage_skills"
+	ModalKindExternalImport  ModalKind = "external_agent_import"
+	ModalKindHooksBrowser    ModalKind = "hooks_browser"
+	ModalKindPluginsBrowser  ModalKind = "plugins_browser"
 	ModalKindAgent           ModalKind = "agent"
 	ModalKindTheme           ModalKind = "theme"
 	ModalKindPets            ModalKind = "pets"
 	ModalKindMemories        ModalKind = "memories"
+	ModalKindFeedback        ModalKind = "feedback"
+	ModalKindAutoReview      ModalKind = "auto_review_denials"
+	ModalKindGoal            ModalKind = "goal"
 	ModalKindGeneric         ModalKind = "generic"
 )
 
@@ -112,18 +119,28 @@ type modalState struct {
 	descriptionLayout bottompane.SelectionDescriptionLayout
 	keymapCapture     *keymapCaptureState
 
-	elicitation        *bottompane.ElicitationFormRequest
-	modelPicker        *codextui.ModelPicker
-	modelReasoning     *codextui.ModelReasoningPicker
-	planReasoningScope *codextui.PlanReasoningScopePicker
-	sessionPicker      *codextui.SessionPickerState
-	sessionAction      *codextui.SessionSelection
-	themePicker        *codextui.ThemePicker
-	themeFilter        string
-	themeSubtitle      string
-	userInput          *codextui.RequestUserInputState
-	statusLineSetup    *statusLineSetupModal
-	terminalTitleSetup *terminalTitleSetupModal
+	elicitation            *bottompane.ElicitationFormRequest
+	modelPicker            *codextui.ModelPicker
+	modelReasoning         *codextui.ModelReasoningPicker
+	planReasoningScope     *codextui.PlanReasoningScopePicker
+	sessionPicker          *codextui.SessionPickerState
+	sessionAction          *codextui.SessionSelection
+	exitAfterSessionAction bool
+	themePicker            *codextui.ThemePicker
+	themeFilter            string
+	themeSubtitle          string
+	userInput              *codextui.RequestUserInputState
+	statusLineSetup        *statusLineSetupModal
+	terminalTitleSetup     *terminalTitleSetupModal
+	customPrompt           *bottompane.CustomPromptView
+	customPromptSubmit     func(string) bubbletea.Cmd
+	goalObjective          string
+	memories               *memoriesModalState
+	feedback               *feedbackModalState
+	manageSkills           *manageSkillsModalState
+	externalAgentMigration *externalAgentMigrationModalState
+	hooksBrowser           *hooksBrowserModalState
+	pluginBrowser          *pluginBrowserModalState
 }
 
 func DefaultApprovalOptions() []ModalOption {
@@ -207,8 +224,29 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.modal.themePicker != nil {
 		return m.updateThemePickerModal(message)
 	}
+	if m.modal.manageSkills != nil {
+		return m.updateManageSkillsModal(message)
+	}
+	if m.modal.externalAgentMigration != nil {
+		return m.updateExternalAgentMigrationModal(message)
+	}
+	if m.modal.hooksBrowser != nil {
+		return m.updateHooksBrowserModal(message)
+	}
+	if m.modal.pluginBrowser != nil {
+		return m.updatePluginBrowserModal(message)
+	}
+	if m.modal.customPrompt != nil {
+		return m.updateCustomPromptModal(message)
+	}
 	if m.modal.keymapCapture != nil {
 		return m.updateKeymapCapture(message)
+	}
+	if m.modal.memories != nil {
+		return m.updateMemoriesModal(message)
+	}
+	if m.modal.feedback != nil {
+		return m.updateFeedbackModal(message)
 	}
 	if m.modal.sessionPicker != nil {
 		return m.updateSessionPickerModal(message)
@@ -323,6 +361,46 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+	if m == nil || m.modal == nil || m.modal.customPrompt == nil {
+		return nil
+	}
+	modal := m.modal
+	prompt := modal.customPrompt
+	if message.Type == bubbletea.KeyRunes {
+		if message.Paste {
+			prompt.HandlePaste(string(message.Runes))
+		} else {
+			for _, ch := range message.Runes {
+				prompt.HandleRuneAt(ch, m.currentTime())
+			}
+		}
+	} else {
+		switch message.Type {
+		case bubbletea.KeyEsc:
+			prompt.HandleKey("esc")
+		case bubbletea.KeyCtrlC:
+			prompt.HandleKey("ctrl-c")
+		case bubbletea.KeyEnter:
+			prompt.HandleKey("enter")
+		case bubbletea.KeyBackspace:
+			prompt.HandleKey("backspace")
+		}
+	}
+	if !prompt.IsComplete() {
+		return nil
+	}
+	m.modal = nil
+	if prompt.Completion == bottompane.CustomPromptCancelled {
+		return nil
+	}
+	name, ok := prompt.LastSubmitted()
+	if !ok || modal.customPromptSubmit == nil {
+		return nil
+	}
+	return modal.customPromptSubmit(name)
 }
 
 func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd {
@@ -601,13 +679,21 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyPetsModalOption(response.OptionID)
 	}
-	if modal.kind == ModalKindMemories {
+	if modal.kind == ModalKindAutoReview {
 		m.modal = nil
 		if cancelled {
 			m.notice = "Cancelled"
 			return nil
 		}
-		return m.applyMemoriesModalOption(response.OptionID)
+		return m.applyAutoReviewDenialSelection(response.OptionID)
+	}
+	if modal.kind == ModalKindGoal {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyGoalModalOption(response.OptionID, modal.goalObjective)
 	}
 	if modal.kind == ModalKindStatusLine && modal.statusLineSetup != nil {
 		m.modal = nil
@@ -639,10 +725,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			m.notice = modal.options[modal.selected].Label
 		}
 	}
+	var callback bubbletea.Cmd
 	if m.onModalResponse != nil {
-		return m.onModalResponse(response)
+		callback = m.onModalResponse(response)
 	}
-	return nil
+	if modal.exitAfterSessionAction && !cancelled && response.Picker != nil {
+		return bubbletea.Batch(callback, bubbletea.Quit)
+	}
+	return callback
 }
 
 func (m *Model) resolveRequestUserInputModal(modal *modalState, optionID string, cancelled bool) (*UserInputDecision, bool, bool) {
@@ -942,6 +1032,24 @@ func (m *Model) renderModal() string {
 	}
 	if m.modal.themePicker != nil {
 		return m.renderThemePickerModal()
+	}
+	if m.modal.manageSkills != nil {
+		return m.renderManageSkillsModal()
+	}
+	if m.modal.externalAgentMigration != nil {
+		return m.renderExternalAgentMigrationModal()
+	}
+	if m.modal.hooksBrowser != nil {
+		return m.renderHooksBrowserModal()
+	}
+	if m.modal.pluginBrowser != nil {
+		return m.renderPluginBrowserModal()
+	}
+	if m.modal.customPrompt != nil {
+		return strings.Join(m.modal.customPrompt.Rows(), "\n")
+	}
+	if m.modal.feedback != nil && m.modal.feedback.stage == feedbackStageNote {
+		return m.renderFeedbackNoteModal()
 	}
 	if m.modal.keymapCapture != nil {
 		return m.renderKeymapCapture()

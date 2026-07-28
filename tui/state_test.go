@@ -13,7 +13,11 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 		CWD:            `D:\repo`,
 		Search:         true,
 		NoAltScreen:    true,
+		CLIVersion:     "0.145.0",
+		AccountDisplay: "dev@example.com (plus)",
+		AgentsSummary:  "AGENTS.md",
 	})
+	state.SetThreadName("Release triage")
 	state.SetThreadID("thread-1")
 	state.AddMessage(RoleUser, "hello")
 	state.AddMessage(RoleAssistant, "hi there")
@@ -26,7 +30,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 		}
 	}
 	card := state.RenderStatusCard()
-	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "Session:", "thread-1", "Limits:"} {
+	for _, want := range []string{"OpenAI Codex (v0.145.0)", "Model:", "gpt-test", "Agents.md:", "AGENTS.md", "Account:", "dev@example.com (plus)", "Thread name:", "Release triage", "Session:", "thread-1", "Limits:"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card = %q, missing %q", card, want)
 		}
@@ -55,6 +59,17 @@ func TestStateRenderStatusCardUsesRuntimeUsageAndLimits(t *testing.T) {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card missing %q:\n%s", want, card)
 		}
+	}
+}
+
+func TestStateRenderStatusCardHidesTokenUsageForChatGPTAccount(t *testing.T) {
+	state := NewState(&Options{AccountDisplay: "dev@example.com (plus)", HasChatGPTAccount: true})
+	card := state.RenderStatusCardWidth(80)
+	if !strings.Contains(card, "dev@example.com (plus)") {
+		t.Fatalf("status card missing account:\n%s", card)
+	}
+	if strings.Contains(card, "Token usage:") {
+		t.Fatalf("ChatGPT status card should hide token usage:\n%s", card)
 	}
 }
 
@@ -106,6 +121,7 @@ func TestParseCommand(t *testing.T) {
 		{input: "/plan investigate", command: CommandPlan, args: "investigate", ok: true},
 		{input: "/btw quick question", command: CommandSide, args: "quick question", ok: true},
 		{input: "/subagents", command: CommandAgent, ok: true},
+		{input: "/multi-agents", command: CommandUnknown, ok: true},
 		{input: "/ide", command: CommandIde, ok: true},
 		{input: "/vim", command: CommandVim, ok: true},
 		{input: "/mention", command: CommandMention, ok: true},

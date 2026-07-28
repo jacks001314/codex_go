@@ -285,7 +285,9 @@ func sanitizeHistoryInputItem(input any) any {
 
 func nonModelVisibleHistoryItemType(itemType string) bool {
 	switch strings.TrimSpace(itemType) {
-	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "todo_list", "error":
+	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "todo_list", "error",
+		"enteredReviewMode", "entered_review_mode", "exitedReviewMode", "exited_review_mode",
+		"contextCompaction", "context_compaction":
 		return true
 	default:
 		return false

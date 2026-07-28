@@ -6,6 +6,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
+	historycell "codex_go/tui/history_cell"
 )
 
 func (m *Model) applyAgentCommand() bubbletea.Cmd {
@@ -18,7 +19,7 @@ func (m *Model) applyAgentCommand() bubbletea.Cmd {
 	}
 	reader := m.onReadAgents
 	if reader == nil {
-		m.openAgentPickerPlaceholder()
+		m.showAgentInfo("No agents available yet.")
 		return nil
 	}
 	m.openModal(ModalRequestMsg{
@@ -43,30 +44,15 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 		return
 	}
 	if message.Err != nil {
-		m.openModal(ModalRequestMsg{
-			ID:    "agent-picker-error",
-			Kind:  ModalKindAgent,
-			Title: "Subagents",
-			Body:  "Failed to load agent threads: " + strings.TrimSpace(message.Err.Error()),
-			Options: []ModalOption{{
-				ID:    "ok",
-				Label: "OK",
-			}},
-		})
+		m.modal = nil
+		m.addErrorHistoryMessage("Failed to load agent threads: " + strings.TrimSpace(message.Err.Error()))
+		m.refreshTranscript()
 		return
 	}
 	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
 	if len(entries) == 0 {
-		m.openModal(ModalRequestMsg{
-			ID:    "agent-picker-empty",
-			Kind:  ModalKindAgent,
-			Title: "Subagents",
-			Body:  "No agents available yet.",
-			Options: []ModalOption{{
-				ID:    "ok",
-				Label: "OK",
-			}},
-		})
+		m.modal = nil
+		m.showAgentInfo("No agents available yet.")
 		return
 	}
 	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
@@ -79,7 +65,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 		}
 		options = append(options, ModalOption{
 			ID:          strings.TrimSpace(entry.ThreadID),
-			Label:       agentPickerLabel(entry, strings.TrimSpace(entry.ThreadID) == currentThreadID),
+			Label:       agentPickerLabel(entry),
 			Description: agentPickerDescription(entry),
 			Shortcut:    modelPickerShortcut(i),
 			Disabled:    strings.TrimSpace(entry.ThreadID) == "",
@@ -129,9 +115,17 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		return m.refreshStatusControlsCmd()
 	}
 	m.notice = "Switching to " + entry.DisplayLabel() + "..."
+	activeSide := m.activeSide
+	closer := m.onCloseSide
 	return func() bubbletea.Msg {
+		if activeSide != nil && closer != nil {
+			_, err := closer(SideCloseParams{ParentThreadID: activeSide.ParentThreadID, SideThreadID: activeSide.SideThreadID})
+			if err != nil {
+				return AgentSwitchResultMsg{ThreadID: threadID, Err: err}
+			}
+		}
 		response, err := switcher(threadID)
-		return AgentSwitchResultMsg{ThreadID: threadID, Response: response, Err: err}
+		return AgentSwitchResultMsg{ThreadID: threadID, Response: response, Err: err, closedSide: activeSide}
 	}
 }
 
@@ -140,6 +134,15 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		return
 	}
 	if message.Err != nil {
+		if message.closedSide != nil {
+			side := message.closedSide
+			m.activeSide = nil
+			if m.State != nil {
+				m.State.SetThreadID(side.ParentThreadID)
+				m.State.Messages = cloneSideMessages(side.ParentMessages)
+				m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
+			}
+		}
 		text := strings.TrimSpace(message.Err.Error())
 		if text == "" {
 			text = "unknown error"
@@ -173,6 +176,61 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	m.setActiveAgentLabel(entry)
 	m.notice = entry.DisplayLabel()
 	m.refreshTranscript()
+}
+
+func (m *Model) navigateAgent(direction int) bubbletea.Cmd {
+	if m == nil || m.State == nil || direction == 0 {
+		return nil
+	}
+	currentThreadID := strings.TrimSpace(m.State.ThreadID)
+	entries := normalizeAgentEntries(m.agentItems, currentThreadID)
+	if len(entries) > 1 {
+		m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+		return m.switchAdjacentAgent(entries, currentThreadID, direction)
+	}
+	if m.onReadAgents == nil || currentThreadID == "" {
+		return nil
+	}
+	reader := m.onReadAgents
+	return func() bubbletea.Msg {
+		loaded, err := reader(currentThreadID)
+		return AgentNavigateResultMsg{CurrentThreadID: currentThreadID, Entries: loaded, Direction: direction, Err: err}
+	}
+}
+
+func (m *Model) applyAgentNavigateResult(message AgentNavigateResultMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if message.Err != nil {
+		m.notice = "Failed to load agent threads: " + strings.TrimSpace(message.Err.Error())
+		m.refreshTranscript()
+		return nil
+	}
+	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
+	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+	if len(entries) <= 1 {
+		return nil
+	}
+	return m.switchAdjacentAgent(entries, currentAgentThreadID(m, message.CurrentThreadID), message.Direction)
+}
+
+func (m *Model) switchAdjacentAgent(entries []codextui.AgentThreadEntry, currentThreadID string, direction int) bubbletea.Cmd {
+	if m == nil || len(entries) <= 1 || direction == 0 {
+		return nil
+	}
+	current := 0
+	for i := range entries {
+		if strings.TrimSpace(entries[i].ThreadID) == strings.TrimSpace(currentThreadID) {
+			current = i
+			break
+		}
+	}
+	next := (current + direction) % len(entries)
+	if next < 0 {
+		next += len(entries)
+	}
+	return m.applyAgentModalOption(entries[next].ThreadID)
 }
 
 func normalizeAgentEntries(entries []codextui.AgentThreadEntry, currentThreadID string) []codextui.AgentThreadEntry {
@@ -220,36 +278,35 @@ func currentAgentThreadID(m *Model, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func agentPickerLabel(entry codextui.AgentThreadEntry, current bool) string {
-	label := strings.TrimSpace(entry.DisplayLabel())
+func agentPickerLabel(entry codextui.AgentThreadEntry) string {
+	label := ""
+	if !entry.IsPrimary {
+		label = strings.TrimSpace(entry.AgentPath)
+	}
+	if label == "" {
+		label = strings.TrimSpace(entry.DisplayLabel())
+	}
 	if label == "" {
 		label = "Agent"
 	}
-	if current {
-		label += " (current)"
-	}
-	return label
+	return "\u25cf " + label
 }
 
 func agentPickerDescription(entry codextui.AgentThreadEntry) string {
-	parts := []string{}
-	if entry.IsRunning {
-		parts = append(parts, "running")
-	}
-	if entry.IsClosed {
-		parts = append(parts, "closed")
-	}
-	if strings.TrimSpace(entry.AgentPath) != "" {
-		parts = append(parts, "path: "+strings.TrimSpace(entry.AgentPath))
-	}
-	if strings.TrimSpace(entry.ThreadID) != "" {
-		parts = append(parts, "thread: "+strings.TrimSpace(entry.ThreadID))
-	}
-	return strings.Join(parts, "  ")
+	return strings.TrimSpace(entry.ThreadID)
 }
 
 func agentPickerSubtitle() string {
-	return "Choose the active agent thread."
+	return "Select an agent to watch. alt+left previous, alt+right next."
+}
+
+func (m *Model) showAgentInfo(message string) {
+	if m == nil {
+		return
+	}
+	m.addHistoryCell(historycell.NewInfoEvent(strings.TrimSpace(message), ""))
+	m.notice = ""
+	m.refreshTranscript()
 }
 
 func (m *Model) agentEntry(threadID string) (codextui.AgentThreadEntry, bool) {

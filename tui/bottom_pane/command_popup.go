@@ -2,6 +2,8 @@ package bottompane
 
 import (
 	"strings"
+
+	codextui "codex_go/tui"
 )
 
 // Rust parity: codex-rs/tui/src/bottom_pane/command_popup.rs.
@@ -23,7 +25,7 @@ func FilterCommandPopupItems(items []CommandPopupItem, query string) []CommandPo
 	if query == "" {
 		out := make([]CommandPopupItem, 0, len(items))
 		for _, item := range items {
-			if item.IsAlias {
+			if item.IsAlias || popupAliasCommand(item.Name) {
 				continue
 			}
 			item.MatchIndices = nil
@@ -80,8 +82,8 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 	commands := CommandsForInput(builtinFlags, serviceTierCommands)
 	items := make([]CommandPopupItem, 0, len(commands))
 	for _, command := range commands {
-		commandText := command.CommandText()
-		if command.IsAlias && commandText != "quit" && commandText != "btw" {
+		if command.Kind == SlashCommandItemBuiltin &&
+			(strings.HasPrefix(command.CommandText(), "debug") || command.Command == codextui.CommandApps) {
 			continue
 		}
 		items = append(items, commandPopupItemFromSlashCommand(command))
@@ -92,6 +94,15 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 	}
 	popup.refreshSelection()
 	return popup
+}
+
+func popupAliasCommand(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "quit", "btw":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *CommandPopup) OnComposerTextChange(text string) {

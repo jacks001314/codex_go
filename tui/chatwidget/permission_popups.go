@@ -1,6 +1,7 @@
 package chatwidget
 
 import (
+	"encoding/json"
 	"strings"
 
 	codextui "codex_go/tui"
@@ -16,6 +17,7 @@ type AutoReviewDenialEntry struct {
 	ID        string
 	Summary   string
 	Rationale string
+	Event     json.RawMessage
 }
 
 type AutoReviewDenialsPopupOutcome string

@@ -1,8 +1,15 @@
 package turn
 
-import "strings"
+import (
+	"strings"
 
-const HostedImageGenerationToolType = "image_generation"
+	"codex_go/codexapi"
+)
+
+const (
+	HostedImageGenerationToolType = "image_generation"
+	HostedWebSearchToolType       = "web_search"
+)
 
 func HostedImageGenerationTool(outputFormat string) map[string]any {
 	outputFormat = strings.TrimSpace(outputFormat)
@@ -13,6 +20,47 @@ func HostedImageGenerationTool(outputFormat string) map[string]any {
 		"type":          HostedImageGenerationToolType,
 		"output_format": outputFormat,
 	}
+}
+
+func HostedWebSearchTool(mode codexapi.WebSearchMode, settings *codexapi.SearchSettings, modelToolType string) map[string]any {
+	if mode == codexapi.WebSearchModeDisabled {
+		return nil
+	}
+	tool := map[string]any{
+		"type":                HostedWebSearchToolType,
+		"external_web_access": mode == codexapi.WebSearchModeLive || mode == codexapi.WebSearchModeIndexed,
+	}
+	if mode == codexapi.WebSearchModeIndexed {
+		tool["indexed_web_access"] = true
+	}
+	if settings != nil {
+		if settings.Filters != nil && len(settings.Filters.AllowedDomains) > 0 {
+			tool["filters"] = map[string]any{"allowed_domains": append([]string(nil), settings.Filters.AllowedDomains...)}
+		}
+		if settings.UserLocation != nil {
+			location := map[string]any{"type": settings.UserLocation.Type}
+			if settings.UserLocation.Country != nil {
+				location["country"] = *settings.UserLocation.Country
+			}
+			if settings.UserLocation.Region != nil {
+				location["region"] = *settings.UserLocation.Region
+			}
+			if settings.UserLocation.City != nil {
+				location["city"] = *settings.UserLocation.City
+			}
+			if settings.UserLocation.Timezone != nil {
+				location["timezone"] = *settings.UserLocation.Timezone
+			}
+			tool["user_location"] = location
+		}
+		if settings.SearchContextSize != nil {
+			tool["search_context_size"] = *settings.SearchContextSize
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(modelToolType), "text_and_image") || strings.EqualFold(strings.TrimSpace(modelToolType), "text-and-image") {
+		tool["search_content_types"] = []string{"text", "image"}
+	}
+	return tool
 }
 
 func MergeHostedTools(tools []any, hostedTools []any) []any {

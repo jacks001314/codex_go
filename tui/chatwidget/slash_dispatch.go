@@ -394,6 +394,8 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 	switch command {
 	case codextui.CommandReview,
 		codextui.CommandRename,
+		codextui.CommandNew,
+		codextui.CommandClear,
 		codextui.CommandPlan,
 		codextui.CommandGoal,
 		codextui.CommandIde,

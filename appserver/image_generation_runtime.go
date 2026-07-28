@@ -73,12 +73,13 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams) ([]any,
 	if cfg == nil {
 		return nil, nil
 	}
-	standalone, err := r.imageGenerationOptionsForTurn(cfg, params)
+	standaloneWebSearch, err := r.webSearchOptionsForTurn(cfg, params)
 	if err != nil {
 		return nil, err
 	}
-	if standalone != nil {
-		return nil, nil
+	standaloneImageGeneration, err := r.imageGenerationOptionsForTurn(cfg, params)
+	if err != nil {
+		return nil, err
 	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
 	if err != nil {
@@ -103,10 +104,18 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams) ([]any,
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, snapshot)
 	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
-	if !appImageGenerationHostedEnabled(*providerInfo, runtimeProvider.Capabilities(), modelInfo, snapshot, cfg.FeatureSettings()) {
-		return nil, nil
+	capabilities := runtimeProvider.Capabilities()
+	tools := []any{}
+	if standaloneWebSearch == nil && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
+		mode := webSearchModeFromConfig(cfg)
+		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
+			tools = append(tools, hosted)
+		}
 	}
-	return []any{turn.HostedImageGenerationTool("png")}, nil
+	if standaloneImageGeneration == nil && appImageGenerationHostedEnabled(*providerInfo, capabilities, modelInfo, snapshot, cfg.FeatureSettings()) {
+		tools = append(tools, turn.HostedImageGenerationTool("png"))
+	}
+	return tools, nil
 }
 
 func (r *RuntimeRouter) imageGenerationInputItemsForTurn(threadID string, params *turn.TurnStartParams) []any {

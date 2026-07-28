@@ -1,6 +1,11 @@
 package chatwidget
 
-import "testing"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestCollaborationModeKindMatchesRustVisibilityAndLabels(t *testing.T) {
 	if CollaborationModeKindPlan.DisplayName() != "Plan" || !CollaborationModeKindPlan.IsTUIVisible() || !CollaborationModeKindPlan.AllowsRequestUserInput() {
@@ -64,5 +69,17 @@ func TestInitialCollaborationMaskAppliesModelOverride(t *testing.T) {
 	mask, ok := InitialCollaborationMask(nil, " gpt-5.4-mini ")
 	if !ok || mask.Mode == nil || *mask.Mode != CollaborationModeKindDefault || mask.Model == nil || *mask.Model != "gpt-5.4-mini" {
 		t.Fatalf("initial mask = %#v ok=%v", mask, ok)
+	}
+}
+
+func TestPlanCollaborationInstructionsMatchRustTemplate(t *testing.T) {
+	instructions := strings.ReplaceAll(CollaborationModeInstructions(CollaborationModeKindPlan), "\r\n", "\n") + "\n"
+	if got := fmt.Sprintf("%X", sha256.Sum256([]byte(instructions))); got != "D6D46C2D460A9D91ADA2167605A8DFC56EFDE6B2AB61E101444C736C6FD6960A" {
+		t.Fatalf("plan collaboration instructions hash = %s", got)
+	}
+	for _, want := range []string{"## Plan Mode vs update_plan tool", "## Execution vs. mutation in Plan Mode", "## PHASE 3", "<proposed_plan>"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("plan collaboration instructions missing %q", want)
+		}
 	}
 }

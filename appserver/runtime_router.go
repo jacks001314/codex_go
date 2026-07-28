@@ -1824,20 +1824,51 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 		return nil, err
 	}
-	notification, err := r.compactThread(context.Background(), &runtimeCompactRequest{
+	started, err := r.requireTurns().Start(&turn.TurnStartParams{ThreadID: params.ThreadID, Originator: "compact"})
+	if err != nil {
+		return nil, err
+	}
+	turnRecord := &started.Turn
+	turnID := strings.TrimSpace(turnRecord.ID)
+	startedAt := time.Unix(turnRecord.StartedAt, 0).UTC()
+	if turnRecord.StartedAt == 0 {
+		startedAt = time.Now().UTC()
+	}
+	appTurn := appTurnFromTurnRecord(turnRecord, nil, TurnStatusInProgress, nil, nil)
+	appTurn.Items = []ThreadItem{}
+	appTurn.ItemsView = TurnItemsNotLoaded
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
+	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
+	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, startedAt)
+	_, err = r.compactThread(context.Background(), &runtimeCompactRequest{
 		ThreadID:     params.ThreadID,
+		TurnID:       turnID,
 		ConnectionID: request.normalizedConnectionID(),
 		Trigger:      compact.TriggerManual,
 		Reason:       compact.ReasonUserRequested,
 		Phase:        compact.PhaseStandaloneTurn,
 	})
 	if err != nil {
+		r.finishTurnWithError(params.ThreadID, turnID, startedAt.UnixMilli(), err)
 		return nil, err
 	}
-	if notification == nil {
-		notification = &ContextCompactedNotification{ThreadID: params.ThreadID}
-	}
-	r.notify(NotificationContextCompacted, notification)
+	completedAt := time.Now().UTC()
+	completedAtUnix := completedAt.Unix()
+	durationMS := completedAt.UnixMilli() - startedAt.UnixMilli()
+	_ = r.appendRuntimeTurnComplete(params.ThreadID, turnID, completedAt, durationMS)
+	r.completeTurnRecord(params.ThreadID, turnID, TurnStatusCompleted)
+	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
+		ThreadID: params.ThreadID,
+		Turn: completedTurnNotificationTurn(
+			turnID,
+			TurnStatusCompleted,
+			nil,
+			&turnRecord.StartedAt,
+			&completedAtUnix,
+			&durationMS,
+		),
+	})
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(params.ThreadID))
 	return &ThreadCompactStartResponse{}, nil
 }
 
@@ -4779,6 +4810,9 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	if reviewThreadID != "" {
 		response.ReviewThreadID = reviewThreadID
 	}
+	if err := r.persistEnteredReviewMode(&params, response); err != nil {
+		return nil, err
+	}
 	r.notifyEnteredReviewMode(&params, response)
 	r.startReviewRuntimeAsync(&params, response, request.normalizedConnectionID())
 	return response, nil
@@ -4889,6 +4923,37 @@ func (r *RuntimeRouter) notifyEnteredReviewMode(params *review.StartParams, resp
 		TurnID:        turnID,
 		CompletedAtMS: nowMS,
 	})
+}
+
+func (r *RuntimeRouter) persistEnteredReviewMode(params *review.StartParams, response *review.StartResponse) error {
+	if r == nil || params == nil || response == nil || !r.hasRuntimeThreadStore() {
+		return nil
+	}
+	threadID := strings.TrimSpace(response.ReviewThreadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	turnID := strings.TrimSpace(response.Turn.ID)
+	if turnID == "" {
+		turnID = "review-" + strings.TrimSpace(params.ThreadID)
+	}
+	hint := review.UserFacingHintForTarget(params.Target.ToTarget())
+	createdAt := time.Now().UTC()
+	item := session.Item{
+		ID:        turnID,
+		Type:      "enteredReviewMode",
+		Text:      hint,
+		CreatedAt: createdAt,
+		Metadata: appTurnMetadata(turnID, map[string]any{
+			"kind":   "review_enter",
+			"review": hint,
+		}),
+	}
+	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
+		return err
+	}
+	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, createdAt)
+	return nil
 }
 
 func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
@@ -6821,6 +6886,9 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	}
 	sessionResults := r.importExternalAgentSessions(&params)
 	response, notification := r.requireConfig().ImportExternalAgentConfigWithResults(&params, sessionResults)
+	if r.services.Plugins != nil {
+		_ = r.services.Plugins.ReloadConfig()
+	}
 	if notification != nil && len(notification.ItemTypeResults) > 0 {
 		r.notify(NotificationExternalAgentConfigImportCompleted, notification)
 		r.emitExternalAgentConfigImportAnalytics(context.Background(), request.normalizedConnectionID(), &params, notification)

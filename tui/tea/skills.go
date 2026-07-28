@@ -21,7 +21,7 @@ func (m *Model) applySkillsManageCommand() bubbletea.Cmd {
 	reader := m.onReadSkills
 	m.openSelectionViewModal(ModalKindGeneric, skillsLoadingView())
 	return func() bubbletea.Msg {
-		response, err := reader(cwd)
+		response, err := reader(cwd, false)
 		return SkillsListResultMsg{CWD: cwd, Response: response, Err: err}
 	}
 }
@@ -44,7 +44,7 @@ func (m *Model) applySkillsListResult(message SkillsListResultMsg) {
 		m.openSelectionViewModal(ModalKindGeneric, skillsErrorView("Skills: "+strings.TrimSpace(message.Err.Error())))
 		return
 	}
-	m.openSkillsBrowser(message.Response, message.CWD)
+	m.openManageSkillsModal(message.Response, message.CWD)
 }
 
 func (m *Model) openSkillsBrowser(response appserver.SkillsListResponse, cwd string) {

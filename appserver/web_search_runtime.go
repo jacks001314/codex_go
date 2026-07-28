@@ -12,7 +12,8 @@ import (
 )
 
 func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams) (*turn.WebSearchOptions, error) {
-	if cfg == nil || turnStartReviewRuntime(params) || !features.Enabled(cfg.FeatureSettings(), "standalone_web_search") {
+	mode := webSearchModeFromConfig(cfg)
+	if cfg == nil || turnStartReviewRuntime(params) || mode == codexapi.WebSearchModeDisabled {
 		return nil, nil
 	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
@@ -38,6 +39,10 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		snapshot = &resolved.Auth
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, snapshot)
+	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
+	if !appStandaloneWebSearchEnabled(runtimeProvider.Capabilities(), modelInfo, cfg.FeatureSettings()) {
+		return nil, nil
+	}
 	apiProvider, err := runtimeProvider.APIProvider()
 	if err != nil {
 		return nil, err
@@ -50,15 +55,31 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	metadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		SessionID:   threadID,
+		ThreadID:    threadID,
+		RequestKind: codexapi.ClientRequestTurn,
+		Extra:       turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), responsesMetadataFromTurnStart(params)),
+	})
 	return &turn.WebSearchOptions{
-		SessionID:  threadID,
-		Model:      modelProviderConfig.Model,
-		Provider:   apiProvider,
-		Auth:       authHeaders,
-		HTTPClient: r.httpClientForConfig(cfg),
-		InputItems: r.webSearchInputItemsForTurn(threadID, params),
-		Settings:   webSearchSettingsFromConfig(cfg),
+		SessionID:       threadID,
+		Model:           modelProviderConfig.Model,
+		Originator:      turnOriginator(params),
+		TurnMetadata:    metadata[codexapi.ClientCodexTurnMetadataHeader],
+		Provider:        apiProvider,
+		Auth:            authHeaders,
+		HTTPClient:      r.httpClientForConfig(cfg),
+		InputItems:      r.webSearchInputItemsForTurn(threadID, params),
+		Settings:        webSearchSettingsFromConfig(cfg, mode),
+		MaxOutputTokens: turn.WebSearchMaxOutputTokens(modelInfo, cfg.ToolOutputTokenLimit()),
 	}, nil
+}
+
+func appStandaloneWebSearchEnabled(capabilities model.ProviderCapabilities, info *model.ModelInfo, featureSettings map[string]bool) bool {
+	if info == nil || !capabilities.NamespaceTools || !capabilities.WebSearch {
+		return false
+	}
+	return info.UseResponsesLite || features.Enabled(featureSettings, "standalone_web_search")
 }
 
 func (r *RuntimeRouter) webSearchInputItemsForTurn(threadID string, params *turn.TurnStartParams) []any {
@@ -70,22 +91,32 @@ func (r *RuntimeRouter) webSearchInputItemsForTurn(threadID string, params *turn
 	return items
 }
 
-func webSearchSettingsFromConfig(cfg *config.Config) *codexapi.SearchSettings {
-	settings := &codexapi.SearchSettings{
-		AllowedCallers: []codexapi.AllowedCaller{codexapi.AllowedCallerDirect},
+func webSearchSettingsFromConfig(cfg *config.Config, mode codexapi.WebSearchMode) *codexapi.SearchSettings {
+	return codexapi.SearchSettingsForMode(mode, webSearchToolConfig(cfg))
+}
+
+func webSearchModeFromConfig(cfg *config.Config) codexapi.WebSearchMode {
+	if cfg == nil || cfg.Values == nil {
+		return codexapi.WebSearchModeCached
 	}
-	webSearch := webSearchToolConfig(cfg)
-	if contextSize := stringFromMapAny(webSearch, "context_size", "contextSize"); contextSize != "" {
-		size := codexapi.SearchContextSize(contextSize)
-		settings.SearchContextSize = &size
+	if value, ok := cfg.Values["web_search"]; ok {
+		return codexapi.WebSearchModeFromValue(value)
 	}
-	if domains := stringSliceFromMapAny(webSearch, "allowed_domains", "allowedDomains"); len(domains) > 0 {
-		settings.Filters = &codexapi.SearchFilters{AllowedDomains: domains}
+	featureSettings := cfg.FeatureSettings()
+	if features.Enabled(featureSettings, "web_search_cached") {
+		return codexapi.WebSearchModeCached
 	}
-	if location := locationFromWebSearchToolConfig(webSearch); location != nil {
-		settings.UserLocation = location
+	if features.Enabled(featureSettings, "web_search_request") {
+		return codexapi.WebSearchModeLive
 	}
-	return settings
+	return codexapi.WebSearchModeCached
+}
+
+func responsesMetadataFromTurnStart(params *turn.TurnStartParams) map[string]string {
+	if params == nil {
+		return nil
+	}
+	return params.ResponsesAPIMetadata
 }
 
 func webSearchToolConfig(cfg *config.Config) map[string]any {

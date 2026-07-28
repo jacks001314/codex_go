@@ -17,6 +17,7 @@ import (
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/config"
 	"codex_go/filesearch"
 	"codex_go/plugin"
 	"codex_go/protocol"
@@ -28,6 +29,7 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 	execcell "codex_go/tui/exec_cell"
 	historycell "codex_go/tui/history_cell"
+	idecontext "codex_go/tui/ide_context"
 	"codex_go/tui/markdown"
 	"codex_go/tui/overlay"
 	"codex_go/tui/styles"
@@ -49,11 +51,14 @@ const (
 type SubmitFunc func(prompt string) bubbletea.Cmd
 
 type SubmitRequest struct {
-	Prompt          string
-	ServiceTier     string
-	Attachments     []bottompane.ComposerAttachment
-	MentionBindings []string
-	MentionCatalog  chatwidget.SubmissionMentionCatalog
+	Prompt                 string
+	ServiceTier            string
+	AdditionalInstructions string
+	Attachments            []bottompane.ComposerAttachment
+	MentionBindings        []string
+	MentionCatalog         chatwidget.SubmissionMentionCatalog
+	IDEContext             *idecontext.IdeContext
+	CollaborationMode      *chatwidget.CollaborationMode
 }
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
@@ -78,6 +83,10 @@ type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.Sess
 
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
+type ThreadRenameFunc func(threadID string, name string) error
+
+type LogoutFunc func() error
+
 type SessionResumeResponse struct {
 	Summary    *codextui.SessionSummary
 	Messages   []codextui.Message
@@ -100,6 +109,8 @@ type TokenActivityReaderFunc func(view chatwidget.TokenActivityView) (chatwidget
 type RateLimitResetCreditsReaderFunc func() (int64, error)
 
 type RateLimitResetCreditConsumerFunc func(idempotencyKey string) (chatwidget.RateLimitResetConsumeOutcome, error)
+
+type RateLimitsReaderFunc func() ([]codextui.RateLimitStatus, error)
 
 type TerminalTitleWriterFunc func(sequence string) bubbletea.Cmd
 
@@ -124,6 +135,9 @@ type SettingsEdit struct {
 
 type SettingsWriteResult struct {
 	FeatureSettings         map[string]bool
+	UseMemories             *bool
+	GenerateMemories        *bool
+	FeedbackEnabled         *bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -133,28 +147,67 @@ type SettingsWriteResult struct {
 	TUITheme                string
 	TUIPet                  string
 	SessionPickerView       string
+	PluginUserMarketplaces  map[string]bool
+	PluginGitMarketplaces   map[string]bool
 	FilePath                string
 }
 
 type SettingsWriteFunc func(edits []SettingsEdit) (SettingsWriteResult, error)
 
+type CollaborationModeUpdateFunc func(threadID string, mode chatwidget.CollaborationMode) error
+
+type MemorySettingsWriteFunc func(threadID string, useMemories bool, generateMemories bool, generateChanged bool) (SettingsWriteResult, error)
+
+type MemoryResetFunc func() error
+
+type FeedbackSubmitFunc func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error)
+
+type IDEContextReaderFunc func(cwd string) (*idecontext.IdeContext, error)
+
+type AutoReviewDenialApproveFunc func(threadID string, entry chatwidget.AutoReviewDenialEntry) error
+
 type WindowsSandboxSetupFunc func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error)
 type DesktopThreadOpenFunc func(threadID string) error
-type SandboxReadDirFunc func(path string) error
-type ExternalAgentImportFunc func(cwd string) (string, error)
+type SandboxReadDirFunc func(path string) (canonicalPath string, err error)
+type ExternalAgentDetectFunc func(cwd string, migrationSource string) (config.ExternalAgentConfigDetectResponse, error)
+type ExternalAgentImportFunc func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error)
 type RolloutPathReaderFunc func(threadID string) (string, error)
 
-type HooksListReaderFunc func(cwd string) ([]chatwidget.HookRun, error)
+type HooksListReaderFunc func(cwd string) (appserver.HookListResponse, error)
 
-type PluginListReaderFunc func() (plugin.PluginListResponse, error)
+type HookConfigWriteFunc func(params config.ConfigBatchWriteParams) error
 
-type SkillsListReaderFunc func(cwd string) (appserver.SkillsListResponse, error)
+type PluginListReaderFunc func(cwd string, forceRefetch bool) (plugin.PluginListResponse, error)
+
+type PluginReadFunc func(params plugin.PluginReadParams) (plugin.PluginReadResponse, error)
+
+type PluginInstallFunc func(params plugin.PluginInstallParams) (plugin.PluginInstallResponse, error)
+
+type PluginUninstallFunc func(params plugin.PluginUninstallParams) (plugin.PluginUninstallResponse, error)
+
+type PluginEnabledWriteFunc func(pluginID string, enabled bool) error
+
+type MarketplaceAddFunc func(params plugin.MarketplaceAddParams) (plugin.MarketplaceAddResponse, error)
+
+type MarketplaceRemoveFunc func(params plugin.MarketplaceRemoveParams) (plugin.MarketplaceRemoveResponse, error)
+
+type MarketplaceUpgradeFunc func(params plugin.MarketplaceUpgradeParams) (plugin.MarketplaceUpgradeResponse, error)
+
+type PluginOpenURLFunc func(target string) error
+
+type SkillsListReaderFunc func(cwd string, forceReload bool) (appserver.SkillsListResponse, error)
+
+type SkillEnabledWriteFunc func(path string, enabled bool) (effectiveEnabled bool, err error)
 
 type FuzzyFileSearchReaderFunc func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error)
 
 type AppListReaderFunc func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error)
 
 type ReviewStartFunc func(params review.StartParams) (review.StartResponse, error)
+
+type ReviewStartCommandFunc func(params review.StartParams) bubbletea.Cmd
+
+type CompactStartCommandFunc func(threadID string) bubbletea.Cmd
 
 type ReviewBranchesReaderFunc func(cwd string) (currentBranch string, branches []string, err error)
 
@@ -176,6 +229,10 @@ type ModelCompactionStatusMsg struct {
 	Active  bool
 }
 
+type CompactStartResultMsg struct {
+	Err error
+}
+
 type TurnCompletedMsg struct {
 	ThreadID         string
 	AssistantMessage string
@@ -183,7 +240,14 @@ type TurnCompletedMsg struct {
 }
 
 type TurnInterruptedMsg struct {
-	Err error
+	ThreadID string
+	Err      error
+}
+
+type reviewTokenSnapshot struct {
+	Total         codextui.TokenUsage
+	Last          codextui.TokenUsage
+	ContextWindow *int64
 }
 
 type MCPStartupUpdateMsg struct {
@@ -193,6 +257,12 @@ type MCPStartupUpdateMsg struct {
 
 type MCPStartupInventoryMsg struct {
 	Servers []historycell.McpServerStatus
+}
+
+type MCPInventoryResultMsg struct {
+	RequestID uint64
+	Servers   []historycell.McpServerStatus
+	Err       error
 }
 
 type MCPStartupFinishAfterLagMsg struct{}
@@ -234,6 +304,12 @@ type RateLimitSnapshotMsg struct {
 	Snapshot chatwidget.RateLimitSnapshot
 }
 
+type RateLimitsResultMsg struct {
+	RequestID uint64
+	Limits    []codextui.RateLimitStatus
+	Err       error
+}
+
 type TokenActivityResultMsg struct {
 	RequestID uint64
 	View      chatwidget.TokenActivityView
@@ -270,8 +346,10 @@ type GoalResultMsg struct {
 	RequestID uint64
 	Action    string
 	ThreadID  string
+	Objective string
 	Goal      *appserver.Goal
 	Cleared   bool
+	Replacing bool
 	Err       error
 }
 
@@ -296,16 +374,51 @@ type WindowsSandboxSetupResultMsg struct {
 	Err     error
 }
 
+type SandboxReadDirResultMsg struct {
+	RequestedPath string
+	CanonicalPath string
+	Err           error
+}
+
+type MemoryResetResultMsg struct {
+	Err error
+}
+
+type FeedbackSubmitResultMsg struct {
+	Category    feedbackCategory
+	IncludeLogs bool
+	Response    appserver.FeedbackUploadResponse
+	Err         error
+}
+
+type GuardianReviewMsg struct {
+	ThreadID string
+	Event    chatwidget.GuardianAssessmentEvent
+}
+
+type AutoReviewDenialApproveResultMsg struct {
+	Entry chatwidget.AutoReviewDenialEntry
+	Err   error
+}
+
 type WindowsSandboxSetupCompletedMsg struct {
 	Completion WindowsSandboxSetupCompletion
 }
 
 type HooksListResultMsg struct {
-	Runs []chatwidget.HookRun
-	Err  error
+	CWD      string
+	Response appserver.HookListResponse
+	Err      error
+}
+
+type HookConfigWriteResultMsg struct {
+	RequestID   uint64
+	ErrorPrefix string
+	Err         error
 }
 
 type PluginListResultMsg struct {
+	CWD      string
 	Response plugin.PluginListResponse
 	Err      error
 }
@@ -336,9 +449,17 @@ type AgentListResultMsg struct {
 }
 
 type AgentSwitchResultMsg struct {
-	ThreadID string
-	Response AgentThreadSwitchResponse
-	Err      error
+	ThreadID   string
+	Response   AgentThreadSwitchResponse
+	Err        error
+	closedSide *activeSideConversation
+}
+
+type AgentNavigateResultMsg struct {
+	CurrentThreadID string
+	Entries         []codextui.AgentThreadEntry
+	Direction       int
+	Err             error
 }
 
 type ReviewStartResultMsg struct {
@@ -364,10 +485,40 @@ type SkillsListResultMsg struct {
 	Err      error
 }
 
+type SkillEnabledWriteResultMsg struct {
+	RequestID uint64
+	Path      string
+	Enabled   bool
+	Err       error
+}
+
+type ExternalAgentDetectResultMsg struct {
+	Results []ExternalAgentSourceDetectResult
+}
+
+type ExternalAgentSourceDetectResult struct {
+	MigrationSource string
+	Label           string
+	Response        config.ExternalAgentConfigDetectResponse
+	Err             error
+}
+
+type ExternalAgentImportResultMsg struct {
+	Selected  []config.ExternalAgentConfigMigrationItem
+	Source    string
+	Response  config.ExternalAgentConfigImportResponse
+	Completed config.ExternalAgentConfigImportCompletedNotification
+	Err       error
+}
+
 type SkillsInventoryResultMsg struct {
 	CWD      string
 	Response appserver.SkillsListResponse
 	Err      error
+}
+
+type LogoutResultMsg struct {
+	Err error
 }
 
 type StreamStartedMsg struct {
@@ -402,12 +553,15 @@ type Options struct {
 	OnModalResponse               ModalResponseFunc
 	OnSessionAction               SessionActionFunc
 	OnResumeSession               SessionResumeFunc
+	OnRenameThread                ThreadRenameFunc
+	OnLogout                      LogoutFunc
 	OnReadAgents                  AgentThreadReaderFunc
 	OnSwitchAgent                 AgentThreadSwitchFunc
 	OnClipboardWrite              func(text string) error
 	OnReadTokenActivity           TokenActivityReaderFunc
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
+	OnReadRateLimits              RateLimitsReaderFunc
 	OnWriteTerminalTitle          TerminalTitleWriterFunc
 	OnPostNotification            NotificationPostFunc
 	OnReadGitDiff                 GitDiffReaderFunc
@@ -417,17 +571,38 @@ type Options struct {
 	OnSetGoal                     GoalSetterFunc
 	OnClearGoal                   GoalClearerFunc
 	OnWriteSettings               SettingsWriteFunc
+	OnUpdateCollaborationMode     CollaborationModeUpdateFunc
+	OnWriteMemorySettings         MemorySettingsWriteFunc
+	OnResetMemories               MemoryResetFunc
+	OnSubmitFeedback              FeedbackSubmitFunc
+	OnReadIDEContext              IDEContextReaderFunc
+	OnApproveAutoReviewDenial     AutoReviewDenialApproveFunc
 	OnStartWindowsSandboxSetup    WindowsSandboxSetupFunc
 	OnOpenDesktopThread           DesktopThreadOpenFunc
 	OnSandboxReadDir              SandboxReadDirFunc
+	OnDetectExternalAgent         ExternalAgentDetectFunc
 	OnImportExternalAgent         ExternalAgentImportFunc
 	OnReadRolloutPath             RolloutPathReaderFunc
 	OnReadHooks                   HooksListReaderFunc
+	OnWriteHookConfig             HookConfigWriteFunc
 	OnReadPlugins                 PluginListReaderFunc
+	OnReadPlugin                  PluginReadFunc
+	OnInstallPlugin               PluginInstallFunc
+	OnUninstallPlugin             PluginUninstallFunc
+	OnWritePluginEnabled          PluginEnabledWriteFunc
+	OnAddMarketplace              MarketplaceAddFunc
+	OnRemoveMarketplace           MarketplaceRemoveFunc
+	OnUpgradeMarketplace          MarketplaceUpgradeFunc
+	OnOpenPluginURL               PluginOpenURLFunc
+	PluginUserMarketplaces        map[string]bool
+	PluginGitMarketplaces         map[string]bool
 	OnReadSkills                  SkillsListReaderFunc
+	OnWriteSkillEnabled           SkillEnabledWriteFunc
 	OnFuzzyFileSearch             FuzzyFileSearchReaderFunc
 	OnReadApps                    AppListReaderFunc
 	OnStartReview                 ReviewStartFunc
+	OnStartReviewCommand          ReviewStartCommandFunc
+	OnStartCompactCommand         CompactStartCommandFunc
 	OnStartSide                   SideStartFunc
 	OnCloseSide                   SideCloseFunc
 	OnReadReviewBranches          ReviewBranchesReaderFunc
@@ -444,9 +619,13 @@ type Options struct {
 	PermissionRequirements         *chatwidget.PermissionRequirements
 	BackgroundProcesses            []historycell.UnifiedExecProcessDetails
 	MCPServers                     []historycell.McpServerStatus
+	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	MCPStartupExpectedServers      []string
 	InitialMessages                <-chan bubbletea.Msg
 	FeatureSettings                map[string]bool
+	UseMemories                    *bool
+	GenerateMemories               *bool
+	FeedbackEnabled                *bool
 	Personality                    chatwidget.Personality
 	HideRateLimitModelNudge        *bool
 	TUITheme                       string
@@ -534,6 +713,11 @@ type Model struct {
 	activeAgentLabel                 string
 	backgroundProcesses              []historycell.UnifiedExecProcessDetails
 	mcpServers                       []historycell.McpServerStatus
+	onReadMCPInventory               func(detail bool) ([]historycell.McpServerStatus, error)
+	nextMCPInventoryRequestID        uint64
+	pendingMCPInventoryRequestID     uint64
+	pendingMCPInventoryMessageIndex  int
+	pendingMCPInventoryDetail        bool
 	featureSettings                  map[string]bool
 	personality                      chatwidget.Personality
 	tuiTheme                         string
@@ -551,12 +735,17 @@ type Model struct {
 	onModalResponse                  ModalResponseFunc
 	onSessionAction                  SessionActionFunc
 	onResumeSession                  SessionResumeFunc
+	onRenameThread                   ThreadRenameFunc
+	onLogout                         LogoutFunc
 	onReadAgents                     AgentThreadReaderFunc
 	onSwitchAgent                    AgentThreadSwitchFunc
 	clipboardWrite                   func(text string) error
 	onReadTokenActivity              TokenActivityReaderFunc
 	onReadRateLimitResetCredits      RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit    RateLimitResetCreditConsumerFunc
+	onReadRateLimits                 RateLimitsReaderFunc
+	nextStatusRateLimitRequestID     uint64
+	pendingStatusRateLimitRequests   map[uint64]struct{}
 	terminalTitleWriter              TerminalTitleWriterFunc
 	notificationPost                 NotificationPostFunc
 	notifications                    chatwidget.NotificationState
@@ -570,20 +759,56 @@ type Model struct {
 	onSetGoal                        GoalSetterFunc
 	onClearGoal                      GoalClearerFunc
 	onWriteSettings                  SettingsWriteFunc
+	onUpdateCollaborationMode        CollaborationModeUpdateFunc
+	onWriteMemorySettings            MemorySettingsWriteFunc
+	onResetMemories                  MemoryResetFunc
+	onSubmitFeedback                 FeedbackSubmitFunc
+	onReadIDEContext                 IDEContextReaderFunc
+	ideContext                       chatwidget.IdeContextState
+	onApproveAutoReviewDenial        AutoReviewDenialApproveFunc
+	toolRequestRuntime               chatwidget.ToolRequestRuntimeState
+	useMemories                      bool
+	generateMemories                 bool
+	feedbackEnabled                  bool
 	windowsSandboxSetup              WindowsSandboxSetupFunc
 	onOpenDesktopThread              DesktopThreadOpenFunc
 	onSandboxReadDir                 SandboxReadDirFunc
+	onDetectExternalAgent            ExternalAgentDetectFunc
 	onImportExternalAgent            ExternalAgentImportFunc
 	onReadRolloutPath                RolloutPathReaderFunc
 	windowsSandboxSetupActive        bool
 	windowsSandboxSetupStatus        chatwidget.WindowsSandboxSetupStatus
 	onReadHooks                      HooksListReaderFunc
+	onWriteHookConfig                HookConfigWriteFunc
+	hookWriteQueue                   []hookConfigWriteOperation
+	hookWriteActive                  bool
+	nextHookWriteRequestID           uint64
 	hookLifecycle                    chatwidget.HookLifecycleState
 	onReadPlugins                    PluginListReaderFunc
+	onReadPlugin                     PluginReadFunc
+	onInstallPlugin                  PluginInstallFunc
+	onUninstallPlugin                PluginUninstallFunc
+	onWritePluginEnabled             PluginEnabledWriteFunc
+	onAddMarketplace                 MarketplaceAddFunc
+	onRemoveMarketplace              MarketplaceRemoveFunc
+	onUpgradeMarketplace             MarketplaceUpgradeFunc
+	onOpenPluginURL                  PluginOpenURLFunc
+	pluginUserMarketplaces           map[string]bool
+	pluginGitMarketplaces            map[string]bool
+	pluginRuntime                    chatwidget.PluginsRuntimeState
+	pluginToggleDesired              map[string]bool
+	pluginToggleActive               map[string]bool
 	onReadSkills                     SkillsListReaderFunc
+	onWriteSkillEnabled              SkillEnabledWriteFunc
+	nextSkillWriteRequestID          uint64
 	onFuzzyFileSearch                FuzzyFileSearchReaderFunc
 	onReadApps                       AppListReaderFunc
 	onStartReview                    ReviewStartFunc
+	onStartReviewCommand             ReviewStartCommandFunc
+	onStartCompactCommand            CompactStartCommandFunc
+	reviewState                      chatwidget.ReviewState
+	reviewTurnID                     string
+	reviewTokenSnapshot              *reviewTokenSnapshot
 	onStartSide                      SideStartFunc
 	onCloseSide                      SideCloseFunc
 	onReadReviewBranches             ReviewBranchesReaderFunc
@@ -602,6 +827,7 @@ type Model struct {
 	experimentalItems                []chatwidget.ExperimentalFeatureOption
 	currentGoal                      *appserver.Goal
 	goalObservedAt                   time.Time
+	pendingGoalObjective             string
 	hasChatGPTAccount                bool
 	chatGPTPlanType                  string
 	availableRateLimitResetCredits   *int64
@@ -626,9 +852,12 @@ type Model struct {
 	editorActive                     bool
 	toolCalls                        map[string]*toolCallDisplayState
 	mcpToolCalls                     map[string]*mcpToolCallDisplayState
+	webSearches                      map[string]*webSearchDisplayState
 	renderedFileChanges              map[string]bool
+	activeProposedPlans              map[string]*proposedPlanDisplayState
 	startedThreadIDs                 map[string]bool
 	completedThreadIDs               map[string]bool
+	pendingThreadName                bool
 	taskStartedAt                    time.Time
 
 	composerPasteEnterUntil *time.Time
@@ -649,6 +878,16 @@ type toolCallDisplayState struct {
 type mcpToolCallDisplayState struct {
 	ID           string
 	Invocation   historycell.McpInvocation
+	MessageIndex int
+}
+
+type webSearchDisplayState struct {
+	ID           string
+	MessageIndex int
+}
+
+type proposedPlanDisplayState struct {
+	Text         strings.Builder
 	MessageIndex int
 }
 
@@ -673,95 +912,131 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 
 	model := &Model{
-		State:                          state,
-		Styles:                         resolveStyles(options.TUIThemeStyles),
-		Transcript:                     newTranscriptComponent(),
-		Composer:                       newComposerComponent(options.Placeholder),
-		StatusBar:                      newStatusBarComponent(),
-		transcript:                     transcript,
-		activityFollow:                 true,
-		retryMessageIndex:              -1,
-		composer:                       composer,
-		noAltScreen:                    options.NoAltScreen,
-		terminalFocused:                true,
-		statusStyle:                    lipgloss.NewStyle().Bold(true),
-		footerStyle:                    lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		bottomStyle:                    lipgloss.NewStyle(),
-		modelPickerOpts:                append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
-		serviceTierCommands:            append([]bottompane.ServiceTierCommand(nil), options.ServiceTierCommands...),
-		sessionItems:                   append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
-		sessionCWD:                     strings.TrimSpace(options.SessionPickerCWD),
-		sessionPickerDensity:           normalizeSessionPickerDensityTea(options.SessionPickerView),
-		backgroundProcesses:            cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
-		mcpServers:                     cloneMcpServerStatuses(options.MCPServers),
-		mcpStartup:                     chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
-		initialMessages:                options.InitialMessages,
-		featureSettings:                cloneBoolMapTea(options.FeatureSettings),
-		personality:                    initialPersonality(state, options.Personality),
-		tuiTheme:                       strings.TrimSpace(options.TUITheme),
-		tuiPet:                         normalizePetIDTea(options.TUIPet),
-		onSubmit:                       options.OnSubmit,
-		onSubmitRequest:                options.OnSubmitRequest,
-		onInterrupt:                    options.OnInterrupt,
-		onInterruptMCPStartup:          options.OnInterruptMCPStartup,
-		onExternalEditor:               options.OnExternalEditor,
-		keymapConfig:                   options.KeymapConfig.Clone(),
-		onKeymapEdit:                   options.OnKeymapEdit,
-		onModalResponse:                options.OnModalResponse,
-		onSessionAction:                options.OnSessionAction,
-		onResumeSession:                options.OnResumeSession,
-		onReadAgents:                   options.OnReadAgents,
-		onSwitchAgent:                  options.OnSwitchAgent,
-		clipboardWrite:                 clipboardWrite,
-		onReadTokenActivity:            options.OnReadTokenActivity,
-		onReadRateLimitResetCredits:    options.OnReadRateLimitResetCredits,
-		onConsumeRateLimitResetCredit:  options.OnConsumeRateLimitResetCredit,
-		terminalTitleWriter:            terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
-		notificationPost:               options.OnPostNotification,
-		notificationSettings:           notificationSettingsOrDefault(options.Notifications),
-		notificationMethod:             notificationMethodOrDefault(options.NotificationMethod),
-		notificationCondition:          notificationConditionOrDefault(options.NotificationCondition),
-		onReadGitDiff:                  options.OnReadGitDiff,
-		onStopBackgroundTerminals:      options.OnStopBackgroundTerminals,
-		onReadDebugConfig:              options.OnReadDebugConfig,
-		onReadGoal:                     options.OnReadGoal,
-		onSetGoal:                      options.OnSetGoal,
-		onClearGoal:                    options.OnClearGoal,
-		onWriteSettings:                options.OnWriteSettings,
-		windowsSandboxSetup:            options.OnStartWindowsSandboxSetup,
-		onOpenDesktopThread:            options.OnOpenDesktopThread,
-		onSandboxReadDir:               options.OnSandboxReadDir,
-		onImportExternalAgent:          options.OnImportExternalAgent,
-		onReadRolloutPath:              options.OnReadRolloutPath,
-		onReadHooks:                    options.OnReadHooks,
-		onReadPlugins:                  options.OnReadPlugins,
-		onReadSkills:                   options.OnReadSkills,
-		onFuzzyFileSearch:              options.OnFuzzyFileSearch,
-		onReadApps:                     options.OnReadApps,
-		onStartReview:                  options.OnStartReview,
-		onStartSide:                    options.OnStartSide,
-		onCloseSide:                    options.OnCloseSide,
-		onReadReviewBranches:           options.OnReadReviewBranches,
-		onReadReviewCommits:            options.OnReadReviewCommits,
-		statusLineConfiguredByUser:     options.StatusLineItems != nil,
-		rateLimitSnapshots:             map[string]chatwidget.RateLimitSnapshot{},
-		rateLimitSwitchPrompt:          chatwidget.RateLimitSwitchPromptIdle,
-		hideRateLimitModelNudge:        boolPtrValueTea(options.HideRateLimitModelNudge),
-		approvalsReviewer:              chatwidget.ApprovalsReviewerUser,
-		permissionRequirements:         clonePermissionRequirementsTea(options.PermissionRequirements),
-		hasChatGPTAccount:              options.HasChatGPTAccount,
-		chatGPTPlanType:                strings.TrimSpace(options.ChatGPTPlanType),
-		availableRateLimitResetCredits: cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
-		toolCalls:                      map[string]*toolCallDisplayState{},
-		mcpToolCalls:                   map[string]*mcpToolCallDisplayState{},
-		renderedFileChanges:            map[string]bool{},
-		startedThreadIDs:               map[string]bool{},
-		completedThreadIDs:             map[string]bool{},
-		now:                            time.Now,
+		State:                           state,
+		Styles:                          resolveStyles(options.TUIThemeStyles),
+		Transcript:                      newTranscriptComponent(),
+		Composer:                        newComposerComponent(options.Placeholder),
+		StatusBar:                       newStatusBarComponent(),
+		transcript:                      transcript,
+		activityFollow:                  true,
+		retryMessageIndex:               -1,
+		composer:                        composer,
+		noAltScreen:                     options.NoAltScreen,
+		terminalFocused:                 true,
+		statusStyle:                     lipgloss.NewStyle().Bold(true),
+		footerStyle:                     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		bottomStyle:                     lipgloss.NewStyle(),
+		modelPickerOpts:                 append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
+		serviceTierCommands:             append([]bottompane.ServiceTierCommand(nil), options.ServiceTierCommands...),
+		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
+		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
+		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),
+		backgroundProcesses:             cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
+		mcpServers:                      cloneMcpServerStatuses(options.MCPServers),
+		onReadMCPInventory:              options.OnReadMCPInventory,
+		pendingMCPInventoryMessageIndex: -1,
+		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
+		initialMessages:                 options.InitialMessages,
+		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
+		personality:                     initialPersonality(state, options.Personality),
+		tuiTheme:                        strings.TrimSpace(options.TUITheme),
+		tuiPet:                          normalizePetIDTea(options.TUIPet),
+		onSubmit:                        options.OnSubmit,
+		onSubmitRequest:                 options.OnSubmitRequest,
+		onInterrupt:                     options.OnInterrupt,
+		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
+		onExternalEditor:                options.OnExternalEditor,
+		keymapConfig:                    options.KeymapConfig.Clone(),
+		onKeymapEdit:                    options.OnKeymapEdit,
+		onModalResponse:                 options.OnModalResponse,
+		onSessionAction:                 options.OnSessionAction,
+		onResumeSession:                 options.OnResumeSession,
+		onRenameThread:                  options.OnRenameThread,
+		onLogout:                        options.OnLogout,
+		onReadAgents:                    options.OnReadAgents,
+		onSwitchAgent:                   options.OnSwitchAgent,
+		clipboardWrite:                  clipboardWrite,
+		onReadTokenActivity:             options.OnReadTokenActivity,
+		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
+		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
+		onReadRateLimits:                options.OnReadRateLimits,
+		pendingStatusRateLimitRequests:  map[uint64]struct{}{},
+		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
+		notificationPost:                options.OnPostNotification,
+		notificationSettings:            notificationSettingsOrDefault(options.Notifications),
+		notificationMethod:              notificationMethodOrDefault(options.NotificationMethod),
+		notificationCondition:           notificationConditionOrDefault(options.NotificationCondition),
+		onReadGitDiff:                   options.OnReadGitDiff,
+		onStopBackgroundTerminals:       options.OnStopBackgroundTerminals,
+		onReadDebugConfig:               options.OnReadDebugConfig,
+		onReadGoal:                      options.OnReadGoal,
+		onSetGoal:                       options.OnSetGoal,
+		onClearGoal:                     options.OnClearGoal,
+		onWriteSettings:                 options.OnWriteSettings,
+		onUpdateCollaborationMode:       options.OnUpdateCollaborationMode,
+		onWriteMemorySettings:           options.OnWriteMemorySettings,
+		onResetMemories:                 options.OnResetMemories,
+		onSubmitFeedback:                options.OnSubmitFeedback,
+		onReadIDEContext:                options.OnReadIDEContext,
+		onApproveAutoReviewDenial:       options.OnApproveAutoReviewDenial,
+		useMemories:                     boolPtrValueTeaDefault(options.UseMemories, true),
+		generateMemories:                boolPtrValueTeaDefault(options.GenerateMemories, true),
+		feedbackEnabled:                 boolPtrValueTeaDefault(options.FeedbackEnabled, true),
+		windowsSandboxSetup:             options.OnStartWindowsSandboxSetup,
+		onOpenDesktopThread:             options.OnOpenDesktopThread,
+		onSandboxReadDir:                options.OnSandboxReadDir,
+		onDetectExternalAgent:           options.OnDetectExternalAgent,
+		onImportExternalAgent:           options.OnImportExternalAgent,
+		onReadRolloutPath:               options.OnReadRolloutPath,
+		onReadHooks:                     options.OnReadHooks,
+		onWriteHookConfig:               options.OnWriteHookConfig,
+		onReadPlugins:                   options.OnReadPlugins,
+		onReadPlugin:                    options.OnReadPlugin,
+		onInstallPlugin:                 options.OnInstallPlugin,
+		onUninstallPlugin:               options.OnUninstallPlugin,
+		onWritePluginEnabled:            options.OnWritePluginEnabled,
+		onAddMarketplace:                options.OnAddMarketplace,
+		onRemoveMarketplace:             options.OnRemoveMarketplace,
+		onUpgradeMarketplace:            options.OnUpgradeMarketplace,
+		onOpenPluginURL:                 options.OnOpenPluginURL,
+		pluginUserMarketplaces:          cloneBoolMapTea(options.PluginUserMarketplaces),
+		pluginGitMarketplaces:           cloneBoolMapTea(options.PluginGitMarketplaces),
+		onReadSkills:                    options.OnReadSkills,
+		onWriteSkillEnabled:             options.OnWriteSkillEnabled,
+		onFuzzyFileSearch:               options.OnFuzzyFileSearch,
+		onReadApps:                      options.OnReadApps,
+		onStartReview:                   options.OnStartReview,
+		onStartReviewCommand:            options.OnStartReviewCommand,
+		onStartCompactCommand:           options.OnStartCompactCommand,
+		onStartSide:                     options.OnStartSide,
+		onCloseSide:                     options.OnCloseSide,
+		onReadReviewBranches:            options.OnReadReviewBranches,
+		onReadReviewCommits:             options.OnReadReviewCommits,
+		statusLineConfiguredByUser:      options.StatusLineItems != nil,
+		rateLimitSnapshots:              map[string]chatwidget.RateLimitSnapshot{},
+		rateLimitSwitchPrompt:           chatwidget.RateLimitSwitchPromptIdle,
+		hideRateLimitModelNudge:         boolPtrValueTea(options.HideRateLimitModelNudge),
+		approvalsReviewer:               chatwidget.ApprovalsReviewerUser,
+		permissionRequirements:          clonePermissionRequirementsTea(options.PermissionRequirements),
+		hasChatGPTAccount:               options.HasChatGPTAccount,
+		chatGPTPlanType:                 strings.TrimSpace(options.ChatGPTPlanType),
+		availableRateLimitResetCredits:  cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
+		toolCalls:                       map[string]*toolCallDisplayState{},
+		mcpToolCalls:                    map[string]*mcpToolCallDisplayState{},
+		renderedFileChanges:             map[string]bool{},
+		webSearches:                     map[string]*webSearchDisplayState{},
+		activeProposedPlans:             map[string]*proposedPlanDisplayState{},
+		startedThreadIDs:                map[string]bool{},
+		completedThreadIDs:              map[string]bool{},
+		now:                             time.Now,
 	}
 	if threadID := strings.TrimSpace(state.ThreadID); threadID != "" {
 		model.markThreadCompleted(threadID)
 	}
+	if strings.TrimSpace(state.CLIVersion) == "" {
+		state.CLIVersion = strings.TrimSpace(options.SessionHeaderVersion)
+	}
+	state.HasChatGPTAccount = options.HasChatGPTAccount
 	if strings.TrimSpace(state.Personality) == "" && strings.TrimSpace(string(options.Personality)) != "" {
 		state.Personality = string(model.personality)
 	}
@@ -891,15 +1166,24 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		return m, nil
 	case TurnCompletedMsg:
+		if m.applyInactiveThreadTurnCompleted(msg) {
+			return m, m.refreshStatusControlsCmd()
+		}
 		cmd := m.applyTurnCompleted(msg)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued())
 	case TurnInterruptedMsg:
+		if m.applyInactiveThreadTurnInterrupted(msg) {
+			return m, m.refreshStatusControlsCmd()
+		}
 		m.applyTurnInterrupted(msg)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued())
 	case MCPStartupUpdateMsg:
 		return m, m.applyMCPStartupUpdate(msg)
 	case MCPStartupInventoryMsg:
 		m.mcpServers = cloneMcpServerStatuses(msg.Servers)
+		return m, nil
+	case MCPInventoryResultMsg:
+		m.applyMCPInventoryResult(msg)
 		return m, nil
 	case MCPStartupFinishAfterLagMsg:
 		return m, m.finishMCPStartupAfterLag(0)
@@ -923,6 +1207,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case RateLimitSnapshotMsg:
 		cmd := m.applyRateLimitSnapshot(msg.Snapshot)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), cmd)
+	case RateLimitsResultMsg:
+		return m, m.applyRateLimitsResult(msg)
 	case TokenActivityResultMsg:
 		m.applyTokenActivityResult(msg)
 		return m, nil
@@ -937,11 +1223,12 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.applyDebugConfigResult(msg)
 		return m, nil
 	case GoalResultMsg:
-		m.applyGoalResult(msg)
-		return m, m.refreshStatusControlsCmd()
+		return m, bubbletea.Batch(m.applyGoalResult(msg), m.refreshStatusControlsCmd())
 	case ReviewStartResultMsg:
 		m.applyReviewStartResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case CompactStartResultMsg:
+		return m, m.applyCompactStartResult(msg)
 	case SideStartResultMsg:
 		return m, m.applySideStartResult(msg)
 	case SideCloseResultMsg:
@@ -964,17 +1251,50 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case SettingsWriteResultMsg:
 		m.applySettingsWriteResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case MemoryResetResultMsg:
+		m.applyMemoryResetResult(msg)
+		return m, nil
+	case FeedbackSubmitResultMsg:
+		m.applyFeedbackSubmitResult(msg)
+		return m, nil
+	case GuardianReviewMsg:
+		m.applyGuardianReview(msg)
+		return m, nil
+	case AutoReviewDenialApproveResultMsg:
+		m.applyAutoReviewDenialApproveResult(msg)
+		return m, nil
 	case WindowsSandboxSetupResultMsg:
 		m.applyWindowsSandboxSetupResult(msg)
 		return m, nil
 	case WindowsSandboxSetupCompletedMsg:
 		m.applyWindowsSandboxSetupCompleted(msg.Completion)
 		return m, nil
+	case SandboxReadDirResultMsg:
+		m.applySandboxReadDirResult(msg)
+		return m, nil
 	case HooksListResultMsg:
 		m.applyHooksListResult(msg)
 		return m, nil
+	case HookConfigWriteResultMsg:
+		return m, m.applyHookConfigWriteResult(msg)
 	case PluginListResultMsg:
-		m.applyPluginListResult(msg)
+		return m, m.applyPluginListResult(msg)
+	case PluginReadResultMsg:
+		return m, m.applyPluginReadResult(msg)
+	case PluginInstallResultMsg:
+		return m, m.applyPluginInstallResult(msg)
+	case PluginUninstallResultMsg:
+		return m, m.applyPluginUninstallResult(msg)
+	case PluginEnabledWriteResultMsg:
+		return m, m.applyPluginEnabledWriteResult(msg)
+	case MarketplaceAddResultMsg:
+		return m, m.applyMarketplaceAddResult(msg)
+	case MarketplaceRemoveResultMsg:
+		return m, m.applyMarketplaceRemoveResult(msg)
+	case MarketplaceUpgradeResultMsg:
+		return m, m.applyMarketplaceUpgradeResult(msg)
+	case PluginOpenURLResultMsg:
+		m.applyPluginOpenURLResult(msg)
 		return m, nil
 	case MentionPluginInventoryResultMsg:
 		m.applyMentionPluginInventoryResult(msg)
@@ -991,12 +1311,22 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case AgentNavigateResultMsg:
+		return m, m.applyAgentNavigateResult(msg)
 	case SkillsListResultMsg:
 		m.applySkillsListResult(msg)
 		return m, nil
+	case SkillEnabledWriteResultMsg:
+		return m, m.applySkillEnabledWriteResult(msg)
+	case ExternalAgentDetectResultMsg:
+		return m, m.applyExternalAgentDetectResult(msg)
+	case ExternalAgentImportResultMsg:
+		return m, m.applyExternalAgentImportResult(msg)
 	case SkillsInventoryResultMsg:
 		m.applySkillsInventoryResult(msg)
 		return m, nil
+	case LogoutResultMsg:
+		return m, m.applyLogoutResult(msg)
 	case StreamStartedMsg:
 		return m, waitForStream(msg.Messages)
 	case ModalRequestMsg:
@@ -1033,6 +1363,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
+			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
+				return m, m.updateModal(msg)
+			}
 			if m.modal != nil && m.modal.sessionPicker != nil {
 				return m, m.respondModal(true)
 			}
@@ -1044,6 +1377,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			}
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlD:
+			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
+				return m, m.updateModal(msg)
+			}
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlV:
 			// Bubble Tea does not provide a portable text-paste message on all
@@ -1079,6 +1415,14 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if cmd, handled := m.updateSlashPopupKey(msg); handled {
 			return m, cmd
+		}
+		if msg.Alt && m.composer.Value() == "" && len(m.attachments) == 0 {
+			switch msg.Type {
+			case bubbletea.KeyLeft:
+				return m, m.navigateAgent(-1)
+			case bubbletea.KeyRight:
+				return m, m.navigateAgent(1)
+			}
 		}
 		keySpec := keySpecFromKeyMsg(msg)
 		if m.keyMatches("global", "toggle_side_conversation", keySpec) ||
@@ -1223,6 +1567,9 @@ func (m *Model) View() string {
 	}
 	if agentLabel := strings.TrimSpace(m.activeAgentLabel); agentLabel != "" && agentLabel != strings.TrimSpace(m.notice) {
 		sections = append(sections, m.footerStyle.Render(fitTerminalLine(agentLabel, m.width)))
+	}
+	if m.ideContext.Enabled {
+		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
 	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerHelpText, m.width)))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -1388,7 +1735,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		m.composerMentionBindings = nil
 		return nil
 	}
-	if invocation, ok := codextui.ParseCommand(input); ok {
+	if invocation, ok := codextui.ParseCommand(input); ok && slashInvocationDispatchable(invocation) {
 		m.composerMentionBindings = nil
 		return m.applyCommand(invocation)
 	}
@@ -1412,7 +1759,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 		return nil, false
 	}
 	invocation, ok := codextui.ParseCommand(input)
-	if !ok {
+	if !ok || !slashInvocationDispatchable(invocation) {
 		return nil, false
 	}
 	m.composer.Reset()
@@ -1434,6 +1781,9 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		return nil
 	}
 	request = cloneSubmitRequest(request)
+	if request.CollaborationMode == nil {
+		request.CollaborationMode = m.effectiveSubmissionCollaborationMode()
+	}
 	if request.ServiceTier == "" && m.State != nil {
 		request.ServiceTier = strings.TrimSpace(m.State.ServiceTier)
 	}
@@ -1442,10 +1792,11 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		return nil
 	}
 	if parseCommand && len(request.Attachments) == 0 {
-		if invocation, ok := codextui.ParseCommand(request.Prompt); ok {
+		if invocation, ok := codextui.ParseCommand(request.Prompt); ok && slashInvocationDispatchable(invocation) {
 			return m.applyCommand(invocation)
 		}
 	}
+	m.captureIDEContext(&request)
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
 	m.Transcript.lastTurnError = ""
@@ -1471,6 +1822,26 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		return m.onSubmit(displayPrompt)
 	}
 	return nil
+}
+
+func slashInvocationDispatchable(invocation *codextui.CommandInvocation) bool {
+	if invocation == nil || strings.TrimSpace(invocation.Args) == "" {
+		return invocation != nil
+	}
+	if chatwidget.CommandSupportsInlineArgs(invocation.Command) {
+		return true
+	}
+	// Go-only compatibility commands keep their established direct-argument form.
+	switch invocation.Command {
+	case codextui.CommandApproval,
+		codextui.CommandSandbox,
+		codextui.CommandAttach,
+		codextui.CommandImage,
+		codextui.CommandURLImage:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
@@ -1829,8 +2200,17 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	switch event.Type {
 	case "thread.started":
+		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {
+			m.toolRequestRuntime = chatwidget.ToolRequestRuntimeState{}
+			m.resetReviewModeState()
+		}
 		m.State.SetThreadID(event.ThreadID)
 		m.markThreadStarted(event.ThreadID)
+		m.persistPendingThreadName()
+		if objective := strings.TrimSpace(m.pendingGoalObjective); objective != "" {
+			m.pendingGoalObjective = ""
+			cmd = m.prepareGoalSet(objective)
+		}
 	case "turn.started":
 		m.setStatus("running")
 		m.Transcript.lastTurnError = ""
@@ -1864,6 +2244,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
 		m.applyDelta(event.Delta)
+	case "item.plan.delta":
+		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
 		m.setStatus("idle")
 		m.markThreadCompleted(m.State.ThreadID)
@@ -1920,6 +2302,9 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 	case "mcp_tool_call":
 		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.renderMCPToolCallItem(item, false)
+	case "web_search", "webSearch":
+		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.renderWebSearchItem(item, false)
 	case "tool_call":
 		m.Transcript.finishAssistantPreambleBeforeTool()
 		m.startOrUpdateToolCall(item)
@@ -1928,8 +2313,12 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		m.renderFileChangeItem(item, false)
 	case "agent_message":
 		// Streaming deltas create the visible assistant message.
+	case "plan":
+		m.proposedPlanState(item.ID)
 	case "imageGeneration":
 		// The completed event carries the saved path.
+	case "enteredReviewMode", "entered_review_mode":
+		m.enterReviewMode(firstNonEmpty(strings.TrimSpace(item.Text), strings.TrimSpace(item.Message)))
 	}
 }
 
@@ -1944,10 +2333,14 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		} else {
 			m.mergeAssistantFinal(item.Text)
 		}
+	case "plan":
+		m.completeProposedPlan(item)
 	case "command_execution":
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
 		m.renderMCPToolCallItem(item, true)
+	case "web_search", "webSearch":
+		m.renderWebSearchItem(item, true)
 	case "tool_call":
 		m.startOrUpdateToolCall(item)
 	case "tool_output":
@@ -1962,6 +2355,12 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		m.renderFileChangeItem(item, true)
 	case "imageGeneration":
 		m.applyImageGenerationItem(item)
+	case "exitedReviewMode", "exited_review_mode":
+		m.exitReviewMode()
+	case "enteredReviewMode", "entered_review_mode":
+		// The started lifecycle event owns the live banner.
+	case "contextCompaction", "context_compaction":
+		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"Context compacted"}))
 	}
 	return nil
 }
@@ -2027,6 +2426,62 @@ func (m *Model) applyDelta(delta *protocol.Delta) {
 	if strings.TrimSpace(delta.Input) != "" {
 		m.appendToolCallInputDelta(delta)
 	}
+}
+
+func (m *Model) proposedPlanState(itemID string) *proposedPlanDisplayState {
+	if m == nil {
+		return nil
+	}
+	if m.activeProposedPlans == nil {
+		m.activeProposedPlans = map[string]*proposedPlanDisplayState{}
+	}
+	itemID = strings.TrimSpace(itemID)
+	if state := m.activeProposedPlans[itemID]; state != nil {
+		return state
+	}
+	state := &proposedPlanDisplayState{MessageIndex: -1}
+	m.activeProposedPlans[itemID] = state
+	return state
+}
+
+func (m *Model) applyProposedPlanDelta(delta *protocol.Delta) {
+	if m == nil || delta == nil || delta.Text == "" {
+		return
+	}
+	state := m.proposedPlanState(delta.ItemID)
+	if state == nil {
+		return
+	}
+	state.Text.WriteString(delta.Text)
+	m.renderProposedPlanState(state)
+}
+
+func (m *Model) completeProposedPlan(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	state := m.proposedPlanState(item.ID)
+	if state == nil {
+		return
+	}
+	if item.Text != "" {
+		state.Text.Reset()
+		state.Text.WriteString(item.Text)
+	}
+	m.renderProposedPlanState(state)
+	delete(m.activeProposedPlans, strings.TrimSpace(item.ID))
+}
+
+func (m *Model) renderProposedPlanState(state *proposedPlanDisplayState) {
+	if m == nil || state == nil {
+		return
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	cell := historycell.NewProposedPlan(state.Text.String())
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
 }
 
 func (m *Model) startOrUpdateToolCall(item *protocol.ThreadItem) {
@@ -2225,6 +2680,68 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 func mcpToolCallInProgress(status string) bool {
 	status = strings.ToLower(strings.TrimSpace(status))
 	return status == "" || status == "in_progress" || status == "inprogress" || status == "running"
+}
+
+func (m *Model) renderWebSearchItem(item *protocol.ThreadItem, completed bool) {
+	if m == nil || item == nil {
+		return
+	}
+	id := firstNonEmpty(strings.TrimSpace(item.ID), strings.TrimSpace(item.CallID))
+	if id == "" {
+		return
+	}
+	if m.webSearches == nil {
+		m.webSearches = map[string]*webSearchDisplayState{}
+	}
+	state := m.webSearches[id]
+	if state == nil {
+		state = &webSearchDisplayState{ID: id, MessageIndex: -1}
+		m.webSearches[id] = state
+	}
+
+	var cell historycell.WebSearchCell
+	if completed {
+		cell = historycell.NewWebSearchCall(id, item.Query, webSearchActionFromProtocolItem(item))
+		m.Transcript.needsFinalMessageSeparator = true
+	} else {
+		cell = historycell.NewActiveWebSearchCall(id, item.Query)
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
+}
+
+func webSearchActionFromProtocolItem(item *protocol.ThreadItem) historycell.WebSearchAction {
+	if item == nil {
+		return historycell.WebSearchAction{Kind: historycell.WebSearchActionOther}
+	}
+	action := item.Action
+	kind := historycell.WebSearchActionKind(metadataString(action, "type"))
+	switch kind {
+	case historycell.WebSearchActionSearch:
+		return historycell.WebSearchAction{
+			Kind:    kind,
+			Query:   metadataString(action, "query"),
+			Queries: metadataStringSlice(action, "queries"),
+		}
+	case historycell.WebSearchActionOpenPage, historycell.WebSearchActionKind("open_page"):
+		return historycell.WebSearchAction{
+			Kind: historycell.WebSearchActionOpenPage,
+			URL:  metadataString(action, "url"),
+		}
+	case historycell.WebSearchActionFindInPage, historycell.WebSearchActionKind("find_in_page"):
+		return historycell.WebSearchAction{
+			Kind:    historycell.WebSearchActionFindInPage,
+			URL:     metadataString(action, "url"),
+			Pattern: metadataString(action, "pattern"),
+		}
+	}
+	if query := strings.TrimSpace(item.Query); query != "" {
+		return historycell.WebSearchAction{Kind: historycell.WebSearchActionSearch, Query: query}
+	}
+	return historycell.WebSearchAction{Kind: historycell.WebSearchActionOther}
 }
 
 func compactMCPArguments(arguments any) string {
@@ -3140,6 +3657,13 @@ func boolPtrValueTea(value *bool) bool {
 	return value != nil && *value
 }
 
+func boolPtrValueTeaDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
 func cloneUnifiedExecProcessDetails(values []historycell.UnifiedExecProcessDetails) []historycell.UnifiedExecProcessDetails {
 	if values == nil {
 		return nil
@@ -3168,6 +3692,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	}
 	if m.inSideConversation() && !sideSlashCommandAllowed(invocation.Command) {
 		message := sideSlashUnavailableMessage(invocation.Name)
+		if invocation.Command == codextui.CommandRename {
+			message = SideRenameBlockMessage
+		}
 		m.State.AddHistoryLines([]string{message}, []string{message})
 		m.notice = message
 		m.refreshTranscript()
@@ -3182,8 +3709,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandKeymap:
 		m.applyKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
-		m.State.AddMessage(codextui.RoleSystem, m.State.RenderStatusCardWidth(max(44, m.width-2)))
-		m.notice = ""
+		return m.applyStatusCommand()
 	case codextui.CommandUsage:
 		return m.applyUsageCommand(invocation.Args)
 	case codextui.CommandGoal:
@@ -3199,8 +3725,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandInit:
 		return m.submitRequest(SubmitRequest{Prompt: initCommandPrompt()}, false)
 	case codextui.CommandCompact:
-		m.State.AddMessage(codextui.RoleSystem, "Compaction requested.")
-		m.notice = "Compaction requested."
+		return m.startCompaction()
 	case codextui.CommandClear:
 		m.startFreshNamedSession(invocation.Args, "Started a fresh session.")
 	case codextui.CommandCopy:
@@ -3228,13 +3753,13 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandResume:
 		return m.applyResumeCommand(invocation.Args)
 	case codextui.CommandFork:
-		m.openSessionPicker(codextui.SessionPickerFork)
+		return m.applyForkCurrentSession()
 	case codextui.CommandArchive:
-		m.openSessionPicker(codextui.SessionPickerArchive)
+		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
 	case codextui.CommandUnarchive:
 		m.openSessionPicker(codextui.SessionPickerUnarchive)
 	case codextui.CommandDelete:
-		m.openSessionPicker(codextui.SessionPickerDelete)
+		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionDelete)
 	case codextui.CommandAttach:
 		m.applyAttachmentCommand(invocation.Args, bottompane.AttachmentFile)
 	case codextui.CommandImage:
@@ -3256,16 +3781,18 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandReview:
 		return m.applyReviewCommand(invocation.Args)
 	case codextui.CommandRename:
-		m.applyRenameCommand(invocation.Args)
+		return m.applyRenameCommand(invocation.Args)
 	case codextui.CommandMention:
 		m.composer.InsertString("@")
-		m.notice = "Mention"
+		m.notice = ""
+		m.refreshTranscript()
+		return m.refreshSkillPopup()
 	case codextui.CommandSkills:
 		m.openSkillsMenu()
 	case codextui.CommandHooks:
 		return m.applyHooksCommand()
 	case codextui.CommandMcp:
-		m.applyMCPCommand(invocation.Args)
+		return m.applyMCPCommand(invocation.Args)
 	case codextui.CommandApps:
 		return m.applyAppsCommand()
 	case codextui.CommandPlugins:
@@ -3275,53 +3802,55 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandPets:
 		return m.applyPetsCommand(invocation.Args)
 	case codextui.CommandIde:
-		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"/ide", "", "IDE context is not connected in this runtime."}))
-		m.notice = "IDE"
+		m.applyIDECommand(invocation.Args)
 	case codextui.CommandVim:
 		m.toggleVimMode()
 	case codextui.CommandAutoReview:
-		m.notice = "No recent auto-review denials in this thread."
+		m.openAutoReviewDenials()
 	case codextui.CommandMemories:
 		m.openMemoriesSettings()
 	case codextui.CommandFeedback:
-		m.notice = "Feedback flow requires app-server support."
+		m.openFeedbackFlow()
 	case codextui.CommandApp:
 		threadID := strings.TrimSpace(m.State.ThreadID)
 		if threadID == "" {
 			m.notice = "Session is still starting; try /app again in a moment."
+			m.addErrorHistoryMessage(m.notice)
 			break
 		}
 		if m.onOpenDesktopThread == nil {
-			m.notice = "Codex Desktop handoff is unavailable in this runtime."
+			m.notice = "Failed to open this session in the Desktop app: Desktop handoff is unavailable in this runtime. Install or launch the Desktop app and try again."
+			m.addErrorHistoryMessage(m.notice)
 			break
 		}
 		if err := m.onOpenDesktopThread(threadID); err != nil {
-			m.notice = "Failed to open this session in Codex Desktop: " + err.Error()
+			m.notice = "Failed to open this session in the Desktop app: " + err.Error() + ". Install or launch the Desktop app and try again."
+			m.addErrorHistoryMessage(m.notice)
 		} else {
-			m.notice = "Opened this session in Codex Desktop."
+			m.notice = "Opened this session in the Desktop app."
+			m.addInfoHistoryMessage(m.notice)
 		}
 	case codextui.CommandImport:
-		if m.onImportExternalAgent == nil {
-			m.notice = "External agent config migration is unavailable in this runtime."
-			break
-		}
-		result, err := m.onImportExternalAgent(m.State.CWD)
-		if err != nil {
-			m.notice = "Import failed: " + err.Error()
-		} else {
-			m.notice = result
-		}
+		return m.applyExternalAgentImportCommand()
 	case codextui.CommandElevateSandbox:
 		return m.applyWindowsSandboxSetupCommand(chatwidget.WindowsSandboxModeElevated)
 	case codextui.CommandSandboxReadRoot:
-		if strings.TrimSpace(invocation.Args) == "" {
+		path := strings.TrimSpace(invocation.Args)
+		if path == "" {
 			m.notice = "Usage: /sandbox-add-read-dir <absolute-directory-path>"
+			m.addErrorHistoryMessage(m.notice)
 		} else if m.onSandboxReadDir == nil {
 			m.notice = "Sandbox read directory request is unavailable in this runtime."
-		} else if err := m.onSandboxReadDir(strings.TrimSpace(invocation.Args)); err != nil {
-			m.notice = "Failed to grant sandbox read access: " + err.Error()
+			m.addErrorHistoryMessage(m.notice)
 		} else {
-			m.notice = "Sandbox read access granted: " + strings.TrimSpace(invocation.Args)
+			m.notice = "Granting sandbox read access to " + path + " ..."
+			m.addInfoHistoryMessage(m.notice)
+			grant := m.onSandboxReadDir
+			m.refreshTranscript()
+			return func() bubbletea.Msg {
+				canonicalPath, err := grant(path)
+				return SandboxReadDirResultMsg{RequestedPath: path, CanonicalPath: canonicalPath, Err: err}
+			}
 		}
 	case codextui.CommandRollout:
 		path := ""
@@ -3330,6 +3859,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 			path, err = m.onReadRolloutPath(m.State.ThreadID)
 			if err != nil {
 				m.notice = "Failed to read rollout path: " + err.Error()
+				m.addErrorHistoryMessage(m.notice)
 				break
 			}
 		}
@@ -3338,18 +3868,22 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		} else {
 			m.notice = "Current rollout path: " + path
 		}
+		m.addInfoHistoryMessage(m.notice)
 	case codextui.CommandTestApproval:
 		m.openApprovalModal(ApprovalRequestMsg{
-			ID:      "test-approval",
-			Title:   "Approval request",
-			Body:    "Test approval request",
-			Command: "echo test approval",
+			ID:    "1",
+			Title: "Would you like to make the following edits?",
+			Options: []ModalOption{
+				{ID: "accept", Label: "Yes, proceed", Shortcut: "y"},
+				{ID: "accept_session", Label: "Yes, and don't ask again for these files", Shortcut: "a"},
+				{ID: "cancel", Label: "No, and tell Codex what to do differently", Shortcut: "esc"},
+			},
 		})
 	case codextui.CommandMemoryDrop, codextui.CommandMemoryUpdate:
 		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{invocation.Name, "", "Memory maintenance requires app-server support."}))
 		m.notice = "Memory maintenance"
 	case codextui.CommandLogout:
-		m.notice = "Logout requested."
+		return m.applyLogoutCommand()
 	default:
 		m.notice = "Unknown command " + invocation.Name + ". Type /help for commands."
 	}
@@ -3534,18 +4068,26 @@ func (m *Model) copyLastAgentResponse() {
 	}
 	text, ok := chatwidget.LastAssistantMarkdown(m.State.Messages)
 	if !ok {
-		m.notice = "No agent response to copy."
+		m.notice = "No agent response to copy"
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
 		return
 	}
 	if m.clipboardWrite == nil {
-		m.notice = "Clipboard is unavailable."
+		m.notice = "Copy failed: clipboard is unavailable"
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
 		return
 	}
 	if err := m.clipboardWrite(text); err != nil {
 		m.notice = "Copy failed: " + err.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
 		return
 	}
-	m.notice = "Copied last agent response."
+	m.notice = "Copied last message to clipboard"
+	m.addInfoHistoryMessage(m.notice)
+	m.refreshTranscript()
 }
 
 const rawOutputModeOnNotice = "Raw output mode on: transcript text is shown for clean terminal selection."
@@ -3563,6 +4105,7 @@ func (m *Model) applyRawOutputCommand(args string) bubbletea.Cmd {
 		return m.setRawOutputMode(false)
 	default:
 		m.notice = rawOutputUsage
+		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
 		return nil
 	}
@@ -3585,6 +4128,7 @@ func (m *Model) setRawOutputMode(enabled bool) bubbletea.Cmd {
 	} else {
 		m.notice = rawOutputModeOffNotice
 	}
+	m.addInfoHistoryMessage(m.notice)
 	m.refreshTranscript()
 	if m.overlay != nil {
 		m.syncTranscriptOverlay()
@@ -3637,7 +4181,7 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	case msg.Err != nil:
 		text = "Failed to compute diff: " + msg.Err.Error()
 	case !msg.IsGitRepo:
-		text = "`/diff` - not inside a git repository"
+		text = "`/diff` \u2014 _not inside a git repository_"
 	case strings.TrimSpace(text) == "":
 		text = "No changes detected."
 	}
@@ -3665,8 +4209,8 @@ func (m *Model) applyStopCommand() bubbletea.Cmd {
 		return nil
 	}
 	m.backgroundProcesses = nil
-	m.State.AddHistoryLines([]string{"Stopping all background terminals."}, []string{"Stopping all background terminals."})
 	m.notice = "Stopping all background terminals."
+	m.addInfoHistoryMessage(m.notice)
 	m.refreshTranscript()
 	if m.onStopBackgroundTerminals != nil {
 		return m.onStopBackgroundTerminals()

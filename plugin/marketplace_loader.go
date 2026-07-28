@@ -12,6 +12,7 @@ var marketplaceManifestRelativePaths = []string{
 	filepath.Join(".agents", "plugins", "marketplace.json"),
 	filepath.Join(".agents", "plugins", "api_marketplace.json"),
 	filepath.Join(".claude-plugin", "marketplace.json"),
+	filepath.Join(".cursor-plugin", "marketplace.json"),
 }
 
 type marketplaceManifestFile struct {
