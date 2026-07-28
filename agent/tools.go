@@ -11,7 +11,10 @@ import (
 	"codex_go/tool"
 )
 
-const MultiAgentV1Namespace = "agent"
+const (
+	MultiAgentV1Namespace = "agent"
+	MultiAgentV2Namespace = "collaboration"
+)
 
 type ToolController interface {
 	SpawnAgent(ctx context.Context, args *SpawnAgentArgs) (*SpawnAgentResult, error)
@@ -36,6 +39,7 @@ func NewMemoryToolController() *MemoryToolController {
 }
 
 type SpawnAgentArgs struct {
+	TaskName        string  `json:"task_name,omitempty"`
 	Message         *string `json:"message,omitempty"`
 	Items           []any   `json:"items,omitempty"`
 	AgentType       *string `json:"agent_type,omitempty"`
@@ -43,6 +47,7 @@ type SpawnAgentArgs struct {
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 	ServiceTier     *string `json:"service_tier,omitempty"`
 	ForkContext     bool    `json:"fork_context,omitempty"`
+	ForkTurns       *string `json:"fork_turns,omitempty"`
 
 	ResolvedRole       string   `json:"-"`
 	NicknameCandidates []string `json:"-"`
@@ -50,6 +55,7 @@ type SpawnAgentArgs struct {
 
 type SpawnAgentResult struct {
 	AgentID  string  `json:"agent_id"`
+	TaskName string  `json:"task_name,omitempty"`
 	Nickname *string `json:"nickname,omitempty"`
 }
 
@@ -105,7 +111,11 @@ func (c *MemoryToolController) SpawnAgent(ctx context.Context, args *SpawnAgentA
 	if args != nil && args.Message != nil {
 		c.inputs[id] = append(c.inputs[id], *args.Message)
 	}
-	return &SpawnAgentResult{AgentID: id, Nickname: &nickname}, nil
+	taskName := ""
+	if args != nil && strings.TrimSpace(args.TaskName) != "" {
+		taskName = "/root/" + strings.TrimSpace(args.TaskName)
+	}
+	return &SpawnAgentResult{AgentID: id, TaskName: taskName, Nickname: &nickname}, nil
 }
 
 func (c *MemoryToolController) SendInput(ctx context.Context, args *SendInputArgs) (*SendInputResult, error) {
@@ -257,11 +267,19 @@ func RegisterMultiAgentHandlers(registry *tool.Registry, controller ToolControll
 }
 
 type MultiAgentHandlerOptions struct {
-	Controller       ToolController
-	Exposure         tool.Exposure
-	Roles            map[string]RoleConfig
-	Defaults         SpawnDefaults
-	DisableWaitAgent bool
+	Controller                ToolController
+	Exposure                  tool.Exposure
+	Version                   MultiAgentVersion
+	Namespace                 string
+	Roles                     map[string]RoleConfig
+	Defaults                  SpawnDefaults
+	DisableWaitAgent          bool
+	WaitDefault               time.Duration
+	WaitMin                   time.Duration
+	WaitMax                   time.Duration
+	WaitConfigured            bool
+	HideSpawnMetadata         bool
+	ExposeSpawnModelOverrides bool
 }
 
 type SpawnDefaults struct {
@@ -276,6 +294,9 @@ func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *Mul
 	}
 	if options == nil {
 		options = &MultiAgentHandlerOptions{}
+	}
+	if options.Version == VersionV2 {
+		return registerMultiAgentV2Handlers(registry, options)
 	}
 	controller := options.Controller
 	if len(options.Roles) > 0 || options.Defaults != (SpawnDefaults{}) {
@@ -404,18 +425,54 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 	name := tool.NamespacedName(MultiAgentV1Namespace, string(kind))
 	switch kind {
 	case MultiAgentToolSpawn:
-		return tool.Spec{Name: name, Description: "Spawns a sub-agent to work on a task.", InputSchema: map[string]any{"required": []string{}, "properties": map[string]any{"message": "Initial task message.", "agent_type": "Optional agent role.", "fork_context": "Whether to fork full context."}}}
+		return tool.Spec{Name: name, Description: "Spawns a sub-agent to work on a task.", InputSchema: multiAgentObjectSchema(map[string]any{
+			"message":          map[string]any{"type": "string", "description": "Initial task message."},
+			"items":            map[string]any{"type": "array", "description": "Optional structured input items.", "items": map[string]any{}},
+			"agent_type":       map[string]any{"type": "string", "description": "Optional configured agent role."},
+			"model":            map[string]any{"type": "string", "description": "Optional model override."},
+			"reasoning_effort": map[string]any{"type": "string", "description": "Optional reasoning effort override."},
+			"service_tier":     map[string]any{"type": "string", "description": "Optional service tier override."},
+			"fork_context":     map[string]any{"type": "boolean", "description": "Whether to include the parent context."},
+		}, nil), Parallel: true}
 	case MultiAgentToolSend:
-		return tool.Spec{Name: name, Description: "Sends input to an existing sub-agent.", InputSchema: map[string]any{"required": []string{"target"}, "properties": map[string]any{"target": "Agent id.", "message": "Message to send.", "interrupt": "Interrupt the target first."}}}
+		return tool.Spec{Name: name, Description: "Sends input to an existing sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+			"target":    map[string]any{"type": "string", "description": "Agent id."},
+			"message":   map[string]any{"type": "string", "description": "Message to send."},
+			"items":     map[string]any{"type": "array", "description": "Optional structured input items.", "items": map[string]any{}},
+			"interrupt": map[string]any{"type": "boolean", "description": "Interrupt the target first."},
+		}, []string{"target"})}
 	case MultiAgentToolWait:
-		return tool.Spec{Name: name, Description: "Waits for one or more sub-agents and reports status.", InputSchema: map[string]any{"properties": map[string]any{"targets": "Agent ids.", "timeout_ms": "Optional timeout in milliseconds."}}}
+		return tool.Spec{Name: name, Description: "Waits for one or more sub-agents and reports status.", InputSchema: multiAgentObjectSchema(map[string]any{
+			"targets":    map[string]any{"type": "array", "description": "Agent ids.", "items": map[string]any{"type": "string"}},
+			"timeout_ms": map[string]any{"type": "integer", "minimum": 0, "description": "Optional timeout in milliseconds."},
+		}, nil)}
 	case MultiAgentToolResume:
-		return tool.Spec{Name: name, Description: "Resumes a closed sub-agent.", InputSchema: map[string]any{"required": []string{"id"}, "properties": map[string]any{"id": "Agent id."}}}
+		return tool.Spec{Name: name, Description: "Resumes a closed sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+			"id": map[string]any{"type": "string", "description": "Agent id."},
+		}, []string{"id"})}
 	case MultiAgentToolClose:
-		return tool.Spec{Name: name, Description: "Closes a sub-agent.", InputSchema: map[string]any{"required": []string{"target"}, "properties": map[string]any{"target": "Agent id."}}}
+		return tool.Spec{Name: name, Description: "Closes a sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+			"target": map[string]any{"type": "string", "description": "Agent id."},
+		}, []string{"target"})}
 	default:
 		return tool.Spec{Name: name}
 	}
+}
+
+func multiAgentObjectSchema(properties map[string]any, required []string) map[string]any {
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if required != nil {
+		requiredValues := make([]any, len(required))
+		for i := range required {
+			requiredValues[i] = required[i]
+		}
+		schema["required"] = requiredValues
+	}
+	return schema
 }
 
 func multiAgentHookToolName(kind MultiAgentToolKind) *tool.HookToolName {

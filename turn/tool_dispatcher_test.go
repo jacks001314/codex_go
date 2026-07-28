@@ -335,6 +335,43 @@ func TestToolDispatcherRespondToModelBecomesFailedOutput(t *testing.T) {
 	}
 }
 
+func TestToolDispatcherRespondToModelMatchesDeclaredOutputSchema(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:         tool.PlainName("reject_json"),
+		OutputSchema: map[string]any{"type": "string"},
+	}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return nil, tool.RespondToModel("agent limit reached")
+	})); err != nil {
+		t.Fatalf("register reject_json: %v", err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		ID:        "call-json",
+		Type:      "function_call",
+		Name:      "reject_json",
+		Arguments: `{}`,
+	}})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Output.Success {
+		t.Fatalf("result = %#v", results)
+	}
+	body := results[0].Response.Output.Text()
+	var message string
+	if err := json.Unmarshal([]byte(body), &message); err != nil {
+		t.Fatalf("response output is not valid JSON: %q: %v", body, err)
+	}
+	if message != "agent limit reached" {
+		t.Fatalf("response message = %q", message)
+	}
+	if results[0].Output.Error != "agent limit reached" {
+		t.Fatalf("diagnostic error = %q", results[0].Output.Error)
+	}
+}
+
 func TestToolDispatcherApplyPatchVerificationFailureIsNotFileChange(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName(tool.DefaultApplyPatchToolName)}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {

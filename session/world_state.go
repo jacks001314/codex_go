@@ -5,6 +5,7 @@ import "encoding/json"
 type WorldState struct {
 	Model                  json.RawMessage `json:"model,omitempty"`
 	Personality            json.RawMessage `json:"personality,omitempty"`
+	ContextWindowGuidance  json.RawMessage `json:"contextWindowGuidance,omitempty"`
 	CollaborationMode      json.RawMessage `json:"collaborationMode,omitempty"`
 	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
 	RealtimeConversation   json.RawMessage `json:"realtimeConversation,omitempty"`
@@ -22,6 +23,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	}
 	state.Model = append(json.RawMessage(nil), state.Model...)
 	state.Personality = append(json.RawMessage(nil), state.Personality...)
+	state.ContextWindowGuidance = append(json.RawMessage(nil), state.ContextWindowGuidance...)
 	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
 	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)

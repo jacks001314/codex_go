@@ -11,7 +11,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const DefaultAgentMaxConcurrentThreadsPerSession = 6
+const DefaultAgentMaxConcurrentThreadsPerSession = 4
 
 type AgentsConfig struct {
 	Enabled                        *bool

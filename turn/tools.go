@@ -3,6 +3,7 @@ package turn
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"codex_go/agent"
 	"codex_go/compact"
@@ -36,10 +37,18 @@ type ToolRegistryOptions struct {
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
 
-	AgentController agent.ToolController
-	AgentExposure   tool.Exposure
-	AgentRoles      map[string]agent.RoleConfig
-	AgentDefaults   agent.SpawnDefaults
+	AgentController                agent.ToolController
+	AgentExposure                  tool.Exposure
+	AgentVersion                   agent.MultiAgentVersion
+	AgentNamespace                 string
+	AgentWaitDefault               time.Duration
+	AgentWaitMin                   time.Duration
+	AgentWaitMax                   time.Duration
+	AgentWaitConfigured            bool
+	AgentHideSpawnMetadata         bool
+	AgentExposeSpawnModelOverrides bool
+	AgentRoles                     map[string]agent.RoleConfig
+	AgentDefaults                  agent.SpawnDefaults
 
 	PluginInstallCandidates            []plugin.DiscoverableInfo
 	PluginInstallRecommendationContext bool
@@ -187,11 +196,19 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.EnableAgents {
 		if err := agent.RegisterMultiAgentHandlersWithOptions(registry, &agent.MultiAgentHandlerOptions{
-			Controller:       options.AgentController,
-			Exposure:         options.AgentExposure,
-			Roles:            options.AgentRoles,
-			Defaults:         options.AgentDefaults,
-			DisableWaitAgent: options.DisableWaitAgent,
+			Controller:                options.AgentController,
+			Exposure:                  options.AgentExposure,
+			Version:                   options.AgentVersion,
+			Namespace:                 options.AgentNamespace,
+			WaitDefault:               options.AgentWaitDefault,
+			WaitMin:                   options.AgentWaitMin,
+			WaitMax:                   options.AgentWaitMax,
+			WaitConfigured:            options.AgentWaitConfigured,
+			HideSpawnMetadata:         options.AgentHideSpawnMetadata,
+			ExposeSpawnModelOverrides: options.AgentExposeSpawnModelOverrides,
+			Roles:                     options.AgentRoles,
+			Defaults:                  options.AgentDefaults,
+			DisableWaitAgent:          options.DisableWaitAgent,
 		}); err != nil {
 			return nil, err
 		}

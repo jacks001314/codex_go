@@ -4755,6 +4755,19 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	inputItems = append(inputItems, modelPersonalityItems...)
+	tokenBudget, err := cfg.TokenBudgetConfigWithDefaults(modelTokenBudgetDefaults(modelInfo))
+	if err != nil {
+		return nil, err
+	}
+	if item, err := r.contextWindowGuidanceWorldStateInputItem(
+		threadID,
+		tokenBudget.Enabled && modelInfo != nil && modelInfo.ContextWindow > 0,
+		tokenBudget.GuidanceMessage,
+	); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
 	if item := r.turnEnvironmentContextInputItem(params); item != nil {
 		inputItems = append(inputItems, item)
@@ -8058,6 +8071,60 @@ func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, in
 		return nil, err
 	}
 	return items, nil
+}
+
+func modelTokenBudgetDefaults(info *model.ModelInfo) *config.TokenBudgetDefaults {
+	if info == nil || info.ModelMessages == nil || info.ModelMessages.TokenBudget == nil {
+		return nil
+	}
+	defaults := info.ModelMessages.TokenBudget
+	return &config.TokenBudgetDefaults{
+		ReminderThresholdTokens:         defaults.ReminderThresholdTokens,
+		ReminderMessageTemplate:         defaults.ReminderMessageTemplate,
+		GuidanceMessage:                 defaults.GuidanceMessage,
+		AutoCompactFallbackPrompt:       defaults.AutoCompactFallbackPrompt,
+		AutoCompactFallbackBufferTokens: defaults.AutoCompactFallbackBufferTokens,
+	}
+}
+
+func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string, enabled bool, message string) (any, error) {
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	message = strings.TrimSpace(message)
+	if !enabled || message == "" {
+		if len(state.ContextWindowGuidance) == 0 {
+			return nil, nil
+		}
+		state.ContextWindowGuidance = nil
+		record.Metadata.WorldState, err = session.EncodeWorldState(state)
+		if err != nil {
+			return nil, err
+		}
+		return nil, r.runtimeSaveThreadRecord(record)
+	}
+	snapshot, err := json.Marshal(message)
+	if err != nil {
+		return nil, err
+	}
+	if sameJSONValue(state.ContextWindowGuidance, snapshot) {
+		return nil, nil
+	}
+	state.ContextWindowGuidance = snapshot
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return nil, err
+	}
+	rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: message})
+	return renderedFragmentInputItem(rendered), nil
 }
 
 func sameJSONValue(left json.RawMessage, right json.RawMessage) bool {

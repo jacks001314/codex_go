@@ -236,3 +236,17 @@ func TestResponsesLoadableToolsFromSpecsSerializesSearchOutputLikeRust(t *testin
 		t.Fatalf("plain tool = %#v", got[1])
 	}
 }
+
+func TestResponsesToolsUseCollaborationNamespace(t *testing.T) {
+	got := ResponsesToolsFromSpecs([]tool.Spec{{
+		Name: tool.NamespacedName("collaboration", "spawn_agent"), Exposure: tool.ExposureModelVisible,
+		NamespaceDescription: "Tools for spawning and managing sub-agents.", InputSchema: map[string]any{"type": "object"},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "collaboration" {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+}

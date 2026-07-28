@@ -12098,6 +12098,54 @@ func TestSameJSONValueIgnoresFormatting(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterContextWindowGuidanceWorldStateDiffs(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := session.ThreadID("thread-context-window-guidance")
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy)},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
+
+	item, err := router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "original guidance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || texts[0] != "<context_window_guidance>original guidance</context_window_guidance>" {
+		t.Fatalf("initial item = %#v", item)
+	}
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "original guidance")
+	if err != nil || item != nil {
+		t.Fatalf("unchanged item = %#v, error = %v", item, err)
+	}
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "refreshed guidance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "refreshed guidance") {
+		t.Fatalf("refreshed item = %#v", item)
+	}
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), false, "")
+	if err != nil || item != nil {
+		t.Fatalf("disabled item = %#v, error = %v", item, err)
+	}
+	record, err := store.Load(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ContextWindowGuidance) != 0 {
+		t.Fatalf("guidance was not cleared: %s", record.Metadata.WorldState)
+	}
+}
+
 func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()

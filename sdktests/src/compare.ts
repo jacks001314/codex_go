@@ -61,6 +61,14 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkNoEmptyCommandExecutions("go", go, expected.forbidEmptyCommandExecutions),
     checkCommentaryBeforeTool("rust", rust, expected.requireCommentaryBeforeTool),
     checkCommentaryBeforeTool("go", go, expected.requireCommentaryBeforeTool),
+    checkCollaborationContract("rust", rust, expected.minCompletedCollabSpawnCalls, expected.requiredCompletedCollabTools),
+    checkCollaborationContract("go", go, expected.minCompletedCollabSpawnCalls, expected.requiredCompletedCollabTools),
+    checkSubagentRollouts("rust", rust, expected.minSubagentRollouts),
+    checkSubagentRollouts("go", go, expected.minSubagentRollouts),
+    checkSubagentRolloutPatterns("rust", rust, expected.subagentRolloutPatterns),
+    checkSubagentRolloutPatterns("go", go, expected.subagentRolloutPatterns),
+    checkFinalAgentMessagePatterns("rust", rust, expected.finalAgentMessagePatterns),
+    checkFinalAgentMessagePatterns("go", go, expected.finalAgentMessagePatterns),
     checkExpectedCommandExecutions("rust", rust, expected.commandExecutions, expected.commandOutputComparison),
     checkExpectedCommandExecutions("go", go, expected.commandExecutions, expected.commandOutputComparison),
     checkExpectedFileChanges("rust", rust, expected.fileChanges),
@@ -511,6 +519,130 @@ function normalizeCommandOrder(items: any[], comparison: unknown) {
   if (comparison !== "parallel-prefix-unordered" || items.length < 2) return items;
   const prefix = items.slice(0, 2).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   return [...prefix, ...items.slice(2)];
+}
+
+function checkCollaborationContract(label: string, recording: any, minimumSpawnCalls: unknown, requiredTools: unknown) {
+  const minimum = typeof minimumSpawnCalls === "number" ? minimumSpawnCalls : 0;
+  const required = Array.isArray(requiredTools) ? requiredTools.map((tool) => canonicalCollaborationTool(String(tool))) : [];
+  if (minimum <= 0 && required.length === 0) {
+    return { name: `${label}: collaboration contract`, ok: true, detail: "scenario has no collaboration contract" };
+  }
+  const completedCalls = new Set<string>();
+  for (const event of recording.events ?? []) {
+    if (event.type !== "item.completed") continue;
+    const item = event.item ?? {};
+    let rawTool = "";
+    if (item.type === "collab_tool_call" && item.status === "completed") rawTool = String(item.tool ?? "");
+    if (item.type === "tool_call") rawTool = String(item.tool_name ?? "");
+    const tool = canonicalCollaborationTool(rawTool);
+    if (tool === "") continue;
+    const callID = String(item.call_id ?? item.callId ?? item.id ?? completedCalls.size);
+    completedCalls.add(`${tool}:${callID}`);
+  }
+  const tools = new Set([...completedCalls].map((call) => call.slice(0, call.lastIndexOf(":"))));
+  const rootThreadID = String(recording?.threadId ?? "").trim();
+  const linkedSubagentThreads = new Set(
+    (Array.isArray(recording?.rolloutRecords) ? recording.rolloutRecords : [])
+      .filter((record: any) => String(record?.parentThreadId ?? "").trim() === rootThreadID)
+      .filter((record: any) => String(record?.threadSource ?? "").trim().toLowerCase() === "subagent")
+      .map((record: any) => String(record?.threadId ?? "").trim())
+      .filter(Boolean),
+  );
+  if (linkedSubagentThreads.size > 0) tools.add("collaboration.spawn_agent");
+  const completedSpawnCalls = [...completedCalls].filter((call) => call.startsWith("collaboration.spawn_agent:")).length;
+  const spawnCalls = Math.max(completedSpawnCalls, linkedSubagentThreads.size);
+  const missing = required.filter((tool: string) => !tools.has(tool));
+  const ok = spawnCalls >= minimum && missing.length === 0;
+  return {
+    name: `${label}: collaboration contract`,
+    ok,
+    detail: ok ? undefined : `${label}: completed tools=${JSON.stringify([...tools])}, spawn evidence=${spawnCalls}/${minimum}, missing=${JSON.stringify(missing)}`,
+  };
+}
+
+function canonicalCollaborationTool(value: string): string {
+  switch (value.trim().toLowerCase()) {
+    case "spawn":
+    case "spawn_agent":
+    case "collaboration.spawn_agent":
+      return "collaboration.spawn_agent";
+    case "wait":
+    case "wait_agent":
+    case "collaboration.wait_agent":
+      return "collaboration.wait_agent";
+    case "send_message":
+    case "collaboration.send_message":
+      return "collaboration.send_message";
+    case "followup_task":
+    case "collaboration.followup_task":
+      return "collaboration.followup_task";
+    case "interrupt_agent":
+    case "collaboration.interrupt_agent":
+      return "collaboration.interrupt_agent";
+    case "list_agents":
+    case "collaboration.list_agents":
+      return "collaboration.list_agents";
+    default:
+      return "";
+  }
+}
+
+function checkSubagentRollouts(label: string, recording: any, minimumSubagents: unknown) {
+  const minimum = typeof minimumSubagents === "number" ? minimumSubagents : 0;
+  if (minimum <= 0) {
+    return { name: `${label}: subagent rollout contract`, ok: true, detail: "scenario has no subagent rollout contract" };
+  }
+  const rootThreadID = String(recording?.threadId ?? "").trim();
+  const linked = Array.isArray(recording?.rolloutRecords)
+    ? recording.rolloutRecords.filter((record: any) => {
+        const threadID = String(record?.threadId ?? "").trim();
+        const parentThreadID = String(record?.parentThreadId ?? "").trim();
+        const source = String(record?.threadSource ?? "").trim().toLowerCase();
+        return threadID !== "" && threadID !== rootThreadID && parentThreadID === rootThreadID && source === "subagent";
+      })
+    : [];
+  const linkedThreadIDs = new Set(linked.map((record: any) => String(record.threadId).trim()));
+  const ok = rootThreadID !== "" && linkedThreadIDs.size >= minimum;
+  return {
+    name: `${label}: subagent rollout contract`,
+    ok,
+    detail: ok ? undefined : `${label}: unique linked subagent threads=${linkedThreadIDs.size}/${minimum}, root thread=${JSON.stringify(rootThreadID)}`,
+  };
+}
+
+function checkSubagentRolloutPatterns(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: subagent rollout patterns`, ok: true, detail: "scenario has no subagent rollout pattern contract" };
+  }
+  const rootThreadID = String(recording?.threadId ?? "").trim();
+  const linked = Array.isArray(recording?.rolloutRecords)
+    ? recording.rolloutRecords.filter((record: any) => {
+        const threadID = String(record?.threadId ?? "").trim();
+        return threadID !== "" && threadID !== rootThreadID &&
+          String(record?.parentThreadId ?? "").trim() === rootThreadID &&
+          String(record?.threadSource ?? "").trim().toLowerCase() === "subagent";
+      })
+    : [];
+  const rolloutText = linked.map((record: any) => String(record?.jsonl ?? "")).join("\n");
+  const missing = expected.map(String).filter((pattern) => !new RegExp(pattern, "s").test(rolloutText));
+  return {
+    name: `${label}: subagent rollout patterns`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label}: missing subagent rollout patterns=${JSON.stringify(missing)}`,
+  };
+}
+
+function checkFinalAgentMessagePatterns(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: final agent message patterns`, ok: true, detail: "scenario has no final-message pattern contract" };
+  }
+  const final = finalAgentMessagesByTurn(recording).at(-1) ?? "";
+  const missing = expected.map(String).filter((pattern) => !new RegExp(pattern, "s").test(final));
+  return {
+    name: `${label}: final agent message patterns`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label}: final=${JSON.stringify(final)}, missing patterns=${JSON.stringify(missing)}`,
+  };
 }
 
 function checkStartedCompletedPairs(label: string, recording: any, expected: unknown) {

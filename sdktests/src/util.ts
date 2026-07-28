@@ -127,9 +127,67 @@ export function snapshotFiles(root: string): Record<string, string> {
 }
 
 export function selectRolloutJsonl(contents: string[], threadId?: string | null): string {
-  return contents
-    .filter((text) => !threadId || text.includes(threadId))
-    .sort((left, right) => right.length - left.length)[0] ?? "";
+  const records = collectRolloutRecords(contents);
+  const exact = threadId
+    ? records.filter((record) => record.threadId === threadId)
+    : records;
+  const candidates = exact.length > 0
+    ? exact
+    : records.filter((record) => !threadId || record.jsonl.includes(threadId));
+  return candidates.sort((left, right) => right.jsonl.length - left.jsonl.length)[0]?.jsonl ?? "";
+}
+
+export type RolloutRecord = {
+  threadId: string;
+  sessionId: string;
+  threadSource: string;
+  parentThreadId: string;
+  agentPath: string;
+  agentNickname: string;
+  jsonl: string;
+};
+
+export function collectRolloutRecords(contents: string[]): RolloutRecord[] {
+  return contents.map((jsonl) => {
+    const meta = rolloutSessionMeta(jsonl);
+    return {
+      threadId: stringValue(meta?.id),
+      sessionId: stringValue(meta?.session_id),
+      threadSource: stringValue(meta?.thread_source),
+      parentThreadId: firstString(
+        meta?.parent_thread_id,
+        meta?.source?.subagent?.thread_spawn?.parent_thread_id,
+      ),
+      agentPath: stringValue(meta?.agent_path),
+      agentNickname: stringValue(meta?.agent_nickname),
+      jsonl,
+    };
+  });
+}
+
+function rolloutSessionMeta(jsonl: string): any {
+  for (const line of jsonl.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.type === "session_meta") return parsed.payload ?? parsed.meta ?? parsed;
+    } catch {
+      // Preserve malformed rollout text for raw diagnostics and keep scanning.
+    }
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = stringValue(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 export function latestArtifactDir(): string {

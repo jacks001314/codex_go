@@ -320,12 +320,21 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		if callErr.IsFatal() {
 			return nil, dispatchErr
 		}
+		message := callErr.ModelMessage()
+		body := message
+		if d.router.DeclaresOutputSchema(invocation.ToolName) {
+			encoded, err := json.Marshal(message)
+			if err != nil {
+				return nil, err
+			}
+			body = string(encoded)
+		}
 		output = &tool.Output{
 			CallID:      invocation.CallID,
 			ToolName:    invocation.ToolName,
 			Success:     false,
-			Body:        callErr.ModelMessage(),
-			Error:       callErr.ModelMessage(),
+			Body:        body,
+			Error:       message,
 			CompletedAt: d.nowUTC(),
 		}
 	}

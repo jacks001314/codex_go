@@ -216,6 +216,9 @@ func isResponsesNamespaceTool(spec *tool.Spec) bool {
 	if spec.Name.Namespace == "clock" {
 		return true
 	}
+	if spec.Name.Namespace == "collaboration" {
+		return true
+	}
 	if strings.HasPrefix(spec.Name.Namespace, "mcp__") {
 		return true
 	}

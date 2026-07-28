@@ -74,6 +74,11 @@ export type Scenario = {
     requireSingleFinalAgentMessagePerTurn?: boolean;
     forbidEmptyCommandExecutions?: boolean;
     requireCommentaryBeforeTool?: boolean;
+    minCompletedCollabSpawnCalls?: number;
+    requiredCompletedCollabTools?: string[];
+    minSubagentRollouts?: number;
+    subagentRolloutPatterns?: string[];
+    finalAgentMessagePatterns?: string[];
     mismatchClassification?: "sdk-assumption" | "platform-difference";
   };
 };
@@ -82,6 +87,70 @@ const commands = platformCommands();
 const localMCPServer = fileURLToPath(new URL("./fixtures/mcp_server.mjs", import.meta.url));
 
 export const scenarios: Scenario[] = [
+	{
+		name: "multi-agent-v2-lifecycle",
+		description: "Exercises named V2 spawn, mailbox wait, completed-agent follow-up, and canonical agent listing.",
+		optIn: true,
+		timeoutMs: 300000,
+		codexConfig: {
+			features: { multi_agent_v2: { enabled: true, wait_agent_enabled: true } },
+			agents: { max_concurrent_threads_per_session: 4 },
+			web_search: "disabled",
+			suppress_unstable_features_warning: true,
+		},
+		threadOptions: {
+			sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{
+			prompt: "Use the collaboration tools directly. Spawn exactly one agent named lifecycle_worker and ask it to reply LIFECYCLE_FIRST. Wait for it to complete. Then use followup_task on that same agent and ask it to reply LIFECYCLE_SECOND. Wait for it to complete, call list_agents, and finally reply with exactly MULTI_AGENT_V2_LIFECYCLE_OK. Do not use shell or modify files.",
+		}],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+			exactAgentMessages: ["MULTI_AGENT_V2_LIFECYCLE_OK"], requiredCompletedItemTypes: ["agent_message"],
+			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minSubagentRollouts: 1,
+			subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+		},
+	},
+  {
+    name: "multi-agent-factorial-100",
+    description: "Requires multiple sub-agents to independently compute and verify 100! before the root agent synthesizes the result.",
+    optIn: true,
+    timeoutMs: 300000,
+    codexConfig: {
+      agents: { max_concurrent_threads_per_session: 4 },
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "Calculate 100!. You must create multiple agents and collaborate to complete the calculation. Wait for their results, verify the value, and return the exact decimal value of 100! in the final answer. Do not use shell or modify files." }],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"],
+      forbiddenCompletedItemTypes: ["file_change"],
+      minCompletedCollabSpawnCalls: 2,
+      requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.wait_agent"],
+      minSubagentRollouts: 2,
+      finalAgentMessagePatterns: [
+        "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000",
+      ],
+      eventSequenceComparison: "model-selected-tools",
+      commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
   {
     name: "code-mode-single-command-audit",
     description: "Runs one deterministic command through JavaScript code mode and verifies nested tool lifecycle and output.",

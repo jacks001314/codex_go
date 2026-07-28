@@ -44,21 +44,34 @@ During longer work, send short progress updates at meaningful points. Do not wai
 const personalityPlaceholder = "{{ personality }}"
 
 type ModelMessages struct {
-	InstructionsTemplate string `json:"instructions_template,omitempty"`
-	PersonalityDefault   string `json:"-"`
-	PersonalityFriendly  string `json:"-"`
-	PersonalityPragmatic string `json:"-"`
+	InstructionsTemplate string                  `json:"instructions_template,omitempty"`
+	PersonalityDefault   string                  `json:"-"`
+	PersonalityFriendly  string                  `json:"-"`
+	PersonalityPragmatic string                  `json:"-"`
+	TokenBudget          *ModelTokenBudgetConfig `json:"token_budget,omitempty"`
+}
+
+// ModelTokenBudgetConfig contains model-owned defaults for the context-window
+// token-budget feature.
+type ModelTokenBudgetConfig struct {
+	ReminderThresholdTokens         int    `json:"reminder_threshold_tokens"`
+	ReminderMessageTemplate         string `json:"reminder_message_template"`
+	GuidanceMessage                 string `json:"guidance_message"`
+	AutoCompactFallbackPrompt       string `json:"auto_compact_fallback_prompt"`
+	AutoCompactFallbackBufferTokens int    `json:"auto_compact_fallback_buffer_tokens"`
 }
 
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		InstructionsTemplate  string            `json:"instructions_template"`
-		InstructionsVariables map[string]string `json:"instructions_variables"`
+		InstructionsTemplate  string                  `json:"instructions_template"`
+		InstructionsVariables map[string]string       `json:"instructions_variables"`
+		TokenBudget           *ModelTokenBudgetConfig `json:"token_budget"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	m.InstructionsTemplate = raw.InstructionsTemplate
+	m.TokenBudget = raw.TokenBudget
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
 		m.PersonalityFriendly = raw.InstructionsVariables["personality_friendly"]
@@ -146,6 +159,7 @@ type ModelInfo struct {
 	WebSearchToolType              string           `json:"web_search_tool_type"`
 	TruncationPolicy               TruncationPolicy `json:"truncation_policy"`
 	SupportsParallelToolCalls      bool             `json:"supports_parallel_tool_calls"`
+	MultiAgentVersion              string           `json:"multi_agent_version"`
 	SupportsImageDetailOriginal    bool             `json:"supports_image_detail_original"`
 	ContextWindow                  int64            `json:"context_window"`
 	MaxContextWindow               int64            `json:"max_context_window"`
@@ -185,6 +199,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		WebSearchToolType              string              `json:"web_search_tool_type"`
 		TruncationPolicy               rawTruncationPolicy `json:"truncation_policy"`
 		SupportsParallelToolCalls      bool                `json:"supports_parallel_tool_calls"`
+		MultiAgentVersion              any                 `json:"multi_agent_version"`
 		SupportsImageDetailOriginal    bool                `json:"supports_image_detail_original"`
 		ContextWindow                  int64               `json:"context_window"`
 		MaxContextWindow               int64               `json:"max_context_window"`
@@ -220,6 +235,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		WebSearchToolType:              raw.WebSearchToolType,
 		TruncationPolicy:               TruncationPolicy(raw.TruncationPolicy),
 		SupportsParallelToolCalls:      raw.SupportsParallelToolCalls,
+		MultiAgentVersion:              knownMultiAgentVersion(stringFromJSONValue(raw.MultiAgentVersion)),
 		SupportsImageDetailOriginal:    raw.SupportsImageDetailOriginal,
 		ContextWindow:                  raw.ContextWindow,
 		MaxContextWindow:               raw.MaxContextWindow,
@@ -255,6 +271,7 @@ type ModelPreset struct {
 	Visibility               string
 	DefaultReasoningLevel    string
 	SupportedReasoningLevels []string
+	MultiAgentVersion        string
 }
 
 type ModelsManagerConfig struct {
@@ -337,19 +354,25 @@ func fallbackBundledModelsResponse() ModelsResponse {
 			{
 				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Latest frontier agentic coding model.",
 				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 1, BaseInstructions: BaseInstructions,
-				ContextWindow: 372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
 				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Frontier coding model.",
 				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
-				ContextWindow: 372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
 				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Frontier coding model.",
 				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
-				ContextWindow: 372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				MultiAgentVersion: "v1", DefaultReasoningLevel: "medium",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
+				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
@@ -464,6 +487,7 @@ func BuildAvailableModels(remoteModels []ModelInfo) []ModelPreset {
 			Visibility:               model.Visibility,
 			DefaultReasoningLevel:    model.DefaultReasoningLevel,
 			SupportedReasoningLevels: cloneStrings(model.SupportedReasoningLevels),
+			MultiAgentVersion:        model.MultiAgentVersion,
 		})
 	}
 	if len(presets) > 0 {
@@ -526,6 +550,15 @@ func bundledModelCatalogPaths() []string {
 func stringFromJSONValue(value any) string {
 	text, _ := value.(string)
 	return strings.TrimSpace(text)
+}
+
+func knownMultiAgentVersion(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "disabled", "v1", "v2":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func reasoningLevelsFromJSON(values []json.RawMessage) []string {
@@ -821,6 +854,10 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 	out.InputModalities = cloneStrings(out.InputModalities)
 	if out.ModelMessages != nil {
 		messages := *out.ModelMessages
+		if messages.TokenBudget != nil {
+			tokenBudget := *messages.TokenBudget
+			messages.TokenBudget = &tokenBudget
+		}
 		out.ModelMessages = &messages
 	}
 	return out

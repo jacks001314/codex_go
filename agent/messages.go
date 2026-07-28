@@ -25,8 +25,8 @@ const (
 )
 
 type AgentMessageStatus struct {
-	Kind    AgentMessageStatusKind
-	Message string
+	Kind    AgentMessageStatusKind `json:"status"`
+	Message string                 `json:"message,omitempty"`
 }
 
 func (s *AgentMessageStatus) IsFinal() bool {

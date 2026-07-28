@@ -155,4 +155,8 @@ func TestModelSwitchAndTokenBudget(t *testing.T) {
 	if got := (&TokenBudgetContext{Used: 10, Limit: 100}).Body(); !strings.Contains(got, "90 remaining") {
 		t.Fatalf("TokenBudgetContext = %q", got)
 	}
+	guidance := RenderStandalone(&ContextWindowGuidance{Message: "keep durable notes"})
+	if guidance == nil || guidance.Role != RoleDeveloper || guidance.Content != "<context_window_guidance>keep durable notes</context_window_guidance>" {
+		t.Fatalf("context window guidance = %#v", guidance)
+	}
 }

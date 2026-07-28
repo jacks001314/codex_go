@@ -68,6 +68,80 @@ test("compareArtifact accepts paired command and one final message", () => {
   }
 });
 
+test("compareArtifact enforces linked subagent rollouts and the final semantic result", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const factorial = "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000";
+    const events = [
+      event("thread.started"),
+      event("turn.started"),
+      event("item.completed", { id: "wait-1", type: "collab_tool_call", tool: "wait", status: "completed" }),
+      event("item.completed", { id: "msg-1", type: "agent_message", text: `100! = ${factorial}` }),
+      event("turn.completed"),
+    ];
+    const withSubagents = (count: number) => ({
+      ...recording(events),
+      threadId: "thread-root",
+      rolloutRecords: Array.from({ length: count }, (_, index) => ({
+        threadId: `thread-child-${index + 1}`,
+        threadSource: "subagent",
+        parentThreadId: "thread-root",
+        jsonl: index === 0 ? "LIFECYCLE_FIRST\nLIFECYCLE_SECOND" : "",
+      })),
+    });
+    const valid = withSubagents(2);
+    writeArtifact(root, valid, valid, undefined, {
+      requireStartedCompletedPairs: [],
+      minCompletedCollabSpawnCalls: 2,
+      requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.wait_agent"],
+      minSubagentRollouts: 2,
+      subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+      finalAgentMessagePatterns: [factorial],
+    });
+    assert.equal(compareArtifact(root).status, "pass");
+
+    const missingSubagent = withSubagents(1);
+    writeArtifact(root, valid, missingSubagent, undefined, {
+      requireStartedCompletedPairs: [],
+      minSubagentRollouts: 2,
+      subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+      finalAgentMessagePatterns: [factorial],
+    });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.checks.find((check) => check.name === "go: subagent rollout contract")?.ok, false);
+
+    const duplicatedSubagent = withSubagents(1);
+    duplicatedSubagent.rolloutRecords.push({ ...duplicatedSubagent.rolloutRecords[0] });
+    writeArtifact(root, valid, duplicatedSubagent, undefined, {
+      requireStartedCompletedPairs: [],
+      minSubagentRollouts: 2,
+      subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+      finalAgentMessagePatterns: [factorial],
+    });
+    const duplicateResult = compareArtifact(root);
+    assert.equal(duplicateResult.status, "behavior_mismatch");
+    assert.match(
+      duplicateResult.checks.find((check) => check.name === "go: subagent rollout contract")?.detail ?? "",
+      /unique linked subagent threads=1\/2/,
+    );
+
+    const missingPattern = withSubagents(2);
+    missingPattern.rolloutRecords[0].jsonl = "LIFECYCLE_FIRST";
+    writeArtifact(root, valid, missingPattern, undefined, {
+      requireStartedCompletedPairs: [],
+      minSubagentRollouts: 2,
+      subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+      finalAgentMessagePatterns: [factorial],
+    });
+    const patternResult = compareArtifact(root);
+    assert.equal(patternResult.status, "behavior_mismatch");
+    assert.equal(patternResult.checks.find((check) => check.name === "go: subagent rollout patterns")?.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact recognizes Rust and Go image-view rollout records", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {

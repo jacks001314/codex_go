@@ -292,6 +292,14 @@ func (r *Router) ModelVisibleSpecs() []Spec {
 	return r.registry.ModelVisibleSpecs()
 }
 
+func (r *Router) DeclaresOutputSchema(name ToolName) bool {
+	if r == nil || r.registry == nil {
+		return false
+	}
+	spec, ok := r.registry.Spec(name)
+	return ok && spec.OutputSchema != nil
+}
+
 func (r *Router) DeferredToolNamespaces() map[string]string {
 	if r == nil || r.registry == nil {
 		return nil

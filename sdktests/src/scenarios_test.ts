@@ -12,6 +12,29 @@ test("long-context structured output uses a strict service-compatible schema", (
   assert.equal(schema?.additionalProperties, false);
 });
 
+test("multi-agent factorial scenario requires collaboration and the exact semantic result", () => {
+  const scenario = getScenario("multi-agent-factorial-100");
+  assert.equal(scenario.optIn, true);
+  assert.equal(scenario.codexConfig?.features?.multi_agent_v2, undefined);
+  assert.match(scenario.turns[0]?.prompt ?? "", /create multiple agents/);
+  assert.equal(scenario.expected.minCompletedCollabSpawnCalls, 2);
+  assert.deepEqual(scenario.expected.requiredCompletedCollabTools, ["collaboration.spawn_agent", "collaboration.wait_agent"]);
+  assert.equal(scenario.expected.minSubagentRollouts, 2);
+  assert.equal(scenario.expected.commandOutputComparison, "informational");
+  assert.match("100! = 93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000", new RegExp(scenario.expected.finalAgentMessagePatterns?.[0] ?? "$^"));
+});
+
+test("multi-agent V2 lifecycle scenario covers named follow-up without workspace changes", () => {
+	const scenario = getScenario("multi-agent-v2-lifecycle");
+	assert.equal(scenario.optIn, true);
+	assert.match(scenario.turns[0]?.prompt ?? "", /lifecycle_worker/);
+	assert.match(scenario.turns[0]?.prompt ?? "", /followup_task/);
+	assert.equal(scenario.expected.minSubagentRollouts, 1);
+	assert.deepEqual(scenario.expected.subagentRolloutPatterns, ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"]);
+	assert.deepEqual(scenario.expected.exactAgentMessages, ["MULTI_AGENT_V2_LIFECYCLE_OK"]);
+	assert.equal(scenario.expected.workspaceMutation, "none");
+});
+
 test("multifile refactor compares deterministic paths and contracts the generated implementation", () => {
   const expected = getScenario("real-coding-multifile-refactor").expected;
   assert.deepEqual(expected.compareWorkspacePaths, [

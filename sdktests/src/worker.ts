@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { selectRolloutJsonl } from "./util.ts";
+import { collectRolloutRecords, selectRolloutJsonl } from "./util.ts";
 
 const [inputPath, outputPath] = process.argv.slice(2);
 if (!inputPath || !outputPath) throw new Error("worker requires input and output paths");
@@ -23,9 +23,9 @@ function checkpoint(extra: Record<string, unknown> = {}) {
   }, null, 2)}\n`, "utf8");
 }
 
-function rolloutJsonl(): string {
+function rolloutArtifacts() {
   const root = path.join(input.envHome, "sessions");
-  if (!existsSync(root)) return "";
+  if (!existsSync(root)) return { rolloutJsonl: "", rolloutRecords: [] };
   const files: string[] = [];
   const visit = (directory: string) => {
     for (const name of readdirSync(directory)) {
@@ -35,7 +35,11 @@ function rolloutJsonl(): string {
     }
   };
   visit(root);
-  return selectRolloutJsonl(files.map((file) => readFileSync(file, "utf8")), currentThreadId);
+  const contents = files.map((file) => readFileSync(file, "utf8"));
+  return {
+    rolloutJsonl: selectRolloutJsonl(contents, currentThreadId),
+    rolloutRecords: collectRolloutRecords(contents),
+  };
 }
 
 try {
@@ -129,6 +133,6 @@ try {
     responsesDebug: existsSync(path.join(input.envHome, "responses-debug.jsonl"))
       ? readFileSync(path.join(input.envHome, "responses-debug.jsonl"), "utf8")
       : "",
-    rolloutJsonl: rolloutJsonl(),
+    ...rolloutArtifacts(),
   });
 }

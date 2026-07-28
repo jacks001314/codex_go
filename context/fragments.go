@@ -493,6 +493,25 @@ type TokenBudgetContext struct {
 	Remaining int
 }
 
+type ContextWindowGuidance struct {
+	Message string
+}
+
+func (c *ContextWindowGuidance) Role() string {
+	return RoleDeveloper
+}
+
+func (c *ContextWindowGuidance) Markers() (string, string) {
+	return "<context_window_guidance>", "</context_window_guidance>"
+}
+
+func (c *ContextWindowGuidance) Body() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Message)
+}
+
 func (t *TokenBudgetContext) Role() string {
 	return RoleDeveloper
 }

@@ -29,6 +29,21 @@ func TestStaticModelsManagerListsSortedModelsAndMarksDefault(t *testing.T) {
 	}
 }
 
+func TestModelCatalogPreservesKnownMultiAgentVersion(t *testing.T) {
+	var catalog ModelsResponse
+	err := json.Unmarshal([]byte(`{"models":[
+		{"slug":"v2","display_name":"V2","visibility":"list","supported_in_api":true,"multi_agent_version":"v2"},
+		{"slug":"future","display_name":"Future","visibility":"list","supported_in_api":true,"multi_agent_version":"v99"}
+	]}`), &catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := BuildAvailableModels(catalog.Models)
+	if len(models) != 2 || models[0].MultiAgentVersion != "v2" || models[1].MultiAgentVersion != "" {
+		t.Fatalf("multi-agent versions = %#v", models)
+	}
+}
+
 func TestBuildAvailableModelsMarksFirstPickerVisibleDefault(t *testing.T) {
 	models := BuildAvailableModels([]ModelInfo{
 		{Slug: "hidden", DisplayName: "Hidden", Visibility: VisibilityHide, SupportedInAPI: true, Priority: 0},
@@ -95,6 +110,13 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 					"personality_default": "Default",
 					"personality_friendly": "Friendly",
 					"personality_pragmatic": "Pragmatic"
+				},
+				"token_budget": {
+					"reminder_threshold_tokens": 12000,
+					"reminder_message_template": "remaining: {n_remaining}",
+					"guidance_message": "keep notes",
+					"auto_compact_fallback_prompt": "summarize",
+					"auto_compact_fallback_buffer_tokens": 8000
 				}
 			},
 			"truncation_policy": {"mode": "tokens", "limit": 10000},
@@ -117,6 +139,14 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	}
 	if model.ModelMessages == nil || model.ModelMessages.PersonalityFriendly != "Friendly" {
 		t.Fatalf("model messages = %#v", model.ModelMessages)
+	}
+	if model.ModelMessages.TokenBudget == nil || model.ModelMessages.TokenBudget.GuidanceMessage != "keep notes" || model.ModelMessages.TokenBudget.AutoCompactFallbackBufferTokens != 8000 {
+		t.Fatalf("model token budget = %#v", model.ModelMessages.TokenBudget)
+	}
+	cloned := cloneModelInfo(model)
+	cloned.ModelMessages.TokenBudget.GuidanceMessage = "changed"
+	if model.ModelMessages.TokenBudget.GuidanceMessage != "keep notes" {
+		t.Fatalf("clone shares model token budget = %#v", model.ModelMessages.TokenBudget)
 	}
 }
 

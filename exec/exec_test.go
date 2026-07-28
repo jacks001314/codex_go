@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/codexapi"
@@ -2288,6 +2289,489 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	}
 }
 
+func TestToolRouterRegistersRealMultiAgentV2Tools(t *testing.T) {
+	home := t.TempDir()
+	runner := NewLocalRunner(home)
+	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir()}}}
+	cfg := &config.Config{Values: map[string]any{
+		"features": map[string]any{"multi_agent_v2": map[string]any{"enabled": true, "wait_agent_enabled": true}},
+		"agents":   map[string]any{"max_concurrent_threads_per_session": int64(4)},
+	}}
+	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", nil)
+	if err != nil {
+		t.Fatalf("multiAgentToolsForRun() error = %v", err)
+	}
+	if tools == nil || tools.controller == nil || tools.disableWait {
+		t.Fatalf("multi-agent tools = %#v", tools)
+	}
+	if tools.maxConcurrency != 5 {
+		t.Fatalf("max concurrency = %d, want 5", tools.maxConcurrency)
+	}
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+		AgentController: tools.controller, AgentExposure: tools.exposure, AgentVersion: tools.version, AgentNamespace: tools.namespace,
+		AgentRoles: tools.roles, AgentDefaults: tools.defaults, DisableWaitAgent: tools.disableWait,
+		AgentWaitDefault: tools.waitDefault, AgentWaitMin: tools.waitMin, AgentWaitMax: tools.waitMax, AgentWaitConfigured: true,
+		AgentHideSpawnMetadata: tools.hideSpawnMetadata, AgentExposeSpawnModelOverrides: tools.exposeSpawnModelOverrides,
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest() error = %v", err)
+	}
+	visible := map[string]bool{}
+	for _, spec := range router.ModelVisibleSpecs() {
+		visible[spec.Name.Key()] = true
+	}
+	for _, name := range []string{
+		"collaboration.spawn_agent", "collaboration.send_message", "collaboration.followup_task",
+		"collaboration.wait_agent", "collaboration.interrupt_agent", "collaboration.list_agents",
+	} {
+		if !visible[name] {
+			t.Fatalf("model-visible tools = %#v, missing %s", visible, name)
+		}
+	}
+	if visible["agent.spawn_agent"] {
+		t.Fatalf("legacy agent namespace leaked into v2 tools: %#v", visible)
+	}
+}
+
+func TestExecMultiAgentVersionForRunMatchesCatalogAndConfigPrecedence(t *testing.T) {
+	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+		{Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2"},
+		{Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1"},
+		{Slug: "catalog-disabled", DisplayName: "catalog-disabled", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "disabled"},
+		{Slug: "catalog-unspecified", DisplayName: "catalog-unspecified", Visibility: model.VisibilityVisible, SupportedInAPI: true},
+	}})
+	enabled := true
+	disabled := false
+	tests := []struct {
+		name          string
+		model         string
+		features      map[string]any
+		agentsEnabled *bool
+		inherited     agent.MultiAgentVersion
+		want          agent.MultiAgentVersion
+	}{
+		{name: "catalog default", want: agent.VersionV2},
+		{name: "catalog v2", model: "catalog-v2", want: agent.VersionV2},
+		{name: "catalog v1", model: "catalog-v1", want: agent.VersionV1},
+		{name: "catalog disabled", model: "catalog-disabled", want: ""},
+		{name: "stable fallback", model: "catalog-unspecified", want: agent.VersionV1},
+		{name: "agents disabled overrides catalog", model: "catalog-v2", agentsEnabled: &disabled, want: ""},
+		{name: "explicit v2 overrides agents disabled", model: "catalog-v1", features: map[string]any{"multi_agent_v2": map[string]any{"enabled": true}}, agentsEnabled: &disabled, want: agent.VersionV2},
+		{name: "inherited session version overrides catalog", model: "catalog-v2", inherited: agent.VersionV1, want: agent.VersionV1},
+		{name: "stable fallback can be disabled", model: "catalog-unspecified", features: map[string]any{"multi_agent": map[string]any{"enabled": false}}, want: ""},
+		{name: "agents explicitly enabled keeps catalog", model: "catalog-v2", agentsEnabled: &enabled, want: agent.VersionV2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			values := map[string]any{}
+			if tc.features != nil {
+				values["features"] = tc.features
+			}
+			cfg := &config.Config{Values: values}
+			req := &Request{
+				Exec:              cli.ExecOptions{Shared: cli.SharedOptions{Model: tc.model}},
+				multiAgentVersion: tc.inherited,
+			}
+			agentsConfig := &config.AgentsConfig{Enabled: tc.agentsEnabled}
+			if got := execMultiAgentVersionForRun(req, cfg, agentsConfig, modelsManager); got != tc.want {
+				t.Fatalf("execMultiAgentVersionForRun() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolRouterUsesCatalogSelectedV2WithoutFeatureFlag(t *testing.T) {
+	home := t.TempDir()
+	runner := NewLocalRunner(home)
+	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2",
+	}}})
+	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir(), Model: "catalog-v2"}}}
+	cfg := &config.Config{Values: map[string]any{}}
+	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", &model.ResponsesAgentRunner{ModelsManager: modelsManager})
+	if err != nil {
+		t.Fatalf("multiAgentToolsForRun() error = %v", err)
+	}
+	if tools == nil || tools.version != agent.VersionV2 || tools.controller == nil {
+		t.Fatalf("catalog-selected multi-agent tools = %#v", tools)
+	}
+	t.Cleanup(func() { closeExecMultiAgentTools(tools) })
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+		AgentController: tools.controller, AgentExposure: tools.exposure, AgentVersion: tools.version, AgentNamespace: tools.namespace,
+		AgentRoles: tools.roles, AgentDefaults: tools.defaults, DisableWaitAgent: tools.disableWait,
+		AgentWaitDefault: tools.waitDefault, AgentWaitMin: tools.waitMin, AgentWaitMax: tools.waitMax, AgentWaitConfigured: true,
+		AgentHideSpawnMetadata: tools.hideSpawnMetadata, AgentExposeSpawnModelOverrides: tools.exposeSpawnModelOverrides,
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest() error = %v", err)
+	}
+	visible := map[string]bool{}
+	for _, spec := range router.ModelVisibleSpecs() {
+		visible[spec.Name.Key()] = true
+	}
+	for _, name := range []string{
+		"collaboration.spawn_agent", "collaboration.send_message", "collaboration.followup_task",
+		"collaboration.wait_agent", "collaboration.interrupt_agent", "collaboration.list_agents",
+	} {
+		if !visible[name] {
+			t.Fatalf("model-visible tools = %#v, missing %s", visible, name)
+		}
+	}
+	if got := execMultiAgentVersionForRequest(req); got != string(agent.VersionV2) {
+		t.Fatalf("persisted request multi-agent version = %q, want v2", got)
+	}
+}
+
+func TestToolRouterUsesCatalogSelectedV1WithoutFeatureFlag(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1",
+	}}})
+	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir(), Model: "catalog-v1"}}}
+	tools, err := runner.multiAgentToolsForRun(
+		context.Background(),
+		req,
+		&config.Config{Values: map[string]any{}},
+		"thread-root",
+		&model.ResponsesAgentRunner{ModelsManager: modelsManager},
+	)
+	if err != nil {
+		t.Fatalf("multiAgentToolsForRun() error = %v", err)
+	}
+	if tools == nil || tools.version != agent.VersionV1 || tools.namespace != agent.MultiAgentV1Namespace {
+		t.Fatalf("catalog-selected V1 tools = %#v", tools)
+	}
+	t.Cleanup(func() { closeExecMultiAgentTools(tools) })
+	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+		AgentController: tools.controller, AgentExposure: tools.exposure, AgentVersion: tools.version, AgentNamespace: tools.namespace,
+		AgentRoles: tools.roles, AgentDefaults: tools.defaults, DisableWaitAgent: tools.disableWait,
+		AgentWaitDefault: tools.waitDefault, AgentWaitMin: tools.waitMin, AgentWaitMax: tools.waitMax, AgentWaitConfigured: true,
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest() error = %v", err)
+	}
+	visible := map[string]bool{}
+	for _, spec := range router.ModelVisibleSpecs() {
+		visible[spec.Name.Key()] = true
+	}
+	for _, name := range []string{"agent.spawn_agent", "agent.send_input", "agent.wait_agent", "agent.resume_agent", "agent.close_agent"} {
+		if !visible[name] {
+			t.Fatalf("model-visible tools = %#v, missing %s", visible, name)
+		}
+	}
+	if visible["collaboration.spawn_agent"] {
+		t.Fatalf("V2 namespace leaked into V1 tools: %#v", visible)
+	}
+}
+
+func TestExecMultiAgentV2UsageHintMatchesRootAndSubagentContract(t *testing.T) {
+	options := &execMultiAgentTools{
+		version: agent.VersionV2, maxConcurrency: 4, exposeSpawnModelOverrides: true,
+	}
+	root := execMultiAgentV2UsageHint(&Request{}, options)
+	for _, fragment := range []string{
+		"You are `/root`", "Message Type: MESSAGE | FINAL_ANSWER", "functions.collaboration.spawn_agent",
+		"There are 4 available concurrency slots", "Only set `model` or `reasoning_effort` when explicitly requested",
+	} {
+		if !strings.Contains(root, fragment) {
+			t.Fatalf("root usage hint missing %q:\n%s", fragment, root)
+		}
+	}
+	subagent := execMultiAgentV2UsageHint(&Request{subagent: &execSubagentContext{AgentPath: "/root/worker"}}, options)
+	for _, fragment := range []string{"You are an agent in a team", "Message Type: NEW_TASK | MESSAGE | FINAL_ANSWER", "delivered back to your parent agent"} {
+		if !strings.Contains(subagent, fragment) {
+			t.Fatalf("subagent usage hint missing %q:\n%s", fragment, subagent)
+		}
+	}
+}
+
+func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	controller.parentModel = "catalog-v2"
+	controller.modelsManager = model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+		{
+			Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true,
+			MultiAgentVersion: "v2", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high"}, ServiceTiers: []string{"priority"},
+		},
+		{
+			Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true,
+			MultiAgentVersion: "v1", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"medium"},
+		},
+	}})
+	unsupportedModel := "catalog-v1"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: &unsupportedModel}); err == nil || !strings.Contains(err.Error(), "Unknown model `catalog-v1`") || !strings.Contains(err.Error(), "Available models: catalog-v2") {
+		t.Fatalf("unsupported model error = %v", err)
+	}
+	unsupportedEffort := "ultra"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{ReasoningEffort: &unsupportedEffort}); err == nil || !strings.Contains(err.Error(), "Supported reasoning efforts: low, medium, high") {
+		t.Fatalf("unsupported reasoning error = %v", err)
+	}
+	validModel := "catalog-v2"
+	args := &agent.SpawnAgentArgs{Model: &validModel}
+	if err := controller.resolveSpawnModelOverrides(args); err != nil {
+		t.Fatal(err)
+	}
+	if args.ReasoningEffort == nil || *args.ReasoningEffort != "medium" {
+		t.Fatalf("default reasoning effort = %#v, want medium", args.ReasoningEffort)
+	}
+	unsupportedTier := "flex"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{ServiceTier: &unsupportedTier}); err == nil || !strings.Contains(err.Error(), "Supported service tiers: priority") {
+		t.Fatalf("unsupported service tier error = %v", err)
+	}
+	fastTier := "fast"
+	tierArgs := &agent.SpawnAgentArgs{ServiceTier: &fastTier}
+	if err := controller.resolveSpawnModelOverrides(tierArgs); err != nil {
+		t.Fatal(err)
+	}
+	if tierArgs.ServiceTier == nil || *tierArgs.ServiceTier != "priority" {
+		t.Fatalf("resolved service tier = %#v, want priority", tierArgs.ServiceTier)
+	}
+}
+
+func TestExecAgentControllerV2LifecyclePathsAndSingleRollout(t *testing.T) {
+	home := t.TempDir()
+	runner := NewLocalRunner(home)
+	recording := &recordingStaticAgent{
+		requests: make(chan model.AgentRequest, 4),
+		response: &model.AgentResponse{
+			Message: "done",
+			Items: []model.AgentItem{{
+				ID: "final", Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"},
+			}},
+			Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 1}, Model: "gpt-test", ProviderID: "local",
+		},
+	}
+	runner.Agent = recording
+	controller := newExecAgentController(runner, context.Background(), &Request{Exec: cli.ExecOptions{Prompt: "root", Shared: cli.SharedOptions{CWD: t.TempDir()}}}, "thread-root", 3).(*execAgentController)
+	t.Cleanup(controller.shutdown)
+	message := "first task"
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker", Message: &message, ForkTurns: execStringPointer("none")})
+	if err != nil || spawned.TaskName != "/root/worker" {
+		t.Fatalf("SpawnAgent() = %#v, %v", spawned, err)
+	}
+	firstRequest := awaitRecordedAgentRequest(t, recording.requests)
+	assertEncryptedAgentCommunication(t, &firstRequest, "/root", "/root/worker", "NEW_TASK", "first task")
+	activity, err := controller.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "/root/worker") || !strings.Contains(activity.Message, "completed") {
+		t.Fatalf("first activity = %#v, %v", activity, err)
+	}
+	if err := controller.SendMessage(context.Background(), &agent.SendMessageArgs{Target: "worker", Message: "queued context"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.FollowupTask(context.Background(), &agent.FollowupTaskArgs{Target: "/root/worker", Message: "second task"}); err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := awaitRecordedAgentRequest(t, recording.requests)
+	assertNoEmptyInputTextBlocks(t, &secondRequest)
+	assertEncryptedAgentCommunication(t, &secondRequest, "/root", "/root/worker", "MESSAGE", "queued context")
+	assertEncryptedAgentCommunication(t, &secondRequest, "/root", "/root/worker", "NEW_TASK", "second task")
+	activity, err = controller.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut {
+		t.Fatalf("followup activity = %#v, %v", activity, err)
+	}
+	scoped := controller.scoped("/root/worker", spawned.AgentID)
+	childMessage := "nested task"
+	nested, err := scoped.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "nested", Message: &childMessage, ForkTurns: execStringPointer("none")})
+	if err != nil || nested.TaskName != "/root/worker/nested" {
+		t.Fatalf("nested spawn = %#v, %v", nested, err)
+	}
+	list, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(list.Agents))
+	for _, item := range list.Agents {
+		names = append(names, item.AgentName)
+	}
+	if !slices.Contains(names, "/root") || !slices.Contains(names, "/root/worker") || !slices.Contains(names, "/root/worker/nested") {
+		t.Fatalf("agent paths = %#v", names)
+	}
+	if got := countExecRolloutsForThread(t, home, spawned.AgentID); got != 1 {
+		t.Fatalf("rollout files for %s = %d, want 1", spawned.AgentID, got)
+	}
+}
+
+func awaitRecordedAgentRequest(t *testing.T, requests <-chan model.AgentRequest) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-requests:
+		return request
+	case <-time.After(5 * time.Second):
+		t.Fatal("subagent request was not recorded")
+		return model.AgentRequest{}
+	}
+}
+
+func assertEncryptedAgentCommunication(t *testing.T, request *model.AgentRequest, author, recipient, messageType, encrypted string) {
+	t.Helper()
+	if request == nil {
+		t.Fatal("agent request is nil")
+	}
+	if request.Prompt != "" {
+		t.Fatalf("agent request prompt = %q, want encrypted agent_message input", request.Prompt)
+	}
+	for _, input := range request.InputItems {
+		item, ok := input.(map[string]any)
+		if !ok || item["type"] != "agent_message" || item["author"] != author || item["recipient"] != recipient {
+			continue
+		}
+		content, _ := item["content"].([]any)
+		if len(content) != 2 {
+			continue
+		}
+		envelope, _ := content[0].(map[string]any)
+		payload, _ := content[1].(map[string]any)
+		if strings.Contains(fmt.Sprint(envelope["text"]), "Message Type: "+messageType+"\n") &&
+			payload["type"] == "encrypted_content" && payload["encrypted_content"] == encrypted {
+			return
+		}
+	}
+	t.Fatalf("encrypted communication %s/%q missing from %#v", messageType, encrypted, request.InputItems)
+}
+
+func assertNoEmptyInputTextBlocks(t *testing.T, request *model.AgentRequest) {
+	t.Helper()
+	for _, input := range request.InputItems {
+		item, ok := input.(map[string]any)
+		if !ok {
+			continue
+		}
+		content := []any{}
+		switch typed := item["content"].(type) {
+		case []any:
+			content = typed
+		case []map[string]any:
+			for _, block := range typed {
+				content = append(content, block)
+			}
+		}
+		for _, raw := range content {
+			block, ok := raw.(map[string]any)
+			text, exists := block["text"].(string)
+			if ok && block["type"] == "input_text" && (!exists || strings.TrimSpace(text) == "") {
+				t.Fatalf("request contains empty input_text block: %#v", item)
+			}
+		}
+	}
+}
+
+func TestExecAgentControllerInterruptGenerationAndConcurrencyLimit(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	blocking := &firstTurnBlockingAgent{started: make(chan struct{})}
+	runner.Agent = blocking
+	controller := newExecAgentController(runner, context.Background(), &Request{Exec: cli.ExecOptions{Prompt: "root", Shared: cli.SharedOptions{CWD: t.TempDir()}}}, "thread-root", 1).(*execAgentController)
+	t.Cleanup(controller.shutdown)
+	message := "block"
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker", Message: &message, ForkTurns: execStringPointer("none")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first child turn did not start")
+	}
+	secondMessage := "second"
+	if _, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "second", Message: &secondMessage, ForkTurns: execStringPointer("none")}); !errors.Is(err, agent.ErrAgentLimitReached) {
+		t.Fatalf("second spawn error = %v", err)
+	}
+	interrupted, err := controller.InterruptAgent(context.Background(), &agent.InterruptAgentArgs{Target: spawned.TaskName})
+	if err != nil || interrupted.PreviousStatus != string(agent.AgentMessageStatusRunning) {
+		t.Fatalf("InterruptAgent() = %#v, %v", interrupted, err)
+	}
+	if _, err := controller.WaitForActivity(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.FollowupTask(context.Background(), &agent.FollowupTaskArgs{Target: "worker", Message: "finish"}); err != nil {
+		t.Fatal(err)
+	}
+	activity, err := controller.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "completed") {
+		t.Fatalf("followup activity = %#v, %v", activity, err)
+	}
+	list, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range list.Agents {
+		if item.AgentName == spawned.TaskName {
+			encoded, _ := json.Marshal(item.AgentStatus)
+			if !strings.Contains(string(encoded), "completed") {
+				t.Fatalf("old interrupted generation overwrote status: %s", encoded)
+			}
+			return
+		}
+	}
+	t.Fatalf("spawned agent missing from %#v", list)
+}
+
+func countExecRolloutsForThread(t *testing.T, home, threadID string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return err
+		}
+		if strings.Contains(filepath.Base(path), threadID) {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestExecAgentControllerRunsPersistedSubagent(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	runner := NewLocalRunner(home)
+	runner.Agent = &staticResponseAgent{
+		response: &model.AgentResponse{
+			Message: "child calculation complete",
+			Items:   []model.AgentItem{{ID: "child-final", Type: "agent_message", Text: "child calculation complete", Data: map[string]any{"phase": "final_answer"}}},
+			Usage:   model.AgentUsage{InputTokens: 1, OutputTokens: 1},
+			Model:   "gpt-test", ProviderID: "local",
+		},
+	}
+	controller := newExecAgentController(runner, context.Background(), &Request{
+		Exec: cli.ExecOptions{Prompt: "root", Shared: cli.SharedOptions{CWD: cwd}},
+	}, "thread-root", 4)
+	t.Cleanup(controller.(*execAgentController).shutdown)
+	message := "compute one segment"
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{Message: &message})
+	if err != nil {
+		t.Fatalf("SpawnAgent() error = %v", err)
+	}
+	timeoutMS := int64(5000)
+	waited, err := controller.WaitAgent(context.Background(), &agent.WaitAgentArgs{Targets: []string{spawned.AgentID}, TimeoutMS: &timeoutMS})
+	if err != nil {
+		t.Fatalf("WaitAgent() error = %v", err)
+	}
+	status := waited.Status[spawned.AgentID]
+	if waited.TimedOut || status.Kind != agent.AgentMessageStatusCompleted || status.Message != "child calculation complete" {
+		t.Fatalf("WaitAgent() = %#v", waited)
+	}
+	record := loadSessionRecord(t, home, spawned.AgentID)
+	if record.ParentThreadID != "thread-root" || record.SessionID != "thread-root" || record.Metadata.ThreadSource != "subagent" ||
+		record.Metadata.Source != "subagent:thread_spawn" || record.Metadata.MultiAgentVersion != string(agent.VersionV2) {
+		t.Fatalf("subagent lineage = %#v", record)
+	}
+	rolloutPath, err := rollout.FindThreadPath(home, spawned.AgentID, false)
+	if err != nil {
+		t.Fatalf("FindThreadPath() error = %v", err)
+	}
+	data, err := os.ReadFile(rolloutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLine := strings.SplitN(string(data), "\n", 2)[0]
+	if !strings.Contains(firstLine, `"thread_source":"subagent"`) || !strings.Contains(firstLine, `"parent_thread_id":"thread-root"`) {
+		t.Fatalf("rollout session metadata = %s", firstLine)
+	}
+}
+
 func TestToolRouterRegistersViewImageForImageCapableModel(t *testing.T) {
 	cwd := t.TempDir()
 	info := &model.ModelInfo{
@@ -3463,6 +3947,22 @@ func TestEmitFinalEventsMapsCollabWaitAgentToRustWait(t *testing.T) {
 	}
 }
 
+func TestV2OnlyWaitMapsToSDKCollabItem(t *testing.T) {
+	waitExecution := &turn.ToolExecutionResult{Invocation: &tool.Invocation{
+		CallID: "wait-v2", ToolName: tool.NamespacedName(agent.MultiAgentV2Namespace, "wait_agent"),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+	}, Output: &tool.Output{Success: true, Body: `{"message":"done","timed_out":false}`}}
+	if !isCollabExecution(waitExecution) {
+		t.Fatal("v2 wait_agent must map to a collab SDK item")
+	}
+	for _, name := range []string{"spawn_agent", "send_message", "followup_task", "interrupt_agent", "list_agents"} {
+		execution := &turn.ToolExecutionResult{Invocation: &tool.Invocation{ToolName: tool.NamespacedName(agent.MultiAgentV2Namespace, name)}}
+		if isCollabExecution(execution) {
+			t.Fatalf("v2 %s must not map to legacy collab SDK item", name)
+		}
+	}
+}
+
 func TestEmitFinalEventsMapsExecCommandToCommandExecutionLikeRust(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Response: &model.AgentResponse{Items: []model.AgentItem{{
@@ -4542,12 +5042,55 @@ type staticResponseAgent struct {
 	request  *model.AgentRequest
 }
 
+type recordingStaticAgent struct {
+	requests chan model.AgentRequest
+	response *model.AgentResponse
+}
+
+type firstTurnBlockingAgent struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+}
+
+func (a *firstTurnBlockingAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		close(a.started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &model.AgentResponse{
+		Message: "completed after interrupt",
+		Items:   []model.AgentItem{{ID: "final", Type: "agent_message", Text: "completed after interrupt", Data: map[string]any{"phase": "final_answer"}}},
+		Usage:   model.AgentUsage{InputTokens: 1, OutputTokens: 1}, Model: request.Model, ProviderID: request.ProviderID,
+	}, nil
+}
+
 func (a *staticResponseAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	a.request = request
 	if a.response == nil {
+		return &model.AgentResponse{}, nil
+	}
+	response := *a.response
+	response.Items = append([]model.AgentItem(nil), a.response.Items...)
+	return &response, nil
+}
+
+func (a *recordingStaticAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if request != nil && a != nil && a.requests != nil {
+		a.requests <- *request
+	}
+	if a == nil || a.response == nil {
 		return &model.AgentResponse{}, nil
 	}
 	response := *a.response

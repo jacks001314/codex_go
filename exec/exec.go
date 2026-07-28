@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	multiagent "codex_go/agent"
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/codexapi"
@@ -54,6 +55,8 @@ type Request struct {
 	// retain non-wire details such as file-change diffs while the SDK JSON shape
 	// remains Rust-compatible.
 	InternalEventHandler func(protocol.ThreadEvent)
+	subagent             *execSubagentContext
+	multiAgentVersion    multiagent.MultiAgentVersion
 }
 
 type Result struct {
@@ -155,12 +158,15 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	requestInputs := requestTurnUserInputs(req)
-	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 {
+	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 && len(req.AdditionalInputItems) == 0 {
 		return nil, errors.New("No prompt provided. Either specify one as an argument or pipe the prompt into stdin.")
 	}
-	identityPrompt := firstNonEmpty(prompt, turnUserInputsSummary(requestInputs))
+	identityPrompt := firstNonEmpty(prompt, turnUserInputsSummary(requestInputs), execAdditionalInputIdentity(req.AdditionalInputItems))
 
 	threadID := newThreadID()
+	if req.subagent != nil && strings.TrimSpace(req.subagent.ThreadID) != "" {
+		threadID = strings.TrimSpace(req.subagent.ThreadID)
+	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		threadID = string(resumeContext.Record.ID)
 	}
@@ -260,6 +266,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	subagentHeader, subagentKind := execReviewSubagentMetadata(req)
+	multiAgentTools, err := r.multiAgentToolsForRun(ctx, req, cfg, threadID, agent)
+	if err != nil {
+		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
+		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
+		return nil, err
+	}
+	defer closeExecMultiAgentTools(multiAgentTools)
+	if usageHint := execMultiAgentV2UsageHint(req, multiAgentTools); usageHint != "" {
+		instructions = strings.Join(nonEmptyStrings([]string{instructions, usageHint}), "\n\n")
+	}
+	agentWaitDefault, agentWaitMin, agentWaitMax, agentHideSpawnMetadata, agentExposeSpawnOverrides := execAgentWaitConfigFromTools(multiAgentTools)
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
 		Prompt:                       runPrompt,
 		InputItems:                   inputItems,
@@ -281,31 +298,46 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		Instructions:                 instructions,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:   installationID,
-			SessionID:        threadID,
+			SessionID:        execSessionID(req, threadID),
 			ThreadID:         threadID,
 			TurnID:           turnID,
 			WindowID:         threadID + ":1",
 			RequestKind:      codexapi.ClientRequestTurn,
 			SubagentHeader:   subagentHeader,
 			SubagentKind:     subagentKind,
+			ParentThreadID:   execParentThreadID(req),
+			ThreadSource:     execThreadSource(req),
 			Extra:            cfg.ResponsesAPIClientMetadata(),
 			UseResponsesLite: useResponsesLite,
 		}),
-		OutputSchema:                 outputSchema,
-		ApprovalPolicy:               approvalPolicy,
-		StreamEvents:                 streamCollector,
-		PermissionProfileID:          sandboxPermissionProfileID(permissionProfile),
-		PermissionProfile:            sandboxPermissionProfile(permissionProfile),
-		MCPService:                   mcpService,
-		MCPTools:                     mcpTools,
-		MCPConnectors:                mcpConnectors,
-		ImageGeneration:              imageGenerationOptions,
-		ViewImage:                    execViewImageOptions(requestCWD(req), &modelInfo),
-		HostedTools:                  hostedTools,
-		DisableHostedImageGeneration: req.Exec.Subcommand == "review",
-		ToolOutputTokenLimit:         cfg.ToolOutputTokenLimit(),
-		UnifiedExecEnabled:           features.Enabled(cfg.FeatureSettings(), "unified_exec"),
-		ExecPermissionApprovals:      features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
+		OutputSchema:                   outputSchema,
+		ApprovalPolicy:                 approvalPolicy,
+		StreamEvents:                   streamCollector,
+		PermissionProfileID:            sandboxPermissionProfileID(permissionProfile),
+		PermissionProfile:              sandboxPermissionProfile(permissionProfile),
+		MCPService:                     mcpService,
+		MCPTools:                       mcpTools,
+		MCPConnectors:                  mcpConnectors,
+		ImageGeneration:                imageGenerationOptions,
+		ViewImage:                      execViewImageOptions(requestCWD(req), &modelInfo),
+		HostedTools:                    hostedTools,
+		DisableHostedImageGeneration:   req.Exec.Subcommand == "review",
+		ToolOutputTokenLimit:           cfg.ToolOutputTokenLimit(),
+		UnifiedExecEnabled:             features.Enabled(cfg.FeatureSettings(), "unified_exec"),
+		ExecPermissionApprovals:        features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
+		AgentController:                execAgentControllerFromTools(multiAgentTools),
+		AgentExposure:                  execAgentExposureFromTools(multiAgentTools),
+		AgentVersion:                   execAgentVersionFromTools(multiAgentTools),
+		AgentNamespace:                 execAgentNamespaceFromTools(multiAgentTools),
+		AgentWaitDefault:               agentWaitDefault,
+		AgentWaitMin:                   agentWaitMin,
+		AgentWaitMax:                   agentWaitMax,
+		AgentWaitConfigured:            multiAgentTools != nil,
+		AgentHideSpawnMetadata:         agentHideSpawnMetadata,
+		AgentExposeSpawnModelOverrides: agentExposeSpawnOverrides,
+		AgentRoles:                     execAgentRolesFromTools(multiAgentTools),
+		AgentDefaults:                  execAgentDefaultsFromTools(multiAgentTools),
+		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -377,6 +409,9 @@ func validateExecWorkingDirectory(cwd string) error {
 }
 
 func execReviewSubagentMetadata(req *Request) (string, string) {
+	if req != nil && req.subagent != nil {
+		return codexapi.ClientSubagentMetadataFromSource(execSessionSource(req))
+	}
 	if req != nil && req.Exec.Subcommand == "review" {
 		return string(model.AgentTaskReview), string(model.AgentTaskReview)
 	}
@@ -384,41 +419,54 @@ func execReviewSubagentMetadata(req *Request) (string, string) {
 }
 
 type agentRunConfig struct {
-	Prompt                       string
-	Instructions                 string
-	InputItems                   []any
-	Model                        string
-	ProviderID                   string
-	TaskKind                     model.AgentTaskKind
-	ThreadID                     string
-	TurnID                       string
-	PreviousResponseID           string
-	ParallelToolCalls            bool
-	ReasoningEffort              string
-	ReasoningSummary             string
-	ConcurrentReasoningSummaries bool
-	ModelVerbosity               string
-	IncludeTimingMetrics         bool
-	BetaFeaturesHeader           string
-	ItemIDsEnabled               bool
-	PromptCacheKey               string
-	ServiceTier                  string
-	ClientMetadata               map[string]string
-	OutputSchema                 any
-	ApprovalPolicy               sandbox.AskForApproval
-	StreamEvents                 *execStreamEventCollector
-	PermissionProfileID          string
-	PermissionProfile            *sandbox.PermissionProfile
-	MCPService                   *mcp.MCPService
-	MCPTools                     []mcp.RuntimeToolInfo
-	MCPConnectors                []mcp.RuntimeConnector
-	ImageGeneration              *turn.ImageGenerationOptions
-	ViewImage                    *tool.ViewImageOptions
-	HostedTools                  []any
-	DisableHostedImageGeneration bool
-	ToolOutputTokenLimit         *int
-	UnifiedExecEnabled           bool
-	ExecPermissionApprovals      bool
+	Prompt                         string
+	Instructions                   string
+	InputItems                     []any
+	Model                          string
+	ProviderID                     string
+	TaskKind                       model.AgentTaskKind
+	ThreadID                       string
+	TurnID                         string
+	PreviousResponseID             string
+	ParallelToolCalls              bool
+	ReasoningEffort                string
+	ReasoningSummary               string
+	ConcurrentReasoningSummaries   bool
+	ModelVerbosity                 string
+	IncludeTimingMetrics           bool
+	BetaFeaturesHeader             string
+	ItemIDsEnabled                 bool
+	PromptCacheKey                 string
+	ServiceTier                    string
+	ClientMetadata                 map[string]string
+	OutputSchema                   any
+	ApprovalPolicy                 sandbox.AskForApproval
+	StreamEvents                   *execStreamEventCollector
+	PermissionProfileID            string
+	PermissionProfile              *sandbox.PermissionProfile
+	MCPService                     *mcp.MCPService
+	MCPTools                       []mcp.RuntimeToolInfo
+	MCPConnectors                  []mcp.RuntimeConnector
+	ImageGeneration                *turn.ImageGenerationOptions
+	ViewImage                      *tool.ViewImageOptions
+	HostedTools                    []any
+	DisableHostedImageGeneration   bool
+	ToolOutputTokenLimit           *int
+	UnifiedExecEnabled             bool
+	ExecPermissionApprovals        bool
+	AgentController                multiagent.ToolController
+	AgentExposure                  tool.Exposure
+	AgentVersion                   multiagent.MultiAgentVersion
+	AgentNamespace                 string
+	AgentWaitDefault               time.Duration
+	AgentWaitMin                   time.Duration
+	AgentWaitMax                   time.Duration
+	AgentWaitConfigured            bool
+	AgentHideSpawnMetadata         bool
+	AgentExposeSpawnModelOverrides bool
+	AgentRoles                     map[string]multiagent.RoleConfig
+	AgentDefaults                  multiagent.SpawnDefaults
+	DisableWaitAgent               bool
 }
 
 type execStreamEventCollector struct {
@@ -856,7 +904,22 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.ImageGeneration = run.ImageGeneration
 		options.ViewImage = run.ViewImage
 	}
-	options.EnableAgents = false
+	options.EnableAgents = run != nil && run.AgentController != nil
+	if options.EnableAgents {
+		options.AgentController = run.AgentController
+		options.AgentExposure = run.AgentExposure
+		options.AgentVersion = run.AgentVersion
+		options.AgentNamespace = run.AgentNamespace
+		options.AgentWaitDefault = run.AgentWaitDefault
+		options.AgentWaitMin = run.AgentWaitMin
+		options.AgentWaitMax = run.AgentWaitMax
+		options.AgentWaitConfigured = run.AgentWaitConfigured
+		options.AgentHideSpawnMetadata = run.AgentHideSpawnMetadata
+		options.AgentExposeSpawnModelOverrides = run.AgentExposeSpawnModelOverrides
+		options.AgentRoles = run.AgentRoles
+		options.AgentDefaults = run.AgentDefaults
+		options.DisableWaitAgent = run.DisableWaitAgent
+	}
 	return turn.BuildToolRouter(options)
 }
 
@@ -1181,7 +1244,7 @@ func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execR
 		if err != nil {
 			return "", nil, err
 		}
-		if req.Exec.Resume.Prompt == "" && len(req.Input) > 0 {
+		if req.Exec.Resume.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 			return "", &execResumeContext{Record: record}, nil
 		}
 		resumePrompt, err := resolveExecResumePrompt(req.Exec.Resume.Prompt, stdin)
@@ -1190,7 +1253,7 @@ func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execR
 		}
 		return resumePrompt, &execResumeContext{Record: record, UserPrompt: resumePrompt}, nil
 	}
-	if req.Exec.Prompt == "" && len(req.Input) > 0 {
+	if req.Exec.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 		return "", nil, nil
 	}
 	resolved, err := prompt.Resolve(req.Exec.Prompt, stdin)
@@ -1202,6 +1265,17 @@ func resolveExecResumePrompt(promptArg string, stdin io.Reader) (string, error) 
 		return promptArg, nil
 	}
 	return prompt.Resolve(promptArg, stdin)
+}
+
+func execAdditionalInputIdentity(items []any) string {
+	if len(items) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return fmt.Sprintf("additional-input-items:%d", len(items))
+	}
+	return string(encoded)
 }
 
 func requestTurnUserInputs(req *Request) []turn.TurnUserInput {
@@ -2512,6 +2586,12 @@ func collabToolNameFromExecution(execution *turn.ToolExecutionResult) (string, b
 }
 
 func normalizeCollabToolName(name tool.ToolName) (string, bool) {
+	if strings.TrimSpace(name.Namespace) == multiagent.MultiAgentV2Namespace {
+		if strings.TrimSpace(name.Name) == "wait_agent" {
+			return "wait", true
+		}
+		return "", false
+	}
 	if strings.TrimSpace(name.Namespace) == "agent" {
 		if toolName, ok := normalizeCollabToolString(name.Name); ok {
 			return toolName, true
@@ -3135,38 +3215,88 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		}
 		return store.Path(resumeRecord.ID)
 	}
+	existing, _ := store.Read(session.ThreadID(threadID), true, true)
 	record := &session.Record{
-		ID:        session.ThreadID(threadID),
-		SessionID: threadID,
-		Preview:   firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
-		CreatedAt: now,
-		UpdatedAt: now,
-		RecencyAt: now,
+		ID:             session.ThreadID(threadID),
+		SessionID:      execSessionID(req, threadID),
+		ParentThreadID: session.ThreadID(execParentThreadID(req)),
+		Preview:        firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		RecencyAt:      now,
 		Metadata: session.Metadata{
-			CWD:            requestCWD(req),
-			Model:          response.Model,
-			ModelProvider:  response.ProviderID,
-			Source:         "cli",
-			ThreadSource:   string(taskKind(req)),
-			HistoryMode:    string(session.ForkAll),
-			LastResponseID: response.ResponseID,
-			SessionPrefix:  session.PrefixForSessionID(threadID),
-			Extra:          execTokenUsageMetadata(nil, tokenUsage),
+			CWD:               requestCWD(req),
+			Model:             response.Model,
+			ModelProvider:     response.ProviderID,
+			Source:            execSessionSource(req),
+			ThreadSource:      execThreadSource(req),
+			Originator:        execAgentOriginator(req),
+			HistoryMode:       string(session.ForkAll),
+			LastResponseID:    response.ResponseID,
+			SessionPrefix:     session.PrefixForSessionID(threadID),
+			AgentNickname:     execAgentNicknameForRequest(req),
+			AgentRole:         execAgentRoleForRequest(req),
+			AgentPath:         execAgentPathForRequest(req),
+			MultiAgentVersion: execMultiAgentVersionForRequest(req),
+			Extra:             execTokenUsageMetadata(nil, tokenUsage),
 		},
 		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
 			CodexHome: r.CodexHome,
 			ThreadID:  threadID,
 		})...),
 	}
+	if existing != nil {
+		record.CreatedAt = existing.CreatedAt
+		record.Metadata.RolloutTurns = append([]session.TurnSnapshot(nil), existing.Metadata.RolloutTurns...)
+	}
+	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
+	delta := execSessionItemDelta(existing, record.Items)
 	if err := store.Save(record); err != nil {
 		return "", err
 	}
-	_ = r.createExecRollout(record, now)
+	if existing == nil {
+		_ = r.createExecRollout(record, now)
+	} else {
+		_ = r.appendExecRollout(record.ID, delta, record, now)
+	}
 	path, err := store.Path(record.ID)
 	if err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+func execCompleteTurnSnapshot(metadata *session.Metadata, turnID string, now time.Time) {
+	if metadata == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	completedAt := now.Unix()
+	for i := range metadata.RolloutTurns {
+		if metadata.RolloutTurns[i].ID == turnID {
+			metadata.RolloutTurns[i].Status = "completed"
+			metadata.RolloutTurns[i].CompletedAt = &completedAt
+			return
+		}
+	}
+	metadata.RolloutTurns = append(metadata.RolloutTurns, session.TurnSnapshot{ID: turnID, Status: "completed", CompletedAt: &completedAt})
+}
+
+func execSessionItemDelta(existing *session.Record, final []session.Item) []session.Item {
+	if existing == nil || len(existing.Items) == 0 {
+		return append([]session.Item(nil), final...)
+	}
+	prefix := len(existing.Items)
+	if prefix > len(final) {
+		prefix = 0
+	} else {
+		for i := 0; i < prefix; i++ {
+			if existing.Items[i].ID != final[i].ID || existing.Items[i].Type != final[i].Type {
+				prefix = 0
+				break
+			}
+		}
+	}
+	return append([]session.Item(nil), final[prefix:]...)
 }
 
 func (r *Runner) persistSessionStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, modelID string, providerID string) error {
@@ -3175,21 +3305,27 @@ func (r *Runner) persistSessionStart(req *Request, threadID string, turnID strin
 	}
 	now := r.now().UTC()
 	record := &session.Record{
-		ID:        session.ThreadID(threadID),
-		SessionID: threadID,
-		Preview:   firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
-		CreatedAt: now,
-		UpdatedAt: now,
-		RecencyAt: now,
+		ID:             session.ThreadID(threadID),
+		SessionID:      execSessionID(req, threadID),
+		ParentThreadID: session.ThreadID(execParentThreadID(req)),
+		Preview:        firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		RecencyAt:      now,
 		Metadata: session.Metadata{
-			CWD:           requestCWD(req),
-			Model:         modelID,
-			ModelProvider: providerID,
-			Source:        "cli",
-			ThreadSource:  string(taskKind(req)),
-			HistoryMode:   string(session.ForkAll),
-			SessionPrefix: session.PrefixForSessionID(threadID),
-			RolloutTurns:  []session.TurnSnapshot{{ID: turnID, Status: "running"}},
+			CWD:               requestCWD(req),
+			Model:             modelID,
+			ModelProvider:     providerID,
+			Source:            execSessionSource(req),
+			ThreadSource:      execThreadSource(req),
+			Originator:        execAgentOriginator(req),
+			HistoryMode:       string(session.ForkAll),
+			SessionPrefix:     session.PrefixForSessionID(threadID),
+			AgentNickname:     execAgentNicknameForRequest(req),
+			AgentRole:         execAgentRoleForRequest(req),
+			AgentPath:         execAgentPathForRequest(req),
+			MultiAgentVersion: execMultiAgentVersionForRequest(req),
+			RolloutTurns:      []session.TurnSnapshot{{ID: turnID, Status: "running"}},
 		},
 		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, nil, now, nil, nil)...),
 	}
@@ -3755,17 +3891,27 @@ func (r *Runner) createExecRollout(record *session.Record, now time.Time) error 
 		return nil
 	}
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
-		CodexHome:     r.CodexHome,
-		SessionID:     record.SessionID,
-		SessionPrefix: record.Metadata.SessionPrefix,
-		ThreadID:      string(record.ID),
-		Source:        record.Metadata.Source,
-		CWD:           record.Metadata.CWD,
-		Model:         record.Metadata.Model,
-		ModelProvider: record.Metadata.ModelProvider,
-		HistoryMode:   record.Metadata.HistoryMode,
-		CLIVersion:    record.Metadata.CLIVersion,
-		Now:           now,
+		CodexHome:         r.CodexHome,
+		SessionID:         record.SessionID,
+		SessionPrefix:     record.Metadata.SessionPrefix,
+		ThreadID:          string(record.ID),
+		ForkedFromID:      string(record.ForkedFromID),
+		Source:            record.Metadata.Source,
+		ThreadSource:      record.Metadata.ThreadSource,
+		Originator:        record.Metadata.Originator,
+		CWD:               record.Metadata.CWD,
+		Model:             record.Metadata.Model,
+		ModelProvider:     record.Metadata.ModelProvider,
+		HistoryMode:       record.Metadata.HistoryMode,
+		MemoryMode:        record.Metadata.MemoryMode,
+		ParentThreadID:    string(record.ParentThreadID),
+		BaseInstructions:  record.Metadata.BaseInstructions,
+		AgentNickname:     record.Metadata.AgentNickname,
+		AgentRole:         record.Metadata.AgentRole,
+		AgentPath:         record.Metadata.AgentPath,
+		MultiAgentVersion: record.Metadata.MultiAgentVersion,
+		CLIVersion:        record.Metadata.CLIVersion,
+		Now:               now,
 	})
 	if err != nil {
 		return err
@@ -3884,6 +4030,10 @@ func execAdditionalInputSessionItems(turnID string, inputItems []any, createdAt 
 	}
 	items := make([]session.Item, 0, len(inputItems))
 	for i, item := range inputItems {
+		if communication, ok := execAgentCommunicationSessionItem(turnID, i, item, createdAt, extraMetadata); ok {
+			items = append(items, communication)
+			continue
+		}
 		role, text, ok := execSkillInstructionInputItemText(item)
 		if !ok {
 			continue
@@ -3902,6 +4052,27 @@ func execAdditionalInputSessionItems(turnID string, inputItems []any, createdAt 
 		})
 	}
 	return items
+}
+
+func execAgentCommunicationSessionItem(turnID string, index int, item any, createdAt time.Time, extraMetadata map[string]any) (session.Item, bool) {
+	raw, ok := item.(map[string]any)
+	if !ok || strings.TrimSpace(execStringFromAny(raw["type"])) != "agent_message" {
+		return session.Item{}, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return session.Item{}, false
+	}
+	metadata := sessionMetadata(turnID, extraMetadata)
+	metadata["author"] = strings.TrimSpace(execStringFromAny(raw["author"]))
+	metadata["recipient"] = strings.TrimSpace(execStringFromAny(raw["recipient"]))
+	return session.Item{
+		ID:        fmt.Sprintf("agent-message-%s-%d", safeSessionItemID(turnID), index+1),
+		Type:      "agent_message",
+		Raw:       encoded,
+		CreatedAt: createdAt,
+		Metadata:  metadata,
+	}, true
 }
 
 func execSkillInstructionInputItemText(item any) (string, string, bool) {
@@ -3970,15 +4141,18 @@ type execImageGenerationContext struct {
 
 func sessionItemsForTurn(turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, createdAt time.Time, extraMetadata map[string]any, imageContext *execImageGenerationContext) []session.Item {
 	suffix := strings.TrimPrefix(turnID, "turn-")
-	items := []session.Item{{
-		ID:        "user-" + suffix,
-		Type:      "message",
-		Role:      "user",
-		Text:      userPrompt,
-		Content:   sessionContentForTurnInputs(userPrompt, userInputs),
-		CreatedAt: createdAt,
-		Metadata:  sessionMetadata(turnID, extraMetadata),
-	}}
+	items := []session.Item{}
+	if content := sessionContentForTurnInputs(userPrompt, userInputs); len(content) > 0 {
+		items = append(items, session.Item{
+			ID:        "user-" + suffix,
+			Type:      "message",
+			Role:      "user",
+			Text:      userPrompt,
+			Content:   content,
+			CreatedAt: createdAt,
+			Metadata:  sessionMetadata(turnID, extraMetadata),
+		})
+	}
 	if result == nil {
 		return items
 	}
@@ -4052,6 +4226,9 @@ func sessionContentForTurnInputs(userPrompt string, inputs []turn.TurnUserInput)
 		}
 	}
 	if len(content) == 0 {
+		if strings.TrimSpace(userPrompt) == "" && len(inputs) == 0 {
+			return nil
+		}
 		return []session.ContentPart{{Type: "input_text", Text: userPrompt}}
 	}
 	return content
