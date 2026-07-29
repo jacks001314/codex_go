@@ -170,7 +170,11 @@ type WindowsSandboxSetupFunc func(mode chatwidget.WindowsSandboxMode, cwd string
 type DesktopThreadOpenFunc func(threadID string) error
 type SandboxReadDirFunc func(path string) (canonicalPath string, err error)
 type ExternalAgentDetectFunc func(cwd string, migrationSource string) (config.ExternalAgentConfigDetectResponse, error)
-type ExternalAgentImportFunc func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error)
+type ExternalAgentImportCompletion struct {
+	Completed config.ExternalAgentConfigImportCompletedNotification
+	Err       error
+}
+type ExternalAgentImportFunc func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, <-chan ExternalAgentImportCompletion, error)
 type RolloutPathReaderFunc func(threadID string) (string, error)
 
 type HooksListReaderFunc func(cwd string) (appserver.HookListResponse, error)
@@ -444,6 +448,7 @@ type AppListResultMsg struct {
 
 type AgentListResultMsg struct {
 	CurrentThreadID string
+	RequestID       uint64
 	Entries         []codextui.AgentThreadEntry
 	Err             error
 }
@@ -504,11 +509,16 @@ type ExternalAgentSourceDetectResult struct {
 }
 
 type ExternalAgentImportResultMsg struct {
-	Selected  []config.ExternalAgentConfigMigrationItem
-	Source    string
-	Response  config.ExternalAgentConfigImportResponse
-	Completed config.ExternalAgentConfigImportCompletedNotification
-	Err       error
+	Selected   []config.ExternalAgentConfigMigrationItem
+	Source     string
+	Response   config.ExternalAgentConfigImportResponse
+	Completion <-chan ExternalAgentImportCompletion
+	Err        error
+}
+
+type ExternalAgentImportCompletedResultMsg struct {
+	ImportID string
+	Result   ExternalAgentImportCompletion
 }
 
 type SkillsInventoryResultMsg struct {
@@ -711,6 +721,9 @@ type Model struct {
 	skillsInventoryLoading           bool
 	agentItems                       []codextui.AgentThreadEntry
 	activeAgentLabel                 string
+	nextAgentRefreshRequestID        uint64
+	pendingAgentRefreshRequestID     uint64
+	pendingAgentRefreshThreadID      string
 	backgroundProcesses              []historycell.UnifiedExecProcessDetails
 	mcpServers                       []historycell.McpServerStatus
 	onReadMCPInventory               func(detail bool) ([]historycell.McpServerStatus, error)
@@ -745,7 +758,7 @@ type Model struct {
 	onConsumeRateLimitResetCredit    RateLimitResetCreditConsumerFunc
 	onReadRateLimits                 RateLimitsReaderFunc
 	nextStatusRateLimitRequestID     uint64
-	pendingStatusRateLimitRequests   map[uint64]struct{}
+	pendingStatusRateLimitRequests   map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter              TerminalTitleWriterFunc
 	notificationPost                 NotificationPostFunc
 	notifications                    chatwidget.NotificationState
@@ -775,6 +788,7 @@ type Model struct {
 	onSandboxReadDir                 SandboxReadDirFunc
 	onDetectExternalAgent            ExternalAgentDetectFunc
 	onImportExternalAgent            ExternalAgentImportFunc
+	pendingExternalAgentImports      map[string]bool
 	onReadRolloutPath                RolloutPathReaderFunc
 	windowsSandboxSetupActive        bool
 	windowsSandboxSetupStatus        chatwidget.WindowsSandboxSetupStatus
@@ -960,7 +974,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                options.OnReadRateLimits,
-		pendingStatusRateLimitRequests:  map[uint64]struct{}{},
+		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
 		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
 		notificationPost:                options.OnPostNotification,
 		notificationSettings:            notificationSettingsOrDefault(options.Notifications),
@@ -987,6 +1001,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSandboxReadDir:                options.OnSandboxReadDir,
 		onDetectExternalAgent:           options.OnDetectExternalAgent,
 		onImportExternalAgent:           options.OnImportExternalAgent,
+		pendingExternalAgentImports:     map[string]bool{},
 		onReadRolloutPath:               options.OnReadRolloutPath,
 		onReadHooks:                     options.OnReadHooks,
 		onWriteHookConfig:               options.OnWriteHookConfig,
@@ -1322,6 +1337,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyExternalAgentDetectResult(msg)
 	case ExternalAgentImportResultMsg:
 		return m, m.applyExternalAgentImportResult(msg)
+	case ExternalAgentImportCompletedResultMsg:
+		m.applyExternalAgentImportCompletedResult(msg)
+		return m, nil
 	case SkillsInventoryResultMsg:
 		m.applySkillsInventoryResult(msg)
 		return m, nil

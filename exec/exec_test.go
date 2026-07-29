@@ -1607,7 +1607,7 @@ func TestRunExecReviewUsesRustReviewRubricInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if agent.request == nil || agent.request.Instructions != review.ReviewPrompt {
+	if agent.request == nil || !strings.HasPrefix(agent.request.Instructions, review.ReviewPrompt) {
 		t.Fatalf("instructions = %q, want Rust review rubric", agent.request.Instructions)
 	}
 	if strings.Contains(agent.request.Instructions, "project instructions") {
@@ -3091,7 +3091,7 @@ func TestRunLoadsProjectModelInstructionsFileFromCWD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if agent.request == nil || agent.request.Instructions != "project instructions" {
+	if agent.request == nil || !strings.HasPrefix(agent.request.Instructions, "project instructions") {
 		t.Fatalf("agent request = %#v", agent.request)
 	}
 }
@@ -3154,8 +3154,8 @@ func TestRunExecutesToolLoopWithInjectedRouter(t *testing.T) {
 	}
 	if !agentRequestToolsContainPlainFunction(&agent.requests[0], "echo") ||
 		!agentRequestToolsContainPlainFunction(&agent.requests[1], "echo") ||
-		!agentRequestToolsContainType(&agent.requests[0], "image_generation") ||
-		!agentRequestToolsContainType(&agent.requests[1], "image_generation") {
+		!agentRequestToolsContainPlainFunction(&agent.requests[0], "view_image") ||
+		!agentRequestToolsContainPlainFunction(&agent.requests[1], "view_image") {
 		t.Fatalf("agent tools = %#v / %#v", agent.requests[0].Tools, agent.requests[1].Tools)
 	}
 }

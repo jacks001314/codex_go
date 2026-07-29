@@ -71,6 +71,7 @@ type httpClient struct {
 	elicitation                        MCPElicitationHandler
 	progress                           MCPProgressHandler
 	openAIForm                         bool
+	protocolMode                       MCPProtocolMode
 	retrySleep                         func(time.Duration)
 	supportsSandboxStateMetaCapability bool
 }
@@ -299,11 +300,16 @@ func newMCPHTTPClient(config *ServerConfig) *httpClient {
 
 func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *httpClient {
 	client := &http.Client{Timeout: mcpClientTimeout(config)}
+	protocolMode := MCPProtocolLegacy
+	if config != nil {
+		protocolMode = config.ProtocolMode
+	}
 	return &httpClient{
-		config:     config,
-		client:     mcpHTTPClientWithDefaultHeaders(client, config),
-		openAIForm: openAIForm,
-		retrySleep: time.Sleep,
+		config:       config,
+		client:       mcpHTTPClientWithDefaultHeaders(client, config),
+		openAIForm:   openAIForm,
+		protocolMode: protocolMode,
+		retrySleep:   time.Sleep,
 	}
 }
 
@@ -392,7 +398,7 @@ func (c *httpClient) deleteSession(sessionID string) error {
 	}
 	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set(mcpHTTPProtocolVersionHeader, defaultMCPProtocol)
+	request.Header.Set(mcpHTTPProtocolVersionHeader, c.protocolMode.protocolVersion())
 	request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
 	if token := c.bearerToken(); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -484,6 +490,26 @@ func (c *httpClient) initialize() (string, error) {
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
+func (c *httpClient) discover() (string, error) {
+	response, requestID, err := c.doRPC("server/discover", map[string]any{}, "", true)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	rpc, err := c.readRPCResponse(response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
+	if err != nil {
+		return "", err
+	}
+	if rpc.Error != nil {
+		return "", newMCPRemoteError("server/discover", rpc.Error)
+	}
+	if err := validateMCPModernDiscovery(rpc.Result); err != nil {
+		return "", err
+	}
+	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
+	return response.Header.Get(mcpHTTPSessionIDHeader), nil
+}
+
 func (c *httpClient) notifyInitialized(sessionID string) error {
 	response, _, err := c.doRPC("notifications/initialized", map[string]any{}, sessionID, false)
 	if response != nil && response.Body != nil {
@@ -496,7 +522,26 @@ func (c *httpClient) reinitialize() error {
 	c.initialized = false
 	c.sessionID = ""
 	for attempt := 0; ; attempt++ {
-		sessionID, err := c.initialize()
+		c.protocolMode = MCPProtocolLegacy
+		if c.config != nil {
+			c.protocolMode = c.config.ProtocolMode
+		}
+		var sessionID string
+		var err error
+		if c.protocolMode == MCPProtocol20260728 {
+			sessionID, err = c.discover()
+			if err == nil {
+				c.sessionID = sessionID
+				c.initialized = true
+				return nil
+			}
+			if isMCPDiscoveryFallbackError(err) {
+				c.protocolMode = MCPProtocolLegacy
+				sessionID, err = c.initialize()
+			}
+		} else {
+			sessionID, err = c.initialize()
+		}
 		if err == nil {
 			c.sessionID = sessionID
 			err = c.notifyInitialized(sessionID)
@@ -535,22 +580,40 @@ func (c *httpClient) sleepBeforeRetry(delay time.Duration) {
 }
 
 func (c *httpClient) callWithSession(method string, params any, out any, sessionID string) error {
-	response, requestID, err := c.doRPC(method, params, sessionID, true)
-	if err != nil {
-		return err
+	baseParams := params
+	requestParams := params
+	for round := 0; ; round++ {
+		response, requestID, err := c.doRPC(method, requestParams, sessionID, true)
+		if err != nil {
+			return err
+		}
+		rpc, readErr := c.readRPCResponse(response, requestID, sessionID)
+		_ = response.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if rpc.Error != nil {
+			return newMCPRemoteError(method, rpc.Error)
+		}
+		if c.protocolMode == MCPProtocol20260728 {
+			ctx := contextWithMCPClientContextAndRoots(context.Background(), c.threadID, c.turnID, c.itemID, c.roots)
+			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, c.serverName, c.elicitation, baseParams, rpc.Result)
+			if err != nil {
+				return err
+			}
+			if inputRequired {
+				if round >= maxMCPInputRequiredRounds {
+					return fmt.Errorf("MCP %s exceeded %d input-required rounds", method, maxMCPInputRequiredRounds)
+				}
+				requestParams = nextParams
+				continue
+			}
+		}
+		if out == nil || rpc.Result == nil {
+			return nil
+		}
+		return json.Unmarshal(*rpc.Result, out)
 	}
-	defer response.Body.Close()
-	rpc, err := c.readRPCResponse(response, requestID, sessionID)
-	if err != nil {
-		return err
-	}
-	if rpc.Error != nil {
-		return newMCPRemoteError(method, rpc.Error)
-	}
-	if out == nil || rpc.Result == nil {
-		return nil
-	}
-	return json.Unmarshal(*rpc.Result, out)
 }
 
 func (c *httpClient) doRPC(method string, params any, sessionID string, includeID bool) (*http.Response, int64, error) {
@@ -561,6 +624,7 @@ func (c *httpClient) doRPC(method string, params any, sessionID string, includeI
 	if endpoint == "" {
 		return nil, 0, errors.New("HTTP MCP URL is required")
 	}
+	params = mcpParamsWithProtocolMetadata(params, c.protocolMode, c.openAIForm)
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
@@ -591,8 +655,18 @@ func (c *httpClient) doRPC(method string, params any, sessionID string, includeI
 		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		readLimit := int64(4096)
+		if method == "server/discover" {
+			readLimit = maxModernMCPMessageBytes + 1
+		}
+		body, _ := io.ReadAll(io.LimitReader(response.Body, readLimit))
 		_ = response.Body.Close()
+		if method == "server/discover" {
+			var rpc httpRPCResponse
+			if json.Unmarshal(body, &rpc) == nil && rpc.ID == id && rpc.Error != nil && rpc.Error.Code == mcpJSONRPCMethodNotFoundCode {
+				return nil, id, newMCPRemoteError(method, rpc.Error)
+			}
+		}
 		detail := strings.TrimSpace(string(body))
 		return nil, 0, &mcpHTTPStatusError{Method: method, Status: response.Status, StatusCode: response.StatusCode, Detail: detail}
 	}
@@ -644,7 +718,7 @@ func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID strin
 	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
-	request.Header.Set(mcpHTTPProtocolVersionHeader, defaultMCPProtocol)
+	request.Header.Set(mcpHTTPProtocolVersionHeader, c.protocolMode.protocolVersion())
 	if strings.TrimSpace(sessionID) != "" {
 		request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
 	}
@@ -671,7 +745,7 @@ func readMCPHTTPRPCResponse(response *http.Response, id int64) (*httpRPCResponse
 }
 
 func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionID string) (*httpRPCResponse, error) {
-	return readMCPHTTPRPCResponseWithHandler(response, id, func(envelope *stdioRPCEnvelope) error {
+	return readMCPHTTPRPCResponseWithHandlerAndLimit(response, id, modernMCPMessageLimit(c.protocolMode), func(envelope *stdioRPCEnvelope) error {
 		if envelope == nil {
 			return nil
 		}
@@ -694,23 +768,48 @@ func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionI
 }
 
 func readMCPHTTPRPCResponseWithHandler(response *http.Response, id int64, requestHandler func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
+	return readMCPHTTPRPCResponseWithHandlerAndLimit(response, id, 0, requestHandler)
+}
+
+func readMCPHTTPRPCResponseWithHandlerAndLimit(response *http.Response, id int64, maxBytes int64, requestHandler func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
 	if response == nil || response.Body == nil {
 		return nil, errors.New("MCP HTTP response is empty")
 	}
 	contentType := response.Header.Get("Content-Type")
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		return readMCPHTTPSSE(response.Body, id, requestHandler)
+		return readMCPHTTPSSEWithLimit(response.Body, id, maxBytes, requestHandler)
 	}
 	var rpc httpRPCResponse
-	if err := json.NewDecoder(response.Body).Decode(&rpc); err != nil {
+	if maxBytes <= 0 {
+		if err := json.NewDecoder(response.Body).Decode(&rpc); err != nil {
+			return nil, err
+		}
+		return &rpc, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("MCP HTTP JSON response exceeds %d bytes", maxBytes)
+	}
+	if err := json.Unmarshal(data, &rpc); err != nil {
 		return nil, err
 	}
 	return &rpc, nil
 }
 
 func readMCPHTTPSSE(reader io.Reader, id int64, requestHandler func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
+	return readMCPHTTPSSEWithLimit(reader, id, 0, requestHandler)
+}
+
+func readMCPHTTPSSEWithLimit(reader io.Reader, id int64, maxBytes int64, requestHandler func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16<<20)
+	scannerLimit := 16 << 20
+	if maxBytes > 0 && maxBytes < int64(scannerLimit) {
+		scannerLimit = int(maxBytes)
+	}
+	scanner.Buffer(make([]byte, 0, 64*1024), scannerLimit)
 	var data bytes.Buffer
 	for scanner.Scan() {
 		line := strings.TrimRight(scanner.Text(), "\r")
@@ -733,6 +832,9 @@ func readMCPHTTPSSE(reader io.Reader, id int64, requestHandler func(envelope *st
 			data.WriteByte('\n')
 		}
 		data.WriteString(value)
+		if maxBytes > 0 && int64(data.Len()) > maxBytes {
+			return nil, fmt.Errorf("MCP HTTP SSE event exceeds %d bytes", maxBytes)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

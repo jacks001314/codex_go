@@ -48,6 +48,7 @@ const (
 	MethodThreadBackgroundTerminalsTerminate Method = "thread/backgroundTerminals/terminate"
 	MethodThreadRollback                     Method = "thread/rollback"
 	MethodThreadList                         Method = "thread/list"
+	MethodThreadSectionList                  Method = "threadSection/list"
 	MethodThreadSearch                       Method = "thread/search"
 	MethodThreadSearchOccurrences            Method = "thread/searchOccurrences"
 	MethodThreadLoadedList                   Method = "thread/loaded/list"
@@ -536,6 +537,11 @@ type GitInfo struct {
 	OriginURL *string `json:"originUrl"`
 }
 
+type ThreadSection struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type Thread struct {
 	ID             string            `json:"id"`
 	Extra          map[string]any    `json:"extra,omitempty"`
@@ -544,7 +550,7 @@ type Thread struct {
 	ParentThreadID *string           `json:"parentThreadId"`
 	Preview        string            `json:"preview"`
 	Ephemeral      bool              `json:"ephemeral"`
-	IsPinned       bool              `json:"isPinned"`
+	Section        *ThreadSection    `json:"section"`
 	HistoryMode    ThreadHistoryMode `json:"historyMode"`
 	ModelProvider  string            `json:"modelProvider"`
 	CreatedAt      int64             `json:"createdAt"`
@@ -579,7 +585,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ParentThreadID *string           `json:"parentThreadId"`
 		Preview        string            `json:"preview"`
 		Ephemeral      bool              `json:"ephemeral"`
-		IsPinned       bool              `json:"isPinned"`
+		Section        *ThreadSection    `json:"section"`
 		HistoryMode    ThreadHistoryMode `json:"historyMode"`
 		ModelProvider  string            `json:"modelProvider"`
 		CreatedAt      int64             `json:"createdAt"`
@@ -603,7 +609,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ParentThreadID: t.ParentThreadID,
 		Preview:        t.Preview,
 		Ephemeral:      t.Ephemeral,
-		IsPinned:       t.IsPinned,
+		Section:        t.Section,
 		HistoryMode:    historyMode,
 		ModelProvider:  t.ModelProvider,
 		CreatedAt:      t.CreatedAt,
@@ -1956,9 +1962,27 @@ func (p *ThreadApproveGuardianDeniedActionParams) Validate() error {
 type ThreadApproveGuardianDeniedActionResponse struct{}
 
 type ThreadMetadataUpdateParams struct {
-	ThreadID string                      `json:"threadId"`
-	GitInfo  *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
-	IsPinned *bool                       `json:"isPinned,omitempty"`
+	ThreadID  string                      `json:"threadId"`
+	GitInfo   *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
+	SectionID OptionalString              `json:"sectionId,omitempty"`
+}
+
+func (p ThreadMetadataUpdateParams) MarshalJSON() ([]byte, error) {
+	type alias ThreadMetadataUpdateParams
+	data, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if !p.SectionID.Set {
+		delete(fields, "sectionId")
+	} else {
+		fields["sectionId"] = p.SectionID.Value
+	}
+	return json.Marshal(fields)
 }
 
 func (p *ThreadMetadataUpdateParams) Validate() error {
@@ -2031,12 +2055,58 @@ type ThreadListParams struct {
 	ModelProviders   []string             `json:"modelProviders,omitempty"`
 	SourceKinds      []ThreadSourceKind   `json:"sourceKinds,omitempty"`
 	Archived         *bool                `json:"archived,omitempty"`
-	IsPinned         *bool                `json:"isPinned,omitempty"`
+	SectionID        OptionalString       `json:"sectionId,omitempty"`
 	CWD              *ThreadListCwdFilter `json:"cwd,omitempty"`
 	UseStateDBOnly   bool                 `json:"useStateDbOnly,omitempty"`
 	SearchTerm       *string              `json:"searchTerm,omitempty"`
 	ParentThreadID   *string              `json:"parentThreadId,omitempty"`
 	AncestorThreadID *string              `json:"ancestorThreadId,omitempty"`
+}
+
+func (p ThreadListParams) MarshalJSON() ([]byte, error) {
+	type alias ThreadListParams
+	data, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if !p.SectionID.Set {
+		delete(fields, "sectionId")
+	} else {
+		fields["sectionId"] = p.SectionID.Value
+	}
+	return json.Marshal(fields)
+}
+
+type ThreadSectionListParams struct {
+	Cursor *string `json:"cursor,omitempty"`
+	Limit  *int    `json:"limit,omitempty"`
+}
+
+func (p *ThreadSectionListParams) Validate() error {
+	if p != nil && p.Limit != nil && *p.Limit < 0 {
+		return invalidLimitError()
+	}
+	return nil
+}
+
+type ThreadSectionListResponse struct {
+	Data       []ThreadSection `json:"data"`
+	NextCursor *string         `json:"nextCursor"`
+}
+
+func (r *ThreadSectionListResponse) MarshalJSON() ([]byte, error) {
+	data := append([]ThreadSection(nil), r.Data...)
+	if data == nil {
+		data = []ThreadSection{}
+	}
+	return json.Marshal(struct {
+		Data       []ThreadSection `json:"data"`
+		NextCursor *string         `json:"nextCursor"`
+	}{Data: data, NextCursor: r.NextCursor})
 }
 
 func (p *ThreadListParams) Validate() error {
@@ -2556,7 +2626,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		ParentThreadID: stringPtrIfNotEmpty(string(record.ParentThreadID)),
 		Preview:        record.Preview,
 		Ephemeral:      boolFromMap(record.Metadata.Extra, "ephemeral"),
-		IsPinned:       record.IsPinned,
+		Section:        threadSectionFromRecord(record),
 		HistoryMode:    historyMode,
 		ModelProvider:  modelProvider,
 		CreatedAt:      unixOrZero(record.CreatedAt),
@@ -2719,7 +2789,10 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 	if params.Archived != nil {
 		options.Archived = *params.Archived
 	}
-	options.IsPinned = params.IsPinned
+	if params.SectionID.Set {
+		options.SectionSet = true
+		options.SectionID = cloneString(params.SectionID.Value)
+	}
 	options.ModelProviders = append([]string(nil), params.ModelProviders...)
 	if params.CWD != nil {
 		options.CWDs = normalizeThreadListCWDs(params.CWD.Values)
@@ -4546,8 +4619,15 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 	if err := params.Validate(); err != nil {
 		return session.MetadataPatch{}, err
 	}
-	patch := session.MetadataPatch{IsPinned: params.IsPinned}
-	if params.GitInfo == nil && params.IsPinned == nil {
+	patch := session.MetadataPatch{}
+	if params.SectionID.Set {
+		patch.SectionSet = true
+		patch.SectionID = cloneString(params.SectionID.Value)
+		if params.SectionID.Value != nil && strings.TrimSpace(*params.SectionID.Value) != session.PinnedThreadSectionID {
+			return session.MetadataPatch{}, jsonRPCInvalidRequest(fmt.Sprintf("thread section not found: %s", strings.TrimSpace(*params.SectionID.Value)))
+		}
+	}
+	if params.GitInfo == nil && !params.SectionID.Set {
 		return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
 	}
 	if params.GitInfo == nil {
@@ -4579,6 +4659,20 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 		patch.Git["origin_url"] = value
 	}
 	return patch, nil
+}
+
+func threadSectionFromRecord(record *session.Record) *ThreadSection {
+	if record == nil {
+		return nil
+	}
+	section := record.Section
+	if section == nil && record.IsPinned {
+		section = &session.ThreadSection{ID: session.PinnedThreadSectionID, Name: session.PinnedThreadSectionName}
+	}
+	if section == nil {
+		return nil
+	}
+	return &ThreadSection{ID: section.ID, Name: section.Name}
 }
 
 func parseCursor(cursor *string) (int, error) {

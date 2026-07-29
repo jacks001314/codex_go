@@ -42,6 +42,7 @@ type stdioClient struct {
 	pending                            map[int64]*stdioPendingCall
 	pendingOrder                       []int64
 	openAIForm                         bool
+	protocolMode                       MCPProtocolMode
 	supportsSandboxStateMetaCapability bool
 }
 
@@ -269,7 +270,7 @@ func newMCPStdioClient(config *ServerConfig) *stdioClient {
 
 func newMCPStdioClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *stdioClient {
 	cloned := cloneServerConfig(config)
-	return &stdioClient{config: &cloned, nextID: 1, openAIForm: openAIForm}
+	return &stdioClient{config: &cloned, nextID: 1, openAIForm: openAIForm, protocolMode: cloned.ProtocolMode}
 }
 
 func (c *stdioClient) Call(method string, params any, out any) error {
@@ -296,24 +297,38 @@ func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method stri
 		return err
 	}
 	stderr := c.currentStderr()
-	response, err := c.doRequest(ctx, options, method, params)
-	if err != nil {
-		decorated := decorateMCPStdioError(err, stderr)
-		if isMCPRemoteError(err) {
-			return decorated
+	baseParams := params
+	requestParams := params
+	for round := 0; ; round++ {
+		response, err := c.doRequest(ctx, options, method, requestParams)
+		if err != nil {
+			return decorateMCPStdioError(err, stderr)
 		}
-		return decorated
+		if response.Error != nil {
+			return newMCPRemoteError(method, response.Error)
+		}
+		if c.protocolModeSnapshot() == MCPProtocol20260728 {
+			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, serverNameFromStdioOptions(options), elicitationFromStdioOptions(options), baseParams, response.Result)
+			if err != nil {
+				return err
+			}
+			if inputRequired {
+				if round >= maxMCPInputRequiredRounds {
+					return fmt.Errorf("MCP %s exceeded %d input-required rounds", method, maxMCPInputRequiredRounds)
+				}
+				requestParams = nextParams
+				continue
+			}
+		}
+		if out == nil || response.Result == nil {
+			return nil
+		}
+		return json.Unmarshal(*response.Result, out)
 	}
-	if response.Error != nil {
-		return newMCPRemoteError(method, response.Error)
-	}
-	if out == nil || response.Result == nil {
-		return nil
-	}
-	return json.Unmarshal(*response.Result, out)
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
+	params = mcpParamsWithProtocolMetadata(params, c.protocolModeSnapshot(), c.openAIForm)
 	cmd := c.currentCommand()
 	id := c.nextRequestID()
 	pending := &stdioPendingCall{
@@ -394,12 +409,20 @@ func (c *stdioClient) ensureInitialized(ctx context.Context, options *stdioCallO
 }
 
 func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCallOptions) error {
-	command := resolveMCPStdioCommand(c.config.Command, c.config.Env)
+	protocolMode, launchEnv, stripProtocolMarker, err := mcpStdioLaunchConfig(c.config)
+	if err != nil {
+		return err
+	}
+	command := resolveMCPStdioCommand(c.config.Command, launchEnv)
 	cmd := newMCPStdioCommand(command, c.config.Args...)
 	if cwd := strings.TrimSpace(c.config.CWD); cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(os.Environ(), envPairs(c.config.Env)...)
+	baseEnv := os.Environ()
+	if stripProtocolMarker {
+		baseEnv = withoutEnvironmentVariable(baseEnv, mcpProtocolVersionEnvVar)
+	}
+	cmd.Env = append(baseEnv, envPairs(launchEnv)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -421,10 +444,35 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	c.stderr = stderr
 	c.started = true
 	c.initialized = false
+	c.protocolMode = protocolMode
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
 	c.mu.Unlock()
 	go c.readLoop(cmd, stdout)
+
+	if protocolMode == MCPProtocol20260728 {
+		response, err := c.doRequest(ctx, options, "server/discover", map[string]any{})
+		if err == nil && response != nil && response.Error != nil {
+			err = newMCPRemoteError("server/discover", response.Error)
+		}
+		if err == nil {
+			err = validateMCPModernDiscovery(response.Result)
+		}
+		if err == nil {
+			c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(response.Result)
+			c.mu.Lock()
+			c.initialized = true
+			c.mu.Unlock()
+			return nil
+		}
+		if !isMCPDiscoveryFallbackError(err) {
+			_ = c.Close()
+			return decorateMCPStdioError(err, stderr)
+		}
+		c.mu.Lock()
+		c.protocolMode = MCPProtocolLegacy
+		c.mu.Unlock()
+	}
 
 	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParams(c.openAIForm))
 	if err != nil {
@@ -524,7 +572,7 @@ func (c *stdioClient) isCurrentCommand(cmd *exec.Cmd) bool {
 func (c *stdioClient) readLoop(cmd *exec.Cmd, reader io.Reader) {
 	buffered := bufio.NewReader(reader)
 	for {
-		data, err := readMCPFrame(buffered)
+		data, err := readMCPFrameWithLimit(buffered, modernMCPMessageLimit(c.protocolModeSnapshot()))
 		if err != nil {
 			c.failTransportFor(cmd, err)
 			return
@@ -790,20 +838,29 @@ func stdioClientHandlers(options *stdioCallOptions) (string, MCPElicitationHandl
 	return options.ServerName, options.Elicitation, options.Progress
 }
 
+func serverNameFromStdioOptions(options *stdioCallOptions) string {
+	serverName, _, _ := stdioClientHandlers(options)
+	return serverName
+}
+
+func elicitationFromStdioOptions(options *stdioCallOptions) MCPElicitationHandler {
+	_, elicitation, _ := stdioClientHandlers(options)
+	return elicitation
+}
+
+func (c *stdioClient) protocolModeSnapshot() MCPProtocolMode {
+	if c == nil {
+		return MCPProtocolLegacy
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.protocolMode
+}
+
 func mcpClientInitializeParams(openAIForm bool) map[string]any {
-	capabilities := map[string]any{
-		"roots": map[string]any{
-			"listChanged": false,
-		},
-	}
-	if openAIForm {
-		capabilities["extensions"] = map[string]any{
-			"openai/form": map[string]any{},
-		}
-	}
 	return map[string]any{
 		"protocolVersion": defaultMCPProtocol,
-		"capabilities":    capabilities,
+		"capabilities":    mcpClientCapabilities(openAIForm),
 		"clientInfo": map[string]string{
 			"name":    "codex-go",
 			"version": "go-port",
@@ -888,10 +945,17 @@ func mcpClientRequestResult(ctx context.Context, serverName string, elicitation 
 }
 
 func readMCPFrame(reader *bufio.Reader) ([]byte, error) {
+	return readMCPFrameWithLimit(reader, 0)
+}
+
+func readMCPFrameWithLimit(reader *bufio.Reader, maxBytes int64) ([]byte, error) {
 	contentLength := -1
 	line, err := reader.ReadString('\n')
 	if err != nil && !(errors.Is(err, io.EOF) && len(line) > 0) {
 		return nil, err
+	}
+	if maxBytes > 0 && int64(len(line)) > maxBytes {
+		return nil, fmt.Errorf("MCP stdio message exceeds %d bytes", maxBytes)
 	}
 	line = strings.TrimRight(line, "\r\n")
 	trimmed := strings.TrimSpace(line)
@@ -914,14 +978,51 @@ func readMCPFrame(reader *bufio.Reader) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if maxBytes > 0 && int64(len(line)) > maxBytes {
+			return nil, fmt.Errorf("MCP stdio header exceeds %d bytes", maxBytes)
+		}
 		line = strings.TrimRight(line, "\r\n")
 	}
 	if contentLength < 0 {
 		return nil, errors.New("MCP response missing Content-Length")
 	}
+	if maxBytes > 0 && int64(contentLength) > maxBytes {
+		return nil, fmt.Errorf("MCP stdio message exceeds %d bytes", maxBytes)
+	}
 	data := make([]byte, contentLength)
 	_, err = io.ReadFull(reader, data)
 	return data, err
+}
+
+func mcpStdioLaunchConfig(config *ServerConfig) (MCPProtocolMode, map[string]string, bool, error) {
+	if config == nil {
+		return MCPProtocolLegacy, nil, false, nil
+	}
+	env := cloneStringMap(config.Env)
+	if config.ProtocolMode != MCPProtocol20260728 {
+		return MCPProtocolLegacy, env, false, nil
+	}
+	requestedVersion, configured := env[mcpProtocolVersionEnvVar]
+	delete(env, mcpProtocolVersionEnvVar)
+	if !configured {
+		return MCPProtocolLegacy, env, true, nil
+	}
+	if requestedVersion != modernMCPProtocol {
+		return MCPProtocolLegacy, nil, true, fmt.Errorf("unsupported %s `%s` for stdio MCP server; expected `%s`", mcpProtocolVersionEnvVar, requestedVersion, modernMCPProtocol)
+	}
+	return MCPProtocol20260728, env, true, nil
+}
+
+func withoutEnvironmentVariable(env []string, target string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(name, target) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func envPairs(values map[string]string) []string {

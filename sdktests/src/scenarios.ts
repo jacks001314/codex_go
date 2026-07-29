@@ -872,7 +872,8 @@ export const scenarios: Scenario[] = [
   },
   {
     name: "resume-tool-interrupted-command",
-    description: "Aborts a running command, resumes the thread, and verifies the interrupted command did not finish later.",
+    description: "Opt-in Windows diagnostic: aborts a running command, resumes the thread, and verifies the interrupted command did not finish later. Current Rust leaves the PowerShell child running, so this cannot be a default differential gate.",
+    optIn: true,
     timeoutMs: 120000,
     threadOptions: {
       sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",

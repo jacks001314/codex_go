@@ -567,9 +567,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	store := newSessionStore()
+	threadID, err := interactiveStartLocalTUIThread(state, store)
+	if err != nil {
+		return err
+	}
+	state.SetThreadID(threadID)
 	runner := newCodexExecRunner(auth.DefaultCodexHome())
 	sideRunner := newCodexExecRunner(auth.DefaultCodexHome())
-	sideCoordinator := newInteractiveLocalSideCoordinator(newSessionStore())
+	sideCoordinator := newInteractiveLocalSideCoordinator(store)
 	defer sideCoordinator.CloseAll()
 	pluginService := interactivePluginService()
 	mcpService, mcpStatuses, mcpExpectedServers := interactiveMCPRuntime(root)
@@ -707,8 +713,43 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}
-	_, err := codextea.Run(ctx, state, options, stdin, stdout)
+	_, err = codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+func interactiveStartLocalTUIThread(state *codextui.State, store *session.Store) (string, error) {
+	if state == nil {
+		return "", errors.New("interactive TUI state is nil")
+	}
+	if store == nil {
+		return "", errors.New("interactive TUI session store is nil")
+	}
+	params, err := json.Marshal(appserver.ThreadStartParams{
+		CWD:            strings.TrimSpace(state.CWD),
+		Model:          strings.TrimSpace(state.Model),
+		ModelProvider:  strings.TrimSpace(state.Provider),
+		ApprovalPolicy: strings.TrimSpace(state.ApprovalPolicy),
+		Sandbox:        strings.TrimSpace(state.Sandbox),
+	})
+	if err != nil {
+		return "", err
+	}
+	router := appserver.NewRouter(store)
+	defer router.Close()
+	response := router.Handle(&appserver.Request{
+		JSONRPC: "2.0",
+		ID:      appserver.IntID(1),
+		Method:  appserver.MethodThreadStart,
+		Params:  params,
+	})
+	if response.Error != nil {
+		return "", fmt.Errorf("thread/start failed during TUI bootstrap: %s", response.Error.Message)
+	}
+	result, ok := response.Result.(*appserver.ThreadStartResponse)
+	if !ok || result == nil || result.Thread == nil || strings.TrimSpace(result.Thread.ID) == "" {
+		return "", errors.New("thread/start failed during TUI bootstrap: response did not include a thread")
+	}
+	return strings.TrimSpace(result.Thread.ID), nil
 }
 
 func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []string) {
@@ -2820,6 +2861,7 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 		options.ServiceTier = firstNonEmptyLocal(options.ServiceTier, interactiveStringFromConfig(values, "service_tier"))
 	}
 	options.Model = firstNonEmptyLocal(options.Model, interactiveDefaultModel())
+	options.ReasoningEffort = firstNonEmptyLocal(options.ReasoningEffort, interactiveDefaultReasoningEffort(options.Model))
 	options.CWD = interactiveSessionPickerCWD(root)
 	return codextui.NewState(options)
 }
@@ -2835,6 +2877,11 @@ func interactiveStringFromConfig(values map[string]any, key string) string {
 func interactiveDefaultModel() string {
 	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
 	return strings.TrimSpace(manager.GetDefaultModel("", true, modelpkg.RefreshOffline))
+}
+
+func interactiveDefaultReasoningEffort(modelID string) string {
+	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	return strings.TrimSpace(manager.GetModelInfo(strings.TrimSpace(modelID), nil).DefaultReasoningLevel)
 }
 
 func interactiveServiceTierCommands(modelID string) []bottompane.ServiceTierCommand {

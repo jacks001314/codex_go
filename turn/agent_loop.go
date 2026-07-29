@@ -40,6 +40,7 @@ type AgentLoopRequest struct {
 	Prompt                       string
 	Instructions                 string
 	Model                        string
+	ToolMode                     string
 	ProviderID                   string
 	TaskKind                     model.AgentTaskKind
 	ThreadID                     string
@@ -243,6 +244,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 		for i := range toolItems {
 			item := toolItems[i]
+			model.RecordExecutedToolCall(&item)
 			result.InputItems = append(result.InputItems, &item)
 		}
 		toolBlocking := timing.BeginToolBlocking(l.now())

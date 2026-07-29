@@ -303,6 +303,8 @@ type InstructionsSkillMetadata struct {
 	LocatorKind             string
 	Root                    string
 	Description             string
+	ShortDescription        string
+	RoutingMetadata         string
 	PluginID                string
 	RemotePluginID          string
 	Contents                string
@@ -315,11 +317,12 @@ type InstructionsSkillMetadata struct {
 }
 
 type InstructionsSkillDependency struct {
-	Type      string
-	Value     string
-	Transport string
-	Command   string
-	URL       string
+	Type        string
+	Value       string
+	Description string
+	Transport   string
+	Command     string
+	URL         string
 }
 
 func (s *InstructionsSkillMetadata) AllowsImplicitInvocation() bool {

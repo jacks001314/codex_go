@@ -234,6 +234,105 @@ func MergeCloudConfigLayers(layers []CloudConfigLayer) map[string]any {
 	return out
 }
 
+func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequirements, bundle CloudConfigBundle, baseDir string) (*ConfigRequirements, error) {
+	layers, err := CloudConfigLayersFromBundle(bundle, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	mergeConfigMaps(values, MergeCloudConfigLayers(layers.EnterpriseManagedConfig))
+
+	managedRequirementValues := map[string]any{}
+	for _, layer := range layers.EnterpriseManagedRequirements {
+		parsed, err := parseRequirementsTOMLValues([]byte(layer.RawTOML))
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, layer.Source.Name, err)
+		}
+		mergeConfigMaps(managedRequirementValues, parsed)
+	}
+	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+	}
+
+	// Permission profiles in requirements are executable policy definitions,
+	// while the remaining fields constrain which config values may be selected.
+	if rawProfiles, ok := managedRequirementValues["permissions"].(map[string]any); ok {
+		mergeConfigMaps(values, map[string]any{"permissions": rawProfiles})
+	}
+	if defaultProfile, ok := managedRequirementValues["default_permissions"].(string); ok && strings.TrimSpace(defaultProfile) != "" {
+		values["default_permissions"] = strings.TrimSpace(defaultProfile)
+	}
+	return mergeConfigRequirements(requirements, managedRequirements), nil
+}
+
+func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequirements {
+	out := cloneRequirements(base)
+	if overlay == nil {
+		return out
+	}
+	if out == nil {
+		return cloneRequirements(overlay)
+	}
+	if overlay.AllowedApprovalPolicies != nil {
+		out.AllowedApprovalPolicies = cloneSlice(overlay.AllowedApprovalPolicies)
+	}
+	if overlay.AllowedApprovalsReviewers != nil {
+		out.AllowedApprovalsReviewers = cloneSlice(overlay.AllowedApprovalsReviewers)
+	}
+	if overlay.AllowedSandboxModes != nil {
+		out.AllowedSandboxModes = cloneSlice(overlay.AllowedSandboxModes)
+	}
+	if overlay.AllowedWindowsSandboxImplementations != nil {
+		out.AllowedWindowsSandboxImplementations = cloneSlice(overlay.AllowedWindowsSandboxImplementations)
+	}
+	if overlay.AllowedPermissionProfiles != nil {
+		out.AllowedPermissionProfiles = cloneBoolMap(overlay.AllowedPermissionProfiles)
+	}
+	if overlay.DefaultPermissions != nil {
+		out.DefaultPermissions = cloneStringPtr(overlay.DefaultPermissions)
+	}
+	if overlay.AllowedWebSearchModes != nil {
+		out.AllowedWebSearchModes = cloneSlice(overlay.AllowedWebSearchModes)
+	}
+	if overlay.AllowManagedHooksOnly != nil {
+		out.AllowManagedHooksOnly = cloneBoolPtr(overlay.AllowManagedHooksOnly)
+	}
+	if overlay.AllowAppshots != nil {
+		out.AllowAppshots = cloneBoolPtr(overlay.AllowAppshots)
+	}
+	if overlay.AllowRemoteControl != nil {
+		out.AllowRemoteControl = cloneBoolPtr(overlay.AllowRemoteControl)
+	}
+	if overlay.ComputerUse != nil {
+		out.ComputerUse = cloneComputerUse(overlay.ComputerUse)
+	}
+	if overlay.BrowserUse != nil {
+		out.BrowserUse = cloneBrowserUse(overlay.BrowserUse)
+	}
+	if overlay.FeatureRequirements != nil {
+		out.FeatureRequirements = cloneBoolMap(overlay.FeatureRequirements)
+	}
+	if overlay.Hooks != nil {
+		out.Hooks = cloneManagedHooks(overlay.Hooks)
+	}
+	if overlay.EnforceResidency != nil {
+		out.EnforceResidency = cloneResidencyRequirementPtr(overlay.EnforceResidency)
+	}
+	if overlay.Network != nil {
+		out.Network = cloneNetwork(overlay.Network)
+	}
+	if overlay.Models != nil {
+		out.Models = cloneModels(overlay.Models)
+	}
+	if overlay.MCPServers != nil {
+		out.MCPServers = cloneMCPServerRequirements(overlay.MCPServers)
+	}
+	if overlay.Plugins != nil {
+		out.Plugins = clonePluginRequirements(overlay.Plugins)
+	}
+	return out
+}
+
 func cloudConfigStripComment(line string) string {
 	inQuote := byte(0)
 	for i := 0; i < len(line); i++ {

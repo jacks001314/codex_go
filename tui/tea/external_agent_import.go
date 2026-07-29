@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -181,8 +182,8 @@ func (m *Model) updateExternalAgentMigrationModal(message bubbletea.KeyMsg) bubb
 	importer := m.onImportExternalAgent
 	selected := append([]config.ExternalAgentConfigMigrationItem(nil), outcome.Items...)
 	return func() bubbletea.Msg {
-		response, completed, err := importer(selected, state.migrationSource)
-		return ExternalAgentImportResultMsg{Selected: selected, Source: state.migrationSource, Response: response, Completed: completed, Err: err}
+		response, completion, err := importer(selected, state.migrationSource)
+		return ExternalAgentImportResultMsg{Selected: selected, Source: state.migrationSource, Response: response, Completion: completion, Err: err}
 	}
 }
 
@@ -262,16 +263,59 @@ func (m *Model) applyExternalAgentImportResult(message ExternalAgentImportResult
 		)
 		return nil
 	}
+	if strings.TrimSpace(message.Response.ImportID) == "" || message.Completion == nil {
+		state.busy = false
+		state.screen = codextui.NewExternalAgentConfigMigrationScreen(
+			state.detected,
+			message.Selected,
+			"Import failed: external agent config import did not start a completion stream",
+		)
+		return nil
+	}
 	m.modal = nil
 	remaining := len(state.detected) - len(message.Selected)
 	if remaining < 0 {
 		remaining = 0
 	}
 	m.applyHistoryCell(historycell.NewPlainHistoryCell(externalAgentMigrationStartedLines(message.Selected, remaining)))
-	m.applyHistoryCell(historycell.NewPlainHistoryCell(externalAgentMigrationFinishedLines(message.Completed)))
+	if m.pendingExternalAgentImports == nil {
+		m.pendingExternalAgentImports = map[string]bool{}
+	}
+	importID := strings.TrimSpace(message.Response.ImportID)
+	m.pendingExternalAgentImports[importID] = true
+	m.notice = "Import started."
+	m.refreshTranscript()
+	return waitForExternalAgentImportCompletion(importID, message.Completion)
+}
+
+func waitForExternalAgentImportCompletion(importID string, completion <-chan ExternalAgentImportCompletion) bubbletea.Cmd {
+	return func() bubbletea.Msg {
+		result, ok := <-completion
+		if !ok {
+			result.Err = errors.New("external agent config import completion stream closed")
+		}
+		return ExternalAgentImportCompletedResultMsg{ImportID: importID, Result: result}
+	}
+}
+
+func (m *Model) applyExternalAgentImportCompletedResult(message ExternalAgentImportCompletedResultMsg) {
+	if m == nil || !m.pendingExternalAgentImports[strings.TrimSpace(message.ImportID)] {
+		return
+	}
+	delete(m.pendingExternalAgentImports, strings.TrimSpace(message.ImportID))
+	if message.Result.Err != nil {
+		m.notice = "Import failed: " + message.Result.Err.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return
+	}
+	completed := message.Result.Completed
+	if completed.ImportID == "" {
+		completed.ImportID = strings.TrimSpace(message.ImportID)
+	}
+	m.applyHistoryCell(historycell.NewPlainHistoryCell(externalAgentMigrationFinishedLines(completed)))
 	m.notice = "Import finished."
 	m.refreshTranscript()
-	return nil
 }
 
 func (m *Model) renderExternalAgentMigrationModal() string {

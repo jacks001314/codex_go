@@ -141,6 +141,10 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	}
 	if len(loopRequest.Tools) == 0 {
 		visibleSpecs := r.router.ModelVisibleSpecs()
+		if strings.EqualFold(strings.TrimSpace(loopRequest.ToolMode), model.ToolModeCodeModeOnly) && codemode.HasExecTool(visibleSpecs) {
+			visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
+			visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+		}
 		if codemode.HasExecTool(visibleSpecs) {
 			visibleSpecs = codemode.AugmentToolSpecs(visibleSpecs)
 		}
@@ -167,6 +171,53 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {
+	out := make([]tool.Spec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Exposure == tool.ExposureDirectModelOnly || !codemode.IsNestedTool(codemode.NameForToolName(spec.Name)) {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
+func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec) []tool.Spec {
+	enabledSpecs := make([]tool.Spec, 0, len(nestedSpecs))
+	deferredSpecs := make([]tool.Spec, 0)
+	namespaces := map[string]codemode.NamespaceDescription{}
+	for _, spec := range nestedSpecs {
+		if spec.Exposure == tool.ExposureDiscoverable {
+			deferredSpecs = append(deferredSpecs, spec)
+			continue
+		}
+		enabledSpecs = append(enabledSpecs, spec)
+		namespace := strings.TrimSpace(spec.Name.Namespace)
+		if namespace == "" {
+			continue
+		}
+		description := strings.TrimSpace(spec.NamespaceDescription)
+		existing, ok := namespaces[namespace]
+		if !ok || (strings.TrimSpace(existing.Description) == "" && description != "") {
+			namespaces[namespace] = codemode.NamespaceDescription{Name: namespace, Description: description}
+		}
+	}
+	description := codemode.BuildExecToolDescriptionWithDeferred(
+		codemode.CollectPromptDefinitions(enabledSpecs),
+		codemode.CollectPromptDefinitions(deferredSpecs),
+		namespaces,
+		true,
+		len(deferredSpecs) > 0,
+	)
+	out := append([]tool.Spec(nil), visibleSpecs...)
+	for index := range out {
+		if codemode.IsPublicToolName(out[index].Name) && out[index].Freeform != nil {
+			out[index].Description = description
+			break
+		}
+	}
+	return out
 }
 
 func codeModeClientMetadataForRequest(metadata map[string]string, router *tool.Router) map[string]string {

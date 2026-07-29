@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -143,6 +144,13 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 
 func windowsShellSandboxUsesElevated(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel, proxyEnforced bool) bool {
 	return proxyEnforced || configured == sandbox.WindowsSandboxElevated || profile != nil && profile.HasDenyReadEntries()
+}
+
+func windowsSandboxProxySettingsMode(mode execserver.WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
+	if mode == execserver.WindowsSandboxProxySettingsPreserve {
+		return windowssandbox.ProxySettingsPreserve
+	}
+	return windowssandbox.ProxySettingsReconcile
 }
 
 func (r *LocalShellRunner) runDirect(ctx context.Context, command []string, cwd string, env map[string]string, started time.Time) (*ShellResult, error) {

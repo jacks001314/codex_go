@@ -20,14 +20,19 @@ func TestMultiAgentV2ConfigDefaultsAndOverrides(t *testing.T) {
 		"max_concurrent_threads_per_session": int64(5), "min_wait_timeout_ms": int64(0), "max_wait_timeout_ms": int64(100),
 		"default_wait_timeout_ms": int64(50), "tool_namespace": "agents", "hide_spawn_agent_metadata": false,
 		"expose_spawn_agent_model_overrides": false, "wait_agent_enabled": false, "non_code_mode_only": false,
+		"subagent_developer_instructions": "  child only  ",
 	}}}}
 	got, err := cfg.MultiAgentV2Config(3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.MaxConcurrentThreadsPerSession != 5 || got.MinWaitTimeout != 0 || got.DefaultWaitTimeout != 50*time.Millisecond || got.MaxWaitTimeout != 100*time.Millisecond ||
-		got.ToolNamespace != "agents" || got.HideSpawnAgentMetadata || got.ExposeSpawnAgentModelOverrides || got.WaitAgentEnabled || got.NonCodeModeOnly {
+		got.ToolNamespace != "agents" || got.HideSpawnAgentMetadata || got.ExposeSpawnAgentModelOverrides || got.WaitAgentEnabled || got.NonCodeModeOnly || got.SubagentDeveloperInstructions == nil || *got.SubagentDeveloperInstructions != "child only" {
 		t.Fatalf("overrides = %#v", got)
+	}
+	empty, err := (&Config{Values: map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{"subagent_developer_instructions": "  "}}}}).MultiAgentV2Config(0)
+	if err != nil || empty.SubagentDeveloperInstructions == nil || *empty.SubagentDeveloperInstructions != "" {
+		t.Fatalf("empty override = %#v, %v", empty, err)
 	}
 }
 

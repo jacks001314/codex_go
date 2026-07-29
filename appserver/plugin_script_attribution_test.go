@@ -33,6 +33,7 @@ func TestAttributeCommandExecutionItemUsesVerifiedRemotePlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugins := plugin.NewPluginService()
+	plugins.SetRuntimeRoute("chatgpt", "openai")
 	plugins.AddPlugin(plugin.PluginDetail{Summary: plugin.PluginSummary{
 		ID:        id.Key(),
 		Name:      id.PluginName,
@@ -73,6 +74,7 @@ func TestAttributeCommandExecutionItemRejectsUnverifiedCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugins := plugin.NewPluginService()
+	plugins.SetRuntimeRoute("chatgpt", "openai")
 	plugins.AddPlugin(plugin.PluginDetail{Summary: plugin.PluginSummary{
 		ID:        id.Key(),
 		Name:      id.PluginName,
@@ -112,6 +114,7 @@ func TestAttributeSessionCommandItemsPreservesHistoryFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugins := plugin.NewPluginService()
+	plugins.SetRuntimeRoute("chatgpt", "openai")
 	plugins.AddPlugin(plugin.PluginDetail{Summary: plugin.PluginSummary{
 		ID: id.Key(), Name: id.PluginName, Installed: true, Enabled: true,
 	}})

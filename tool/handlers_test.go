@@ -205,7 +205,7 @@ func TestRustCoreToolSurfaceParity(t *testing.T) {
 		t.Fatalf("update_plan spec = %#v", planSpec)
 	}
 	userInputSpec := NewRequestUserInputHandler(nil).Spec()
-	if !strings.Contains(userInputSpec.Description, "This tool is only available in Plan mode.") {
+	if !strings.Contains(userInputSpec.Description, "This tool is only available in Plan mode.") || userInputSpec.Exposure != ExposureDirectModelOnly {
 		t.Fatalf("request_user_input spec = %#v", userInputSpec)
 	}
 }

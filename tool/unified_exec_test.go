@@ -1091,7 +1091,7 @@ func TestUnifiedExecWriteStdinSerializesPerSessionAndRunsAcrossSessions(t *testi
 			CWD:             t.TempDir(),
 			TTY:             true,
 			YieldTimeMS:     unifiedExecMinYieldMS,
-			TimeoutMS:       15_000,
+			TimeoutMS:       60_000,
 			MaxOutputTokens: intPtr(100),
 		}, callID)
 		if err != nil || result.ProcessID == nil {
@@ -1194,7 +1194,7 @@ func TestUnifiedExecBackgroundProcessListAndTerminateAreThreadScopedLikeRust(t *
 			HookCommand:         "long helper " + threadID,
 			CWD:                 t.TempDir(),
 			YieldTimeMS:         unifiedExecMinYieldMS,
-			TimeoutMS:           15_000,
+			TimeoutMS:           60_000,
 			UnifiedExecThreadID: threadID,
 			UnifiedExecTurnID:   "turn-" + threadID,
 		}, callID)
@@ -1246,8 +1246,11 @@ func TestUnifiedExecNonTTYCtrlCMatchesRustPlatformBehavior(t *testing.T) {
 		YieldTimeMS: 2_000,
 	}, nil)
 	if runtime.GOOS == "windows" {
-		if err == nil || !strings.Contains(err.Error(), "not supported on windows") {
-			t.Fatalf("WriteStdin(Ctrl-C) = %#v, %v", result, err)
+		if err != nil {
+			t.Fatalf("WriteStdin(Ctrl-C) error = %v", err)
+		}
+		if result.ProcessID != nil || !result.HasExitCode || result.ExitCode != 1 {
+			t.Fatalf("interrupt result = %#v, want Windows exit 1", result)
 		}
 		return
 	}

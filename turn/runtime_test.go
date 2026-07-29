@@ -215,6 +215,67 @@ func TestRuntimeAugmentsWebRunDescriptionOnlyWithCodeMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeCodeModeOnlyKeepsOnlyExecWaitAndDirectModelToolsVisible(t *testing.T) {
+	agent := &singleTurnAgent{response: &model.AgentResponse{
+		Message: "done",
+		Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "done"}},
+	}}
+	registry := tool.NewRegistry()
+	for _, spec := range []tool.Spec{
+		{Name: tool.PlainName("apply_patch")},
+		{Name: tool.PlainName("update_plan")},
+		{Name: tool.PlainName("request_user_input"), Exposure: tool.ExposureDirectModelOnly},
+		{Name: tool.NamespacedName("collaboration", "spawn_agent"), Exposure: tool.ExposureDirectModelOnly, NamespaceDescription: "Agent tools"},
+	} {
+		if err := registry.Register(tool.NewExecutorFunc(spec, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+			return &tool.Output{Success: true}, nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execTool, waitTool := tool.NewCodeModeExecutors(registry)
+	if err := registry.Register(execTool); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(waitTool); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "edit", ToolMode: model.ToolModeCodeModeOnly}); err != nil {
+		t.Fatal(err)
+	}
+	visible := runtimeRequestToolNames(agent.requests[0].Tools)
+	for _, want := range []string{"exec", "wait", "request_user_input", "collaboration.spawn_agent"} {
+		if !visible[want] {
+			t.Fatalf("visible tools = %#v, missing %q", visible, want)
+		}
+	}
+	for _, hidden := range []string{"apply_patch", "update_plan"} {
+		if visible[hidden] {
+			t.Fatalf("visible tools = %#v, unexpectedly contains %q", visible, hidden)
+		}
+	}
+	nested := tool.NewRouter(registry).CodeModeToolNames()
+	if _, ok := nested["apply_patch"]; !ok {
+		t.Fatalf("nested tools = %#v, missing apply_patch", nested)
+	}
+	for _, directOnly := range []string{"request_user_input", "collaboration__spawn_agent"} {
+		if _, ok := nested[directOnly]; ok {
+			t.Fatalf("nested tools = %#v, contains direct-only %q", nested, directOnly)
+		}
+	}
+	execDescription := runtimeToolDescription(agent.requests[0].Tools, "exec")
+	if !strings.Contains(execDescription, "### `apply_patch`") || !strings.Contains(execDescription, "declare const tools: { apply_patch(args: unknown): Promise<unknown>; };") {
+		t.Fatalf("exec description = %q", execDescription)
+	}
+	for _, directOnly := range []string{"request_user_input", "collaboration__spawn_agent"} {
+		if strings.Contains(execDescription, "declare const tools: { "+directOnly+"(") {
+			t.Fatalf("exec description contains direct-only tool %q: %q", directOnly, execDescription)
+		}
+	}
+}
+
 func TestRuntimeWithoutRouterPreservesPromptAndResponseInputItems(t *testing.T) {
 	agent := &singleTurnAgent{response: &model.AgentResponse{
 		Message: "assistant answer",
@@ -458,6 +519,27 @@ func runtimeRequestToolsContainType(tools []any, toolType string) bool {
 	return false
 }
 
+func runtimeRequestToolNames(tools []any) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range tools {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := item["name"].(string)
+		if item["type"] != "namespace" {
+			out[name] = true
+			continue
+		}
+		children, _ := item["tools"].([]map[string]any)
+		for _, child := range children {
+			childName, _ := child["name"].(string)
+			out[name+"."+childName] = true
+		}
+	}
+	return out
+}
+
 func runtimeNamespacedToolDescription(tools []any, namespace string, name string) string {
 	for _, value := range tools {
 		namespaceTool, ok := value.(map[string]any)
@@ -471,6 +553,18 @@ func runtimeNamespacedToolDescription(tools []any, namespace string, name string
 				return description
 			}
 		}
+	}
+	return ""
+}
+
+func runtimeToolDescription(tools []any, name string) string {
+	for _, value := range tools {
+		item, ok := value.(map[string]any)
+		if !ok || item["name"] != name {
+			continue
+		}
+		description, _ := item["description"].(string)
+		return description
 	}
 	return ""
 }

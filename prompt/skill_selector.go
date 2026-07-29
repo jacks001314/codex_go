@@ -32,6 +32,7 @@ type SkillSelectionDocument struct {
 	Name             string
 	ShortDescription string
 	Description      string
+	RoutingMetadata  string
 	Dependencies     string
 }
 
@@ -359,6 +360,40 @@ func SelectSkillsCharacterNgram(query string, documents []SkillSelectionDocument
 	}
 	result.CandidateIDs = rankedSkillIDs(scored, limit)
 	return result
+}
+
+// SelectSkillsCharacterRoutingCard evaluates character similarity over the
+// bounded skill description, host interface metadata, and tool dependencies.
+func SelectSkillsCharacterRoutingCard(query string, documents []SkillSelectionDocument, limit int) CheapSkillSelection {
+	routingDocuments := append([]SkillSelectionDocument(nil), documents...)
+	for i := 0; i < min(len(routingDocuments), skillSelectorMaxCandidates); i++ {
+		routingDocuments[i].ShortDescription = joinBoundedSkillRoutingFields(
+			routingDocuments[i].ShortDescription,
+			routingDocuments[i].RoutingMetadata,
+			routingDocuments[i].Dependencies,
+		)
+	}
+	return SelectSkillsCharacterNgram(query, routingDocuments, limit)
+}
+
+func joinBoundedSkillRoutingFields(fields ...string) string {
+	var out strings.Builder
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || out.Len() >= skillSelectorMaxDocumentBytes {
+			continue
+		}
+		if out.Len() > 0 {
+			out.WriteByte(' ')
+		}
+		remaining := skillSelectorMaxDocumentBytes - out.Len()
+		if remaining <= 0 {
+			break
+		}
+		bounded, _ := boundedSkillSelectorString(field, remaining)
+		out.WriteString(bounded)
+	}
+	return out.String()
 }
 
 func SelectSkillsFieldedBM25(query string, documents []SkillSelectionDocument, limit int) CheapSkillSelection {

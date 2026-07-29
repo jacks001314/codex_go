@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -208,5 +209,14 @@ func TestWindowsShellSandboxUsesElevatedLikeRust(t *testing.T) {
 	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{}}
 	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, false) {
 		t.Fatal("deny-read profile did not select elevated backend")
+	}
+}
+
+func TestWindowsSandboxProxySettingsMode(t *testing.T) {
+	if got := windowsSandboxProxySettingsMode(execserver.WindowsSandboxProxySettingsPreserve); got != windowssandbox.ProxySettingsPreserve {
+		t.Fatalf("preserve proxy settings mode = %q", got)
+	}
+	if got := windowsSandboxProxySettingsMode(execserver.WindowsSandboxProxySettingsReconcile); got != windowssandbox.ProxySettingsReconcile {
+		t.Fatalf("reconcile proxy settings mode = %q", got)
 	}
 }

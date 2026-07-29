@@ -95,6 +95,9 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	if err := action.FillDeleteContent(applyOptions); err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
+	if err := action.Verify(applyOptions); err != nil {
+		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+	}
 	changes := applyPatchFileChanges(action, e.cwd())
 	if e.approval != nil {
 		decision, approvalErr := e.approval(ctx, &ApplyPatchApprovalRequest{
@@ -124,7 +127,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			}, nil
 		}
 	}
-	result, err := action.Apply(applyOptions)
+	result, err := action.ApplyVerified(applyOptions)
 	if err != nil {
 		body := "apply_patch failed: " + applypatch.FormatError(err)
 		return &Output{

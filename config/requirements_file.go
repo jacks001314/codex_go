@@ -20,10 +20,26 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 		}
 		return nil, err
 	}
-	var values map[string]any
+	return ParseRequirementsTOML(data)
+}
+
+func ParseRequirementsTOML(data []byte) (*ConfigRequirements, error) {
+	values, err := parseRequirementsTOMLValues(data)
+	if err != nil {
+		return nil, err
+	}
+	return configRequirementsFromValidatedMap(values)
+}
+
+func parseRequirementsTOMLValues(data []byte) (map[string]any, error) {
+	values := map[string]any{}
 	if err := toml.Unmarshal(data, &values); err != nil {
 		return nil, err
 	}
+	return values, nil
+}
+
+func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequirements, error) {
 	if raw, ok := values["experimental_network"]; ok {
 		networkValues, ok := raw.(map[string]any)
 		if !ok {

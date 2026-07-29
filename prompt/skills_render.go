@@ -111,14 +111,24 @@ type skillAliasPlan struct {
 	tableCost       int
 }
 
+type skillLineAllocation struct {
+	omitted          bool
+	descriptionChars int
+}
+
+type combinedAvailableSkillsRender struct {
+	hostSkillLines     []string
+	hostSkillRootLines []string
+	hostReport         *SkillRenderReport
+	executorSkillLines []string
+	executorReport     *SkillRenderReport
+}
+
 func DefaultSkillMetadataBudget(contextWindow int64) SkillMetadataBudget {
 	if contextWindow > 0 {
 		limit := int(contextWindow) * SkillMetadataContextWindowPercent / 100
 		if limit < 1 {
 			limit = 1
-		}
-		if limit > 4000 {
-			limit = 4000
 		}
 		return SkillMetadataBudget{Kind: SkillMetadataBudgetTokens, Limit: limit}
 	}
@@ -150,6 +160,70 @@ func RenderAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, option
 }
 
 func RenderExtensionAvailableSkills(skills []InstructionsSkillMetadata, includeUsageInstructions bool) *AvailableSkills {
+	return RenderExtensionAvailableSkillsWithOptions(skills, AvailableSkillsRenderOptions{
+		Budget:                   SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget},
+		IncludeUsageInstructions: includeUsageInstructions,
+	})
+}
+
+func RenderExtensionAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) *AvailableSkills {
+	lines := extensionSkillRenderLines(skills)
+	if len(lines) == 0 {
+		return nil
+	}
+	budget := normalizedSkillMetadataBudget(options.Budget)
+	skillLines, report := renderSkillLines(lines, budget)
+	skillLines = appendExtensionOmissionMarker(skillLines, report, budget)
+	warning := skillRenderWarning(report, budget)
+	return &AvailableSkills{
+		Body:           renderAvailableSkillsBody(nil, skillLines, options.IncludeUsageInstructions),
+		SkillLines:     skillLines,
+		Report:         report,
+		WarningMessage: warning,
+	}
+}
+
+// RenderCombinedAvailableSkills shares one metadata budget between host and
+// executor catalogs. Executor entries are allocated first to match the runtime
+// extension surface, while host entries can still use path aliases under pressure.
+func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, executorSkills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) (*AvailableSkills, *AvailableSkills) {
+	hostLines := orderedSkillRenderLines(hostSkills)
+	executorLines := extensionSkillRenderLines(executorSkills)
+	budget := normalizedSkillMetadataBudget(options.Budget)
+	if len(hostLines) == 0 || len(executorLines) == 0 {
+		return RenderAvailableSkillsWithOptions(hostSkills, options), RenderExtensionAvailableSkillsWithOptions(executorSkills, options)
+	}
+
+	absolute := renderCombinedSkillLines(hostLines, executorLines, budget, nil)
+	selected := absolute
+	if !combinedSkillsFullyRendered(absolute) {
+		if plan, ok := buildSkillAliasPlan(hostLines, budget); ok && plan.tableCost < budget.Limit {
+			adjustedBudget := budget
+			adjustedBudget.Limit -= plan.tableCost
+			aliased := renderCombinedSkillLines(applySkillAliases(hostLines, plan), executorLines, adjustedBudget, plan.rootLines)
+			if combinedSkillsRenderIsBetter(aliased, absolute, budget) {
+				selected = aliased
+			}
+		}
+	}
+
+	hostWarning := skillRenderWarning(selected.hostReport, budget)
+	executorWarning := skillRenderWarning(selected.executorReport, budget)
+	return &AvailableSkills{
+			Body:           renderAvailableSkillsBody(selected.hostSkillRootLines, selected.hostSkillLines, options.IncludeUsageInstructions),
+			SkillRootLines: selected.hostSkillRootLines,
+			SkillLines:     selected.hostSkillLines,
+			Report:         selected.hostReport,
+			WarningMessage: hostWarning,
+		}, &AvailableSkills{
+			Body:           renderAvailableSkillsBody(nil, selected.executorSkillLines, options.IncludeUsageInstructions),
+			SkillLines:     selected.executorSkillLines,
+			Report:         selected.executorReport,
+			WarningMessage: executorWarning,
+		}
+}
+
+func extensionSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLine {
 	lines := make([]skillRenderLine, 0, len(skills))
 	for _, skill := range skills {
 		if !skill.AllowsImplicitInvocation() {
@@ -161,37 +235,21 @@ func RenderExtensionAvailableSkills(skills []InstructionsSkillMetadata, includeU
 		}
 		lines = append(lines, skillRenderLine{name: skill.Name, description: truncateSkillDescription(skill.Description), path: strings.ReplaceAll(firstNonEmptyString(skill.LocatorPath, skill.Path), "\\", "/"), locatorKind: locatorKind})
 	}
-	budget := SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
-	skillLines, report := renderSkillLines(lines, budget)
-	if len(skillLines) == 0 {
-		return nil
-	}
+	return lines
+}
+
+func appendExtensionOmissionMarker(skillLines []string, report *SkillRenderReport, budget SkillMetadataBudget) []string {
 	if report.OmittedCount > 0 {
-		omitted := report.OmittedCount
-		word := "skills"
-		if omitted == 1 {
-			word = "skill"
-		}
-		marker := fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word)
+		marker := extensionOmissionMarker(report.OmittedCount)
 		for len(skillLines) > 0 && linesCost(budget, append(skillLines, marker)) > budget.Limit {
 			skillLines = skillLines[:len(skillLines)-1]
 			report.IncludedCount--
 			report.OmittedCount++
-			omitted = report.OmittedCount
-			if omitted == 1 {
-				word = "skill"
-			} else {
-				word = "skills"
-			}
-			marker = fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word)
+			marker = extensionOmissionMarker(report.OmittedCount)
 		}
 		skillLines = append(skillLines, marker)
 	}
-	return &AvailableSkills{
-		Body:       renderAvailableSkillsBody(nil, skillLines, includeUsageInstructions),
-		SkillLines: skillLines,
-		Report:     report,
-	}
+	return skillLines
 }
 
 func orderedSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLine {
@@ -246,16 +304,20 @@ func renderBestSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) (
 }
 
 func renderSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) ([]string, *SkillRenderReport) {
+	return renderAllocatedSkillLines(lines, allocateSkillLines(lines, budget))
+}
+
+func allocateSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) []skillLineAllocation {
 	fullCost := 0
 	for _, line := range lines {
 		fullCost += budget.cost(line.renderFull() + "\n")
 	}
 	if fullCost <= budget.Limit {
-		out := make([]string, 0, len(lines))
-		for _, line := range lines {
-			out = append(out, line.renderFull())
+		allocations := make([]skillLineAllocation, len(lines))
+		for index, line := range lines {
+			allocations[index].descriptionChars = len([]rune(line.description))
 		}
-		return out, &SkillRenderReport{TotalCount: len(lines), IncludedCount: len(lines)}
+		return allocations
 	}
 
 	minimumCost := 0
@@ -263,54 +325,157 @@ func renderSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) ([]st
 		minimumCost += budget.cost(line.renderMinimum() + "\n")
 	}
 	if minimumCost <= budget.Limit {
-		allocations := allocateDescriptionBudget(lines, budget, budget.Limit-minimumCost)
-		out := make([]string, 0, len(lines))
-		truncatedChars := 0
-		truncatedCount := 0
-		for i, line := range lines {
-			chars := allocations[i]
-			out = append(out, line.renderWithDescriptionChars(chars))
-			if chars < len([]rune(line.description)) {
-				truncatedChars += len([]rune(line.description)) - chars
-				if line.description != "" {
-					truncatedCount++
+		descriptionChars := allocateDescriptionBudget(lines, budget, budget.Limit-minimumCost)
+		allocations := make([]skillLineAllocation, len(lines))
+		for index := range allocations {
+			allocations[index].descriptionChars = descriptionChars[index]
+		}
+		return allocations
+	}
+
+	allocations := make([]skillLineAllocation, len(lines))
+	used := 0
+	for index, line := range lines {
+		cost := budget.cost(line.renderMinimum() + "\n")
+		if used+cost <= budget.Limit {
+			used += cost
+		} else {
+			allocations[index].omitted = true
+		}
+	}
+	return allocations
+}
+
+func renderAllocatedSkillLines(lines []skillRenderLine, allocations []skillLineAllocation) ([]string, *SkillRenderReport) {
+	out := make([]string, 0, len(lines))
+	report := &SkillRenderReport{TotalCount: len(lines)}
+	for index, line := range lines {
+		allocation := allocations[index]
+		descriptionChars := len([]rune(line.description))
+		if allocation.omitted {
+			report.OmittedCount++
+			report.TruncatedDescriptionChars += descriptionChars
+			if descriptionChars > 0 {
+				report.TruncatedDescriptionSkillCount++
+			}
+			continue
+		}
+		report.IncludedCount++
+		out = append(out, line.renderWithDescriptionChars(allocation.descriptionChars))
+		if allocation.descriptionChars < descriptionChars {
+			report.TruncatedDescriptionChars += descriptionChars - allocation.descriptionChars
+			if descriptionChars > 0 {
+				report.TruncatedDescriptionSkillCount++
+			}
+		}
+	}
+	return out, report
+}
+
+func renderCombinedSkillLines(hostLines []skillRenderLine, executorLines []skillRenderLine, budget SkillMetadataBudget, hostRootLines []string) *combinedAvailableSkillsRender {
+	allLines := append(append([]skillRenderLine(nil), executorLines...), hostLines...)
+	allocations := allocateSkillLines(allLines, budget)
+	marker := reserveExecutorOmissionMarker(allLines, len(executorLines), budget, allocations)
+	executorRendered, executorReport := renderAllocatedSkillLines(executorLines, allocations[:len(executorLines)])
+	if marker != "" {
+		executorRendered = append(executorRendered, marker)
+	}
+	hostRendered, hostReport := renderAllocatedSkillLines(hostLines, allocations[len(executorLines):])
+	return &combinedAvailableSkillsRender{
+		hostSkillLines:     hostRendered,
+		hostSkillRootLines: hostRootLines,
+		hostReport:         hostReport,
+		executorSkillLines: executorRendered,
+		executorReport:     executorReport,
+	}
+}
+
+func reserveExecutorOmissionMarker(lines []skillRenderLine, executorCount int, budget SkillMetadataBudget, allocations []skillLineAllocation) string {
+	for {
+		omitted := 0
+		for _, allocation := range allocations[:executorCount] {
+			if allocation.omitted {
+				omitted++
+			}
+		}
+		if omitted == 0 {
+			return ""
+		}
+		marker := extensionOmissionMarker(omitted)
+		if allocatedSkillLinesCost(lines, allocations, budget)+budget.cost(marker+"\n") <= budget.Limit {
+			return marker
+		}
+		removeIndex := -1
+		for index := len(allocations) - 1; index >= executorCount; index-- {
+			if !allocations[index].omitted {
+				removeIndex = index
+				break
+			}
+		}
+		if removeIndex < 0 {
+			for index := executorCount - 1; index >= 0; index-- {
+				if !allocations[index].omitted {
+					removeIndex = index
+					break
 				}
 			}
 		}
-		return out, &SkillRenderReport{
-			TotalCount:                     len(lines),
-			IncludedCount:                  len(lines),
-			TruncatedDescriptionChars:      truncatedChars,
-			TruncatedDescriptionSkillCount: truncatedCount,
+		if removeIndex < 0 {
+			return ""
 		}
+		allocations[removeIndex].omitted = true
 	}
+}
 
-	out := make([]string, 0, len(lines))
-	used := 0
-	omitted := 0
-	truncatedChars := 0
-	truncatedCount := 0
-	for _, line := range lines {
-		cost := budget.cost(line.renderMinimum() + "\n")
-		descriptionChars := len([]rune(line.description))
-		if used+cost <= budget.Limit {
-			used += cost
-			out = append(out, line.renderMinimum())
-		} else {
-			omitted++
+func allocatedSkillLinesCost(lines []skillRenderLine, allocations []skillLineAllocation, budget SkillMetadataBudget) int {
+	cost := 0
+	for index, line := range lines {
+		if allocations[index].omitted {
+			continue
 		}
-		truncatedChars += descriptionChars
-		if descriptionChars > 0 {
-			truncatedCount++
-		}
+		cost += budget.cost(line.renderWithDescriptionChars(allocations[index].descriptionChars) + "\n")
 	}
-	return out, &SkillRenderReport{
-		TotalCount:                     len(lines),
-		IncludedCount:                  len(out),
-		OmittedCount:                   omitted,
-		TruncatedDescriptionChars:      truncatedChars,
-		TruncatedDescriptionSkillCount: truncatedCount,
+	return cost
+}
+
+func combinedSkillsFullyRendered(rendered *combinedAvailableSkillsRender) bool {
+	return rendered != nil && rendered.hostReport.OmittedCount == 0 && rendered.hostReport.TruncatedDescriptionChars == 0 && rendered.executorReport.OmittedCount == 0 && rendered.executorReport.TruncatedDescriptionChars == 0
+}
+
+func combinedSkillsRenderIsBetter(candidate *combinedAvailableSkillsRender, current *combinedAvailableSkillsRender, budget SkillMetadataBudget) bool {
+	if candidate.executorReport.IncludedCount != current.executorReport.IncludedCount {
+		return candidate.executorReport.IncludedCount > current.executorReport.IncludedCount
 	}
+	candidateIncluded := candidate.hostReport.IncludedCount + candidate.executorReport.IncludedCount
+	currentIncluded := current.hostReport.IncludedCount + current.executorReport.IncludedCount
+	if candidateIncluded != currentIncluded {
+		return candidateIncluded > currentIncluded
+	}
+	candidateTruncated := candidate.hostReport.TruncatedDescriptionChars + candidate.executorReport.TruncatedDescriptionChars
+	currentTruncated := current.hostReport.TruncatedDescriptionChars + current.executorReport.TruncatedDescriptionChars
+	if candidateTruncated != currentTruncated {
+		return candidateTruncated < currentTruncated
+	}
+	return combinedSkillsCost(candidate, budget) < combinedSkillsCost(current, budget)
+}
+
+func combinedSkillsCost(rendered *combinedAvailableSkillsRender, budget SkillMetadataBudget) int {
+	return availableSkillsCost(budget, rendered.hostSkillRootLines, rendered.hostSkillLines) + linesCost(budget, rendered.executorSkillLines)
+}
+
+func extensionOmissionMarker(omitted int) string {
+	word := "skills"
+	if omitted == 1 {
+		word = "skill"
+	}
+	return fmt.Sprintf("- %d additional %s omitted from this bounded skills list.", omitted, word)
+}
+
+func normalizedSkillMetadataBudget(budget SkillMetadataBudget) SkillMetadataBudget {
+	if budget.Limit <= 0 {
+		return SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
+	}
+	return budget
 }
 
 func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*skillAliasPlan, bool) {

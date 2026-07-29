@@ -13,23 +13,41 @@ import (
 	historycell "codex_go/tui/history_cell"
 )
 
+type pendingStatusRateLimitRequest struct {
+	messageIndex int
+	snapshot     codextui.State
+	width        int
+}
+
 func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
-	card := m.State.RenderStatusCardWidth(max(44, m.width-2))
-	m.State.AddHistoryLines(strings.Split(card, "\n"), strings.Split(card, "\n"))
+	refreshing := m.State.HasChatGPTAccount && m.onReadRateLimits != nil
+	snapshot := *m.State
+	snapshot.Messages = nil
+	snapshot.RateLimits = append([]codextui.RateLimitStatus(nil), m.State.RateLimits...)
+	snapshot.RateLimitsRefreshing = refreshing
+	cardWidth := max(44, m.width-2)
+	card := snapshot.RenderStatusCardWidth(cardWidth)
+	messageIndex := len(m.State.Messages)
+	history := statusHistoryText(card)
+	m.State.AddHistoryLines(strings.Split(history, "\n"), strings.Split(history, "\n"))
 	m.notice = ""
 	m.refreshTranscript()
-	if !m.State.HasChatGPTAccount || m.onReadRateLimits == nil {
+	if !refreshing {
 		return nil
 	}
 	requestID := m.nextStatusRateLimitRequestID
 	m.nextStatusRateLimitRequestID++
 	if m.pendingStatusRateLimitRequests == nil {
-		m.pendingStatusRateLimitRequests = map[uint64]struct{}{}
+		m.pendingStatusRateLimitRequests = map[uint64]pendingStatusRateLimitRequest{}
 	}
-	m.pendingStatusRateLimitRequests[requestID] = struct{}{}
+	m.pendingStatusRateLimitRequests[requestID] = pendingStatusRateLimitRequest{
+		messageIndex: messageIndex,
+		snapshot:     snapshot,
+		width:        cardWidth,
+	}
 	reader := m.onReadRateLimits
 	return func() bubbletea.Msg {
 		limits, err := reader()
@@ -41,15 +59,30 @@ func (m *Model) applyRateLimitsResult(message RateLimitsResultMsg) bubbletea.Cmd
 	if m == nil || m.State == nil {
 		return nil
 	}
-	if _, pending := m.pendingStatusRateLimitRequests[message.RequestID]; !pending {
+	pending, ok := m.pendingStatusRateLimitRequests[message.RequestID]
+	if !ok {
 		return nil
 	}
 	delete(m.pendingStatusRateLimitRequests, message.RequestID)
-	if message.Err != nil || len(message.Limits) == 0 {
-		return nil
+	pending.snapshot.RateLimitsRefreshing = false
+	if message.Err == nil {
+		limits := append([]codextui.RateLimitStatus(nil), message.Limits...)
+		pending.snapshot.RateLimits = limits
+		pending.snapshot.RateLimitsLoaded = true
+		m.State.RateLimits = append([]codextui.RateLimitStatus(nil), limits...)
+		m.State.RateLimitsLoaded = true
 	}
-	m.State.RateLimits = append([]codextui.RateLimitStatus(nil), message.Limits...)
+	if pending.messageIndex >= 0 && pending.messageIndex < len(m.State.Messages) {
+		card := pending.snapshot.RenderStatusCardWidth(pending.width)
+		history := statusHistoryText(card)
+		m.State.Messages[pending.messageIndex] = codextui.Message{Role: codextui.RoleHistory, Text: history, RawText: history}
+		m.refreshTranscript()
+	}
 	return m.refreshStatusControlsCmd()
+}
+
+func statusHistoryText(card string) string {
+	return "/status\n\n" + card
 }
 
 //go:embed prompt_for_init_command.md
@@ -60,6 +93,7 @@ func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
 		return
 	}
 	name := strings.TrimSpace(args)
+	m.resetAgentPickerRefresh(true)
 	m.State.ResetThread()
 	m.State.SetThreadName(name)
 	m.pendingThreadName = name != ""

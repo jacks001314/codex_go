@@ -8,6 +8,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/mcp"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -49,8 +50,8 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 	}
 }
 
-func TestThreadPinningProtocolParity(t *testing.T) {
-	request, err := ParseRequest([]byte(`{"id":1,"method":"thread/metadata/update","params":{"threadId":"thread-1","isPinned":false}}`))
+func TestThreadSectionProtocolParity(t *testing.T) {
+	request, err := ParseRequest([]byte(`{"id":1,"method":"thread/metadata/update","params":{"threadId":"thread-1","sectionId":null}}`))
 	if err != nil {
 		t.Fatalf("ParseRequest error = %v", err)
 	}
@@ -58,25 +59,32 @@ func TestThreadPinningProtocolParity(t *testing.T) {
 	if err := request.DecodeParams(&params); err != nil {
 		t.Fatalf("DecodeParams error = %v", err)
 	}
-	if params.IsPinned == nil || *params.IsPinned {
-		t.Fatalf("isPinned = %#v, want explicit false", params.IsPinned)
+	if !params.SectionID.Set || params.SectionID.Value != nil {
+		t.Fatalf("sectionId = %#v, want explicit null", params.SectionID)
 	}
 	patch, err := MetadataPatchToSession(&params)
-	if err != nil || patch.IsPinned == nil || *patch.IsPinned {
+	if err != nil || !patch.SectionSet || patch.SectionID != nil {
 		t.Fatalf("MetadataPatchToSession() = %#v, %v", patch, err)
 	}
-	pinned := true
-	options, err := BuildListOptions(&ThreadListParams{IsPinned: &pinned})
-	if err != nil || options.IsPinned == nil || !*options.IsPinned {
+	pinnedID := session.PinnedThreadSectionID
+	options, err := BuildListOptions(&ThreadListParams{SectionID: OptionalString{Set: true, Value: &pinnedID}})
+	if err != nil || !options.SectionSet || options.SectionID == nil || *options.SectionID != pinnedID {
 		t.Fatalf("BuildListOptions() = %#v, %v", options, err)
 	}
-	data, err := json.Marshal(&Thread{ID: "thread-1", IsPinned: true})
+	data, err := json.Marshal(&Thread{ID: "thread-1", Section: &ThreadSection{ID: pinnedID, Name: session.PinnedThreadSectionName}})
 	if err != nil {
 		t.Fatalf("Marshal(Thread) error = %v", err)
 	}
 	var encoded map[string]any
-	if err := json.Unmarshal(data, &encoded); err != nil || encoded["isPinned"] != true {
+	if err := json.Unmarshal(data, &encoded); err != nil {
 		t.Fatalf("thread JSON = %s, %v", data, err)
+	}
+	section, _ := encoded["section"].(map[string]any)
+	if section["id"] != pinnedID {
+		t.Fatalf("thread JSON = %s, %v", data, err)
+	}
+	if _, ok := encoded["isPinned"]; ok {
+		t.Fatalf("thread JSON retained removed isPinned field: %s", data)
 	}
 }
 

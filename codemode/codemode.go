@@ -27,6 +27,31 @@ NEWLINE: /\r?\n/
 SOURCE: /[\s\S]+/
 `
 
+const deferredNestedToolsGuidance = `Some deferred nested tools may be omitted from this description. They are still available on the global tools object and listed in ALL_TOOLS.
+To find one, filter ALL_TOOLS by name and description.`
+
+const execDescriptionTemplate = `Run JavaScript code to orchestrate/compose tool calls
+- Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
+- All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
+- Nested tool methods take either a string or an object as their input argument.
+- Nested tools return either an object or a string, based on the description.
+- Runs raw JavaScript -- no Node, no file system, no network access, no console.
+- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
+- You may optionally start the tool input with a first-line pragma like // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}.
+- yield_time_ms asks exec to yield early if the script is still running. Defaults to 10000 ms.
+- max_output_tokens sets the token budget for direct exec results. Defaults to 10000 tokens.
+- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
+
+Global helpers:
+- exit(): Immediately ends the current script successfully.
+- text(value): Appends a text item. Non-string values are stringified when possible.
+- image(value), audio(value), generatedImage(value): Append supported media results.
+- store(key, value) and load(key): Persist serializable values within the code-mode session.
+- notify(value): Immediately injects an extra custom_tool_call_output.
+- setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
+- ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
+- yield_control(): Yields accumulated output while the script keeps running.`
+
 var (
 	ErrCellNotFound = errors.New("code mode cell not found")
 	ErrCellComplete = errors.New("code mode cell already complete")
@@ -152,7 +177,7 @@ func BuildToolSurface(registry *tool.Registry, namespaces map[string]NamespaceDe
 			specs = append(specs, spec)
 		}
 	}
-	definitions := CollectDefinitions(specs)
+	definitions := CollectPromptDefinitions(specs)
 	return &ToolSurface{
 		Definitions:            definitions,
 		Exec:                   BuildExecTool(definitions, namespaces, codeModeOnly, deferred),
@@ -162,48 +187,46 @@ func BuildToolSurface(registry *tool.Registry, namespaces map[string]NamespaceDe
 }
 
 func BuildExecToolDescription(definitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool) string {
-	var builder strings.Builder
-	builder.WriteString("Execute JavaScript-like code that may call enabled tools by name.\n")
-	if codeModeOnly {
-		builder.WriteString("Use this as the primary execution surface for tool orchestration.\n")
+	return BuildExecToolDescriptionWithDeferred(definitions, nil, namespaces, codeModeOnly, deferredToolsAvailable)
+}
+
+func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferredDefinitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool) string {
+	sections := []string{execDescriptionTemplate}
+	if deferredToolsAvailable || len(deferredDefinitions) > 0 {
+		sections = append(sections, deferredNestedToolsGuidance)
 	}
-	if deferredToolsAvailable {
-		builder.WriteString("Deferred tools may be discovered before invocation.\n")
+	if !codeModeOnly {
+		return strings.Join(sections, "\n\n")
 	}
-	if len(namespaces) > 0 {
-		keys := make([]string, 0, len(namespaces))
-		for key := range namespaces {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			description := strings.TrimSpace(namespaces[key].Description)
-			if description != "" {
-				builder.WriteString("\n")
-				builder.WriteString(key)
-				builder.WriteString(": ")
-				builder.WriteString(description)
-				builder.WriteString("\n")
-			}
-		}
-	}
+
 	definitions = SortDefinitions(definitions)
-	if len(definitions) > 0 {
-		builder.WriteString("\nEnabled tools:\n")
-		for _, definition := range definitions {
-			if !IsNestedTool(definition.Name) {
-				continue
-			}
-			builder.WriteString("- ")
-			builder.WriteString(definition.Name)
-			if strings.TrimSpace(definition.Description) != "" {
-				builder.WriteString(": ")
-				builder.WriteString(firstLine(definition.Description))
-			}
-			builder.WriteString("\n")
+	currentNamespace := ""
+	for _, definition := range definitions {
+		if !IsNestedTool(definition.Name) {
+			continue
 		}
+		namespace := definition.ToolName.Namespace
+		if namespace != currentNamespace {
+			if namespaceDescription, ok := namespaces[namespace]; ok {
+				description := strings.TrimSpace(namespaceDescription.Description)
+				if description != "" {
+					name := strings.TrimSpace(namespaceDescription.Name)
+					if name == "" {
+						name = namespace
+					}
+					sections = append(sections, "## "+name+"\n"+description)
+				}
+			}
+			currentNamespace = namespace
+		}
+		globalName := NormalizeIdentifier(definition.Name)
+		heading := "### `" + globalName + "`"
+		if globalName != definition.Name {
+			heading += " (`" + definition.Name + "`)"
+		}
+		sections = append(sections, heading+"\n"+strings.TrimSpace(RenderSample(definition)))
 	}
-	return strings.TrimSpace(builder.String())
+	return strings.Join(sections, "\n\n")
 }
 
 func BuildWaitToolDescription() string {
@@ -249,6 +272,9 @@ func RenderSample(definition ToolDefinition) string {
 }
 
 func AugmentToolSpec(spec tool.Spec) tool.Spec {
+	if spec.Exposure == tool.ExposureDirectModelOnly {
+		return spec
+	}
 	if spec.Name.Key() == tool.ToolSearchName {
 		return spec
 	}
@@ -529,6 +555,14 @@ func mcpStructuredContentSchema(outputSchema map[string]any) (any, bool) {
 }
 
 func CollectDefinitions(specs []tool.Spec) []ToolDefinition {
+	definitions := CollectPromptDefinitions(specs)
+	for index := range definitions {
+		definitions[index] = AugmentToolDefinition(definitions[index])
+	}
+	return definitions
+}
+
+func CollectPromptDefinitions(specs []tool.Spec) []ToolDefinition {
 	definitions := make([]ToolDefinition, 0, len(specs))
 	for _, spec := range specs {
 		name := spec.Name
@@ -549,7 +583,7 @@ func CollectDefinitions(specs []tool.Spec) []ToolDefinition {
 			}
 		}
 		if IsNestedTool(definition.Name) {
-			definitions = append(definitions, AugmentToolDefinition(definition))
+			definitions = append(definitions, definition)
 		}
 	}
 	return SortDefinitions(definitions)
@@ -725,14 +759,6 @@ func (s *CellStore) List() []Cell {
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out
-}
-
-func firstLine(value string) string {
-	value = strings.TrimSpace(value)
-	if index := strings.IndexByte(value, '\n'); index >= 0 {
-		return value[:index]
-	}
-	return value
 }
 
 func cloneCell(cell *Cell) *Cell {

@@ -233,15 +233,31 @@ func (a *Action) FillDeleteContent(options *ApplyOptions) error {
 }
 
 func (a *Action) Apply(options *ApplyOptions) (*ApplyResult, error) {
+	if err := a.Verify(options); err != nil {
+		return nil, err
+	}
+	return a.ApplyVerified(options)
+}
+
+func (a *Action) Verify(options *ApplyOptions) error {
+	if a == nil || len(a.Hunks) == 0 {
+		return fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
+	}
+	cwd := "."
+	if options != nil && strings.TrimSpace(options.CWD) != "" {
+		cwd = options.CWD
+	}
+	return a.preflight(cwd)
+}
+
+// ApplyVerified commits an action after Verify has succeeded.
+func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if a == nil || len(a.Hunks) == 0 {
 		return nil, fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
 	}
 	cwd := "."
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
-	}
-	if err := a.preflight(cwd); err != nil {
-		return nil, err
 	}
 	return a.applyCommitted(cwd)
 }

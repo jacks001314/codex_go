@@ -112,13 +112,45 @@ func TestPlanTypeClassificationsMatchRust(t *testing.T) {
 	if PlanTeam.IsBusinessLike() || PlanEnterprise.IsBusinessLike() {
 		t.Fatal("team and legacy enterprise plans are not business-like")
 	}
-	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased} {
+		if !plan.IsTeamLike() {
+			t.Fatalf("plan %q should be team-like", plan)
+		}
+	}
+	if PlanBusiness.IsTeamLike() || PlanProlite.IsTeamLike() {
+		t.Fatal("enterprise and individual Pro Lite plans are not team-like")
+	}
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
 		if !plan.IsWorkspaceAccount() {
 			t.Fatalf("plan %q should be a workspace account", plan)
 		}
 	}
 	if PlanPlus.IsWorkspaceAccount() || PlanUnknown.IsWorkspaceAccount() {
 		t.Fatal("individual or unknown plans must not be workspace accounts")
+	}
+}
+
+func TestAccountFromAuthParsesSelfServeBusinessProlite(t *testing.T) {
+	account := AccountFromAuth(&AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"email":     "business@example.com",
+			"plan_type": "self_serve_business_prolite",
+		},
+	})
+	if account == nil || account.PlanType != PlanSelfServeBusinessProlite {
+		t.Fatalf("account = %+v", account)
+	}
+	if !account.PlanType.IsTeamLike() || !account.PlanType.IsWorkspaceAccount() {
+		t.Fatalf("plan classification = team-like %t, workspace %t", account.PlanType.IsTeamLike(), account.PlanType.IsWorkspaceAccount())
+	}
+
+	encoded, err := json.Marshal(&AccountUpdatedNotification{PlanType: &account.PlanType})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"planType":"self_serve_business_prolite"`) {
+		t.Fatalf("notification = %s", encoded)
 	}
 }
 

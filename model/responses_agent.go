@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -747,6 +748,10 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 	if err != nil {
 		return nil, err
 	}
+	modelsManager := runtimeProvider.ModelsManager(nil)
+	if remote, ok := modelsManager.(*RemoteModelsManager); ok && strings.TrimSpace(codexHome) != "" {
+		remote.ConfigureCache(filepath.Clean(codexHome))
+	}
 	return NewResponsesAgentRunner(&ResponsesAgentOptions{
 		Provider:                   &apiProvider,
 		Auth:                       &authHeaders,
@@ -756,7 +761,7 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		ProviderRequiresOpenAIAuth: runtimeProvider.Info().RequiresOpenAIAuth,
 		CodexHome:                  codexHome,
 		AuthSnapshot:               snapshot,
-		ModelsManager:              runtimeProvider.ModelsManager(nil),
+		ModelsManager:              modelsManager,
 		IncludeAttestation:         runtimeProvider.SupportsAttestation(),
 		SupportsWebsockets:         runtimeProvider.Info().SupportsWebsockets,
 		WebsocketConnectTimeout: func() time.Duration {
@@ -1348,6 +1353,7 @@ func responsesInputItems(request *AgentRequest) []any {
 	if strings.TrimSpace(request.Prompt) != "" {
 		items = append(items, responsesUserMessage(strings.TrimSpace(request.Prompt)))
 	}
+	items = BoundExecutedToolCallsForPrompt(items)
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}

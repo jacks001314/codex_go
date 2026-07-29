@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,6 +117,48 @@ func TestMCPToolExecutorHookPayloadsUsePrefixedName(t *testing.T) {
 	response, ok := post.ToolResponse.(map[string]any)
 	if !ok || response["content"] == nil {
 		t.Fatalf("ToolResponse = %#v", post.ToolResponse)
+	}
+}
+
+func TestCodexAppsMCPToolExecutorUploadsDeclaredFilesAfterPreHook(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("notes"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		Service:    NewMCPService(nil),
+		ServerName: RuntimeCodexAppsMCPServerName,
+		ToolInfo:   &MCPToolInfo{Name: "capture"},
+		OpenAIFileRewriter: NewOpenAIFileRewriter(
+			dir,
+			&OpenAIFileAuth{ChatGPTBackend: true},
+			&fakeUploader{},
+		),
+		OpenAIFileInputOptionalFields: map[string][]string{"file": {"file_name"}},
+	})
+	invocation := &tool.Invocation{
+		CallID:   "call-upload",
+		ToolName: tool.NamespacedName("mcp__codex_apps", "capture"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"file":"notes.txt"}`},
+	}
+	pre, ok := executor.PreToolUsePayload(invocation)
+	if !ok || pre.ToolInput.(map[string]any)["file"] != "notes.txt" {
+		t.Fatalf("pre payload = %#v ok=%v", pre, ok)
+	}
+	output, err := executor.Execute(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(output.Body, `"file_id":"file_123"`) || !strings.Contains(output.Body, `"file_name":"notes.txt"`) {
+		t.Fatalf("MCP body did not receive rewritten arguments: %s", output.Body)
+	}
+	post, ok := executor.PostToolUsePayload(invocation, output)
+	if !ok {
+		t.Fatal("PostToolUsePayload() ok = false")
+	}
+	file, ok := post.ToolInput.(map[string]any)["file"].(map[string]any)
+	if !ok || file["file_id"] != "file_123" || file["file_name"] != "notes.txt" {
+		t.Fatalf("post tool input = %#v", post.ToolInput)
 	}
 }
 

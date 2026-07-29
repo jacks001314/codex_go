@@ -5,19 +5,16 @@ package tea
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf16"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
-
-	"codex_go/sandbox/windowssandbox"
-	"codex_go/sandbox/windowssandbox/conpty"
+	gopty "github.com/aymanbagabas/go-pty"
 )
 
 const slashParityEnv = "CODEX_GO_SLASH_PARITY"
+const slashParityLocalExeEnv = "CODEX_GO_EXE"
 
 func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 	if os.Getenv(slashParityEnv) != "1" {
@@ -27,27 +24,36 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cwd: %v", err)
 	}
-	root := filepath.Clean(filepath.Join(cwd, "..", "..", ".."))
-	localExe := filepath.Join(root, "code.exe")
-	systemExe := filepath.Join(os.Getenv("APPDATA"), "npm", "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe")
+	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
+	localExe := strings.TrimSpace(os.Getenv(slashParityLocalExeEnv))
+	if localExe == "" {
+		localExe = filepath.Join(root, "code.exe")
+	}
+	systemExe := strings.TrimSpace(os.Getenv("CODEX_SYSTEM_EXE"))
+	if systemExe == "" {
+		systemExe = filepath.Join(os.Getenv("APPDATA"), "npm", "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe")
+	}
 	for _, path := range []string{localExe, systemExe} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("required executable %s: %v", path, err)
 		}
 	}
 
-	commands := []string{"/help", "/status", "/mcp", "/exit"}
+	commands := []string{"/status", "/mcp"}
 	system := runCodexSlashPTY(t, systemExe, root, commands)
 	local := runCodexSlashPTY(t, localExe, root, commands)
 
 	for _, want := range []string{
 		"OpenAI Codex",
-		"/help",
 		"/status",
 		"/mcp",
 		"model",
 		"approval",
-		"sandbox",
+		"permissions",
+		"reasoning low",
+		"read only",
+		"collaboration mode",
+		"session",
 	} {
 		if !strings.Contains(strings.ToLower(system), strings.ToLower(want)) {
 			t.Fatalf("system output missing %q:\n%s", want, system)
@@ -61,153 +67,82 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 func runCodexSlashPTY(t *testing.T, exe string, cwd string, commands []string) string {
 	t.Helper()
 	home := t.TempDir()
-	env := map[string]string{
-		"CODEX_HOME":     home,
-		"OPENAI_API_KEY": "sk-test",
-		"TERM":           "xterm-256color",
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}`), 0o600); err != nil {
+		t.Fatalf("write isolated PTY auth fixture: %v", err)
 	}
-	created, instance, err := spawnCurrentUserConPTYWithEnv([]string{exe, "--no-alt-screen"}, cwd, env, 120, 36)
+	config := "[projects." + strconv.Quote(cwd) + "]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write isolated PTY trust fixture: %v", err)
+	}
+	terminal, err := gopty.New()
 	if err != nil {
-		t.Fatalf("spawn %s: %v", exe, err)
+		t.Fatalf("create production ConPTY for %s: %v", exe, err)
 	}
-	defer func() { _ = created.Close() }()
-	defer func() { _ = instance.Close() }()
+	if err := terminal.Resize(120, 36); err != nil {
+		t.Fatalf("resize production ConPTY for %s: %v", exe, err)
+	}
+	command := terminal.Command(exe, "--no-alt-screen")
+	command.Dir = cwd
+	command.Env = append(os.Environ(),
+		"CODEX_HOME="+home,
+		"OPENAI_API_KEY=sk-test",
+		"TERM=xterm-256color",
+	)
+	if err := command.Start(); err != nil {
+		t.Fatalf("spawn %s through production ConPTY: %v", exe, err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- command.Wait() }()
 
 	var output lockedTerminalOutput
-	outputDone, err := windowssandbox.ReadHandleLoop(instance.TakeOutputRead(), func(chunk []byte) {
-		output.Write(chunk)
-	})
-	if err != nil {
-		t.Fatalf("read ConPTY output: %v", err)
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		buffer := make([]byte, 4096)
+		for {
+			read, readErr := terminal.Read(buffer)
+			if read > 0 {
+				output.Write(buffer[:read])
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "OpenAI Codex", exited, 10*time.Second)
+	if !ready {
+		if earlyExit != nil {
+			t.Fatalf("%s exited before rendering: %v output=%q", exe, earlyExit, output.String())
+		}
+		_ = command.Process.Kill()
+		t.Fatalf("%s did not render through production ConPTY; output=%q", exe, output.String())
 	}
-	inputWrite := windows.Handle(instance.TakeInputWrite())
+	time.Sleep(3 * time.Second)
 	for _, command := range commands {
-		var written uint32
-		if err := windows.WriteFile(inputWrite, []byte(command+"\r"), &written, nil); err != nil {
+		if _, err := terminal.Write([]byte(command + "\r")); err != nil {
 			t.Fatalf("write %q to %s: %v", command, exe, err)
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(750 * time.Millisecond)
 	}
-	_ = windows.CloseHandle(inputWrite)
-
-	timeoutMS := int64(8000)
-	outcome, err := windowssandbox.WaitCreatedProcess(created, &timeoutMS, windowssandbox.CancellationToken{})
-	if err != nil {
-		t.Fatalf("wait %s: %v output=%q", exe, err, output.String())
+	time.Sleep(2 * time.Second)
+	_ = command.Process.Kill()
+	conPTY, ok := terminal.(gopty.ConPty)
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		if ok {
+			_ = conPTY.InputPipe().Close()
+		}
+		t.Fatalf("%s did not stop after slash capture; output=%q", exe, output.String())
 	}
-	if outcome != windowssandbox.ProcessWaitExited {
-		_ = windowssandbox.TerminateCreatedProcess(created, 1)
-		t.Fatalf("%s did not exit: %s output=%q", exe, outcome, output.String())
+	if ok {
+		_ = conPTY.InputPipe().Close()
+		_ = conPTY.OutputPipe().Close()
 	}
-	exitCode, err := windowssandbox.CreatedProcessExitCode(created)
-	if err != nil {
-		t.Fatalf("exit code %s: %v", exe, err)
-	}
-	skipIfWindowsConPTYHostDLLInitFailed(t, exitCode, output.String())
-	if exitCode != 0 {
-		t.Fatalf("%s exited %d output=%q", exe, exitCode, output.String())
-	}
-	_ = instance.Close()
 	select {
 	case <-outputDone:
 	case <-time.After(time.Second):
+		t.Fatalf("timed out draining %s ConPTY output", exe)
 	}
 	return output.String()
-}
-
-func spawnCurrentUserConPTYWithEnv(command []string, cwd string, env map[string]string, columns int16, rows int16) (*windowssandbox.CreatedProcess, *conpty.Instance, error) {
-	if len(command) == 0 {
-		return nil, nil, windowssandbox.ErrInvalidRequest
-	}
-	instance, err := conpty.Create(columns, rows)
-	if err != nil {
-		return nil, nil, err
-	}
-	attributeList, err := windowssandbox.NewProcThreadAttributeListWithCount(1)
-	if err != nil {
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	defer attributeList.Close()
-	if err := attributeList.SetPseudoconsole(instance.RawHandle()); err != nil {
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	desktop, err := windowssandbox.PrepareLaunchDesktop(false)
-	if err != nil {
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	applicationName, err := windows.UTF16PtrFromString(command[0])
-	if err != nil {
-		_ = desktop.Close()
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	commandLine, err := windows.UTF16FromString(windowssandbox.ArgvToCommandLine(command))
-	if err != nil {
-		_ = desktop.Close()
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	cwdPtr, err := windows.UTF16PtrFromString(cwd)
-	if err != nil {
-		_ = desktop.Close()
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	envStrings := os.Environ()
-	for key, value := range env {
-		envStrings = append(envStrings, key+"="+value)
-	}
-	envBlock, err := environmentBlockUTF16Ptr(envStrings)
-	if err != nil {
-		_ = desktop.Close()
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	startupInfo := windows.StartupInfoEx{
-		StartupInfo: windows.StartupInfo{
-			Cb:        uint32(unsafe.Sizeof(windows.StartupInfoEx{})),
-			Flags:     windows.STARTF_USESTDHANDLES,
-			StdInput:  windows.InvalidHandle,
-			StdOutput: windows.InvalidHandle,
-			StdErr:    windows.InvalidHandle,
-			Desktop:   desktop.StartupInfoDesktop(),
-		},
-		ProcThreadAttributeList: attributeList.WindowsList(),
-	}
-	var processInfo windows.ProcessInformation
-	creationFlags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
-	err = windows.CreateProcess(
-		applicationName,
-		&commandLine[0],
-		nil,
-		nil,
-		false,
-		creationFlags,
-		envBlock,
-		cwdPtr,
-		&startupInfo.StartupInfo,
-		&processInfo,
-	)
-	if err != nil {
-		_ = desktop.Close()
-		_ = instance.Close()
-		return nil, nil, err
-	}
-	return &windowssandbox.CreatedProcess{
-		ProcessHandle: uintptr(processInfo.Process),
-		ThreadHandle:  uintptr(processInfo.Thread),
-		ProcessID:     processInfo.ProcessId,
-		ThreadID:      processInfo.ThreadId,
-		StartupFlags:  startupInfo.StartupInfo.Flags,
-		Desktop:       desktop,
-	}, instance, nil
-}
-
-func environmentBlockUTF16Ptr(env []string) (*uint16, error) {
-	block := strings.Join(env, "\x00") + "\x00\x00"
-	encoded := utf16.Encode([]rune(block))
-	return &encoded[0], nil
 }

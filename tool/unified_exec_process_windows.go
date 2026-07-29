@@ -9,7 +9,6 @@ import (
 	osexec "os/exec"
 	"strings"
 
-	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
@@ -18,13 +17,6 @@ import (
 type startedUnifiedExecCommand struct {
 	stdin   io.WriteCloser
 	readers []io.ReadCloser
-}
-
-func windowsSandboxProxySettingsMode(mode execserver.WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
-	if mode == execserver.WindowsSandboxProxySettingsPreserve {
-		return windowssandbox.ProxySettingsPreserve
-	}
-	return windowssandbox.ProxySettingsReconcile
 }
 
 func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedExecSandboxCommand, error) {
@@ -100,8 +92,10 @@ func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecComm
 }
 
 func interruptUnifiedExecProcess(process *os.Process) error {
-	_ = process
-	return fmt.Errorf("interrupt is not supported on windows for non-tty unified exec sessions")
+	if process == nil {
+		return nil
+	}
+	return process.Kill()
 }
 
 func unifiedExecExitCode(state *os.ProcessState, err error) int {

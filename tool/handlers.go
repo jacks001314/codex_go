@@ -209,7 +209,7 @@ func NewRequestUserInputHandlerWithModes(responder UserInputResponder, modes []s
 }
 
 func (h *RequestUserInputHandler) Spec() Spec {
-	return Spec{Name: PlainName("request_user_input"), Description: requestUserInputToolDescription(h.availableModes)}
+	return Spec{Name: PlainName("request_user_input"), Description: requestUserInputToolDescription(h.availableModes), Exposure: ExposureDirectModelOnly}
 }
 
 func normalizeRequestUserInputAvailableModes(modes []string) []string {

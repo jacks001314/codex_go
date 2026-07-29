@@ -219,6 +219,111 @@ func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 	}
 }
 
+func TestListStatusCheckedOptionalStartupUsesSharedGraceAndWarmsCache(t *testing.T) {
+	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
+		runMCPHelperServer()
+		return
+	}
+	releaseFile := t.TempDir() + string(os.PathSeparator) + "release-optional"
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"optional": {Config: ServerConfig{
+			Command: executable,
+			Args:    []string{"-test.run=TestListStatusCheckedOptionalStartupUsesSharedGraceAndWarmsCache", "--"},
+			Env: map[string]string{
+				"MCP_CONCURRENT_FAST_HELPER":   "1",
+				"MCP_OPTIONAL_STARTUP_BARRIER": "1",
+				"MCP_CONCURRENT_RELEASE_FILE":  releaseFile,
+			},
+			Enabled: true, StartupTimeout: 5 * time.Second,
+		}},
+	}})
+	defer service.Close()
+
+	started := time.Now()
+	response, err := service.ListStatusChecked(&MCPListServerStatusParams{
+		Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("optional startup blocked for %v", elapsed)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].Tools) != 0 {
+		t.Fatalf("pending optional response = %#v", response.Data)
+	}
+	if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
+		t.Fatalf("release optional helper: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		statuses := service.ConfiguredStatuses()
+		if len(statuses) == 1 && statuses[0].State == MCPServerReady && len(statuses[0].Tools) == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("optional MCP did not publish its warmed tool cache")
+}
+
+func TestListStatusCheckedExplicitRequiredServerWaitsPastGrace(t *testing.T) {
+	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
+		runMCPHelperServer()
+		return
+	}
+	releaseFile := t.TempDir() + string(os.PathSeparator) + "release-required"
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"required-by-turn": {Config: ServerConfig{
+			Command: executable,
+			Args:    []string{"-test.run=TestListStatusCheckedExplicitRequiredServerWaitsPastGrace", "--"},
+			Env: map[string]string{
+				"MCP_CONCURRENT_FAST_HELPER":   "1",
+				"MCP_OPTIONAL_STARTUP_BARRIER": "1",
+				"MCP_CONCURRENT_RELEASE_FILE":  releaseFile,
+			},
+			Enabled: true, StartupTimeout: 5 * time.Second,
+		}},
+	}})
+	defer service.Close()
+
+	done := make(chan *MCPListServerStatusResponse, 1)
+	go func() {
+		response, _ := service.ListStatusChecked(&MCPListServerStatusParams{
+			Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+			RequiredServers:      []string{"required-by-turn"},
+			NonBlockingOptional:  true,
+			OptionalStartupGrace: 25 * time.Millisecond,
+		})
+		done <- response
+	}()
+	select {
+	case <-done:
+		t.Fatal("explicitly required MCP returned before startup completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
+		t.Fatalf("release required helper: %v", err)
+	}
+	select {
+	case response := <-done:
+		if response == nil || len(response.Data) != 1 || len(response.Data[0].Tools) != 1 {
+			t.Fatalf("required MCP response = %#v", response)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("explicitly required MCP did not finish after release")
+	}
+}
+
 func mcpUpdateBefore(updates []mcpStartupTestUpdate, before mcpStartupTestUpdate, after mcpStartupTestUpdate) bool {
 	beforeIndex := -1
 	afterIndex := -1
@@ -883,6 +988,15 @@ func helperMCPServerCommand(t *testing.T) (string, []string) {
 }
 
 func runMCPHelperServer() {
+	if os.Getenv("MCP_OPTIONAL_STARTUP_BARRIER") == "1" {
+		releaseFile := os.Getenv("MCP_CONCURRENT_RELEASE_FILE")
+		for {
+			if _, err := os.Stat(releaseFile); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	if os.Getenv("MCP_CONCURRENT_SLOW_HELPER") == "1" {
 		releaseFile := os.Getenv("MCP_CONCURRENT_RELEASE_FILE")
 		for {

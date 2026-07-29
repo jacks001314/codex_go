@@ -133,7 +133,7 @@ func TestBuildToolSurfaceFromRegistry(t *testing.T) {
 	}
 
 	surface := BuildToolSurface(registry, nil, true)
-	if !surface.DeferredToolsAvailable || !strings.Contains(surface.Exec.Description, "Deferred tools may be discovered") {
+	if !surface.DeferredToolsAvailable || !strings.Contains(surface.Exec.Description, "Some deferred nested tools may be omitted") {
 		t.Fatalf("surface = %#v", surface)
 	}
 	if len(surface.Definitions) != 1 || surface.Definitions[0].Name != "visible" {

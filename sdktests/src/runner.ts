@@ -148,8 +148,28 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
     }
     throw error;
   } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+    try {
+      await removeTemporaryRoot(tmpDir);
+    } catch (error: any) {
+      runState.cleanupError = String(error?.message ?? error);
+      writeJsonAtomic(runStatePath, runState);
+      console.warn(`temporary cleanup failed for ${tmpDir}: ${runState.cleanupError}`);
+    }
   }
+}
+
+async function removeTemporaryRoot(root: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
 }
 
 function readSandboxLogs(home: string): Record<string, string> {

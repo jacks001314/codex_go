@@ -145,6 +145,12 @@ type MCPListServerStatusParams struct {
 	Limit    *uint32                `json:"limit,omitempty"`
 	Detail   *MCPServerStatusDetail `json:"detail,omitempty"`
 	ThreadID *string                `json:"threadId,omitempty"`
+
+	// Turn-scoped catalog capture can stop waiting for optional startup after a
+	// shared grace period. Management RPCs leave NonBlockingOptional false.
+	RequiredServers      []string      `json:"-"`
+	NonBlockingOptional  bool          `json:"-"`
+	OptionalStartupGrace time.Duration `json:"-"`
 }
 
 type MCPServerInfo struct {
@@ -582,6 +588,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			}
 			info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(registration.Config.Command, registration.Config.URL), Args: append([]string(nil), registration.Config.Args...)}
 			config := cloneServerConfig(&registration.Config)
+			config.ProtocolMode = runtime.ProtocolMode
 			if strings.TrimSpace(config.OAuthServerName) == "" {
 				config.OAuthServerName = name
 			}
@@ -1001,7 +1008,16 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		return servers
 	}
 	resultCh := make(chan mcpInventoryStatusResult, len(servers))
-	pending := 0
+	pending := make(map[int]string, len(servers))
+	required := map[string]bool{}
+	if params != nil {
+		for _, name := range params.RequiredServers {
+			if name = strings.TrimSpace(name); name != "" {
+				required[name] = true
+			}
+		}
+	}
+	requiredIndexes := map[int]bool{}
 	for i := range servers {
 		name := servers[i].effectiveName()
 		config, ok := configs[name]
@@ -1013,20 +1029,56 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			continue
 		}
 		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
-		pending++
+		pending[i] = name
+		if config.Required || required[name] || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
+			requiredIndexes[i] = true
+		}
 		go func(index int, serverName string, serverConfig ServerConfig, status MCPServerStatus) {
 			resultCh <- s.inventoryStatusForConfig(index, serverName, &serverConfig, status, detail.includesInventory(), threadID)
 		}(i, name, config, cloneMCPServerStatus(servers[i]))
 	}
-	for pending > 0 {
-		result := <-resultCh
-		pending--
+	applyResult := func(result mcpInventoryStatusResult) {
+		if _, ok := pending[result.Index]; !ok {
+			return
+		}
+		delete(pending, result.Index)
+		delete(requiredIndexes, result.Index)
 		servers[result.Index] = result.Status
 		name := result.Status.effectiveName()
 		if result.Err != nil && result.Status.State == MCPServerFailed {
 			notifyMCPStartupObserver(observer, name, MCPServerFailed, result.Err)
 		} else {
 			notifyMCPStartupObserver(observer, name, result.Status.State, nil)
+		}
+	}
+	if params == nil || !params.NonBlockingOptional {
+		for len(pending) > 0 {
+			applyResult(<-resultCh)
+		}
+		return servers
+	}
+
+	grace := params.OptionalStartupGrace
+	if grace <= 0 {
+		grace = time.Second
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	graceExpired := false
+	for len(pending) > 0 {
+		if graceExpired && len(requiredIndexes) == 0 {
+			break
+		}
+		if graceExpired {
+			result := <-resultCh
+			applyResult(result)
+			continue
+		}
+		select {
+		case result := <-resultCh:
+			applyResult(result)
+		case <-timer.C:
+			graceExpired = true
 		}
 	}
 	return servers
@@ -1493,9 +1545,9 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	cloned.ApplyHTTPRequest = nil
 	data, err := json.Marshal(cloned)
 	if err != nil {
-		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t", cloned, openAIForm, applyHTTPRequest)
+		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode)
 	}
-	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t", data, openAIForm, applyHTTPRequest)
+	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d", data, openAIForm, applyHTTPRequest, config.ProtocolMode)
 }
 
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {

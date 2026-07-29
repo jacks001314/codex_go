@@ -21,6 +21,7 @@ const (
 	PlanPro                         PlanType = "pro"
 	PlanProlite                     PlanType = "prolite"
 	PlanTeam                        PlanType = "team"
+	PlanSelfServeBusinessProlite    PlanType = "self_serve_business_prolite"
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
 	PlanBusiness                    PlanType = "business"
 	PlanEnt26                       PlanType = "ent26"
@@ -38,9 +39,18 @@ func (p PlanType) IsBusinessLike() bool {
 	}
 }
 
+func (p PlanType) IsTeamLike() bool {
+	switch p {
+	case PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p PlanType) IsWorkspaceAccount() bool {
 	switch p {
-	case PlanTeam, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26,
+	case PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26,
 		PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu:
 		return true
 	default:
@@ -147,6 +157,30 @@ func AccountIDFromAuthForRestrictions(snapshot *AuthDotJSON) string {
 		claims := ChatGPTClaimsFromJWT(stringFromAny(snapshot.Tokens, key))
 		if strings.TrimSpace(claims.AccountID) != "" {
 			return strings.TrimSpace(claims.AccountID)
+		}
+	}
+	return ""
+}
+
+func ChatGPTUserIDFromAuth(snapshot *AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	userID := firstNonEmptyAccount(
+		stringFromAny(snapshot.Tokens, "chatgpt_user_id"),
+		stringFromAny(snapshot.Tokens, "user_id"),
+		stringFromAny(snapshot.Tokens, "chatgptUserId"),
+		stringFromAny(snapshot.Tokens, "userId"),
+	)
+	if userID != "" {
+		return strings.TrimSpace(userID)
+	}
+	if record := AgentIdentityRecordFromAuth(snapshot); record != nil {
+		return strings.TrimSpace(record.ChatGPTUserID)
+	}
+	for _, key := range []string{"access_token", "id_token"} {
+		if value := claimStringFromJWT(stringFromAny(snapshot.Tokens, key), "chatgpt_user_id"); value != "" {
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""
@@ -1394,6 +1428,8 @@ func planFromString(value string) PlanType {
 		return PlanProlite
 	case string(PlanTeam):
 		return PlanTeam
+	case string(PlanSelfServeBusinessProlite):
+		return PlanSelfServeBusinessProlite
 	case string(PlanSelfServeBusinessUsageBased):
 		return PlanSelfServeBusinessUsageBased
 	case string(PlanBusiness):

@@ -968,6 +968,7 @@ func TestEnabledSkillRootsPreserveRemotePluginIdentityLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewPluginService()
+	service.SetRuntimeRoute("chatgpt", "openai")
 	service.AddPlugin(PluginDetail{
 		Summary: PluginSummary{
 			ID:             "sample@openai-curated-remote",

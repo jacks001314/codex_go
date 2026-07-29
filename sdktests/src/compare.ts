@@ -1,5 +1,6 @@
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { readJson, writeJson } from "./util.ts";
 
 export type CompareClassification =
@@ -226,7 +227,7 @@ function checkStructuredAgentMessages(label: string, recording: any, expected: u
   } catch (error: any) {
     return { name: `${label}: structured agent messages`, ok: false, detail: `${label} JSON parse failed: ${error?.message ?? error}` };
   }
-  const ok = JSON.stringify(parsed) === JSON.stringify(expected);
+  const ok = isDeepStrictEqual(parsed, expected);
   return {
     name: `${label}: structured agent messages`,
     ok,
@@ -256,7 +257,7 @@ function checkAgentMessageContracts(label: string, recording: any, expected: unk
     }
     if (Object.prototype.hasOwnProperty.call(contract ?? {}, "structured")) {
       try {
-        return JSON.stringify(JSON.parse(messages[index])) === JSON.stringify(contract.structured);
+        return isDeepStrictEqual(JSON.parse(messages[index]), contract.structured);
       } catch {
         return false;
       }

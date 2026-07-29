@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStateRenderWelcomeAndFrame(t *testing.T) {
@@ -24,7 +25,7 @@ func TestStateRenderWelcomeAndFrame(t *testing.T) {
 	state.AddHistoryLines([]string{"• MCP Tools", "  • docs"}, []string{"MCP Tools", "docs"})
 
 	welcome := state.RenderWelcome()
-	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "on-request", "workspace-write", `Directory:`, `D:\repo`} {
+	for _, want := range []string{"OpenAI Codex", "Model:", "gpt-test", "Workspace (Ask for approval)", `Directory:`, `D:\repo`} {
 		if !strings.Contains(welcome, want) {
 			t.Fatalf("welcome = %q, missing %q", welcome, want)
 		}
@@ -53,9 +54,15 @@ func TestStateRenderStatusCardUsesRuntimeUsageAndLimits(t *testing.T) {
 	state.TotalTokenUsage = TokenUsage{InputTokens: 50000, CachedInputTokens: 10000, OutputTokens: 5000, TotalTokens: 55000}
 	state.LastTokenUsage = TokenUsage{TotalTokens: 50000}
 	state.ModelContextWindow = &window
-	state.RateLimits = []RateLimitStatus{{Label: "5h", UsedPercent: 37}, {Label: "weekly", UsedPercent: 81}}
+	capturedAt := time.Date(2026, 7, 29, 3, 4, 0, 0, time.Local)
+	reset := capturedAt.Add(10 * time.Minute)
+	state.RateLimits = []RateLimitStatus{
+		{Label: "5h", UsedPercent: 37, CapturedAt: capturedAt, ResetsAt: &reset},
+		{Label: "weekly", UsedPercent: 81, CapturedAt: capturedAt},
+		{Label: "Credits", Text: "38 credits", IsText: true, CapturedAt: capturedAt},
+	}
 	card := state.RenderStatusCardWidth(100)
-	for _, want := range []string{"45,000 total  (40,000 input + 5,000 output)", "80% left (50,000 used / 200,000)", "5h 63% left", "weekly 19% left"} {
+	for _, want := range []string{"╭", "45K total  (40K input + 5K output)", "80% left (50K used / 200K)", "5h limit:", "63% left", "(resets 03:14)", "Weekly limit:", "19% left", "Credits:", "38 credits"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card missing %q:\n%s", want, card)
 		}
@@ -81,8 +88,29 @@ func TestStateResetThreadClearsRuntimeUsage(t *testing.T) {
 	state.ModelContextWindow = &window
 	state.RateLimits = []RateLimitStatus{{Label: "5h", UsedPercent: 50}}
 	state.ResetThread()
-	if !state.TotalTokenUsage.IsZero() || !state.LastTokenUsage.IsZero() || state.ModelContextWindow != nil || len(state.RateLimits) != 0 {
+	if !state.TotalTokenUsage.IsZero() || !state.LastTokenUsage.IsZero() || state.ModelContextWindow != nil || len(state.RateLimits) != 0 || state.RateLimitsLoaded || state.RateLimitsRefreshing {
 		t.Fatalf("ResetThread retained runtime usage: %+v", state)
+	}
+}
+
+func TestStateRenderStatusCardOmitsDefaultProviderAndShowsDefaultCollaborationMode(t *testing.T) {
+	state := NewState(&Options{Provider: "OpenAI", ApprovalPolicy: "never", Sandbox: "danger-full-access"})
+	card := state.RenderStatusCardWidth(80)
+	if strings.Contains(card, "Model provider:") {
+		t.Fatalf("default provider leaked into status card:\n%s", card)
+	}
+	if !strings.Contains(card, "Collaboration mode:") || !strings.Contains(card, "Default") {
+		t.Fatalf("status card missing default collaboration mode:\n%s", card)
+	}
+	if !strings.Contains(card, "Permissions:") || !strings.Contains(card, "Full Access") {
+		t.Fatalf("status card missing Rust permissions label:\n%s", card)
+	}
+}
+
+func TestStateRenderStatusCardUsesRustPermissionDefaults(t *testing.T) {
+	card := NewState(nil).RenderStatusCardWidth(80)
+	if !strings.Contains(card, "Permissions:") || !strings.Contains(card, "Read Only (Ask for approval)") {
+		t.Fatalf("status card missing Rust default permissions:\n%s", card)
 	}
 }
 

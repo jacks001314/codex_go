@@ -26,16 +26,17 @@ type RuntimeTool struct {
 }
 
 type RuntimeToolInfo struct {
-	ServerName           string      `json:"serverName"`
-	CallableName         string      `json:"toolName,omitempty"`
-	CallableNamespace    string      `json:"toolNamespace,omitempty"`
-	NamespaceDescription string      `json:"namespaceDescription,omitempty"`
-	ConnectorID          string      `json:"connectorId,omitempty"`
-	ConnectorName        string      `json:"connectorName,omitempty"`
-	PluginDisplayNames   []string    `json:"pluginDisplayNames,omitempty"`
-	ServerOrigin         string      `json:"serverOrigin,omitempty"`
-	OmitLegacyPrefix     bool        `json:"-"`
-	Tool                 RuntimeTool `json:"tool"`
+	ServerName                    string              `json:"serverName"`
+	CallableName                  string              `json:"toolName,omitempty"`
+	CallableNamespace             string              `json:"toolNamespace,omitempty"`
+	NamespaceDescription          string              `json:"namespaceDescription,omitempty"`
+	ConnectorID                   string              `json:"connectorId,omitempty"`
+	ConnectorName                 string              `json:"connectorName,omitempty"`
+	PluginDisplayNames            []string            `json:"pluginDisplayNames,omitempty"`
+	ServerOrigin                  string              `json:"serverOrigin,omitempty"`
+	OpenAIFileInputOptionalFields map[string][]string `json:"openaiFileInputOptionalFields,omitempty"`
+	OmitLegacyPrefix              bool                `json:"-"`
+	Tool                          RuntimeTool         `json:"tool"`
 }
 
 func (t *RuntimeToolInfo) IsModelVisible() bool {
@@ -103,6 +104,9 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 					Annotations:  RuntimeToolAnnotationsFromMCP(toolInfo.Annotations),
 					ModelVisible: ToolModelVisible(&toolInfo),
 				},
+			}
+			if IsCodexAppsMCPServerName(serverName) {
+				runtimeTool.OpenAIFileInputOptionalFields = prepareOpenAIFileParamsForModel(&runtimeTool.Tool, toolInfo.Meta)
 			}
 			if connector := ConnectorToolInfoFromMCPTool(serverName, &toolInfo); connector != nil {
 				runtimeTool.ConnectorID = strings.TrimSpace(connector.ConnectorID)
@@ -797,7 +801,30 @@ func cloneRuntimeToolInfo(info *RuntimeToolInfo) RuntimeToolInfo {
 	}
 	out := *info
 	out.PluginDisplayNames = append([]string(nil), info.PluginDisplayNames...)
-	out.Tool.InputSchema = cloneRuntimeAnyMap(info.Tool.InputSchema)
+	out.Tool.InputSchema = deepCloneRuntimeAnyMap(info.Tool.InputSchema)
+	out.OpenAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(info.OpenAIFileInputOptionalFields)
+	return out
+}
+
+func deepCloneRuntimeAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	cloned, _ := cloneJSONValue(in).(map[string]any)
+	if cloned == nil {
+		return cloneRuntimeAnyMap(in)
+	}
+	return cloned
+}
+
+func cloneOpenAIFileOptionalFields(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for name, fields := range in {
+		out[name] = append([]string(nil), fields...)
+	}
 	return out
 }
 

@@ -13,30 +13,35 @@ import (
 const (
 	LegacyMCPToolNamePrefix = "mcp__"
 	MCPToolNameDelimiter    = "__"
+	openAIFileHookInputKey  = "_codex_openai_file_arguments"
 )
 
 type ToolExecutorOptions struct {
-	Service     *MCPService
-	ServerName  string
-	ToolInfo    *MCPToolInfo
-	ToolName    tool.ToolName
-	Parallel    bool
-	ThreadID    string
-	TurnID      string
-	RequestMeta map[string]any
-	Binding     *Binding
+	Service                       *MCPService
+	ServerName                    string
+	ToolInfo                      *MCPToolInfo
+	ToolName                      tool.ToolName
+	Parallel                      bool
+	ThreadID                      string
+	TurnID                        string
+	RequestMeta                   map[string]any
+	Binding                       *Binding
+	OpenAIFileRewriter            *OpenAIFileRewriter
+	OpenAIFileInputOptionalFields map[string][]string
 }
 
 type ToolExecutor struct {
-	service     *MCPService
-	serverName  string
-	toolInfo    MCPToolInfo
-	toolName    tool.ToolName
-	parallel    bool
-	threadID    string
-	turnID      string
-	requestMeta map[string]any
-	binding     *Binding
+	service                       *MCPService
+	serverName                    string
+	toolInfo                      MCPToolInfo
+	toolName                      tool.ToolName
+	parallel                      bool
+	threadID                      string
+	turnID                        string
+	requestMeta                   map[string]any
+	binding                       *Binding
+	openAIFileRewriter            *OpenAIFileRewriter
+	openAIFileInputOptionalFields map[string][]string
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -61,6 +66,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.turnID = strings.TrimSpace(options.TurnID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.binding = options.Binding
+	executor.openAIFileRewriter = options.OpenAIFileRewriter
+	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
 	return executor
 }
 
@@ -76,10 +83,11 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 	for i := range tools {
 		info := runtimeToolInfoToMCPToolInfo(&tools[i])
 		if err := RegisterToolExecutor(registry, &ToolExecutorOptions{
-			Service:    service,
-			ServerName: tools[i].ServerName,
-			ToolInfo:   info,
-			ToolName:   tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
+			Service:                       service,
+			ServerName:                    tools[i].ServerName,
+			ToolInfo:                      info,
+			ToolName:                      tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
+			OpenAIFileInputOptionalFields: tools[i].OpenAIFileInputOptionalFields,
 		}); err != nil {
 			return err
 		}
@@ -99,11 +107,19 @@ func (e *ToolExecutor) Spec() tool.Spec {
 }
 
 func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
-	_ = ctx
 	if invocation == nil || invocation.Payload.Kind != tool.PayloadFunction {
 		return nil, tool.RespondToModel("mcp handler received unsupported payload")
 	}
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
+	rewrittenArguments := any(nil)
+	if e.openAIFileRewriter != nil && len(e.openAIFileInputOptionalFields) > 0 {
+		rewritten, err := e.openAIFileRewriter.RewriteArgumentsWithOptionalFields(ctx, arguments, e.openAIFileInputOptionalFields)
+		if err != nil {
+			return nil, tool.RespondToModel(err.Error())
+		}
+		arguments = rewritten
+		rewrittenArguments = rewritten
+	}
 	meta := e.requestMetaForCall(invocation.CallID)
 	callParams := &MCPToolCallParams{
 		ServerName: e.resolvedServerName(),
@@ -131,6 +147,9 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	data["server"] = e.resolvedServerName()
 	data["tool"] = e.resolvedRemoteToolName()
+	if rewrittenArguments != nil {
+		data[openAIFileHookInputKey] = rewrittenArguments
+	}
 	return &tool.Output{
 		Success:    !mcpToolCallIsError(response),
 		Body:       body,
@@ -185,10 +204,14 @@ func (e *ToolExecutor) PostToolUsePayload(invocation *tool.Invocation, output *t
 	if value, ok := output.Data["hook_response"]; ok {
 		response = value
 	}
+	toolInput := mcpHookToolInput(invocation.Payload.Arguments)
+	if value, ok := output.Data[openAIFileHookInputKey]; ok {
+		toolInput = value
+	}
 	return &tool.PostToolUsePayload{
 		ToolName:     e.hookToolName(),
 		ToolUseID:    firstNonEmptyMCP(output.CallID, invocation.CallID),
-		ToolInput:    mcpHookToolInput(invocation.Payload.Arguments),
+		ToolInput:    toolInput,
 		ToolResponse: response,
 	}, true
 }

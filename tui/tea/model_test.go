@@ -57,14 +57,14 @@ func TestModelTokenUsageEventUpdatesStatusCard(t *testing.T) {
 		Last:  protocol.Usage{TotalTokens: 50000}, ModelContextWindow: &window,
 	})})
 	card := state.RenderStatusCardWidth(100)
-	for _, want := range []string{"45,000 total", "80% left (50,000 used / 200,000)"} {
+	for _, want := range []string{"45K total", "80% left (50K used / 200K)"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card missing %q:\n%s", want, card)
 		}
 	}
 }
 
-func TestModelStatusRefreshesRateLimitsForFutureOutput(t *testing.T) {
+func TestModelStatusRefreshesRateLimitsInOriginalHistoryCell(t *testing.T) {
 	state := codextui.NewState(nil)
 	reads := 0
 	model := NewModel(state, Options{HasChatGPTAccount: true, OnReadRateLimits: func() ([]codextui.RateLimitStatus, error) {
@@ -76,17 +76,15 @@ func TestModelStatusRefreshesRateLimitsForFutureOutput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("ChatGPT /status did not request a rate-limit refresh")
 	}
-	if view := model.View(); strings.Contains(view, "8% left") || strings.Contains(view, "refreshing limits") {
-		t.Fatalf("initial status used in-flight limits:\n%s", view)
+	if raw := state.Messages[0].RawText; strings.Contains(raw, "8% left") || !strings.Contains(raw, "refresh requested; run /status again shortly.") {
+		t.Fatalf("initial status did not show in-flight refresh state:\n%s", raw)
 	}
 	model.Update(cmd())
 	if reads != 1 || len(state.RateLimits) != 1 || state.RateLimits[0].UsedPercent != 92 {
 		t.Fatalf("refreshed limits reads=%d limits=%#v", reads, state.RateLimits)
 	}
-	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "5h 8% left") {
-		t.Fatalf("future status did not use refreshed limits:\n%s", view)
+	if raw := state.Messages[0].RawText; !strings.Contains(raw, "5h limit:") || !strings.Contains(raw, "8% left") || strings.Contains(raw, "refresh requested") {
+		t.Fatalf("original status cell was not refreshed in place:\n%s", raw)
 	}
 }
 
@@ -122,8 +120,11 @@ func TestModelStatusTracksOverlappingRateLimitRefreshesIndependently(t *testing.
 		t.Fatalf("first completion pending=%#v limits=%#v", model.pendingStatusRateLimitRequests, state.RateLimits)
 	}
 	model.applyRateLimitsResult(RateLimitsResultMsg{RequestID: secondMessage.RequestID})
-	if len(model.pendingStatusRateLimitRequests) != 0 || len(state.RateLimits) != 1 || state.RateLimits[0].UsedPercent != 10 {
+	if len(model.pendingStatusRateLimitRequests) != 0 || len(state.RateLimits) != 0 || !state.RateLimitsLoaded {
 		t.Fatalf("empty completion pending=%#v limits=%#v", model.pendingStatusRateLimitRequests, state.RateLimits)
+	}
+	if !strings.Contains(state.Messages[0].RawText, "90% left") || !strings.Contains(state.Messages[1].RawText, "not available for this account") {
+		t.Fatalf("overlapping status cells were not updated independently: %#v", state.Messages)
 	}
 }
 
@@ -5352,6 +5353,7 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	var detectedSources []string
 	importedSource := ""
 	importedItems := []config.ExternalAgentConfigMigrationItem{}
+	completion := make(chan ExternalAgentImportCompletion, 1)
 	model := NewModel(state, Options{
 		Width:  90,
 		Height: 30,
@@ -5363,19 +5365,10 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 			}
 			return config.ExternalAgentConfigDetectResponse{Items: []config.ExternalAgentConfigMigrationItem{item}}, nil
 		},
-		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error) {
+		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, <-chan ExternalAgentImportCompletion, error) {
 			importedSource = source
 			importedItems = append(importedItems, items...)
-			return config.ExternalAgentConfigImportResponse{ImportID: "import-1"}, config.ExternalAgentConfigImportCompletedNotification{
-				ImportID: "import-1",
-				ItemTypeResults: []config.ExternalAgentConfigImportTypeResult{{
-					ItemType: config.MigrationSkills,
-					Successes: []config.ExternalAgentConfigImportItemTypeSuccess{
-						{ItemType: config.MigrationSkills},
-						{ItemType: config.MigrationSkills},
-					},
-				}},
-			}, nil
+			return config.ExternalAgentConfigImportResponse{ImportID: "import-1"}, completion, nil
 		},
 	})
 
@@ -5402,7 +5395,8 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	if cmd == nil {
 		t.Fatal("import selection did not return import command")
 	}
-	runTeaCmd(t, model, cmd)
+	started := cmd()
+	_, completionCmd := model.Update(started)
 	if len(importedItems) != 1 || importedItems[0].ItemType != config.MigrationSkills {
 		t.Fatalf("imported items = %#v", importedItems)
 	}
@@ -5413,9 +5407,30 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 		t.Fatalf("import modal remained open after success")
 	}
 	view = model.View()
-	for _, want := range []string{"Import started", "Skills: 2 - review, docs", "Import finished: 2 imported, 0 failed", "Run /import again"} {
+	for _, want := range []string{"Import started", "Skills: 2 - review, docs"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("import result missing %q:\n%s", want, view)
+			t.Fatalf("import start missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Import finished") {
+		t.Fatalf("import rendered completion before background result:\n%s", view)
+	}
+	completion <- ExternalAgentImportCompletion{Completed: config.ExternalAgentConfigImportCompletedNotification{
+		ImportID: "import-1",
+		ItemTypeResults: []config.ExternalAgentConfigImportTypeResult{{
+			ItemType: config.MigrationSkills,
+			Successes: []config.ExternalAgentConfigImportItemTypeSuccess{
+				{ItemType: config.MigrationSkills},
+				{ItemType: config.MigrationSkills},
+			},
+		}},
+	}}
+	close(completion)
+	runTeaCmd(t, model, completionCmd)
+	view = model.View()
+	for _, want := range []string{"Import finished: 2 imported, 0 failed", "Run /import again"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("import completion missing %q:\n%s", want, view)
 		}
 	}
 }
@@ -5461,9 +5476,12 @@ func TestModelExternalAgentImportChoosesBetweenDetectedSources(t *testing.T) {
 			}
 			return config.ExternalAgentConfigDetectResponse{Items: []config.ExternalAgentConfigMigrationItem{claudeItem}}, nil
 		},
-		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error) {
+		OnImportExternalAgent: func(items []config.ExternalAgentConfigMigrationItem, source string) (config.ExternalAgentConfigImportResponse, <-chan ExternalAgentImportCompletion, error) {
 			importedSource = source
-			return config.ExternalAgentConfigImportResponse{ImportID: "import-cursor"}, config.ExternalAgentConfigImportCompletedNotification{ImportID: "import-cursor"}, nil
+			completion := make(chan ExternalAgentImportCompletion, 1)
+			completion <- ExternalAgentImportCompletion{Completed: config.ExternalAgentConfigImportCompletedNotification{ImportID: "import-cursor"}}
+			close(completion)
+			return config.ExternalAgentConfigImportResponse{ImportID: "import-cursor"}, completion, nil
 		},
 	})
 	typeText(t, model, "/import")
@@ -6619,6 +6637,67 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "Scout [review]") {
 		t.Fatalf("active agent notice missing:\n%s", model.View())
+	}
+}
+
+func TestModelAgentPickerShowsCacheImmediatelyAndRefreshesInBackground(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	reads := 0
+	model := NewModel(state, Options{
+		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
+			reads++
+			return []codextui.AgentThreadEntry{
+				{ThreadID: "thread-main", IsPrimary: true},
+				{ThreadID: "thread-worker", AgentNickname: "Scout", IsRunning: false},
+				{ThreadID: "thread-new", AgentNickname: "Builder", IsRunning: true},
+			}, nil
+		},
+	})
+	model.agentItems = []codextui.AgentThreadEntry{
+		{ThreadID: "thread-main", IsPrimary: true},
+		{ThreadID: "thread-worker", AgentNickname: "Scout", IsRunning: true},
+	}
+
+	cmd := model.applyAgentCommand()
+	if cmd == nil || model.modal == nil || model.modal.id != "agent-picker" {
+		t.Fatalf("cached picker was not opened immediately: modal=%#v cmd=%v", model.modal, cmd != nil)
+	}
+	if strings.Contains(model.View(), "Loading agent threads") || !strings.Contains(model.View(), "Scout") {
+		t.Fatalf("cached picker view =\n%s", model.View())
+	}
+	model.modal.selected = 1
+	if coalesced := model.applyAgentCommand(); coalesced != nil {
+		t.Fatal("second picker open started a duplicate refresh")
+	}
+	model.Update(cmd())
+	if reads != 1 || model.modal == nil || len(model.modal.options) != 3 {
+		t.Fatalf("background refresh reads=%d modal=%#v", reads, model.modal)
+	}
+	if selected := model.modal.options[model.modal.selected].ID; selected != "thread-worker" {
+		t.Fatalf("selection after refresh = %q, want thread-worker", selected)
+	}
+	if !strings.Contains(model.View(), "Builder") {
+		t.Fatalf("refreshed picker missing new agent:\n%s", model.View())
+	}
+}
+
+func TestModelAgentPickerRejectsRefreshFromClearedSession(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-old")
+	model := NewModel(state, Options{
+		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
+			return []codextui.AgentThreadEntry{{ThreadID: "thread-old", IsPrimary: true}, {ThreadID: "thread-worker"}}, nil
+		},
+	})
+	cmd := model.applyAgentCommand()
+	if cmd == nil {
+		t.Fatal("agent picker refresh command missing")
+	}
+	model.startFreshNamedSession("", "new")
+	model.Update(cmd())
+	if len(model.agentItems) != 0 || state.ThreadID != "" {
+		t.Fatalf("stale refresh repopulated cleared session: items=%#v thread=%q", model.agentItems, state.ThreadID)
 	}
 }
 

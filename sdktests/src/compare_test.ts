@@ -68,6 +68,31 @@ test("compareArtifact accepts paired command and one final message", () => {
   }
 });
 
+test("compareArtifact treats structured JSON object key order as insignificant", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const events = validEvents();
+    events[4] = event("item.completed", {
+      id: "msg-1",
+      type: "agent_message",
+      text: '{"state":"LONG_CONTEXT","token":"ALPHA_7K"}',
+    });
+    const valid = recording(events);
+    const expected = { token: "ALPHA_7K", state: "LONG_CONTEXT" };
+    writeArtifact(root, valid, valid, undefined, {
+      structuredAgentMessages: [expected],
+      agentMessageContracts: [{ structured: expected }],
+    });
+
+    const result = compareArtifact(root);
+    assert.equal(result.status, "pass");
+    assert.equal(result.checks.find((check) => check.name === "rust: structured agent messages")?.ok, true);
+    assert.equal(result.checks.find((check) => check.name === "go: per-turn agent message contracts")?.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact enforces exact completed item type counts", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {

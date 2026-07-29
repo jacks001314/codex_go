@@ -85,3 +85,35 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 		t.Fatalf("closed = %+v, err=%v", closed, err)
 	}
 }
+
+func TestRuntimeAgentControllerAppliesV2SubagentDeveloperInstructions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir(), Instructions: "parent instructions"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentControllerWithVersion(router, "parent", parent.Metadata.CWD, 2, agent.VersionV2)
+	empty := ""
+	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{DeveloperInstructions: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load(session.ThreadID(result.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Metadata.Instructions != "" || record.Metadata.MultiAgentVersion != string(agent.VersionV2) {
+		t.Fatalf("child metadata = %#v", record.Metadata)
+	}
+
+	inherited, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inheritedRecord, err := store.Load(session.ThreadID(inherited.AgentID))
+	if err != nil || inheritedRecord.Metadata.Instructions != "parent instructions" {
+		t.Fatalf("inherited child = %#v, %v", inheritedRecord, err)
+	}
+}

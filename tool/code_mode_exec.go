@@ -239,6 +239,9 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	if len(invocation.Payload.Input) > codeModeMaxFrameBytes {
 		return nil, RespondToModel(fmt.Sprintf("code-mode IPC frame length %d exceeds %d bytes", len(invocation.Payload.Input), codeModeMaxFrameBytes))
 	}
+	if e.remote == nil && e.disableFallback {
+		return nil, Fatal("code-mode host is disabled and in-process fallback is disabled")
+	}
 	if e.remote != nil {
 		output, remoteErr := e.executeRemote(ctx, invocation, source, options)
 		if remoteErr == nil {
@@ -346,6 +349,18 @@ func (e *codeModeExecExecutor) CodeModeToolNames() map[string]CodeModeToolNameMe
 	return out
 }
 
+func (e *codeModeExecExecutor) CodeModeToolSpecs() []Spec {
+	nestedTools := e.nestedTools()
+	if len(nestedTools) == 0 {
+		return nil
+	}
+	out := make([]Spec, 0, len(nestedTools))
+	for _, nested := range nestedTools {
+		out = append(out, nested.spec)
+	}
+	return out
+}
+
 func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 	if e == nil || e.registry == nil {
 		return nil
@@ -357,7 +372,7 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 			continue
 		}
 		spec, ok := e.registry.Spec(name)
-		if !ok || (spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key()) {
+		if !ok || spec.Exposure == ExposureDirectModelOnly || (spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key()) {
 			continue
 		}
 		out = append(out, codeModeNestedTool{globalName: codeModeIdentifier(ResponsesAPIName(name)), name: name, spec: spec})

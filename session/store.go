@@ -30,10 +30,16 @@ const (
 )
 
 var (
-	ErrInvalidThreadID = errors.New("invalid thread id")
-	ErrThreadNotFound  = errors.New("thread not found")
-	ErrThreadArchived  = errors.New("thread archived")
-	ErrConflict        = errors.New("thread store conflict")
+	ErrInvalidThreadID      = errors.New("invalid thread id")
+	ErrThreadNotFound       = errors.New("thread not found")
+	ErrThreadArchived       = errors.New("thread archived")
+	ErrThreadSectionMissing = errors.New("thread section not found")
+	ErrConflict             = errors.New("thread store conflict")
+)
+
+const (
+	PinnedThreadSectionID   = "01984de2-8f74-7c91-a3b2-5c5e937cf318"
+	PinnedThreadSectionName = "Pinned"
 )
 
 type ForkMode string
@@ -43,6 +49,11 @@ type SortKey string
 type SortDirection string
 
 type ThreadID string
+
+type ThreadSection struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 
 type Item struct {
 	ID               string          `json:"id"`
@@ -245,7 +256,8 @@ type Record struct {
 	Title          string           `json:"title,omitempty"`
 	Preview        string           `json:"preview,omitempty"`
 	Archived       bool             `json:"archived"`
-	IsPinned       bool             `json:"is_pinned,omitempty"`
+	Section        *ThreadSection   `json:"section,omitempty"`
+	IsPinned       bool             `json:"is_pinned,omitempty"` // Legacy on-disk migration field.
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at"`
 	RecencyAt      time.Time        `json:"recency_at"`
@@ -271,6 +283,8 @@ type MetadataPatch struct {
 	Preview                 *string
 	Archived                *bool
 	IsPinned                *bool
+	SectionSet              bool
+	SectionID               *string
 	CWD                     *string
 	Model                   *string
 	ModelProvider           *string
@@ -310,6 +324,8 @@ type ListOptions struct {
 	SortDirection  SortDirection
 	Archived       bool
 	IsPinned       *bool
+	SectionSet     bool
+	SectionID      *string
 	Search         string
 	ModelProviders []string
 	CWDs           []string
@@ -568,6 +584,7 @@ func (s *Store) loadLocked(threadID ThreadID) (*Record, error) {
 	if err := validateThreadID(record.ID); err != nil {
 		return nil, err
 	}
+	normalizeRecordSection(&record)
 	return &record, nil
 }
 
@@ -695,7 +712,21 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 	if patch.Archived != nil {
 		record.Archived = *patch.Archived
 	}
-	if patch.IsPinned != nil {
+	if patch.SectionSet {
+		section, err := threadSectionForID(patch.SectionID)
+		if err != nil {
+			return nil, err
+		}
+		record.Section = section
+		record.IsPinned = section != nil && section.ID == PinnedThreadSectionID
+	} else if patch.IsPinned != nil {
+		// Preserve callers compiled against the former pin API while storing the
+		// replacement section contract.
+		if *patch.IsPinned {
+			record.Section = pinnedThreadSection()
+		} else {
+			record.Section = nil
+		}
 		record.IsPinned = *patch.IsPinned
 	}
 	if patch.CWD != nil {
@@ -900,6 +931,27 @@ func (s *Store) AllRecords() ([]Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.loadAllLocked()
+}
+
+func (s *Store) ListSections(cursor string, limit int) ([]ThreadSection, string, error) {
+	sections := []ThreadSection{{ID: PinnedThreadSectionID, Name: PinnedThreadSectionName}}
+	start := 0
+	for start < len(sections) && sections[start].ID <= strings.TrimSpace(cursor) {
+		start++
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	end := start + limit
+	if end > len(sections) {
+		end = len(sections)
+	}
+	page := append([]ThreadSection(nil), sections[start:end]...)
+	next := ""
+	if end < len(sections) && len(page) > 0 {
+		next = page[len(page)-1].ID
+	}
+	return page, next, nil
 }
 
 func ListRecords(records []Record, options ListOptions) (*Page, error) {
@@ -1159,6 +1211,7 @@ func (s *Store) loadAllLocked() ([]Record, error) {
 		if err := validateThreadID(record.ID); err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
 		}
+		normalizeRecordSection(&record)
 		records = append(records, record)
 	}
 	return records, nil
@@ -1198,8 +1251,19 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 	if record.Archived != options.Archived {
 		return false
 	}
-	if options.IsPinned != nil && record.IsPinned != *options.IsPinned {
-		return false
+	if options.SectionSet {
+		if options.SectionID == nil {
+			if record.Section != nil {
+				return false
+			}
+		} else if record.Section == nil || record.Section.ID != strings.TrimSpace(*options.SectionID) {
+			return false
+		}
+	} else if options.IsPinned != nil {
+		pinned := record.Section != nil && record.Section.ID == PinnedThreadSectionID
+		if pinned != *options.IsPinned {
+			return false
+		}
 	}
 	if len(options.ModelProviders) > 0 && !containsString(options.ModelProviders, record.Metadata.ModelProvider) {
 		return false
@@ -1646,10 +1710,44 @@ func cloneRecord(record *Record) *Record {
 		return nil
 	}
 	clone := *record
+	clone.Section = cloneThreadSection(record.Section)
 	clone.Metadata = cloneMetadata(record.Metadata)
 	clone.HistoryBase = cloneHistoryPosition(record.HistoryBase)
 	clone.Items = cloneItems(record.Items)
 	return &clone
+}
+
+func pinnedThreadSection() *ThreadSection {
+	return &ThreadSection{ID: PinnedThreadSectionID, Name: PinnedThreadSectionName}
+}
+
+func cloneThreadSection(section *ThreadSection) *ThreadSection {
+	if section == nil {
+		return nil
+	}
+	cloned := *section
+	return &cloned
+}
+
+func threadSectionForID(id *string) (*ThreadSection, error) {
+	if id == nil {
+		return nil, nil
+	}
+	value := strings.TrimSpace(*id)
+	if value == PinnedThreadSectionID {
+		return pinnedThreadSection(), nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrThreadSectionMissing, value)
+}
+
+func normalizeRecordSection(record *Record) {
+	if record == nil {
+		return
+	}
+	if record.Section == nil && record.IsPinned {
+		record.Section = pinnedThreadSection()
+	}
+	record.IsPinned = record.Section != nil && record.Section.ID == PinnedThreadSectionID
 }
 
 // LocalRecord returns the physical, non-inherited portion of a record. It is

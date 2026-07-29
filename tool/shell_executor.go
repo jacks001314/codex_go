@@ -232,6 +232,10 @@ func IsShellCommandToolName(name ToolName) bool {
 }
 
 func (e *ShellExecutor) unifiedExecSpec() Spec {
+	yieldTimeDescription := "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."
+	if runtime.GOOS == "windows" {
+		yieldTimeDescription = "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms."
+	}
 	properties := map[string]any{
 		"cmd": map[string]any{
 			"type":        "string",
@@ -247,7 +251,7 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 		},
 		"yield_time_ms": map[string]any{
 			"type":        "number",
-			"description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.",
+			"description": yieldTimeDescription,
 		},
 		"max_output_tokens": map[string]any{
 			"type":        "number",

@@ -335,13 +335,13 @@ func TestApplyPatchExecutorComplexChangeMatrix(t *testing.T) {
 
 func TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace(t *testing.T) {
 	tests := []struct {
-		name             string
-		patch            string
-		applicationError bool
+		name              string
+		patch             string
+		verificationError bool
 	}{
 		{name: "missing_end", patch: "*** Begin Patch\n*** Add File: bad.txt\n+bad"},
 		{name: "delete_missing", patch: "*** Begin Patch\n*** Delete File: absent.txt\n*** End Patch"},
-		{name: "context_mismatch", patch: "*** Begin Patch\n*** Update File: keep.txt\n@@\n-not-present\n+changed\n*** End Patch", applicationError: true},
+		{name: "context_mismatch", patch: "*** Begin Patch\n*** Update File: keep.txt\n@@\n-not-present\n+changed\n*** End Patch", verificationError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -354,12 +354,11 @@ func TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace(t *testing.T) {
 				CallID: "call-invalid", ToolName: PlainName(DefaultApplyPatchToolName),
 				Payload: Payload{Kind: PayloadCustom, Input: test.patch},
 			})
-			if test.applicationError {
-				if err != nil || output == nil || output.Success || output.Data["fileChange"] != true || output.Data["status"] != "failed" {
-					t.Fatalf("Execute() = %#v, %v; want structured failed file change", output, err)
-				}
-			} else if err == nil {
+			if err == nil {
 				t.Fatalf("Execute() = %#v, nil; want verification error", output)
+			}
+			if test.verificationError && !strings.Contains(err.Error(), "failed to find expected lines") {
+				t.Fatalf("Execute() error = %v; want missing-context verification error", err)
 			}
 			assertApplyPatchFile(t, filepath.Join(cwd, "keep.txt"), "keep\n")
 			assertApplyPatchMissing(t, filepath.Join(cwd, "bad.txt"))

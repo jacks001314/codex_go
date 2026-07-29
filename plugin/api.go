@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1251,6 +1252,11 @@ type PluginService struct {
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
 	shareBackend                  PluginShareBackend
+	codexHome                     string
+	authMode                      string
+	modelProviderID               string
+	targetCuratedMarketplace      TargetCuratedMarketplace
+	curatedSyncInFlight           bool
 }
 
 func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
@@ -1272,6 +1278,7 @@ func NewPluginService() *PluginService {
 		marketplaceMaterializer:       &GitMarketplaceMaterializer{},
 		marketplacePluginMaterializer: &GitMarketplaceMaterializer{},
 		marketplaceRevision:           &GitMarketplaceRevisionResolver{},
+		targetCuratedMarketplace:      TargetCuratedOpenAI,
 	}
 }
 
@@ -1755,9 +1762,10 @@ func (s *PluginService) List(params *PluginListParams) *PluginListResponse {
 		storedDetails = append(storedDetails, cloneDetail(detail))
 	}
 	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
 	loadedDetails, loadErrors := loadMarketplacePlugins(marketplaces)
-	details := mergePluginDetails(storedDetails, loadedDetails)
+	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
 	plugins := make([]PluginSummary, 0, len(details))
 	for _, detail := range details {
 		if !params.IncludeInstalled && detail.Summary.Installed {
@@ -1784,7 +1792,7 @@ func (s *PluginService) Installed(params *PluginInstalledParams) *PluginInstalle
 	defer s.mu.Unlock()
 	plugins := make([]PluginSummary, 0)
 	for _, detail := range s.plugins {
-		if detail.Summary.Installed {
+		if detail.Summary.Installed && pluginEligibleForCuratedTarget(detail.Summary.ID, detail.Summary.MarketplaceName, s.targetCuratedMarketplace) {
 			plugins = append(plugins, cloneSummary(detail.Summary))
 		}
 	}
@@ -1801,6 +1809,7 @@ func (s *PluginService) Installed(params *PluginInstalledParams) *PluginInstalle
 			Keywords:          []string{},
 		})
 	}
+	plugins = routePluginSummaries(plugins, s.targetCuratedMarketplace)
 	sort.SliceStable(plugins, func(i int, j int) bool {
 		return plugins[i].ID < plugins[j].ID
 	})
@@ -1815,15 +1824,7 @@ func (s *PluginService) EnabledCapabilities() []CapabilitySummary {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	details := make([]PluginDetail, 0, len(s.plugins))
-	for _, detail := range s.plugins {
-		if !detail.Summary.Installed || !detail.Summary.Enabled {
-			continue
-		}
-		details = append(details, cloneDetail(detail))
-	}
-	s.mu.Unlock()
+	details := s.enabledPluginDetailsSnapshot()
 	details = s.materializePluginDetailsBestEffort(details)
 	out := make([]CapabilitySummary, 0, len(details))
 	for _, detail := range details {
@@ -1869,8 +1870,15 @@ func (s *PluginService) materializePluginDetailBestEffort(detail PluginDetail) P
 }
 
 func (s *PluginService) DiscoverableInstallCandidates() []DiscoverableInfo {
+	return s.DiscoverableInstallCandidatesContext(context.Background())
+}
+
+func (s *PluginService) DiscoverableInstallCandidatesContext(ctx context.Context) []DiscoverableInfo {
 	if s == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	s.mu.Lock()
 	storedDetails := make([]PluginDetail, 0, len(s.plugins))
@@ -1878,11 +1886,12 @@ func (s *PluginService) DiscoverableInstallCandidates() []DiscoverableInfo {
 		storedDetails = append(storedDetails, cloneDetail(detail))
 	}
 	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
-	details := mergePluginDetails(storedDetails, loadedDetails)
+	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
 	details = s.materializeInstalledDiscoverableDetailsBestEffort(details)
-	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(details); ok {
+	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(ctx, details); ok {
 		return endpointCandidates
 	}
 	out := make([]DiscoverableInfo, 0, len(details))
@@ -2090,9 +2099,10 @@ func (s *PluginService) Read(params *PluginReadParams) (*PluginReadResponse, err
 		storedDetails = append(storedDetails, cloneDetail(detail))
 	}
 	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
-	for _, detail := range mergePluginDetails(storedDetails, loadedDetails) {
+	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
 		if response := readPluginDetailResponse(detail, params); response != nil {
 			materialized, err := s.materializeMarketplacePluginDetail(&response.Plugin)
 			if err != nil {
@@ -2135,9 +2145,10 @@ func (s *PluginService) readInstalledPluginSkill(params *PluginSkillReadParams) 
 		storedDetails = append(storedDetails, cloneDetail(detail))
 	}
 	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
-	for _, detail := range mergePluginDetails(storedDetails, loadedDetails) {
+	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
 		if !pluginDetailMatchesSkillRead(&detail, params) {
 			continue
 		}
@@ -2287,15 +2298,7 @@ func (s *PluginService) EnabledHookSources() []HookSource {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	details := make([]PluginDetail, 0, len(s.plugins))
-	for _, detail := range s.plugins {
-		if !detail.Summary.Installed || !detail.Summary.Enabled {
-			continue
-		}
-		details = append(details, cloneDetail(detail))
-	}
-	s.mu.Unlock()
+	details := s.enabledPluginDetailsSnapshot()
 	details = s.materializePluginDetailsBestEffort(details)
 	sources := make([]HookSource, 0, len(details))
 	for _, detail := range details {
@@ -2328,15 +2331,7 @@ func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	details := make([]PluginDetail, 0, len(s.plugins))
-	for _, detail := range s.plugins {
-		if !detail.Summary.Installed || !detail.Summary.Enabled {
-			continue
-		}
-		details = append(details, cloneDetail(detail))
-	}
-	s.mu.Unlock()
+	details := s.enabledPluginDetailsSnapshot()
 	details = s.materializePluginDetailsBestEffort(details)
 	roots := make([]EnabledSkillRoot, 0, len(details))
 	for _, detail := range details {
@@ -2385,6 +2380,10 @@ func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResp
 	}
 	s.mu.Lock()
 	if detail, ok := s.plugins[id]; ok {
+		if !s.pluginEligibleForRuntimeLocked(detail) {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: plugin %q is not available for the active authentication mode", ErrInvalidPluginRequest, id)
+		}
 		configPath := s.marketplaceConfigPath
 		s.mu.Unlock()
 		if detail.Summary.InstallPolicy == InstallBlocked {
@@ -2417,9 +2416,10 @@ func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResp
 		return &PluginInstallResponse{PluginID: detail.Summary.ID, AuthPolicy: detail.Summary.AuthPolicy, AppsNeedingAuth: appsNeedingAuthForInstall(&detail)}, nil
 	}
 	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
-	for _, detail := range loadedDetails {
+	for _, detail := range routePluginDetails(loadedDetails, target) {
 		if !pluginInstallRequestMatchesDetail(params, id, &detail) {
 			continue
 		}
@@ -2815,6 +2815,8 @@ func (s *PluginService) marketplaceListLocked() []Marketplace {
 	for _, marketplace := range s.marketplaces {
 		marketplaces = append(marketplaces, marketplace)
 	}
+	marketplaces = appendImplicitCuratedMarketplace(marketplaces, s.implicitCuratedMarketplaceLocked())
+	marketplaces = routeMarketplaces(marketplaces, s.targetCuratedMarketplace)
 	sort.SliceStable(marketplaces, func(i int, j int) bool {
 		return marketplaces[i].Name < marketplaces[j].Name
 	})
@@ -2829,15 +2831,24 @@ func marketplaceEntries(marketplaces []Marketplace, plugins []PluginSummary) []P
 	for _, summary := range plugins {
 		byMarketplace[summary.MarketplaceName] = append(byMarketplace[summary.MarketplaceName], cloneSummary(summary))
 	}
-	entries := make([]PluginMarketplaceEntry, 0, len(marketplaces))
+	entries := make([]PluginMarketplaceEntry, 0, len(marketplaces)+len(byMarketplace))
+	seen := map[string]bool{}
 	for _, marketplace := range marketplaces {
 		path := marketplace.RootPath
+		seen[marketplace.Name] = true
 		entries = append(entries, PluginMarketplaceEntry{
 			Name:    marketplace.Name,
 			Path:    &path,
 			Plugins: byMarketplace[marketplace.Name],
 		})
 	}
+	for marketplaceName, summaries := range byMarketplace {
+		if marketplaceName == "" || seen[marketplaceName] {
+			continue
+		}
+		entries = append(entries, PluginMarketplaceEntry{Name: marketplaceName, Plugins: summaries})
+	}
+	sort.SliceStable(entries, func(i int, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries
 }
 
@@ -2853,7 +2864,11 @@ func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail) []Plu
 		if detail.Summary.ID == "" {
 			continue
 		}
-		byID[detail.Summary.ID] = cloneDetail(detail)
+		if catalogDetail, ok := byID[detail.Summary.ID]; ok {
+			byID[detail.Summary.ID] = mergeConfiguredPluginDetail(catalogDetail, detail)
+		} else {
+			byID[detail.Summary.ID] = cloneDetail(detail)
+		}
 	}
 	out := make([]PluginDetail, 0, len(byID))
 	for _, detail := range byID {
@@ -2863,6 +2878,19 @@ func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail) []Plu
 		return out[i].Summary.ID < out[j].Summary.ID
 	})
 	return out
+}
+
+func mergeConfiguredPluginDetail(catalog PluginDetail, configured PluginDetail) PluginDetail {
+	merged := cloneDetail(catalog)
+	merged.Summary.Installed = configured.Summary.Installed
+	merged.Summary.Enabled = configured.Summary.Enabled
+	if configured.Summary.RemotePluginID != "" {
+		merged.Summary.RemotePluginID = configured.Summary.RemotePluginID
+	}
+	if configured.Summary.Source.Path != "" || configured.ManifestPath != "" {
+		merged = cloneDetail(configured)
+	}
+	return merged
 }
 
 func readPluginDetailResponse(detail PluginDetail, params *PluginReadParams) *PluginReadResponse {

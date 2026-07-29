@@ -195,7 +195,7 @@ func paidAppTooltip() (string, bool) {
 func paidTooltipPlan(plan auth.PlanType) bool {
 	switch plan {
 	case auth.PlanPlus, auth.PlanEnterprise, auth.PlanPro, auth.PlanProlite,
-		auth.PlanTeam, auth.PlanSelfServeBusinessUsageBased,
+		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased,
 		auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased:
 		return true
 	default:
@@ -322,7 +322,7 @@ func dateOnly(value time.Time) time.Time {
 func normalizeAnnouncementPlan(plan auth.PlanType) (auth.PlanType, bool) {
 	switch plan {
 	case auth.PlanFree, auth.PlanGo, auth.PlanPlus, auth.PlanPro, auth.PlanProlite,
-		auth.PlanTeam, auth.PlanSelfServeBusinessUsageBased, auth.PlanBusiness,
+		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased, auth.PlanBusiness,
 		auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise, auth.PlanEdu:
 		return plan, true
 	default:

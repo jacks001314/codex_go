@@ -690,7 +690,7 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "OpenAI Codex") ||
-		!strings.Contains(output, "Model: gpt-5.5") ||
+		!strings.Contains(output, "Model: gpt-5.6-sol") ||
 		!strings.Contains(output, "Directory:") ||
 		!strings.Contains(output, "first turn") ||
 		!strings.Contains(output, "second turn") {
@@ -794,6 +794,42 @@ func TestInteractiveUIStateUsesEffectiveConfigModelAndDirectory(t *testing.T) {
 	override := interactiveUIState(&cli.RootOptions{Shared: cli.SharedOptions{CWD: project, Model: "gpt-cli"}})
 	if override.Model != "gpt-cli" || override.ReasoningEffort != "xhigh" {
 		t.Fatalf("override state = model %q reasoning %q", override.Model, override.ReasoningEffort)
+	}
+}
+
+func TestInteractiveUIStateUsesSelectedModelDefaultReasoningEffort(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := interactiveUIState(&cli.RootOptions{})
+	if state.Model != "gpt-5.6-sol" || state.ReasoningEffort != "low" {
+		t.Fatalf("default state = model %q reasoning %q", state.Model, state.ReasoningEffort)
+	}
+}
+
+func TestInteractiveStartLocalTUIThreadReservesDisplayedSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	store := newSessionStore()
+	state := codextui.NewState(&codextui.Options{
+		CWD:            t.TempDir(),
+		Model:          "gpt-5.6-sol",
+		Provider:       "openai",
+		ApprovalPolicy: "on-request",
+		Sandbox:        "read-only",
+	})
+	threadID, err := interactiveStartLocalTUIThread(state, store)
+	if err != nil {
+		t.Fatalf("interactiveStartLocalTUIThread() error = %v", err)
+	}
+	state.SetThreadID(threadID)
+	record, err := store.Read(session.ThreadID(threadID), false, true)
+	if err != nil {
+		t.Fatalf("reserved session read error = %v", err)
+	}
+	if record.Metadata.Model != state.Model || record.Metadata.CWD != state.CWD || state.ThreadID != threadID {
+		t.Fatalf("reserved session = record %#v state thread %q", record.Metadata, state.ThreadID)
+	}
+	if card := state.RenderStatusCardWidth(100); !strings.Contains(card, "Session:") || !strings.Contains(card, threadID) {
+		t.Fatalf("status card missing reserved session:\n%s", card)
 	}
 }
 
@@ -1030,7 +1066,7 @@ func TestInteractiveTurnCommandAppliesExecTokenUsageToStatus(t *testing.T) {
 		t.Fatalf("model context window = %#v", state.ModelContextWindow)
 	}
 	card := state.RenderStatusCardWidth(100)
-	if strings.Contains(card, "Token usage:         0 total") || !strings.Contains(card, "Context window:") || !strings.Contains(card, "258,400") {
+	if strings.Contains(card, "Token usage:      0 total") || !strings.Contains(card, "Context window:") || !strings.Contains(card, "258K") {
 		t.Fatalf("status card did not include runtime usage:\n%s", card)
 	}
 }
@@ -2998,10 +3034,11 @@ func TestInteractiveExternalAgentMigrationHandlersUseEmbeddedAppServer(t *testin
 		t.Fatalf("detected items = %#v", detected.Items)
 	}
 
-	response, completed, err := interactiveExternalAgentImportHandler(nil)(detected.Items[:2], "claude-code")
+	response, completion, err := interactiveExternalAgentImportHandler(nil)(detected.Items[:2], "claude-code")
 	if err != nil {
 		t.Fatalf("external agent import error = %v", err)
 	}
+	completed := (<-completion).Completed
 	if response.ImportID == "" || completed.ImportID != response.ImportID {
 		t.Fatalf("import response/completion = %#v / %#v", response, completed)
 	}
@@ -3026,8 +3063,13 @@ func TestInteractiveExternalAgentMigrationHandlersUseEmbeddedAppServer(t *testin
 	if err != nil || len(cursorDetected.Items) != 1 || cursorDetected.Items[0].ItemType != config.MigrationConfig {
 		t.Fatalf("Cursor detect = %#v err=%v", cursorDetected.Items, err)
 	}
-	if _, cursorCompleted, err := interactiveExternalAgentImportHandler(nil)(cursorDetected.Items, "cursor"); err != nil || len(cursorCompleted.ItemTypeResults) != 1 || len(cursorCompleted.ItemTypeResults[0].Successes) != 1 {
-		t.Fatalf("Cursor import = %#v err=%v", cursorCompleted, err)
+	_, cursorCompletion, err := interactiveExternalAgentImportHandler(nil)(cursorDetected.Items, "cursor")
+	if err != nil {
+		t.Fatalf("Cursor import start error = %v", err)
+	}
+	cursorCompleted := (<-cursorCompletion).Completed
+	if len(cursorCompleted.ItemTypeResults) != 1 || len(cursorCompleted.ItemTypeResults[0].Successes) != 1 {
+		t.Fatalf("Cursor import = %#v", cursorCompleted)
 	}
 	if data, err := os.ReadFile(filepath.Join(home, "config.toml")); err != nil || !strings.Contains(string(data), "CURSOR_IMPORT_TEST") {
 		t.Fatalf("Cursor config import = %q err=%v", data, err)

@@ -18,10 +18,15 @@ type runtimeAgentController struct {
 	parentID   string
 	cwd        string
 	maxThreads int
+	version    agent.MultiAgentVersion
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
-	return &runtimeAgentController{router: router, parentID: strings.TrimSpace(parentID), cwd: strings.TrimSpace(cwd), maxThreads: maxThreads}
+	return newRuntimeAgentControllerWithVersion(router, parentID, cwd, maxThreads, agent.VersionV1)
+}
+
+func newRuntimeAgentControllerWithVersion(router *RuntimeRouter, parentID string, cwd string, maxThreads int, version agent.MultiAgentVersion) agent.ToolController {
+	return &runtimeAgentController{router: router, parentID: strings.TrimSpace(parentID), cwd: strings.TrimSpace(cwd), maxThreads: maxThreads, version: version}
 }
 
 func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnAgentArgs) (*agent.SpawnAgentResult, error) {
@@ -52,11 +57,16 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	now := time.Now().UTC()
 	modelID := agentStringValue(args.Model)
 	providerID := ""
+	developerInstructions := ""
 	if parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), false, false); readErr == nil && parent != nil {
 		if modelID == "" {
 			modelID = parent.Metadata.Model
 		}
 		providerID = parent.Metadata.ModelProvider
+		developerInstructions = parent.Metadata.Instructions
+	}
+	if args.DeveloperInstructions != nil {
+		developerInstructions = *args.DeveloperInstructions
 	}
 	record := &session.Record{
 		ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID),
@@ -65,7 +75,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			CWD: c.cwd, Model: modelID, ModelProvider: providerID,
 			Source: string(SessionSourceAppServer), ThreadSource: "subAgentThreadSpawn",
 			Originator: "subagent", AgentNickname: nickname, AgentRole: args.ResolvedRole,
-			MultiAgentVersion: string(agent.VersionV1), SessionPrefix: session.PrefixForSessionID(string(threadID)),
+			Instructions: developerInstructions, MultiAgentVersion: string(c.version), SessionPrefix: session.PrefixForSessionID(string(threadID)),
 		},
 	}
 	if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
@@ -83,6 +93,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
 		params := &turn.TurnStartParams{ThreadID: string(threadID), Prompt: prompt, CWD: c.cwd, Model: modelID}
+		if args.DeveloperInstructions != nil {
+			value := *args.DeveloperInstructions
+			params.DeveloperInstructions = &value
+		}
 		if args.ReasoningEffort != nil {
 			effort := strings.TrimSpace(*args.ReasoningEffort)
 			params.Effort = &effort

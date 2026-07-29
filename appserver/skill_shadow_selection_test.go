@@ -62,8 +62,8 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 	router.runSkillShadowSelection(cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
 
 	records := metrics.Records()
-	if len(records) != 30 {
-		t.Fatalf("metric records = %d, want 30", len(records))
+	if len(records) != 36 {
+		t.Fatalf("metric records = %d, want 36", len(records))
 	}
 	methods := map[string]bool{}
 	for _, record := range records {
@@ -80,7 +80,7 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 			t.Fatalf("catalog metric = %#v", record)
 		}
 	}
-	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "multi_query_lexical_v1", "routing_card_exact_v1"} {
+	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "character_routing_card_v1", "multi_query_lexical_v1", "routing_card_exact_v1"} {
 		if !methods[method] {
 			t.Fatalf("missing method %q in %#v", method, methods)
 		}
@@ -94,6 +94,22 @@ func TestRuntimeRouterSkillShadowSelectionDisabledBySkillSearchFeature(t *testin
 	router.runSkillShadowSelection(&config.Config{Values: map[string]any{"features": map[string]any{"skill_search": false}}}, &turn.TurnStartParams{Prompt: "slides"}, []promptctx.InstructionsSkillMetadata{{Name: "slides"}})
 	if records := metrics.Records(); len(records) != 0 {
 		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestRuntimeRouterSkillShadowSelectionExcludesExplicitSkillsLikeRust(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	defer router.Close()
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	router.runSkillShadowSelection(cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "skill", Name: "slides"}}}, []promptctx.InstructionsSkillMetadata{
+		{Name: "slides", Description: "Create presentations."},
+		{Name: "sheets", Description: "Analyze tabular data."},
+	})
+	for _, record := range metrics.Records() {
+		if record.name == skillShadowCatalogMetric && record.value != 1 {
+			t.Fatalf("catalog metric = %#v, want explicitly selected skill excluded", record)
+		}
 	}
 }
 

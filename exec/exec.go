@@ -312,6 +312,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		Prompt:                         runPrompt,
 		InputItems:                     inputItems,
 		Model:                          modelID,
+		ToolMode:                       modelInfo.ToolMode,
 		ProviderID:                     providerID,
 		TaskKind:                       taskKind,
 		ThreadID:                       threadID,
@@ -443,6 +444,7 @@ type agentRunConfig struct {
 	Instructions                   string
 	InputItems                     []any
 	Model                          string
+	ToolMode                       string
 	ProviderID                     string
 	TaskKind                       model.AgentTaskKind
 	ThreadID                       string
@@ -856,6 +858,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		InputItems:                   append([]any(nil), run.InputItems...),
 		HostedTools:                  append([]any(nil), run.HostedTools...),
 		Model:                        run.Model,
+		ToolMode:                     run.ToolMode,
 		ProviderID:                   run.ProviderID,
 		TaskKind:                     run.TaskKind,
 		ThreadID:                     run.ThreadID,

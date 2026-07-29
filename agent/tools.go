@@ -49,8 +49,9 @@ type SpawnAgentArgs struct {
 	ForkContext     bool    `json:"fork_context,omitempty"`
 	ForkTurns       *string `json:"fork_turns,omitempty"`
 
-	ResolvedRole       string   `json:"-"`
-	NicknameCandidates []string `json:"-"`
+	ResolvedRole          string   `json:"-"`
+	NicknameCandidates    []string `json:"-"`
+	DeveloperInstructions *string  `json:"-"`
 }
 
 type SpawnAgentResult struct {
@@ -283,9 +284,10 @@ type MultiAgentHandlerOptions struct {
 }
 
 type SpawnDefaults struct {
-	Model           string
-	ReasoningEffort string
-	ServiceTier     string
+	Model                 string
+	ReasoningEffort       string
+	ServiceTier           string
+	DeveloperInstructions *string
 }
 
 func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *MultiAgentHandlerOptions) error {

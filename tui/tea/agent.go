@@ -18,24 +18,42 @@ func (m *Model) applyAgentCommand() bubbletea.Cmd {
 		currentThreadID = strings.TrimSpace(m.State.ThreadID)
 	}
 	reader := m.onReadAgents
+	selectedThreadID := m.agentPickerSelectedThreadID()
 	if reader == nil {
-		m.showAgentInfo("No agents available yet.")
+		entries := normalizeAgentEntries(m.agentItems, currentThreadID)
+		if len(entries) > 0 {
+			m.showAgentPicker(entries, currentThreadID, selectedThreadID)
+		} else {
+			m.showAgentInfo("No agents available yet.")
+		}
 		return nil
 	}
-	m.openModal(ModalRequestMsg{
-		ID:    "agent-picker-loading",
-		Kind:  ModalKindAgent,
-		Title: "Subagents",
-		Body:  "Loading agent threads...",
-		Options: []ModalOption{{
-			ID:       "loading",
-			Label:    "Loading",
-			Disabled: true,
-		}},
-	})
+	entries := normalizeAgentEntries(m.agentItems, currentThreadID)
+	if len(entries) > 0 {
+		m.showAgentPicker(entries, currentThreadID, selectedThreadID)
+	} else {
+		m.openModal(ModalRequestMsg{
+			ID:    "agent-picker-loading",
+			Kind:  ModalKindAgent,
+			Title: "Subagents",
+			Body:  "Loading agent threads...",
+			Options: []ModalOption{{
+				ID:       "loading",
+				Label:    "Loading",
+				Disabled: true,
+			}},
+		})
+	}
+	if m.pendingAgentRefreshRequestID != 0 {
+		return nil
+	}
+	m.nextAgentRefreshRequestID++
+	requestID := m.nextAgentRefreshRequestID
+	m.pendingAgentRefreshRequestID = requestID
+	m.pendingAgentRefreshThreadID = currentThreadID
 	return func() bubbletea.Msg {
 		entries, err := reader(currentThreadID)
-		return AgentListResultMsg{CurrentThreadID: currentThreadID, Entries: entries, Err: err}
+		return AgentListResultMsg{CurrentThreadID: currentThreadID, RequestID: requestID, Entries: entries, Err: err}
 	}
 }
 
@@ -43,28 +61,60 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 	if m == nil {
 		return
 	}
+	if message.RequestID != 0 {
+		if message.RequestID != m.pendingAgentRefreshRequestID || strings.TrimSpace(message.CurrentThreadID) != m.pendingAgentRefreshThreadID {
+			return
+		}
+		m.pendingAgentRefreshRequestID = 0
+		m.pendingAgentRefreshThreadID = ""
+	}
+	currentThreadID := currentAgentThreadID(m, message.CurrentThreadID)
+	if currentThreadID != strings.TrimSpace(message.CurrentThreadID) && !agentEntriesContainThread(message.Entries, currentThreadID) {
+		return
+	}
 	if message.Err != nil {
-		m.modal = nil
-		m.addErrorHistoryMessage("Failed to load agent threads: " + strings.TrimSpace(message.Err.Error()))
-		m.refreshTranscript()
+		if len(m.agentItems) == 0 {
+			m.modal = nil
+			m.addErrorHistoryMessage("Failed to load agent threads: " + strings.TrimSpace(message.Err.Error()))
+			m.refreshTranscript()
+		}
 		return
 	}
 	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
 	if len(entries) == 0 {
-		m.modal = nil
-		m.showAgentInfo("No agents available yet.")
+		if len(m.agentItems) == 0 {
+			m.modal = nil
+			m.showAgentInfo("No agents available yet.")
+		}
 		return
 	}
 	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+	selectedID := ""
+	showPicker := false
+	if m.modal != nil {
+		showPicker = m.modal.id == "agent-picker" || m.modal.id == "agent-picker-loading"
+		if m.modal.id == "agent-picker" && m.modal.selected >= 0 && m.modal.selected < len(m.modal.options) {
+			selectedID = strings.TrimSpace(m.modal.options[m.modal.selected].ID)
+		}
+	}
+	if showPicker {
+		m.showAgentPicker(entries, currentThreadID, selectedID)
+	}
+}
+
+func (m *Model) showAgentPicker(entries []codextui.AgentThreadEntry, currentThreadID string, selectedThreadID string) {
+	if m == nil || len(entries) == 0 {
+		return
+	}
 	options := make([]ModalOption, 0, len(entries))
 	selected := 0
-	currentThreadID := currentAgentThreadID(m, message.CurrentThreadID)
 	for i, entry := range entries {
-		if strings.TrimSpace(entry.ThreadID) == currentThreadID {
+		threadID := strings.TrimSpace(entry.ThreadID)
+		if threadID == strings.TrimSpace(selectedThreadID) || (strings.TrimSpace(selectedThreadID) == "" && threadID == currentThreadID) {
 			selected = i
 		}
 		options = append(options, ModalOption{
-			ID:          strings.TrimSpace(entry.ThreadID),
+			ID:          threadID,
 			Label:       agentPickerLabel(entry),
 			Description: agentPickerDescription(entry),
 			Shortcut:    modelPickerShortcut(i),
@@ -80,6 +130,39 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 	})
 	if m.modal != nil {
 		m.modal.selected = selected
+	}
+}
+
+func agentEntriesContainThread(entries []codextui.AgentThreadEntry, threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.ThreadID) == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) agentPickerSelectedThreadID() string {
+	if m == nil || m.modal == nil || m.modal.id != "agent-picker" || m.modal.selected < 0 || m.modal.selected >= len(m.modal.options) {
+		return ""
+	}
+	return strings.TrimSpace(m.modal.options[m.modal.selected].ID)
+}
+
+func (m *Model) resetAgentPickerRefresh(clearEntries bool) {
+	if m == nil {
+		return
+	}
+	m.nextAgentRefreshRequestID++
+	m.pendingAgentRefreshRequestID = 0
+	m.pendingAgentRefreshThreadID = ""
+	if clearEntries {
+		m.agentItems = nil
+		m.activeAgentLabel = ""
 	}
 }
 

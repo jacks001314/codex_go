@@ -35,6 +35,10 @@ During longer work, send short progress updates at meaningful points. Do not wai
 
 	ServiceTierDefaultRequestValue = "default"
 
+	ToolModeDirect       = "direct"
+	ToolModeCodeMode     = "code_mode"
+	ToolModeCodeModeOnly = "code_mode_only"
+
 	VisibilityNone    = "none"
 	VisibilityHide    = "hide"
 	VisibilityList    = "list"
@@ -159,6 +163,7 @@ type ModelInfo struct {
 	WebSearchToolType              string           `json:"web_search_tool_type"`
 	TruncationPolicy               TruncationPolicy `json:"truncation_policy"`
 	SupportsParallelToolCalls      bool             `json:"supports_parallel_tool_calls"`
+	ToolMode                       string           `json:"tool_mode"`
 	MultiAgentVersion              string           `json:"multi_agent_version"`
 	SupportsImageDetailOriginal    bool             `json:"supports_image_detail_original"`
 	ContextWindow                  int64            `json:"context_window"`
@@ -199,6 +204,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		WebSearchToolType              string              `json:"web_search_tool_type"`
 		TruncationPolicy               rawTruncationPolicy `json:"truncation_policy"`
 		SupportsParallelToolCalls      bool                `json:"supports_parallel_tool_calls"`
+		ToolMode                       any                 `json:"tool_mode"`
 		MultiAgentVersion              any                 `json:"multi_agent_version"`
 		SupportsImageDetailOriginal    bool                `json:"supports_image_detail_original"`
 		ContextWindow                  int64               `json:"context_window"`
@@ -235,6 +241,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		WebSearchToolType:              raw.WebSearchToolType,
 		TruncationPolicy:               TruncationPolicy(raw.TruncationPolicy),
 		SupportsParallelToolCalls:      raw.SupportsParallelToolCalls,
+		ToolMode:                       knownToolMode(stringFromJSONValue(raw.ToolMode)),
 		MultiAgentVersion:              knownMultiAgentVersion(stringFromJSONValue(raw.MultiAgentVersion)),
 		SupportsImageDetailOriginal:    raw.SupportsImageDetailOriginal,
 		ContextWindow:                  raw.ContextWindow,
@@ -353,95 +360,119 @@ func fallbackBundledModelsResponse() ModelsResponse {
 		Models: []ModelInfo{
 			{
 				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Latest frontier agentic coding model.",
-				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 1, BaseInstructions: BaseInstructions,
-				MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 1, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none",
+				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Frontier coding model.",
-				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
-				MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
+				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Balanced agentic coding model for everyday work.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none",
+				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Frontier coding model.",
-				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
-				MultiAgentVersion: "v1", DefaultReasoningLevel: "medium",
+				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Fast and affordable agentic coding model.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v1", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
-				ContextWindow:            372000, MaxContextWindow: 372000, EffectiveContextWindowPercent: 95,
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none",
+				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
 				Slug:                           "gpt-5.5",
-				DisplayName:                    "gpt-5.5",
-				Description:                    "Frontier model for complex coding and research.",
-				Visibility:                     VisibilityVisible,
+				DisplayName:                    "GPT-5.5",
+				Description:                    "Frontier model for complex coding, research, and real-world work.",
+				Visibility:                     VisibilityList,
 				SupportedInAPI:                 true,
-				Priority:                       0,
-				ServiceTiers:                   []string{"default", "priority"},
-				DefaultServiceTier:             "default",
+				Priority:                       7,
+				ServiceTiers:                   []string{"priority"},
 				BaseInstructions:               BaseInstructions,
 				IncludeSkillsUsageInstructions: true,
+				DefaultReasoningLevel:          "medium",
+				SupportedReasoningLevels:       []string{"low", "medium", "high", "xhigh"},
 				TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
 				ContextWindow:                  272000,
 				MaxContextWindow:               272000,
 				EffectiveContextWindowPercent:  95,
 				InputModalities:                []string{"text", "image"},
+				SupportsParallelToolCalls:      true,
 			},
 			{
-				Slug: "gpt-5.2", DisplayName: "gpt-5.2", Description: "General purpose coding model.",
-				Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 40, BaseInstructions: BaseInstructions,
+				Slug: "gpt-5.2", DisplayName: "GPT-5.2", Description: "Optimized for professional work and long-running agents.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 29, BaseInstructions: BaseInstructions,
+				DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh"},
 				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
-				InputModalities: []string{"text", "image"},
+				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
 				Slug:                           "gpt-5.4",
-				DisplayName:                    "gpt-5.4",
+				DisplayName:                    "GPT-5.4",
 				Description:                    "Strong model for everyday coding.",
-				Visibility:                     VisibilityVisible,
+				Visibility:                     VisibilityHide,
 				SupportedInAPI:                 true,
-				Priority:                       10,
+				Priority:                       16,
 				BaseInstructions:               BaseInstructions,
 				IncludeSkillsUsageInstructions: true,
+				DefaultReasoningLevel:          "medium",
+				SupportedReasoningLevels:       []string{"low", "medium", "high", "xhigh"},
+				ServiceTiers:                   []string{"priority"},
 				TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
 				ContextWindow:                  272000,
-				MaxContextWindow:               272000,
+				MaxContextWindow:               1000000,
 				EffectiveContextWindowPercent:  95,
 				InputModalities:                []string{"text", "image"},
+				SupportsParallelToolCalls:      true,
 			},
 			{
 				Slug:                           "gpt-5.4-mini",
-				DisplayName:                    "gpt-5.4-mini",
-				Description:                    "Small, fast model for simpler coding tasks.",
-				Visibility:                     VisibilityVisible,
+				DisplayName:                    "GPT-5.4-Mini",
+				Description:                    "Small, fast, and cost-efficient model for simpler coding tasks.",
+				Visibility:                     VisibilityHide,
 				SupportedInAPI:                 true,
-				Priority:                       20,
+				Priority:                       23,
 				BaseInstructions:               BaseInstructions,
 				IncludeSkillsUsageInstructions: true,
-				TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
-				ContextWindow:                  128000,
-				MaxContextWindow:               128000,
-				EffectiveContextWindowPercent:  95,
-				InputModalities:                []string{"text"},
-			},
-			{
-				Slug:                           "gpt-5.3-codex",
-				DisplayName:                    "gpt-5.3-codex",
-				Description:                    "Coding-optimized model.",
-				Visibility:                     VisibilityVisible,
-				SupportedInAPI:                 true,
-				Priority:                       30,
-				BaseInstructions:               BaseInstructions,
-				IncludeSkillsUsageInstructions: true,
+				DefaultReasoningLevel:          "medium",
+				SupportedReasoningLevels:       []string{"low", "medium", "high", "xhigh"},
 				TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
 				ContextWindow:                  272000,
 				MaxContextWindow:               272000,
 				EffectiveContextWindowPercent:  95,
 				InputModalities:                []string{"text", "image"},
+				SupportsParallelToolCalls:      true,
+			},
+			{
+				Slug:                          "codex-auto-review",
+				DisplayName:                   "Codex Auto Review",
+				Description:                   "Automatic approval review model for Codex.",
+				Visibility:                    VisibilityHide,
+				SupportedInAPI:                true,
+				Priority:                      43,
+				BaseInstructions:              BaseInstructions,
+				DefaultReasoningLevel:         "medium",
+				SupportedReasoningLevels:      []string{"low", "medium", "high", "xhigh"},
+				TruncationPolicy:              TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
+				ContextWindow:                 272000,
+				MaxContextWindow:              1000000,
+				EffectiveContextWindowPercent: 95,
+				InputModalities:               []string{"text", "image"},
+				SupportsParallelToolCalls:     true,
 			},
 		},
 	}
@@ -555,6 +586,15 @@ func stringFromJSONValue(value any) string {
 func knownMultiAgentVersion(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "disabled", "v1", "v2":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func knownToolMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ToolModeDirect, ToolModeCodeMode, ToolModeCodeModeOnly:
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

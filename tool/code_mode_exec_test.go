@@ -588,6 +588,17 @@ func TestCodeModeRemoteFailureIsFatalWhenFallbackDisabled(t *testing.T) {
 	}
 }
 
+func TestCodeModeDisabledHostIsFatalWhenFallbackDisabled(t *testing.T) {
+	registry := NewRegistry()
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, nil, true)
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID: "disabled-host", Payload: Payload{Kind: PayloadCustom, Input: `text("MUST_NOT_RUN")`},
+	})
+	if err == nil || output != nil || !strings.Contains(err.Error(), "code-mode host is disabled and in-process fallback is disabled") {
+		t.Fatalf("output = %#v error = %v", output, err)
+	}
+}
+
 func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("mcp__calendar", "lookup")}, func(context.Context, *Invocation) (*Output, error) {
@@ -601,6 +612,11 @@ func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("other_hidden"), Exposure: ExposureHidden}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("request_user_input"), Exposure: ExposureDirectModelOnly}, func(context.Context, *Invocation) (*Output, error) {
 		return &Output{Success: true}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -626,6 +642,9 @@ func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
 	}
 	if _, ok := names["other_hidden"]; ok {
 		t.Fatalf("hidden non-command tool leaked: %#v", names)
+	}
+	if _, ok := names["request_user_input"]; ok {
+		t.Fatalf("direct-model-only tool leaked into code mode: %#v", names)
 	}
 }
 

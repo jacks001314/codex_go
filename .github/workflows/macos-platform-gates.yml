@@ -1,0 +1,47 @@
+name: macOS platform gates
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app/**'
+      - 'network/**'
+      - 'sandbox/**'
+      - 'scripts/**'
+      - '.github/workflows/macos-platform-gates.yml'
+
+jobs:
+  macos-platform-gates:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run macOS-tagged packages and platform tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          go test ./network ./app ./tui/... ./sandbox/... -count=1 2>&1 | tee artifacts/macos-go-tests.txt
+      - name: Verify native roots and Unix socket implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = darwin
+          go test ./network -run '^TestNativeDarwin' -count=1 2>&1 | tee artifacts/macos-network-tests.txt
+          go test ./sandbox -run '^TestNativeSeatbelt' -count=1 2>&1 | tee artifacts/macos-seatbelt-tests.txt
+          test -x /usr/bin/security
+          test -x /usr/bin/sandbox-exec
+          security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain > artifacts/macos-native-roots.pem
+          test -s artifacts/macos-native-roots.pem
+      - name: Verify CLI and desktop app regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./app ./tui/... -run 'Desktop|UnixSocket|Unsupported|Platform' -count=1 2>&1 | tee artifacts/macos-cli-desktop-tests.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-platform-gates
+          path: artifacts/

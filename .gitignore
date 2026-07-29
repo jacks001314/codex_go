@@ -2,6 +2,9 @@
 .*/
 !/.agents/
 !/.agents/**
+!/.github/
+!/.github/workflows/
+!/.github/workflows/macos-platform-gates.yml
 fuck.*
 code.exe
 bin/

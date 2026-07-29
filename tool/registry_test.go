@@ -40,6 +40,20 @@ func TestRegistryRegisterAndModelVisibleSpecs(t *testing.T) {
 	}
 }
 
+func TestRegistryDirectModelOnlySpecsAreVisibleButNotDiscoverable(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("direct_only"), Exposure: ExposureDirectModelOnly}, noopExecutor)); err != nil {
+		t.Fatal(err)
+	}
+	visible := registry.ModelVisibleSpecs()
+	if len(visible) != 1 || visible[0].Name.Key() != "direct_only" {
+		t.Fatalf("visible = %#v", visible)
+	}
+	if discoverable := registry.DiscoverableSpecs(); len(discoverable) != 0 {
+		t.Fatalf("discoverable = %#v", discoverable)
+	}
+}
+
 func TestRouterRegisterIfAbsentUpdatesSharedCodeModeRegistry(t *testing.T) {
 	registry := NewRegistry()
 	router := NewRouter(registry)

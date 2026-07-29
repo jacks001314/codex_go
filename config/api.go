@@ -1316,6 +1316,7 @@ type ConfigService struct {
 	managedLayers        []Layer
 	featureDefaults      map[string]bool
 	importHistory        []ExternalAgentConfigImportHistory
+	nextImportID         int
 	externalAgentHome    string
 	now                  func() time.Time
 }
@@ -1930,68 +1931,93 @@ func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImp
 }
 
 func (s *ConfigService) ImportExternalAgentConfigWithResults(params *ExternalAgentConfigImportParams, additional []ExternalAgentConfigImportTypeResult) (*ExternalAgentConfigImportResponse, *ExternalAgentConfigImportCompletedNotification) {
+	response, typeResults := s.StartExternalAgentConfigImport(params, false)
+	typeResults = append(typeResults, additional...)
+	return response, s.CompleteExternalAgentConfigImport(response.ImportID, params, typeResults)
+}
+
+// StartExternalAgentConfigImport reserves a stable import ID and applies the
+// migration items that must finish before the app-server response is sent.
+func (s *ConfigService) StartExternalAgentConfigImport(params *ExternalAgentConfigImportParams, deferPlugins bool) (*ExternalAgentConfigImportResponse, []ExternalAgentConfigImportTypeResult) {
 	if params == nil {
 		params = &ExternalAgentConfigImportParams{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	importID := fmt.Sprintf("import-%d", len(s.importHistory)+1)
+	importID := s.nextExternalAgentImportIDLocked()
+	var typeResults []ExternalAgentConfigImportTypeResult
+	if _, validation := ValidatePendingSessionImports(params.MigrationItems); validation != nil && len(validation.Failures) > 0 {
+		typeResults = append(typeResults, *validation)
+	}
+	typeResults = append(typeResults, s.importExternalAgentConfigItemsLocked(params, deferPlugins)...)
+	return &ExternalAgentConfigImportResponse{ImportID: importID}, typeResults
+}
+
+// ImportExternalAgentConfigItems processes a deferred subset without reserving
+// another import ID or recording a second history entry.
+func (s *ConfigService) ImportExternalAgentConfigItems(params *ExternalAgentConfigImportParams) []ExternalAgentConfigImportTypeResult {
+	if params == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.importExternalAgentConfigItemsLocked(params, false)
+}
+
+func (s *ConfigService) importExternalAgentConfigItemsLocked(params *ExternalAgentConfigImportParams, deferPlugins bool) []ExternalAgentConfigImportTypeResult {
 	migrationSource := normalizeExternalMigrationSource(params.MigrationSource)
-	var successes []ExternalAgentConfigImportItemTypeSuccess
 	var typeResults []ExternalAgentConfigImportTypeResult
 	for i := range params.MigrationItems {
 		item := params.MigrationItems[i]
-		if item.ItemType == MigrationSessions {
+		if item.ItemType == MigrationSessions || deferPlugins && item.ItemType == MigrationPlugins {
 			continue
 		}
 		if item.ItemType == MigrationMemory {
 			result := s.importExternalMemory(&item, params.Source)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		if migrationSource == externalMigrationSourceCursor {
 			result := s.importExternalCursorMigration(item)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		if item.ItemType == MigrationConfig || item.ItemType == MigrationSkills || item.ItemType == MigrationAgentsMD {
 			result := s.importExternalCoreMigration(item)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		if item.ItemType == MigrationMCPServerConfig || item.ItemType == MigrationCommands || item.ItemType == MigrationSubagents {
 			result := s.importExternalToolsMigration(item)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		if item.ItemType == MigrationHooks {
 			result := s.importExternalHooksMigration(item)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		if item.ItemType == MigrationPlugins {
 			result := s.importExternalPluginsMigration(item)
 			typeResults = append(typeResults, result)
-			successes = append(successes, result.Successes...)
 			continue
 		}
 		itemSuccesses := ExternalAgentImportSuccessesForItem(&item, params.Source)
-		successes = append(successes, itemSuccesses...)
 		typeResults = append(typeResults, ExternalAgentConfigImportTypeResult{
 			ItemType:  item.ItemType,
 			Successes: itemSuccesses,
 			Failures:  []ExternalAgentConfigImportItemTypeFailure{},
 		})
 	}
-	if _, validation := ValidatePendingSessionImports(params.MigrationItems); validation != nil && len(validation.Failures) > 0 {
-		typeResults = append(typeResults, *validation)
+	return typeResults
+}
+
+func (s *ConfigService) CompleteExternalAgentConfigImport(importID string, params *ExternalAgentConfigImportParams, typeResults []ExternalAgentConfigImportTypeResult) *ExternalAgentConfigImportCompletedNotification {
+	if params == nil {
+		params = &ExternalAgentConfigImportParams{}
 	}
-	typeResults = append(typeResults, additional...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	notification := BuildExternalAgentImportResult(importID, typeResults)
 	history := ExternalAgentConfigImportHistory{
 		ImportID:      importID,
@@ -2001,7 +2027,16 @@ func (s *ConfigService) ImportExternalAgentConfigWithResults(params *ExternalAge
 		Failures:      collectImportFailures(notification.ItemTypeResults),
 	}
 	s.importHistory = append(s.importHistory, history)
-	return &ExternalAgentConfigImportResponse{ImportID: importID}, notification
+	return notification
+}
+
+func (s *ConfigService) nextExternalAgentImportIDLocked() string {
+	if s.nextImportID <= len(s.importHistory) {
+		s.nextImportID = len(s.importHistory) + 1
+	}
+	importID := fmt.Sprintf("import-%d", s.nextImportID)
+	s.nextImportID++
+	return importID
 }
 
 func (s *ConfigService) ImportHistories() *ExternalAgentConfigImportHistoriesReadResponse {
@@ -2020,7 +2055,7 @@ func (s *ConfigService) RecordExternalAgentImportHistory(params *ExternalAgentCo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	importID := fmt.Sprintf("import-%d", len(s.importHistory)+1)
+	importID := s.nextExternalAgentImportIDLocked()
 	providerID := strings.TrimSpace(params.ProviderID)
 	history := ExternalAgentConfigImportHistory{
 		ImportID:      importID,

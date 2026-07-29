@@ -28,6 +28,7 @@ type Metadata struct {
 type Registry struct {
 	mu                 sync.Mutex
 	agentsByPath       map[AgentPath]Metadata
+	pathByThread       map[string]AgentPath
 	usedNicknames      map[string]bool
 	nicknameResetCount int
 	totalCount         atomic.Uint64
@@ -45,6 +46,7 @@ type SpawnReservation struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		agentsByPath:    make(map[AgentPath]Metadata),
+		pathByThread:    make(map[string]AgentPath),
 		usedNicknames:   make(map[string]bool),
 		nicknameChooser: newRoundRobinChooser(),
 	}
@@ -68,30 +70,39 @@ func (r *Registry) ReserveSpawnSlot(maxThreads int) (*SpawnReservation, error) {
 func (r *Registry) RegisterRootThread(threadID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.agentsByPath[rootAgentPath]; exists {
+	if existing, exists := r.agentsByPath[rootAgentPath]; exists {
+		if existing.ThreadID != "" {
+			r.pathByThread[existing.ThreadID] = rootAgentPath
+		}
 		return
 	}
 	r.agentsByPath[rootAgentPath] = Metadata{
 		ThreadID: threadID,
 		Path:     rootAgentPath,
 	}
+	if threadID != "" {
+		r.pathByThread[threadID] = rootAgentPath
+	}
 }
 
 func (r *Registry) ReleaseSpawnedThread(threadID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for path, metadata := range r.agentsByPath {
-		if metadata.ThreadID != threadID {
-			continue
-		}
-		delete(r.agentsByPath, path)
-		if metadata.Nickname != "" {
-			delete(r.usedNicknames, metadata.Nickname)
-		}
-		if path != rootAgentPath {
-			r.decrementSpawned()
-		}
+	path, exists := r.pathByThread[threadID]
+	if !exists {
 		return
+	}
+	delete(r.pathByThread, threadID)
+	metadata, exists := r.agentsByPath[path]
+	if !exists || metadata.ThreadID != threadID {
+		return
+	}
+	delete(r.agentsByPath, path)
+	if metadata.Nickname != "" {
+		delete(r.usedNicknames, metadata.Nickname)
+	}
+	if path != rootAgentPath {
+		r.decrementSpawned()
 	}
 }
 
@@ -108,8 +119,15 @@ func (r *Registry) RegisterSpawnedThread(metadata Metadata) {
 	if metadata.Nickname != "" {
 		r.usedNicknames[metadata.Nickname] = true
 	}
+	if previousPath, ok := r.pathByThread[metadata.ThreadID]; ok && previousPath != key {
+		delete(r.agentsByPath, previousPath)
+	}
+	if previous, ok := r.agentsByPath[key]; ok && previous.ThreadID != "" && previous.ThreadID != metadata.ThreadID {
+		delete(r.pathByThread, previous.ThreadID)
+	}
 	metadata.Path = key
 	r.agentsByPath[key] = metadata
+	r.pathByThread[metadata.ThreadID] = key
 }
 
 func (r *Registry) AgentIDForPath(path AgentPath) (string, bool) {
@@ -122,12 +140,12 @@ func (r *Registry) AgentIDForPath(path AgentPath) (string, bool) {
 func (r *Registry) MetadataForThread(threadID string) (Metadata, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, metadata := range r.agentsByPath {
-		if metadata.ThreadID == threadID {
-			return metadata, true
-		}
+	path, ok := r.pathByThread[threadID]
+	if !ok {
+		return Metadata{}, false
 	}
-	return Metadata{}, false
+	metadata, ok := r.agentsByPath[path]
+	return metadata, ok && metadata.ThreadID == threadID
 }
 
 func (r *Registry) LiveAgents() []Metadata {
@@ -149,13 +167,16 @@ func (r *Registry) LiveAgents() []Metadata {
 func (r *Registry) UpdateLastTaskMessage(threadID string, message string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for path, metadata := range r.agentsByPath {
-		if metadata.ThreadID == threadID {
-			metadata.LastTaskMessage = message
-			r.agentsByPath[path] = metadata
-			return
-		}
+	path, ok := r.pathByThread[threadID]
+	if !ok {
+		return
 	}
+	metadata, ok := r.agentsByPath[path]
+	if !ok || metadata.ThreadID != threadID {
+		return
+	}
+	metadata.LastTaskMessage = message
+	r.agentsByPath[path] = metadata
 }
 
 func (r *Registry) ClearLastTaskMessage(threadID string) {

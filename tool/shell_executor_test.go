@@ -200,6 +200,10 @@ func TestUnifiedExecSpecsMatchRustSchemas(t *testing.T) {
 			t.Fatalf("Go-only unified exec property %q present in %#v", name, properties)
 		}
 	}
+	yieldDescription := properties["yield_time_ms"].(map[string]any)["description"].(string)
+	if runtime.GOOS == "windows" && !strings.Contains(yieldDescription, "10000-30000 ms") {
+		t.Fatalf("Windows yield description = %q", yieldDescription)
+	}
 	if execSpec.InputSchema["additionalProperties"] != false {
 		t.Fatalf("exec additionalProperties = %#v", execSpec.InputSchema["additionalProperties"])
 	}

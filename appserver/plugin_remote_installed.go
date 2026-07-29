@@ -97,6 +97,7 @@ func (r *RuntimeRouter) startInstalledRemotePluginSync() {
 		} {
 			service.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName])
 		}
+		r.effectivePluginsChanged()
 	}()
 }
 

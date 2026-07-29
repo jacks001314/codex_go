@@ -84,6 +84,9 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	if !ok || call.Type != "function_call" || call.CallID != "call-1" {
 		t.Fatalf("tool call input = %#v", agent.requests[1].InputItems[1])
 	}
+	if calls := call.ExecutedToolCalls(); len(calls) != 1 {
+		t.Fatalf("executed tool call metadata = %#v", calls)
+	}
 	item, ok := agent.requests[1].InputItems[3].(*ToolResponseItem)
 	if !ok || item.Type != "function_call_output" || item.Output.Text() != "tool result" {
 		t.Fatalf("tool output input = %#v", agent.requests[1].InputItems[2])

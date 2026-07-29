@@ -48,6 +48,7 @@ type ServerConfig struct {
 	StartupTimeout           time.Duration                     `json:"-"`
 	ToolTimeout              time.Duration                     `json:"-"`
 	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
+	ProtocolMode             MCPProtocolMode                   `json:"-"`
 }
 
 type ToolConfig struct {
@@ -80,6 +81,7 @@ type RuntimeConfig struct {
 	CodexHome            string
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
+	ProtocolMode         MCPProtocolMode
 }
 
 type RuntimeAuth struct {
@@ -107,6 +109,7 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		ConnectorIDs:         runtimeConfigStringSliceAny(values, "connector_ids", "connectorIds"),
 		Auth:                 cloneRuntimeAuth(runtimeAuth),
 		Requirements:         managedconfig.CloneConfigRequirements(requirements),
+		ProtocolMode:         mcpProtocolModeFromValues(values),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
@@ -137,6 +140,10 @@ type ConfigOverlay struct {
 	Remove            bool
 	ContributorID     string
 	ContributionOrder int
+	Source            CatalogSource
+	PluginID          string
+	PluginDisplayName string
+	SelectionOrder    int
 }
 
 type Manager struct {
@@ -172,6 +179,13 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 		return overlays[i].ContributionOrder < overlays[j].ContributionOrder
 	})
 	for _, overlay := range overlays {
+		source := overlay.Source
+		if source == "" {
+			source = CatalogSourceExtension
+		}
+		if current, ok := servers[overlay.Name]; ok && CatalogSourcePriority(SourceFromRegistration(&current)) > CatalogSourcePriority(source) {
+			continue
+		}
 		if overlay.Remove {
 			delete(servers, overlay.Name)
 			continue
@@ -179,9 +193,12 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 		servers[overlay.Name] = ServerRegistration{
 			Name:              overlay.Name,
 			Config:            cloneServerConfig(&overlay.Config),
-			Source:            "extension",
+			Source:            string(source),
 			ContributorID:     overlay.ContributorID,
 			ContributionOrder: overlay.ContributionOrder,
+			PluginID:          overlay.PluginID,
+			PluginDisplayName: overlay.PluginDisplayName,
+			SelectionOrder:    overlay.SelectionOrder,
 		}
 	}
 	out := base
@@ -295,6 +312,10 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	server.EnvVars = runtimeConfigEnvVars(values["env_vars"])
 	server.CWD = runtimeConfigString(values, "cwd")
 	return server
+}
+
+func ServerConfigFromValues(values map[string]any) *ServerConfig {
+	return runtimeServerConfigFromValues(values)
 }
 
 func runtimeConfigMapAny(values map[string]any, keys ...string) (map[string]any, bool) {

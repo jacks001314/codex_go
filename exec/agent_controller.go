@@ -219,6 +219,9 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		options.hideSpawnMetadata = v2Config.HideSpawnAgentMetadata
 		options.exposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
 		options.maxConcurrency = v2Config.MaxConcurrentThreadsPerSession
+		if v2Config.NonCodeModeOnly {
+			options.exposure = tool.ExposureDirectModelOnly
+		}
 	}
 
 	controller := agent.ToolController(nil)

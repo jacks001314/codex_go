@@ -124,7 +124,7 @@ func (s *PluginService) ClearRecommendedPluginsCache() {
 	s.mu.Unlock()
 }
 
-func (s *PluginService) suggestedDiscoverableCandidates(details []PluginDetail) ([]DiscoverableInfo, bool) {
+func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context, details []PluginDetail) ([]DiscoverableInfo, bool) {
 	if s == nil {
 		return nil, false
 	}
@@ -137,7 +137,10 @@ func (s *PluginService) suggestedDiscoverableCandidates(details []PluginDetail) 
 		return nil, false
 	}
 	if cached == nil {
-		fetched, err := provider.ListSuggestedPlugins(context.Background())
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		fetched, err := provider.ListSuggestedPlugins(ctx)
 		if err != nil || fetched == nil {
 			return nil, false
 		}

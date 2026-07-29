@@ -24,13 +24,18 @@ func (r *RuntimeRouter) runSkillShadowSelection(cfg *config.Config, params *turn
 		return
 	}
 	query, queryTruncated := skillShadowQuery(params)
+	explicitlySelected := skillShadowExplicitNames(params)
 	documents := make([]promptctx.SkillSelectionDocument, 0)
 	for _, group := range groups {
 		for _, skill := range group {
-			if !skill.AllowsImplicitInvocation() {
+			if !skill.AllowsImplicitInvocation() || explicitlySelected[strings.ToLower(strings.TrimSpace(skill.Name))] {
 				continue
 			}
-			documents = append(documents, promptctx.SkillSelectionDocument{ID: len(documents), Name: skill.Name, Description: skill.Description})
+			documents = append(documents, promptctx.SkillSelectionDocument{
+				ID: len(documents), Name: skill.Name, ShortDescription: skill.ShortDescription,
+				Description: skill.Description, RoutingMetadata: skill.RoutingMetadata,
+				Dependencies: skillShadowDependencies(skill.Dependencies),
+			})
 		}
 	}
 	observations := promptctx.RunSkillShadowSelection(query, documents)
@@ -53,6 +58,30 @@ func (r *RuntimeRouter) runSkillShadowSelection(cfg *config.Config, params *turn
 		r.services.SkillShadowMetrics.Histogram(skillShadowTermsMetric, observation.QueryTermCount, tags)
 		r.services.SkillShadowMetrics.Histogram(skillShadowReductionMetric, skillShadowReductionBPS(len(documents), len(observation.CandidateIDs)), tags)
 	}
+}
+
+func skillShadowExplicitNames(params *turn.TurnStartParams) map[string]bool {
+	out := map[string]bool{}
+	if params == nil {
+		return out
+	}
+	for _, input := range params.Input {
+		if input.Type != "skill" && input.Type != "mention" {
+			continue
+		}
+		if name := strings.ToLower(strings.TrimSpace(input.Name)); name != "" {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+func skillShadowDependencies(dependencies []promptctx.InstructionsSkillDependency) string {
+	parts := make([]string, 0, min(len(dependencies), 32)*2)
+	for _, dependency := range dependencies[:min(len(dependencies), 32)] {
+		parts = append(parts, nonEmptyStrings(dependency.Value, dependency.Description)...)
+	}
+	return strings.Join(parts, " ")
 }
 
 func skillShadowQuery(params *turn.TurnStartParams) (string, bool) {

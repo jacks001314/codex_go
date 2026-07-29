@@ -287,11 +287,51 @@ func TestDefaultSkillMetadataBudget(t *testing.T) {
 	if got := DefaultSkillMetadataBudget(200000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 4000 {
 		t.Fatalf("DefaultSkillMetadataBudget(200000) = %#v", got)
 	}
-	if got := DefaultSkillMetadataBudget(1000000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 4000 {
-		t.Fatalf("DefaultSkillMetadataBudget cap = %#v", got)
+	if got := DefaultSkillMetadataBudget(1000000); got.Kind != SkillMetadataBudgetTokens || got.Limit != 20000 {
+		t.Fatalf("DefaultSkillMetadataBudget(1000000) = %#v", got)
 	}
 	if got := DefaultSkillMetadataBudget(0); got.Kind != SkillMetadataBudgetCharacters || got.Limit != DefaultSkillMetadataCharBudget {
 		t.Fatalf("DefaultSkillMetadataBudget(0) = %#v", got)
+	}
+}
+
+func TestRenderCombinedAvailableSkillsSharesBudgetAndPrioritizesExecutor(t *testing.T) {
+	host := []InstructionsSkillMetadata{
+		{Name: "host-one", Description: strings.Repeat("h", 100), Path: "C:/skills/host-one/SKILL.md", Root: "C:/skills", Scope: "user"},
+		{Name: "host-two", Description: strings.Repeat("h", 100), Path: "C:/skills/host-two/SKILL.md", Root: "C:/skills", Scope: "user"},
+	}
+	executor := []InstructionsSkillMetadata{
+		{Name: "executor-one", Description: strings.Repeat("e", 100), Path: "skill://executor/one", LocatorKind: "environment resource"},
+		{Name: "executor-two", Description: strings.Repeat("e", 100), Path: "skill://executor/two", LocatorKind: "environment resource"},
+	}
+	options := AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 155}}
+	hostAvailable, executorAvailable := RenderCombinedAvailableSkills(host, executor, options)
+	if hostAvailable == nil || executorAvailable == nil {
+		t.Fatalf("combined render = host %#v executor %#v", hostAvailable, executorAvailable)
+	}
+	if executorAvailable.Report.IncludedCount != len(executor) {
+		t.Fatalf("executor report = %#v", executorAvailable.Report)
+	}
+	if hostAvailable.Report.OmittedCount == 0 {
+		t.Fatalf("host report did not absorb shared budget pressure: %#v", hostAvailable.Report)
+	}
+	if got := linesCost(options.Budget, append(append([]string(nil), executorAvailable.SkillLines...), hostAvailable.SkillLines...)) + aliasedMetadataOverheadCost(options.Budget, hostAvailable.SkillRootLines); got > options.Budget.Limit {
+		t.Fatalf("combined metadata cost = %d, budget = %d", got, options.Budget.Limit)
+	}
+}
+
+func TestRenderCombinedAvailableSkillsReservesExecutorOmissionMarker(t *testing.T) {
+	executor := make([]InstructionsSkillMetadata, 0, 4)
+	for index := 0; index < 4; index++ {
+		executor = append(executor, InstructionsSkillMetadata{Name: fmt.Sprintf("executor-%d", index), Path: fmt.Sprintf("skill://executor/%d", index), LocatorKind: "environment resource"})
+	}
+	host := []InstructionsSkillMetadata{{Name: "host", Path: "C:/skills/host/SKILL.md", Root: "C:/skills"}}
+	_, executorAvailable := RenderCombinedAvailableSkills(host, executor, AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 120}})
+	if executorAvailable == nil || executorAvailable.Report.OmittedCount == 0 {
+		t.Fatalf("executor report = %#v", executorAvailable)
+	}
+	if !strings.Contains(strings.Join(executorAvailable.SkillLines, "\n"), "additional skill") {
+		t.Fatalf("executor omission marker missing: %#v", executorAvailable.SkillLines)
 	}
 }
 
@@ -328,7 +368,7 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t 
 	if available == nil || available.Report == nil || available.Report.OmittedCount != 0 || available.Report.IncludedCount != len(skills) {
 		t.Fatalf("extension pressure report = %#v", available)
 	}
-	if available.WarningMessage != nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
+	if available.WarningMessage == nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
 		t.Fatalf("extension bounded catalog body = %q warning=%v", available.Body, available.WarningMessage)
 	}
 }

@@ -22,6 +22,13 @@ test("long-context structured output uses a strict service-compatible schema", (
   assert.equal(schema?.additionalProperties, false);
 });
 
+test("interrupted command recovery remains opt-in while the Rust Windows baseline cannot complete it", () => {
+  const scenario = getScenario("resume-tool-interrupted-command");
+  assert.equal(scenario.optIn, true);
+  assert.match(scenario.description, /Current Rust leaves the PowerShell child running/);
+  assert.match(scenario.turns[0]?.prompt ?? "", /Start-Sleep -Seconds 30/);
+});
+
 test("multi-agent factorial scenario requires collaboration and the exact semantic result", () => {
   const scenario = getScenario("multi-agent-factorial-100");
   assert.equal(scenario.optIn, true);

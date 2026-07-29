@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"codex_go/applypatch"
 	"codex_go/appserver"
@@ -279,7 +280,7 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 		ConfigOverrides:       opts.ConfigOverrides,
 		Command:               opts.Command,
 	}
-	runConfig, err := loadSandboxRunConfigForRun(opts)
+	runConfig, err := loadSandboxRunConfigForRunContext(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -448,10 +449,18 @@ func resolveSandboxPermissionProfileForRun(opts *cli.SandboxOptions) (*config.Sa
 }
 
 func loadSandboxRunConfigForRun(opts *cli.SandboxOptions) (*sandboxRunConfig, error) {
+	return loadSandboxRunConfigForRunContext(context.Background(), opts)
+}
+
+func loadSandboxRunConfigForRunContext(ctx context.Context, opts *cli.SandboxOptions) (*sandboxRunConfig, error) {
 	if opts == nil {
 		opts = &cli.SandboxOptions{}
 	}
 	codexHome := auth.DefaultCodexHome()
+	cloudConfigBundle, err := sandboxCloudConfigBundleForRun(ctx, codexHome, opts)
+	if err != nil {
+		return nil, err
+	}
 	managedConfigPath := ""
 	if opts.IncludeManagedConfig {
 		managedConfigPath = filepath.Join(codexHome, "managed_config.toml")
@@ -462,6 +471,7 @@ func loadSandboxRunConfigForRun(opts *cli.SandboxOptions) (*sandboxRunConfig, er
 		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
 		IncludeManagedConfig: opts.IncludeManagedConfig,
 		ManagedConfigPath:    managedConfigPath,
+		CloudConfigBundle:    cloudConfigBundle,
 	})
 	if err != nil {
 		return nil, err
@@ -485,6 +495,64 @@ func loadSandboxRunConfigForRun(opts *cli.SandboxOptions) (*sandboxRunConfig, er
 		EnvPolicy:         sandboxEnvPolicyFromConfig(loaded, opts.CWD),
 		UseLegacyLandlock: loaded.FeatureSettings()["use_legacy_landlock"],
 	}, nil
+}
+
+func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts *cli.SandboxOptions) (*config.CloudConfigLoader, error) {
+	if opts == nil || strings.TrimSpace(opts.PermissionProfile) == "" || !opts.IncludeManagedConfig {
+		return nil, nil
+	}
+	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		Profile:              opts.ConfigProfile,
+		CWD:                  opts.CWD,
+		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
+		IncludeManagedConfig: opts.IncludeManagedConfig,
+		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	store := auth.NewStoreWithOptions(codexHome, authStoreOptionsFromLoadedConfig(bootstrap))
+	snapshot, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	if !sandboxCloudConfigEligibleAuth(snapshot) {
+		return nil, nil
+	}
+	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
+		loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
+			CodexHome:     codexHome,
+			BaseURL:       bootstrap.ChatGPTBaseURL(),
+			ChatGPTUserID: auth.ChatGPTUserIDFromAuth(snapshot),
+			AccountID:     auth.AccountIDFromAuthForRestrictions(snapshot),
+			HTTPClient:    codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0),
+			Authorize: func(requestCtx context.Context, request *http.Request) error {
+				return authHeaders.Apply(requestCtx, request, nil)
+			},
+		})
+	}), nil
+}
+
+func sandboxCloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+	default:
+		return false
+	}
+	account := auth.AccountFromAuth(snapshot)
+	if account == nil || account.Type != auth.AccountChatGPT {
+		return false
+	}
+	return account.PlanType.IsBusinessLike() || account.PlanType == auth.PlanEnterprise || account.PlanType == auth.PlanEdu
 }
 
 func sandboxEnvPolicyFromConfig(cfg *config.Config, cwd string) *codexexec.EnvPolicy {

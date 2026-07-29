@@ -5971,14 +5971,7 @@ func TestRuntimeRouterExternalAgentConfigImportEmitsAnalyticsLikeRust(t *testing
 	if importResponse.ImportID == "" {
 		t.Fatalf("empty import id in response = %+v", importResponse)
 	}
-	var completed *config.ExternalAgentConfigImportCompletedNotification
-	for _, notification := range sink.List() {
-		if notification.Method != NotificationExternalAgentConfigImportCompleted {
-			continue
-		}
-		completed, _ = notification.Params.(*config.ExternalAgentConfigImportCompletedNotification)
-		break
-	}
+	completed := waitForExternalAgentImportNotification(t, sink, importResponse.ImportID)
 	if completed == nil ||
 		completed.ImportID != importResponse.ImportID ||
 		len(completed.ItemTypeResults) != 1 ||
@@ -12432,26 +12425,23 @@ func TestRuntimeRouterWaitForEnvironmentUsesFeatureGateSelectedEnvironmentAndHos
 				t.Fatal(turnStart.Error)
 			}
 			request := waitForRuntimeAgentRequest(t, agent)
-			var waitTool map[string]any
-			for _, rawTool := range request.Tools {
-				candidate, ok := mapAnyFromValue(rawTool)
-				if ok && candidate["type"] == "function" && candidate["name"] == tool.WaitForEnvironmentToolName {
-					waitTool = candidate
-					break
-				}
-			}
+			visibleInCodeMode := agentRequestCodeModeHasTool(request, "", tool.WaitForEnvironmentToolName)
 			if !enabled {
-				if waitTool != nil {
-					t.Fatalf("wait tool visible while feature disabled: %#v", waitTool)
+				if visibleInCodeMode {
+					t.Fatalf("wait tool available while feature disabled: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 				}
 			} else {
-				description, _ := waitTool["description"].(string)
-				if waitTool == nil || !strings.HasPrefix(description, "Host wait description\n\n") ||
-					!strings.Contains(description, "declare const tools: { wait_for_environment(args:") {
-					t.Fatalf("wait tool = %#v", waitTool)
+				if !visibleInCodeMode {
+					t.Fatalf("wait tool missing from code mode: %#v", request.ClientMetadata)
 				}
-				parameters, _ := mapAnyFromValue(waitTool["parameters"])
-				properties, _ := mapAnyFromValue(parameters["properties"])
+				spec := tool.NewWaitForEnvironmentHandler(nil, []string{"env-1"}, &tool.WaitForEnvironmentToolConfig{
+					ToolDescription:          "Host wait description",
+					EnvironmentIDDescription: "Host environment ID description",
+				}).Spec()
+				if spec.Description != "Host wait description" {
+					t.Fatalf("wait description = %q", spec.Description)
+				}
+				properties, _ := mapAnyFromValue(spec.InputSchema["properties"])
 				environmentID, _ := mapAnyFromValue(properties["environment_id"])
 				if environmentID["description"] != "Host environment ID description" {
 					t.Fatalf("environment_id schema = %#v", environmentID)
@@ -12952,12 +12942,8 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 	if !strings.Contains(inputText, "<recommended_plugins>") || !strings.Contains(inputText, "Drive (drive@market)") {
 		t.Fatalf("recommended plugin input item missing: %s", inputText)
 	}
-	toolsJSON, err := json.Marshal(request.Tools)
-	if err != nil {
-		t.Fatalf("Marshal tools error = %v", err)
-	}
-	if !strings.Contains(string(toolsJSON), "request_plugin_install") {
-		t.Fatalf("request_plugin_install tool missing: %s", toolsJSON)
+	if !agentRequestCodeModeHasTool(request, "", tool.RequestPluginInstallToolName) {
+		t.Fatalf("request_plugin_install tool missing from code mode: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
@@ -13073,12 +13059,8 @@ tool_suggest = true
 	if !strings.Contains(inputText, "<recommended_plugins>") || !strings.Contains(inputText, "- GitHub (github@openai-curated-remote)") {
 		t.Fatalf("recommended plugin input item missing: %s", inputText)
 	}
-	toolsJSON, err := json.Marshal(request.Tools)
-	if err != nil {
-		t.Fatalf("Marshal tools error = %v", err)
-	}
-	if !strings.Contains(string(toolsJSON), "request_plugin_install") || strings.Contains(string(toolsJSON), "list_available_plugins_to_install") {
-		t.Fatalf("recommendation tools mismatch: %s", toolsJSON)
+	if !agentRequestCodeModeHasTool(request, "", tool.RequestPluginInstallToolName) || agentRequestCodeModeHasTool(request, "", tool.ListAvailablePluginsToInstallToolName) {
+		t.Fatalf("recommendation tools mismatch: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 	mu.Lock()
@@ -13374,9 +13356,14 @@ func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *tes
 			t.Fatalf("first request missing skill fragment %q: %#v", want, firstRequest.InputItems)
 		}
 	}
-	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "imagegen", "Generate images"} {
 		if !strings.Contains(firstRequest.Instructions, want) {
 			t.Fatalf("first request instructions missing %q:\n%s", want, firstRequest.Instructions)
+		}
+	}
+	for _, unwanted := range []string{"### How to use skills", "must read its `SKILL.md` completely"} {
+		if strings.Contains(firstRequest.Instructions, unwanted) {
+			t.Fatalf("default model unexpectedly included skills usage instructions %q:\n%s", unwanted, firstRequest.Instructions)
 		}
 	}
 	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
@@ -15294,18 +15281,8 @@ func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if len(request.Tools) == 0 {
-		t.Fatalf("agent tools empty")
-	}
-	found := false
-	for _, rawTool := range request.Tools {
-		toolMap, ok := rawTool.(map[string]any)
-		if ok && toolMap["type"] == "namespace" && toolMap["name"] == "codex_app" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("dynamic namespace missing from tools: %#v", request.Tools)
+	if !agentRequestCodeModeHasTool(request, "codex_app", "demo_tool") {
+		t.Fatalf("dynamic namespace missing from code mode: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
@@ -15724,15 +15701,11 @@ clock_source = "external"
 	if !slicesContainString(developerTexts, "It is 2026-06-17 17:34:15 UTC.") {
 		t.Fatalf("developer input texts = %#v", developerTexts)
 	}
-	toolsJSON, err := json.Marshal(request.Tools)
-	if err != nil {
-		t.Fatalf("Marshal tools error = %v", err)
+	if !agentRequestCodeModeHasTool(request, "clock", "curr_time") {
+		t.Fatalf("clock current-time tool missing from code mode: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 	}
-	if !modelToolsContainNamespaceTool(request.Tools, "clock", "curr_time") {
-		t.Fatalf("clock current-time tool missing: %s", toolsJSON)
-	}
-	if modelToolsContainNamespaceTool(request.Tools, "clock", "sleep") {
-		t.Fatalf("clock sleep tool should follow sleep_tool=false: %s", toolsJSON)
+	if agentRequestCodeModeHasTool(request, "clock", "sleep") {
+		t.Fatalf("clock sleep tool should follow sleep_tool=false: %s", request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
@@ -23148,6 +23121,27 @@ func modelToolsContainNamespaceTool(tools []any, namespace string, name string) 
 	return false
 }
 
+func agentRequestCodeModeHasTool(request model.AgentRequest, namespace string, name string) bool {
+	var metadata struct {
+		ToolNames map[string]tool.CodeModeToolNameMetadata `json:"code_mode_tool_names"`
+	}
+	if err := json.Unmarshal([]byte(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
+		return false
+	}
+	for _, candidate := range metadata.ToolNames {
+		if candidate.Name != name {
+			continue
+		}
+		if namespace == "" && candidate.Namespace == nil {
+			return true
+		}
+		if candidate.Namespace != nil && *candidate.Namespace == namespace {
+			return true
+		}
+	}
+	return false
+}
+
 func modelToolsContainHostedWebSearch(tools []any) bool {
 	for _, item := range tools {
 		toolMap, ok := mapAnyFromValue(item)
@@ -23576,6 +23570,16 @@ func waitForReviewAnalyticsEvent(t *testing.T, sink *recordingTurnEventSink, rev
 		case <-deadline:
 			t.Fatalf("timed out waiting for codex_review_event %s", reviewID)
 		}
+	}
+}
+
+func TestMCPServerNamesFromTurnTextMatchesStructuredAndLinkedMentions(t *testing.T) {
+	got := mcpServerNamesFromTurnText("use mcp://docs and [$calendar](mcp://calendar), ignore mcp://docs/resource")
+	if strings.Join(got, ",") != "docs,calendar,docs" {
+		t.Fatalf("mcp server mentions = %#v", got)
+	}
+	if got := mcpServerNameFromMentionPath("mcp://notes"); got != "notes" {
+		t.Fatalf("structured MCP mention = %q", got)
 	}
 }
 

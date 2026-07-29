@@ -719,6 +719,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadMetadataUpdate(request)
 	case MethodThreadList:
 		return r.handleThreadList(request)
+	case MethodThreadSectionList:
+		return r.handleThreadSectionList(request)
 	case MethodThreadSearch:
 		return r.handleThreadSearch(request)
 	case MethodThreadSearchOccurrences:
@@ -828,6 +830,9 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 }
 
 func newThreadID() session.ThreadID {
+	if id, err := uuid.NewV7(); err == nil {
+		return session.ThreadID(id.String())
+	}
 	return session.ThreadID(uuid.NewString())
 }
 
@@ -2160,6 +2165,39 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 		return nil, err
 	}
 	return BuildListResponse(page, r.store, false)
+}
+
+func (r *Router) handleThreadSectionList(request *Request) (*ThreadSectionListResponse, error) {
+	var params ThreadSectionListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	limit := defaultPageSize
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit < 1 {
+			limit = 1
+		}
+		if limit > maxThreadListPageSize {
+			limit = maxThreadListPageSize
+		}
+	}
+	cursor := ""
+	if params.Cursor != nil {
+		cursor = strings.TrimSpace(*params.Cursor)
+	}
+	sections, next, err := r.store.ListSections(cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]ThreadSection, 0, len(sections))
+	for _, section := range sections {
+		data = append(data, ThreadSection{ID: section.ID, Name: section.Name})
+	}
+	return &ThreadSectionListResponse{Data: data, NextCursor: stringPtrIfNotEmpty(next)}, nil
 }
 
 func materializedThreadRecords(records []session.Record) []session.Record {

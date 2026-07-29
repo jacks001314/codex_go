@@ -144,3 +144,58 @@ func TestRegistryTaskMessageAndDepthHelpers(t *testing.T) {
 		t.Fatalf("ExceedsThreadSpawnDepthLimit() = false, want true")
 	}
 }
+
+func TestRegistryIdentityIndexesStayBijective(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterSpawnedThread(Metadata{ThreadID: "thread-old", Path: "/agent/researcher"})
+	registry.RegisterSpawnedThread(Metadata{ThreadID: "thread-new", Path: "/agent/researcher", Role: "researcher"})
+
+	if _, ok := registry.MetadataForThread("thread-old"); ok {
+		t.Fatal("replaced thread retained a reverse identity")
+	}
+	if got, ok := registry.AgentIDForPath("/agent/researcher"); !ok || got != "thread-new" {
+		t.Fatalf("AgentIDForPath() = %q/%t", got, ok)
+	}
+
+	registry.RegisterSpawnedThread(Metadata{ThreadID: "thread-new", Path: "/agent/reviewer", Role: "reviewer"})
+	if _, ok := registry.AgentIDForPath("/agent/researcher"); ok {
+		t.Fatal("moving a thread retained its previous path")
+	}
+	if got, ok := registry.MetadataForThread("thread-new"); !ok || got.Path != "/agent/reviewer" || got.Role != "reviewer" {
+		t.Fatalf("MetadataForThread() = %#v/%t", got, ok)
+	}
+
+	registry.RegisterSpawnedThread(Metadata{ThreadID: "thread-new"})
+	if _, ok := registry.AgentIDForPath("/agent/reviewer"); ok {
+		t.Fatal("moving to pathless metadata retained its previous path")
+	}
+	if got, ok := registry.MetadataForThread("thread-new"); !ok || got.Path != AgentPath("thread:thread-new") {
+		t.Fatalf("pathless metadata = %#v/%t", got, ok)
+	}
+
+	registry.ReleaseSpawnedThread("thread-old")
+	if _, ok := registry.MetadataForThread("thread-new"); !ok {
+		t.Fatal("releasing a replaced identity removed the current thread")
+	}
+}
+
+func TestRegistryRootIdentityIsStableAndReleasable(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterRootThread("root-1")
+	registry.RegisterRootThread("root-2")
+
+	if got, ok := registry.AgentIDForPath(rootAgentPath); !ok || got != "root-1" {
+		t.Fatalf("root path = %q/%t", got, ok)
+	}
+	if _, ok := registry.MetadataForThread("root-2"); ok {
+		t.Fatal("ignored root registration was reverse-indexed")
+	}
+
+	registry.ReleaseSpawnedThread("root-1")
+	if _, ok := registry.AgentIDForPath(rootAgentPath); ok {
+		t.Fatal("released root path is still registered")
+	}
+	if registry.TotalSpawned() != 0 {
+		t.Fatalf("releasing root changed spawn count to %d", registry.TotalSpawned())
+	}
+}

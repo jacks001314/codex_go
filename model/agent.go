@@ -70,6 +70,10 @@ type AgentItem struct {
 	Execution string
 	Search    map[string]any
 	Data      map[string]any
+
+	// Locally observed metadata is intentionally private so JSON input cannot
+	// forge warehouse-only executed-tool records.
+	executedToolCalls []ExecutedToolCall
 }
 
 func (i *AgentItem) MarshalJSON() ([]byte, error) {
@@ -78,7 +82,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 	}
 	switch i.Type {
 	case "function_call":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID        string `json:"id,omitempty"`
 			Type      string `json:"type"`
 			Name      string `json:"name"`
@@ -94,7 +98,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			CallID:    firstAgentItemValue(i.CallID, i.ID),
 		})
 	case "custom_tool_call":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID        string `json:"id,omitempty"`
 			Type      string `json:"type"`
 			Status    string `json:"status,omitempty"`
@@ -112,7 +116,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Input:     i.Input,
 		})
 	case "tool_search_call":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID        string  `json:"id,omitempty"`
 			Type      string  `json:"type"`
 			CallID    *string `json:"call_id"`
@@ -128,7 +132,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Arguments: agentItemSearchArguments(i),
 		})
 	case "web_search_call":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID     string         `json:"id,omitempty"`
 			Type   string         `json:"type"`
 			Status string         `json:"status,omitempty"`
@@ -140,7 +144,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Action: cloneAgentItemMap(i.Search),
 		})
 	case "reasoning":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID               string                          `json:"id,omitempty"`
 			Type             string                          `json:"type"`
 			Summary          []responsesReasoningSummary     `json:"summary"`
@@ -154,7 +158,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			EncryptedContent: agentReasoningEncryptedContent(i.Data),
 		})
 	case "image_generation_call":
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID            string `json:"id,omitempty"`
 			Type          string `json:"type"`
 			Status        string `json:"status"`
@@ -169,7 +173,7 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 		})
 	case "", "agent_message":
 		phase := stringValueFromAgentItemMap(i.Data, "phase", "messagePhase", "message_phase")
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID      string                       `json:"id,omitempty"`
 			Type    string                       `json:"type"`
 			Role    string                       `json:"role"`
@@ -186,12 +190,27 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			}},
 		})
 	default:
-		return json.Marshal(struct {
+		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID   string `json:"id,omitempty"`
 			Type string `json:"type"`
 			Text string `json:"text,omitempty"`
 		}{ID: i.ID, Type: i.Type, Text: i.Text})
 	}
+}
+
+func marshalAgentItemWithExecutedToolCalls(item *AgentItem, value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil || item == nil || len(item.executedToolCalls) == 0 {
+		return encoded, err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+	object[internalChatMessageMetadataPassthroughField] = map[string]any{
+		executedToolCallsField: item.executedToolCalls,
+	}
+	return json.Marshal(object)
 }
 
 type responsesReasoningSummary struct {

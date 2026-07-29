@@ -28,27 +28,29 @@ func (*captureToolController) CloseAgent(context.Context, *CloseAgentArgs) (*Clo
 
 func TestRoleAwareToolControllerAppliesDefaultsAndLockedRoleSettings(t *testing.T) {
 	delegate := &captureToolController{}
+	defaultInstructions := "child default"
 	controller := NewRoleAwareToolController(delegate, map[string]RoleConfig{
-		"reviewer": {Description: "Reviews.", NicknameCandidates: []string{"Sage", "Scout"}, Settings: map[string]string{"model": "gpt-review", "model_reasoning_effort": "high", "service_tier": "fast"}},
-	}, SpawnDefaults{Model: "gpt-default", ReasoningEffort: "medium", ServiceTier: "auto"})
+		"reviewer": {Description: "Reviews.", NicknameCandidates: []string{"Sage", "Scout"}, Settings: map[string]string{"model": "gpt-review", "model_reasoning_effort": "high", "service_tier": "fast", "developer_instructions": "role instructions"}},
+	}, SpawnDefaults{Model: "gpt-default", ReasoningEffort: "medium", ServiceTier: "auto", DeveloperInstructions: &defaultInstructions})
 	role := " reviewer "
 	requestedModel := "gpt-requested"
 	if _, err := controller.SpawnAgent(context.Background(), &SpawnAgentArgs{AgentType: &role, Model: &requestedModel}); err != nil {
 		t.Fatal(err)
 	}
 	got := delegate.spawned
-	if got == nil || got.ResolvedRole != "reviewer" || value(got.Model) != "gpt-review" || value(got.ReasoningEffort) != "high" || value(got.ServiceTier) != "fast" || strings.Join(got.NicknameCandidates, ",") != "Sage,Scout" {
+	if got == nil || got.ResolvedRole != "reviewer" || value(got.Model) != "gpt-review" || value(got.ReasoningEffort) != "high" || value(got.ServiceTier) != "fast" || value(got.DeveloperInstructions) != "role instructions" || strings.Join(got.NicknameCandidates, ",") != "Sage,Scout" {
 		t.Fatalf("spawned = %+v", got)
 	}
 }
 
 func TestRoleAwareToolControllerUsesDefaultsWithoutConfiguredRole(t *testing.T) {
 	delegate := &captureToolController{}
-	controller := NewRoleAwareToolController(delegate, nil, SpawnDefaults{Model: "gpt-default", ReasoningEffort: "medium"})
+	emptyInstructions := ""
+	controller := NewRoleAwareToolController(delegate, nil, SpawnDefaults{Model: "gpt-default", ReasoningEffort: "medium", DeveloperInstructions: &emptyInstructions})
 	if _, err := controller.SpawnAgent(context.Background(), &SpawnAgentArgs{}); err != nil {
 		t.Fatal(err)
 	}
-	if value(delegate.spawned.Model) != "gpt-default" || value(delegate.spawned.ReasoningEffort) != "medium" {
+	if value(delegate.spawned.Model) != "gpt-default" || value(delegate.spawned.ReasoningEffort) != "medium" || delegate.spawned.DeveloperInstructions == nil || *delegate.spawned.DeveloperInstructions != "" {
 		t.Fatalf("spawned = %+v", delegate.spawned)
 	}
 }

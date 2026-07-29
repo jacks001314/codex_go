@@ -40,8 +40,10 @@ func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected start result type: %T", startResponse.Result)
 	}
-	if _, err := uuid.Parse(start.Thread.ID); err != nil {
+	if id, err := uuid.Parse(start.Thread.ID); err != nil {
 		t.Fatalf("started thread id = %q, want UUID: %v", start.Thread.ID, err)
+	} else if id.Version() != 7 {
+		t.Fatalf("started thread id = %q, want UUIDv7", start.Thread.ID)
 	}
 	if start.Thread.CWD != "D:/repo" {
 		t.Fatalf("unexpected started thread: %+v", start.Thread)
@@ -1507,6 +1509,55 @@ func TestRouterThreadMetadataUpdateUpdatesRustStateSQLiteLikeRust(t *testing.T) 
 	}
 	if got := routerTestScalarNullString(t, stateDB, `SELECT git_origin_url FROM threads WHERE id = ?`, string(threadID)); got.Valid {
 		t.Fatalf("sqlite git_origin_url after clear = %+v, want NULL", got)
+	}
+}
+
+func TestRouterThreadSectionsListUpdateFilterAndClearLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-sections")
+	createRecord(t, store, threadID, fixedTime())
+	router := NewRouter(store)
+
+	listed := router.Handle(requestWithParams(t, IntID(1), MethodThreadSectionList, ThreadSectionListParams{}))
+	if listed.Error != nil {
+		t.Fatalf("threadSection/list error = %+v", listed.Error)
+	}
+	sections := listed.Result.(*ThreadSectionListResponse)
+	if len(sections.Data) != 1 || sections.Data[0].ID != session.PinnedThreadSectionID || sections.Data[0].Name != session.PinnedThreadSectionName || sections.NextCursor != nil {
+		t.Fatalf("threadSection/list = %#v", sections)
+	}
+
+	unknown := "01984de2-8f74-7c91-a3b2-5c5e937cf319"
+	rejected := router.Handle(requestWithParams(t, IntID(2), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID), SectionID: OptionalString{Set: true, Value: &unknown},
+	}))
+	if rejected.Error == nil || rejected.Error.Message != "thread section not found: "+unknown {
+		t.Fatalf("unknown section response = %+v", rejected.Error)
+	}
+
+	pinnedID := session.PinnedThreadSectionID
+	updated := router.Handle(requestWithParams(t, IntID(3), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID), SectionID: OptionalString{Set: true, Value: &pinnedID},
+	}))
+	if updated.Error != nil {
+		t.Fatalf("section update error = %+v", updated.Error)
+	}
+	if section := updated.Result.(*ThreadMetadataUpdateResponse).Thread.Section; section == nil || section.ID != pinnedID {
+		t.Fatalf("updated section = %#v", section)
+	}
+
+	filtered := router.Handle(requestWithParams(t, IntID(4), MethodThreadList, ThreadListParams{
+		SectionID: OptionalString{Set: true, Value: &pinnedID},
+	}))
+	if filtered.Error != nil || len(filtered.Result.(*ThreadListResponse).Data) != 1 {
+		t.Fatalf("section-filtered thread/list = %#v", filtered)
+	}
+
+	cleared := router.Handle(requestWithParams(t, IntID(5), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID), SectionID: OptionalString{Set: true},
+	}))
+	if cleared.Error != nil || cleared.Result.(*ThreadMetadataUpdateResponse).Thread.Section != nil {
+		t.Fatalf("section clear response = %#v", cleared)
 	}
 }
 

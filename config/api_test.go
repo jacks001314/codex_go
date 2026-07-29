@@ -874,6 +874,21 @@ func TestExternalAgentSessionImportFailureKeepsStableSubErrorType(t *testing.T) 
 	}
 }
 
+func TestExternalAgentImportReportsSessionValidationBeforeSynchronousResults(t *testing.T) {
+	service := NewConfigService(t.TempDir())
+	details := NewMigrationDetails()
+	details.Sessions = []SessionMigration{{Path: ""}}
+	_, results := service.StartExternalAgentConfigImport(&ExternalAgentConfigImportParams{
+		MigrationItems: []ExternalAgentConfigMigrationItem{
+			{ItemType: MigrationConfig, Description: "Import config"},
+			{ItemType: MigrationSessions, Details: details},
+		},
+	}, false)
+	if len(results) != 2 || results[0].ItemType != MigrationSessions || results[1].ItemType != MigrationConfig {
+		t.Fatalf("import result order = %#v", results)
+	}
+}
+
 func writeConfig(t *testing.T, home string, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {

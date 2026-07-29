@@ -34,7 +34,7 @@ func TestSearchMessageOccurrencesFiltersAssistantCommentary(t *testing.T) {
 	}
 }
 
-func TestStorePinUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
+func TestStoreSectionUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()
 	for i, id := range []ThreadID{"thread-1", "thread-2", "thread-3"} {
@@ -43,28 +43,31 @@ func TestStorePinUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
 			t.Fatalf("Save(%s) error = %v", id, err)
 		}
 	}
-	pinned := true
-	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{IsPinned: &pinned}, true); err != nil {
-		t.Fatalf("pin thread error = %v", err)
+	pinnedID := PinnedThreadSectionID
+	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{SectionSet: true, SectionID: &pinnedID}, true); err != nil {
+		t.Fatalf("section thread error = %v", err)
 	}
-	page, err := store.List(ListOptions{PageSize: 1, IsPinned: &pinned})
+	page, err := store.List(ListOptions{PageSize: 1, SectionSet: true, SectionID: &pinnedID})
 	if err != nil {
-		t.Fatalf("List(pinned) error = %v", err)
+		t.Fatalf("List(section) error = %v", err)
 	}
 	if got := ids(page.Records); !reflect.DeepEqual(got, []ThreadID{"thread-2"}) || page.NextCursor != "" {
-		t.Fatalf("List(pinned) = %v cursor %q, want [thread-2] and no cursor", got, page.NextCursor)
+		t.Fatalf("List(section) = %v cursor %q, want [thread-2] and no cursor", got, page.NextCursor)
 	}
 	loaded, err := store.Load("thread-2")
-	if err != nil || !loaded.IsPinned {
-		t.Fatalf("Load(thread-2) = %#v, %v; want persisted pin", loaded, err)
+	if err != nil || loaded.Section == nil || loaded.Section.ID != pinnedID {
+		t.Fatalf("Load(thread-2) = %#v, %v; want persisted section", loaded, err)
 	}
-	pinned = false
-	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{IsPinned: &pinned}, true); err != nil {
-		t.Fatalf("unpin thread error = %v", err)
+	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{SectionSet: true}, true); err != nil {
+		t.Fatalf("clear section error = %v", err)
 	}
 	loaded, err = store.Load("thread-2")
-	if err != nil || loaded.IsPinned {
-		t.Fatalf("Load(thread-2) after unpin = %#v, %v", loaded, err)
+	if err != nil || loaded.Section != nil {
+		t.Fatalf("Load(thread-2) after clear = %#v, %v", loaded, err)
+	}
+	sections, next, err := store.ListSections("", 1)
+	if err != nil || len(sections) != 1 || sections[0].ID != pinnedID || next != "" {
+		t.Fatalf("ListSections() = %#v, %q, %v", sections, next, err)
 	}
 }
 
@@ -828,6 +831,52 @@ func TestStorePaginatedForkFreezesBoundaryAndProtectsSourceDeletion(t *testing.T
 	}
 	if err := store.Delete("source"); err != nil {
 		t.Fatalf("Delete(source) after child error = %v", err)
+	}
+}
+
+func TestStorePaginatedHistoryNeedsNoSidecarStateDatabase(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	source := &Record{
+		ID: "source-json-state",
+		Metadata: Metadata{
+			HistoryMode:  "paginated",
+			RolloutTurns: []TurnSnapshot{{ID: "turn-1", Status: "completed"}},
+		},
+		Items: []Item{{ID: "item-1", Text: "source", CreatedAtOrdinal: 1, Metadata: map[string]any{"turnId": "turn-1"}}},
+	}
+	if err := store.Create(source); err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	if _, err := store.Fork(source.ID, ForkOptions{NewID: "fork-json-state", Mode: ForkAll}); err != nil {
+		t.Fatalf("Fork() error = %v", err)
+	}
+	if _, err := store.AppendItem("fork-json-state", Item{ID: "item-2", Text: "child", CreatedAtOrdinal: 2, Metadata: map[string]any{"turnId": "turn-2"}}); err != nil {
+		t.Fatalf("AppendItem(fork) error = %v", err)
+	}
+	page, err := store.ListItems("fork-json-state", ListItemsOptions{PageSize: 1, SortDirection: SortAsc})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "item-1" || page.NextCursor == "" {
+		t.Fatalf("ListItems(first page) = %#v, err=%v", page, err)
+	}
+	next, err := store.ListItems("fork-json-state", ListItemsOptions{PageSize: 1, SortDirection: SortAsc, Cursor: page.NextCursor})
+	if err != nil || len(next.Items) != 1 || next.Items[0].ID != "item-2" {
+		t.Fatalf("ListItems(second page) = %#v, err=%v", next, err)
+	}
+	if err := store.Delete(source.ID); !errors.Is(err, ErrInvalidThreadID) {
+		t.Fatalf("Delete(referenced source) error = %v", err)
+	}
+	if err := store.Delete("fork-json-state"); err != nil {
+		t.Fatalf("Delete(fork) error = %v", err)
+	}
+	if err := store.Delete(source.ID); err != nil {
+		t.Fatalf("Delete(source) error = %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(root) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("sidecar state artifacts remain after deletion: %#v", entries)
 	}
 }
 

@@ -260,6 +260,29 @@ func TestRuntimeAuthUsesCodexBackendMatchesRustModes(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigPluginOverlaysRetainAttributionAndLoseToUserConfig(t *testing.T) {
+	base := RuntimeConfigFromValues(map[string]any{"mcp_servers": map[string]any{
+		"docs": map[string]any{"command": "user-docs"},
+	}}, "")
+	runtime := NewManager(nil).RuntimeConfig(*base, []ConfigOverlay{
+		{
+			Name: "docs", Config: ServerConfig{Command: "plugin-docs", Enabled: true},
+			Source: CatalogSourcePlugin, PluginID: "sample@test", PluginDisplayName: "Sample", ContributionOrder: 1,
+		},
+		{
+			Name: "search", Config: ServerConfig{Command: "plugin-search", Enabled: true},
+			Source: CatalogSourcePlugin, PluginID: "sample@test", PluginDisplayName: "Sample", ContributionOrder: 2,
+		},
+	})
+	if got := runtime.Servers["docs"]; got.Config.Command != "user-docs" || SourceFromRegistration(&got) != CatalogSourceConfig {
+		t.Fatalf("user config registration = %#v", got)
+	}
+	search := runtime.Servers["search"]
+	if search.Config.Command != "plugin-search" || SourceFromRegistration(&search) != CatalogSourcePlugin || search.PluginID != "sample@test" || search.PluginDisplayName != "Sample" {
+		t.Fatalf("plugin registration = %#v", search)
+	}
+}
+
 func TestManagerConfiguredAndEffectiveServers(t *testing.T) {
 	manager := NewManager(nil)
 	config := &RuntimeConfig{Servers: map[string]ServerRegistration{

@@ -102,6 +102,7 @@ type RuntimeServices struct {
 	LocalEnvironmentEnabled      *bool
 	WorkspaceCodexPluginsEnabled *bool
 	WaitForEnvironmentToolConfig *tool.WaitForEnvironmentToolConfig
+	ExternalAgentSessionImporter func(*config.ExternalAgentConfigImportParams) []config.ExternalAgentConfigImportTypeResult
 
 	RemoteControlDisabledByRequirements bool
 }
@@ -1473,6 +1474,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	}
 	if isRealtimeMethod(request.Method) {
 		return r.dispatchRealtime(request)
+	}
+	if request.Method == MethodThreadSectionList {
+		if r.services.ThreadRouter == nil {
+			return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+		}
+		return r.services.ThreadRouter.dispatch(request)
 	}
 	if isThreadMethod(request.Method) {
 		if r.services.ThreadRouter == nil {
@@ -6290,8 +6297,17 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Custom embedders may construct a router without the default startup path.
+	// Refresh the auth-dependent projection before returning the catalog.
+	if r.services.Config != nil {
+		r.configureMCPFromConfig()
+	}
 	response := r.requirePlugins().List(&params)
-	r.startInstalledRemotePluginSync()
+	if r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
+		r.startInstalledRemotePluginSync()
+	} else {
+		r.maybeStartCuratedRepoSync(true)
+	}
 	return response, nil
 }
 
@@ -6507,20 +6523,67 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 	if err != nil || read == nil {
 		return
 	}
+	var snapshot *auth.AuthDotJSON
 	var runtimeAuth *mcp.RuntimeAuth
 	if resolved, resolveErr := r.resolveAuthWithLoginRestrictions(r.services.Config.CodexHome()); resolveErr == nil && resolved != nil {
-		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolved.Auth)
+		snapshot = &resolved.Auth
+	} else if r.services.Account != nil {
+		snapshot = r.services.Account.AuthSnapshot()
+	}
+	if snapshot != nil {
+		runtimeAuth = mcp.RuntimeAuthFromSnapshot(snapshot)
+	}
+	if r.services.Plugins != nil {
+		authMode := ""
+		if snapshot != nil {
+			authMode = snapshot.Mode()
+		}
+		providerID := firstNonEmpty(stringFromMap(read.Config, "model_provider"), stringFromMap(read.Config, "modelProvider"), model.OpenAIProviderID)
+		if r.services.Plugins.SetRuntimeRoute(authMode, providerID) && r.services.Skills != nil {
+			r.services.Skills.ClearCache()
+		}
 	}
 	var requirements *config.ConfigRequirements
 	if current := r.services.Config.Requirements(); current != nil {
 		requirements = current.Requirements
 	}
-	r.requireMCP().ApplyRuntimeConfig(mcp.RuntimeConfigFromValuesWithAuthAndRequirements(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements))
+	r.requireMCP().ApplyRuntimeConfig(r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements))
 	r.mcpConfigManaged.Store(true)
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
 	}
 	r.prewarmLoadedMCPThreads()
+}
+
+func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
+	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
+	if r == nil || r.services.Plugins == nil {
+		return base
+	}
+	contributions := r.services.Plugins.EnabledMCPServerContributions()
+	overlays := make([]mcp.ConfigOverlay, 0, len(contributions))
+	for _, contribution := range contributions {
+		server := mcp.ServerConfigFromValues(contribution.Config)
+		if server == nil {
+			continue
+		}
+		if server.Command != "" && server.CWD == "" {
+			server.CWD = contribution.PluginRoot
+		}
+		overlays = append(overlays, mcp.ConfigOverlay{
+			Name:              contribution.Name,
+			Config:            *server,
+			ContributorID:     contribution.PluginID,
+			ContributionOrder: contribution.Order,
+			Source:            mcp.CatalogSourcePlugin,
+			PluginID:          contribution.PluginID,
+			PluginDisplayName: contribution.PluginDisplayName,
+		})
+	}
+	if len(overlays) == 0 {
+		return base
+	}
+	return mcp.NewManager(nil).RuntimeConfig(*base, overlays)
 }
 
 func (r *RuntimeRouter) handleMCPServerStatusList(request *Request) (*mcp.MCPListServerStatusResponse, error) {
@@ -6884,16 +6947,57 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	sessionResults := r.importExternalAgentSessions(&params)
-	response, notification := r.requireConfig().ImportExternalAgentConfigWithResults(&params, sessionResults)
-	if r.services.Plugins != nil {
-		_ = r.services.Plugins.ReloadConfig()
-	}
-	if notification != nil && len(notification.ItemTypeResults) > 0 {
-		r.notify(NotificationExternalAgentConfigImportCompleted, notification)
-		r.emitExternalAgentConfigImportAnalytics(context.Background(), request.normalizedConnectionID(), &params, notification)
+	response, completedResults := r.requireConfig().StartExternalAgentConfigImport(&params, true)
+	if len(params.MigrationItems) > 0 {
+		params.MigrationItems = append([]config.ExternalAgentConfigMigrationItem(nil), params.MigrationItems...)
+		go r.completeExternalAgentConfigImport(params, response.ImportID, completedResults, request.normalizedConnectionID())
 	}
 	return response, nil
+}
+
+func (r *RuntimeRouter) completeExternalAgentConfigImport(params config.ExternalAgentConfigImportParams, importID string, completedResults []config.ExternalAgentConfigImportTypeResult, connectionID string) {
+	sessionResults := make(chan []config.ExternalAgentConfigImportTypeResult, 1)
+	pluginResults := make(chan []config.ExternalAgentConfigImportTypeResult, 1)
+	go func() {
+		if r.services.ExternalAgentSessionImporter != nil {
+			sessionResults <- r.services.ExternalAgentSessionImporter(&params)
+			return
+		}
+		sessionResults <- r.importExternalAgentSessions(&params)
+	}()
+	go func() {
+		pluginParams := params
+		pluginParams.MigrationItems = externalAgentImportItemsOfType(params.MigrationItems, config.MigrationPlugins)
+		pluginResults <- r.requireConfig().ImportExternalAgentConfigItems(&pluginParams)
+	}()
+
+	completedResults = append(append([]config.ExternalAgentConfigImportTypeResult(nil), completedResults...), <-sessionResults...)
+	completedResults = append(completedResults, <-pluginResults...)
+	if externalAgentImportContainsType(params.MigrationItems, config.MigrationPlugins) && r.services.Plugins != nil {
+		_ = r.services.Plugins.ReloadConfig()
+	}
+	notification := r.requireConfig().CompleteExternalAgentConfigImport(importID, &params, completedResults)
+	r.emitExternalAgentConfigImportAnalytics(context.Background(), connectionID, &params, notification)
+	r.notify(NotificationExternalAgentConfigImportCompleted, notification)
+}
+
+func externalAgentImportItemsOfType(items []config.ExternalAgentConfigMigrationItem, itemType config.MigrationItemType) []config.ExternalAgentConfigMigrationItem {
+	out := make([]config.ExternalAgentConfigMigrationItem, 0)
+	for _, item := range items {
+		if item.ItemType == itemType {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func externalAgentImportContainsType(items []config.ExternalAgentConfigMigrationItem, itemType config.MigrationItemType) bool {
+	for _, item := range items {
+		if item.ItemType == itemType {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccountResponse, error) {
@@ -6927,6 +7031,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		}
 		r.requireAccount().ApplyAuthSnapshot(snapshot)
 		r.configureMCPFromConfig()
+		r.maybeStartCuratedRepoSync(false)
 		r.clearRecommendedPluginsCache()
 		r.noteAuthChanged()
 	}
@@ -7148,6 +7253,7 @@ func (r *RuntimeRouter) awaitAccountLoginRuntime(loginID string, done <-chan err
 	}
 	r.requireAccount().ApplyAuthSnapshot(&resolved.Auth)
 	r.configureMCPFromConfig()
+	r.maybeStartCuratedRepoSync(false)
 	r.requireAccount().CompleteLogin(loginID, auth.AccountFromAuth(&resolved.Auth), "")
 	r.noteAuthChanged()
 	r.clearRecommendedPluginsCache()
@@ -7208,7 +7314,10 @@ func (r *RuntimeRouter) handleAccountSessionsLogout(request *Request) (*auth.Acc
 	if err != nil {
 		return nil, err
 	}
+	r.configureMCPFromConfig()
+	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
+	r.noteAuthChanged()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -7222,7 +7331,10 @@ func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.Acc
 	if err != nil {
 		return nil, err
 	}
+	r.configureMCPFromConfig()
+	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
+	r.noteAuthChanged()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -7242,9 +7354,10 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 			return nil, err
 		}
 	}
+	r.configureMCPFromConfig()
+	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
-	r.configureMCPFromConfig()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -7254,6 +7367,35 @@ func (r *RuntimeRouter) clearRecommendedPluginsCache() {
 		return
 	}
 	r.services.Plugins.ClearRecommendedPluginsCache()
+}
+
+func (r *RuntimeRouter) effectivePluginsChanged() {
+	if r == nil {
+		return
+	}
+	r.clearRecommendedPluginsCache()
+	if r.services.Skills != nil {
+		r.services.Skills.ClearCache()
+	}
+	r.configureMCPFromConfig()
+}
+
+func (r *RuntimeRouter) maybeStartCuratedRepoSync(force bool) {
+	if r == nil || r.services.Plugins == nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	cfg := &config.Config{Values: read.Config}
+	if !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
+		return
+	}
+	if !force && !r.services.Plugins.HasConfiguredCuratedPlugins() {
+		return
+	}
+	r.services.Plugins.StartCuratedRepoSync(r.effectivePluginsChanged)
 }
 
 func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResponse, error) {
@@ -8298,7 +8440,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	if cfg == nil {
 		cfg = r.effectiveMCPConfigForThread(threadID)
 	}
-	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) {
+	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && (r.services.Plugins == nil || len(r.services.Plugins.EnabledMCPServerContributions()) == 0) {
 		return nil, false
 	}
 	authRevision, _ := r.authRevisionSnapshot(context.Background())
@@ -8309,7 +8451,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		}
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
-		return mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, cfg.Requirements)
+		return r.runtimeMCPConfig(values, codexHome, runtimeAuth, cfg.Requirements)
 	}
 	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, func(cfg *config.Config) *mcp.MCPService {
 		service := mcp.NewMCPService(runtimeConfig(cfg))
@@ -8712,11 +8854,15 @@ func (r *RuntimeRouter) requireToolRouter(cwd string) (*tool.Router, error) {
 }
 
 func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID string) (*turn.Runtime, error) {
+	return r.buildTurnRuntimeContext(context.Background(), params, turnID)
+}
+
+func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *turn.TurnStartParams, turnID string) (*turn.Runtime, error) {
 	if r.services.TurnRuntime != nil {
 		return r.services.TurnRuntime, nil
 	}
 	cwd := firstNonEmpty(params.CWD, r.services.DefaultCWD)
-	router, err := r.toolRouterForTurn(cwd, params, turnID)
+	router, err := r.toolRouterForTurnContext(ctx, cwd, params, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -8731,6 +8877,13 @@ func (r *RuntimeRouter) buildTurnRuntime(params *turn.TurnStartParams, turnID st
 }
 
 func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartParams, turnID string) (*tool.Router, error) {
+	return r.toolRouterForTurnContext(context.Background(), cwd, params, turnID)
+}
+
+func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string, params *turn.TurnStartParams, turnID string) (*tool.Router, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
@@ -8756,9 +8909,11 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	waitForEnvironmentEnabled := cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_executor")
 	disableUpdatePlan := cfg != nil && !cfg.UpdatePlanEnabled()
 	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
-	var candidates []plugin.DiscoverableInfo
-	if r != nil {
-		candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(cfg))
+	mcpService := r.mcpServiceForThread(threadID, cfg)
+	requiredMCPServers := r.requiredMCPServersForTurn(threadID, cfg, params)
+	candidates, mcpTools, mcpConnectors, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers)
+	if err != nil {
+		return nil, err
 	}
 	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
@@ -8777,8 +8932,6 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 			}
 		}
 	}
-	mcpService := r.mcpServiceForThread(threadID, cfg)
-	mcpTools, mcpConnectors := r.mcpRuntimeInputsForService(threadID, cfg, mcpService)
 	executorSkillProviders := r.executorSkillProviderForThread(threadID)
 	if r != nil && r.services.ToolRouter != nil && viewImageOptions != nil {
 		if err := r.services.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*viewImageOptions)); err != nil {
@@ -8881,6 +9034,14 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.SkillProviders = executorSkillProviders
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
+	if runtimeToolsUseOpenAIFileUpload(mcpTools) {
+		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
+		options.OpenAIFileRewriter = mcp.NewOpenAIFileRewriterWithOptions(mcp.OpenAIFileRewriterOptions{
+			CWD:        cwd,
+			Auth:       mcp.OpenAIFileAuthFromRuntimeAuth(runtimeAuth, cfg.ChatGPTBaseURL()),
+			HTTPClient: r.httpClientForConfig(cfg),
+		})
+	}
 	options.EnableAgents = false
 	if cfg != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
 		agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
@@ -8888,11 +9049,36 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 			return nil, agentsErr
 		}
 		enabled := agentsConfig.Enabled == nil || *agentsConfig.Enabled
-		if enabled && len(agentsConfig.Roles) > 0 {
+		v2Enabled := features.Enabled(cfg.FeatureSettings(), "multi_agent_v2")
+		if enabled && (len(agentsConfig.Roles) > 0 || v2Enabled) {
 			options.EnableAgents = true
-			options.AgentController = newRuntimeAgentController(r, threadID, cwd, agentsConfig.MaxConcurrentThreadsPerSession)
+			version := agent.VersionV1
+			maxThreads := agentsConfig.MaxConcurrentThreadsPerSession
+			defaults := agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
+			if v2Enabled {
+				v2Config, configErr := cfg.MultiAgentV2Config(maxThreads)
+				if configErr != nil {
+					return nil, configErr
+				}
+				version = agent.VersionV2
+				maxThreads = v2Config.MaxConcurrentThreadsPerSession
+				options.AgentNamespace = v2Config.ToolNamespace
+				options.AgentWaitMin = v2Config.MinWaitTimeout
+				options.AgentWaitMax = v2Config.MaxWaitTimeout
+				options.AgentWaitDefault = v2Config.DefaultWaitTimeout
+				options.AgentWaitConfigured = true
+				options.AgentHideSpawnMetadata = v2Config.HideSpawnAgentMetadata
+				options.AgentExposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
+				if v2Config.NonCodeModeOnly {
+					options.AgentExposure = tool.ExposureDirectModelOnly
+				}
+				options.DisableWaitAgent = options.DisableWaitAgent || !v2Config.WaitAgentEnabled
+				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
+			}
+			options.AgentVersion = version
+			options.AgentController = newRuntimeAgentControllerWithVersion(r, threadID, cwd, maxThreads, version)
 			options.AgentRoles = agentsConfig.Roles
-			options.AgentDefaults = agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
+			options.AgentDefaults = defaults
 		}
 	}
 	if params != nil && len(params.DynamicTools) > 0 {
@@ -8925,6 +9111,58 @@ func (r *RuntimeRouter) toolRouterForTurn(cwd string, params *turn.TurnStartPara
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+type turnMCPPreparation struct {
+	tools      []mcp.RuntimeToolInfo
+	connectors []mcp.RuntimeConnector
+}
+
+func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID string, cfg *config.Config, mcpService *mcp.MCPService, requiredMCPServers []string) ([]plugin.DiscoverableInfo, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Both preparation branches consult the app catalog. Initialize its shared
+	// service before either goroutine can observe the lazy service pointer.
+	if r != nil {
+		_ = r.requireApps()
+	}
+	recommendations := make(chan []plugin.DiscoverableInfo, 1)
+	mcpPrepared := make(chan turnMCPPreparation, 1)
+	go func() {
+		var candidates []plugin.DiscoverableInfo
+		if r != nil {
+			candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurnContext(ctx, cfg))
+		}
+		recommendations <- candidates
+	}()
+	go func() {
+		tools, connectors := r.mcpRuntimeInputsForServiceWithRequired(threadID, cfg, mcpService, requiredMCPServers)
+		mcpPrepared <- turnMCPPreparation{tools: tools, connectors: connectors}
+	}()
+
+	var candidates []plugin.DiscoverableInfo
+	select {
+	case <-ctx.Done():
+		return nil, nil, nil, ctx.Err()
+	case candidates = <-recommendations:
+	}
+	var prepared turnMCPPreparation
+	select {
+	case <-ctx.Done():
+		return nil, nil, nil, ctx.Err()
+	case prepared = <-mcpPrepared:
+	}
+	return candidates, prepared.tools, prepared.connectors, nil
+}
+
+func runtimeToolsUseOpenAIFileUpload(tools []mcp.RuntimeToolInfo) bool {
+	for i := range tools {
+		if len(tools[i].OpenAIFileInputOptionalFields) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string) *tool.ViewImageOptions {
@@ -9471,12 +9709,18 @@ func (r *RuntimeRouter) mcpRuntimeInputsForTurn(threadID string, cfg *config.Con
 }
 
 func (r *RuntimeRouter) mcpRuntimeInputsForService(threadID string, cfg *config.Config, service *mcp.MCPService) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+	return r.mcpRuntimeInputsForServiceWithRequired(threadID, cfg, service, nil)
+}
+
+func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequired(threadID string, cfg *config.Config, service *mcp.MCPService, requiredServers []string) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
 	if r == nil || service == nil {
 		return nil, nil
 	}
 	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
-		ThreadID: stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
-		Detail:   &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		ThreadID:            stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
+		Detail:              &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		RequiredServers:     append([]string(nil), requiredServers...),
+		NonBlockingOptional: true,
 	})
 	if err != nil || response == nil {
 		return nil, nil
@@ -9492,6 +9736,140 @@ func (r *RuntimeRouter) mcpRuntimeInputsForService(threadID string, cfg *config.
 	}
 	tools = r.annotateRuntimeMCPToolsWithPluginSources(tools)
 	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg)
+}
+
+func (r *RuntimeRouter) requiredMCPServersForTurn(threadID string, cfg *config.Config, params *turn.TurnStartParams) []string {
+	required := map[string]bool{}
+	add := func(values ...string) {
+		for _, value := range values {
+			if value = strings.TrimSpace(value); value != "" {
+				required[value] = true
+			}
+		}
+	}
+	if params != nil {
+		add(mcpServerNamesFromTurnText(params.Prompt)...)
+		for _, input := range params.Input {
+			if strings.EqualFold(strings.TrimSpace(input.Type), "mention") {
+				add(mcpServerNameFromMentionPath(input.Path))
+			}
+			add(mcpServerNamesFromTurnText(input.Text)...)
+			if strings.EqualFold(strings.TrimSpace(input.Type), "skill") && strings.HasPrefix(strings.TrimSpace(input.Path), "skill://") {
+				add(mcp.RuntimeCodexAppsMCPServerName)
+			}
+		}
+	}
+
+	capabilities := []plugin.CapabilitySummary(nil)
+	if r != nil && r.services.Plugins != nil {
+		capabilities = r.services.Plugins.EnabledCapabilities()
+		for _, capability := range plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities) {
+			add(capability.MCPServers...)
+		}
+	}
+
+	metadata := r.skillMetadataForMCPRequirements(threadID, params)
+	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
+		Inputs: skillMentionInputsFromTurn(params), Skills: metadata,
+	})
+	for _, skill := range selected {
+		for _, dependency := range skill.Dependencies {
+			if strings.EqualFold(strings.TrimSpace(dependency.Type), "mcp") {
+				add(dependency.Value)
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), "orchestrator") {
+			add(mcp.RuntimeCodexAppsMCPServerName)
+		}
+		for _, capability := range capabilities {
+			if skill.PluginID == capability.ConfigName || skill.RemotePluginID == capability.RemotePluginID {
+				add(capability.MCPServers...)
+			}
+		}
+	}
+
+	out := make([]string, 0, len(required))
+	for name := range required {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, params *turn.TurnStartParams) []promptctx.InstructionsSkillMetadata {
+	if r == nil || r.services.Skills == nil {
+		return nil
+	}
+	listParams := &SkillsListParams{}
+	if params != nil {
+		sessionConfig := &config.Config{Values: map[string]any{}}
+		applyRuntimeConfigOverrides(sessionConfig, turnConfigOverrides(params))
+		listParams.Config = skillConfigEntriesFromValues(sessionConfig.Values)
+		if cwd := turnCWD(params); cwd != "" {
+			listParams.CWDs = []string{cwd}
+		}
+	}
+	response, err := r.services.Skills.List(listParams)
+	if err != nil || response == nil {
+		return nil
+	}
+	entries := cloneSkills(response.Skills)
+	if r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled {
+		if pluginEntries, pluginErr := r.pluginSkillEntriesForRuntime(); pluginErr == nil {
+			if pluginEntries, pluginErr = r.services.Skills.applyConfigEntries(pluginEntries, listParams.Config); pluginErr == nil {
+				entries = append(entries, pluginEntries...)
+			}
+		}
+	}
+	if capabilityEntries, _, capabilityErr := r.selectedCapabilitySkillEntriesForRuntime(threadID); capabilityErr == nil {
+		if capabilityEntries, capabilityErr = r.services.Skills.applyConfigEntries(capabilityEntries, listParams.Config); capabilityErr == nil {
+			entries = append(entries, capabilityEntries...)
+		}
+	}
+	metadata := promptSkillMetadataFromEntries(entries)
+	custom, _ := r.customSkillMetadataForRuntime(context.Background(), "")
+	return append(metadata, custom...)
+}
+
+func mcpServerNamesFromTurnText(text string) []string {
+	const prefix = "mcp://"
+	out := []string{}
+	for remaining := text; ; {
+		index := strings.Index(remaining, prefix)
+		if index < 0 {
+			break
+		}
+		remaining = remaining[index+len(prefix):]
+		end := strings.IndexFunc(remaining, func(character rune) bool {
+			return character == '/' || character == '\\' || character == ')' || character == ']' || character == '}' || character == '>' || character == '"' || character == '\'' || character == '`' || character == ',' || character == ';' || character == ':' || character == '?' || character == '#' || character == '&' || character == '=' || character == ' ' || character == '\t' || character == '\r' || character == '\n'
+		})
+		name := remaining
+		if end >= 0 {
+			name = remaining[:end]
+			remaining = remaining[end:]
+		} else {
+			remaining = ""
+		}
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+		if remaining == "" {
+			break
+		}
+	}
+	return out
+}
+
+func mcpServerNameFromMentionPath(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "mcp://") {
+		return ""
+	}
+	names := mcpServerNamesFromTurnText(path)
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }
 
 func (r *RuntimeRouter) mcpRuntimeConnectorsForTurn(threadID string, cfg *config.Config) []mcp.RuntimeConnector {
@@ -9706,6 +10084,7 @@ func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.
 	}
 	r.requireAccount().ApplyAuthSnapshot(&snapshot)
 	r.configureMCPFromConfig()
+	r.maybeStartCuratedRepoSync(false)
 	r.noteAuthChanged()
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return &model.ExternalAuthRefreshResponse{
@@ -9790,16 +10169,6 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return
 	}
-	runtime, err := r.buildTurnRuntime(params, response.Turn.ID)
-	if err != nil {
-		r.clearActiveRuntimeTurn(params.ThreadID, "")
-		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
-		return
-	}
-	if runtime == nil {
-		r.clearActiveRuntimeTurn(params.ThreadID, "")
-		return
-	}
 	paramsCopy := cloneTurnStartParams(params)
 	turnCopy := response.Turn
 	ctx, cancel := context.WithCancel(context.Background())
@@ -9811,6 +10180,18 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 	r.updateActiveRuntimeTurnAnalytics(params.ThreadID, response.Turn.ID, connectionID, nil)
 	go func() {
 		defer r.threads.TurnWorkerDone()
+		runtime, err := r.buildTurnRuntimeContext(ctx, paramsCopy, response.Turn.ID)
+		if err != nil {
+			if ctx.Err() == nil {
+				r.clearActiveRuntimeTurn(paramsCopy.ThreadID, response.Turn.ID)
+				r.emitTurnRuntimeError(paramsCopy.ThreadID, response.Turn.ID, err)
+			}
+			return
+		}
+		if runtime == nil {
+			r.clearActiveRuntimeTurn(paramsCopy.ThreadID, response.Turn.ID)
+			return
+		}
 		r.runTurnRuntime(ctx, paramsCopy, &turnCopy, runtime, connectionID)
 	}()
 }

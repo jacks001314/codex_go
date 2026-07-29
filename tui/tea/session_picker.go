@@ -333,6 +333,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}
+	m.resetAgentPickerRefresh(true)
 	m.State.SetThreadID(threadID)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)

@@ -92,6 +92,7 @@ type LoadOptions struct {
 	CWD                  string
 	IncludeManagedConfig bool
 	ManagedConfigPath    string
+	CloudConfigBundle    *CloudConfigLoader
 }
 
 type EffectiveOptions struct {
@@ -103,6 +104,7 @@ type EffectiveOptions struct {
 	StrictConfig         bool
 	IncludeManagedConfig bool
 	ManagedConfigPath    string
+	CloudConfigBundle    *CloudConfigLoader
 }
 
 func Load(codexHome string) (*Config, error) {
@@ -151,6 +153,19 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts != nil && opts.IncludeManagedConfig && opts.CloudConfigBundle != nil {
+		bundle, err := opts.CloudConfigBundle.Get()
+		if err != nil {
+			return nil, err
+		}
+		if bundle != nil && !bundle.IsEmpty() {
+			cloudRequirements, err := applyCloudConfigBundle(values, requirements, *bundle, codexHome)
+			if err != nil {
+				return nil, err
+			}
+			requirements = cloudRequirements
+		}
+	}
 	return &Config{Values: values, Requirements: requirements}, nil
 }
 
@@ -174,6 +189,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		loadOpts.CWD = opts.CWD
 		loadOpts.IncludeManagedConfig = opts.IncludeManagedConfig
 		loadOpts.ManagedConfigPath = opts.ManagedConfigPath
+		loadOpts.CloudConfigBundle = opts.CloudConfigBundle
 	}
 	cfg, err := LoadWithOptions(codexHome, loadOpts)
 	if err != nil {

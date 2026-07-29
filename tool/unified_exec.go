@@ -26,7 +26,7 @@ import (
 
 const (
 	unifiedExecMinYieldMS            uint64 = 250
-	unifiedExecWindowsInitialYieldMS uint64 = 2_000
+	unifiedExecWindowsInitialYieldMS uint64 = 10_000
 	unifiedExecMinEmptyPollYieldMS   uint64 = 5_000
 	unifiedExecMaxYieldMS            uint64 = 30_000
 	unifiedExecDefaultMaxEmptyPollMS uint64 = 300_000
@@ -1324,11 +1324,15 @@ func (p *unifiedExecProcess) interrupt() error {
 	p.mu.Lock()
 	remote := p.remote
 	remoteID := p.remoteID
+	tty := p.tty
 	process := (*os.Process)(nil)
 	if p.cmd != nil {
 		process = p.cmd.Process
 	}
 	p.mu.Unlock()
+	if runtime.GOOS == "windows" && !tty {
+		return p.terminate()
+	}
 	if remote != nil {
 		_, err := remote.Signal(context.Background(), &execserver.SignalParams{ProcessID: remoteID, Signal: "interrupt"})
 		return err

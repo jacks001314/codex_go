@@ -16,6 +16,9 @@ func (s *PluginService) SetCodexHome(codexHome string) {
 	if codexHome == "" {
 		return
 	}
+	s.mu.Lock()
+	s.codexHome = codexHome
+	s.mu.Unlock()
 	s.SetMarketplaceInstallRoot(filepath.Join(codexHome, InstalledMarketplacesDir))
 	s.SetMarketplaceConfigPath(filepath.Join(codexHome, ConfigTOMLFilename))
 }

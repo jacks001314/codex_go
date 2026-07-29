@@ -33,19 +33,18 @@ func interactiveExternalAgentDetectHandler(root *cli.RootOptions) codextea.Exter
 }
 
 func interactiveExternalAgentImportHandler(root *cli.RootOptions) codextea.ExternalAgentImportFunc {
-	return func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, config.ExternalAgentConfigImportCompletedNotification, error) {
+	return func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, <-chan codextea.ExternalAgentImportCompletion, error) {
 		router := appserver.NewRuntimeRouter(appserver.RuntimeServices{
 			Config:       interactiveConfigService(root),
 			ThreadRouter: appserver.NewRouter(newSessionStore()),
 		})
-		defer router.Close()
-		var completed config.ExternalAgentConfigImportCompletedNotification
+		notifications := make(chan config.ExternalAgentConfigImportCompletedNotification, 1)
 		router.SetNotificationSink(appserver.NotificationSinkFunc(func(notification *appserver.Notification) {
 			if notification == nil || notification.Method != appserver.NotificationExternalAgentConfigImportCompleted {
 				return
 			}
 			if payload, ok := notification.Params.(*config.ExternalAgentConfigImportCompletedNotification); ok && payload != nil {
-				completed = *payload
+				notifications <- *payload
 			}
 		}))
 		migrationSource = strings.TrimSpace(migrationSource)
@@ -54,7 +53,8 @@ func interactiveExternalAgentImportHandler(root *cli.RootOptions) codextea.Exter
 			MigrationSource: &migrationSource,
 		})
 		if err != nil {
-			return config.ExternalAgentConfigImportResponse{}, completed, err
+			_ = router.Close()
+			return config.ExternalAgentConfigImportResponse{}, nil, err
 		}
 		response := router.Handle(&appserver.Request{
 			JSONRPC: "2.0",
@@ -63,16 +63,26 @@ func interactiveExternalAgentImportHandler(root *cli.RootOptions) codextea.Exter
 			Params:  params,
 		})
 		if response == nil {
-			return config.ExternalAgentConfigImportResponse{}, completed, errors.New("externalAgentConfig/import returned no response")
+			_ = router.Close()
+			return config.ExternalAgentConfigImportResponse{}, nil, errors.New("externalAgentConfig/import returned no response")
 		}
 		if response.Error != nil {
-			return config.ExternalAgentConfigImportResponse{}, completed, errors.New(response.Error.Message)
+			_ = router.Close()
+			return config.ExternalAgentConfigImportResponse{}, nil, errors.New(response.Error.Message)
 		}
 		imported, ok := response.Result.(*config.ExternalAgentConfigImportResponse)
 		if !ok || imported == nil {
-			return config.ExternalAgentConfigImportResponse{}, completed, errors.New("externalAgentConfig/import returned an unexpected response")
+			_ = router.Close()
+			return config.ExternalAgentConfigImportResponse{}, nil, errors.New("externalAgentConfig/import returned an unexpected response")
 		}
-		return *imported, completed, nil
+		completion := make(chan codextea.ExternalAgentImportCompletion, 1)
+		go func() {
+			completed := <-notifications
+			completion <- codextea.ExternalAgentImportCompletion{Completed: completed}
+			close(completion)
+			_ = router.Close()
+		}()
+		return *imported, completion, nil
 	}
 }
 

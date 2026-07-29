@@ -55,13 +55,21 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 	}
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
-		profileID = stringFromConfigValue(c.Values["default_permissions"])
+		if c.Requirements != nil && c.Requirements.DefaultPermissions != nil {
+			profileID = strings.TrimSpace(*c.Requirements.DefaultPermissions)
+		}
+		if profileID == "" {
+			profileID = stringFromConfigValue(c.Values["default_permissions"])
+		}
 	}
 	if profileID == "" {
 		if len(profiles) > 0 {
 			return nil, fmt.Errorf("config defines `[permissions]` profiles but does not set `default_permissions`")
 		}
 		return c.resolveLegacySandboxPermissionProfile(cwd)
+	}
+	if c.Requirements != nil && c.Requirements.AllowedPermissionProfiles != nil && !c.Requirements.AllowedPermissionProfiles[profileID] {
+		return nil, fmt.Errorf("permission profile %q is disallowed by managed requirements", profileID)
 	}
 	if !strings.HasPrefix(profileID, ":") {
 		if _, ok := profiles[profileID]; ok {

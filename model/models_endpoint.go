@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,8 @@ import (
 const modelsEndpointETagHeader = "X-Models-ETag"
 const modelsEndpointClientVersion = "0.0.0"
 const modelsEndpointRefreshTimeout = 5 * time.Second
+const defaultModelsCacheTTL = 5 * time.Minute
+const modelsCacheFilename = "models_cache.json"
 
 type ModelsEndpoint interface {
 	ListModels(ctx context.Context, etag string) (*ModelsEndpointResponse, error)
@@ -109,6 +113,17 @@ type RemoteModelsManager struct {
 	fetched                         bool
 	endpoint                        ModelsEndpoint
 	useRemoteCatalogAsSourceOfTruth bool
+	cachePath                       string
+	cacheTTL                        time.Duration
+	cacheClientVersion              string
+	now                             func() time.Time
+}
+
+type modelsCache struct {
+	FetchedAt     time.Time   `json:"fetched_at"`
+	ETag          string      `json:"etag,omitempty"`
+	ClientVersion string      `json:"client_version,omitempty"`
+	Models        []ModelInfo `json:"models"`
 }
 
 type RemoteModelsManagerOptions struct {
@@ -136,7 +151,26 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		remoteModels:                    cloneModelInfos(catalog.Models),
 		endpoint:                        options.Endpoint,
 		useRemoteCatalogAsSourceOfTruth: options.UseRemoteCatalogAsSourceOfTruth,
+		now:                             time.Now,
 	}
+}
+
+func (m *RemoteModelsManager) ConfigureCache(codexHome string) {
+	if m == nil {
+		return
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if codexHome == "" {
+		m.cachePath = ""
+		m.cacheTTL = 0
+		m.cacheClientVersion = ""
+		return
+	}
+	m.cachePath = filepath.Join(codexHome, modelsCacheFilename)
+	m.cacheTTL = defaultModelsCacheTTL
+	m.cacheClientVersion = modelsEndpointClientVersion
 }
 
 func (m *RemoteModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {
@@ -187,6 +221,7 @@ func (m *RemoteModelsManager) RefreshIfNewETag(etag string) {
 	current := m.etag
 	m.mu.RUnlock()
 	if current != "" && current == etag {
+		m.renewCacheTTLIfNeeded()
 		return
 	}
 	m.refreshAvailableModels(RefreshOnline)
@@ -199,11 +234,13 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	switch strategy {
 	case RefreshOnline:
 		m.fetchAndUpdateModels()
+	case RefreshOffline:
+		m.tryLoadFreshCache()
 	case RefreshOnlineIfUncached:
 		m.mu.RLock()
 		shouldFetch := !m.fetched
 		m.mu.RUnlock()
-		if shouldFetch {
+		if shouldFetch && !m.tryLoadFreshCache() {
 			m.fetchAndUpdateModels()
 		}
 	}
@@ -224,11 +261,11 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 				m.etag = strings.TrimSpace(response.ETag)
 			}
 			m.mu.Unlock()
+			m.renewCacheTTLIfNeeded()
 		}
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.fetched = true
 	if len(response.Models) > 0 {
 		if m.useRemoteCatalogAsSourceOfTruth && hasRemoteSourceOfTruthModel(response.Models) {
@@ -240,6 +277,112 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 	if strings.TrimSpace(response.ETag) != "" {
 		m.etag = strings.TrimSpace(response.ETag)
 	}
+	cache := modelsCache{
+		FetchedAt:     m.nowLocked(),
+		ETag:          m.etag,
+		ClientVersion: m.cacheClientVersion,
+		Models:        cloneModelInfos(response.Models),
+	}
+	cachePath := m.cachePath
+	m.mu.Unlock()
+	if cachePath != "" {
+		_ = writeModelsCache(cachePath, &cache)
+	}
+}
+
+func (m *RemoteModelsManager) tryLoadFreshCache() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	cachePath := m.cachePath
+	cacheTTL := m.cacheTTL
+	clientVersion := m.cacheClientVersion
+	now := m.nowLocked()
+	m.mu.RUnlock()
+	if cachePath == "" || cacheTTL <= 0 {
+		return false
+	}
+	cache, err := readModelsCache(cachePath)
+	if err != nil || cache.ClientVersion != clientVersion || !cache.isFresh(now, cacheTTL) {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fetched {
+		return true
+	}
+	m.fetched = true
+	m.etag = strings.TrimSpace(cache.ETag)
+	if len(cache.Models) > 0 {
+		if m.useRemoteCatalogAsSourceOfTruth && hasRemoteSourceOfTruthModel(cache.Models) {
+			m.remoteModels = cloneModelInfos(cache.Models)
+		} else {
+			m.remoteModels = mergeModelInfos(m.remoteModels, cache.Models)
+		}
+	}
+	return true
+}
+
+func (m *RemoteModelsManager) renewCacheTTLIfNeeded() {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	cachePath := m.cachePath
+	cacheTTL := m.cacheTTL
+	now := m.nowLocked()
+	m.mu.RUnlock()
+	if cachePath == "" || cacheTTL <= 0 {
+		return
+	}
+	cache, err := readModelsCache(cachePath)
+	if err != nil || cache.isFresh(now, cacheTTL/2) {
+		return
+	}
+	cache.FetchedAt = now
+	_ = writeModelsCache(cachePath, cache)
+}
+
+func (m *RemoteModelsManager) nowLocked() time.Time {
+	if m != nil && m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (c *modelsCache) isFresh(now time.Time, ttl time.Duration) bool {
+	if c == nil || c.FetchedAt.IsZero() || ttl <= 0 {
+		return false
+	}
+	age := now.Sub(c.FetchedAt)
+	return age <= ttl
+}
+
+func readModelsCache(path string) (*modelsCache, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cache modelsCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
+func writeModelsCache(path string, cache *modelsCache) error {
+	if cache == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func hasRemoteSourceOfTruthModel(models []ModelInfo) bool {

@@ -1057,6 +1057,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
+		ToolMode:                     runConfig.ToolMode,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskRegular,
 		ThreadID:                     threadID,
@@ -1295,6 +1296,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
+		ToolMode:                     runConfig.ToolMode,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskReview,
 		ThreadID:                     threadID,
@@ -4735,6 +4737,7 @@ func providerFromTurnStart(params *turn.TurnStartParams) string {
 
 type appTurnRunConfig struct {
 	Model                        string
+	ToolMode                     string
 	ProviderID                   string
 	Instructions                 string
 	Originator                   string
@@ -4908,8 +4911,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if permissionProfile != nil && permissionProfile.Profile != nil && !permissionProfile.Profile.Disabled && runtime.GOOS != "linux" {
 		unifiedExecEnabled = false
 	}
+	toolMode := ""
+	if modelInfo != nil {
+		toolMode = modelInfo.ToolMode
+	}
 	return &appTurnRunConfig{
 		Model:                        modelProviderConfig.Model,
+		ToolMode:                     toolMode,
 		ProviderID:                   modelProviderConfig.ProviderID,
 		Instructions:                 instructions,
 		Originator:                   strings.TrimSpace(params.Originator),
@@ -5574,11 +5582,15 @@ func appEnabledForRuntime(app *apps.AppEntry) bool {
 }
 
 func (r *RuntimeRouter) pluginInstallCandidatesForTurn(cfg *config.Config) []plugin.DiscoverableInfo {
+	return r.pluginInstallCandidatesForTurnContext(context.Background(), cfg)
+}
+
+func (r *RuntimeRouter) pluginInstallCandidatesForTurnContext(ctx context.Context, cfg *config.Config) []plugin.DiscoverableInfo {
 	if r == nil || r.services.Plugins == nil {
 		return nil
 	}
 	r.configureSuggestedPluginProviderForTurn(cfg)
-	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidates(), r.pluginDiscoverableConfigForTurn(cfg))
+	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidatesContext(ctx), r.pluginDiscoverableConfigForTurn(cfg))
 }
 
 func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo) []plugin.DiscoverableInfo {
@@ -5968,7 +5980,7 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 	}
 	mentioned := plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities)
 	if len(mentioned) > 0 {
-		mcpTools, _ := r.mcpRuntimeInputsForTurn(threadID, cfg)
+		mcpTools, _ := r.mcpRuntimeInputsForServiceWithRequired(threadID, cfg, r.mcpServiceForThread(threadID, cfg), r.requiredMCPServersForTurn(threadID, cfg, params))
 		appsByID := r.appsForExplicitMentions(threadID, cfg)
 		for _, text := range plugin.BuildPluginInjections(
 			mentioned,
@@ -6119,33 +6131,30 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		return strings.TrimSpace(instructions), skillInputItems, postToolInputItems, nil
 	}
 	includeUsageInstructions := r.includeSkillsUsageInstructionsForTurn(cfg, params)
-	hostAvailable := promptctx.RenderAvailableSkillsWithOptions(
+	executorMetadata := append(append(append([]promptctx.InstructionsSkillMetadata(nil), orchestratorMetadata...), selectedCapabilitySkillMetadata...), customMetadata...)
+	hostAvailable, executorAvailable := promptctx.RenderCombinedAvailableSkills(
 		hostSkillMetadata,
+		executorMetadata,
 		promptctx.AvailableSkillsRenderOptions{
 			Budget:                   promptctx.DefaultSkillMetadataBudget(r.skillContextWindowForTurn(cfg, params)),
 			IncludeUsageInstructions: includeUsageInstructions,
 		},
 	)
-	if hostAvailable != nil && hostAvailable.WarningMessage != nil && strings.TrimSpace(*hostAvailable.WarningMessage) != "" {
-		r.notify(NotificationWarning, &WarningNotification{
-			ThreadID: stringPtrIfNotEmpty(threadID),
-			Message:  strings.TrimSpace(*hostAvailable.WarningMessage),
-		})
-	}
-	extensionAvailable := []*promptctx.AvailableSkills{
-		promptctx.RenderExtensionAvailableSkills(orchestratorMetadata, includeUsageInstructions),
-		promptctx.RenderExtensionAvailableSkills(selectedCapabilitySkillMetadata, includeUsageInstructions),
-		promptctx.RenderExtensionAvailableSkills(customMetadata, includeUsageInstructions),
+	for _, available := range []*promptctx.AvailableSkills{hostAvailable, executorAvailable} {
+		if available != nil && available.WarningMessage != nil && strings.TrimSpace(*available.WarningMessage) != "" {
+			r.notify(NotificationWarning, &WarningNotification{
+				ThreadID: stringPtrIfNotEmpty(threadID),
+				Message:  strings.TrimSpace(*available.WarningMessage),
+			})
+		}
 	}
 	skillInputItems := r.explicitSkillInputItemsForTurn(threadID, turnID, modelID, params, skillMetadata)
-	rendered := make([]string, 0, 5)
+	rendered := make([]string, 0, 3)
 	if hostAvailable != nil {
 		rendered = append(rendered, hostAvailable.Body)
 	}
-	for _, available := range extensionAvailable {
-		if available != nil {
-			rendered = append(rendered, available.Body)
-		}
+	if executorAvailable != nil {
+		rendered = append(rendered, executorAvailable.Body)
 	}
 	rendered = append(rendered, instructions)
 	return strings.Join(nonEmpty(rendered), "\n\n"), skillInputItems, postToolInputItems, nil
@@ -6454,6 +6463,8 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 				LocatorKind:             promptSkillLocatorKind(entry),
 				Root:                    entry.Root,
 				Description:             description,
+				ShortDescription:        entry.ShortDescription,
+				RoutingMetadata:         promptSkillRoutingMetadata(entry.Interface),
 				PluginID:                entry.PluginID,
 				RemotePluginID:          entry.RemotePluginID,
 				Contents:                entry.Contents,
@@ -6462,6 +6473,7 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 				AuthorityID:             entry.AuthorityID,
 				PackageID:               entry.PackageID,
 				ResourceID:              entry.ResourceID,
+				Dependencies:            promptDependenciesFromSkillEntry(entry.Dependencies),
 			})
 		}
 	}
@@ -6623,6 +6635,49 @@ func promptDependenciesFromCustomSkill(dependencies []skillprovider.ToolDependen
 			Command:   dependency.Command,
 			URL:       dependency.URL,
 		})
+	}
+	return out
+}
+
+func promptSkillRoutingMetadata(value *SkillInterface) string {
+	if value == nil {
+		return ""
+	}
+	defaultPrompt := ""
+	if value.DefaultPrompt != nil {
+		defaultPrompt = *value.DefaultPrompt
+	}
+	return strings.Join(nonEmptyStrings(value.DisplayName, value.ShortDescription, defaultPrompt), " ")
+}
+
+func promptDependenciesFromSkillEntry(dependencies *SkillDependencies) []promptctx.InstructionsSkillDependency {
+	if dependencies == nil {
+		return nil
+	}
+	limit := min(len(dependencies.Tools), 32)
+	out := make([]promptctx.InstructionsSkillDependency, 0, limit)
+	for _, dependency := range dependencies.Tools[:limit] {
+		command, url := "", ""
+		if dependency.Command != nil {
+			command = *dependency.Command
+		}
+		if dependency.URL != nil {
+			url = *dependency.URL
+		}
+		out = append(out, promptctx.InstructionsSkillDependency{
+			Type: dependency.Type, Value: dependency.Value, Description: dependency.Description,
+			Transport: dependency.Transport, Command: command, URL: url,
+		})
+	}
+	return out
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
 	}
 	return out
 }

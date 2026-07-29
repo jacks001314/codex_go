@@ -2898,7 +2898,9 @@ func (p *processState) signal(params *SignalParams) (*SignalResponse, error) {
 	p.mu.Lock()
 	cmd := p.cmd
 	signalFn := p.signalFn
-	running := !p.exited && (signalFn != nil || (cmd != nil && cmd.Process != nil))
+	terminateFn := p.terminateFn
+	tty := p.tty
+	running := !p.exited && (signalFn != nil || terminateFn != nil || (cmd != nil && cmd.Process != nil))
 	p.mu.Unlock()
 	if !running {
 		return &SignalResponse{}, nil
@@ -2906,14 +2908,25 @@ func (p *processState) signal(params *SignalParams) (*SignalResponse, error) {
 	if params != nil && params.Signal != "" && !strings.EqualFold(params.Signal, "interrupt") {
 		return nil, fmt.Errorf("unsupported process signal %s", params.Signal)
 	}
+	if runtime.GOOS == "windows" && !tty {
+		if terminateFn != nil {
+			if err := terminateFn(); err != nil {
+				return nil, fmt.Errorf("failed to terminate process on interrupt: %w", err)
+			}
+			return &SignalResponse{}, nil
+		}
+		if cmd != nil && cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil {
+				return nil, fmt.Errorf("failed to terminate process on interrupt: %w", err)
+			}
+		}
+		return &SignalResponse{}, nil
+	}
 	if signalFn != nil {
 		if err := signalFn(); err != nil {
 			return nil, fmt.Errorf("failed to signal process: %w", err)
 		}
 		return &SignalResponse{}, nil
-	}
-	if runtime.GOOS == "windows" {
-		return nil, errors.New("process interrupt is not supported by this process backend")
 	}
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		return nil, fmt.Errorf("failed to signal process: %w", err)

@@ -24,6 +24,7 @@ type MultiAgentV2Config struct {
 	ExposeSpawnAgentModelOverrides bool
 	WaitAgentEnabled               bool
 	NonCodeModeOnly                bool
+	SubagentDeveloperInstructions  *string
 }
 
 func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) {
@@ -85,6 +86,10 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 			return nil, err
 		}
 		out.ToolNamespace = value
+	}
+	if value, ok := raw["subagent_developer_instructions"].(string); ok {
+		trimmed := strings.TrimSpace(value)
+		out.SubagentDeveloperInstructions = &trimmed
 	}
 	for key, target := range map[string]*bool{
 		"hide_spawn_agent_metadata":          &out.HideSpawnAgentMetadata,

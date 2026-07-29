@@ -64,6 +64,22 @@ func TestEventBrokerStreamMappingPauseResumeAndFairness(t *testing.T) {
 	}
 }
 
+func TestFocusGainedPreservesAlreadyQueuedKey(t *testing.T) {
+	stream := NewEventStreamState(NewEventBroker())
+	stream.TerminalFocused = false
+	stream.PushTerminalEvent(TerminalEvent{Kind: TerminalEventFocusGained})
+	stream.PushTerminalEvent(TerminalEvent{Kind: TerminalEventKey, Key: "f"})
+
+	event, ok := stream.NextEvent()
+	if !ok || event.Kind != TuiEventDraw || !stream.TerminalFocused {
+		t.Fatalf("focus event = %#v ok=%v focused=%v", event, ok, stream.TerminalFocused)
+	}
+	event, ok = stream.NextEvent()
+	if !ok || event.Kind != TuiEventKey || event.Key != "f" {
+		t.Fatalf("queued key = %#v ok=%v", event, ok)
+	}
+}
+
 func TestKeyboardModeDetectionAndAnsiMatchRust(t *testing.T) {
 	yes := "YES"
 	no := "0"

@@ -21,9 +21,10 @@ var (
 type Exposure string
 
 const (
-	ExposureModelVisible Exposure = "model_visible"
-	ExposureHidden       Exposure = "hidden"
-	ExposureDiscoverable Exposure = "discoverable"
+	ExposureModelVisible    Exposure = "model_visible"
+	ExposureDirectModelOnly Exposure = "direct_model_only"
+	ExposureHidden          Exposure = "hidden"
+	ExposureDiscoverable    Exposure = "discoverable"
 )
 
 type ToolName struct {
@@ -202,7 +203,7 @@ func (r *Registry) ModelVisibleSpecs() []Spec {
 	defer r.mu.RUnlock()
 	out := make([]Spec, 0, len(r.specs))
 	for _, spec := range r.specs {
-		if spec.Exposure == "" || spec.Exposure == ExposureModelVisible {
+		if spec.Exposure == "" || spec.Exposure == ExposureModelVisible || spec.Exposure == ExposureDirectModelOnly {
 			out = append(out, spec)
 		}
 	}
@@ -322,6 +323,23 @@ func (r *Router) CodeModeToolNames() map[string]CodeModeToolNameMetadata {
 		return nil
 	}
 	return provider.CodeModeToolNames()
+}
+
+func (r *Router) CodeModeToolSpecs() []Spec {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	executor, ok := r.registry.Lookup(PlainName(CodeModeExecToolName))
+	if !ok {
+		return nil
+	}
+	provider, ok := executor.(interface {
+		CodeModeToolSpecs() []Spec
+	})
+	if !ok {
+		return nil
+	}
+	return provider.CodeModeToolSpecs()
 }
 
 func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {

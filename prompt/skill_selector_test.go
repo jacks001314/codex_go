@@ -97,3 +97,20 @@ func TestRoutingCardExactSkillSelectorMatchesRustPriorities(t *testing.T) {
 		t.Fatalf("exact stop word name=%v", got)
 	}
 }
+
+func TestSkillSelectorCharacterRoutingCardUsesInterfaceAndDependencies(t *testing.T) {
+	documents := []SkillSelectionDocument{
+		{ID: 1, Name: "content-tools", Description: "Prepare visual content.", RoutingMetadata: "Create an animated pet spritesheet."},
+		{ID: 2, Name: "team-communication", Description: "Share updates with the team.", Dependencies: "slack Post messages to team channels."},
+		{ID: 3, Name: "documents", Description: "Write project updates."},
+	}
+	if got := SelectSkillsCharacterRoutingCard("animated pet spritesheet", documents, 20).CandidateIDs; len(got) == 0 || got[0] != 1 {
+		t.Fatalf("interface routing candidates = %#v, want 1 first", got)
+	}
+	if got := SelectSkillsCharacterRoutingCard("post this update in Slack", documents, 20).CandidateIDs; len(got) == 0 || got[0] != 2 {
+		t.Fatalf("dependency routing candidates = %#v, want 2 first", got)
+	}
+	if documents[0].ShortDescription != "" || documents[0].RoutingMetadata == "" {
+		t.Fatalf("selector mutated documents: %#v", documents)
+	}
+}

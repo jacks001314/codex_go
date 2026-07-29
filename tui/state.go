@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type MessageRole string
@@ -62,6 +63,8 @@ type State struct {
 	LastTokenUsage          TokenUsage
 	ModelContextWindow      *int64
 	RateLimits              []RateLimitStatus
+	RateLimitsLoaded        bool
+	RateLimitsRefreshing    bool
 	CLIVersion              string
 	AccountDisplay          string
 	AgentsSummary           string
@@ -71,6 +74,11 @@ type State struct {
 type RateLimitStatus struct {
 	Label       string
 	UsedPercent float64
+	ResetsAt    *time.Time
+	CapturedAt  time.Time
+	Details     string
+	Text        string
+	IsText      bool
 }
 
 func NewState(options *Options) *State {
@@ -155,6 +163,8 @@ func (s *State) ResetThread() {
 		s.LastTokenUsage = TokenUsage{}
 		s.ModelContextWindow = nil
 		s.RateLimits = nil
+		s.RateLimitsLoaded = false
+		s.RateLimitsRefreshing = false
 	}
 }
 
@@ -185,84 +195,172 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	if width > 100 {
 		width = 100
 	}
-	inner := width - 2
 	if s == nil {
 		s = NewState(nil)
 	}
-	provider := strings.TrimSpace(s.Provider)
+	availableInnerWidth := width - 4
+	provider := statusModelProvider(s.Provider)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
-	mode := "Default"
-	if s.PlanMode {
-		mode = "Plan"
-	}
-	permission := displayValue(s.Sandbox, "default") + ", " + displayValue(s.ApprovalPolicy, "default")
 	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
-	header := ">_ OpenAI Codex"
+	header := " >_ OpenAI Codex"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"
 	}
-	agentsSummary := displayValue(s.AgentsSummary, "<none>")
+
+	type statusFieldData struct {
+		label            string
+		value            string
+		percentRemaining float64
+		resets           string
+		details          string
+		window           bool
+	}
+	fields := []statusFieldData{{label: "Model", value: model}}
+	if provider != "" {
+		fields = append(fields, statusFieldData{label: "Model provider", value: provider})
+	}
+	fields = append(fields,
+		statusFieldData{label: "Directory", value: displayValue(s.CWD, "-")},
+		statusFieldData{label: "Permissions", value: statusPermissions(s.Sandbox, s.ApprovalPolicy)},
+		statusFieldData{label: "Agents.md", value: displayValue(s.AgentsSummary, "<none>")},
+	)
+	if account := strings.TrimSpace(s.AccountDisplay); account != "" {
+		fields = append(fields, statusFieldData{label: "Account", value: account})
+	}
+	if threadName := strings.TrimSpace(s.ThreadName); threadName != "" {
+		fields = append(fields, statusFieldData{label: "Thread name", value: threadName})
+	}
+	collaborationMode := "Default"
+	if s.PlanMode {
+		collaborationMode = "Plan"
+	}
+	fields = append(fields, statusFieldData{label: "Collaboration mode", value: collaborationMode})
+	if threadID := strings.TrimSpace(s.ThreadID); threadID != "" {
+		fields = append(fields, statusFieldData{label: "Session", value: threadID})
+	}
+
+	usageFields := make([]statusFieldData, 0, 2+len(s.RateLimits))
+	if !s.HasChatGPTAccount {
+		usageFields = append(usageFields, statusFieldData{label: "Token usage", value: s.statusTokenUsage()})
+	}
+	if contextWindow := s.statusContextWindow(); contextWindow != "" {
+		usageFields = append(usageFields, statusFieldData{label: "Context window", value: contextWindow})
+	}
+	if len(s.RateLimits) == 0 {
+		limitsText := "data not available yet"
+		if s.RateLimitsRefreshing {
+			limitsText = "refresh requested; run /status again shortly."
+		} else if s.RateLimitsLoaded {
+			limitsText = "not available for this account"
+		}
+		usageFields = append(usageFields, statusFieldData{label: "Limits", value: limitsText})
+	} else {
+		stale := false
+		for _, limit := range s.RateLimits {
+			label := statusRateLimitLabel(limit.Label)
+			if text := strings.TrimSpace(limit.Text); limit.IsText || text != "" {
+				usageFields = append(usageFields, statusFieldData{label: label, value: text})
+				continue
+			}
+			remaining := clampStatusPercent(100 - limit.UsedPercent)
+			resets := ""
+			if limit.ResetsAt != nil {
+				resets = formatStatusReset(*limit.ResetsAt, limit.CapturedAt)
+			}
+			usageFields = append(usageFields, statusFieldData{
+				label: label, value: statusRateLimitSummary(remaining), percentRemaining: remaining,
+				resets: resets, details: strings.TrimSpace(limit.Details), window: true,
+			})
+			if !limit.CapturedAt.IsZero() && time.Since(limit.CapturedAt) > 15*time.Minute {
+				stale = true
+			}
+		}
+		if stale {
+			warning := "limits may be stale - start new turn to refresh."
+			if s.RateLimitsRefreshing {
+				warning = "limits may be stale - run /status again shortly."
+			}
+			usageFields = append(usageFields, statusFieldData{label: "Warning", value: warning})
+		}
+	}
+
+	labelWidth := DisplayWidth("Token usage")
+	for _, item := range fields {
+		if candidate := DisplayWidth(item.label); candidate > labelWidth {
+			labelWidth = candidate
+		}
+	}
+	for _, item := range usageFields {
+		if candidate := DisplayWidth(item.label); candidate > labelWidth {
+			labelWidth = candidate
+		}
+	}
+	valueOffset := 1 + labelWidth + 1 + 3
+	valueWidth := max(0, availableInnerWidth-valueOffset)
+	for index := range fields {
+		if fields[index].label == "Directory" && DisplayWidth(fields[index].value) > valueWidth {
+			fields[index].value = CenterTruncatePath(fields[index].value, valueWidth)
+		}
+	}
+
 	rows := []string{header, ""}
-	providerLower := strings.ToLower(provider)
+	providerLower := strings.ToLower(strings.TrimSpace(s.Provider))
 	if providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex") {
 		rows = append(rows,
 			"Visit https://chatgpt.com/codex/settings/usage for up-to-date",
 			"information on rate limits and credits", "",
 		)
 	}
-	rows = append(rows,
-		statusField("Model", model),
-		statusField("Directory", displayValue(s.CWD, "-")),
-		statusField("Permissions", "Custom ("+permission+")"),
-		statusField("Agents.md", agentsSummary),
-	)
-	if provider != "" {
-		rows = append(rows, statusField("Model provider", provider))
-	}
-	if account := strings.TrimSpace(s.AccountDisplay); account != "" {
-		rows = append(rows, statusField("Account", account))
-	}
-	if threadName := strings.TrimSpace(s.ThreadName); threadName != "" {
-		rows = append(rows, statusField("Thread name", threadName))
-	}
-	rows = append(rows, statusField("Collaboration mode", mode))
-	if threadID := strings.TrimSpace(s.ThreadID); threadID != "" {
-		rows = append(rows, statusField("Session", threadID))
+	for _, item := range fields {
+		rows = append(rows, renderStatusField(item.label, item.value, labelWidth))
 	}
 	rows = append(rows, "")
-	if !s.HasChatGPTAccount {
-		rows = append(rows, statusField("Token usage", s.statusTokenUsage()))
-	}
-	if contextWindow := s.statusContextWindow(); contextWindow != "" {
-		rows = append(rows, statusField("Context window", contextWindow))
-	}
-	if len(s.RateLimits) == 0 {
-		rows = append(rows, statusField("Limits", "data not available yet"))
-	} else {
-		for _, limit := range s.RateLimits {
-			remaining := 100 - limit.UsedPercent
-			if remaining < 0 {
-				remaining = 0
+	for _, item := range usageFields {
+		value := item.value
+		if item.window {
+			full := renderStatusLimitProgressBar(item.percentRemaining) + " " + item.value
+			if DisplayWidth(full) <= valueWidth {
+				value = full
 			}
-			if remaining > 100 {
-				remaining = 100
+		}
+		line := renderStatusField(item.label, value, labelWidth)
+		if item.resets != "" {
+			reset := "(resets " + item.resets + ")"
+			if DisplayWidth(line)+1+DisplayWidth(reset) <= availableInnerWidth {
+				line += " " + reset
+			} else {
+				rows = append(rows, line)
+				line = strings.Repeat(" ", valueOffset) + reset
 			}
-			rows = append(rows, statusField("Limits", fmt.Sprintf("%s %.0f%% left", displayValue(limit.Label, "usage"), remaining)))
+		}
+		rows = append(rows, line)
+		if item.details != "" {
+			for _, detail := range wrapStatusText(item.details, max(1, valueWidth)) {
+				rows = append(rows, strings.Repeat(" ", valueOffset)+detail)
+			}
 		}
 	}
-	border := "+" + strings.Repeat("-", inner) + "+"
+
+	contentWidth := 0
+	for _, row := range rows {
+		if candidate := DisplayWidth(row); candidate > contentWidth {
+			contentWidth = candidate
+		}
+	}
+	contentWidth = min(contentWidth, availableInnerWidth)
+	border := "╭" + strings.Repeat("─", contentWidth+2) + "╮"
 	out := []string{border}
 	for _, row := range rows {
-		row = truncateStatusRow(row, inner-2)
-		out = append(out, "| "+row+strings.Repeat(" ", inner-2-len([]rune(row)))+" |")
+		row = truncateStatusRow(row, contentWidth)
+		out = append(out, "│ "+row+strings.Repeat(" ", contentWidth-DisplayWidth(row))+" │")
 	}
-	out = append(out, border)
+	out = append(out, "╰"+strings.Repeat("─", contentWidth+2)+"╯")
 	return strings.Join(out, "\n")
 }
 
 func (s *State) statusTokenUsage() string {
 	usage := s.TotalTokenUsage
-	return fmt.Sprintf("%s total  (%s input + %s output)", FormatInt(usage.BlendedTotal()), FormatInt(usage.NonCachedInput()), FormatInt(usage.OutputTokens))
+	return fmt.Sprintf("%s total  (%s input + %s output)", formatStatusTokensCompact(usage.BlendedTotal()), formatStatusTokensCompact(usage.NonCachedInput()), formatStatusTokensCompact(usage.OutputTokens))
 }
 
 func (s *State) statusContextWindow() string {
@@ -270,20 +368,149 @@ func (s *State) statusContextWindow() string {
 		return ""
 	}
 	used := s.LastTokenUsage.TokensInContextWindow()
-	return fmt.Sprintf("%d%% left (%s used / %s)", s.LastTokenUsage.PercentOfContextWindowRemaining(*s.ModelContextWindow), FormatInt(used), FormatInt(*s.ModelContextWindow))
+	return fmt.Sprintf("%d%% left (%s used / %s)", s.LastTokenUsage.PercentOfContextWindowRemaining(*s.ModelContextWindow), formatStatusTokensCompact(used), formatStatusTokensCompact(*s.ModelContextWindow))
 }
 
-func statusField(label, value string) string { return fmt.Sprintf("%-20s %s", label+":", value) }
+func renderStatusField(label string, value string, labelWidth int) string {
+	return " " + label + ":" + strings.Repeat(" ", 3+max(0, labelWidth-DisplayWidth(label))) + value
+}
 
 func truncateStatusRow(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) <= width {
+	if DisplayWidth(value) <= width {
 		return value
 	}
 	if width <= 1 {
-		return string(runes[:width])
+		return TruncateToWidth(value, width)
 	}
-	return string(runes[:width-1]) + "…"
+	return TruncateToWidth(value, width-1) + "…"
+}
+
+func statusModelProvider(provider string) string {
+	provider = strings.TrimSpace(provider)
+	switch strings.ToLower(provider) {
+	case "", "openai", "codex", "openai-codex":
+		return ""
+	default:
+		return provider
+	}
+}
+
+func statusPermissions(sandbox string, approval string) string {
+	sandbox = strings.TrimSpace(sandbox)
+	approval = strings.TrimSpace(approval)
+	if sandbox == "" {
+		sandbox = "read-only"
+	}
+	if approval == "" {
+		approval = "on-request"
+	}
+	approvalLabel := displayValue(approval, "default")
+	if strings.EqualFold(approval, "on-request") {
+		approvalLabel = "Ask for approval"
+	}
+	switch strings.ToLower(sandbox) {
+	case "read-only", ":read-only":
+		return "Read Only (" + approvalLabel + ")"
+	case "workspace", "workspace-write", ":workspace", "auto":
+		return "Workspace (" + approvalLabel + ")"
+	case "danger-full-access", "full-access", ":danger-full-access":
+		if strings.EqualFold(approval, "never") {
+			return "Full Access"
+		}
+		return "No Sandbox (" + approvalLabel + ")"
+	default:
+		return "Custom (" + displayValue(sandbox, "default") + ", " + approvalLabel + ")"
+	}
+}
+
+func formatStatusTokensCompact(value int64) string {
+	if value <= 0 {
+		return "0"
+	}
+	if value < 1000 {
+		return fmt.Sprintf("%d", value)
+	}
+	scaled := float64(value) / 1_000
+	suffix := "K"
+	if value >= 1_000_000_000_000 {
+		scaled, suffix = float64(value)/1_000_000_000_000, "T"
+	} else if value >= 1_000_000_000 {
+		scaled, suffix = float64(value)/1_000_000_000, "B"
+	} else if value >= 1_000_000 {
+		scaled, suffix = float64(value)/1_000_000, "M"
+	}
+	decimals := 0
+	if scaled < 10 {
+		decimals = 2
+	} else if scaled < 100 {
+		decimals = 1
+	}
+	formatted := fmt.Sprintf("%.*f", decimals, scaled)
+	if strings.Contains(formatted, ".") {
+		formatted = strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
+	}
+	return formatted + suffix
+}
+
+func statusRateLimitLabel(label string) string {
+	label = displayValue(strings.TrimSpace(label), "usage")
+	lower := strings.ToLower(label)
+	if strings.HasSuffix(lower, "limit") || lower == "limits" || lower == "credits" || lower == "warning" {
+		return label
+	}
+	runes := []rune(label)
+	if len(runes) > 0 {
+		runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+	}
+	return string(runes) + " limit"
+}
+
+func clampStatusPercent(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func statusRateLimitSummary(percentRemaining float64) string {
+	return fmt.Sprintf("%.0f%% left", percentRemaining)
+}
+
+func renderStatusLimitProgressBar(percentRemaining float64) string {
+	filled := int(clampStatusPercent(percentRemaining)/100*20 + 0.5)
+	return "[" + strings.Repeat("■", filled) + strings.Repeat("□", 20-filled) + "]"
+}
+
+func formatStatusReset(value time.Time, capturedAt time.Time) string {
+	value = value.Local()
+	if capturedAt.IsZero() {
+		capturedAt = time.Now()
+	}
+	capturedAt = capturedAt.Local()
+	if value.Year() == capturedAt.Year() && value.YearDay() == capturedAt.YearDay() {
+		return value.Format("15:04")
+	}
+	return value.Format("15:04 on 2 Jan")
+}
+
+func wrapStatusText(value string, width int) []string {
+	words := strings.Fields(value)
+	if len(words) == 0 {
+		return nil
+	}
+	lines := []string{words[0]}
+	for _, word := range words[1:] {
+		last := len(lines) - 1
+		if DisplayWidth(lines[last])+1+DisplayWidth(word) <= width {
+			lines[last] += " " + word
+		} else {
+			lines = append(lines, word)
+		}
+	}
+	return lines
 }
 
 func (s *State) RenderPrompt() string {

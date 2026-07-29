@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	gopty "github.com/aymanbagabas/go-pty"
 	"golang.org/x/sys/windows"
 
 	"codex_go/sandbox/windowssandbox"
@@ -25,12 +26,20 @@ const realPTYTerminalRestoreEnv = "CODEX_GO_TUI_PTY_SMOKE"
 const realPTYTerminalRestoreChildEnv = "CODEX_GO_TUI_PTY_CHILD"
 const windowsStatusDLLInitFailed uint32 = 0xC0000142
 const windowsStatusDLLInitFailedSigned = -1073741502
+const realPTYFocusInputMarker = "focus-key-preserved-7Q9"
 
 func TestRealPTYTerminalRestoreSmoke(t *testing.T) {
 	if os.Getenv(realPTYTerminalRestoreEnv) != "1" {
 		t.Skipf("set %s=1 to run the Windows terminal restore smoke", realPTYTerminalRestoreEnv)
 	}
 	runWindowsPTYTerminalRestoreParent(t)
+}
+
+func TestRealPTYFocusGainedPreservesQueuedKey(t *testing.T) {
+	if os.Getenv(realPTYTerminalRestoreEnv) != "1" {
+		t.Skipf("set %s=1 to run the Windows focus-input smoke", realPTYTerminalRestoreEnv)
+	}
+	runWindowsPTYFocusInputParent(t)
 }
 
 func TestMain(m *testing.M) {
@@ -142,6 +151,102 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 	text := output.String()
 	if strings.Contains(text, "\x1b[?1049h") {
 		t.Fatalf("normal chat unexpectedly entered alternate screen; output=%q", text)
+	}
+}
+
+func runWindowsPTYFocusInputParent(t *testing.T) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	restoreEnv := setWindowsPTYTerminalRestoreChildEnv()
+	defer restoreEnv()
+	terminal, err := gopty.New()
+	if err != nil {
+		t.Fatalf("create production ConPTY: %v", err)
+	}
+	if err := terminal.Resize(80, 24); err != nil {
+		t.Fatalf("resize production ConPTY: %v", err)
+	}
+	command := terminal.Command(os.Args[0], "-test.run", "^TestRealPTYFocusGainedPreservesQueuedKey$", "-test.v")
+	command.Dir = cwd
+	if err := command.Start(); err != nil {
+		t.Fatalf("spawn ConPTY child: %v", err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- command.Wait() }()
+
+	var output lockedTerminalOutput
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		buffer := make([]byte, 4096)
+		for {
+			read, readErr := terminal.Read(buffer)
+			if read > 0 {
+				output.Write(buffer[:read])
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	reporting, earlyExit := waitForGoPTYOutputOrExit(&output, "\x1b[?1004h", exited, 3*time.Second)
+	if !reporting {
+		if earlyExit != nil {
+			t.Fatalf("ConPTY child exited before enabling focus reporting: %v; output=%q", earlyExit, output.String())
+		}
+		_ = command.Process.Kill()
+		t.Fatalf("ConPTY child did not enable focus reporting; output=%q", output.String())
+	}
+	payload := []byte("\x1b[O\x1b[I" + realPTYFocusInputMarker)
+	if _, err := terminal.Write(payload); err != nil {
+		t.Fatalf("send focus and queued input to ConPTY child: %v", err)
+	}
+	preserved, earlyExit := waitForGoPTYOutputOrExit(&output, realPTYFocusInputMarker, exited, 3*time.Second)
+	if !preserved {
+		if earlyExit != nil {
+			t.Fatalf("ConPTY child exited before rendering queued focus input: %v; output=%q", earlyExit, output.String())
+		}
+		_ = command.Process.Kill()
+		t.Fatalf("focus-gained event did not preserve the complete queued key sequence; output=%q", output.String())
+	}
+	conPTY, ok := terminal.(gopty.ConPty)
+	if !ok {
+		t.Fatal("production Windows PTY does not expose ConPTY pipes")
+	}
+	_ = conPTY.InputPipe().Close()
+	select {
+	case <-exited:
+	case <-time.After(8 * time.Second):
+		t.Logf("ConPTY child wait did not complete after cleanup; output=%q", output.String())
+	}
+	_ = conPTY.OutputPipe().Close()
+	select {
+	case <-outputDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ConPTY output drain")
+	}
+}
+
+func waitForGoPTYOutputOrExit(output *lockedTerminalOutput, needle string, exited <-chan error, timeout time.Duration) (bool, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if output.Contains(needle) {
+			return true, nil
+		}
+		select {
+		case err := <-exited:
+			return output.Contains(needle), err
+		case <-ticker.C:
+		case <-deadline.C:
+			return output.Contains(needle), nil
+		}
 	}
 }
 

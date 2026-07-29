@@ -85,6 +85,9 @@ func findMarketplaceManifestPath(root string) string {
 	if root == "" {
 		return ""
 	}
+	if info, err := os.Stat(root); err == nil && !info.IsDir() {
+		return root
+	}
 	for _, relative := range marketplaceManifestRelativePaths {
 		path := filepath.Join(root, relative)
 		info, err := os.Stat(path)
@@ -108,7 +111,7 @@ func loadMarketplaceManifest(marketplace Marketplace, manifestPath string) ([]Pl
 	if marketplaceName == "" {
 		marketplaceName = marketplace.Name
 	}
-	root := marketplace.RootPath
+	root := marketplaceRootForManifest(marketplace.RootPath, manifestPath)
 	details := make([]PluginDetail, 0, len(manifest.Plugins))
 	for _, plugin := range manifest.Plugins {
 		detail, ok := loadMarketplacePluginDetail(root, marketplaceName, manifestPath, plugin)
@@ -117,6 +120,24 @@ func loadMarketplaceManifest(marketplace Marketplace, manifestPath string) ([]Pl
 		}
 	}
 	return details, nil
+}
+
+func marketplaceRootForManifest(configuredRoot string, manifestPath string) string {
+	configuredRoot = strings.TrimSpace(configuredRoot)
+	manifestPath = filepath.Clean(strings.TrimSpace(manifestPath))
+	if info, err := os.Stat(configuredRoot); err != nil || info.IsDir() {
+		return configuredRoot
+	}
+	dir := filepath.Dir(manifestPath)
+	switch filepath.Base(dir) {
+	case ".claude-plugin", ".cursor-plugin":
+		return filepath.Dir(dir)
+	case "plugins":
+		if filepath.Base(filepath.Dir(dir)) == ".agents" {
+			return filepath.Dir(filepath.Dir(dir))
+		}
+	}
+	return dir
 }
 
 func loadMarketplacePluginDetail(marketplaceRoot string, marketplaceName string, marketplacePath string, plugin marketplaceManifestPlugin) (PluginDetail, bool) {

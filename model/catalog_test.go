@@ -1,13 +1,17 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStaticModelsManagerListsSortedModelsAndMarksDefault(t *testing.T) {
@@ -44,6 +48,20 @@ func TestModelCatalogPreservesKnownMultiAgentVersion(t *testing.T) {
 	}
 }
 
+func TestModelCatalogPreservesKnownToolMode(t *testing.T) {
+	var catalog ModelsResponse
+	err := json.Unmarshal([]byte(`{"models":[
+		{"slug":"code","display_name":"Code","visibility":"list","supported_in_api":true,"tool_mode":"code_mode_only"},
+		{"slug":"future","display_name":"Future","visibility":"list","supported_in_api":true,"tool_mode":"future_mode"}
+	]}`), &catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 2 || catalog.Models[0].ToolMode != ToolModeCodeModeOnly || catalog.Models[1].ToolMode != "" {
+		t.Fatalf("tool modes = %#v", catalog.Models)
+	}
+}
+
 func TestBuildAvailableModelsMarksFirstPickerVisibleDefault(t *testing.T) {
 	models := BuildAvailableModels([]ModelInfo{
 		{Slug: "hidden", DisplayName: "Hidden", Visibility: VisibilityHide, SupportedInAPI: true, Priority: 0},
@@ -77,6 +95,17 @@ func TestBuildAvailableModelsPreservesReasoningFields(t *testing.T) {
 	}
 	if len(got.SupportedReasoningLevels) != 3 || got.SupportedReasoningLevels[2] != "high" {
 		t.Fatalf("supported reasoning = %#v", got.SupportedReasoningLevels)
+	}
+}
+
+func TestFallbackBundledModelsMatchCurrentRustDefault(t *testing.T) {
+	manager := NewStaticModelsManager(fallbackBundledModelsResponse())
+	if got := manager.GetDefaultModel("", true, RefreshOffline); got != "gpt-5.6-sol" {
+		t.Fatalf("default model = %q", got)
+	}
+	info := manager.GetModelInfo("gpt-5.6-sol", nil)
+	if info.DefaultReasoningLevel != "low" || info.ContextWindow != 272000 || info.ToolMode != ToolModeCodeModeOnly || !info.UseResponsesLite {
+		t.Fatalf("default model info = %#v", info)
 	}
 }
 
@@ -121,6 +150,7 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 			},
 			"truncation_policy": {"mode": "tokens", "limit": 10000},
 			"supports_parallel_tool_calls": true,
+			"tool_mode": "code_mode_only",
 			"context_window": 272000,
 			"max_context_window": 1000000,
 			"effective_context_window_percent": 95,
@@ -134,7 +164,7 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	if model.Description != "" || model.SupportedReasoningLevels[0] != "low" || model.ServiceTiers[0] != "priority" {
 		t.Fatalf("model = %#v", model)
 	}
-	if model.Visibility != VisibilityList || !model.SupportsParallelToolCalls || !model.SupportsSearchTool {
+	if model.Visibility != VisibilityList || !model.SupportsParallelToolCalls || !model.SupportsSearchTool || model.ToolMode != ToolModeCodeModeOnly {
 		t.Fatalf("model flags = %#v", model)
 	}
 	if model.ModelMessages == nil || model.ModelMessages.PersonalityFriendly != "Friendly" {
@@ -225,6 +255,90 @@ func TestRemoteModelsManagerRefreshesOnlineAndETag(t *testing.T) {
 	updated := manager.GetModelInfo("remote", nil)
 	if updated.DisplayName != "Remote Updated" {
 		t.Fatalf("updated model = %#v", updated)
+	}
+}
+
+func TestRemoteModelsManagerThrottlesMatchingETagCacheRenewal(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+		Models: []ModelInfo{{Slug: "remote", DisplayName: "Remote", Visibility: VisibilityList, SupportedInAPI: true}},
+		ETag:   "etag-1",
+	}}}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		Endpoint:                        endpoint,
+		UseRemoteCatalogAsSourceOfTruth: true,
+	})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+
+	_ = manager.ListModels(RefreshOnlineIfUncached)
+	cachePath := filepath.Join(home, modelsCacheFilename)
+	original, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	now = now.Add(time.Minute)
+	manager.RefreshIfNewETag("etag-1")
+	recent, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("ReadFile(recent) error = %v", err)
+	}
+	if !bytes.Equal(recent, original) {
+		t.Fatal("matching ETag rewrote a cache younger than half its TTL")
+	}
+
+	now = now.Add(2 * time.Minute)
+	manager.RefreshIfNewETag("etag-1")
+	renewed, err := readModelsCache(cachePath)
+	if err != nil {
+		t.Fatalf("readModelsCache() error = %v", err)
+	}
+	if !renewed.FetchedAt.Equal(now) {
+		t.Fatalf("renewed fetched_at = %s, want %s", renewed.FetchedAt, now)
+	}
+	if endpoint.calls != 1 {
+		t.Fatalf("matching ETag refetched models: calls = %d", endpoint.calls)
+	}
+}
+
+func TestRemoteModelsManagerLoadsFreshDiskCacheAndRejectsStaleOrWrongVersion(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 7, 29, 2, 0, 0, 0, time.UTC)
+	cachePath := filepath.Join(home, modelsCacheFilename)
+	cache := &modelsCache{
+		FetchedAt:     now.Add(-time.Minute),
+		ETag:          "etag-cached",
+		ClientVersion: modelsEndpointClientVersion,
+		Models:        []ModelInfo{{Slug: "cached", DisplayName: "Cached", Visibility: VisibilityList, SupportedInAPI: true}},
+	}
+	if err := writeModelsCache(cachePath, cache); err != nil {
+		t.Fatalf("writeModelsCache() error = %v", err)
+	}
+
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+		Models: []ModelInfo{{Slug: "online", DisplayName: "Online", Visibility: VisibilityList, SupportedInAPI: true}},
+		ETag:   "etag-online",
+	}}}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+	models := manager.ListModels(RefreshOnlineIfUncached)
+	if len(models) != 1 || models[0].Model != "cached" || endpoint.calls != 0 {
+		t.Fatalf("fresh cache models = %#v, calls = %d", models, endpoint.calls)
+	}
+
+	cache.ClientVersion = "other-version"
+	if err := writeModelsCache(cachePath, cache); err != nil {
+		t.Fatalf("writeModelsCache(wrong version) error = %v", err)
+	}
+	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+	models = manager.ListModels(RefreshOnlineIfUncached)
+	if len(models) != 1 || models[0].Model != "online" || endpoint.calls != 1 {
+		t.Fatalf("wrong-version fallback models = %#v, calls = %d", models, endpoint.calls)
 	}
 }
 
