@@ -59,18 +59,20 @@ func TestLocalAgentRunnerHonorsCancelledContext(t *testing.T) {
 }
 
 func TestAgentItemMarshalToolCalls(t *testing.T) {
+	plaintextArgs := []string{}
 	item := &AgentItem{
-		ID:        "call-1",
-		Type:      "function_call",
-		Name:      "echo",
-		CallID:    "call-1",
-		Arguments: `{"text":"hi"}`,
+		ID:                    "call-1",
+		Type:                  "function_call",
+		Name:                  "echo",
+		CallID:                "call-1",
+		Arguments:             `{"text":"hi"}`,
+		EncryptedFunctionArgs: &plaintextArgs,
 	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	if string(data) != `{"id":"call-1","type":"function_call","name":"echo","arguments":"{\"text\":\"hi\"}","call_id":"call-1"}` {
+	if string(data) != `{"id":"call-1","type":"function_call","name":"echo","arguments":"{\"text\":\"hi\"}","encrypted_function_args":[],"call_id":"call-1"}` {
 		t.Fatalf("json = %s", data)
 	}
 

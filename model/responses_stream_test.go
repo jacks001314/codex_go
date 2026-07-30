@@ -67,6 +67,28 @@ func TestParseResponsesStreamKeepsDeclaredFunctionToolAsFunctionCall(t *testing.
 	}
 }
 
+func TestParseResponsesStreamPreservesPlaintextCollaborationMarker(t *testing.T) {
+	response, err := parseResponsesStream(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.added","item":{"id":"fc-1","type":"function_call","namespace":"collaboration","name":"spawn_agent","call_id":"call-1","arguments":"","encrypted_function_args":[]}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc-1","call_id":"call-1","delta":"{\"task_name\":\"worker\",\"message\":\"hello\"}"}`,
+			`{"type":"response.output_item.done","item":{"id":"fc-1","type":"function_call","namespace":"collaboration","name":"spawn_agent","call_id":"call-1","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)),
+		&AgentRequest{Model: "gpt-test"},
+		"openai",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStream() error = %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].EncryptedFunctionArgs == nil || len(*response.Items[0].EncryptedFunctionArgs) != 0 {
+		t.Fatalf("function call marker = %#v", response.Items)
+	}
+}
+
 func TestResponsesStreamAccumulatorAppliesCustomToolInputDeltasOverInitialInput(t *testing.T) {
 	acc := &responsesStreamAccumulator{
 		customToolInputDeltas: map[string]string{"call-1": "*** Begin Patch\n*** Add File: calculator.py\n+def add(a, b):\n+    return a + b\n*** End Patch"},

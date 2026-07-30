@@ -2,14 +2,11 @@ package execserver
 
 import (
 	"fmt"
-	"io/fs"
-	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 )
 
-const maxCapabilityDiscoveryRoots = 64
+const maxCapabilityDiscoveryRoots = 128
 
 func discoverCapabilities(params *CapabilityDiscoveryParams) (*CapabilityDiscoveryResponse, error) {
 	if params == nil || len(params.Roots) == 0 {
@@ -20,45 +17,41 @@ func discoverCapabilities(params *CapabilityDiscoveryParams) (*CapabilityDiscove
 	}
 	response := &CapabilityDiscoveryResponse{Manifests: []CapabilityManifest{}, Errors: []CapabilityDiscoveryError{}}
 	for _, root := range params.Roots {
-		path, err := capabilityRootPath(root.Path)
+		walk, err := walkPath(&FSWalkParams{
+			Path: root.Path,
+			Options: FSWalkOptions{
+				MaxDepth:                6,
+				MaxDirectories:          2000,
+				MaxEntries:              20000,
+				FollowDirectorySymlinks: true,
+			},
+			Sandbox: root.Sandbox,
+		})
 		if err != nil {
 			response.Errors = append(response.Errors, CapabilityDiscoveryError{RootID: root.ID, Message: err.Error()})
 			continue
 		}
-		count := 0
-		err = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
+		for _, walkErr := range walk.Errors {
+			response.Errors = append(response.Errors, CapabilityDiscoveryError{RootID: root.ID, Message: fmt.Sprintf("%s: %s", walkErr.Path, walkErr.Message)})
+		}
+		if walk.Truncated {
+			response.Errors = append(response.Errors, CapabilityDiscoveryError{RootID: root.ID, Message: "capability root reached its traversal limit"})
+		}
+		for _, entry := range walk.Entries {
+			if entry.Kind != "file" {
+				continue
 			}
-			rel, err := filepath.Rel(path, current)
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() && rel != "." && len(strings.Split(filepath.ToSlash(rel), "/")) > 8 {
-				return filepath.SkipDir
-			}
-			count++
-			if count > 4096 {
-				return fmt.Errorf("capability root exceeds 4096 entries")
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			normalized := filepath.ToSlash(rel)
+			normalized := strings.ReplaceAll(entry.Path, "\\", "/")
 			kind := ""
-			if entry.Name() == "SKILL.md" {
+			if strings.HasSuffix(normalized, "/SKILL.md") {
 				kind = "skill"
 			}
 			if normalized == ".codex-plugin/plugin.json" || strings.HasSuffix(normalized, "/.codex-plugin/plugin.json") {
 				kind = "plugin"
 			}
 			if kind != "" {
-				response.Manifests = append(response.Manifests, CapabilityManifest{RootID: root.ID, Kind: kind, Path: filepath.ToSlash(current)})
+				response.Manifests = append(response.Manifests, CapabilityManifest{RootID: root.ID, Kind: kind, Path: entry.Path})
 			}
-			return nil
-		})
-		if err != nil {
-			response.Errors = append(response.Errors, CapabilityDiscoveryError{RootID: root.ID, Message: err.Error()})
 		}
 	}
 	sort.Slice(response.Manifests, func(i, j int) bool {
@@ -71,23 +64,4 @@ func discoverCapabilities(params *CapabilityDiscoveryParams) (*CapabilityDiscove
 		return response.Manifests[i].Path < response.Manifests[j].Path
 	})
 	return response, nil
-}
-
-func capabilityRootPath(value string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme != "file" {
-		return "", fmt.Errorf("root path must be an absolute file URI")
-	}
-	path := parsed.Path
-	if parsed.Host != "" {
-		path = "//" + parsed.Host + parsed.Path
-	}
-	if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
-		path = path[1:]
-	}
-	path = filepath.FromSlash(path)
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("root path must be an absolute file URI")
-	}
-	return filepath.Clean(path), nil
 }

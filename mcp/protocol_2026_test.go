@@ -183,6 +183,134 @@ func TestMCP2026HTTPFallsBackOnlyFromCorrelatedMethodNotFound(t *testing.T) {
 	}
 }
 
+func TestMCP2026HTTPFallsBackForLegacyPrevalidationErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		message     string
+		contentType string
+		negotiated  string
+	}{
+		{
+			name:        "missing session",
+			message:     "Bad Request: No valid session ID provided",
+			contentType: "application/json",
+			negotiated:  defaultMCPProtocol,
+		},
+		{
+			name:        "omitted rejected version and non-json content type",
+			message:     "Bad Request: Unsupported protocol version (supported versions: 2025-03-26)",
+			contentType: "text/plain",
+			negotiated:  "2025-03-26",
+		},
+		{
+			name:        "known legacy version with older compatibility version",
+			message:     "Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-11-25, 2024-10-07)",
+			contentType: "application/octet-stream",
+			negotiated:  "2025-11-25",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			methods := []string{}
+			headers := []string{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					ID     int64  `json:"id"`
+					Method string `json:"method"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatalf("Decode() error = %v", err)
+				}
+				methods = append(methods, request.Method)
+				headers = append(headers, r.Header.Get(mcpHTTPProtocolVersionHeader))
+				switch request.Method {
+				case "server/discover":
+					w.Header().Set("Content-Type", test.contentType)
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      nil,
+						"error":   map[string]any{"code": mcpLegacyPrevalidationErrorCode, "message": test.message},
+					})
+				case "initialize":
+					writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": test.negotiated, "capabilities": map[string]any{}})
+				case "notifications/initialized":
+					w.WriteHeader(http.StatusAccepted)
+				case "tools/list":
+					writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+				default:
+					t.Fatalf("unexpected method %q", request.Method)
+				}
+			}))
+			defer server.Close()
+
+			client := newMCPHTTPClient(&ServerConfig{URL: server.URL, ProtocolMode: MCPProtocol20260728})
+			var result struct {
+				Tools []any `json:"tools"`
+			}
+			if err := client.Call("tools/list", map[string]any{}, &result); err != nil {
+				t.Fatalf("Call() error = %v", err)
+			}
+			if got := strings.Join(methods, ","); got != "server/discover,initialize,notifications/initialized,tools/list" {
+				t.Fatalf("methods = %q", got)
+			}
+			wantHeaders := strings.Join([]string{modernMCPProtocol, defaultMCPProtocol, test.negotiated, test.negotiated}, ",")
+			if got := strings.Join(headers, ","); got != wantHeaders {
+				t.Fatalf("protocol headers = %q, want %q", got, wantHeaders)
+			}
+		})
+	}
+}
+
+func TestMCP2026HTTPRejectsUnprovenLegacyPrevalidationErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		code       int64
+		responseID any
+		message    string
+		sessionID  string
+	}{
+		{name: "unrelated code", status: http.StatusBadRequest, code: -32602, message: "Bad Request: No valid session ID provided"},
+		{name: "correlated response", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, responseID: int64(1), message: "Bad Request: No valid session ID provided"},
+		{name: "unauthorized", status: http.StatusUnauthorized, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: No valid session ID provided"},
+		{name: "session already assigned", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: No valid session ID provided", sessionID: "session-1"},
+		{name: "unknown version only", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2024-10-07)"},
+		{name: "modern version included", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2026-07-28)"},
+		{name: "future version included", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2099-01-01)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if test.sessionID != "" {
+					w.Header().Set(mcpHTTPSessionIDHeader, test.sessionID)
+				}
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(test.status)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      test.responseID,
+					"error":   map[string]any{"code": test.code, "message": test.message},
+				})
+			}))
+			defer server.Close()
+
+			client := newMCPHTTPClient(&ServerConfig{URL: server.URL, ProtocolMode: MCPProtocol20260728})
+			var result struct {
+				Tools []any `json:"tools"`
+			}
+			if err := client.Call("tools/list", map[string]any{}, &result); err == nil {
+				t.Fatal("Call() error = nil, want discovery rejection")
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want discovery only", requests)
+			}
+		})
+	}
+}
+
 func TestMCP2026StdioDiscoveryAndMultiRoundInput(t *testing.T) {
 	if os.Getenv("MCP_STDIO_2026_HELPER") == "1" {
 		runMCP2026StdioHelper(t)

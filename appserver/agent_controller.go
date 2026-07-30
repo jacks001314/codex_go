@@ -14,11 +14,13 @@ import (
 )
 
 type runtimeAgentController struct {
-	router     *RuntimeRouter
-	parentID   string
-	cwd        string
-	maxThreads int
-	version    agent.MultiAgentVersion
+	router       *RuntimeRouter
+	parentID     string
+	parentTurnID string
+	cwd          string
+	maxThreads   int
+	version      agent.MultiAgentVersion
+	environments []map[string]any
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
@@ -26,7 +28,23 @@ func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd strin
 }
 
 func newRuntimeAgentControllerWithVersion(router *RuntimeRouter, parentID string, cwd string, maxThreads int, version agent.MultiAgentVersion) agent.ToolController {
-	return &runtimeAgentController{router: router, parentID: strings.TrimSpace(parentID), cwd: strings.TrimSpace(cwd), maxThreads: maxThreads, version: version}
+	return newRuntimeAgentControllerWithEnvironmentSelections(router, parentID, cwd, maxThreads, version, nil)
+}
+
+func newRuntimeAgentControllerWithEnvironmentSelections(router *RuntimeRouter, parentID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
+	return newRuntimeAgentControllerForTurn(router, parentID, "", cwd, maxThreads, version, environments)
+}
+
+func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, parentTurnID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
+	return &runtimeAgentController{
+		router:       router,
+		parentID:     strings.TrimSpace(parentID),
+		parentTurnID: strings.TrimSpace(parentTurnID),
+		cwd:          strings.TrimSpace(cwd),
+		maxThreads:   maxThreads,
+		version:      version,
+		environments: cloneMapSlice(environments),
+	}
 }
 
 func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnAgentArgs) (*agent.SpawnAgentResult, error) {
@@ -68,6 +86,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if args.DeveloperInstructions != nil {
 		developerInstructions = *args.DeveloperInstructions
 	}
+	extra := map[string]any{}
+	if len(c.environments) > 0 {
+		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(c.environments)
+	}
 	record := &session.Record{
 		ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID),
 		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
@@ -75,7 +97,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			CWD: c.cwd, Model: modelID, ModelProvider: providerID,
 			Source: string(SessionSourceAppServer), ThreadSource: "subAgentThreadSpawn",
 			Originator: "subagent", AgentNickname: nickname, AgentRole: args.ResolvedRole,
-			Instructions: developerInstructions, MultiAgentVersion: string(c.version), SessionPrefix: session.PrefixForSessionID(string(threadID)),
+			Instructions: developerInstructions, MultiAgentVersion: string(c.version), SessionPrefix: session.PrefixForSessionID(string(threadID)), Extra: extra,
 		},
 	}
 	if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
@@ -92,7 +114,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
-		params := &turn.TurnStartParams{ThreadID: string(threadID), Prompt: prompt, CWD: c.cwd, Model: modelID}
+		params := &turn.TurnStartParams{ThreadID: string(threadID), Prompt: prompt, CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID}
 		if args.DeveloperInstructions != nil {
 			value := *args.DeveloperInstructions
 			params.DeveloperInstructions = &value
@@ -137,7 +159,7 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	if prompt == "" && len(args.Items) == 0 {
 		return nil, fmt.Errorf("message or items is required")
 	}
-	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt}))
+	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt, ParentTurnID: c.parentTurnID}))
 	if err != nil {
 		return nil, err
 	}

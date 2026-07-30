@@ -6,6 +6,7 @@ package diffview
 import (
 	"strings"
 
+	codextui "codex_go/tui"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -54,19 +55,19 @@ type FileDiff struct {
 // View renders a structured diff into terminal output.
 // It wraps a set of FileDiffs and renders them with the given configuration.
 type View struct {
-	Files       []FileDiff
-	Layout      Layout
-	ShowLineNum bool
+	Files        []FileDiff
+	Layout       Layout
+	ShowLineNum  bool
 	ContextLines int
-	Width       int
+	Width        int
 
 	// Styles
-	AddFg      lipgloss.Color
-	AddBg      lipgloss.Color
-	DelFg      lipgloss.Color
-	DelBg      lipgloss.Color
-	ContextFg  lipgloss.Color
-	HeaderFg   lipgloss.Color
+	AddFg     lipgloss.Color
+	AddBg     lipgloss.Color
+	DelFg     lipgloss.Color
+	DelBg     lipgloss.Color
+	ContextFg lipgloss.Color
+	HeaderFg  lipgloss.Color
 
 	maxLineNumWidth int
 }
@@ -78,12 +79,12 @@ func NewView(width int) *View {
 		ShowLineNum:  true,
 		ContextLines: 3,
 		Width:        width,
-		AddFg:        lipgloss.Color("2"),   // green
-		AddBg:        lipgloss.Color("22"),  // dark green
-		DelFg:        lipgloss.Color("1"),   // red
-		DelBg:        lipgloss.Color("52"),  // dark red
-		ContextFg:    lipgloss.Color("8"),   // dim
-		HeaderFg:     lipgloss.Color("12"),  // blue
+		AddFg:        lipgloss.Color("2"),  // green
+		AddBg:        lipgloss.Color("22"), // dark green
+		DelFg:        lipgloss.Color("1"),  // red
+		DelBg:        lipgloss.Color("52"), // dark red
+		ContextFg:    lipgloss.Color("8"),  // dim
+		HeaderFg:     lipgloss.Color("12"), // blue
 	}
 }
 
@@ -214,21 +215,21 @@ func (v *View) padLineNum(n int) string {
 }
 
 func (v *View) truncateLine(line string) string {
-	runes := []rune(line)
-	if v.Width <= 0 || len(runes) <= v.Width {
+	if v.Width <= 0 || codextui.DisplayWidth(line) <= v.Width {
 		return line
 	}
 	if v.Width <= 3 {
-		return string(runes[:v.Width])
+		return codextui.TruncateToWidth(line, v.Width)
 	}
-	return string(runes[:v.Width-1]) + "…"
+	return codextui.TruncateWithEllipsis(line, v.Width)
 }
 
 func (v *View) padOrTruncate(line string, width int, fg, bg lipgloss.Color) string {
-	if len(line) > width {
-		line = line[:width-1] + "…"
+	lineWidth := codextui.DisplayWidth(line)
+	if lineWidth > width {
+		line = codextui.TruncateWithEllipsis(line, width)
 	} else {
-		line = line + strings.Repeat(" ", width-len(line))
+		line = line + strings.Repeat(" ", width-lineWidth)
 	}
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(line)
 }

@@ -88,6 +88,18 @@ func TestRenderHelpersWrapBottomAlignFooterAndTruncateMatchRustCore(t *testing.T
 	}
 }
 
+func TestRenderHelpersKeepHalfwidthAndEmojiGraphemesIntact(t *testing.T) {
+	if got := truncateLineWordBoundaryWithEllipsis("ab\uff76\uff9ecd", 5); got != "ab\uff76\uff9e\u2026" {
+		t.Fatalf("halfwidth truncated = %q", got)
+	}
+	if got, want := breakLongWord("ab\uff76\uff9ec", 3), []string{"ab", "\uff76\uff9ec"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("halfwidth breakLongWord = %#v, want %#v", got, want)
+	}
+	if got, want := breakLongWord("a\U0001f44d\U0001f3fbb", 2), []string{"a", "\U0001f44d\U0001f3fb", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("emoji breakLongWord = %#v, want %#v", got, want)
+	}
+}
+
 func TestRenderUIPlacesSectionsAndFooter(t *testing.T) {
 	sections := LayoutSectionsFor(LayoutInput{
 		Area:                   Rect{Width: 32, Height: 8},

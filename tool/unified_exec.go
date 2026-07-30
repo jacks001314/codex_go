@@ -562,32 +562,73 @@ func unifiedExecManagedNetworkContext(value *network.ProxyManagedNetworkSandboxC
 }
 
 func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandboxContext, error) {
-	profileJSON := strings.TrimSpace(req.PermissionProfileJSON)
+	return NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile:               req.PermissionProfile,
+		PermissionProfileJSON:           req.PermissionProfileJSON,
+		CWD:                             req.CWD,
+		WindowsSandboxLevel:             req.WindowsSandboxLevel,
+		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
+		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
+	})
+}
+
+type FileSystemSandboxContextOptions struct {
+	PermissionProfile               *sandbox.PermissionProfile
+	PermissionProfileJSON           string
+	CWD                             string
+	WorkspaceRoots                  []string
+	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
+	WindowsSandboxPrivateDesktop    bool
+	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
+	UseLegacyLandlock               bool
+}
+
+// NewFileSystemSandboxContext keeps canonical permissions separate from the
+// environment-specific cwd and workspace roots used to materialize them.
+func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*execserver.FileSystemSandboxContext, error) {
+	if options.PermissionProfile == nil {
+		return nil, errors.New("permission profile is required")
+	}
+	profileJSON := strings.TrimSpace(options.PermissionProfileJSON)
 	if profileJSON == "" {
 		var err error
-		profileJSON, err = sandbox.RuntimePermissionProfileJSON(*req.PermissionProfile)
+		profileJSON, err = sandbox.RuntimePermissionProfileJSON(*options.PermissionProfile)
 		if err != nil {
 			return nil, err
 		}
 	}
-	portableJSON, err := portablePermissionProfileJSON(profileJSON, req.CWD)
+	portableJSON, err := portablePermissionProfileJSON(profileJSON, options.CWD)
 	if err != nil {
 		return nil, err
 	}
-	cwd, err := unifiedExecPathURI(req.CWD)
+	cwd, err := unifiedExecPathURI(options.CWD)
 	if err != nil {
 		return nil, err
 	}
-	windowsSandboxLevel := req.WindowsSandboxLevel
+	workspaceRoots := make([]string, 0, len(options.WorkspaceRoots))
+	for _, root := range options.WorkspaceRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		uri, uriErr := unifiedExecPathURI(root)
+		if uriErr != nil {
+			return nil, uriErr
+		}
+		workspaceRoots = append(workspaceRoots, uri)
+	}
+	windowsSandboxLevel := options.WindowsSandboxLevel
 	if windowsSandboxLevel == "" {
 		windowsSandboxLevel = sandbox.WindowsSandboxDisabled
 	}
 	return &execserver.FileSystemSandboxContext{
 		Permissions:                     json.RawMessage(portableJSON),
 		CWD:                             cwd,
+		WorkspaceRoots:                  workspaceRoots,
 		WindowsSandboxLevel:             string(windowsSandboxLevel),
-		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
-		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
+		WindowsSandboxPrivateDesktop:    options.WindowsSandboxPrivateDesktop,
+		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,
+		UseLegacyLandlock:               options.UseLegacyLandlock,
 	}, nil
 }
 

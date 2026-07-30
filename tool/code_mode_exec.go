@@ -367,6 +367,7 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 	}
 	names := e.registry.Names()
 	out := make([]codeModeNestedTool, 0, len(names))
+	seenIdentifiers := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if name.Key() == CodeModeExecToolName || name.Key() == "wait" {
 			continue
@@ -375,7 +376,12 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 		if !ok || spec.Exposure == ExposureDirectModelOnly || (spec.Exposure == ExposureHidden && name.Key() != e.nestedCommandTool.Key()) {
 			continue
 		}
-		out = append(out, codeModeNestedTool{globalName: codeModeIdentifier(ResponsesAPIName(name)), name: name, spec: spec})
+		globalName := codeModeIdentifier(ResponsesAPIName(name))
+		if _, exists := seenIdentifiers[globalName]; exists {
+			continue
+		}
+		seenIdentifiers[globalName] = struct{}{}
+		out = append(out, codeModeNestedTool{globalName: globalName, name: name, spec: spec})
 	}
 	return out
 }
@@ -457,6 +463,7 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 		invocationContext = cloneInvocationContext(parent.Context)
 	}
 	invocation := &Invocation{CallID: call.RuntimeToolCallID, ToolName: call.ToolName, Payload: payload, Source: "code_mode", Context: invocationContext}
+	applySpecInvocationContext(invocation, executor.Spec())
 	startedAt := time.Now().UTC()
 	if parent != nil {
 		if started, ok := parent.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
@@ -652,6 +659,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			pending++
 			go func() {
 				nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: cloneInvocationContext(invocation.Context), Source: "code_mode"}
+				applySpecInvocationContext(nestedInvocation, toolSpec)
 				startedAt := time.Now().UTC()
 				if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
 					started(ctx, nestedInvocation, startedAt)

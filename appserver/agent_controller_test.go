@@ -8,6 +8,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/session"
+	"codex_go/turn"
 )
 
 func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
@@ -115,5 +116,48 @@ func TestRuntimeAgentControllerAppliesV2SubagentDeveloperInstructions(t *testing
 	inheritedRecord, err := store.Load(session.ThreadID(inherited.AgentID))
 	if err != nil || inheritedRecord.Metadata.Instructions != "parent instructions" {
 		t.Fatalf("inherited child = %#v, %v", inheritedRecord, err)
+	}
+}
+
+func TestRuntimeAgentControllerChildInheritsTurnEnvironmentSelectionsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: "/primary"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	selections := []map[string]any{
+		{"environmentId": "remote-primary", "cwd": "/primary"},
+		{"environmentId": "local", "cwd": "/local"},
+	}
+	controller := newRuntimeAgentControllerWithEnvironmentSelections(router, "parent", parent.Metadata.CWD, 2, agent.VersionV2, selections)
+	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load(session.ThreadID(result.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+	if len(persisted) != 2 || persisted[0]["environmentId"] != "remote-primary" || persisted[1]["environmentId"] != "local" {
+		t.Fatalf("persisted environments = %#v", persisted)
+	}
+	params := &turn.TurnStartParams{ThreadID: result.AgentID}
+	router.inheritTurnEnvironmentSelections(params)
+	if len(params.Environments) != 2 || params.Environments[0]["cwd"] != "/primary" {
+		t.Fatalf("inherited environments = %#v", params.Environments)
+	}
+}
+
+func TestRuntimeAgentControllerAttributesChildTurnsToParentTurn(t *testing.T) {
+	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", t.TempDir(), 1, agent.VersionV1, nil)
+	runtimeController, ok := controller.(*runtimeAgentController)
+	if !ok {
+		t.Fatalf("controller = %T", controller)
+	}
+	if runtimeController.parentID != "parent-thread" || runtimeController.parentTurnID != "parent-turn" {
+		t.Fatalf("parent provenance = thread %q turn %q", runtimeController.parentID, runtimeController.parentTurnID)
 	}
 }

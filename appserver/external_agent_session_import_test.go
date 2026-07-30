@@ -33,7 +33,18 @@ func TestExternalAgentSessionImportPersistsSourceChronology(t *testing.T) {
 	if response.Error != nil {
 		t.Fatalf("import response = %+v", response)
 	}
-	waitForExternalAgentImportNotification(t, sink, response.Result.(*config.ExternalAgentConfigImportResponse).ImportID)
+	completed := waitForExternalAgentImportNotification(t, sink, response.Result.(*config.ExternalAgentConfigImportResponse).ImportID)
+	if len(completed.ItemTypeResults) != 1 || len(completed.ItemTypeResults[0].Successes) != 1 || completed.ItemTypeResults[0].Successes[0].Title == nil || *completed.ItemTypeResults[0].Successes[0].Title != title {
+		t.Fatalf("completed session title = %+v", completed.ItemTypeResults)
+	}
+	histories := router.Handle(requestWithParams(t, IntID(2), MethodExternalAgentConfigImportHistoriesRead, map[string]any{}))
+	if histories.Error != nil {
+		t.Fatalf("read histories error = %+v", histories.Error)
+	}
+	historyData := histories.Result.(*config.ExternalAgentConfigImportHistoriesReadResponse).Data
+	if len(historyData) != 1 || len(historyData[0].Successes) != 1 || historyData[0].Successes[0].Title == nil || *historyData[0].Successes[0].Title != title {
+		t.Fatalf("import history session title = %+v", historyData)
+	}
 	page, err := store.List(session.ListOptions{PageSize: 10, IncludeHistory: true})
 	if err != nil || len(page.Records) != 1 {
 		t.Fatalf("imported records = %+v err=%v", page, err)

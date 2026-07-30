@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/mcp"
+	"codex_go/model"
+	codexnetwork "codex_go/network"
 )
 
 var openMCPLoginBrowser = auth.OpenBrowser
@@ -87,9 +90,9 @@ func runMCP(ctx context.Context, opts *cli.MCPOptions, stdout io.Writer) error {
 	store := newMCPCLIStore(auth.DefaultCodexHome())
 	switch opts.Action {
 	case "list":
-		return runMCPList(store, opts, stdout)
+		return runMCPList(ctx, store, opts, stdout)
 	case "get":
-		return runMCPGet(store, opts, stdout)
+		return runMCPGet(ctx, store, opts, stdout)
 	case "add":
 		return runMCPAdd(ctx, store, opts, stdout)
 	case "remove":
@@ -97,14 +100,14 @@ func runMCP(ctx context.Context, opts *cli.MCPOptions, stdout io.Writer) error {
 	case "login":
 		return runMCPLogin(ctx, store, opts, stdout)
 	case "logout":
-		return runMCPLogout(store, opts, stdout)
+		return runMCPLogout(ctx, store, opts, stdout)
 	default:
 		return fmt.Errorf("unknown mcp subcommand %s", opts.Action)
 	}
 }
 
-func runMCPList(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
-	cfg, err := store.Load(opts.ConfigOverrides)
+func runMCPList(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
+	cfg, err := store.LoadManaged(ctx, opts.ConfigOverrides)
 	if err != nil {
 		return err
 	}
@@ -169,8 +172,8 @@ func runMCPList(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) erro
 	return nil
 }
 
-func runMCPGet(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
-	cfg, err := store.Load(opts.ConfigOverrides)
+func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
+	cfg, err := store.LoadManaged(ctx, opts.ConfigOverrides)
 	if err != nil {
 		return err
 	}
@@ -258,7 +261,7 @@ func runMCPAdd(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 		return err
 	}
 	fmt.Fprintf(stdout, "Added global MCP server '%s'.\n", opts.Name)
-	support := mcpOAuthLoginSupport(ctx, server)
+	support := mcpOAuthLoginSupport(ctx, server, store.httpClient)
 	switch support.Kind {
 	case mcpOAuthLoginSupported:
 		fmt.Fprintln(stdout, "Detected OAuth support. Starting OAuth flow…")
@@ -290,7 +293,7 @@ func runMCPRemove(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) er
 }
 
 func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
-	cfg, err := store.Load(opts.ConfigOverrides)
+	cfg, err := store.LoadManaged(ctx, opts.ConfigOverrides)
 	if err != nil {
 		return err
 	}
@@ -307,7 +310,7 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	var support mcpOAuthLoginSupportResult
 	var discoveredScopes []string
 	if !explicitScopesSet && !configuredScopesSet {
-		support = mcpOAuthLoginSupport(ctx, server)
+		support = mcpOAuthLoginSupport(ctx, server, store.httpClient)
 		if support.Kind == mcpOAuthLoginSupported {
 			discoveredScopes = support.Discovery.ScopesSupported
 		}
@@ -322,7 +325,7 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	}
 	service := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
 		opts.Name: {Config: mcpServerRuntimeConfig(opts.Name, server, store.codexHome)},
-	}, CodexHome: store.codexHome})
+	}, CodexHome: store.codexHome, HTTPClient: store.httpClient})
 	response, err := service.OauthLogin(&mcp.MCPServerOauthLoginParams{Name: opts.Name, Scopes: resolvedScopes.Scopes})
 	if err != nil {
 		return err
@@ -363,13 +366,13 @@ type mcpResolvedOAuthScopes struct {
 	Source mcpOAuthScopesSource
 }
 
-func mcpOAuthLoginSupport(ctx context.Context, server *mcpCLIServer) mcpOAuthLoginSupportResult {
+func mcpOAuthLoginSupport(ctx context.Context, server *mcpCLIServer, client *http.Client) mcpOAuthLoginSupportResult {
 	if server == nil || server.Type != "streamable_http" || strings.TrimSpace(server.BearerTokenEnvVar) != "" {
 		return mcpOAuthLoginSupportResult{Kind: mcpOAuthLoginUnsupported}
 	}
 	timeoutCtx, cancel := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
 	defer cancel()
-	client := &http.Client{Timeout: mcpCLIOAuthDiscoveryTimeout}
+	client = mcpCLIHTTPClientWithTimeout(client, mcpCLIOAuthDiscoveryTimeout)
 	discovery, err := mcp.DiscoverStreamableHTTPOAuth(timeoutCtx, server.URL, client)
 	if err != nil {
 		return mcpOAuthLoginSupportResult{Kind: mcpOAuthLoginUnknown, Err: err}
@@ -409,7 +412,7 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 	if store == nil || server == nil || discovery == nil {
 		return fmt.Errorf("OAuth login requires a discovered streamable HTTP server")
 	}
-	httpClient := &http.Client{Timeout: mcpCLIOAuthDiscoveryTimeout}
+	httpClient := mcpCLIHTTPClientWithTimeout(store.httpClient, mcpCLIOAuthDiscoveryTimeout)
 	startCtx, cancelStart := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
 	login, err := mcp.StartOAuthLoginServer(startCtx, &mcp.OAuthLoginServerOptions{
 		ServerName:            name,
@@ -460,8 +463,8 @@ func shouldRetryMCPLoginWithoutScopes(resolvedScopes mcpResolvedOAuthScopes, err
 	return errors.As(err, &providerError)
 }
 
-func runMCPLogout(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
-	cfg, err := store.Load(opts.ConfigOverrides)
+func runMCPLogout(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
+	cfg, err := store.LoadManaged(ctx, opts.ConfigOverrides)
 	if err != nil {
 		return err
 	}
@@ -765,7 +768,8 @@ func cloneStringMap(values map[string]string) map[string]string {
 }
 
 type mcpCLIStore struct {
-	codexHome string
+	codexHome  string
+	httpClient *http.Client
 }
 
 func newMCPCLIStore(codexHome string) *mcpCLIStore {
@@ -777,7 +781,73 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.httpClient = codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0)
 	return mcpCLIConfigFromValues(loaded.Values), nil
+}
+
+func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcpCLIConfig, error) {
+	bootstrap, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.httpClient = codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0)
+	snapshot, err := auth.NewStoreWithOptions(s.codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
+	if err != nil {
+		return nil, err
+	}
+	if !mcpCLICloudConfigEligibleAuth(snapshot) {
+		return mcpCLIConfigFromValues(bootstrap.Values), nil
+	}
+	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
+	if err != nil {
+		return nil, err
+	}
+	loader := config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
+		loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
+		defer cancel()
+		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
+			CodexHome:     s.codexHome,
+			BaseURL:       bootstrap.ChatGPTBaseURL(),
+			ChatGPTUserID: auth.ChatGPTUserIDFromAuth(snapshot),
+			AccountID:     auth.AccountIDFromAuthForRestrictions(snapshot),
+			HTTPClient:    s.httpClient,
+			Authorize: func(requestCtx context.Context, request *http.Request) error {
+				return authHeaders.Apply(requestCtx, request, nil)
+			},
+		})
+	})
+	loaded, err := config.LoadEffectiveWithOptions(s.codexHome, &config.EffectiveOptions{
+		RawOverrides:         append([]string(nil), overrides...),
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(s.codexHome, "managed_config.toml"),
+		CloudConfigBundle:    loader,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.httpClient = codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0)
+	return mcpCLIConfigFromValues(loaded.Values), nil
+}
+
+func mcpCLICloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+		return auth.AccountFromAuth(snapshot) != nil
+	default:
+		return false
+	}
+}
+
+func mcpCLIHTTPClientWithTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if client == nil {
+		return &http.Client{Timeout: timeout}
+	}
+	cloned := *client
+	cloned.Timeout = timeout
+	return &cloned
 }
 
 func (s *mcpCLIStore) Upsert(overrides []string, server *mcpCLIServer) error {

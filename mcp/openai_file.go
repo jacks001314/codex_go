@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/utils"
+
 	"github.com/google/uuid"
 )
 
@@ -71,10 +73,51 @@ type OpenAIFileUploadRequest struct {
 	Path          string
 	FileName      string
 	FileSizeBytes int64
+	Open          func(context.Context) (io.ReadCloser, error)
 }
 
 type OpenAIFileUploader interface {
 	UploadOpenAIFile(ctx context.Context, request OpenAIFileUploadRequest) (*OpenAIUploadedFile, error)
+}
+
+type OpenAIFileMetadata struct {
+	IsFile bool
+	Size   int64
+}
+
+type OpenAIFileSystem interface {
+	Metadata(ctx context.Context, pathURI string) (*OpenAIFileMetadata, error)
+	Open(ctx context.Context, pathURI string) (io.ReadCloser, error)
+}
+
+type localOpenAIFileSystem struct{}
+
+func (localOpenAIFileSystem) Metadata(_ context.Context, pathURI string) (*OpenAIFileMetadata, error) {
+	path, err := openAIFileHostPath(pathURI)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	return &OpenAIFileMetadata{IsFile: info.Mode().IsRegular(), Size: info.Size()}, nil
+}
+
+func (localOpenAIFileSystem) Open(_ context.Context, pathURI string) (io.ReadCloser, error) {
+	path, err := openAIFileHostPath(pathURI)
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(path)
+}
+
+func openAIFileHostPath(pathURI string) (string, error) {
+	parsed, err := utils.Parse(pathURI)
+	if err != nil {
+		return "", err
+	}
+	return parsed.HostNativePath()
 }
 
 type LocalOpenAIFileUploader struct {
@@ -212,17 +255,22 @@ func (u *LocalOpenAIFileUploader) authorizedJSON(ctx context.Context, method str
 }
 
 func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL string, request OpenAIFileUploadRequest) error {
-	contents, err := os.Open(request.Path)
-	if err != nil {
-		return err
-	}
-	defer contents.Close()
-
 	requestID := uuid.NewString()
 	host := openAIFileUploadHost(uploadURL)
 	started := time.Now()
 	requestCtx, cancel := context.WithTimeout(ctx, u.requestTimeout())
 	defer cancel()
+	var contents io.ReadCloser
+	var err error
+	if request.Open != nil {
+		contents, err = request.Open(requestCtx)
+	} else {
+		contents, err = os.Open(request.Path)
+	}
+	if err != nil {
+		return err
+	}
+	defer contents.Close()
 	uploadRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPut, uploadURL, contents)
 	if err != nil {
 		return fmt.Errorf("OpenAI file blob upload failed after %dms (request, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), host, requestID)
@@ -314,6 +362,7 @@ type OpenAIFileRewriterOptions struct {
 	CWD              string
 	Auth             *OpenAIFileAuth
 	Uploader         OpenAIFileUploader
+	FileSystem       OpenAIFileSystem
 	HTTPClient       OpenAIFileHTTPDoer
 	UploadLimitBytes int64
 }
@@ -322,6 +371,7 @@ type OpenAIFileRewriter struct {
 	CWD              string
 	Auth             *OpenAIFileAuth
 	Uploader         OpenAIFileUploader
+	FileSystem       OpenAIFileSystem
 	UploadLimitBytes int64
 }
 
@@ -342,6 +392,7 @@ func NewOpenAIFileRewriterWithOptions(options OpenAIFileRewriterOptions) *OpenAI
 		CWD:              options.CWD,
 		Auth:             options.Auth,
 		Uploader:         uploader,
+		FileSystem:       options.FileSystem,
 		UploadLimitBytes: limit,
 	}
 }
@@ -431,32 +482,49 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 	if cwd == "" {
 		return nil, r.contextualize(fieldName, index, filePath, "no primary turn environment is available")
 	}
-	resolved := filePath
-	if !filepath.IsAbs(filePath) {
-		resolved = filepath.Join(cwd, filePath)
-	}
-	info, err := os.Stat(resolved)
+	cwdURI, err := openAIFileDirectoryURI(cwd)
 	if err != nil {
 		return nil, r.contextualize(fieldName, index, filePath, err.Error())
 	}
-	if !info.Mode().IsRegular() {
-		return nil, r.contextualize(fieldName, index, filePath, fmt.Sprintf("path `%s` is not a file", resolved))
+	resolved, err := cwdURI.Join(filePath)
+	if err != nil {
+		return nil, r.contextualize(fieldName, index, filePath, err.Error())
+	}
+	fileSystem := r.FileSystem
+	if fileSystem == nil {
+		fileSystem = localOpenAIFileSystem{}
+	}
+	info, err := fileSystem.Metadata(ctx, resolved.String())
+	if err != nil {
+		return nil, r.contextualize(fieldName, index, filePath, err.Error())
+	}
+	displayPath := resolved.NativePathString()
+	if info == nil || !info.IsFile {
+		return nil, r.contextualize(fieldName, index, filePath, fmt.Sprintf("path `%s` is not a file", displayPath))
 	}
 	limit := r.UploadLimitBytes
 	if limit <= 0 {
 		limit = DefaultOpenAIFileUploadLimitBytes
 	}
-	if info.Size() > limit {
-		return nil, r.contextualize(fieldName, index, filePath, fmt.Sprintf("file `%s` is too large: %d bytes exceeds the limit of %d bytes", resolved, info.Size(), limit))
+	if info.Size > limit {
+		return nil, r.contextualize(fieldName, index, filePath, fmt.Sprintf("file `%s` is too large: %d bytes exceeds the limit of %d bytes", displayPath, info.Size, limit))
 	}
 	uploader := r.Uploader
 	if uploader == nil {
 		uploader = &LocalOpenAIFileUploader{Auth: r.Auth}
 	}
+	fileName, ok := resolved.Basename()
+	if !ok || strings.TrimSpace(fileName) == "" {
+		fileName = "file"
+	}
+	resolvedURI := resolved.String()
 	uploaded, err := uploader.UploadOpenAIFile(ctx, OpenAIFileUploadRequest{
-		Path:          resolved,
-		FileName:      firstNonEmptyMCP(filepath.Base(resolved), "file"),
-		FileSizeBytes: info.Size(),
+		Path:          displayPath,
+		FileName:      fileName,
+		FileSizeBytes: info.Size,
+		Open: func(openCtx context.Context) (io.ReadCloser, error) {
+			return fileSystem.Open(openCtx, resolvedURI)
+		},
 	})
 	if err != nil {
 		return nil, r.contextualize(fieldName, index, filePath, err.Error())
@@ -475,6 +543,33 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 		payload["file_name"] = uploaded.FileName
 	}
 	return payload, nil
+}
+
+func openAIFileDirectoryURI(cwd string) (*utils.PathURI, error) {
+	cwd = strings.TrimSpace(cwd)
+	if parsed, err := utils.Parse(cwd); err == nil {
+		if strings.HasSuffix(parsed.EncodedPath(), "/") {
+			return parsed, nil
+		}
+		return utils.Parse(parsed.String() + "/")
+	}
+	legacy := utils.NewLegacyAppPathString(cwd)
+	convention, absolute := legacy.InferAbsolutePathConvention()
+	if !absolute {
+		hostPath, err := filepath.Abs(cwd)
+		if err != nil {
+			return nil, err
+		}
+		return openAIFileDirectoryURI(hostPath)
+	}
+	separator := "/"
+	if convention == utils.ConventionWindows {
+		separator = `\`
+	}
+	if !strings.HasSuffix(cwd, "/") && !strings.HasSuffix(cwd, `\`) {
+		cwd += separator
+	}
+	return utils.FromAbsoluteNativePath(cwd, convention)
 }
 
 func containsOpenAIFileOptionalField(values []string, want string) bool {

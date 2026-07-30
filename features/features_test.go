@@ -37,6 +37,9 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	if !defaults["in_app_updates"] {
 		t.Fatal("in_app_updates default = false, want true")
 	}
+	if defaults["recommended_plugins"] {
+		t.Fatal("recommended_plugins default = true, want false")
+	}
 }
 
 func TestModelClientBetaFeaturesHeader(t *testing.T) {

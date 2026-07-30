@@ -92,7 +92,7 @@ func (c SessionHeaderHistoryCell) modelLine() string {
 
 func (c SessionHeaderHistoryCell) directoryLine(innerWidth int) string {
 	prefix := "directory: "
-	maxPathWidth := innerWidth - len([]rune(prefix))
+	maxPathWidth := innerWidth - tui.DisplayWidth(prefix)
 	if maxPathWidth < 1 {
 		maxPathWidth = 1
 	}
@@ -154,10 +154,6 @@ func (c SessionInfoCell) RawLines() []string {
 func historyBorder(lines []string, innerWidth int) []string {
 	out := []string{"\u256d" + strings.Repeat("\u2500", innerWidth+2) + "\u256e"}
 	for _, line := range lines {
-		runes := []rune(line)
-		if len(runes) > innerWidth {
-			line = string(runes[:innerWidth])
-		}
 		out = append(out, "\u2502 "+padRightRunes(line, innerWidth)+" \u2502")
 	}
 	out = append(out, "\u2570"+strings.Repeat("\u2500", innerWidth+2)+"\u256f")

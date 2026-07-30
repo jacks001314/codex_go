@@ -29,6 +29,7 @@ func (r *RuntimeRouter) importExternalAgentSessions(params *config.ExternalAgent
 			completedImports = append(completedImports, config.ExternalSessionImportCompletion{
 				SourcePath:       migration.Path,
 				ImportedThreadID: externalAgentStringValue(success.Target),
+				Title:            migration.Title,
 			})
 		}
 	}
@@ -93,6 +94,7 @@ func (r *RuntimeRouter) importExternalAgentSession(migration config.SessionMigra
 	target := string(record.ID)
 	return &config.ExternalAgentConfigImportItemTypeSuccess{
 		ItemType: config.MigrationSessions, Source: externalAgentStringPointer(path), Target: &target,
+		Title: externalAgentStringPointer(record.Title),
 	}, nil
 }
 

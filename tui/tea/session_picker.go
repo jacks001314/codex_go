@@ -219,7 +219,7 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 	m.notice = ""
 }
 
-func (m *Model) applyForkCurrentSession() bubbletea.Cmd {
+func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
@@ -228,6 +228,7 @@ func (m *Model) applyForkCurrentSession() bubbletea.Cmd {
 		Target: codextui.SessionTarget{
 			ThreadID: strings.TrimSpace(m.State.ThreadID),
 		},
+		Name: strings.TrimSpace(name),
 	}
 	decision, notice, _ := m.applySessionSelection(selection)
 	if strings.TrimSpace(notice) != "" {
@@ -288,6 +289,15 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			return nil, err.Error(), true
 		}
 		if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
+			if name := strings.TrimSpace(selection.Name); name != "" {
+				if m.onRenameThread == nil {
+					m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
+				} else if err := m.onRenameThread(summary.ThreadID, name); err != nil {
+					m.addErrorHistoryMessage("Failed to name the forked session: " + strings.TrimSpace(err.Error()))
+				} else {
+					summary.Title = name
+				}
+			}
 			m.upsertSessionItem(*summary)
 			m.State.SetThreadID(summary.ThreadID)
 			decision.Value = summary.ThreadID

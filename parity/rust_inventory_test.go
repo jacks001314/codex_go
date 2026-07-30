@@ -42,6 +42,7 @@ func goTopLevelDirectories(t *testing.T, root string) []string {
 		"npm":          true,
 		"scripts":      true,
 		"sdktests":     true,
+		"tmp":          true,
 		"update":       true,
 		"vscodetests":  true,
 	}

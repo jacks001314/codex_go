@@ -97,6 +97,7 @@ type ClientMetadata struct {
 	Compaction          *ClientCompactionMetadata
 	ForkedFromThreadID  string
 	ParentThreadID      string
+	ParentTurnID        string
 	SubagentHeader      string
 	SubagentKind        string
 	ThreadSource        string
@@ -150,6 +151,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.ParentThreadID != "" {
 		value["parent_thread_id"] = m.ParentThreadID
+	}
+	if m.ParentTurnID != "" {
+		value["parent_turn_id"] = m.ParentTurnID
 	}
 	if m.SubagentKind != "" {
 		value["subagent_kind"] = m.SubagentKind
@@ -206,6 +210,9 @@ func (m *ClientMetadata) ClientMetadata() map[string]string {
 	if m.ParentThreadID != "" {
 		out[ClientCodexParentThreadIDHeader] = m.ParentThreadID
 	}
+	if m.ParentTurnID != "" {
+		out["parent_turn_id"] = m.ParentTurnID
+	}
 	if m.HasTurnMetadata() {
 		if jsonText, ok := m.TurnMetadataJSON(); ok {
 			out[ClientCodexTurnMetadataHeader] = jsonText
@@ -260,7 +267,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		"session_id", "thread_id", "turn_id", "window_id", strings.ToLower(ClientCodexWindowIDHeader),
 		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
-		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id",
+		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id",
 		"subagent_kind", "thread_source", "sandbox", "workspaces",
 		CodeModeToolNamesKey,
 	}

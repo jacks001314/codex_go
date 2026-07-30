@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -327,6 +328,95 @@ func TestExternalHooksMigrationHonorsLocalDisableOverride(t *testing.T) {
 	migration, err = buildExternalHooksMigration(sourceDir, filepath.Join(root, ".codex"))
 	if err != nil || len(migration.Groups) != 0 {
 		t.Fatalf("local disable override = %#v err=%v", migration, err)
+	}
+}
+
+func TestExternalRepoMigrationNeverOverwritesSymlinkTargets(t *testing.T) {
+	root := t.TempDir()
+	codexHome := filepath.Join(root, ".codex-home")
+	empty := ""
+	for _, test := range []struct {
+		name          string
+		linkedContent *string
+	}{
+		{name: "existing", linkedContent: &empty},
+		{name: "dangling"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := filepath.Join(root, "repo-"+test.name)
+			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(repo, ".claude"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(repo, ".codex"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("Claude guidance\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, ".claude", "settings.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"command":"echo done"}]}]}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, name := range []string{"AGENTS.md", "hooks.json"} {
+				linkedTarget := filepath.Join(root, test.name+"-"+name+"-target")
+				migrationTarget := filepath.Join(repo, name)
+				if name == "hooks.json" {
+					migrationTarget = filepath.Join(repo, ".codex", name)
+				}
+				if test.linkedContent != nil {
+					if err := os.WriteFile(linkedTarget, []byte(*test.linkedContent), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(linkedTarget, migrationTarget); err != nil {
+					t.Skipf("symlinks are unavailable: %v", err)
+				}
+			}
+
+			service := NewConfigService(codexHome)
+			detected := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{CWDs: []string{repo}})
+			if len(detected.Items) != 0 {
+				t.Fatalf("symlink targets detected for migration = %#v", detected.Items)
+			}
+
+			cwd := repo
+			items := []ExternalAgentConfigMigrationItem{
+				{ItemType: MigrationAgentsMD, CWD: &cwd},
+				{ItemType: MigrationHooks, CWD: &cwd},
+			}
+			_, completed := service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{MigrationItems: items})
+			if len(completed.ItemTypeResults) != 2 {
+				t.Fatalf("completed = %#v", completed)
+			}
+			for _, result := range completed.ItemTypeResults {
+				if len(result.Successes) != 0 || len(result.Failures) != 0 {
+					t.Fatalf("symlink target import result = %#v", result)
+				}
+			}
+
+			for _, name := range []string{"AGENTS.md", "hooks.json"} {
+				linkedTarget := filepath.Join(root, test.name+"-"+name+"-target")
+				migrationTarget := filepath.Join(repo, name)
+				if name == "hooks.json" {
+					migrationTarget = filepath.Join(repo, ".codex", name)
+				}
+				gotLink, err := os.Readlink(migrationTarget)
+				if err != nil || gotLink != linkedTarget {
+					t.Fatalf("migration target symlink = %q, want %q, err=%v", gotLink, linkedTarget, err)
+				}
+				data, err := os.ReadFile(linkedTarget)
+				if test.linkedContent == nil {
+					if !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("dangling target was created: data=%q err=%v", data, err)
+					}
+				} else if err != nil || string(data) != *test.linkedContent {
+					t.Fatalf("linked target changed: data=%q err=%v", data, err)
+				}
+			}
+		})
 	}
 }
 

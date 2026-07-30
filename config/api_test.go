@@ -837,9 +837,9 @@ func TestExternalAgentConfigDetectAndImport(t *testing.T) {
 
 	recorded := service.RecordExternalAgentImportHistory(&ExternalAgentConfigImportHistoryRecordParams{
 		ProviderID: "external-client",
-		ItemTypeResults: []ExternalAgentConfigImportTypeResult{{
+		ItemTypeResults: []ExternalAgentConfigImportHistoryRecordTypeResultParams{{
 			ItemType: MigrationConfig,
-			Successes: []ExternalAgentConfigImportItemTypeSuccess{{
+			Successes: []ExternalAgentConfigImportHistoryRecordSuccessParams{{
 				ItemType: MigrationConfig,
 				Source:   &source,
 			}},

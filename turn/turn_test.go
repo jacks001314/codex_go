@@ -62,6 +62,7 @@ func TestMetadataState(t *testing.T) {
 	metadata := NewMetadataState("session", "thread", "turn")
 	metadata.ForkedFromThreadID = "fork"
 	metadata.ParentThreadID = "parent"
+	metadata.ParentTurnID = "parent-turn"
 	metadata.Sandbox = "workspace-write"
 	metadata.SetTurnStartedAtUnixMS(42)
 	metadata.MarkUserInputRequestedDuringTurn()
@@ -70,6 +71,7 @@ func TestMetadataState(t *testing.T) {
 		"too_long":                 string(make([]byte, 600)),
 		"x-codex-installation-id":  "override",
 		"x-codex-parent-thread-id": "override-parent",
+		"parent_turn_id":           "override-turn",
 		"x-codex-turn-metadata":    "override-metadata",
 		"x-openai-subagent":        "override-subagent",
 	})
@@ -103,6 +105,7 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 		RequestKind:        codexapi.ClientRequestTurn,
 		ForkedFromThreadID: "source-thread",
 		ParentThreadID:     "parent-thread",
+		ParentTurnID:       "parent-turn",
 		SubagentHeader:     "guardian",
 		SubagentKind:       "guardian",
 		ThreadSource:       "automation",
@@ -111,6 +114,7 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 			"thread_id":                "bad",
 			"x-codex-turn-metadata":    "bad",
 			"x-codex-parent-thread-id": "bad",
+			"parent_turn_id":           "bad",
 		},
 		StartedAtMS:      42,
 		UseResponsesLite: true,
@@ -134,7 +138,7 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	if turnMetadata["workspace_kind"] != "git" || turnMetadata["thread_id"] != "thread" || turnMetadata["turn_started_at_unix_ms"].(float64) != 42 {
 		t.Fatalf("turn metadata = %#v", turnMetadata)
 	}
-	if turnMetadata["forked_from_thread_id"] != "source-thread" || turnMetadata["parent_thread_id"] != "parent-thread" || turnMetadata["subagent_kind"] != "guardian" || turnMetadata["thread_source"] != "automation" {
+	if turnMetadata["forked_from_thread_id"] != "source-thread" || turnMetadata["parent_thread_id"] != "parent-thread" || turnMetadata["parent_turn_id"] != "parent-turn" || turnMetadata["subagent_kind"] != "guardian" || turnMetadata["thread_source"] != "automation" {
 		t.Fatalf("lineage turn metadata = %#v", turnMetadata)
 	}
 	if turnMetadata["x-codex-parent-thread-id"] != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf16"
 )
 
 type LegacyAppPathString struct {
@@ -33,6 +34,18 @@ func NewLegacyAppPathString(value string) LegacyAppPathString {
 func LegacyAppPathStringFromURI(uri *PathURI, convention PathConvention) (LegacyAppPathString, error) {
 	if uri == nil || uri.url == nil {
 		return LegacyAppPathString{}, &LegacyError{Reason: "path URI is nil"}
+	}
+	if data := opaqueFallbackBytes(uri.url); data != nil {
+		if convention == ConventionWindows && len(data)%2 == 0 {
+			values := make([]uint16, len(data)/2)
+			for i := range values {
+				values[i] = uint16(data[i*2]) | uint16(data[i*2+1])<<8
+			}
+			return LegacyAppPathString{Value: string(utf16.Decode(values))}, nil
+		}
+		if convention == ConventionPosix {
+			return LegacyAppPathString{Value: string(data)}, nil
+		}
 	}
 	switch convention {
 	case ConventionPosix:

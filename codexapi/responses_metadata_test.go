@@ -9,6 +9,7 @@ func TestMetadataClientAndTurnMetadata(t *testing.T) {
 	metadata := NewResponsesMetadata("install", "session", "thread", "window")
 	metadata.TurnID = "turn"
 	metadata.ParentThreadID = "parent"
+	metadata.ParentTurnID = "parent-turn"
 	metadata.SubagentHeader = "review"
 	metadata.RequestKind = &ResponsesRequestKind{
 		Kind:       RequestKindCompaction,
@@ -23,7 +24,7 @@ func TestMetadataClientAndTurnMetadata(t *testing.T) {
 	if err := json.Unmarshal([]byte(client[TurnMetadataHeader]), &payload); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if payload[RequestKindKey] != RequestKindCompaction || payload["workspace_kind"] != "git" || payload[ThreadIDKey] != "thread" {
+	if payload[RequestKindKey] != RequestKindCompaction || payload["workspace_kind"] != "git" || payload[ThreadIDKey] != "thread" || payload[ParentTurnIDKey] != "parent-turn" || client[ParentTurnIDKey] != "parent-turn" {
 		t.Fatalf("payload = %#v", payload)
 	}
 }

@@ -165,9 +165,10 @@ func padRightRunes(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(text)
-	if len(runes) >= width {
-		return string(runes[:width])
+	text = tui.TruncateToWidth(text, width)
+	used := tui.DisplayWidth(text)
+	if used >= width {
+		return text
 	}
-	return text + strings.Repeat(" ", width-len(runes))
+	return text + strings.Repeat(" ", width-used)
 }

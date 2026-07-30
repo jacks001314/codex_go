@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ type MCPStartupObserver func(name string, status MCPServerStartupState, err erro
 type MCPAuthStatus string
 
 const (
+	MCPAuthUnknown     MCPAuthStatus = "unknown"
 	MCPAuthUnsupported MCPAuthStatus = "unsupported"
 	MCPAuthNotLoggedIn MCPAuthStatus = "notLoggedIn"
 	MCPAuthBearerToken MCPAuthStatus = "bearerToken"
@@ -544,23 +546,31 @@ func (c *MCPToolCallContent) Map() map[string]any {
 }
 
 type MCPService struct {
-	mu            sync.Mutex
-	servers       map[string]MCPServerStatus
-	configs       map[string]ServerConfig
-	dynamicConfig map[string]bool
-	required      map[string]bool
-	httpClients   map[string]*cachedMCPHTTPClient
-	stdioClients  map[string]*cachedMCPStdioClient
-	oauthLogins   map[string]*OAuthLoginServer
-	oauth         *OAuthStore
-	resourceCache *MCPResourceCache
-	elicitation   MCPElicitationHandler
-	progress      MCPProgressHandler
-	roots         MCPRootsProvider
-	oauthComplete MCPOAuthLoginCompletionHandler
-	openAIForm    bool
-	generation    uint64
+	mu                  sync.Mutex
+	servers             map[string]MCPServerStatus
+	configs             map[string]ServerConfig
+	dynamicConfig       map[string]bool
+	required            map[string]bool
+	starting            map[string]int
+	httpClients         map[string]*cachedMCPHTTPClient
+	stdioClients        map[string]*cachedMCPStdioClient
+	oauthLogins         map[string]*OAuthLoginServer
+	oauth               *OAuthStore
+	resourceCache       *MCPResourceCache
+	elicitation         MCPElicitationHandler
+	progress            MCPProgressHandler
+	roots               MCPRootsProvider
+	oauthComplete       MCPOAuthLoginCompletionHandler
+	openAIForm          bool
+	generation          uint64
+	sharedHTTPClient    HTTPDoer
+	sharedHTTPClientKey string
 }
+
+var sharedOptionalMCPStartupGrace = struct {
+	sync.Mutex
+	deadlines map[string]time.Time
+}{deadlines: map[string]time.Time{}}
 
 type cachedMCPHTTPClient struct {
 	key    string
@@ -573,8 +583,10 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1}
 	if runtime != nil {
+		service.sharedHTTPClient = runtime.HTTPClient
+		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStore(runtime.CodexHome)
 		}
@@ -628,7 +640,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	for name, cached := range s.httpClients {
 		config, ok := refreshed.configs[name]
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpConnectionCacheKey(&config, s.openAIForm) {
+			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, refreshed.sharedHTTPClientKey) {
 			nextHTTPClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -654,10 +666,13 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.configs = refreshed.configs
 	s.dynamicConfig = refreshed.dynamicConfig
 	s.required = refreshed.required
+	s.starting = refreshed.starting
 	s.httpClients = nextHTTPClients
 	s.stdioClients = nextStdioClients
 	s.oauthLogins = map[string]*OAuthLoginServer{}
 	s.oauth = refreshed.oauth
+	s.sharedHTTPClient = refreshed.sharedHTTPClient
+	s.sharedHTTPClientKey = refreshed.sharedHTTPClientKey
 	s.generation++
 	if s.resourceCache == nil {
 		s.resourceCache = NewMCPResourceCache(nil)
@@ -952,6 +967,44 @@ func (s *MCPService) ValidateRequiredServers(threadID string) error {
 	return fmt.Errorf("required MCP servers failed to initialize: %s", strings.Join(failures, "; "))
 }
 
+// WaitForServerStartup refreshes only the MCP server that owns the selected
+// tool. The inventory request can block without occupying the tool execution
+// gate, so unrelated calls in the same model response remain runnable.
+func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, threadID string) error {
+	if s == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	s.mu.Lock()
+	config, ok := s.configs[name]
+	status := cloneMCPServerStatus(s.servers[name])
+	starting := s.starting[name] > 0
+	s.mu.Unlock()
+	if !ok || !config.Enabled {
+		return nil
+	}
+	if !starting && (status.State == "" || status.State == MCPServerReady) {
+		return nil
+	}
+	done := make(chan struct{}, 1)
+	go func() {
+		_ = s.inventoryStatusForConfig(0, name, &config, status, false, strings.TrimSpace(threadID))
+		done <- struct{}{}
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
+}
+
 func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusParams, observer MCPStartupObserver) (*MCPListServerStatusResponse, error) {
 	var detail *MCPServerStatusDetail
 	if params != nil {
@@ -1033,6 +1086,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		if config.Required || required[name] || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
 			requiredIndexes[i] = true
 		}
+		s.markServerStartupStarted(name)
 		go func(index int, serverName string, serverConfig ServerConfig, status MCPServerStatus) {
 			resultCh <- s.inventoryStatusForConfig(index, serverName, &serverConfig, status, detail.includesInventory(), threadID)
 		}(i, name, config, cloneMCPServerStatus(servers[i]))
@@ -1062,23 +1116,44 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 	if grace <= 0 {
 		grace = time.Second
 	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	graceExpired := false
+	defaultDeadline := time.Now().Add(grace)
+	optionalDeadlines := map[int]time.Time{}
+	for index, name := range pending {
+		if !requiredIndexes[index] {
+			optionalDeadlines[index] = sharedOptionalStartupDeadline(name, configs[name], defaultDeadline)
+		}
+	}
 	for len(pending) > 0 {
-		if graceExpired && len(requiredIndexes) == 0 {
+		now := time.Now()
+		for index, deadline := range optionalDeadlines {
+			if !deadline.After(now) {
+				delete(optionalDeadlines, index)
+				delete(pending, index)
+			}
+		}
+		if len(pending) == 0 {
 			break
 		}
-		if graceExpired {
+		var nextDeadline time.Time
+		for _, deadline := range optionalDeadlines {
+			if nextDeadline.IsZero() || deadline.Before(nextDeadline) {
+				nextDeadline = deadline
+			}
+		}
+		if nextDeadline.IsZero() {
 			result := <-resultCh
 			applyResult(result)
 			continue
 		}
+		timer := time.NewTimer(time.Until(nextDeadline))
 		select {
 		case result := <-resultCh:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			delete(optionalDeadlines, result.Index)
 			applyResult(result)
 		case <-timer.C:
-			graceExpired = true
 		}
 	}
 	return servers
@@ -1122,9 +1197,9 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	current, ok := s.servers[name]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
 	current.State = status.State
@@ -1138,6 +1213,50 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 		current.ResourceTemplates = append([]MCPResourceTemplate(nil), status.ResourceTemplates...)
 	}
 	s.servers[name] = cloneMCPServerStatus(current)
+	if s.starting[name] <= 1 {
+		delete(s.starting, name)
+	} else {
+		s.starting[name]--
+	}
+	config := s.configs[name]
+	s.mu.Unlock()
+	if status.State == MCPServerReady {
+		clearSharedOptionalStartupDeadline(name, config)
+	}
+}
+
+func (s *MCPService) markServerStartupStarted(name string) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.starting == nil {
+		s.starting = map[string]int{}
+	}
+	s.starting[name]++
+	s.mu.Unlock()
+}
+
+func sharedOptionalStartupDeadline(name string, config ServerConfig, fallback time.Time) time.Time {
+	key := optionalStartupGraceKey(name, config)
+	sharedOptionalMCPStartupGrace.Lock()
+	defer sharedOptionalMCPStartupGrace.Unlock()
+	if deadline, ok := sharedOptionalMCPStartupGrace.deadlines[key]; ok {
+		return deadline
+	}
+	sharedOptionalMCPStartupGrace.deadlines[key] = fallback
+	return fallback
+}
+
+func clearSharedOptionalStartupDeadline(name string, config ServerConfig) {
+	key := optionalStartupGraceKey(name, config)
+	sharedOptionalMCPStartupGrace.Lock()
+	delete(sharedOptionalMCPStartupGrace.deadlines, key)
+	sharedOptionalMCPStartupGrace.Unlock()
+}
+
+func optionalStartupGraceKey(name string, config ServerConfig) string {
+	return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(&config, false)
 }
 
 func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOauthLoginResponse, error) {
@@ -1156,7 +1275,8 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 		if loginURL, ok := s.startOAuthLoginServer(name, &config, params); ok {
 			url = loginURL
 		} else {
-			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs)
+			client := s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
+			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
 		}
 	}
 	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url}, nil
@@ -1513,18 +1633,40 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 		s.httpClients = map[string]*cachedMCPHTTPClient{}
 	}
 	openAIForm := s.openAIForm
-	key := mcpConnectionCacheKey(config, openAIForm)
+	sharedHTTPClient := s.sharedHTTPClient
+	sharedHTTPClientKey := s.sharedHTTPClientKey
+	key := mcpHTTPConnectionCacheKey(config, openAIForm, sharedHTTPClientKey)
 	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() {
 		s.mu.Unlock()
 		return cached.client
 	}
 	old := s.deleteHTTPClientLocked(name)
 	cloned := cloneServerConfig(config)
-	client := newMCPHTTPClientWithOpenAIForm(&cloned, openAIForm)
+	client := newMCPHTTPClientWithShared(&cloned, openAIForm, sharedHTTPClient)
 	s.httpClients[name] = &cachedMCPHTTPClient{key: key, client: client}
 	s.mu.Unlock()
 	closeHTTPClients([]*httpClient{old})
 	return client
+}
+
+func mcpHTTPConnectionCacheKey(config *ServerConfig, openAIForm bool, sharedHTTPClientKey string) string {
+	return mcpConnectionCacheKey(config, openAIForm) + "|httpClient=" + sharedHTTPClientKey
+}
+
+func mcpHTTPDoerIdentity(client HTTPDoer) string {
+	if client == nil {
+		return ""
+	}
+	value := reflect.ValueOf(client)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		if value.IsNil() {
+			return ""
+		}
+		return fmt.Sprintf("%T:%x", client, value.Pointer())
+	default:
+		return fmt.Sprintf("%T:%v", client, client)
+	}
 }
 
 func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
@@ -1683,7 +1825,7 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 	}
 	status, err := store.AuthStatus(serverName, config)
 	if err != nil {
-		return MCPAuthUnsupported
+		return MCPAuthUnknown
 	}
 	return status
 }

@@ -44,3 +44,21 @@ func TestDetectExternalSessionMigration(t *testing.T) {
 		t.Fatalf("changed imported session not redetected = %#v", changed.Items)
 	}
 }
+
+func TestExternalSessionImportLedgerPersistsTitle(t *testing.T) {
+	codexHome := t.TempDir()
+	sourcePath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(sourcePath, []byte("session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	title := "Original session title"
+	if err := RecordExternalSessionImports(codexHome, []ExternalSessionImportCompletion{{
+		SourcePath: sourcePath, ImportedThreadID: "thread-1", Title: &title,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := loadExternalSessionImportLedger(codexHome)
+	if err != nil || len(ledger.Records) != 1 || ledger.Records[0].Title == nil || *ledger.Records[0].Title != title {
+		t.Fatalf("ledger = %#v, %v", ledger, err)
+	}
+}

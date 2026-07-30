@@ -1,5 +1,7 @@
 package tui
 
+import "github.com/rivo/uniseg"
+
 // Rust parity: codex-rs/tui/src/live_wrap.rs.
 
 type Row struct {
@@ -119,9 +121,13 @@ func (b *RowBuilder) wrapCurrentLine() {
 	for b.currentLine != "" {
 		prefix, suffix, taken := TakePrefixByWidth(b.currentLine, b.targetWidth)
 		if taken == 0 {
-			runes := []rune(b.currentLine)
-			b.rows = append(b.rows, Row{Text: string(runes[0])})
-			b.currentLine = string(runes[1:])
+			graphemes := uniseg.NewGraphemes(b.currentLine)
+			if !graphemes.Next() {
+				return
+			}
+			_, end := graphemes.Positions()
+			b.rows = append(b.rows, Row{Text: b.currentLine[:end]})
+			b.currentLine = b.currentLine[end:]
 			continue
 		}
 		if suffix == "" {
@@ -138,13 +144,16 @@ func TakePrefixByWidth(text string, maxCols int) (string, string, int) {
 	}
 	cols := 0
 	end := 0
-	for i, r := range text {
-		width := DisplayWidth(string(r))
+	graphemes := uniseg.NewGraphemes(text)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		_, graphemeEnd := graphemes.Positions()
+		width := DisplayWidth(grapheme)
 		if cols+width > maxCols {
 			break
 		}
 		cols += width
-		end = i + len(string(r))
+		end = graphemeEnd
 		if cols == maxCols {
 			break
 		}

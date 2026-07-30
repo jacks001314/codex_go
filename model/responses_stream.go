@@ -725,6 +725,9 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			return false, err
 		}
 		a.applyToolInputDeltas(item)
+		if item != nil && item.EncryptedFunctionArgs != nil {
+			a.recordAgentItem(item)
+		}
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventOutputAdded,
 			ResponseID: a.responseID,
@@ -959,6 +962,9 @@ func mergeStreamAgentItem(existing AgentItem, incoming AgentItem) AgentItem {
 	}
 	if merged.Arguments == "" {
 		merged.Arguments = existing.Arguments
+	}
+	if merged.EncryptedFunctionArgs == nil {
+		merged.EncryptedFunctionArgs = cloneAgentStringSlicePtr(existing.EncryptedFunctionArgs)
 	}
 	if merged.Input == "" {
 		merged.Input = existing.Input

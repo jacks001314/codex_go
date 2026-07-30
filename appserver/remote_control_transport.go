@@ -242,7 +242,19 @@ func (s *RemoteControlTransportServer) sendValueToConnection(ctx context.Context
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return
+		response, ok := value.(*Response)
+		if !ok || response == nil {
+			return
+		}
+		data, err = json.Marshal(ErrorResponse(
+			response.ID,
+			JSONRPCInternalErrorCode,
+			"failed to serialize response: "+err.Error(),
+			nil,
+		))
+		if err != nil {
+			return
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()

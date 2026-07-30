@@ -7,11 +7,13 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
-	ToolSearchName         = "tool_search"
-	DefaultToolSearchLimit = 8
+	ToolSearchName                      = "tool_search"
+	DefaultToolSearchLimit              = 8
+	maxToolSearchSourceDescriptionBytes = 4 * 1024
 )
 
 type ToolSearchArgs struct {
@@ -293,15 +295,52 @@ func renderToolSearchSources(sources []SearchSourceInfo) string {
 		return "None currently enabled."
 	}
 	sources = dedupeToolSearchSources(sources)
-	lines := make([]string, 0, len(sources))
+	reservedNameBytes := len(sources) - 1
 	for _, source := range sources {
-		if strings.TrimSpace(source.Description) == "" {
-			lines = append(lines, "- "+source.Name)
+		reservedNameBytes += 2 + len(source.Name)
+	}
+	descriptionBudget := maxToolSearchSourceDescriptionBytes - reservedNameBytes
+	if descriptionBudget < 0 {
+		descriptionBudget = 0
+	}
+	var rendered strings.Builder
+	for _, source := range sources {
+		separatorBytes := 0
+		if rendered.Len() > 0 {
+			separatorBytes = 1
+		}
+		required := separatorBytes + 2 + len(source.Name)
+		if required > maxToolSearchSourceDescriptionBytes-rendered.Len() {
 			continue
 		}
-		lines = append(lines, "- "+source.Name+": "+source.Description)
+		if rendered.Len() > 0 {
+			rendered.WriteByte('\n')
+		}
+		rendered.WriteString("- ")
+		rendered.WriteString(source.Name)
+		if strings.TrimSpace(source.Description) != "" && descriptionBudget >= 2 {
+			rendered.WriteString(": ")
+			descriptionBudget -= 2
+			bounded := utf8PrefixByBytes(source.Description, descriptionBudget)
+			rendered.WriteString(bounded)
+			descriptionBudget -= len(bounded)
+		}
 	}
-	return strings.Join(lines, "\n")
+	return rendered.String()
+}
+
+func utf8PrefixByBytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end]
 }
 
 func dedupeToolSearchSources(sources []SearchSourceInfo) []SearchSourceInfo {
@@ -398,11 +437,10 @@ func cloneMapAny(in map[string]any) map[string]any {
 func (r *Registry) NamesAsSpecs() []Spec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]Spec, 0, len(r.specs))
-	for _, spec := range r.specs {
-		out = append(out, cloneSpec(spec))
+	out := make([]Spec, 0, len(r.order))
+	for _, key := range r.order {
+		out = append(out, cloneSpec(r.specs[key]))
 	}
-	sortSpecs(out)
 	return out
 }
 

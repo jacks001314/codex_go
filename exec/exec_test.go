@@ -1480,26 +1480,6 @@ func TestFreshRunsWithSamePromptUseDistinctThreadAndPromptCacheKeys(t *testing.T
 	}
 }
 
-func TestRunWarnsForRemovedFullAuto(t *testing.T) {
-	home := t.TempDir()
-	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
-		t.Fatalf("Save auth returned error: %v", err)
-	}
-	var stdout, stderr bytes.Buffer
-	_, err := NewLocalRunner(home).Run(Request{
-		Exec: cli.ExecOptions{
-			Prompt:          "hello",
-			RemovedFullAuto: true,
-		},
-	}, strings.NewReader(""), &stdout, &stderr)
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if !strings.Contains(stderr.String(), "--full-auto") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
 func TestRunExecReview(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -2220,15 +2200,6 @@ func TestEffectiveExecApprovalPolicyMatchesRustHeadless(t *testing.T) {
 	}
 
 	req := &Request{
-		Exec: cli.ExecOptions{
-			RemovedFullAuto: true,
-		},
-	}
-	if got := effectiveExecApprovalPolicy(autoReviewConfig, req); got != sandbox.ApprovalNever {
-		t.Fatalf("full-auto approval policy = %q, want never", got)
-	}
-
-	req = &Request{
 		Exec: cli.ExecOptions{Shared: cli.SharedOptions{DangerouslyBypassApprovalsAndSandbox: true}},
 	}
 	if got := effectiveExecApprovalPolicy(autoReviewConfig, req); got != sandbox.ApprovalNever {
@@ -2627,6 +2598,55 @@ func assertEncryptedAgentCommunication(t *testing.T, request *model.AgentRequest
 		}
 	}
 	t.Fatalf("encrypted communication %s/%q missing from %#v", messageType, encrypted, request.InputItems)
+}
+
+func TestExecAgentCommunicationInputItemSupportsStructuredPlaintext(t *testing.T) {
+	item := execAgentCommunicationInputItem(execAgentCommunication{
+		author: "/root", recipient: "/root/worker", message: "inspect the rollout", trigger: true, plaintext: true,
+	})
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("plaintext content = %#v", item["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	want := "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\ninspect the rollout"
+	if !ok || block["type"] != "input_text" || block["text"] != want {
+		t.Fatalf("plaintext block = %#v, want %q", block, want)
+	}
+	encoded, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "encrypted_content") {
+		t.Fatalf("plaintext communication contains encrypted block: %s", encoded)
+	}
+}
+
+func TestExecCompactionPreservesStructuredAgentRawAndForkStripsIt(t *testing.T) {
+	raw := execAgentCommunicationInputItem(execAgentCommunication{
+		author: "/root", recipient: "/root/worker", message: "encrypted delegated task", trigger: true,
+	})
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionItem := session.Item{ID: "agent-task", Type: "agent_message", Raw: encoded, CreatedAt: fixedExecTime()}
+	compacted := execCompactItemsFromSession([]session.Item{sessionItem})
+	if len(compacted) != 1 || string(compacted[0].Raw) != string(encoded) {
+		t.Fatalf("compact items = %#v", compacted)
+	}
+	restored := execSessionItemsFromCompact(compacted, fixedExecTime())
+	if len(restored) != 1 || string(restored[0].Raw) != string(encoded) {
+		t.Fatalf("restored items = %#v", restored)
+	}
+	inputs := session.InputItemsFromItems(restored, &session.HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(inputs) != 1 {
+		t.Fatalf("restored model inputs = %#v", inputs)
+	}
+	filtered := stripParentAgentMessages(append(inputs, map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "keep"}}}))
+	if len(filtered) != 1 || filtered[0].(map[string]any)["type"] != "message" {
+		t.Fatalf("fork-filtered inputs = %#v", filtered)
+	}
 }
 
 func assertNoEmptyInputTextBlocks(t *testing.T, request *model.AgentRequest) {

@@ -38,6 +38,13 @@ func TestManagerAddInfoAndList(t *testing.T) {
 	if info.Shell.Name != "bash" || info.CWD == nil || !strings.HasPrefix(*info.CWD, "file://") {
 		t.Fatalf("Info() = %+v", info)
 	}
+	if err := manager.SetInfo("remote-2", EnvironmentShellInfo{Name: "zsh", Path: "/bin/zsh"}, "/updated"); err != nil {
+		t.Fatalf("SetInfo(update) error = %v", err)
+	}
+	updated, err := manager.Info(&EnvironmentInfoParams{EnvironmentID: "remote-2"})
+	if err != nil || updated.Shell.Name != "zsh" || updated.CWD == nil || !strings.HasSuffix(*updated.CWD, "/updated") {
+		t.Fatalf("updated Info() = %+v, %v", updated, err)
+	}
 
 	records := manager.List()
 	if len(records) != 2 || records[0].EnvironmentID != "remote-1" || records[1].EnvironmentID != "remote-2" {

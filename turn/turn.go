@@ -264,6 +264,7 @@ type MetadataState struct {
 	ThreadID                     string
 	ForkedFromThreadID           string
 	ParentThreadID               string
+	ParentTurnID                 string
 	SubagentHeader               string
 	SubagentKind                 string
 	ThreadSource                 string
@@ -342,6 +343,9 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 	if m.ParentThreadID != "" {
 		value["parent_thread_id"] = m.ParentThreadID
 	}
+	if m.ParentTurnID != "" {
+		value["parent_turn_id"] = m.ParentTurnID
+	}
 	if m.SubagentHeader != "" {
 		value["subagent_header"] = m.SubagentHeader
 	}
@@ -378,6 +382,7 @@ type ResponsesClientMetadataOptions struct {
 	RequestKind        codexapi.ClientRequestKind
 	ForkedFromThreadID string
 	ParentThreadID     string
+	ParentTurnID       string
 	SubagentHeader     string
 	SubagentKind       string
 	ThreadSource       string
@@ -413,6 +418,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	}
 	metadata.ForkedFromThreadID = strings.TrimSpace(options.ForkedFromThreadID)
 	metadata.ParentThreadID = strings.TrimSpace(options.ParentThreadID)
+	metadata.ParentTurnID = strings.TrimSpace(options.ParentTurnID)
 	metadata.SubagentHeader = strings.TrimSpace(options.SubagentHeader)
 	metadata.SubagentKind = strings.TrimSpace(options.SubagentKind)
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)

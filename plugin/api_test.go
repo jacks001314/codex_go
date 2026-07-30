@@ -1938,3 +1938,41 @@ func TestEnabledHookSourcesSkipsUninstalledPlugins(t *testing.T) {
 		t.Fatalf("EnabledHookSources() = %+v, want no hooks for uninstalled plugin", sources)
 	}
 }
+
+func TestPluginSummarySerializesRemoteEligibilityAndInstallTimeLikeRust(t *testing.T) {
+	disabledReason := PluginPlanNotEligibleReason
+	eligiblePlanTypes := []string{"team", "enterprise"}
+	installedAt := int64(1_785_283_200)
+	payload := marshalObject(t, PluginSummary{
+		ID:                "docs@remote",
+		Name:              "docs",
+		DisabledReason:    &disabledReason,
+		EligiblePlanTypes: &eligiblePlanTypes,
+		Installed:         true,
+		InstalledAt:       &installedAt,
+	})
+	if payload["disabledReason"] != "plan_not_eligible" || payload["installedAt"] != float64(installedAt) {
+		t.Fatalf("summary metadata = %#v", payload)
+	}
+	plans, ok := payload["eligiblePlanTypes"].([]any)
+	if !ok || len(plans) != 2 || plans[0] != "team" || plans[1] != "enterprise" {
+		t.Fatalf("eligiblePlanTypes = %#v", payload["eligiblePlanTypes"])
+	}
+
+	local := marshalObject(t, PluginSummary{ID: "local@market", Name: "local"})
+	for _, key := range []string{"disabledReason", "eligiblePlanTypes", "installedAt"} {
+		if value, ok := local[key]; !ok || value != nil {
+			t.Fatalf("local %s = %#v in %#v, want explicit null", key, value, local)
+		}
+	}
+}
+
+func TestPluginDisabledReasonMapsUnknownValuesForForwardCompatibility(t *testing.T) {
+	var reason PluginDisabledReason
+	if err := json.Unmarshal([]byte(`"new_backend_reason"`), &reason); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if reason != PluginDisabledReasonUnknown {
+		t.Fatalf("reason = %q, want %q", reason, PluginDisabledReasonUnknown)
+	}
+}

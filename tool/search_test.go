@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,31 @@ func TestToolSearchDescriptionOmitsSourcesWhenWorldStateAdvertisesThem(t *testin
 	}
 	if !strings.Contains(description, "use this tool (`tool_search`) to search") {
 		t.Fatalf("description = %q", description)
+	}
+}
+
+func TestToolSearchDescriptionBoundsAggregateSources(t *testing.T) {
+	sources := make([]SearchSourceInfo, 0, 8)
+	for index := 0; index < 8; index++ {
+		sources = append(sources, SearchSourceInfo{
+			Name:        fmt.Sprintf("source-%02d", index),
+			Description: strings.Repeat("🦀", 300),
+		})
+	}
+	description := BuildToolSearchDescription(sources, 8)
+	const prefix = "You have access to tools from the following sources:\n"
+	section := strings.SplitN(description, prefix, 2)
+	if len(section) != 2 {
+		t.Fatalf("description missing source section: %q", description)
+	}
+	sourceList := strings.SplitN(section[1], "\nSome of the tools may not have been provided", 2)[0]
+	if len(sourceList) > maxToolSearchSourceDescriptionBytes {
+		t.Fatalf("source list bytes = %d", len(sourceList))
+	}
+	for index := 0; index < 8; index++ {
+		if !strings.Contains(sourceList, fmt.Sprintf("- source-%02d", index)) {
+			t.Fatalf("source list omitted source-%02d: %q", index, sourceList)
+		}
 	}
 }
 

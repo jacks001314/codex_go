@@ -1262,6 +1262,32 @@ func TestUnifiedExecNonTTYCtrlCMatchesRustPlatformBehavior(t *testing.T) {
 	}
 }
 
+func TestFileSystemSandboxContextKeepsCanonicalPermissionsSeparateFromWorkspaceRoots(t *testing.T) {
+	cwd := t.TempDir()
+	workspace := filepath.Join(cwd, "attempt-workspace")
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"project_roots"}},"access":"write"}]},"network":"restricted"}`
+	contextValue, err := NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile:     &profile,
+		PermissionProfileJSON: canonical,
+		CWD:                   cwd,
+		WorkspaceRoots:        []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
+	}
+	if !strings.Contains(string(contextValue.Permissions), `"kind":"project_roots"`) || strings.Contains(string(contextValue.Permissions), filepath.ToSlash(workspace)) {
+		t.Fatalf("canonical permissions were materialized into attempt roots: %s", contextValue.Permissions)
+	}
+	wantWorkspace, err := unifiedExecPathURI(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contextValue.WorkspaceRoots) != 1 || contextValue.WorkspaceRoots[0] != wantWorkspace {
+		t.Fatalf("workspace roots = %#v, want %q", contextValue.WorkspaceRoots, wantWorkspace)
+	}
+}
+
 func unifiedExecHelperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=^TestUnifiedExecHelperProcess$", "--", "--unified-exec-helper", mode}
 }

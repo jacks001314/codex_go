@@ -167,6 +167,9 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 		return nil, nil
 	}
 	if len(invocations) == 1 {
+		if err := d.router.WaitUntilReady(ctx, invocations[0]); err != nil {
+			return nil, err
+		}
 		result, err := d.executeToolInvocation(ctx, invocations[0])
 		if err != nil {
 			return nil, err
@@ -195,11 +198,52 @@ func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
 
 func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {
 	results := make([]ToolExecutionResult, len(invocations))
+	var executionGate sync.RWMutex
+	var readinessWG sync.WaitGroup
+	var readinessErrMu sync.Mutex
+	var readinessErr error
+	executeReady := func(index int, invocation *tool.Invocation) {
+		defer readinessWG.Done()
+		if err := d.router.WaitUntilReady(ctx, invocation); err != nil {
+			readinessErrMu.Lock()
+			if readinessErr == nil {
+				readinessErr = err
+			}
+			readinessErrMu.Unlock()
+			return
+		}
+		if d.router.SupportsParallel(invocation.ToolName) {
+			executionGate.RLock()
+			defer executionGate.RUnlock()
+		} else {
+			executionGate.Lock()
+			defer executionGate.Unlock()
+		}
+		result, err := d.executeToolInvocation(ctx, invocation)
+		readinessErrMu.Lock()
+		defer readinessErrMu.Unlock()
+		if err != nil {
+			if readinessErr == nil {
+				readinessErr = err
+			}
+			return
+		}
+		results[index] = *result
+	}
 	index := 0
 	for index < len(invocations) {
+		if d.router.HasReadinessWait(invocations[index].ToolName) {
+			readinessWG.Add(1)
+			go executeReady(index, invocations[index])
+			index++
+			continue
+		}
 		if !d.router.SupportsParallel(invocations[index].ToolName) {
+			executionGate.Lock()
 			result, err := d.executeToolInvocation(ctx, invocations[index])
+			executionGate.Unlock()
 			if err != nil {
+				readinessWG.Wait()
 				return nil, err
 			}
 			results[index] = *result
@@ -207,14 +251,21 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 			continue
 		}
 		start := index
-		for index < len(invocations) && d.router.SupportsParallel(invocations[index].ToolName) {
+		for index < len(invocations) && d.router.SupportsParallel(invocations[index].ToolName) && !d.router.HasReadinessWait(invocations[index].ToolName) {
 			index++
 		}
+		executionGate.RLock()
 		groupResults, err := d.executeParallelToolInvocations(ctx, invocations[start:index])
+		executionGate.RUnlock()
 		if err != nil {
+			readinessWG.Wait()
 			return nil, err
 		}
 		copy(results[start:index], groupResults)
+	}
+	readinessWG.Wait()
+	if readinessErr != nil {
+		return nil, readinessErr
 	}
 	return results, nil
 }
@@ -526,11 +577,12 @@ func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool)
 	switch item.Type {
 	case "function_call":
 		return &tool.ResponseItem{
-			Type:      item.Type,
-			Namespace: item.Namespace,
-			Name:      item.Name,
-			CallID:    firstNonEmptyTurnString(item.CallID, item.ID),
-			Arguments: item.Arguments,
+			Type:                  item.Type,
+			Namespace:             item.Namespace,
+			Name:                  item.Name,
+			CallID:                firstNonEmptyTurnString(item.CallID, item.ID),
+			Arguments:             item.Arguments,
+			EncryptedFunctionArgs: cloneTurnStringSlicePtr(item.EncryptedFunctionArgs),
 		}, true
 	case "custom_tool_call":
 		return &tool.ResponseItem{
@@ -550,6 +602,14 @@ func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool)
 	default:
 		return nil, false
 	}
+}
+
+func cloneTurnStringSlicePtr(value *[]string) *[]string {
+	if value == nil {
+		return nil
+	}
+	cloned := append([]string{}, (*value)...)
+	return &cloned
 }
 
 func outputBody(output *tool.Output) any {

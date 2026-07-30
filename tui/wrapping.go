@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // Rust parity: codex-rs/tui/src/wrapping.rs.
@@ -146,15 +146,17 @@ func splitTokenByWidth(token string, width int) []string {
 	var out []string
 	var current strings.Builder
 	used := 0
-	for _, r := range token {
-		rw := runewidth.RuneWidth(r)
-		if used > 0 && used+rw > width {
+	graphemes := uniseg.NewGraphemes(token)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		graphemeWidth := DisplayWidth(grapheme)
+		if used > 0 && used+graphemeWidth > width {
 			out = append(out, current.String())
 			current.Reset()
 			used = 0
 		}
-		current.WriteRune(r)
-		used += rw
+		current.WriteString(grapheme)
+		used += graphemeWidth
 	}
 	if current.Len() > 0 {
 		out = append(out, current.String())
@@ -327,7 +329,7 @@ func isASCIIAlphaNum(r rune) bool {
 }
 
 func lenColumns(text string) int {
-	return runewidth.StringWidth(text)
+	return DisplayWidth(text)
 }
 
 func maxInt(a int, b int) int {

@@ -58,100 +58,102 @@ type CodexTurnEventRequest struct {
 }
 
 type CodexTurnEventParams struct {
-	ThreadID                  string                       `json:"thread_id"`
-	SessionID                 string                       `json:"session_id"`
-	TurnID                    string                       `json:"turn_id"`
-	SubmissionType            *string                      `json:"submission_type"`
-	AppServerClient           CodexAppServerClientMetadata `json:"app_server_client"`
-	Runtime                   CodexRuntimeMetadata         `json:"runtime"`
-	Ephemeral                 bool                         `json:"ephemeral"`
-	ThreadSource              *string                      `json:"thread_source"`
-	InitializationMode        string                       `json:"initialization_mode"`
-	SubagentSource            *string                      `json:"subagent_source"`
-	ParentThreadID            *string                      `json:"parent_thread_id"`
-	Model                     *string                      `json:"model"`
-	ModelProvider             string                       `json:"model_provider"`
-	SandboxPolicy             *string                      `json:"sandbox_policy"`
-	ReasoningEffort           *string                      `json:"reasoning_effort"`
-	ReasoningSummary          *string                      `json:"reasoning_summary"`
-	ServiceTier               string                       `json:"service_tier"`
-	ApprovalPolicy            string                       `json:"approval_policy"`
-	ApprovalsReviewer         string                       `json:"approvals_reviewer"`
-	SandboxNetworkAccess      bool                         `json:"sandbox_network_access"`
-	CollaborationMode         *string                      `json:"collaboration_mode"`
-	Personality               *string                      `json:"personality"`
-	WorkspaceKind             *string                      `json:"workspace_kind"`
-	NumInputImages            int                          `json:"num_input_images"`
-	IsFirstTurn               bool                         `json:"is_first_turn"`
-	Status                    *string                      `json:"status"`
-	TurnError                 any                          `json:"turn_error"`
-	CodexErrorKind            *string                      `json:"codex_error_kind"`
-	CodexErrorHTTPStatusCode  *uint16                      `json:"codex_error_http_status_code"`
-	SteerCount                *int                         `json:"steer_count"`
-	TotalToolCallCount        *int                         `json:"total_tool_call_count"`
-	ShellCommandCount         *int                         `json:"shell_command_count"`
-	FileChangeCount           *int                         `json:"file_change_count"`
-	MCPToolCallCount          *int                         `json:"mcp_tool_call_count"`
-	DynamicToolCallCount      *int                         `json:"dynamic_tool_call_count"`
-	SubagentToolCallCount     *int                         `json:"subagent_tool_call_count"`
-	WebSearchCount            *int                         `json:"web_search_count"`
-	ImageGenerationCount      *int                         `json:"image_generation_count"`
-	InputTokens               *int64                       `json:"input_tokens"`
-	CachedInputTokens         *int64                       `json:"cached_input_tokens"`
-	CacheWriteInputTokens     *int64                       `json:"cache_write_input_tokens"`
-	OutputTokens              *int64                       `json:"output_tokens"`
-	ReasoningOutputTokens     *int64                       `json:"reasoning_output_tokens"`
-	TotalTokens               *int64                       `json:"total_tokens"`
-	BeforeFirstSamplingMS     uint64                       `json:"before_first_sampling_ms"`
-	SamplingMS                uint64                       `json:"sampling_ms"`
-	BetweenSamplingOverheadMS uint64                       `json:"between_sampling_overhead_ms"`
-	ToolBlockingMS            uint64                       `json:"tool_blocking_ms"`
-	AfterLastSamplingMS       uint64                       `json:"after_last_sampling_ms"`
-	SamplingRequestCount      uint32                       `json:"sampling_request_count"`
-	SamplingRetryCount        uint32                       `json:"sampling_retry_count"`
-	DurationMS                *uint64                      `json:"duration_ms"`
-	StartedAt                 *uint64                      `json:"started_at"`
-	CompletedAt               *uint64                      `json:"completed_at"`
+	ThreadID                             string                       `json:"thread_id"`
+	SessionID                            string                       `json:"session_id"`
+	TurnID                               string                       `json:"turn_id"`
+	SubmissionType                       *string                      `json:"submission_type"`
+	AppServerClient                      CodexAppServerClientMetadata `json:"app_server_client"`
+	Runtime                              CodexRuntimeMetadata         `json:"runtime"`
+	Ephemeral                            bool                         `json:"ephemeral"`
+	ThreadSource                         *string                      `json:"thread_source"`
+	InitializationMode                   string                       `json:"initialization_mode"`
+	SubagentSource                       *string                      `json:"subagent_source"`
+	ParentThreadID                       *string                      `json:"parent_thread_id"`
+	Model                                *string                      `json:"model"`
+	ModelProvider                        string                       `json:"model_provider"`
+	SandboxPolicy                        *string                      `json:"sandbox_policy"`
+	ReasoningEffort                      *string                      `json:"reasoning_effort"`
+	ReasoningSummary                     *string                      `json:"reasoning_summary"`
+	ServiceTier                          string                       `json:"service_tier"`
+	ApprovalPolicy                       string                       `json:"approval_policy"`
+	ApprovalsReviewer                    string                       `json:"approvals_reviewer"`
+	SandboxNetworkAccess                 bool                         `json:"sandbox_network_access"`
+	CollaborationMode                    *string                      `json:"collaboration_mode"`
+	Personality                          *string                      `json:"personality"`
+	WorkspaceKind                        *string                      `json:"workspace_kind"`
+	NumInputImages                       int                          `json:"num_input_images"`
+	IsFirstTurn                          bool                         `json:"is_first_turn"`
+	Status                               *string                      `json:"status"`
+	ExplicitClientInterruptRequestedAtMS *uint64                      `json:"explicit_client_interrupt_requested_at_ms"`
+	TurnError                            any                          `json:"turn_error"`
+	CodexErrorKind                       *string                      `json:"codex_error_kind"`
+	CodexErrorHTTPStatusCode             *uint16                      `json:"codex_error_http_status_code"`
+	SteerCount                           *int                         `json:"steer_count"`
+	TotalToolCallCount                   *int                         `json:"total_tool_call_count"`
+	ShellCommandCount                    *int                         `json:"shell_command_count"`
+	FileChangeCount                      *int                         `json:"file_change_count"`
+	MCPToolCallCount                     *int                         `json:"mcp_tool_call_count"`
+	DynamicToolCallCount                 *int                         `json:"dynamic_tool_call_count"`
+	SubagentToolCallCount                *int                         `json:"subagent_tool_call_count"`
+	WebSearchCount                       *int                         `json:"web_search_count"`
+	ImageGenerationCount                 *int                         `json:"image_generation_count"`
+	InputTokens                          *int64                       `json:"input_tokens"`
+	CachedInputTokens                    *int64                       `json:"cached_input_tokens"`
+	CacheWriteInputTokens                *int64                       `json:"cache_write_input_tokens"`
+	OutputTokens                         *int64                       `json:"output_tokens"`
+	ReasoningOutputTokens                *int64                       `json:"reasoning_output_tokens"`
+	TotalTokens                          *int64                       `json:"total_tokens"`
+	BeforeFirstSamplingMS                uint64                       `json:"before_first_sampling_ms"`
+	SamplingMS                           uint64                       `json:"sampling_ms"`
+	BetweenSamplingOverheadMS            uint64                       `json:"between_sampling_overhead_ms"`
+	ToolBlockingMS                       uint64                       `json:"tool_blocking_ms"`
+	AfterLastSamplingMS                  uint64                       `json:"after_last_sampling_ms"`
+	SamplingRequestCount                 uint32                       `json:"sampling_request_count"`
+	SamplingRetryCount                   uint32                       `json:"sampling_retry_count"`
+	DurationMS                           *uint64                      `json:"duration_ms"`
+	StartedAt                            *uint64                      `json:"started_at"`
+	CompletedAt                          *uint64                      `json:"completed_at"`
 }
 
 type CodexTurnEventInput struct {
-	ThreadID                 string
-	SessionID                string
-	TurnID                   string
-	SubmissionType           *string
-	AppServerClient          CodexAppServerClientMetadata
-	ThreadOriginator         string
-	Runtime                  CodexRuntimeMetadata
-	Ephemeral                bool
-	ThreadSource             *string
-	InitializationMode       string
-	SubagentSource           *string
-	ParentThreadID           *string
-	Model                    *string
-	ModelProvider            string
-	SandboxPolicy            *string
-	ReasoningEffort          *string
-	ReasoningSummary         *string
-	ServiceTier              string
-	ApprovalPolicy           string
-	ApprovalsReviewer        string
-	SandboxNetworkAccess     bool
-	CollaborationMode        *string
-	Personality              *string
-	WorkspaceKind            *string
-	NumInputImages           int
-	IsFirstTurn              bool
-	Status                   *string
-	TurnError                any
-	CodexErrorKind           *string
-	CodexErrorHTTPStatusCode *uint16
-	SteerCount               *int
-	ToolCounts               *CodexTurnToolCounts
-	TokenUsage               *CodexTurnTokenUsage
-	TimingProfile            CodexTurnTimingProfile
-	DurationMS               *uint64
-	StartedAt                *uint64
-	CompletedAt              *uint64
+	ThreadID                             string
+	SessionID                            string
+	TurnID                               string
+	SubmissionType                       *string
+	AppServerClient                      CodexAppServerClientMetadata
+	ThreadOriginator                     string
+	Runtime                              CodexRuntimeMetadata
+	Ephemeral                            bool
+	ThreadSource                         *string
+	InitializationMode                   string
+	SubagentSource                       *string
+	ParentThreadID                       *string
+	Model                                *string
+	ModelProvider                        string
+	SandboxPolicy                        *string
+	ReasoningEffort                      *string
+	ReasoningSummary                     *string
+	ServiceTier                          string
+	ApprovalPolicy                       string
+	ApprovalsReviewer                    string
+	SandboxNetworkAccess                 bool
+	CollaborationMode                    *string
+	Personality                          *string
+	WorkspaceKind                        *string
+	NumInputImages                       int
+	IsFirstTurn                          bool
+	Status                               *string
+	ExplicitClientInterruptRequestedAtMS *uint64
+	TurnError                            any
+	CodexErrorKind                       *string
+	CodexErrorHTTPStatusCode             *uint16
+	SteerCount                           *int
+	ToolCounts                           *CodexTurnToolCounts
+	TokenUsage                           *CodexTurnTokenUsage
+	TimingProfile                        CodexTurnTimingProfile
+	DurationMS                           *uint64
+	StartedAt                            *uint64
+	CompletedAt                          *uint64
 }
 
 type CodexTurnToolCounts struct {
@@ -200,60 +202,61 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 	return CodexTurnEventRequest{
 		EventType: CodexTurnEventType,
 		EventParams: CodexTurnEventParams{
-			ThreadID:                  input.ThreadID,
-			SessionID:                 input.SessionID,
-			TurnID:                    input.TurnID,
-			SubmissionType:            input.SubmissionType,
-			AppServerClient:           client,
-			Runtime:                   input.Runtime,
-			Ephemeral:                 input.Ephemeral,
-			ThreadSource:              input.ThreadSource,
-			InitializationMode:        initializationMode,
-			SubagentSource:            input.SubagentSource,
-			ParentThreadID:            input.ParentThreadID,
-			Model:                     input.Model,
-			ModelProvider:             input.ModelProvider,
-			SandboxPolicy:             input.SandboxPolicy,
-			ReasoningEffort:           input.ReasoningEffort,
-			ReasoningSummary:          input.ReasoningSummary,
-			ServiceTier:               serviceTier,
-			ApprovalPolicy:            input.ApprovalPolicy,
-			ApprovalsReviewer:         input.ApprovalsReviewer,
-			SandboxNetworkAccess:      input.SandboxNetworkAccess,
-			CollaborationMode:         input.CollaborationMode,
-			Personality:               input.Personality,
-			WorkspaceKind:             input.WorkspaceKind,
-			NumInputImages:            input.NumInputImages,
-			IsFirstTurn:               input.IsFirstTurn,
-			Status:                    input.Status,
-			TurnError:                 input.TurnError,
-			CodexErrorKind:            input.CodexErrorKind,
-			CodexErrorHTTPStatusCode:  input.CodexErrorHTTPStatusCode,
-			SteerCount:                input.SteerCount,
-			TotalToolCallCount:        toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.Total }),
-			ShellCommandCount:         toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ShellCommand }),
-			FileChangeCount:           toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.FileChange }),
-			MCPToolCallCount:          toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.MCPToolCall }),
-			DynamicToolCallCount:      toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.DynamicToolCall }),
-			SubagentToolCallCount:     toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.SubagentToolCall }),
-			WebSearchCount:            toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.WebSearch }),
-			ImageGenerationCount:      toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ImageGeneration }),
-			InputTokens:               tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.InputTokens }),
-			CachedInputTokens:         tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CachedInputTokens }),
-			CacheWriteInputTokens:     tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CacheWriteInputTokens }),
-			OutputTokens:              tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.OutputTokens }),
-			ReasoningOutputTokens:     tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.ReasoningOutputTokens }),
-			TotalTokens:               tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.TotalTokens }),
-			BeforeFirstSamplingMS:     input.TimingProfile.BeforeFirstSamplingMS,
-			SamplingMS:                input.TimingProfile.SamplingMS,
-			BetweenSamplingOverheadMS: input.TimingProfile.BetweenSamplingOverheadMS,
-			ToolBlockingMS:            input.TimingProfile.ToolBlockingMS,
-			AfterLastSamplingMS:       input.TimingProfile.AfterLastSamplingMS,
-			SamplingRequestCount:      input.TimingProfile.SamplingRequestCount,
-			SamplingRetryCount:        input.TimingProfile.SamplingRetryCount,
-			DurationMS:                input.DurationMS,
-			StartedAt:                 input.StartedAt,
-			CompletedAt:               input.CompletedAt,
+			ThreadID:                             input.ThreadID,
+			SessionID:                            input.SessionID,
+			TurnID:                               input.TurnID,
+			SubmissionType:                       input.SubmissionType,
+			AppServerClient:                      client,
+			Runtime:                              input.Runtime,
+			Ephemeral:                            input.Ephemeral,
+			ThreadSource:                         input.ThreadSource,
+			InitializationMode:                   initializationMode,
+			SubagentSource:                       input.SubagentSource,
+			ParentThreadID:                       input.ParentThreadID,
+			Model:                                input.Model,
+			ModelProvider:                        input.ModelProvider,
+			SandboxPolicy:                        input.SandboxPolicy,
+			ReasoningEffort:                      input.ReasoningEffort,
+			ReasoningSummary:                     input.ReasoningSummary,
+			ServiceTier:                          serviceTier,
+			ApprovalPolicy:                       input.ApprovalPolicy,
+			ApprovalsReviewer:                    input.ApprovalsReviewer,
+			SandboxNetworkAccess:                 input.SandboxNetworkAccess,
+			CollaborationMode:                    input.CollaborationMode,
+			Personality:                          input.Personality,
+			WorkspaceKind:                        input.WorkspaceKind,
+			NumInputImages:                       input.NumInputImages,
+			IsFirstTurn:                          input.IsFirstTurn,
+			Status:                               input.Status,
+			ExplicitClientInterruptRequestedAtMS: input.ExplicitClientInterruptRequestedAtMS,
+			TurnError:                            input.TurnError,
+			CodexErrorKind:                       input.CodexErrorKind,
+			CodexErrorHTTPStatusCode:             input.CodexErrorHTTPStatusCode,
+			SteerCount:                           input.SteerCount,
+			TotalToolCallCount:                   toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.Total }),
+			ShellCommandCount:                    toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ShellCommand }),
+			FileChangeCount:                      toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.FileChange }),
+			MCPToolCallCount:                     toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.MCPToolCall }),
+			DynamicToolCallCount:                 toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.DynamicToolCall }),
+			SubagentToolCallCount:                toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.SubagentToolCall }),
+			WebSearchCount:                       toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.WebSearch }),
+			ImageGenerationCount:                 toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ImageGeneration }),
+			InputTokens:                          tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.InputTokens }),
+			CachedInputTokens:                    tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CachedInputTokens }),
+			CacheWriteInputTokens:                tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.CacheWriteInputTokens }),
+			OutputTokens:                         tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.OutputTokens }),
+			ReasoningOutputTokens:                tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.ReasoningOutputTokens }),
+			TotalTokens:                          tokenUsagePtr(input.TokenUsage, func(u CodexTurnTokenUsage) int64 { return u.TotalTokens }),
+			BeforeFirstSamplingMS:                input.TimingProfile.BeforeFirstSamplingMS,
+			SamplingMS:                           input.TimingProfile.SamplingMS,
+			BetweenSamplingOverheadMS:            input.TimingProfile.BetweenSamplingOverheadMS,
+			ToolBlockingMS:                       input.TimingProfile.ToolBlockingMS,
+			AfterLastSamplingMS:                  input.TimingProfile.AfterLastSamplingMS,
+			SamplingRequestCount:                 input.TimingProfile.SamplingRequestCount,
+			SamplingRetryCount:                   input.TimingProfile.SamplingRetryCount,
+			DurationMS:                           input.DurationMS,
+			StartedAt:                            input.StartedAt,
+			CompletedAt:                          input.CompletedAt,
 		},
 	}
 }

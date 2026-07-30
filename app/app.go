@@ -733,7 +733,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 		rootConfigOverrides = append(rootConfigOverrides, root.ConfigOverrides...)
 	}
 	if strings.TrimSpace(opts.Remote) != "" {
-		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig)
+		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig, stdin)
 	}
 	loadedConfig, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
 		RawOverrides: rootConfigOverrides,
@@ -750,7 +750,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	return execserver.NewServerWithHTTPClient(httpClient).ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
-func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool) error {
+func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool, stdin io.Reader) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.Remote), "/")
 	if baseURL == "" {
 		return errors.New("environment registry base URL is required")
@@ -774,7 +774,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		}
 		headers := http.Header{}
 		headers.Set("Authorization", "Bearer "+accessToken)
-		return execserver.RunRemoteEnvironment(ctx, execserver.RemoteEnvironmentConfig{
+		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 			BaseURL:       baseURL,
 			EnvironmentID: environmentID,
 			Name:          strings.TrimSpace(opts.Name),
@@ -803,13 +803,36 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	if err != nil {
 		return err
 	}
-	return execserver.RunRemoteEnvironment(ctx, execserver.RemoteEnvironmentConfig{
+	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:       baseURL,
 		EnvironmentID: environmentID,
 		Name:          strings.TrimSpace(opts.Name),
 		AuthHeaders:   headers,
 		HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
 	})
+}
+
+func runExecServerRemoteWithParentLifetime(ctx context.Context, stdin io.Reader, exitOnStdinClose bool, cfg execserver.RemoteEnvironmentConfig) error {
+	if !exitOnStdinClose {
+		return execserver.RunRemoteEnvironment(ctx, cfg)
+	}
+	runCtx, cancel := execServerRemoteParentContext(ctx, stdin)
+	defer cancel()
+	return execserver.RunRemoteEnvironment(runCtx, cfg)
+}
+
+func execServerRemoteParentContext(ctx context.Context, stdin io.Reader) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		if stdin != nil {
+			_, _ = io.Copy(io.Discard, stdin)
+		}
+		cancel()
+	}()
+	return runCtx, cancel
 }
 
 func execServerRemoteAuthHeaders(snapshot *auth.AuthDotJSON) (http.Header, error) {

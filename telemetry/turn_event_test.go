@@ -91,6 +91,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"is_first_turn": true,
 			"status": "completed",
 			"turn_error": null,
+			"explicit_client_interrupt_requested_at_ms": null,
 			"codex_error_kind": null,
 			"codex_error_http_status_code": null,
 			"steer_count": 0,

@@ -29,6 +29,7 @@ const (
 	imageGenerationMaxEditImages = 5
 	imageGenerationDefaultDetail = "high"
 	imageGenerationOutputPrefix  = "data:image/png;base64,"
+	imageTurnIDHeader            = "x-codex-image-turn-id"
 )
 
 type ImageGenerationOptions struct {
@@ -100,7 +101,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
-	result, err := h.executeImageRequest(ctx, request)
+	result, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation failed: "+err.Error()), nil
 	}
@@ -217,7 +218,7 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	}, nil
 }
 
-func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest) (string, error) {
+func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, error) {
 	if request == nil {
 		return "", fmt.Errorf("image request is nil")
 	}
@@ -225,9 +226,9 @@ func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, reques
 	var err error
 	switch request.kind {
 	case imageGenerationRequestGenerate:
-		response, err = h.postImageRequest(ctx, "images/generations", request.generate)
+		response, err = h.postImageRequest(ctx, "images/generations", request.generate, turnID)
 	case imageGenerationRequestEdit:
-		response, err = h.postImageRequest(ctx, "images/edits", request.edit)
+		response, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
 	default:
 		return "", fmt.Errorf("unknown image request kind %q", request.kind)
 	}
@@ -240,7 +241,7 @@ func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, reques
 	return response.Data[0].B64JSON, nil
 }
 
-func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path string, payload any) (*codexapi.ImageResponse, error) {
+func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path string, payload any, turnID string) (*codexapi.ImageResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode image request: %w", err)
@@ -256,6 +257,9 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if turnID = strings.TrimSpace(turnID); turnID != "" && !strings.ContainsAny(turnID, "\r\n") {
+		req.Header.Set(imageTurnIDHeader, turnID)
+	}
 	addHeaderValues(req.Header, h.options.Provider.Headers)
 	signed, err := h.options.Auth.ApplyRequest(ctx, req, body)
 	if err != nil {
@@ -296,6 +300,18 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 		return nil, fmt.Errorf("failed to decode image response: %w", err)
 	}
 	return &decoded, nil
+}
+
+func imageGenerationTurnID(invocation *tool.Invocation) string {
+	if invocation == nil || invocation.Context == nil {
+		return ""
+	}
+	for _, key := range []string{"turn_id", "turnId"} {
+		if value, ok := invocation.Context[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (h *ImageGenerationHandler) sessionID() string {

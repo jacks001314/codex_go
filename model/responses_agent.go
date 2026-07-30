@@ -216,22 +216,23 @@ type responsesAgentAPIResponse struct {
 }
 
 type responsesAgentOutputItem struct {
-	ID        string                       `json:"id"`
-	Type      string                       `json:"type"`
-	Role      string                       `json:"role"`
-	Phase     string                       `json:"phase"`
-	Content   []responsesAgentContentBlock `json:"content"`
-	Name      string                       `json:"name"`
-	Namespace string                       `json:"namespace"`
-	CallID    string                       `json:"call_id"`
-	Arguments any                          `json:"arguments"`
-	Input     string                       `json:"input"`
-	Status    string                       `json:"status"`
-	Revised   string                       `json:"revised_prompt"`
-	Result    string                       `json:"result"`
-	Execution string                       `json:"execution"`
-	Search    map[string]any               `json:"search"`
-	Action    map[string]any               `json:"action"`
+	ID                    string                       `json:"id"`
+	Type                  string                       `json:"type"`
+	Role                  string                       `json:"role"`
+	Phase                 string                       `json:"phase"`
+	Content               []responsesAgentContentBlock `json:"content"`
+	Name                  string                       `json:"name"`
+	Namespace             string                       `json:"namespace"`
+	CallID                string                       `json:"call_id"`
+	Arguments             any                          `json:"arguments"`
+	EncryptedFunctionArgs *[]string                    `json:"encrypted_function_args"`
+	Input                 string                       `json:"input"`
+	Status                string                       `json:"status"`
+	Revised               string                       `json:"revised_prompt"`
+	Result                string                       `json:"result"`
+	Execution             string                       `json:"execution"`
+	Search                map[string]any               `json:"search"`
+	Action                map[string]any               `json:"action"`
 }
 
 type responsesAgentContentBlock struct {
@@ -420,7 +421,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		modelID = "gpt-5.5"
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItems(request), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
@@ -536,7 +537,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItems(request), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -813,7 +814,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	instructions := responsesInstructions(request)
-	inputItems := responsesInputItems(request)
+	inputItems := responsesInputItemsForProvider(request, r.providerName())
 	tools := cloneAnySlice(request.Tools)
 	if !request.DisableHostedImageGeneration {
 		tools = r.withHostedToolsForRequest(tools, &modelInfo)
@@ -1360,6 +1361,37 @@ func responsesInputItems(request *AgentRequest) []any {
 	return items
 }
 
+func responsesInputItemsForProvider(request *AgentRequest, providerName string) []any {
+	items := responsesInputItems(request)
+	if strings.EqualFold(strings.TrimSpace(providerName), OpenAIProviderName) {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		switch typed := item.(type) {
+		case *AgentItem:
+			if typed == nil {
+				out = append(out, nil)
+				continue
+			}
+			clone := *typed
+			clone.EncryptedFunctionArgs = nil
+			out = append(out, &clone)
+		case AgentItem:
+			clone := typed
+			clone.EncryptedFunctionArgs = nil
+			out = append(out, clone)
+		case map[string]any:
+			clone := cloneMapAny(typed)
+			delete(clone, "encrypted_function_args")
+			out = append(out, clone)
+		default:
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func stripResponseInputItemIDs(items []any) []any {
 	out := make([]any, 0, len(items))
 	for i := range items {
@@ -1574,16 +1606,17 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		callID = id
 	}
 	item := &AgentItem{
-		ID:        id,
-		Type:      output.Type,
-		Name:      output.Name,
-		Namespace: output.Namespace,
-		CallID:    callID,
-		Arguments: responseArgumentsString(output.Arguments),
-		Input:     output.Input,
-		Execution: output.Execution,
-		Search:    cloneResponseSearch(output.Search),
-		Status:    output.Status,
+		ID:                    id,
+		Type:                  output.Type,
+		Name:                  output.Name,
+		Namespace:             output.Namespace,
+		CallID:                callID,
+		Arguments:             responseArgumentsString(output.Arguments),
+		EncryptedFunctionArgs: cloneAgentStringSlicePtr(output.EncryptedFunctionArgs),
+		Input:                 output.Input,
+		Execution:             output.Execution,
+		Search:                cloneResponseSearch(output.Search),
+		Status:                output.Status,
 	}
 	if item.Type == "tool_search_call" && len(item.Search) == 0 {
 		item.Search = responseArgumentsMap(output.Arguments)

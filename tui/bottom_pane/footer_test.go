@@ -139,6 +139,9 @@ func TestFooterStatusIndicatorsMatchRustText(t *testing.T) {
 	if got, ok := GoalStatusIndicatorLine(&FooterGoalStatusIndicator{Kind: GoalStatusBudgetLimited}); !ok || got != "Goal abandoned" {
 		t.Fatalf("budget limited = %q ok=%v", got, ok)
 	}
+	if got, ok := GoalStatusIndicatorLine(&FooterGoalStatusIndicator{Kind: GoalStatusBlocked}); !ok || got != "Goal stalled (/goal resume)" {
+		t.Fatalf("stalled goal = %q ok=%v", got, ok)
+	}
 	if got := StatusLineRightIndicatorLine(CollaborationModePlan, active, true, true); got != "Plan mode (shift+tab to cycle)"+FooterContextJoiner+"IDE context" {
 		t.Fatalf("mode right indicator = %q", got)
 	}

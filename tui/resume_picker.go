@@ -77,6 +77,7 @@ func (t SessionTarget) DisplayLabel() string {
 type SessionSelection struct {
 	Kind   SessionSelectionKind
 	Target SessionTarget
+	Name   string
 }
 
 type SessionFilterMode int

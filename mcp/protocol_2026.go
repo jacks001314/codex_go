@@ -18,8 +18,16 @@ const (
 	mcpClientInfoMetadataKey         = "io.modelcontextprotocol/clientInfo"
 	mcpClientCapabilitiesMetadataKey = "io.modelcontextprotocol/clientCapabilities"
 	mcpJSONRPCMethodNotFoundCode     = int64(-32601)
+	mcpLegacyPrevalidationErrorCode  = int64(-32000)
 	maxMCPInputRequiredRounds        = 1000
 )
+
+var knownLegacyMCPProtocols = map[string]struct{}{
+	"2025-11-25": {},
+	"2025-06-18": {},
+	"2025-03-26": {},
+	"2024-11-05": {},
+}
 
 type MCPProtocolMode uint8
 
@@ -115,6 +123,48 @@ func isMCPDiscoveryFallbackError(err error) bool {
 	}
 	var remoteErr *MCPRemoteError
 	return errors.As(err, &remoteErr) && remoteErr.Code == mcpJSONRPCMethodNotFoundCode
+}
+
+func hasMCPLegacyFallbackEvidence(message string) bool {
+	if message == "Bad Request: No valid session ID provided" {
+		return true
+	}
+	const prefixes = "Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: "
+	const legacyPrefix = "Bad Request: Unsupported protocol version (supported versions: "
+	supported, ok := strings.CutPrefix(message, prefixes)
+	if !ok {
+		supported, ok = strings.CutPrefix(message, legacyPrefix)
+	}
+	if !ok || !strings.HasSuffix(supported, ")") {
+		return false
+	}
+	versions := strings.Split(strings.TrimSuffix(supported, ")"), ",")
+	hasKnown := false
+	for _, raw := range versions {
+		version := strings.TrimSpace(raw)
+		if !isLegacyMCPProtocolDate(version) {
+			return false
+		}
+		if _, ok := knownLegacyMCPProtocols[version]; ok {
+			hasKnown = true
+		}
+	}
+	return len(versions) > 0 && hasKnown
+}
+
+func isLegacyMCPProtocolDate(version string) bool {
+	if len(version) != 10 || version >= modernMCPProtocol || version[4] != '-' || version[7] != '-' {
+		return false
+	}
+	for index := range version {
+		if index == 4 || index == 7 {
+			continue
+		}
+		if version[index] < '0' || version[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type mcpInputRequiredResult struct {

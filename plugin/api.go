@@ -37,6 +37,29 @@ const (
 	PluginDisabledByAdmin PluginAvailability = "DISABLED_BY_ADMIN"
 )
 
+type PluginDisabledReason string
+
+const (
+	PluginDisabledByAdminReason  PluginDisabledReason = "disabled_by_admin"
+	PluginPlanNotEligibleReason  PluginDisabledReason = "plan_not_eligible"
+	PluginRequiredAppUnavailable PluginDisabledReason = "required_app_unavailable"
+	PluginDisabledReasonUnknown  PluginDisabledReason = "unknown"
+)
+
+func (r *PluginDisabledReason) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch PluginDisabledReason(value) {
+	case PluginDisabledByAdminReason, PluginPlanNotEligibleReason, PluginRequiredAppUnavailable, PluginDisabledReasonUnknown:
+		*r = PluginDisabledReason(value)
+	default:
+		*r = PluginDisabledReasonUnknown
+	}
+	return nil
+}
+
 type PluginInstallPolicy string
 
 const (
@@ -356,6 +379,8 @@ type PluginSummary struct {
 	LocalVersion                     *string                    `json:"localVersion"`
 	ShareContext                     *PluginShareContext        `json:"shareContext"`
 	Availability                     PluginAvailability         `json:"availability"`
+	DisabledReason                   *PluginDisabledReason      `json:"disabledReason"`
+	EligiblePlanTypes                *[]string                  `json:"eligiblePlanTypes"`
 	InstallPolicy                    PluginInstallPolicy        `json:"installPolicy"`
 	InstallPolicySource              *PluginInstallPolicySource `json:"installPolicySource"`
 	MustShowInstallationInterstitial *bool                      `json:"mustShowInstallationInterstitial"`
@@ -366,6 +391,7 @@ type PluginSummary struct {
 	MCPServers                       []string                   `json:"mcpServers,omitempty"`
 	AppConnectors                    []string                   `json:"appConnectors,omitempty"`
 	Installed                        bool                       `json:"installed"`
+	InstalledAt                      *int64                     `json:"installedAt"`
 	Enabled                          bool                       `json:"enabled"`
 	InstallSuggestion                bool                       `json:"installSuggestion,omitempty"`
 	PluginDisplayNameTag             string                     `json:"pluginDisplayNameTag,omitempty"`
@@ -385,6 +411,8 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		LocalVersion                     *string                    `json:"localVersion"`
 		ShareContext                     *PluginShareContext        `json:"shareContext"`
 		Availability                     PluginAvailability         `json:"availability"`
+		DisabledReason                   *PluginDisabledReason      `json:"disabledReason"`
+		EligiblePlanTypes                *[]string                  `json:"eligiblePlanTypes"`
 		InstallPolicy                    PluginInstallPolicy        `json:"installPolicy"`
 		InstallPolicySource              *PluginInstallPolicySource `json:"installPolicySource"`
 		MustShowInstallationInterstitial *bool                      `json:"mustShowInstallationInterstitial"`
@@ -392,6 +420,7 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		Interface                        *PluginInterface           `json:"interface"`
 		Source                           PluginSource               `json:"source"`
 		Installed                        bool                       `json:"installed"`
+		InstalledAt                      *int64                     `json:"installedAt"`
 		Enabled                          bool                       `json:"enabled"`
 		Keywords                         []string                   `json:"keywords"`
 	}{
@@ -402,6 +431,8 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		LocalVersion:                     cloneStringPtr(s.LocalVersion),
 		ShareContext:                     cloneSharePtr(s.ShareContext),
 		Availability:                     s.Availability,
+		DisabledReason:                   clonePluginDisabledReasonPtr(s.DisabledReason),
+		EligiblePlanTypes:                cloneStringSlicePtr(s.EligiblePlanTypes),
 		InstallPolicy:                    s.InstallPolicy,
 		InstallPolicySource:              clonePluginInstallPolicySourcePtr(s.InstallPolicySource),
 		MustShowInstallationInterstitial: cloneBoolPtr(s.MustShowInstallationInterstitial),
@@ -409,6 +440,7 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 		Interface:                        clonePluginInterfacePtr(s.Interface),
 		Source:                           clonePluginSource(s.Source),
 		Installed:                        s.Installed,
+		InstalledAt:                      cloneInt64Ptr(s.InstalledAt),
 		Enabled:                          s.Enabled,
 		Keywords:                         keywords,
 	})
@@ -3117,6 +3149,9 @@ func cloneSummary(summary PluginSummary) PluginSummary {
 	}
 	summary.InstallPolicySource = clonePluginInstallPolicySourcePtr(summary.InstallPolicySource)
 	summary.MustShowInstallationInterstitial = cloneBoolPtr(summary.MustShowInstallationInterstitial)
+	summary.DisabledReason = clonePluginDisabledReasonPtr(summary.DisabledReason)
+	summary.EligiblePlanTypes = cloneStringSlicePtr(summary.EligiblePlanTypes)
+	summary.InstalledAt = cloneInt64Ptr(summary.InstalledAt)
 	if summary.ShareContext != nil {
 		value := cloneShare(*summary.ShareContext)
 		summary.ShareContext = &value
@@ -3126,6 +3161,30 @@ func cloneSummary(summary PluginSummary) PluginSummary {
 		summary.Interface = &value
 	}
 	return summary
+}
+
+func clonePluginDisabledReasonPtr(value *PluginDisabledReason) *PluginDisabledReason {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneStringSlicePtr(value *[]string) *[]string {
+	if value == nil {
+		return nil
+	}
+	cloned := append([]string{}, (*value)...)
+	return &cloned
+}
+
+func cloneInt64Ptr(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func clonePluginInterface(value PluginInterface) PluginInterface {

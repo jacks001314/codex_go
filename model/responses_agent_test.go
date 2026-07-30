@@ -2600,3 +2600,22 @@ func firstEventByKind(events []ResponsesStreamEvent, kind ResponsesStreamEventKi
 	}
 	return nil
 }
+
+func TestResponsesInputItemsStripEncryptedFunctionArgsForNonOpenAIProviders(t *testing.T) {
+	marker := []string{}
+	request := &AgentRequest{InputItems: []any{
+		&AgentItem{Type: "function_call", Name: "spawn_agent", EncryptedFunctionArgs: &marker},
+		map[string]any{"type": "function_call", "name": "send_message", "encrypted_function_args": []any{}},
+	}}
+	openAI := responsesInputItemsForProvider(request, OpenAIProviderName)
+	if openAI[0].(*AgentItem).EncryptedFunctionArgs == nil {
+		t.Fatal("OpenAI input lost encrypted function marker")
+	}
+	nonOpenAI := responsesInputItemsForProvider(request, "ollama")
+	if nonOpenAI[0].(*AgentItem).EncryptedFunctionArgs != nil {
+		t.Fatalf("non-OpenAI AgentItem marker = %#v", nonOpenAI[0])
+	}
+	if _, ok := nonOpenAI[1].(map[string]any)["encrypted_function_args"]; ok {
+		t.Fatalf("non-OpenAI map marker = %#v", nonOpenAI[1])
+	}
+}

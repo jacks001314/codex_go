@@ -207,6 +207,7 @@ type TurnStartParams struct {
 	AdditionalContext     map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
 	DynamicTools          []DynamicToolSpec                 `json:"dynamicTools,omitempty"`
 	ExperimentalRawEvents bool                              `json:"-"`
+	ParentTurnID          string                            `json:"-"`
 }
 
 func (p *TurnStartParams) CloneDynamicTools() []DynamicToolSpec {

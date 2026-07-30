@@ -54,6 +54,15 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
+	shared := &http.Client{}
+	router := NewRuntimeRouter(RuntimeServices{HTTPClient: shared})
+	runtimeConfig := router.runtimeMCPConfig(map[string]any{}, t.TempDir(), nil, nil)
+	if runtimeConfig.HTTPClient != shared {
+		t.Fatalf("runtime MCP HTTP client = %#v, want shared client %#v", runtimeConfig.HTTPClient, shared)
+	}
+}
+
 func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -345,6 +354,83 @@ func TestRuntimeRouterThreadListAndSearchOverlayRuntimeStatus(t *testing.T) {
 	}
 	if got := searchData[0].Thread.Status.Type; got != SystemErrorStatus().Type {
 		t.Fatalf("thread/search status = %q, want %q", got, SystemErrorStatus().Type)
+	}
+}
+
+func TestRuntimeRouterThreadListAndSearchReportSubagentDirectInputCapability(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	type expectedThread struct {
+		id      session.ThreadID
+		version string
+		spawned bool
+		loaded  bool
+		want    *bool
+	}
+	can, cannot := true, false
+	threads := []expectedThread{
+		{id: "ordinary-loaded", loaded: true},
+		{id: "spawn-v1", version: string(agent.VersionV1), spawned: true, loaded: true, want: &can},
+		{id: "spawn-v2", version: string(agent.VersionV2), spawned: true, loaded: true, want: &cannot},
+		{id: "spawn-unloaded", version: string(agent.VersionV1), spawned: true},
+	}
+	for i, item := range threads {
+		metadata := session.Metadata{Source: string(SessionSourceCli), ModelProvider: "openai", HistoryMode: string(ThreadHistoryLegacy)}
+		if item.spawned {
+			metadata.Source = "subagent:thread_spawn"
+			metadata.ThreadSource = string(ThreadSourceKindSubAgentThreadSpawn)
+			metadata.MultiAgentVersion = item.version
+		}
+		at := now.Add(time.Duration(i) * time.Second)
+		if err := store.Create(&session.Record{ID: item.id, SessionID: string(item.id), Preview: "needle", CreatedAt: at, UpdatedAt: at, RecencyAt: at, Metadata: metadata}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	for _, item := range threads {
+		if item.loaded {
+			router.requireThreadStatus().UpsertThread(string(item.id), false)
+		}
+	}
+	assertCapabilities := func(label string, data []Thread) {
+		t.Helper()
+		if len(data) != len(threads) {
+			t.Fatalf("%s data = %+v", label, data)
+		}
+		byID := make(map[string]*bool, len(data))
+		for i := range data {
+			byID[data[i].ID] = data[i].CanAcceptDirectInput
+		}
+		for _, item := range threads {
+			got := byID[string(item.id)]
+			if item.want == nil {
+				if got != nil {
+					t.Fatalf("%s %s capability = %v, want nil", label, item.id, *got)
+				}
+			} else if got == nil || *got != *item.want {
+				t.Fatalf("%s %s capability = %v, want %v", label, item.id, got, *item.want)
+			}
+		}
+	}
+	sourceKinds := []ThreadSourceKind{ThreadSourceKindCli, ThreadSourceKindSubAgentThreadSpawn}
+	listed := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{ModelProviders: []string{"openai"}, SourceKinds: sourceKinds}))
+	if listed.Error != nil {
+		t.Fatalf("thread/list error = %+v", listed.Error)
+	}
+	assertCapabilities("list", listed.Result.(*ThreadListResponse).Data)
+	searched := router.Handle(requestWithParams(t, IntID(2), MethodThreadSearch, ThreadSearchParams{SearchTerm: "needle", SourceKinds: sourceKinds}))
+	if searched.Error != nil {
+		t.Fatalf("thread/search error = %+v", searched.Error)
+	}
+	searchThreads := make([]Thread, 0, len(threads))
+	for _, result := range searched.Result.(*ThreadSearchResponse).Data {
+		searchThreads = append(searchThreads, result.Thread)
+	}
+	assertCapabilities("search", searchThreads)
+
+	rejected := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{ThreadID: "spawn-v2"}))
+	if rejected.Error == nil || rejected.Error.Message != "direct app-server input is not allowed for multi-agent v2 sub-agents" {
+		t.Fatalf("v2 direct turn response = %+v", rejected)
 	}
 }
 
@@ -5900,9 +5986,9 @@ func TestRuntimeRouterRecordsExternalAgentImportHistory(t *testing.T) {
 	source := "external.json"
 	record := router.Handle(requestWithParams(t, IntID(1), MethodExternalAgentConfigImportHistoryRecord, config.ExternalAgentConfigImportHistoryRecordParams{
 		ProviderID: "external-client",
-		ItemTypeResults: []config.ExternalAgentConfigImportTypeResult{{
+		ItemTypeResults: []config.ExternalAgentConfigImportHistoryRecordTypeResultParams{{
 			ItemType: config.MigrationConfig,
-			Successes: []config.ExternalAgentConfigImportItemTypeSuccess{{
+			Successes: []config.ExternalAgentConfigImportHistoryRecordSuccessParams{{
 				ItemType: config.MigrationConfig,
 				Source:   &source,
 			}},
@@ -8531,11 +8617,13 @@ func TestRuntimeRouterMCPToolStartedMapsToRustV2Notification(t *testing.T) {
 	startedAt := time.Now().UTC()
 
 	notify := router.runtimeToolStartedNotifier("thread-mcp", "turn-mcp", t.TempDir(), false)
-	notify(context.Background(), &tool.Invocation{
+	invocation := &tool.Invocation{
 		CallID:   "call-mcp",
 		ToolName: tool.NamespacedName("mcp__geogebra", "geogebra_create_point"),
 		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"label":"A"}`},
-	}, startedAt)
+		Context:  map[string]any{"read_only_hint": true},
+	}
+	notify(context.Background(), invocation, startedAt)
 
 	notifications := sink.List()
 	if len(notifications) != 1 || notifications[0].Method != NotificationItemStarted {
@@ -8551,6 +8639,23 @@ func TestRuntimeRouterMCPToolStartedMapsToRustV2Notification(t *testing.T) {
 	arguments, ok := started.Item["arguments"].(map[string]any)
 	if !ok || arguments["label"] != "A" {
 		t.Fatalf("MCP start arguments = %#v", started.Item["arguments"])
+	}
+	if started.Item["readOnlyHint"] != true {
+		t.Fatalf("MCP start readOnlyHint = %#v", started.Item["readOnlyHint"])
+	}
+
+	encoded, err := json.Marshal(&ThreadItem{ID: "call-mcp", Type: "mcpToolCall", Data: map[string]any{
+		"server": "geogebra", "tool": "geogebra_create_point", "status": "completed", "read_only_hint": true,
+	}})
+	if err != nil {
+		t.Fatalf("Marshal MCP item error = %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		t.Fatalf("Unmarshal MCP item error = %v", err)
+	}
+	if persisted["readOnlyHint"] != true {
+		t.Fatalf("persisted MCP readOnlyHint = %#v in %#v", persisted["readOnlyHint"], persisted)
 	}
 }
 
@@ -8982,6 +9087,47 @@ func TestTurnEnvironmentContextReportsSelectedPowerShellLikeRust(t *testing.T) {
 	text := fmt.Sprint(item.(map[string]any)["content"].([]map[string]any)[0]["text"])
 	if !strings.Contains(text, `<shell>powershell</shell>`) || !strings.Contains(text, `C:\workspace`) {
 		t.Fatalf("environment context item = %q", text)
+	}
+}
+
+func TestTurnEnvironmentContextMarksPrimaryWhenMultipleSelectedLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/fallback")
+	if err := manager.SetInfo("remote-primary", EnvironmentShellInfo{Name: "zsh", Path: "/bin/zsh"}, "/primary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetInfo("remote-secondary", EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "/secondary"); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	item := router.turnEnvironmentContextInputItem(&turn.TurnStartParams{Environments: []map[string]any{
+		{"environmentId": "remote-primary", "cwd": "/primary"},
+		{"environmentId": "remote-secondary", "cwd": "/secondary"},
+	}})
+	text := fmt.Sprint(item.(map[string]any)["content"].([]map[string]any)[0]["text"])
+	want := "<environment_context>\n" +
+		"  <environments>\n" +
+		"    <environment id=\"remote-primary\" primary=\"true\">\n" +
+		"      <cwd>/primary</cwd>\n" +
+		"      <shell>zsh</shell>\n" +
+		"    </environment>\n" +
+		"    <environment id=\"remote-secondary\" primary=\"false\">\n" +
+		"      <cwd>/secondary</cwd>\n" +
+		"      <shell>bash</shell>\n" +
+		"    </environment>\n" +
+		"  </environments>\n" +
+		"</environment_context>"
+	if text != want {
+		t.Fatalf("environment context = %q, want %q", text, want)
+	}
+}
+
+func TestPrimaryTurnEnvironmentCWDUsesFirstSelectionLikeRust(t *testing.T) {
+	params := &turn.TurnStartParams{Environments: []map[string]any{
+		{"environmentId": "primary", "cwd": "/remote/workspace"},
+		{"environmentId": "secondary", "cwd": "/other"},
+	}}
+	if got := primaryTurnEnvironmentCWD(params, "/local/fallback"); got != "/remote/workspace" {
+		t.Fatalf("primaryTurnEnvironmentCWD() = %q", got)
 	}
 }
 
@@ -13067,6 +13213,33 @@ tool_suggest = true
 	defer mu.Unlock()
 	if requests != 1 || gotAuthorization != "Bearer access-token" || gotAccountID != "workspace-1" {
 		t.Fatalf("suggested request count=%d auth=%q account=%q", requests, gotAuthorization, gotAccountID)
+	}
+}
+
+func TestSuggestedPluginsFeatureGateIsIndependentFromToolSuggestLikeRust(t *testing.T) {
+	tests := []struct {
+		name     string
+		features map[string]any
+		want     bool
+	}{
+		{name: "tool suggest", features: map[string]any{"apps": true, "plugins": true, "tool_suggest": true}},
+		{name: "recommended plugins", features: map[string]any{"apps": true, "plugins": true, "tool_suggest": false, "recommended_plugins": true}},
+		{name: "both disabled", features: map[string]any{"apps": true, "plugins": true, "tool_suggest": false, "recommended_plugins": false}, want: false},
+		{name: "apps disabled", features: map[string]any{"apps": false, "plugins": true, "recommended_plugins": true}, want: false},
+		{name: "plugins disabled", features: map[string]any{"apps": true, "plugins": false, "recommended_plugins": true}, want: false},
+	}
+	for index := range tests {
+		if tests[index].name == "tool suggest" || tests[index].name == "recommended plugins" {
+			tests[index].want = true
+		}
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &config.Config{Values: map[string]any{"features": test.features}}
+			if got := suggestedPluginsEnabledForConfig(cfg); got != test.want {
+				t.Fatalf("suggestedPluginsEnabledForConfig() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 
@@ -18229,6 +18402,9 @@ func TestRuntimeRouterTurnInterruptedEmitsCodexTurnAnalyticsLikeRust(t *testing.
 	}
 	if params.DurationMS == nil || params.CompletedAt == nil || params.StartedAt == nil {
 		t.Fatalf("interrupted analytics timing = duration:%#v started:%#v completed:%#v", params.DurationMS, params.StartedAt, params.CompletedAt)
+	}
+	if params.ExplicitClientInterruptRequestedAtMS == nil || *params.ExplicitClientInterruptRequestedAtMS == 0 {
+		t.Fatalf("explicit interrupt timestamp = %#v", params.ExplicitClientInterruptRequestedAtMS)
 	}
 }
 

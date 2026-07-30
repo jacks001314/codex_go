@@ -36,6 +36,7 @@ type ToolExecutor struct {
 	toolInfo                      MCPToolInfo
 	toolName                      tool.ToolName
 	parallel                      bool
+	readOnlyHint                  *bool
 	threadID                      string
 	turnID                        string
 	requestMeta                   map[string]any
@@ -61,7 +62,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	} else if executor.serverName != "" && executor.toolInfo.Name != "" {
 		executor.toolName = tool.NamespacedName(executor.serverName, executor.toolInfo.Name)
 	}
-	executor.parallel = options.Parallel || mcpToolReadOnlyHint(executor.toolInfo.Annotations)
+	executor.readOnlyHint = mcpToolReadOnlyHint(executor.toolInfo.Annotations)
+	executor.parallel = options.Parallel || (executor.readOnlyHint != nil && *executor.readOnlyHint)
 	executor.threadID = strings.TrimSpace(options.ThreadID)
 	executor.turnID = strings.TrimSpace(options.TurnID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
@@ -98,11 +100,12 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
 	return tool.Spec{
-		Name:        name,
-		Description: firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
-		InputSchema: cloneAnyMap(e.toolInfo.InputSchema),
-		Search:      e.searchInfo(),
-		Parallel:    e.parallel,
+		Name:         name,
+		Description:  firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
+		InputSchema:  cloneAnyMap(e.toolInfo.InputSchema),
+		Search:       e.searchInfo(),
+		Parallel:     e.parallel,
+		ReadOnlyHint: cloneBoolPtrMCP(e.readOnlyHint),
 	}
 }
 
@@ -147,6 +150,9 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	data["server"] = e.resolvedServerName()
 	data["tool"] = e.resolvedRemoteToolName()
+	if e.readOnlyHint != nil {
+		data["read_only_hint"] = *e.readOnlyHint
+	}
 	if rewrittenArguments != nil {
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}
@@ -156,6 +162,16 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		Data:       data,
 		LogPreview: mcpLogPreview(body),
 	}, nil
+}
+
+func (e *ToolExecutor) WaitUntilReady(ctx context.Context, invocation *tool.Invocation) error {
+	threadID := e.threadID
+	if invocation != nil && invocation.Context != nil {
+		if value, ok := invocation.Context["thread_id"].(string); ok && strings.TrimSpace(value) != "" {
+			threadID = strings.TrimSpace(value)
+		}
+	}
+	return e.mcpService().WaitForServerStartup(ctx, e.resolvedServerName(), threadID)
 }
 
 func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
@@ -435,18 +451,26 @@ func runtimeToolInfoToMCPToolInfo(info *RuntimeToolInfo) *MCPToolInfo {
 	}
 }
 
-func mcpToolReadOnlyHint(annotations any) bool {
+func mcpToolReadOnlyHint(annotations any) *bool {
 	encoded, err := json.Marshal(annotations)
 	if err != nil {
-		return false
+		return nil
 	}
 	var raw struct {
 		ReadOnlyHint *bool `json:"readOnlyHint"`
 	}
 	if err := json.Unmarshal(encoded, &raw); err != nil {
-		return false
+		return nil
 	}
-	return raw.ReadOnlyHint != nil && *raw.ReadOnlyHint
+	return cloneBoolPtrMCP(raw.ReadOnlyHint)
+}
+
+func cloneBoolPtrMCP(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func nonEmptyStrings(values []string) []string {

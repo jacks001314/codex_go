@@ -8,13 +8,13 @@ import (
 )
 
 func TestDesktopThreadMessagesMatchRust(t *testing.T) {
-	if DesktopThreadOpenedMessage != "Opened this session in Codex Desktop." {
+	if DesktopThreadOpenedMessage != "Opened this session in the Desktop app." {
 		t.Fatalf("DesktopThreadOpenedMessage = %q", DesktopThreadOpenedMessage)
 	}
-	if got := DesktopThreadOpenErrorMessage("launch failed"); got != "Failed to open this session in Codex Desktop: launch failed. Install or launch Codex Desktop and try again." {
+	if got := DesktopThreadOpenErrorMessage("launch failed"); got != "Failed to open this session in the Desktop app: launch failed. Install or launch the Desktop app and try again." {
 		t.Fatalf("DesktopThreadOpenErrorMessage() = %q", got)
 	}
-	if got := DesktopThreadOpenErrorMessage(" launch failed "); got != "Failed to open this session in Codex Desktop:  launch failed . Install or launch Codex Desktop and try again." {
+	if got := DesktopThreadOpenErrorMessage(" launch failed "); got != "Failed to open this session in the Desktop app:  launch failed . Install or launch the Desktop app and try again." {
 		t.Fatalf("DesktopThreadOpenErrorMessage() preserved whitespace = %q", got)
 	}
 	if got := DesktopThreadURL(" thread-1 "); got != "codex://threads/ thread-1 " {
@@ -24,12 +24,12 @@ func TestDesktopThreadMessagesMatchRust(t *testing.T) {
 
 func TestDesktopThreadHistoryCellsMatchRustSnapshots(t *testing.T) {
 	opened := historycell.NewInfoEvent(DesktopThreadOpenedMessage, "")
-	if got := strings.Join(opened.DisplayLines(80), "\n"); got != "• Opened this session in Codex Desktop." {
+	if got := strings.Join(opened.DisplayLines(80), "\n"); got != "• Opened this session in the Desktop app." {
 		t.Fatalf("opened history = %q", got)
 	}
 
 	err := historycell.NewErrorEvent(DesktopThreadOpenErrorMessage("launch failed"))
-	if got := strings.Join(err.DisplayLines(80), "\n"); got != "■ Failed to open this session in Codex Desktop: launch failed. Install or launch Codex Desktop and try again." {
+	if got := strings.Join(err.DisplayLines(80), "\n"); got != "■ Failed to open this session in the Desktop app: launch failed. Install or launch the Desktop app and try again." {
 		t.Fatalf("error history = %q", got)
 	}
 }
@@ -40,16 +40,24 @@ func TestWindowsDesktopAppLaunchScriptMatchesRustShape(t *testing.T) {
 	}
 	script := WindowsDesktopAppLaunchScript("codex://threads/it's")
 	for _, want := range []string{
+		"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
 		"$ErrorActionPreference = 'Stop'",
 		"$url = 'codex://threads/it''s'",
 		"Get-AppxPackage -Name OpenAI.Codex",
-		"Codex.exe",
+		"Get-AppxPackageManifest -Package $package.PackageFullName",
+		"$_.Category -eq 'windows.protocol'",
+		"$_.Protocol.Name -eq 'codex'",
+		"Join-Path $package.InstallLocation $application.Executable",
+		"Split-Path -Parent $exe",
 		"resources\\app.asar",
 		"Start-Process",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("WindowsDesktopAppLaunchScript missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "Join-Path $appDir 'Codex.exe'") {
+		t.Fatalf("WindowsDesktopAppLaunchScript still hardcodes the internal Codex.exe shim:\n%s", script)
 	}
 }
 

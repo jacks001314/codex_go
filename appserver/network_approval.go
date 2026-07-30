@@ -200,9 +200,10 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 		}
 		if err := s.router.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
 			slog.Warn("Failed to apply network policy amendment", "error", err)
-		} else {
-			s.rememberNetworkRuleSaved(active.threadID, active.turnID, amendment)
+			s.recordPolicyDenialForThread(active.threadID, "Network access was blocked by policy because the approved network policy amendment could not be applied.")
+			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
+		s.rememberNetworkRuleSaved(active.threadID, active.turnID, amendment)
 		if amendment.Action == NetworkPolicyRuleAllow {
 			return network.AllowProxyDecision(), NetworkPolicyRuleAllow
 		}
@@ -350,6 +351,27 @@ func (s *networkApprovalService) recordUserDenialForThread(threadID string) {
 	}
 	if selected != nil {
 		selected.outcome = "rejected by user"
+	}
+}
+
+func (s *networkApprovalService) recordPolicyDenialForThread(threadID string, message string) {
+	if s == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	var selected *activeNetworkApprovalCall
+	for _, call := range s.calls {
+		if threadID != "" && call.threadID != threadID {
+			continue
+		}
+		if selected != nil {
+			return
+		}
+		selected = call
+	}
+	if selected != nil && selected.outcome == "" {
+		selected.outcome = message
 	}
 }
 

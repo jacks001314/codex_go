@@ -292,7 +292,7 @@ func GoalStatusIndicatorLine(indicator *FooterGoalStatusIndicator) (string, bool
 	case GoalStatusPaused:
 		return "Goal paused (/goal resume)", true
 	case GoalStatusBlocked:
-		return "Goal blocked (/goal resume)", true
+		return "Goal stalled (/goal resume)", true
 	case GoalStatusUsageLimited:
 		return "Goal hit usage limits (/goal resume)", true
 	case GoalStatusBudgetLimited:

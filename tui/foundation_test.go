@@ -28,6 +28,50 @@ func TestLineTruncationCountsWideRunes(t *testing.T) {
 	}
 }
 
+func TestTerminalWidthKeepsHalfwidthSoundMarksAndGraphemes(t *testing.T) {
+	tests := map[string]int{
+		"\uff76\uff9e\uff8a\uff9f": 4,
+		"\uff76\uff9e\uff9e":       3,
+		"\u754c\uff9e":             3,
+		"\uff9e":                   1,
+	}
+	for text, want := range tests {
+		if got := DisplayWidth(text); got != want {
+			t.Fatalf("DisplayWidth(%q) = %d, want %d", text, got, want)
+		}
+	}
+
+	if got := TruncateToWidth("ab\uff76\uff9ec", 4); got != "ab\uff76\uff9e" {
+		t.Fatalf("TruncateToWidth kept = %q", got)
+	}
+	if got := TruncateToWidth("ab\uff76\uff9ec", 3); got != "ab" {
+		t.Fatalf("TruncateToWidth split halfwidth grapheme: %q", got)
+	}
+	if got := TruncateToWidth("a\U0001f44d\U0001f3fbb", 2); got != "a" {
+		t.Fatalf("TruncateToWidth split emoji grapheme: %q", got)
+	}
+}
+
+func TestWrapAndLiveWrapUseGraphemeCellWidths(t *testing.T) {
+	if got, want := WrapLine("ab\uff76\uff9ec", WrapOptions{Width: 3, BreakWords: true}), []string{"ab", "\uff76\uff9ec"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("WrapLine = %#v, want %#v", got, want)
+	}
+	if got, want := WrapLine("a\U0001f44d\U0001f3fbb", WrapOptions{Width: 2, BreakWords: true}), []string{"a", "\U0001f44d\U0001f3fb", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("emoji WrapLine = %#v, want %#v", got, want)
+	}
+
+	prefix, suffix, width := TakePrefixByWidth("ab\uff76\uff9ec", 4)
+	if prefix != "ab\uff76\uff9e" || suffix != "c" || width != 4 {
+		t.Fatalf("TakePrefixByWidth = %q, %q, %d", prefix, suffix, width)
+	}
+	builder := NewRowBuilder(1)
+	builder.PushFragment("\uff76\uff9ex")
+	rows := builder.DisplayRows()
+	if len(rows) != 2 || rows[0].Text != "\uff76\uff9e" || rows[1].Text != "x" {
+		t.Fatalf("narrow RowBuilder rows = %#v", rows)
+	}
+}
+
 func TestWrappingURLDetectionMatchesRustHeuristics(t *testing.T) {
 	positives := []string{
 		"https://example.com/a/b",

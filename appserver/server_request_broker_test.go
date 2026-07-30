@@ -236,6 +236,47 @@ func TestServerRequestBrokerResolvedCallbackOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestServerRequestBrokerCancelRemovesOnlyMatchingPendingRequest(t *testing.T) {
+	broker := NewServerRequestBroker()
+	sent := make(chan *ServerRequest, 2)
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		sent <- request
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelled := make(chan error, 1)
+	go func() {
+		cancelled <- broker.Request(ctx, ServerRequestMCPElicitation, map[string]string{"name": "cancelled"}, nil)
+	}()
+	completed := make(chan error, 1)
+	go func() {
+		completed <- broker.Request(context.Background(), ServerRequestMCPElicitation, map[string]string{"name": "active"}, nil)
+	}()
+
+	requests := map[string]*ServerRequest{}
+	for range 2 {
+		request := <-sent
+		params, ok := request.Params.(map[string]string)
+		if !ok {
+			t.Fatalf("request params = %#v", request.Params)
+		}
+		requests[params["name"]] = request
+	}
+	cancel()
+	if err := <-cancelled; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Request() error = %v", err)
+	}
+	if ok, err := broker.Resolve(OK(requests["cancelled"].ID, map[string]any{})); err != nil || ok {
+		t.Fatalf("cancelled Resolve() resolved=%v error=%v", ok, err)
+	}
+	if ok, err := broker.Resolve(OK(requests["active"].ID, map[string]any{})); err != nil || !ok {
+		t.Fatalf("active Resolve() resolved=%v error=%v", ok, err)
+	}
+	if err := <-completed; err != nil {
+		t.Fatalf("active Request() error = %v", err)
+	}
+}
+
 type authRefreshTestResponse struct {
 	AccessToken string `json:"accessToken"`
 }

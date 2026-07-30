@@ -387,17 +387,19 @@ func TestParseExecColorFlag(t *testing.T) {
 	}
 }
 
-func TestParseExecRejectsFullAutoWithDangerousBypass(t *testing.T) {
+func TestParseExecRejectsRemovedFullAuto(t *testing.T) {
 	for _, args := range [][]string{
+		{"exec", "--full-auto", "hello"},
 		{"exec", "--full-auto", "--dangerously-bypass-approvals-and-sandbox", "hello"},
 		{"--yolo", "exec", "--full-auto", "hello"},
+		{"exec", "resume", "--last", "--full-auto", "hello"},
 		{"exec", "resume", "--last", "--full-auto", "--dangerously-bypass-approvals-and-sandbox", "hello"},
 	} {
 		_, err := Parse(args)
 		if err == nil {
-			t.Fatalf("Parse(%v) returned nil error, want conflict", args)
+			t.Fatalf("Parse(%v) returned nil error, want unknown argument", args)
 		}
-		if !strings.Contains(err.Error(), "--full-auto") || !strings.Contains(err.Error(), "--dangerously-bypass-approvals-and-sandbox") {
+		if !strings.Contains(err.Error(), "--full-auto") {
 			t.Fatalf("Parse(%v) error = %q", args, err.Error())
 		}
 	}
@@ -1228,6 +1230,7 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 		"--environment-id", "env-1",
 		"--name", "worker-a",
 		"--use-agent-identity-auth",
+		"--exit-on-stdin-close",
 	})
 	if err != nil {
 		t.Fatalf("Parse exec-server returned error: %v", err)
@@ -1235,7 +1238,7 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 	if execServer.Command != CommandExecServer || execServer.ExecServer.Remote != "ws://127.0.0.1:7777" || execServer.ExecServer.EnvironmentID != "env-1" {
 		t.Fatalf("exec-server = %#v", execServer)
 	}
-	if execServer.ExecServer.Name != "worker-a" || !execServer.ExecServer.UseAgentIdentityAuth {
+	if execServer.ExecServer.Name != "worker-a" || !execServer.ExecServer.UseAgentIdentityAuth || !execServer.ExecServer.ExitOnStdinClose {
 		t.Fatalf("exec-server = %#v", execServer.ExecServer)
 	}
 
@@ -1266,6 +1269,21 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 	_, err = Parse([]string{"exec-server", "--use-agent-identity-auth"})
 	if err == nil || err.Error() != "--use-agent-identity-auth requires --remote" {
 		t.Fatalf("exec-server agent identity requires remote error = %v", err)
+	}
+	_, err = Parse([]string{"exec-server", "--exit-on-stdin-close"})
+	if err == nil || err.Error() != "--exit-on-stdin-close requires --remote" {
+		t.Fatalf("exec-server parent lifetime requires remote error = %v", err)
+	}
+}
+
+func TestParseExecServerExitOnStdinCloseEnvironment(t *testing.T) {
+	t.Setenv(execServerExitOnStdinCloseEnv, "true")
+	parsed, err := Parse([]string{"exec-server", "--remote", "https://example.test", "--environment-id", "env-1"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !parsed.ExecServer.ExitOnStdinClose {
+		t.Fatal("ExitOnStdinClose = false, want true from environment")
 	}
 }
 

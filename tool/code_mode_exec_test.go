@@ -648,6 +648,38 @@ func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
 	}
 }
 
+func TestCodeModeNormalizedToolNameCollisionKeepsFirstRegisteredTool(t *testing.T) {
+	registry := NewRegistry()
+	for _, spec := range []Spec{
+		{Name: PlainName("foo-bar"), Description: "first winner"},
+		{Name: PlainName("foo_bar"), Description: "shadowed tool"},
+	} {
+		if err := registry.Register(NewExecutorFunc(spec, noopExecutor)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec, wait := NewCodeModeExecutors(registry)
+	if err := registry.Prepend(wait); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Prepend(exec); err != nil {
+		t.Fatal(err)
+	}
+
+	router := NewRouter(registry)
+	names := router.CodeModeToolNames()
+	if len(names) != 1 || names["foo_bar"].Name != "foo-bar" {
+		t.Fatalf("CodeModeToolNames() = %#v", names)
+	}
+	specs := router.CodeModeToolSpecs()
+	if len(specs) != 1 || specs[0].Name.Key() != "foo-bar" || specs[0].Description != "first winner" {
+		t.Fatalf("CodeModeToolSpecs() = %#v", specs)
+	}
+	if _, ok := registry.Lookup(PlainName("foo_bar")); !ok {
+		t.Fatal("shadowed tool must remain directly dispatchable")
+	}
+}
+
 func mustJSON(t *testing.T, value string) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(value)

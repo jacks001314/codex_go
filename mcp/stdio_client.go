@@ -142,84 +142,42 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 }
 
 func listMCPStdioTools(client *stdioClient, options *stdioCallOptions) ([]MCPToolInfo, error) {
-	tools := []MCPToolInfo{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("tools/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "tools/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
 		var response struct {
 			Tools      []MCPToolInfo `json:"tools"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "tools/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		tools = append(tools, response.Tools...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return tools, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("tools/list")
+		return response.Tools, response.NextCursor, nil
+	})
 }
 
 func listMCPStdioResources(client *stdioClient, options *stdioCallOptions) ([]MCPResource, error) {
-	resources := []MCPResource{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("resources/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "resources/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResource, *string, error) {
 		var response struct {
 			Resources  []MCPResource `json:"resources"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "resources/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "resources/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		resources = append(resources, response.Resources...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return resources, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("resources/list")
+		return response.Resources, response.NextCursor, nil
+	})
 }
 
 func listMCPStdioResourceTemplates(client *stdioClient, options *stdioCallOptions) ([]MCPResourceTemplate, error) {
-	templates := []MCPResourceTemplate{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("resources/templates/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "resources/templates/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResourceTemplate, *string, error) {
 		var response struct {
 			ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates"`
 			NextCursor        *string               `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "resources/templates/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "resources/templates/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		templates = append(templates, response.ResourceTemplates...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return templates, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("resources/templates/list")
+		return response.ResourceTemplates, response.NextCursor, nil
+	})
 }
 
 func callMCPStdioTool(config *ServerConfig, serverName string, threadID string, turnID string, itemID string, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
@@ -278,17 +236,20 @@ func (c *stdioClient) Call(method string, params any, out any) error {
 }
 
 func (c *stdioClient) CallWithOptions(options *stdioCallOptions, method string, params any, out any) error {
-	return c.callWithOptionsOnce(options, method, params, out)
+	return c.CallWithOptionsContext(context.Background(), options, method, params, out)
 }
 
-func (c *stdioClient) callWithOptionsOnce(options *stdioCallOptions, method string, params any, out any) error {
+func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdioCallOptions, method string, params any, out any) error {
 	if c == nil || c.config == nil {
 		return errors.New("stdio MCP client is nil")
 	}
 	if strings.TrimSpace(c.config.Command) == "" {
 		return errors.New("stdio MCP command is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.callTimeout())
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	defer cancel()
 	if options != nil {
 		ctx = contextWithMCPClientContextAndRoots(ctx, options.ThreadID, options.TurnID, options.ItemID, options.Roots)

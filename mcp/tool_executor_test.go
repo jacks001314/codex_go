@@ -217,6 +217,16 @@ func TestMCPRegisterToolExecutors(t *testing.T) {
 	if !executor.Spec().Parallel {
 		t.Fatalf("read-only MCP tool should support parallel calls")
 	}
+	if executor.Spec().ReadOnlyHint == nil || !*executor.Spec().ReadOnlyHint {
+		t.Fatalf("read-only MCP tool hint = %#v", executor.Spec().ReadOnlyHint)
+	}
+	writeCapable := NewToolExecutor(&ToolExecutorOptions{
+		ServerName: "server",
+		ToolInfo:   &MCPToolInfo{Name: "write", Annotations: map[string]any{"readOnlyHint": false}},
+	})
+	if writeCapable.Spec().ReadOnlyHint == nil || *writeCapable.Spec().ReadOnlyHint || writeCapable.Spec().Parallel {
+		t.Fatalf("write-capable MCP spec = %#v", writeCapable.Spec())
+	}
 }
 
 func TestMCPToolResponseDataShape(t *testing.T) {

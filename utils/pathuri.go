@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -8,9 +9,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 )
 
-const FileScheme = "file"
+const (
+	FileScheme       = "file"
+	badPathURIPrefix = "file:///%00/bad/path/"
+)
 
 func CrossPlatformBase(value string) string {
 	value = strings.TrimRight(value, `/\`)
@@ -92,7 +97,7 @@ func Parse(raw string) (*PathURI, error) {
 	if parsed.Host == "localhost" || parsed.Host == "LOCALHOST" {
 		parsed.Host = ""
 	}
-	if strings.Contains(strings.ToLower(parsed.EscapedPath()), "%00") {
+	if strings.Contains(strings.ToLower(parsed.EscapedPath()), "%00") && opaqueFallbackBytes(parsed) == nil {
 		return nil, &ParseError{Reason: "invalid file URI path", Path: raw}
 	}
 	if parsed.Path == "" {
@@ -182,6 +187,22 @@ func (u *PathURI) InferConvention() (PathConvention, bool) {
 	if u == nil || u.url == nil {
 		return "", false
 	}
+	if data := opaqueFallbackBytes(u.url); data != nil {
+		if len(data) >= 4 && len(data)%2 == 0 {
+			values := make([]uint16, len(data)/2)
+			for i := range values {
+				values[i] = uint16(data[i*2]) | uint16(data[i*2+1])<<8
+			}
+			text := string(utf16.Decode(values))
+			if isWindowsAbsolutePath(text) || strings.HasPrefix(text, `\\`) {
+				return ConventionWindows, true
+			}
+		}
+		if len(data) > 0 && data[0] == '/' {
+			return ConventionPosix, true
+		}
+		return "", false
+	}
 	if u.url.Host != "" {
 		return ConventionWindows, true
 	}
@@ -232,6 +253,9 @@ func (u *PathURI) Parent() (*PathURI, bool) {
 	if u == nil || u.url == nil {
 		return nil, false
 	}
+	if opaqueFallbackBytes(u.url) != nil {
+		return nil, false
+	}
 	convention, ok := u.InferConvention()
 	if !ok {
 		return nil, false
@@ -271,6 +295,9 @@ func (u *PathURI) StartsWith(base *PathURI) bool {
 	}
 	if u.String() == base.String() {
 		return true
+	}
+	if opaqueFallbackBytes(u.url) != nil || opaqueFallbackBytes(base.url) != nil {
+		return false
 	}
 	if u.Host() != base.Host() {
 		return false
@@ -312,6 +339,9 @@ func (u *PathURI) Join(nativePath string) (*PathURI, error) {
 	}
 	if convention == ConventionWindows && isDriveRelative(nativePath) {
 		return nil, &ParseError{Reason: "invalid file URI path", Path: nativePath}
+	}
+	if opaqueFallbackBytes(u.url) != nil {
+		return nil, &ParseError{Reason: "invalid file URI path", Path: u.String()}
 	}
 	segments := nonEmptySegments(u.segments())
 	anchorDepth := 0
@@ -364,6 +394,26 @@ func (u *PathURI) segments() []string {
 }
 
 func fromWindowsPath(nativePath string) (*PathURI, error) {
+	if normalized, ok := NormalizeWindowsDevicePath(nativePath); ok {
+		if strings.HasPrefix(normalized, `\\`) {
+			components := strings.FieldsFunc(strings.TrimPrefix(normalized, `\\`), func(ch rune) bool { return ch == '\\' || ch == '/' })
+			if len(components) < 2 || components[0] == "." || components[0] == ".." || components[1] == "." || components[1] == ".." {
+				return windowsOpaquePathURI(nativePath)
+			}
+		}
+		uri, err := fromUnnormalizedWindowsPath(normalized)
+		if err != nil || (strings.HasPrefix(normalized, `\\`) && (uri == nil || uri.Host() == "")) {
+			return windowsOpaquePathURI(nativePath)
+		}
+		return uri, nil
+	}
+	if strings.HasPrefix(nativePath, `\\?\`) || strings.HasPrefix(nativePath, `\\.\`) {
+		return windowsOpaquePathURI(nativePath)
+	}
+	return fromUnnormalizedWindowsPath(nativePath)
+}
+
+func fromUnnormalizedWindowsPath(nativePath string) (*PathURI, error) {
 	normalized := strings.ReplaceAll(nativePath, `\`, "/")
 	bytes := []byte(normalized)
 	if len(bytes) >= 3 && pathURIASCIIAlpha(bytes[0]) && bytes[1] == ':' && bytes[2] == '/' {
@@ -379,6 +429,55 @@ func fromWindowsPath(nativePath string) (*PathURI, error) {
 		return fromSegments(host, cleanSegments(parts[1:]), strings.HasSuffix(normalized, "/"))
 	}
 	return nil, &ParseError{Reason: "path is not absolute", Path: nativePath}
+}
+
+// NormalizeWindowsDevicePath removes Windows drive and UNC namespace aliases
+// without consulting the host operating system.
+func NormalizeWindowsDevicePath(nativePath string) (string, bool) {
+	for _, prefix := range []string{`\\?\UNC\`, `\\.\UNC\`} {
+		if strings.HasPrefix(nativePath, prefix) {
+			return `\\` + strings.TrimPrefix(nativePath, prefix), true
+		}
+	}
+	for _, prefix := range []string{`\\?\`, `\\.\`} {
+		if strings.HasPrefix(nativePath, prefix) {
+			value := strings.TrimPrefix(nativePath, prefix)
+			if isWindowsAbsolutePath(value) {
+				return value, true
+			}
+		}
+	}
+	return "", false
+}
+
+func isWindowsAbsolutePath(value string) bool {
+	bytes := []byte(value)
+	return len(bytes) >= 3 && pathURIASCIIAlpha(bytes[0]) && bytes[1] == ':' && (bytes[2] == '\\' || bytes[2] == '/')
+}
+
+func windowsOpaquePathURI(nativePath string) (*PathURI, error) {
+	encoded := utf16.Encode([]rune(nativePath))
+	data := make([]byte, 0, len(encoded)*2)
+	for _, value := range encoded {
+		data = append(data, byte(value), byte(value>>8))
+	}
+	raw := badPathURIPrefix + base64.RawURLEncoding.EncodeToString(data)
+	return Parse(raw)
+}
+
+func opaqueFallbackBytes(uri *url.URL) []byte {
+	if uri == nil {
+		return nil
+	}
+	encoded := strings.TrimPrefix(uri.String(), badPathURIPrefix)
+	if encoded == uri.String() || encoded == "" || strings.Contains(encoded, "/") {
+		return nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || base64.RawURLEncoding.EncodeToString(data) != encoded {
+		return nil
+	}
+	return data
 }
 
 func fromSegments(host string, segments []string, trailingSlash bool) (*PathURI, error) {

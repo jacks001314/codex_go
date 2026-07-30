@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	execserverclient "codex_go/execserver"
 	"codex_go/session"
 	"codex_go/skillprovider"
 )
@@ -16,15 +17,19 @@ import (
 const maxExecutorSkillResourceBytes = 1024 * 1024
 
 func (r *RuntimeRouter) executorSkillProviderForThread(threadID string) *skillprovider.Registry {
+	return r.executorSkillProviderForThreadWithSandbox(threadID, nil)
+}
+
+func (r *RuntimeRouter) executorSkillProviderForThreadWithSandbox(threadID string, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) *skillprovider.Registry {
 	if r == nil || !r.threadHasSelectedCapabilityRoots(threadID) {
 		return nil
 	}
 	provider := skillprovider.ProviderFuncs{
 		ListFunc: func(ctx context.Context, _ skillprovider.ListQuery) (skillprovider.Catalog, error) {
-			return r.executorSkillProviderCatalog(ctx, threadID)
+			return r.executorSkillProviderCatalog(ctx, threadID, sandboxContexts)
 		},
 		ReadFunc: func(ctx context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
-			return r.readExecutorSkillProviderResource(ctx, threadID, request)
+			return r.readExecutorSkillProviderResource(ctx, threadID, request, sandboxContexts)
 		},
 	}
 	return skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
@@ -38,8 +43,8 @@ func (r *RuntimeRouter) threadHasSelectedCapabilityRoots(threadID string) bool {
 	return err == nil && record != nil && len(record.Metadata.SelectedCapabilityRoots) > 0
 }
 
-func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, threadID string) (skillprovider.Catalog, error) {
-	entries, warnings, err := r.selectedCapabilitySkillEntriesForRuntime(threadID)
+func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, threadID string, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.Catalog, error) {
+	entries, warnings, err := r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx, threadID, sandboxContexts)
 	if err != nil {
 		return skillprovider.Catalog{}, err
 	}
@@ -63,11 +68,11 @@ func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, thread
 	return catalog, nil
 }
 
-func (r *RuntimeRouter) readExecutorSkillProviderResource(ctx context.Context, threadID string, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
+func (r *RuntimeRouter) readExecutorSkillProviderResource(ctx context.Context, threadID string, request skillprovider.ReadRequest, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.ReadResult, error) {
 	if request.Authority.Kind != skillprovider.SourceExecutor {
 		return skillprovider.ReadResult{}, fmt.Errorf("executor skill provider cannot read %s resources", request.Authority.Kind)
 	}
-	entries, _, err := r.selectedCapabilitySkillEntriesForRuntime(threadID)
+	entries, _, err := r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx, threadID, sandboxContexts)
 	if err != nil {
 		return skillprovider.ReadResult{}, err
 	}
@@ -86,7 +91,11 @@ func (r *RuntimeRouter) readExecutorSkillProviderResource(ctx context.Context, t
 	if !ok {
 		return skillprovider.ReadResult{}, errors.New("executor skill resource does not match its package")
 	}
-	contents, err := r.readExecutorSkillEntryResource(ctx, selected, relative, request.Resource)
+	sandboxContext, err := requireExecutorSkillSandboxContext(sandboxContexts, selected.EnvironmentID, selected.SourcePath)
+	if err != nil {
+		return skillprovider.ReadResult{}, err
+	}
+	contents, err := r.readExecutorSkillEntryResource(ctx, selected, relative, request.Resource, sandboxContext)
 	if err != nil {
 		return skillprovider.ReadResult{}, err
 	}
@@ -111,7 +120,7 @@ func executorSkillRelativeResource(authorityID string, packageID string, resourc
 	return relative, true
 }
 
-func (r *RuntimeRouter) readExecutorSkillEntryResource(ctx context.Context, entry *SkillsListEntry, relative string, resourceID string) (string, error) {
+func (r *RuntimeRouter) readExecutorSkillEntryResource(ctx context.Context, entry *SkillsListEntry, relative string, resourceID string, sandboxContext *execserverclient.FileSystemSandboxContext) (string, error) {
 	if entry == nil {
 		return "", errors.New("executor skill entry is unavailable")
 	}
@@ -124,17 +133,25 @@ func (r *RuntimeRouter) readExecutorSkillEntryResource(ctx context.Context, entr
 			return "", fmt.Errorf("executor skill resource references unavailable environment `%s`", entry.EnvironmentID)
 		}
 		resourcePath := remoteJoin(remoteSkillDir(entry.SourcePath), relative)
-		contents, err := readRemoteEnvironmentSkillText(ctx, record, resourcePath)
+		contents, err := readRemoteEnvironmentSkillTextWithSandbox(ctx, record, resourcePath, sandboxContext)
 		if err != nil {
 			return "", fmt.Errorf("failed to read executor skill resource %s: %w", resourceID, err)
 		}
 		return validateExecutorSkillResourceContents(resourceID, contents)
 	}
-	root := filepath.Dir(entry.SourcePath)
+	sourcePath := executorEnvironmentNativePath(entry.SourcePath)
+	root := filepath.Dir(sourcePath)
 	target := filepath.Join(root, filepath.FromSlash(relative))
 	rel, err := filepath.Rel(root, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
 		return "", errors.New("executor skill resource does not match its package")
+	}
+	if sandboxContext != nil {
+		contents, readErr := readLocalEnvironmentSkillTextWithSandbox(ctx, target, sandboxContext)
+		if readErr != nil {
+			return "", fmt.Errorf("failed to read executor skill resource %s: %w", resourceID, readErr)
+		}
+		return validateExecutorSkillResourceContents(resourceID, contents)
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {

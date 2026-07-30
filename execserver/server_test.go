@@ -1291,6 +1291,21 @@ func TestChildEnvPolicy(t *testing.T) {
 	}
 }
 
+func TestChildEnvRemovesParentLifetimeControl(t *testing.T) {
+	for _, params := range []*ExecParams{
+		{Env: map[string]string{CodexExecServerExitOnStdinCloseEnvVar: "true", "KEEP": "yes"}},
+		{
+			EnvPolicy: &ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
+			Env:       map[string]string{CodexExecServerExitOnStdinCloseEnvVar: "true", "KEEP": "yes"},
+		},
+	} {
+		env := childEnv(params)
+		if hasEnvKey(env, CodexExecServerExitOnStdinCloseEnvVar) || env["KEEP"] != "yes" {
+			t.Fatalf("childEnv() = %#v", env)
+		}
+	}
+}
+
 func TestCopyPathPreservesSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("creating symlinks requires privileges on Windows")

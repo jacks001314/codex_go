@@ -374,8 +374,15 @@ func externalRepoRoot(cwd string) string {
 }
 
 func missingOrEmptyTextFile(path string) bool {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
 	data, err := os.ReadFile(path)
-	return errors.Is(err, os.ErrNotExist) || (err == nil && strings.TrimSpace(string(data)) == "")
+	return err == nil && strings.TrimSpace(string(data)) == ""
 }
 
 func nonEmptyTextFile(path string) bool {

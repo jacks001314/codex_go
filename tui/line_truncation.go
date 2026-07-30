@@ -1,11 +1,31 @@
 package tui
 
-import "github.com/mattn/go-runewidth"
+import (
+	"strings"
+
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
+)
 
 // Rust parity: codex-rs/tui/src/line_truncation.rs.
 
 func DisplayWidth(text string) int {
-	return runewidth.StringWidth(text)
+	width := 0
+	graphemes := uniseg.NewGraphemes(text)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		marks := 0
+		var base strings.Builder
+		for _, r := range grapheme {
+			if r == '\uFF9E' || r == '\uFF9F' {
+				marks++
+				continue
+			}
+			base.WriteRune(r)
+		}
+		width += runewidth.StringWidth(base.String()) + marks
+	}
+	return width
 }
 
 func TruncateToWidth(text string, maxWidth int) string {
@@ -13,16 +33,18 @@ func TruncateToWidth(text string, maxWidth int) string {
 		return ""
 	}
 	used := 0
-	out := make([]rune, 0, len(text))
-	for _, r := range text {
-		width := runewidth.RuneWidth(r)
+	var out strings.Builder
+	graphemes := uniseg.NewGraphemes(text)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		width := DisplayWidth(grapheme)
 		if used+width > maxWidth {
 			break
 		}
-		out = append(out, r)
+		out.WriteString(grapheme)
 		used += width
 	}
-	return string(out)
+	return out.String()
 }
 
 func TruncateWithEllipsis(text string, maxWidth int) string {

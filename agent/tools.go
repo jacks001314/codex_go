@@ -52,6 +52,7 @@ type SpawnAgentArgs struct {
 	ResolvedRole          string   `json:"-"`
 	NicknameCandidates    []string `json:"-"`
 	DeveloperInstructions *string  `json:"-"`
+	Plaintext             bool     `json:"-"`
 }
 
 type SpawnAgentResult struct {
@@ -350,6 +351,7 @@ func (e *MultiAgentToolExecutor) Execute(ctx context.Context, invocation *tool.I
 		if err := invocation.DecodeArguments(&args); err != nil {
 			return nil, err
 		}
+		args.Plaintext = plaintextCollaborationInvocation(invocation)
 		result, err = e.controller.SpawnAgent(ctx, &args)
 	case MultiAgentToolSend:
 		var args SendInputArgs
@@ -386,6 +388,10 @@ func (e *MultiAgentToolExecutor) Execute(ctx context.Context, invocation *tool.I
 		return nil, err
 	}
 	return &tool.Output{Success: true, Body: string(body), Data: map[string]any{"result": result}, LogPreview: string(body)}, nil
+}
+
+func plaintextCollaborationInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil && invocation.Source == "direct_plaintext_message"
 }
 
 func (e *MultiAgentToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.PreToolUsePayload, bool) {

@@ -114,7 +114,7 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 			},
 		},
 	}
-	return registry.Register(&dynamicToolExecutor{
+	_, err := registry.RegisterExternal(&dynamicToolExecutor{
 		spec:      spec,
 		caller:    options.Caller,
 		threadID:  strings.TrimSpace(options.ThreadID),
@@ -123,6 +123,7 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 		tool:      function.Name,
 		now:       options.Now,
 	})
+	return err
 }
 
 type dynamicToolExecutor struct {

@@ -2279,6 +2279,21 @@ func (r *RuntimeRouter) applyRuntimeThreadStatus(thread *Thread) {
 		return
 	}
 	thread.Status = status
+	record, err := r.threadRecord(session.ThreadID(thread.ID), true, false)
+	if err != nil || record == nil || !runtimeRecordIsThreadSpawn(record) {
+		return
+	}
+	canAccept := !strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2))
+	thread.CanAcceptDirectInput = &canAccept
+}
+
+func runtimeRecordIsThreadSpawn(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	threadSource := strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(record.Metadata.ThreadSource)))
+	source := strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(record.Metadata.Source)))
+	return threadSource == "subagentthreadspawn" || source == "subagentthreadspawn"
 }
 
 func runtimeThreadListShouldDefaultModelProvider(request *Request, params *ThreadListParams) bool {
@@ -4150,9 +4165,13 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false); err == nil && runtimeRecordIsThreadSpawn(record) && strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
+		return nil, jsonRPCInvalidRequest("direct app-server input is not allowed for multi-agent v2 sub-agents")
+	}
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
+	r.inheritTurnEnvironmentSelections(&params)
 	if err := r.validateTurnStartEnvironments(&params); err != nil {
 		return nil, err
 	}
@@ -4184,11 +4203,76 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		return nil, err
 	}
 	_ = r.persistTurnStartRuntimeWorkspaceRoots(&params)
+	_ = r.persistTurnEnvironmentSelections(&params)
 	if hasSettingsUpdate {
 		r.applyTurnStartSettingsUpdate(settingsUpdate)
 	}
 	r.startTurnRuntimeAsync(&params, response, request.normalizedConnectionID())
 	return response, nil
+}
+
+const runtimeEnvironmentSelectionsExtraKey = "runtime_environments"
+
+func (r *RuntimeRouter) inheritTurnEnvironmentSelections(params *turn.TurnStartParams) {
+	if r == nil || params == nil || params.Environments != nil || strings.TrimSpace(params.ThreadID) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+	params.Environments = environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+}
+
+func (r *RuntimeRouter) persistTurnEnvironmentSelections(params *turn.TurnStartParams) error {
+	if params == nil || params.Environments == nil {
+		return nil
+	}
+	return r.persistThreadEnvironmentSelections(params.ThreadID, params.Environments)
+}
+
+func (r *RuntimeRouter) persistThreadEnvironmentSelections(threadID string, environments []map[string]any) error {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return err
+	}
+	extra := cloneAnyMap(record.Metadata.Extra)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if len(environments) == 0 {
+		delete(extra, runtimeEnvironmentSelectionsExtraKey)
+	} else {
+		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(environments)
+	}
+	if runtimeRecordEphemeral(record) {
+		record.Metadata.Extra = extra
+		r.saveEphemeralThreadRecord(record)
+		return nil
+	}
+	_, err = r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
+	return err
+}
+
+func environmentSelectionsFromAny(value any) []map[string]any {
+	switch values := value.(type) {
+	case []map[string]any:
+		return cloneMapSlice(values)
+	case []any:
+		out := make([]map[string]any, 0, len(values))
+		for _, value := range values {
+			if selected, ok := value.(map[string]any); ok {
+				out = append(out, cloneAnyMap(selected))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (r *RuntimeRouter) persistTurnStartRuntimeWorkspaceRoots(params *turn.TurnStartParams) error {
@@ -4761,12 +4845,17 @@ func turnSteerRuntimeError(err error) error {
 
 func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterruptResponse, error) {
 	var params turn.TurnInterruptParams
+	requestedAtMS := uint64(time.Now().UnixMilli())
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
 	if r.hasRuntimeThreadStore() && r.activeRuntimeTurnIsReview(params.ThreadID, params.TurnID) {
 		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
-			r.finishReviewRuntimeInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
+			analytics := analyticsContextFromActiveRuntimeTurn(active)
+			if analytics != nil {
+				analytics.ExplicitClientInterruptRequestedAtMS = &requestedAtMS
+			}
+			r.finishReviewRuntimeInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS, analytics)
 			return &turn.TurnInterruptResponse{}, nil
 		}
 	}
@@ -4776,11 +4865,15 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 	}
 	if r.hasRuntimeThreadStore() {
 		if active, ok := r.cancelActiveRuntimeTurnTracked(params.ThreadID, params.TurnID); ok {
+			analytics := analyticsContextFromActiveRuntimeTurn(active)
+			if analytics != nil {
+				analytics.ExplicitClientInterruptRequestedAtMS = &requestedAtMS
+			}
 			// Match Rust app-server ordering: acknowledge turn/interrupt before
 			// publishing the interrupted terminal lifecycle notifications.
 			go func() {
 				defer r.threads.TurnWorkerDone()
-				r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
+				r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analytics)
 			}()
 		}
 	}
@@ -6557,6 +6650,9 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
+	if r != nil {
+		base.HTTPClient = r.httpClientForConfig(&config.Config{Values: values})
+	}
 	if r == nil || r.services.Plugins == nil {
 		return base
 	}
@@ -6898,12 +6994,29 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	if params.ThreadID != nil && *params.ThreadID != "" {
 		threadID = *params.ThreadID
 	}
+	clientTags := cloneStringMap(params.Tags)
+	if params.ThreadID != nil && r.services.ThreadRouter != nil {
+		if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
+			path := r.services.ThreadRouter.threadRolloutPath(record)
+			var selectedTurnID *string
+			if value, ok := clientTags["turn_id"]; ok {
+				selectedTurnID = &value
+			}
+			if modelID, effort, ok := feedbackModelAndEffortFromRollout(path, selectedTurnID); ok {
+				if clientTags == nil {
+					clientTags = map[string]string{}
+				}
+				clientTags["model"] = modelID
+				clientTags["effort"] = effort
+			}
+		}
+	}
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID
 	snapshot.PrepareUpload(&FeedbackUploadOptions{
 		Classification:      params.Classification,
 		Reason:              params.Reason,
-		ClientTags:          params.Tags,
+		ClientTags:          clientTags,
 		IncludeLogs:         params.IncludeLogs,
 		ExtraAttachmentPath: FeedbackAttachmentPaths(nil, nil, threadID, nil, params.ExtraLogFiles),
 	})
@@ -8932,7 +9045,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			}
 		}
 	}
-	executorSkillProviders := r.executorSkillProviderForThread(threadID)
+	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, cwd, params)
+	if err != nil {
+		return nil, err
+	}
+	executorSkillProviders := r.executorSkillProviderForThreadWithSandbox(threadID, executorSandboxContexts)
 	if r != nil && r.services.ToolRouter != nil && viewImageOptions != nil {
 		if err := r.services.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*viewImageOptions)); err != nil {
 			return nil, err
@@ -9037,8 +9154,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if runtimeToolsUseOpenAIFileUpload(mcpTools) {
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		options.OpenAIFileRewriter = mcp.NewOpenAIFileRewriterWithOptions(mcp.OpenAIFileRewriterOptions{
-			CWD:        cwd,
+			CWD:        primaryTurnEnvironmentCWD(params, cwd),
 			Auth:       mcp.OpenAIFileAuthFromRuntimeAuth(runtimeAuth, cfg.ChatGPTBaseURL()),
+			FileSystem: r.primaryTurnOpenAIFileSystem(params),
 			HTTPClient: r.httpClientForConfig(cfg),
 		})
 	}
@@ -9076,7 +9194,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
-			options.AgentController = newRuntimeAgentControllerWithVersion(r, threadID, cwd, maxThreads, version)
+			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, cwd, maxThreads, version, params.Environments)
 			options.AgentRoles = agentsConfig.Roles
 			options.AgentDefaults = defaults
 		}
@@ -9093,7 +9211,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.DisableUpdatePlan = disableUpdatePlan
 	options.DisableWaitAgent = disableWaitAgent
 	options.ClockProvider = clockProvider
-	if len(candidates) > 0 {
+	if len(candidates) > 0 && cfg != nil && features.Enabled(cfg.FeatureSettings(), "tool_suggest") {
 		options.PluginInstallCandidates = candidates
 		options.PluginInstallRecommendationContext = true
 		options.PluginInstallRuntime = &pluginInstallRuntime{
@@ -9111,6 +9229,18 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
 	return turn.BuildToolRouter(options)
+}
+
+func primaryTurnEnvironmentCWD(params *turn.TurnStartParams, fallback string) string {
+	if params != nil && len(params.Environments) > 0 {
+		if cwd := strings.TrimSpace(firstNonEmpty(
+			threadItemStringFromAnyMap(params.Environments[0], "cwd"),
+			threadItemStringFromAnyMap(params.Environments[0], "CWD"),
+		)); cwd != "" {
+			return cwd
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 type turnMCPPreparation struct {
@@ -10256,7 +10386,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadIncrementElicitationLegacy, MethodThreadDecrementElicitationLegacy,
 		MethodThreadUnsubscribe, MethodThreadMemoryModeSet, MethodMemoryReset,
 		MethodThreadCompactStart, MethodThreadApproveGuardianDeniedAction,
-		MethodThreadMetadataUpdate, MethodThreadList, MethodThreadRead,
+		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadTurnsList, MethodThreadRollback, MethodThreadInjectItems:
 		return true

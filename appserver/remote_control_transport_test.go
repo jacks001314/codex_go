@@ -129,6 +129,30 @@ func TestRemoteControlTransportTargetsServerRequests(t *testing.T) {
 	}
 }
 
+func TestRemoteControlTransportConvertsResponseSerializationFailure(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{Remote: remotecontrol.NewManager("codex", "installation-id")})
+	server := NewRemoteControlTransportServer(router, nil)
+	writer := make(chan remotecontrol.RemoteClientOutgoingMessage, 1)
+	server.openConnection(remotecontrol.RemoteClientTransportEvent{
+		Type:         remotecontrol.RemoteClientConnectionOpened,
+		ConnectionID: 9,
+		Writer:       writer,
+	})
+
+	server.sendValueToRemoteID(context.Background(), 9, OK(IntID(7), make(chan int)))
+	message := readRemoteControlTransportMessage(t, writer)
+	if string(message["id"]) != "7" {
+		t.Fatalf("serialization error id = %s", message["id"])
+	}
+	var responseError ResponseError
+	if err := json.Unmarshal(message["error"], &responseError); err != nil {
+		t.Fatalf("decode serialization error: %v", err)
+	}
+	if responseError.Code != JSONRPCInternalErrorCode || !strings.Contains(responseError.Message, "failed to serialize response: json: unsupported type: chan int") {
+		t.Fatalf("serialization error = %#v", responseError)
+	}
+}
+
 func readRemoteControlTransportMessage(t *testing.T, writer <-chan remotecontrol.RemoteClientOutgoingMessage) map[string]json.RawMessage {
 	t.Helper()
 	select {

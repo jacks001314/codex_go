@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,6 +34,9 @@ const (
 
 	SourceLocal  Source = "local"
 	SourceRemote Source = "remote"
+
+	RemoteRetainedMessageTokenBudget = 64_000
+	MaxRetainedAgentMessageTokens    = 10_000
 )
 
 var ErrInvalidCompaction = errors.New("invalid compaction")
@@ -131,6 +135,7 @@ type Item struct {
 	Kind    string
 	Content []ContentPart
 	Data    map[string]any
+	Raw     json.RawMessage
 	Created time.Time
 }
 
@@ -324,13 +329,10 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 			if result.Source == "" {
 				result.Source = SourceRemote
 			}
-			result.NewHistory = ProcessRemoteHistory(result.NewHistory, options.InitialContext, options.InjectBeforeLastUser)
 			if len(result.NewHistory) == 0 && strings.TrimSpace(result.Summary) != "" {
 				result.NewHistory = BuildCompactedHistory(nil, lastUserMessages(requestHistoryForCompaction(request), 1), result.Summary)
-				if options.InjectBeforeLastUser {
-					result.NewHistory = InsertInitialContextBeforeLastUserOrSummary(result.NewHistory, options.InitialContext)
-				}
 			}
+			result.NewHistory = processRemoteHistoryWithRetained(result.NewHistory, requestHistoryForCompaction(request), options.InitialContext, options.InjectBeforeLastUser)
 			if result.CompletedAt.IsZero() {
 				result.CompletedAt = time.Now().UTC()
 			}
@@ -351,12 +353,14 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 
 func ShouldKeepCompactedHistoryItem(item Item) bool {
 	switch item.Type {
-	case "agent_message", "compaction", "context_compaction":
+	case "agent_message":
+		return !isAgentCompletionMessage(&item)
+	case "compaction", "context_compaction":
 		return true
 	case "compaction_trigger":
 		return false
 	}
-	if item.Type != "message" {
+	if item.Type != "message" && item.Type != "user_message" && item.Type != "assistant_message" {
 		return false
 	}
 	switch item.Role {
@@ -388,6 +392,10 @@ func InsertInitialContextBeforeLastUserOrSummary(history []Item, initialContext 
 	insertAt := len(history)
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
+		if isStructuredAgentMessage(&item) && !isAgentCompletionMessage(&item) {
+			insertAt = i
+			break
+		}
 		if item.Role == "user" && item.Kind != "compaction_summary" {
 			insertAt = i
 			break
@@ -414,6 +422,155 @@ func ProcessRemoteHistory(remote []Item, initialContext []Item, injectBeforeLast
 		return InsertInitialContextBeforeLastUserOrSummary(filtered, initialContext)
 	}
 	return filtered
+}
+
+func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool) []Item {
+	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget)
+	filtered := FilterCompactedHistory(remote)
+	history := append([]Item(nil), retained...)
+	for _, item := range filtered {
+		if compactHistoryContainsItem(history, item) {
+			continue
+		}
+		history = append(history, item)
+	}
+	if injectBeforeLastUser {
+		return InsertInitialContextBeforeLastUserOrSummary(history, initialContext)
+	}
+	return cloneItems(history)
+}
+
+func retainedMessagesForRemoteCompaction(items []Item, maxTokens int) []Item {
+	if maxTokens <= 0 {
+		return nil
+	}
+	candidates := make([]Item, 0, len(items))
+	for _, item := range items {
+		keep := (item.Type == "message" || item.Type == "user_message") && item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
+		if isStructuredAgentMessage(&item) {
+			cost := EstimateItemTokens(&item)
+			keep = !isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens
+		}
+		if keep {
+			candidates = append(candidates, item)
+		}
+	}
+
+	remaining := maxTokens
+	retainedReversed := make([]Item, 0, len(candidates))
+	for i := len(candidates) - 1; i >= 0 && remaining > 0; i-- {
+		item := candidates[i]
+		cost := max(1, EstimateItemTokens(&item))
+		if cost <= remaining {
+			retainedReversed = append(retainedReversed, item)
+			remaining -= cost
+			continue
+		}
+		if isStructuredAgentMessage(&item) {
+			continue
+		}
+		item.Text = truncateTextToTokens(ItemText(&item), remaining)
+		item.Content = nil
+		item.Data = nil
+		item.Raw = nil
+		if strings.TrimSpace(item.Text) != "" {
+			retainedReversed = append(retainedReversed, item)
+		}
+		remaining = 0
+	}
+	for left, right := 0, len(retainedReversed)-1; left < right; left, right = left+1, right-1 {
+		retainedReversed[left], retainedReversed[right] = retainedReversed[right], retainedReversed[left]
+	}
+	return cloneItems(retainedReversed)
+}
+
+func EstimateItemTokens(item *Item) int {
+	if item == nil {
+		return 0
+	}
+	if isStructuredAgentMessage(item) && len(item.Raw) > 0 {
+		visibleBytes := len(item.Raw)
+		for _, encrypted := range agentMessageEncryptedContents(item) {
+			visibleBytes -= len(encrypted)
+			visibleBytes += (len(encrypted)*9 + 15) / 16
+		}
+		if visibleBytes < 0 {
+			visibleBytes = 0
+		}
+		return (visibleBytes + 3) / 4
+	}
+	return EstimateTextTokens(ItemText(item))
+}
+
+func isStructuredAgentMessage(item *Item) bool {
+	if item == nil || item.Type != "agent_message" || len(item.Raw) == 0 {
+		return false
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil || strings.TrimSpace(fmt.Sprint(raw["type"])) != "agent_message" {
+		return false
+	}
+	_, hasAuthor := raw["author"]
+	_, hasRecipient := raw["recipient"]
+	return hasAuthor || hasRecipient
+}
+
+func isAgentCompletionMessage(item *Item) bool {
+	text, ok := firstAgentMessageInputText(item)
+	return ok && strings.HasPrefix(text, "Message Type: FINAL_ANSWER\n")
+}
+
+func firstAgentMessageInputText(item *Item) (string, bool) {
+	for index, content := range rawAgentMessageContent(item) {
+		if index > 0 {
+			break
+		}
+		block, ok := content.(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(block["type"])) != "input_text" {
+			return "", false
+		}
+		text, ok := block["text"].(string)
+		return text, ok
+	}
+	return "", false
+}
+
+func agentMessageEncryptedContents(item *Item) []string {
+	var encrypted []string
+	for _, content := range rawAgentMessageContent(item) {
+		block, ok := content.(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(block["type"])) != "encrypted_content" {
+			continue
+		}
+		if value, ok := block["encrypted_content"].(string); ok {
+			encrypted = append(encrypted, value)
+		}
+	}
+	return encrypted
+}
+
+func rawAgentMessageContent(item *Item) []any {
+	if item == nil || len(item.Raw) == 0 {
+		return nil
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil {
+		return nil
+	}
+	content, _ := raw["content"].([]any)
+	return content
+}
+
+func compactHistoryContainsItem(items []Item, candidate Item) bool {
+	for _, item := range items {
+		if candidate.ID != "" && candidate.ID == item.ID && candidate.Type == item.Type {
+			return true
+		}
+		if candidate.ID == "" && item.ID == "" && candidate.Type == item.Type && candidate.Role == item.Role && candidate.Kind == item.Kind && ItemText(&candidate) == ItemText(&item) && string(candidate.Raw) == string(item.Raw) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestHistoryForCompaction(request *Request) []Item {
@@ -454,7 +611,7 @@ func ItemText(item *Item) string {
 func EstimateTokens(items []Item) int {
 	total := 0
 	for i := range items {
-		total += EstimateTextTokens(ItemText(&items[i]))
+		total += EstimateItemTokens(&items[i])
 	}
 	return total
 }
@@ -505,7 +662,7 @@ func TrimHistoryToTokenBudget(items []Item, maxTokens int) []Item {
 	selected := make([]Item, 0, len(items))
 	used := 0
 	for i := len(items) - 1; i >= 0; i-- {
-		cost := EstimateTextTokens(ItemText(&items[i]))
+		cost := EstimateItemTokens(&items[i])
 		if cost == 0 {
 			cost = 1
 		}
@@ -513,6 +670,9 @@ func TrimHistoryToTokenBudget(items []Item, maxTokens int) []Item {
 			break
 		}
 		if used+cost > maxTokens {
+			if isStructuredAgentMessage(&items[i]) {
+				continue
+			}
 			item := items[i]
 			item.Text = truncateTextToTokens(ItemText(&items[i]), maxTokens-used)
 			item.Content = nil
@@ -707,6 +867,7 @@ func cloneItems(items []Item) []Item {
 		cloned[i] = items[i]
 		cloned[i].Content = cloneContentParts(items[i].Content)
 		cloned[i].Data = cloneAnyMap(items[i].Data)
+		cloned[i].Raw = append(json.RawMessage(nil), items[i].Raw...)
 	}
 	return cloned
 }

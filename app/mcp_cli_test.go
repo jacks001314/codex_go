@@ -10,11 +10,35 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/mcp"
 )
+
+func TestMCPCLIStoreUsesConfiguredProxyPolicy(t *testing.T) {
+	home := t.TempDir()
+	writeMCPCLIConfig(t, home, "[features]\nrespect_system_proxy = true\n")
+	store := newMCPCLIStore(home)
+	if _, err := store.Load(nil); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	transport, ok := store.httpClient.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatalf("configured MCP HTTP transport = %#v, want system proxy routing", store.httpClient.Transport)
+	}
+
+	writeMCPCLIConfig(t, home, "[features]\nrespect_system_proxy = false\n")
+	if _, err := store.Load(nil); err != nil {
+		t.Fatalf("Load() after policy change error = %v", err)
+	}
+	transport, ok = store.httpClient.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("configured MCP HTTP transport = %#v, want proxy disabled", store.httpClient.Transport)
+	}
+}
 
 func TestMCPAddListGetRemove(t *testing.T) {
 	home := t.TempDir()
@@ -57,6 +81,189 @@ func TestMCPAddListGetRemove(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Removed global MCP server 'fs'.") {
 		t.Fatalf("remove stdout = %q", stdout.String())
+	}
+}
+
+func TestMCPCloudManagedListGetDoNotWriteManagedServersToUserConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var bundleRequests atomic.Int32
+	var backend *httptest.Server
+	backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/backend-api/wham/config/bundle" {
+			http.NotFound(w, request)
+			return
+		}
+		bundleRequests.Add(1)
+		if request.Header.Get("Authorization") != "Bearer chatgpt-token" || request.Header.Get("ChatGPT-Account-ID") != "workspace-123" {
+			t.Errorf("cloud config headers = %v", request.Header)
+		}
+		writeMCPCLIJSON(t, w, map[string]any{
+			"config_toml": map[string]any{
+				"enterprise_managed": []map[string]any{{
+					"id":   "managed-mcp",
+					"name": "Managed MCP servers",
+					"contents": `[mcp_servers.managed-slack]
+url = "` + backend.URL + `/mcp"
+auth = "oauth"
+scopes = ["managed.read"]
+
+[mcp_servers.managed-slack.oauth]
+client_id = "managed-client"
+`,
+				}},
+			},
+		})
+	}))
+	defer backend.Close()
+	userConfig := `cli_auth_credentials_store = "file"
+chatgpt_base_url = "` + backend.URL + `/backend-api"
+
+[mcp_servers.local]
+command = "local-mcp"
+`
+	writeMCPCLIConfig(t, home, userConfig)
+	saveMCPCloudAuth(t, home)
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"mcp", "list", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp list --json error = %v", err)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("Unmarshal(list) error = %v; stdout=%s", err, stdout.String())
+	}
+	managed := mcpJSONServer(t, entries, "managed-slack")
+	transport := managed["transport"].(map[string]any)
+	if transport["type"] != "streamable_http" || transport["url"] != backend.URL+"/mcp" {
+		t.Fatalf("managed transport = %#v", transport)
+	}
+	_ = mcpJSONServer(t, entries, "local")
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "get", "managed-slack", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp get managed error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"name": "managed-slack"`) {
+		t.Fatalf("managed get stdout = %q", stdout.String())
+	}
+	configBeforeMutation, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(configBeforeMutation) != strings.TrimSpace(userConfig)+"\n" || bundleRequests.Load() != 1 {
+		t.Fatalf("read-only commands changed config or bypassed cache: config=%q requests=%d", configBeforeMutation, bundleRequests.Load())
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "add", "added", "--", "added-mcp"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp add error = %v", err)
+	}
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "remove", "managed-slack"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp remove managed error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No MCP server named 'managed-slack' found.") {
+		t.Fatalf("remove managed stdout = %q", stdout.String())
+	}
+	written, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), "managed-slack") || !strings.Contains(string(written), "mcp_servers.added") || !strings.Contains(string(written), "mcp_servers.local") {
+		t.Fatalf("mutating commands copied or lost MCP config:\n%s", written)
+	}
+}
+
+func TestMCPCloudManagedLoginLogoutUsesManagedOAuthConfigOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var tokenForm url.Values
+	var backend *httptest.Server
+	backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/backend-api/wham/config/bundle":
+			writeMCPCLIJSON(t, w, map[string]any{"config_toml": map[string]any{"enterprise_managed": []map[string]any{{
+				"id": "managed-mcp", "name": "Managed MCP servers", "contents": `[mcp_servers.managed-slack]
+url = "` + backend.URL + `/mcp"
+auth = "oauth"
+scopes = ["managed.read"]
+
+[mcp_servers.managed-slack.oauth]
+client_id = "managed-client"
+`,
+			}}}})
+		case "/.well-known/oauth-authorization-server/mcp":
+			writeMCPCLIJSON(t, w, map[string]any{
+				"authorization_endpoint": backend.URL + "/authorize",
+				"token_endpoint":         backend.URL + "/token",
+				"scopes_supported":       []string{"managed.read"},
+			})
+		case "/token":
+			if err := request.ParseForm(); err != nil {
+				t.Errorf("ParseForm() error = %v", err)
+			}
+			tokenForm = cloneURLValues(request.Form)
+			writeMCPCLIJSON(t, w, map[string]any{
+				"access_token": "managed-access", "refresh_token": "managed-refresh", "expires_in": 3600,
+			})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer backend.Close()
+	userConfig := `cli_auth_credentials_store = "file"
+chatgpt_base_url = "` + backend.URL + `/backend-api"
+`
+	writeMCPCLIConfig(t, home, userConfig)
+	saveMCPCloudAuth(t, home)
+
+	var browserURL string
+	withMCPLoginBrowser(t, func(target string) error {
+		browserURL = target
+		mcpCompleteBrowserOAuthCallback(t, target, "managed-code")
+		return nil
+	})
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"mcp", "login", "managed-slack"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp login managed error = %v", err)
+	}
+	parsed, err := url.Parse(browserURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("client_id") != "managed-client" || parsed.Query().Get("scope") != "managed.read" || tokenForm.Get("code") != "managed-code" {
+		t.Fatalf("managed OAuth browser=%v tokenForm=%v", parsed.Query(), tokenForm)
+	}
+	tokens, err := mcp.NewOAuthStore(home).Load("managed-slack", backend.URL+"/mcp")
+	if err != nil || tokens == nil || tokens.AccessToken != "managed-access" || tokens.RefreshToken != "managed-refresh" {
+		t.Fatalf("managed OAuth tokens = %#v, %v", tokens, err)
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"mcp", "logout", "managed-slack"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp logout managed error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Removed OAuth credentials for 'managed-slack'.") {
+		t.Fatalf("managed logout stdout = %q", stdout.String())
+	}
+	tokens, err = mcp.NewOAuthStore(home).Load("managed-slack", backend.URL+"/mcp")
+	if err != nil || tokens != nil {
+		t.Fatalf("managed credentials remain = %#v, %v", tokens, err)
+	}
+	configAfter, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil || string(configAfter) != strings.TrimSpace(userConfig)+"\n" {
+		t.Fatalf("managed OAuth changed user config = %q, %v", configAfter, err)
+	}
+}
+
+func saveMCPCloudAuth(t *testing.T, home string) {
+	t.Helper()
+	plan := "enterprise"
+	snapshot := auth.FromChatGPTAuthTokens("chatgpt-token", "workspace-123", &plan)
+	snapshot.Tokens["chatgpt_user_id"] = "user-123"
+	if err := auth.NewStore(home).Save(snapshot); err != nil {
+		t.Fatalf("Save cloud auth error = %v", err)
 	}
 }
 

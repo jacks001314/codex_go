@@ -41,6 +41,7 @@ const (
 	MethodThreadCompactStart                 Method = "thread/compact/start"
 	MethodThreadApproveGuardianDeniedAction  Method = "thread/approveGuardianDeniedAction"
 	MethodThreadMetadataUpdate               Method = "thread/metadata/update"
+	MethodThreadSectionMove                  Method = "thread/section/move"
 	MethodThreadSettingsUpdate               Method = "thread/settings/update"
 	MethodThreadShellCommand                 Method = "thread/shellCommand"
 	MethodThreadBackgroundTerminalsClean     Method = "thread/backgroundTerminals/clean"
@@ -468,9 +469,10 @@ type ThreadResumeHistoryItem json.RawMessage
 type SortKey string
 
 const (
-	SortCreatedAt SortKey = "created_at"
-	SortUpdatedAt SortKey = "updated_at"
-	SortRecencyAt SortKey = "recency_at"
+	SortCreatedAt       SortKey = "created_at"
+	SortUpdatedAt       SortKey = "updated_at"
+	SortRecencyAt       SortKey = "recency_at"
+	SortSectionPosition SortKey = "section_position"
 )
 
 type SortDirection string
@@ -543,30 +545,32 @@ type ThreadSection struct {
 }
 
 type Thread struct {
-	ID             string            `json:"id"`
-	Extra          map[string]any    `json:"extra,omitempty"`
-	SessionID      string            `json:"sessionId"`
-	ForkedFromID   *string           `json:"forkedFromId"`
-	ParentThreadID *string           `json:"parentThreadId"`
-	Preview        string            `json:"preview"`
-	Ephemeral      bool              `json:"ephemeral"`
-	Section        *ThreadSection    `json:"section"`
-	HistoryMode    ThreadHistoryMode `json:"historyMode"`
-	ModelProvider  string            `json:"modelProvider"`
-	CreatedAt      int64             `json:"createdAt"`
-	UpdatedAt      int64             `json:"updatedAt"`
-	RecencyAt      *int64            `json:"recencyAt"`
-	Status         ThreadStatus      `json:"status"`
-	Path           *string           `json:"path"`
-	CWD            string            `json:"cwd"`
-	CLIVersion     string            `json:"cliVersion"`
-	Source         SessionSource     `json:"source"`
-	ThreadSource   *ThreadSource     `json:"threadSource"`
-	AgentNickname  *string           `json:"agentNickname"`
-	AgentRole      *string           `json:"agentRole"`
-	GitInfo        *GitInfo          `json:"gitInfo"`
-	Name           *string           `json:"name"`
-	Turns          []Turn            `json:"turns"`
+	ID                   string            `json:"id"`
+	Extra                map[string]any    `json:"extra,omitempty"`
+	SessionID            string            `json:"sessionId"`
+	ForkedFromID         *string           `json:"forkedFromId"`
+	ParentThreadID       *string           `json:"parentThreadId"`
+	Preview              string            `json:"preview"`
+	Ephemeral            bool              `json:"ephemeral"`
+	Section              *ThreadSection    `json:"section"`
+	SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
+	HistoryMode          ThreadHistoryMode `json:"historyMode"`
+	ModelProvider        string            `json:"modelProvider"`
+	CreatedAt            int64             `json:"createdAt"`
+	UpdatedAt            int64             `json:"updatedAt"`
+	RecencyAt            *int64            `json:"recencyAt"`
+	Status               ThreadStatus      `json:"status"`
+	Path                 *string           `json:"path"`
+	CWD                  string            `json:"cwd"`
+	CLIVersion           string            `json:"cliVersion"`
+	Source               SessionSource     `json:"source"`
+	CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
+	ThreadSource         *ThreadSource     `json:"threadSource"`
+	AgentNickname        *string           `json:"agentNickname"`
+	AgentRole            *string           `json:"agentRole"`
+	GitInfo              *GitInfo          `json:"gitInfo"`
+	Name                 *string           `json:"name"`
+	Turns                []Turn            `json:"turns"`
 }
 
 func (t *Thread) MarshalJSON() ([]byte, error) {
@@ -579,53 +583,57 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		historyMode = ThreadHistoryLegacy
 	}
 	return json.Marshal(struct {
-		ID             string            `json:"id"`
-		SessionID      string            `json:"sessionId"`
-		ForkedFromID   *string           `json:"forkedFromId"`
-		ParentThreadID *string           `json:"parentThreadId"`
-		Preview        string            `json:"preview"`
-		Ephemeral      bool              `json:"ephemeral"`
-		Section        *ThreadSection    `json:"section"`
-		HistoryMode    ThreadHistoryMode `json:"historyMode"`
-		ModelProvider  string            `json:"modelProvider"`
-		CreatedAt      int64             `json:"createdAt"`
-		UpdatedAt      int64             `json:"updatedAt"`
-		RecencyAt      *int64            `json:"recencyAt"`
-		Status         ThreadStatus      `json:"status"`
-		Path           *string           `json:"path"`
-		CWD            string            `json:"cwd"`
-		CLIVersion     string            `json:"cliVersion"`
-		Source         SessionSource     `json:"source"`
-		ThreadSource   *ThreadSource     `json:"threadSource"`
-		AgentNickname  *string           `json:"agentNickname"`
-		AgentRole      *string           `json:"agentRole"`
-		GitInfo        *GitInfo          `json:"gitInfo"`
-		Name           *string           `json:"name"`
-		Turns          []Turn            `json:"turns"`
+		ID                   string            `json:"id"`
+		SessionID            string            `json:"sessionId"`
+		ForkedFromID         *string           `json:"forkedFromId"`
+		ParentThreadID       *string           `json:"parentThreadId"`
+		Preview              string            `json:"preview"`
+		Ephemeral            bool              `json:"ephemeral"`
+		Section              *ThreadSection    `json:"section"`
+		SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
+		HistoryMode          ThreadHistoryMode `json:"historyMode"`
+		ModelProvider        string            `json:"modelProvider"`
+		CreatedAt            int64             `json:"createdAt"`
+		UpdatedAt            int64             `json:"updatedAt"`
+		RecencyAt            *int64            `json:"recencyAt"`
+		Status               ThreadStatus      `json:"status"`
+		Path                 *string           `json:"path"`
+		CWD                  string            `json:"cwd"`
+		CLIVersion           string            `json:"cliVersion"`
+		Source               SessionSource     `json:"source"`
+		CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
+		ThreadSource         *ThreadSource     `json:"threadSource"`
+		AgentNickname        *string           `json:"agentNickname"`
+		AgentRole            *string           `json:"agentRole"`
+		GitInfo              *GitInfo          `json:"gitInfo"`
+		Name                 *string           `json:"name"`
+		Turns                []Turn            `json:"turns"`
 	}{
-		ID:             t.ID,
-		SessionID:      t.SessionID,
-		ForkedFromID:   t.ForkedFromID,
-		ParentThreadID: t.ParentThreadID,
-		Preview:        t.Preview,
-		Ephemeral:      t.Ephemeral,
-		Section:        t.Section,
-		HistoryMode:    historyMode,
-		ModelProvider:  t.ModelProvider,
-		CreatedAt:      t.CreatedAt,
-		UpdatedAt:      t.UpdatedAt,
-		RecencyAt:      t.RecencyAt,
-		Status:         t.Status,
-		Path:           t.Path,
-		CWD:            t.CWD,
-		CLIVersion:     t.CLIVersion,
-		Source:         t.Source,
-		ThreadSource:   t.ThreadSource,
-		AgentNickname:  t.AgentNickname,
-		AgentRole:      t.AgentRole,
-		GitInfo:        t.GitInfo,
-		Name:           t.Name,
-		Turns:          turns,
+		ID:                   t.ID,
+		SessionID:            t.SessionID,
+		ForkedFromID:         t.ForkedFromID,
+		ParentThreadID:       t.ParentThreadID,
+		Preview:              t.Preview,
+		Ephemeral:            t.Ephemeral,
+		Section:              t.Section,
+		SectionEnteredAt:     t.SectionEnteredAt,
+		HistoryMode:          historyMode,
+		ModelProvider:        t.ModelProvider,
+		CreatedAt:            t.CreatedAt,
+		UpdatedAt:            t.UpdatedAt,
+		RecencyAt:            t.RecencyAt,
+		Status:               t.Status,
+		Path:                 t.Path,
+		CWD:                  t.CWD,
+		CLIVersion:           t.CLIVersion,
+		Source:               t.Source,
+		CanAcceptDirectInput: t.CanAcceptDirectInput,
+		ThreadSource:         t.ThreadSource,
+		AgentNickname:        t.AgentNickname,
+		AgentRole:            t.AgentRole,
+		GitInfo:              t.GitInfo,
+		Name:                 t.Name,
+		Turns:                turns,
 	})
 }
 
@@ -920,6 +928,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			AppContext        any     `json:"appContext"`
 			MCPAppResourceURI *string `json:"mcpAppResourceUri,omitempty"`
 			PluginID          *string `json:"pluginId"`
+			ReadOnlyHint      *bool   `json:"readOnlyHint"`
 			Result            any     `json:"result"`
 			Error             any     `json:"error"`
 			DurationMS        *int64  `json:"durationMs"`
@@ -933,6 +942,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			AppContext:        threadItemMCPAppContext(i),
 			MCPAppResourceURI: threadItemStringPtrFromData(i.Data, "mcpAppResourceUri", "mcp_app_resource_uri"),
 			PluginID:          threadItemStringPtrFromData(i.Data, "pluginId", "plugin_id"),
+			ReadOnlyHint:      threadItemBoolPtrFromData(i.Data, "readOnlyHint", "read_only_hint"),
 			Result:            threadItemMCPResult(i),
 			Error:             threadItemMCPError(i),
 			DurationMS:        threadItemInt64PtrFromData(i.Data, "duration_ms", "durationMs"),
@@ -1962,27 +1972,8 @@ func (p *ThreadApproveGuardianDeniedActionParams) Validate() error {
 type ThreadApproveGuardianDeniedActionResponse struct{}
 
 type ThreadMetadataUpdateParams struct {
-	ThreadID  string                      `json:"threadId"`
-	GitInfo   *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
-	SectionID OptionalString              `json:"sectionId,omitempty"`
-}
-
-func (p ThreadMetadataUpdateParams) MarshalJSON() ([]byte, error) {
-	type alias ThreadMetadataUpdateParams
-	data, err := json.Marshal(alias(p))
-	if err != nil {
-		return nil, err
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, err
-	}
-	if !p.SectionID.Set {
-		delete(fields, "sectionId")
-	} else {
-		fields["sectionId"] = p.SectionID.Value
-	}
-	return json.Marshal(fields)
+	ThreadID string                      `json:"threadId"`
+	GitInfo  *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
 }
 
 func (p *ThreadMetadataUpdateParams) Validate() error {
@@ -2046,6 +2037,38 @@ func (o *OptionalString) IsZero() bool {
 type ThreadMetadataUpdateResponse struct {
 	Thread *Thread `json:"thread"`
 }
+
+type ThreadSectionMoveParams struct {
+	ThreadID       string         `json:"threadId"`
+	SectionID      OptionalString `json:"sectionId"`
+	BeforeThreadID *string        `json:"beforeThreadId,omitempty"`
+}
+
+func (p ThreadSectionMoveParams) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ThreadID       string  `json:"threadId"`
+		SectionID      *string `json:"sectionId"`
+		BeforeThreadID *string `json:"beforeThreadId,omitempty"`
+	}{ThreadID: p.ThreadID, SectionID: p.SectionID.Value, BeforeThreadID: p.BeforeThreadID})
+}
+
+func (p *ThreadSectionMoveParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return jsonRPCInvalidRequest("threadId is required")
+	}
+	if !p.SectionID.Set {
+		return jsonRPCInvalidRequest("sectionId is required")
+	}
+	if p.SectionID.Value != nil && strings.TrimSpace(*p.SectionID.Value) == "" {
+		return jsonRPCInvalidRequest("sectionId must not be empty")
+	}
+	if p.SectionID.Value == nil && p.BeforeThreadID != nil {
+		return jsonRPCInvalidRequest("beforeThreadId requires a non-null sectionId")
+	}
+	return nil
+}
+
+type ThreadSectionMoveResponse struct{}
 
 type ThreadListParams struct {
 	Cursor           *string              `json:"cursor,omitempty"`
@@ -2307,6 +2330,9 @@ func (p *ThreadSearchParams) Validate() error {
 	}
 	if err := validateThreadSourceKinds(p.SourceKinds); err != nil {
 		return err
+	}
+	if p.SortKey == SortSectionPosition {
+		return jsonRPCInvalidRequest(fmt.Sprintf("unsupported sortKey %q", p.SortKey))
 	}
 	return nil
 }
@@ -2619,30 +2645,36 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		value := record.RecencyAt.Unix()
 		recencyAt = &value
 	}
+	var sectionEnteredAt *int64
+	if record.SectionEnteredAt != nil && !record.SectionEnteredAt.IsZero() {
+		value := record.SectionEnteredAt.Unix()
+		sectionEnteredAt = &value
+	}
 	thread := &Thread{
-		ID:             threadID,
-		SessionID:      sessionID,
-		ForkedFromID:   stringPtrIfNotEmpty(string(record.ForkedFromID)),
-		ParentThreadID: stringPtrIfNotEmpty(string(record.ParentThreadID)),
-		Preview:        record.Preview,
-		Ephemeral:      boolFromMap(record.Metadata.Extra, "ephemeral"),
-		Section:        threadSectionFromRecord(record),
-		HistoryMode:    historyMode,
-		ModelProvider:  modelProvider,
-		CreatedAt:      unixOrZero(record.CreatedAt),
-		UpdatedAt:      unixOrZero(record.UpdatedAt),
-		RecencyAt:      recencyAt,
-		Status:         NotLoadedStatus(),
-		Path:           threadPath,
-		CWD:            record.Metadata.CWD,
-		CLIVersion:     record.Metadata.CLIVersion,
-		Source:         source,
-		ThreadSource:   threadSource,
-		AgentNickname:  stringPtrIfNotEmpty(record.Metadata.AgentNickname),
-		AgentRole:      stringPtrIfNotEmpty(record.Metadata.AgentRole),
-		GitInfo:        gitInfoFromMap(record.Metadata.Git),
-		Name:           stringPtrIfNotEmpty(record.Title),
-		Turns:          []Turn{},
+		ID:               threadID,
+		SessionID:        sessionID,
+		ForkedFromID:     stringPtrIfNotEmpty(string(record.ForkedFromID)),
+		ParentThreadID:   stringPtrIfNotEmpty(string(record.ParentThreadID)),
+		Preview:          record.Preview,
+		Ephemeral:        boolFromMap(record.Metadata.Extra, "ephemeral"),
+		Section:          threadSectionFromRecord(record),
+		SectionEnteredAt: sectionEnteredAt,
+		HistoryMode:      historyMode,
+		ModelProvider:    modelProvider,
+		CreatedAt:        unixOrZero(record.CreatedAt),
+		UpdatedAt:        unixOrZero(record.UpdatedAt),
+		RecencyAt:        recencyAt,
+		Status:           NotLoadedStatus(),
+		Path:             threadPath,
+		CWD:              record.Metadata.CWD,
+		CLIVersion:       record.Metadata.CLIVersion,
+		Source:           source,
+		ThreadSource:     threadSource,
+		AgentNickname:    stringPtrIfNotEmpty(record.Metadata.AgentNickname),
+		AgentRole:        stringPtrIfNotEmpty(record.Metadata.AgentRole),
+		GitInfo:          gitInfoFromMap(record.Metadata.Git),
+		Name:             stringPtrIfNotEmpty(record.Title),
+		Turns:            []Turn{},
 	}
 	if includeTurns {
 		thread.Turns = turnsFromRecord(record)
@@ -2773,6 +2805,8 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 		options.SortKey = session.SortUpdatedAt
 	case SortRecencyAt:
 		options.SortKey = session.SortRecencyAt
+	case SortSectionPosition:
+		options.SortKey = session.SortSectionPosition
 	case SortCreatedAt, "":
 		options.SortKey = session.SortCreatedAt
 	default:
@@ -2781,8 +2815,14 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 	switch params.SortDirection {
 	case SortAsc:
 		options.SortDirection = session.SortAsc
-	case SortDesc, "":
+	case SortDesc:
 		options.SortDirection = session.SortDesc
+	case "":
+		if options.SortKey == session.SortSectionPosition {
+			options.SortDirection = session.SortAsc
+		} else {
+			options.SortDirection = session.SortDesc
+		}
 	default:
 		return session.ListOptions{}, jsonRPCInvalidRequest(fmt.Sprintf("unsupported sortDirection %q", params.SortDirection))
 	}
@@ -2900,6 +2940,10 @@ func validThreadListCursor(cursor string) bool {
 	}
 	if allDigits {
 		return true
+	}
+	if position, threadID, ok := strings.Cut(cursor, "|"); ok && strings.TrimSpace(threadID) != "" {
+		_, err := strconv.ParseInt(position, 10, 64)
+		return err == nil
 	}
 	_, err := time.Parse(time.RFC3339Nano, cursor)
 	return err == nil
@@ -4620,18 +4664,8 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 		return session.MetadataPatch{}, err
 	}
 	patch := session.MetadataPatch{}
-	if params.SectionID.Set {
-		patch.SectionSet = true
-		patch.SectionID = cloneString(params.SectionID.Value)
-		if params.SectionID.Value != nil && strings.TrimSpace(*params.SectionID.Value) != session.PinnedThreadSectionID {
-			return session.MetadataPatch{}, jsonRPCInvalidRequest(fmt.Sprintf("thread section not found: %s", strings.TrimSpace(*params.SectionID.Value)))
-		}
-	}
-	if params.GitInfo == nil && !params.SectionID.Set {
-		return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
-	}
 	if params.GitInfo == nil {
-		return patch, nil
+		return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
 	}
 	if !params.GitInfo.SHA.Set && !params.GitInfo.Branch.Set && !params.GitInfo.OriginURL.Set {
 		return session.MetadataPatch{}, jsonRPCInvalidRequest("gitInfo must include at least one field")

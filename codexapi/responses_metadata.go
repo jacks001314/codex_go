@@ -18,6 +18,7 @@ const (
 	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
 	ForkedFromThreadIDKey  = "forked_from_thread_id"
 	ParentThreadIDKey      = "parent_thread_id"
+	ParentTurnIDKey        = "parent_turn_id"
 	SubagentKindKey        = "subagent_kind"
 	ThreadSourceKey        = "thread_source"
 	SandboxKey             = "sandbox"
@@ -50,6 +51,7 @@ var reservedMetadataKeys = map[string]bool{
 	TurnStartedAtUnixMSKey: true,
 	ForkedFromThreadIDKey:  true,
 	ParentThreadIDKey:      true,
+	ParentTurnIDKey:        true,
 	SubagentKindKey:        true,
 	ThreadSourceKey:        true,
 	SandboxKey:             true,
@@ -88,6 +90,7 @@ type ResponsesMetadata struct {
 	RequestKind         *ResponsesRequestKind
 	ForkedFromThreadID  string
 	ParentThreadID      string
+	ParentTurnID        string
 	SubagentHeader      string
 	SubagentKind        string
 	ThreadSource        string
@@ -136,6 +139,7 @@ func (m *ResponsesMetadata) TurnMetadataValue() map[string]any {
 	}
 	putStringAny(payload, ForkedFromThreadIDKey, m.ForkedFromThreadID)
 	putStringAny(payload, ParentThreadIDKey, m.ParentThreadID)
+	putStringAny(payload, ParentTurnIDKey, m.ParentTurnID)
 	putStringAny(payload, SubagentKindKey, m.SubagentKind)
 	putStringAny(payload, ThreadSourceKey, m.ThreadSource)
 	putStringAny(payload, SandboxKey, m.Sandbox)
@@ -177,6 +181,7 @@ func (m *ResponsesMetadata) ClientMetadata() map[string]string {
 	putStringString(out, TurnIDKey, m.TurnID)
 	putStringString(out, OpenAISubagentHeader, m.SubagentHeader)
 	putStringString(out, ParentThreadIDHeader, m.ParentThreadID)
+	putStringString(out, ParentTurnIDKey, m.ParentTurnID)
 	if m.HasTurnMetadata() {
 		if encoded, ok := m.TurnMetadataJSON(); ok {
 			out[TurnMetadataHeader] = encoded

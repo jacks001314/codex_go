@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -626,6 +627,76 @@ func TestToolDispatcherSerializesNonParallelCalls(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("ExecuteToolItems() did not finish")
+	}
+}
+
+type toolDispatcherReadinessExecutor struct {
+	ready   <-chan struct{}
+	started chan<- string
+}
+
+func (e *toolDispatcherReadinessExecutor) Spec() tool.Spec {
+	return tool.Spec{Name: tool.PlainName("readiness_serial")}
+}
+
+func (e *toolDispatcherReadinessExecutor) WaitUntilReady(ctx context.Context, _ *tool.Invocation) error {
+	select {
+	case <-e.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *toolDispatcherReadinessExecutor) Execute(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+	e.started <- invocation.CallID
+	return &tool.Output{Success: true, Body: invocation.CallID}, nil
+}
+
+func TestToolDispatcherReadinessWaitDoesNotBlockUnrelatedSerialTool(t *testing.T) {
+	registry := tool.NewRegistry()
+	ready := make(chan struct{})
+	started := make(chan string, 2)
+	if err := registry.Register(&toolDispatcherReadinessExecutor{ready: ready, started: started}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("unrelated_serial")}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		started <- invocation.CallID
+		return &tool.Output{Success: true, Body: invocation.CallID}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+	done := make(chan error, 1)
+	go func() {
+		results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{
+			{Type: "function_call", Name: "readiness_serial", CallID: "waiting", Arguments: `{}`},
+			{Type: "function_call", Name: "unrelated_serial", CallID: "unrelated", Arguments: `{}`},
+		})
+		if err == nil && (len(results) != 2 || results[0].Invocation.CallID != "waiting" || results[1].Invocation.CallID != "unrelated") {
+			err = fmt.Errorf("results = %#v", results)
+		}
+		done <- err
+	}()
+	select {
+	case callID := <-started:
+		if callID != "unrelated" {
+			t.Fatalf("first executed call = %q, want unrelated", callID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated tool was blocked by readiness wait")
+	}
+	close(ready)
+	select {
+	case callID := <-started:
+		if callID != "waiting" {
+			t.Fatalf("second executed call = %q, want waiting", callID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ready tool did not execute")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
 	}
 }
 

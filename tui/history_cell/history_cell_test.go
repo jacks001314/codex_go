@@ -94,6 +94,10 @@ func TestUserAndAgentMessageCells(t *testing.T) {
 	if len(transcriptOnly.DisplayLines(80)) != 0 || len(transcriptOnly.RawLines()) != 0 {
 		t.Fatalf("transcript only reasoning leaked display/raw")
 	}
+	titleOnly := NewReasoningSummaryCell("**Confirming backend JSONL source**", false)
+	if got := strings.Join(titleOnly.DisplayLines(80), "\n"); !strings.Contains(got, "Confirming backend JSONL source") {
+		t.Fatalf("title-only reasoning hidden: %q", got)
+	}
 }
 
 func TestPlanCells(t *testing.T) {
@@ -493,6 +497,12 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 	for _, want := range []string{"OpenAI Codex (v1.2.3)", "model: gpt-5 high", "fast", "permissions: YOLO mode"} {
 		if !strings.Contains(headerDisplay, want) {
 			t.Fatalf("session header missing %q:\n%s", want, headerDisplay)
+		}
+	}
+	halfwidthHeader := NewSessionHeader("gpt-5", "", false, "\uff76\uff9e\uff8a\uff9f", "1")
+	for _, line := range halfwidthHeader.DisplayLines(16) {
+		if tui.DisplayWidth(line) != 16 {
+			t.Fatalf("halfwidth session border width=%d line=%q", tui.DisplayWidth(line), line)
 		}
 	}
 	info := NewSessionInfo(header, true, "")

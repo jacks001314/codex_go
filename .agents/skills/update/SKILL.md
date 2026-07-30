@@ -12,7 +12,7 @@ codex-go是官方rust版本codex cli的go版本同步实现，需要功能高度
 
 ## 工作流
 
-1. 上游rust codex cli 本地git库位于目录：D:\qax\reagent\dev\git\codex，使用git pull origin master拉取最新更新
+1. 上游rust codex cli 本地git库位于目录：D:\qax\reagent\dev\git\codex，使用git pull origin main拉取最新更新
 
 2. 比对当前go版本codex项目和rust codex cli相关功能，制定功能更新计划，输出到update/plan_年_月_日.md
 

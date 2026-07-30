@@ -18,6 +18,22 @@ type fakeUploader struct {
 	requests []OpenAIFileUploadRequest
 }
 
+type fakeOpenAIFileSystem struct {
+	metadataPaths []string
+	openedPaths   []string
+	contents      string
+}
+
+func (f *fakeOpenAIFileSystem) Metadata(_ context.Context, pathURI string) (*OpenAIFileMetadata, error) {
+	f.metadataPaths = append(f.metadataPaths, pathURI)
+	return &OpenAIFileMetadata{IsFile: true, Size: int64(len(f.contents))}, nil
+}
+
+func (f *fakeOpenAIFileSystem) Open(_ context.Context, pathURI string) (io.ReadCloser, error) {
+	f.openedPaths = append(f.openedPaths, pathURI)
+	return io.NopCloser(strings.NewReader(f.contents)), nil
+}
+
 func (u *fakeUploader) UploadOpenAIFile(ctx context.Context, request OpenAIFileUploadRequest) (*OpenAIUploadedFile, error) {
 	_ = ctx
 	u.requests = append(u.requests, request)
@@ -69,6 +85,67 @@ func TestRewriteArgumentsUploadsScalarPath(t *testing.T) {
 	}
 	if len(uploader.requests) != 1 || uploader.requests[0].Path != path {
 		t.Fatalf("unexpected upload requests: %#v", uploader.requests)
+	}
+}
+
+func TestRewriteArgumentsUsesSelectedWindowsEnvironmentPathConvention(t *testing.T) {
+	fileSystem := &fakeOpenAIFileSystem{contents: "quarterly"}
+	uploader := &fakeUploader{}
+	rewriter := NewOpenAIFileRewriterWithOptions(OpenAIFileRewriterOptions{
+		CWD:        `C:\workspace\project`,
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true},
+		Uploader:   uploader,
+		FileSystem: fileSystem,
+	})
+	rewritten, err := rewriter.RewriteArgumentsWithOptionalFields(context.Background(), map[string]any{
+		"file": `reports\q1.txt`,
+	}, map[string][]string{"file": {"file_name"}})
+	if err != nil {
+		t.Fatalf("RewriteArgumentsWithOptionalFields() error = %v", err)
+	}
+	wantURI := "file:///C:/workspace/project/reports/q1.txt"
+	if len(fileSystem.metadataPaths) != 1 || fileSystem.metadataPaths[0] != wantURI {
+		t.Fatalf("metadata paths = %#v, want %q", fileSystem.metadataPaths, wantURI)
+	}
+	if len(uploader.requests) != 1 || uploader.requests[0].Path != `C:\workspace\project\reports\q1.txt` || uploader.requests[0].FileName != "q1.txt" {
+		t.Fatalf("upload requests = %#v", uploader.requests)
+	}
+	reader, err := uploader.requests[0].Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	contents, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil || string(contents) != "quarterly" {
+		t.Fatalf("uploaded contents = %q, readErr=%v closeErr=%v", contents, readErr, closeErr)
+	}
+	if len(fileSystem.openedPaths) != 1 || fileSystem.openedPaths[0] != wantURI {
+		t.Fatalf("opened paths = %#v, want %q", fileSystem.openedPaths, wantURI)
+	}
+	uploaded := rewritten.(map[string]any)["file"].(map[string]any)
+	if uploaded["file_name"] != "q1.txt" {
+		t.Fatalf("uploaded value = %#v", uploaded)
+	}
+}
+
+func TestRewriteArgumentsUsesSelectedPosixEnvironmentPathConvention(t *testing.T) {
+	fileSystem := &fakeOpenAIFileSystem{contents: "report"}
+	uploader := &fakeUploader{}
+	rewriter := NewOpenAIFileRewriterWithOptions(OpenAIFileRewriterOptions{
+		CWD:        "/workspace/project",
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true},
+		Uploader:   uploader,
+		FileSystem: fileSystem,
+	})
+	_, err := rewriter.RewriteArguments(context.Background(), map[string]any{"file": "../report.txt"}, []string{"file"})
+	if err != nil {
+		t.Fatalf("RewriteArguments() error = %v", err)
+	}
+	if len(fileSystem.metadataPaths) != 1 || fileSystem.metadataPaths[0] != "file:///workspace/report.txt" {
+		t.Fatalf("metadata paths = %#v", fileSystem.metadataPaths)
+	}
+	if len(uploader.requests) != 1 || uploader.requests[0].Path != "/workspace/report.txt" || uploader.requests[0].FileName != "report.txt" {
+		t.Fatalf("upload requests = %#v", uploader.requests)
 	}
 }
 

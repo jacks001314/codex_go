@@ -1,6 +1,9 @@
 package bottompane
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestTextAreaStateEditsClampToUTF8Boundaries(t *testing.T) {
 	world := "\u4e16\u754c"
@@ -123,5 +126,25 @@ func TestTextAreaStateWrapHeightCursorAndHandleKeys(t *testing.T) {
 	state.HandleKey("ctrl+y")
 	if state.Text != "abcde\nf" {
 		t.Fatalf("after yank text=%q", state.Text)
+	}
+}
+
+func TestTextAreaWrapAndCursorUseGraphemeCellWidths(t *testing.T) {
+	state := NewTextAreaState("ab\uff76\uff9ec")
+	if got, want := state.WrappedLines(3), []string{"ab", "\uff76\uff9ec"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("halfwidth WrappedLines = %#v, want %#v", got, want)
+	}
+	col, row := state.CursorPosition(3, 0)
+	if col != 3 || row != 1 {
+		t.Fatalf("halfwidth cursor col=%d row=%d, want 3,1", col, row)
+	}
+
+	state = NewTextAreaState("a\U0001f44d\U0001f3fbb")
+	if got, want := state.WrappedLines(2), []string{"a", "\U0001f44d\U0001f3fb", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("emoji WrappedLines = %#v, want %#v", got, want)
+	}
+	col, row = state.CursorPosition(2, 0)
+	if col != 1 || row != 2 {
+		t.Fatalf("emoji cursor col=%d row=%d, want 1,2", col, row)
 	}
 }

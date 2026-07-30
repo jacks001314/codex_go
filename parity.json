@@ -1,19 +1,19 @@
 {
-  "rustBaseline": "fa1d4c40d0",
-  "rustTag": "main@fa1d4c40d0",
-  "rustUpstreamHead": "fa1d4c40d0e63eef2e0ba8a9e004ccd0a80b77f5",
-  "rustUpstreamTag": "main@fa1d4c40d0",
+  "rustBaseline": "25eecb071e",
+  "rustTag": "main@25eecb071e",
+  "rustUpstreamHead": "25eecb071e7f551516d63fe41c922678d51889c2",
+  "rustUpstreamTag": "main@25eecb071e",
   "rustE2EBinary": {
     "version": "codex-cli 0.0.0",
-    "tag": "main@fa1d4c40d0",
-    "sha256": "add18d279c921fce9a4538a05d11ec65e6ab72f9a1e4345fb4309c7d6cafebe6"
+    "tag": "main@25eecb071e",
+    "sha256": "4b060c4af8b3ebe57dcbcdd542bdb1e1cdcb5461b17b8346e6e89562ccfb7775"
   },
   "goE2EBinary": {
     "version": "codex-cli 0.0.0",
-    "commit": "3252456a54fda016ee6fcb85b05e2168439147a1+worktree",
-    "sha256": "6f8a0af4af30f759a2114af534157a6d3ba8bad754064e1418f0edf287a1364a"
+    "commit": "1ceca7dacc48c4fb59410304688376958e5281b3+worktree",
+    "sha256": "7c3e748f3eb074afe37e59905a2998154c4f8a54557c54be407d50f504b2aa97"
   },
-  "generatedAt": "2026-07-29",
+  "generatedAt": "2026-07-30",
   "items": [
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},
     {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./config ./agent ./appserver"},
@@ -40,7 +40,8 @@
     {"id":"external-agent-memory-import","status":"done","area":"memory","reason":"Go detects external project Markdown memory, verifies SHA-256 content, imports under extension-scoped resources with scope.json and source/project/cwd/hash metadata, rejects path/hash failures, and removes resources for disappeared projects without inventing rollout provenance.","test":"go test ./config -run ExternalAgentMemory -count=1"},
     {"id":"realtime-webrtc-crate-removal","status":"intentional_difference","area":"realtime","reason":"The Rust crate removal is repository-structure cleanup, not a wire-protocol removal.","userImpact":"Go retains its existing realtime capability; external protocol behavior is unchanged.","test":"go test ./appserver ./model"},
     {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap is verified on a native Kali runner. Native Windows platform and production ConPTY gates pass. Forty-seven relevant packages compile for Darwin/arm64, and Darwin network/sandbox vet plus actionlint pass. The macOS workflow now directly tests Keychain roots, a Unix-socket HTTP round trip, native seatbelt enforcement, and desktop/platform behavior; a native macOS workflow artifact is still required.","test":"go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"},
-    {"id":"sdk-windows-interrupted-command","status":"intentional_difference","area":"sdk","reason":"The opt-in Windows cancellation diagnostic reproducibly fails on current Rust fa1d4c40d0: SDK abort leaves the PowerShell descendant running, creates interrupted-marker.txt, and the resumed turn aborts. Go terminates the descendant, leaves no marker, and resumes successfully. This Rust baseline failure is excluded from the default differential set but retained as an explicit diagnostic.","userImpact":"Go cancellation is stronger on Windows: an interrupted command cannot continue mutating the workspace, and the thread remains resumable.","test":"npm --prefix sdktests run test:parity -- --scenario resume-tool-interrupted-command --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"},
-    {"id":"sdk-streaming-smoke","status":"done","area":"sdk","reason":"The official TypeScript SDK drives current Rust fa1d4c40d0 and codex_go with isolated homes and workspaces, the configured default model, no SDK model overrides, strict event/item ordering, usage checks, and workspace side-effect comparison. The final approved suite passed 42 of 42 scenarios; summary: sdktests/artifacts/suites/2026-07-28T215319021Z-parity/suite-summary.json.","test":"npm --prefix sdktests run test:parity -- --all --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"}
+    {"id":"sdk-windows-interrupted-command","status":"intentional_difference","area":"sdk","reason":"The opt-in Windows cancellation diagnostic reproducibly failed on Rust fa1d4c40d0: SDK abort left the PowerShell descendant running, created interrupted-marker.txt, and the resumed turn aborted. Go terminated the descendant, left no marker, and resumed successfully. This diagnostic remains excluded from the default differential set and is not used as evidence for the 25eecb071e baseline.","userImpact":"Go cancellation is stronger on Windows: an interrupted command cannot continue mutating the workspace, and the thread remains resumable.","test":"npm --prefix sdktests run test:parity -- --scenario resume-tool-interrupted-command --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"},
+    {"id":"upstream-2026-07-30","status":"done","area":"parity","reason":"All 82 Rust commits from fa1d4c40d0 through 25eecb071e were classified. Applicable protocol, MCP, executor sandbox, tool registry, remote compaction, telemetry, TUI width, OAuth redirect, serialization, fork boundary, and lifecycle changes are implemented with focused and race coverage; Rust-only dependency, release, allocation, and source-layout changes are explicitly classified.","test":"go test ./... -count=1; go vet ./...; go test -race ./mcp ./tool ./session ./appserver ./execserver -count=1"},
+    {"id":"sdk-streaming-smoke","status":"done","area":"sdk","reason":"The official TypeScript SDK drives current Rust 25eecb071e and codex_go with isolated homes and workspaces, the configured default model, no SDK model overrides, strict event/item ordering, usage checks, and workspace side-effect comparison. The final approved suite passed 42 of 42 scenarios with zero mismatches or infrastructure failures; summary: sdktests/artifacts/suites/2026-07-30T164951300Z-parity/suite-summary.json. The model-free raw paginated fork audit also passed.","test":"npm --prefix sdktests run test:parity -- --all --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>; npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex>"}
   ]
 }

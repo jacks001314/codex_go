@@ -51,27 +51,30 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 }
 
 func TestThreadSectionProtocolParity(t *testing.T) {
-	request, err := ParseRequest([]byte(`{"id":1,"method":"thread/metadata/update","params":{"threadId":"thread-1","sectionId":null}}`))
+	request, err := ParseRequest([]byte(`{"id":1,"method":"thread/section/move","params":{"threadId":"thread-1","sectionId":null}}`))
 	if err != nil {
 		t.Fatalf("ParseRequest error = %v", err)
 	}
-	var params ThreadMetadataUpdateParams
+	var params ThreadSectionMoveParams
 	if err := request.DecodeParams(&params); err != nil {
 		t.Fatalf("DecodeParams error = %v", err)
 	}
 	if !params.SectionID.Set || params.SectionID.Value != nil {
 		t.Fatalf("sectionId = %#v, want explicit null", params.SectionID)
 	}
-	patch, err := MetadataPatchToSession(&params)
-	if err != nil || !patch.SectionSet || patch.SectionID != nil {
-		t.Fatalf("MetadataPatchToSession() = %#v, %v", patch, err)
+	if err := params.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 	pinnedID := session.PinnedThreadSectionID
-	options, err := BuildListOptions(&ThreadListParams{SectionID: OptionalString{Set: true, Value: &pinnedID}})
-	if err != nil || !options.SectionSet || options.SectionID == nil || *options.SectionID != pinnedID {
+	options, err := BuildListOptions(&ThreadListParams{
+		SectionID: OptionalString{Set: true, Value: &pinnedID},
+		SortKey:   SortSectionPosition,
+	})
+	if err != nil || !options.SectionSet || options.SectionID == nil || *options.SectionID != pinnedID || options.SortKey != session.SortSectionPosition || options.SortDirection != session.SortAsc {
 		t.Fatalf("BuildListOptions() = %#v, %v", options, err)
 	}
-	data, err := json.Marshal(&Thread{ID: "thread-1", Section: &ThreadSection{ID: pinnedID, Name: session.PinnedThreadSectionName}})
+	enteredAt := int64(123)
+	data, err := json.Marshal(&Thread{ID: "thread-1", Section: &ThreadSection{ID: pinnedID, Name: session.PinnedThreadSectionName}, SectionEnteredAt: &enteredAt})
 	if err != nil {
 		t.Fatalf("Marshal(Thread) error = %v", err)
 	}
@@ -82,6 +85,9 @@ func TestThreadSectionProtocolParity(t *testing.T) {
 	section, _ := encoded["section"].(map[string]any)
 	if section["id"] != pinnedID {
 		t.Fatalf("thread JSON = %s, %v", data, err)
+	}
+	if encoded["sectionEnteredAt"] != float64(enteredAt) {
+		t.Fatalf("thread JSON sectionEnteredAt = %#v, want %d", encoded["sectionEnteredAt"], enteredAt)
 	}
 	if _, ok := encoded["isPinned"]; ok {
 		t.Fatalf("thread JSON retained removed isPinned field: %s", data)

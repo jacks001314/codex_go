@@ -72,6 +72,7 @@ type httpClient struct {
 	progress                           MCPProgressHandler
 	openAIForm                         bool
 	protocolMode                       MCPProtocolMode
+	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
 	supportsSandboxStateMetaCapability bool
 }
@@ -160,84 +161,42 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 }
 
 func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, error) {
-	tools := []MCPToolInfo{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("tools/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "tools/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
 		var response struct {
 			Tools      []MCPToolInfo `json:"tools"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "tools/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		tools = append(tools, response.Tools...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return tools, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("tools/list")
+		return response.Tools, response.NextCursor, nil
+	})
 }
 
 func listMCPHTTPResources(client *httpClient, options *httpClientCallOptions) ([]MCPResource, error) {
-	resources := []MCPResource{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("resources/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "resources/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResource, *string, error) {
 		var response struct {
 			Resources  []MCPResource `json:"resources"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "resources/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "resources/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		resources = append(resources, response.Resources...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return resources, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("resources/list")
+		return response.Resources, response.NextCursor, nil
+	})
 }
 
 func listMCPHTTPResourceTemplates(client *httpClient, options *httpClientCallOptions) ([]MCPResourceTemplate, error) {
-	templates := []MCPResourceTemplate{}
-	cursor := ""
-	seen := map[string]bool{}
-	for page := 0; page < mcpListPaginationMaxPages; page++ {
-		if cursor != "" {
-			if seen[cursor] {
-				return nil, mcpPaginationCursorError("resources/templates/list", cursor)
-			}
-			seen[cursor] = true
-		}
+	return collectMCPPaginated(context.Background(), "resources/templates/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResourceTemplate, *string, error) {
 		var response struct {
 			ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates"`
 			NextCursor        *string               `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptions(options, "resources/templates/list", mcpListParams(cursor), &response); err != nil {
-			return nil, err
+		if err := client.CallWithOptionsContext(ctx, options, "resources/templates/list", mcpListParamsForCursor(cursor), &response); err != nil {
+			return nil, nil, err
 		}
-		templates = append(templates, response.ResourceTemplates...)
-		cursor = mcpNextCursor(response.NextCursor)
-		if cursor == "" {
-			return templates, nil
-		}
-	}
-	return nil, mcpPaginationPageLimitError("resources/templates/list")
+		return response.ResourceTemplates, response.NextCursor, nil
+	})
 }
 
 func callMCPHTTPTool(config *ServerConfig, serverName string, threadID string, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
@@ -299,7 +258,11 @@ func newMCPHTTPClient(config *ServerConfig) *httpClient {
 }
 
 func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *httpClient {
-	client := &http.Client{Timeout: mcpClientTimeout(config)}
+	return newMCPHTTPClientWithShared(config, openAIForm, nil)
+}
+
+func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HTTPDoer) *httpClient {
+	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
 	protocolMode := MCPProtocolLegacy
 	if config != nil {
 		protocolMode = config.ProtocolMode
@@ -311,6 +274,26 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 		protocolMode: protocolMode,
 		retrySleep:   time.Sleep,
 	}
+}
+
+type httpDoerRoundTripper struct {
+	doer HTTPDoer
+}
+
+func (t httpDoerRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return t.doer.Do(request)
+}
+
+func mcpHTTPClientFromShared(shared HTTPDoer, timeout time.Duration) *http.Client {
+	if client, ok := shared.(*http.Client); ok && client != nil {
+		cloned := *client
+		cloned.Timeout = timeout
+		return &cloned
+	}
+	if shared != nil {
+		return &http.Client{Timeout: timeout, Transport: httpDoerRoundTripper{doer: shared}}
+	}
+	return &http.Client{Timeout: timeout}
 }
 
 // oauthHTTPClient reuses the final MCP runtime client's routing, proxy, TLS,
@@ -398,7 +381,7 @@ func (c *httpClient) deleteSession(sessionID string) error {
 	}
 	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set(mcpHTTPProtocolVersionHeader, c.protocolMode.protocolVersion())
+	request.Header.Set(mcpHTTPProtocolVersionHeader, c.effectiveProtocolVersion())
 	request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
 	if token := c.bearerToken(); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -432,25 +415,32 @@ func (c *httpClient) Call(method string, params any, out any) error {
 }
 
 func (c *httpClient) CallWithOptions(options *httpClientCallOptions, method string, params any, out any) error {
+	return c.CallWithOptionsContext(context.Background(), options, method, params, out)
+}
+
+func (c *httpClient) CallWithOptionsContext(ctx context.Context, options *httpClientCallOptions, method string, params any, out any) error {
 	if c == nil {
 		return errors.New("HTTP MCP client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.applyCallOptions(options)
 	if !c.initialized {
-		if err := c.reinitialize(); err != nil {
+		if err := c.reinitialize(ctx); err != nil {
 			return err
 		}
 	}
-	err := c.callWithTransientRetries(method, params, out)
+	err := c.callWithTransientRetries(ctx, method, params, out)
 	if err == nil || !isMCPHTTPSessionInvalidError(err) || strings.TrimSpace(c.sessionID) == "" {
 		return err
 	}
-	if resetErr := c.reinitialize(); resetErr != nil {
+	if resetErr := c.reinitialize(ctx); resetErr != nil {
 		return resetErr
 	}
-	return c.callWithTransientRetries(method, params, out)
+	return c.callWithTransientRetries(ctx, method, params, out)
 }
 
 func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
@@ -473,8 +463,8 @@ func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
 	c.progress = options.Progress
 }
 
-func (c *httpClient) initialize() (string, error) {
-	response, requestID, err := c.doRPC("initialize", mcpClientInitializeParams(c.openAIForm), "", true)
+func (c *httpClient) initialize(ctx context.Context) (string, error) {
+	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParams(c.openAIForm), "", true)
 	if err != nil {
 		return "", err
 	}
@@ -486,12 +476,18 @@ func (c *httpClient) initialize() (string, error) {
 	if rpc.Error != nil {
 		return "", newMCPRemoteError("initialize", rpc.Error)
 	}
+	var initialized struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if rpc.Result != nil && json.Unmarshal(*rpc.Result, &initialized) == nil {
+		c.negotiatedProtocolVersion = strings.TrimSpace(initialized.ProtocolVersion)
+	}
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
-func (c *httpClient) discover() (string, error) {
-	response, requestID, err := c.doRPC("server/discover", map[string]any{}, "", true)
+func (c *httpClient) discover(ctx context.Context) (string, error) {
+	response, requestID, err := c.doRPC(ctx, "server/discover", map[string]any{}, "", true)
 	if err != nil {
 		return "", err
 	}
@@ -510,26 +506,27 @@ func (c *httpClient) discover() (string, error) {
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
-func (c *httpClient) notifyInitialized(sessionID string) error {
-	response, _, err := c.doRPC("notifications/initialized", map[string]any{}, sessionID, false)
+func (c *httpClient) notifyInitialized(ctx context.Context, sessionID string) error {
+	response, _, err := c.doRPC(ctx, "notifications/initialized", map[string]any{}, sessionID, false)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
 	return err
 }
 
-func (c *httpClient) reinitialize() error {
+func (c *httpClient) reinitialize(ctx context.Context) error {
 	c.initialized = false
 	c.sessionID = ""
 	for attempt := 0; ; attempt++ {
 		c.protocolMode = MCPProtocolLegacy
+		c.negotiatedProtocolVersion = ""
 		if c.config != nil {
 			c.protocolMode = c.config.ProtocolMode
 		}
 		var sessionID string
 		var err error
 		if c.protocolMode == MCPProtocol20260728 {
-			sessionID, err = c.discover()
+			sessionID, err = c.discover(ctx)
 			if err == nil {
 				c.sessionID = sessionID
 				c.initialized = true
@@ -537,14 +534,14 @@ func (c *httpClient) reinitialize() error {
 			}
 			if isMCPDiscoveryFallbackError(err) {
 				c.protocolMode = MCPProtocolLegacy
-				sessionID, err = c.initialize()
+				sessionID, err = c.initialize(ctx)
 			}
 		} else {
-			sessionID, err = c.initialize()
+			sessionID, err = c.initialize(ctx)
 		}
 		if err == nil {
 			c.sessionID = sessionID
-			err = c.notifyInitialized(sessionID)
+			err = c.notifyInitialized(ctx, sessionID)
 			if err == nil {
 				c.initialized = true
 				return nil
@@ -554,36 +551,51 @@ func (c *httpClient) reinitialize() error {
 		if attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {
 			return err
 		}
-		c.sleepBeforeRetry(mcpStreamableHTTPRetryDelays[attempt])
+		if err := c.sleepBeforeRetryContext(ctx, mcpStreamableHTTPRetryDelays[attempt]); err != nil {
+			return err
+		}
 	}
 }
 
-func (c *httpClient) callWithTransientRetries(method string, params any, out any) error {
+func (c *httpClient) callWithTransientRetries(ctx context.Context, method string, params any, out any) error {
 	for attempt := 0; ; attempt++ {
-		err := c.callWithSession(method, params, out, c.sessionID)
+		err := c.callWithSession(ctx, method, params, out, c.sessionID)
 		if err == nil {
 			return nil
 		}
 		if method != "tools/list" || attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {
 			return err
 		}
-		c.sleepBeforeRetry(mcpStreamableHTTPRetryDelays[attempt])
+		if err := c.sleepBeforeRetryContext(ctx, mcpStreamableHTTPRetryDelays[attempt]); err != nil {
+			return err
+		}
 	}
 }
 
 func (c *httpClient) sleepBeforeRetry(delay time.Duration) {
-	if c.retrySleep != nil {
-		c.retrySleep(delay)
-		return
-	}
-	time.Sleep(delay)
+	_ = c.sleepBeforeRetryContext(context.Background(), delay)
 }
 
-func (c *httpClient) callWithSession(method string, params any, out any, sessionID string) error {
+func (c *httpClient) sleepBeforeRetryContext(ctx context.Context, delay time.Duration) error {
+	if c.retrySleep != nil {
+		c.retrySleep(delay)
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *httpClient) callWithSession(ctx context.Context, method string, params any, out any, sessionID string) error {
 	baseParams := params
 	requestParams := params
 	for round := 0; ; round++ {
-		response, requestID, err := c.doRPC(method, requestParams, sessionID, true)
+		response, requestID, err := c.doRPC(ctx, method, requestParams, sessionID, true)
 		if err != nil {
 			return err
 		}
@@ -596,8 +608,8 @@ func (c *httpClient) callWithSession(method string, params any, out any, session
 			return newMCPRemoteError(method, rpc.Error)
 		}
 		if c.protocolMode == MCPProtocol20260728 {
-			ctx := contextWithMCPClientContextAndRoots(context.Background(), c.threadID, c.turnID, c.itemID, c.roots)
-			nextParams, inputRequired, err := nextMCP2026RequestParams(ctx, c.serverName, c.elicitation, baseParams, rpc.Result)
+			requestCtx := contextWithMCPClientContextAndRoots(ctx, c.threadID, c.turnID, c.itemID, c.roots)
+			nextParams, inputRequired, err := nextMCP2026RequestParams(requestCtx, c.serverName, c.elicitation, baseParams, rpc.Result)
 			if err != nil {
 				return err
 			}
@@ -616,7 +628,7 @@ func (c *httpClient) callWithSession(method string, params any, out any, session
 	}
 }
 
-func (c *httpClient) doRPC(method string, params any, sessionID string, includeID bool) (*http.Response, int64, error) {
+func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessionID string, includeID bool) (*http.Response, int64, error) {
 	if c == nil || c.config == nil {
 		return nil, 0, errors.New("HTTP MCP client is nil")
 	}
@@ -640,7 +652,7 @@ func (c *httpClient) doRPC(method string, params any, sessionID string, includeI
 		return nil, 0, err
 	}
 	token, oauthToken := c.authorizationBearerToken(false)
-	response, err := c.doHTTPRequest(endpoint, data, sessionID, token)
+	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -648,7 +660,7 @@ func (c *httpClient) doRPC(method string, params any, sessionID string, includeI
 		retryToken, retryOAuthToken := c.authorizationBearerToken(true)
 		if retryOAuthToken && strings.TrimSpace(retryToken) != "" {
 			_ = response.Body.Close()
-			response, err = c.doHTTPRequest(endpoint, data, sessionID, retryToken)
+			response, err = c.doHTTPRequestContext(ctx, endpoint, data, sessionID, retryToken)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -665,6 +677,21 @@ func (c *httpClient) doRPC(method string, params any, sessionID string, includeI
 			var rpc httpRPCResponse
 			if json.Unmarshal(body, &rpc) == nil && rpc.ID == id && rpc.Error != nil && rpc.Error.Code == mcpJSONRPCMethodNotFoundCode {
 				return nil, id, newMCPRemoteError(method, rpc.Error)
+			}
+			if response.StatusCode == http.StatusBadRequest && strings.TrimSpace(response.Header.Get(mcpHTTPSessionIDHeader)) == "" {
+				var uncorrelated struct {
+					JSONRPC string          `json:"jsonrpc"`
+					ID      json.RawMessage `json:"id"`
+					Error   *stdioRPCError  `json:"error"`
+				}
+				if json.Unmarshal(body, &uncorrelated) == nil &&
+					uncorrelated.JSONRPC == "2.0" &&
+					(len(bytes.TrimSpace(uncorrelated.ID)) == 0 || bytes.Equal(bytes.TrimSpace(uncorrelated.ID), []byte("null"))) &&
+					uncorrelated.Error != nil &&
+					uncorrelated.Error.Code == mcpLegacyPrevalidationErrorCode &&
+					hasMCPLegacyFallbackEvidence(uncorrelated.Error.Message) {
+					return nil, id, errMCPModernProtocolUnsupported
+				}
 			}
 		}
 		detail := strings.TrimSpace(string(body))
@@ -711,14 +738,21 @@ func isRetryableMCPStreamableHTTPError(err error) bool {
 }
 
 func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID string, bearerToken string) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(data))
+	return c.doHTTPRequestContext(context.Background(), endpoint, data, sessionID, bearerToken)
+}
+
+func (c *httpClient) doHTTPRequestContext(ctx context.Context, endpoint string, data []byte, sessionID string, bearerToken string) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	c.applyConfiguredHTTPHeaders(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
-	request.Header.Set(mcpHTTPProtocolVersionHeader, c.protocolMode.protocolVersion())
+	request.Header.Set(mcpHTTPProtocolVersionHeader, c.effectiveProtocolVersion())
 	if strings.TrimSpace(sessionID) != "" {
 		request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
 	}
@@ -731,6 +765,16 @@ func (c *httpClient) doHTTPRequest(endpoint string, data []byte, sessionID strin
 		}
 	}
 	return c.client.Do(request)
+}
+
+func (c *httpClient) effectiveProtocolVersion() string {
+	if c != nil && strings.TrimSpace(c.negotiatedProtocolVersion) != "" {
+		return strings.TrimSpace(c.negotiatedProtocolVersion)
+	}
+	if c == nil {
+		return defaultMCPProtocol
+	}
+	return c.protocolMode.protocolVersion()
 }
 
 func (c *httpClient) applyConfiguredHTTPHeaders(request *http.Request) {

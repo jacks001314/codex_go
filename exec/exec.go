@@ -123,10 +123,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := validateExecWorkingDirectory(requestCWD(req)); err != nil {
 		return nil, err
 	}
-	if warning := removedFullAutoWarning(req.Exec); warning != "" {
-		fmt.Fprintln(stderr, warning)
-	}
-
 	cfg, err := config.LoadEffective(
 		r.CodexHome,
 		mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
@@ -1176,8 +1172,7 @@ func sandboxPermissionProfile(resolution *config.SandboxPermissionProfileResolut
 
 func effectiveExecApprovalPolicy(cfg *config.Config, req *Request) sandbox.AskForApproval {
 	if req != nil && (req.Exec.Shared.DangerouslyBypassApprovalsAndSandbox ||
-		req.Root.Shared.DangerouslyBypassApprovalsAndSandbox ||
-		req.Exec.RemovedFullAuto) {
+		req.Root.Shared.DangerouslyBypassApprovalsAndSandbox) {
 		return sandbox.ApprovalNever
 	}
 	if req != nil {
@@ -1670,13 +1665,6 @@ func newThreadID() string {
 
 func deterministicTurnID(prompt string) string {
 	return "turn-" + uuid.NewString()
-}
-
-func removedFullAutoWarning(opts cli.ExecOptions) string {
-	if opts.RemovedFullAuto {
-		return "warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead."
-	}
-	return ""
 }
 
 func mergedOverrides(root, exec []string) []string {
@@ -3922,7 +3910,7 @@ func execCompactItemsFromSession(items []session.Item) []compact.Item {
 				kind = strings.TrimSpace(value)
 			}
 		}
-		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Created: item.CreatedAt}
+		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Created: item.CreatedAt}
 		for j := range item.Content {
 			compactItem.Content = append(compactItem.Content, compact.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
 		}
@@ -3939,7 +3927,7 @@ func execSessionItemsFromCompact(items []compact.Item, now time.Time) []session.
 		if created.IsZero() {
 			created = now
 		}
-		sessionItem := session.Item{ID: firstNonEmpty(item.ID, fmt.Sprintf("compact-%d", i)), Type: item.Type, Role: item.Role, Text: compact.ItemText(&item), CreatedAt: created, Data: cloneExecAnyMap(item.Data), Metadata: map[string]any{"compact": true, "kind": item.Kind}}
+		sessionItem := session.Item{ID: firstNonEmpty(item.ID, fmt.Sprintf("compact-%d", i)), Type: item.Type, Role: item.Role, Text: compact.ItemText(&item), CreatedAt: created, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Metadata: map[string]any{"compact": true, "kind": item.Kind}}
 		for j := range item.Content {
 			sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
 		}

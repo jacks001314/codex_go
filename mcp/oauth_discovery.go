@@ -50,7 +50,7 @@ func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *
 	if client == nil {
 		client = http.DefaultClient
 	}
-	client = mcpHTTPClientWithDefaultHeaders(client, nil)
+	client = mcpOAuthDiscoveryHTTPClient(mcpHTTPClientWithDefaultHeaders(client, nil))
 	raw := strings.TrimSpace(serverURL)
 	if raw == "" {
 		return nil, errors.New("MCP OAuth discovery URL is required")
@@ -87,6 +87,47 @@ func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *
 	return nil, nil
 }
 
+func mcpOAuthDiscoveryHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	cloned := *client
+	originalCheckRedirect := client.CheckRedirect
+	cloned.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !sameHTTPOrigin(via[len(via)-1].URL, request.URL) {
+			return fmt.Errorf("OAuth discovery redirect to non-same-origin URL rejected: %s", request.URL)
+		}
+		if originalCheckRedirect != nil {
+			return originalCheckRedirect(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &cloned
+}
+
+func sameHTTPOrigin(left *url.URL, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, right.Scheme) || !strings.EqualFold(left.Hostname(), right.Hostname()) {
+		return false
+	}
+	port := func(value *url.URL) string {
+		if explicit := value.Port(); explicit != "" {
+			return explicit
+		}
+		switch strings.ToLower(value.Scheme) {
+		case "http":
+			return "80"
+		case "https":
+			return "443"
+		default:
+			return ""
+		}
+	}
+	return port(left) == port(right)
+}
+
 func SupportsStreamableHTTPOAuthLogin(ctx context.Context, serverURL string, client *http.Client) (bool, error) {
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, serverURL, client)
 	if err != nil {
@@ -95,7 +136,7 @@ func SupportsStreamableHTTPOAuthLogin(ctx context.Context, serverURL string, cli
 	return discovery != nil, nil
 }
 
-func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64) string {
+func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64, client *http.Client) string {
 	if timeoutSecs == nil || *timeoutSecs == 0 {
 		return buildMCPOAuthURL(config, scopes)
 	}
@@ -105,7 +146,25 @@ func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return buildMCPOAuthURLWithDiscovery(ctx, config, scopes, &http.Client{Timeout: timeout})
+	if client == nil {
+		client = &http.Client{}
+	} else {
+		cloned := *client
+		client = &cloned
+	}
+	client.Timeout = timeout
+	return buildMCPOAuthURLWithDiscovery(ctx, config, scopes, client)
+}
+
+func mcpOAuthLoginDiscoveryTimeout(timeoutSecs *uint64) time.Duration {
+	if timeoutSecs == nil || *timeoutSecs == 0 {
+		return 0
+	}
+	timeout := time.Duration(*timeoutSecs) * time.Second
+	if timeout > mcpOAuthLoginDiscoveryMaxTimeout {
+		return mcpOAuthLoginDiscoveryMaxTimeout
+	}
+	return timeout
 }
 
 func buildMCPOAuthURLWithDiscovery(ctx context.Context, config *ServerConfig, scopes []string, client *http.Client) string {

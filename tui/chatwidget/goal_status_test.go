@@ -114,6 +114,12 @@ func TestGoalSummaryLinesAndHints(t *testing.T) {
 	}
 }
 
+func TestGoalBlockedUsesStalledDisplayLabelLikeRust(t *testing.T) {
+	if got := GoalStatusLabel(appserver.GoalBlocked); got != "stalled" {
+		t.Fatalf("GoalStatusLabel(blocked) = %q", got)
+	}
+}
+
 func TestEditedGoalStatus(t *testing.T) {
 	cases := map[appserver.GoalStatus]appserver.GoalStatus{
 		appserver.GoalActive:        appserver.GoalActive,

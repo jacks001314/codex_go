@@ -257,6 +257,74 @@ func TestDiscoverStreamableHTTPOAuthIgnoresEmptyScopes(t *testing.T) {
 	}
 }
 
+func TestOAuthDiscoveryRejectsCrossOriginRedirects(t *testing.T) {
+	targetRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetRequests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp" {
+			http.Redirect(w, r, target.URL+"/redirect-target", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer resource.Close()
+
+	_, err := DiscoverStreamableHTTPOAuth(context.Background(), resource.URL+"/mcp", resource.Client())
+	if err == nil || !strings.Contains(err.Error(), "OAuth discovery redirect to non-same-origin URL rejected") || !strings.Contains(err.Error(), target.URL) {
+		t.Fatalf("cross-origin discovery error = %v", err)
+	}
+	if targetRequests != 0 {
+		t.Fatalf("cross-origin redirect target received %d requests", targetRequests)
+	}
+}
+
+func TestOAuthDiscoveryPreservesTransientHTTPErrors(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			_, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", status)) {
+				t.Fatalf("transient HTTP %d discovery error = %v", status, err)
+			}
+		})
+	}
+}
+
+func TestOAuthDiscoveryPreservesSameOriginRedirectPolicy(t *testing.T) {
+	redirectChecks := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/from" {
+			http.Redirect(w, r, "/to", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		redirectChecks++
+		return nil
+	}
+	response, err := mcpOAuthDiscoveryHTTPClient(client).Get(server.URL + "/from")
+	if err != nil {
+		t.Fatalf("same-origin redirect error = %v", err)
+	}
+	_ = response.Body.Close()
+	if redirectChecks != 1 || response.Request.URL.Path != "/to" {
+		t.Fatalf("same-origin checks=%d final=%s", redirectChecks, response.Request.URL)
+	}
+}
+
 func TestSupportsStreamableHTTPOAuthLoginDoesNotRequireScopesSupported(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {

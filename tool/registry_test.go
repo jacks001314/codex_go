@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,11 +33,43 @@ func TestRegistryRegisterAndModelVisibleSpecs(t *testing.T) {
 		t.Fatalf("discoverable = %+v", discoverable)
 	}
 	names := registry.Names()
-	if !reflect.DeepEqual([]string{names[0].Key(), names[1].Key(), names[2].Key(), names[3].Key()}, []string{"a", "b", "d", "ns.c"}) {
+	if !reflect.DeepEqual([]string{names[0].Key(), names[1].Key(), names[2].Key(), names[3].Key()}, []string{"b", "a", "ns.c", "d"}) {
 		t.Fatalf("names = %+v", names)
 	}
 	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("a")}, noopExecutor)); !errors.Is(err, ErrDuplicateToolName) {
 		t.Fatalf("expected duplicate, got %v", err)
+	}
+}
+
+func TestRegistryExternalRegistrationPreservesFirstRuntimeAndTrustedOrder(t *testing.T) {
+	registry := NewRegistry()
+	first := NewExecutorFunc(Spec{Name: PlainName("first"), Description: "winner"}, noopExecutor)
+	if err := registry.Register(first); err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registry.RegisterExternal(NewExecutorFunc(Spec{Name: PlainName("first"), Description: "shadow"}, noopExecutor))
+	if err != nil || registered {
+		t.Fatalf("RegisterExternal(duplicate) registered=%t err=%v", registered, err)
+	}
+	registered, err = registry.RegisterExternal(NewExecutorFunc(Spec{Name: PlainName("second")}, noopExecutor))
+	if err != nil || !registered {
+		t.Fatalf("RegisterExternal(second) registered=%t err=%v", registered, err)
+	}
+	if err := registry.Prepend(NewExecutorFunc(Spec{Name: PlainName("synthetic")}, noopExecutor)); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.Names(); len(got) != 3 || got[0].Key() != "synthetic" || got[1].Key() != "first" || got[2].Key() != "second" {
+		t.Fatalf("ordered names = %#v", got)
+	}
+	if executor, ok := registry.Lookup(PlainName("first")); !ok || executor != first {
+		t.Fatalf("first runtime was replaced: %#v", executor)
+	}
+	removed, ok := registry.Remove(PlainName("first"))
+	if !ok || removed != first {
+		t.Fatalf("Remove(first) = %#v, %t", removed, ok)
+	}
+	if got := registry.Names(); len(got) != 2 || got[0].Key() != "synthetic" || got[1].Key() != "second" {
+		t.Fatalf("names after removal = %#v", got)
 	}
 }
 
@@ -114,7 +147,8 @@ func TestRouterBuildToolCall(t *testing.T) {
 
 func TestRouterBuildToolCallResolvesResponsesAPIName(t *testing.T) {
 	registry := NewRegistry()
-	err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("mcp__memory", "create_entities")}, noopExecutor))
+	readOnly := true
+	err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("mcp__memory", "create_entities"), ReadOnlyHint: &readOnly}, noopExecutor))
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -131,6 +165,40 @@ func TestRouterBuildToolCallResolvesResponsesAPIName(t *testing.T) {
 	}
 	if invocation.ToolName.Key() != "mcp__memory.create_entities" {
 		t.Fatalf("tool name = %s", invocation.ToolName.Key())
+	}
+	if hint, ok := invocation.Context["read_only_hint"].(bool); !ok || !hint {
+		t.Fatalf("invocation read-only context = %#v", invocation.Context)
+	}
+}
+
+func TestRouterBuildToolCallMarksOnlyPlaintextCollaborationMessages(t *testing.T) {
+	empty := []string{}
+	encrypted := []string{"message"}
+	router := NewRouter(NewRegistry())
+	tests := []struct {
+		name      ToolName
+		metadata  *[]string
+		plaintext bool
+	}{
+		{name: NamespacedName("collaboration", "spawn_agent"), metadata: &empty, plaintext: true},
+		{name: NamespacedName("collaboration", "send_message"), metadata: &empty, plaintext: true},
+		{name: NamespacedName("collaboration", "followup_task"), metadata: &empty, plaintext: true},
+		{name: NamespacedName("collaboration", "wait_agent"), metadata: &empty},
+		{name: NamespacedName("mcp__server", "spawn_agent"), metadata: &empty},
+		{name: NamespacedName("collaboration", "spawn_agent"), metadata: &encrypted},
+		{name: NamespacedName("collaboration", "spawn_agent")},
+	}
+	for index, test := range tests {
+		invocation, ok, err := router.BuildToolCall(ResponseItem{
+			Type: "function_call", Namespace: test.name.Namespace, Name: test.name.Name,
+			CallID: fmt.Sprintf("call-%d", index), EncryptedFunctionArgs: test.metadata,
+		})
+		if err != nil || !ok {
+			t.Fatalf("BuildToolCall(%d) ok=%t err=%v", index, ok, err)
+		}
+		if got := invocation.Source == "direct_plaintext_message"; got != test.plaintext {
+			t.Fatalf("BuildToolCall(%d) source=%q, plaintext=%t", index, invocation.Source, test.plaintext)
+		}
 	}
 }
 

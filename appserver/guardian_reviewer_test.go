@@ -95,7 +95,7 @@ func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reviewer := &modelGuardianReviewer{agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
-				if request.TaskKind != model.AgentTaskReview || request.Originator != "guardian" || request.ClientMetadata["x-openai-subagent"] != "guardian" || request.OutputSchema == nil {
+				if request.TaskKind != model.AgentTaskReview || request.Originator != "guardian" || request.ClientMetadata["x-openai-subagent"] != "guardian" || request.ClientMetadata["parent_turn_id"] != "turn-1" || request.OutputSchema == nil {
 					t.Fatalf("request = %#v", request)
 				}
 				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"` + tc.outcome + `","rationale":"reviewed"}`}, nil

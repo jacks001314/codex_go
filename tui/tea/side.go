@@ -342,18 +342,25 @@ func (m *Model) returnFromSideConversation() bubbletea.Cmd {
 			SideThreadID:   side.SideThreadID,
 		}
 		closer := m.onCloseSide
-		m.notice = "Closing side conversation..."
-		m.refreshTranscript()
-		return func() bubbletea.Msg {
+		m.abandonSideThread(side.SideThreadID)
+		statusCmd := m.finishReturnFromSideConversation(side, "Returned to main thread.")
+		cleanupCmd := func() bubbletea.Msg {
 			response, err := closer(params)
 			return SideCloseResultMsg{Params: params, Response: response, Err: err}
 		}
+		return bubbletea.Batch(statusCmd, cleanupCmd)
 	}
 	return m.finishReturnFromSideConversation(side, "Returned to main thread.")
 }
 
 func (m *Model) applySideCloseResult(msg SideCloseResultMsg) bubbletea.Cmd {
-	if m == nil || m.State == nil || m.activeSide == nil {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if m.sideThreadAbandoned(msg.Params.SideThreadID) {
+		return nil
+	}
+	if m.activeSide == nil {
 		return nil
 	}
 	side := m.activeSide
@@ -367,6 +374,28 @@ func (m *Model) applySideCloseResult(msg SideCloseResultMsg) bubbletea.Cmd {
 		return nil
 	}
 	return m.finishReturnFromSideConversation(side, "Returned to main thread.")
+}
+
+func (m *Model) abandonSideThread(threadID string) {
+	if m == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if m.abandonedSideThreads == nil {
+		m.abandonedSideThreads = map[string]struct{}{}
+	}
+	m.abandonedSideThreads[threadID] = struct{}{}
+}
+
+func (m *Model) sideThreadAbandoned(threadID string) bool {
+	if m == nil || len(m.abandonedSideThreads) == 0 {
+		return false
+	}
+	_, ok := m.abandonedSideThreads[strings.TrimSpace(threadID)]
+	return ok
 }
 
 func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, notice string) bubbletea.Cmd {
@@ -463,6 +492,9 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 	if threadID == "" {
 		return nil
 	}
+	if m.sideThreadAbandoned(threadID) {
+		return nil
+	}
 	if threadID == strings.TrimSpace(m.State.ThreadID) {
 		cmd := m.applyThreadEvent(msg.Event)
 		if m.activeSide != nil {
@@ -510,6 +542,9 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 		return false
 	}
 	threadID := strings.TrimSpace(msg.ThreadID)
+	if m.sideThreadAbandoned(threadID) {
+		return true
+	}
 	currentThreadID := strings.TrimSpace(m.State.ThreadID)
 	if threadID == "" || currentThreadID == "" || threadID == currentThreadID {
 		return false
@@ -553,6 +588,9 @@ func (m *Model) applyInactiveThreadTurnInterrupted(msg TurnInterruptedMsg) bool 
 		return false
 	}
 	threadID := strings.TrimSpace(msg.ThreadID)
+	if m.sideThreadAbandoned(threadID) {
+		return true
+	}
 	currentThreadID := strings.TrimSpace(m.State.ThreadID)
 	if threadID == "" || currentThreadID == "" || threadID == currentThreadID {
 		return false

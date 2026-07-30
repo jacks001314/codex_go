@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	RemoteSecurityProfile = "noise_hybrid_ik_v1"
+	RemoteSecurityProfile                 = "noise_hybrid_ik_v1"
+	CodexExecServerExitOnStdinCloseEnvVar = "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE"
 
 	noiseChannelSuite         = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256"
 	mlkem768PublicKeyBytes    = 1184
@@ -106,6 +107,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	defer identity.Destroy()
 
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
+	defer server.shutdownSessions()
 	backoff := cfg.Backoff
 	registration, err := registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
 	if err != nil {

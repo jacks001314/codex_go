@@ -3,6 +3,8 @@ package diffview
 import (
 	"strings"
 	"testing"
+
+	codextui "codex_go/tui"
 )
 
 func TestNewViewDefaults(t *testing.T) {
@@ -180,10 +182,20 @@ func TestTruncateLine(t *testing.T) {
 	}
 }
 
+func TestTruncateLineUsesTerminalGraphemeWidth(t *testing.T) {
+	v := NewView(5)
+	if got := v.truncateLine("ab\uff76\uff9ecd"); got != "ab\uff76\uff9e\u2026" {
+		t.Fatalf("halfwidth truncateLine = %q", got)
+	}
+	if got := v.truncateLine("a\U0001f44d\U0001f3fbbcd"); codextui.DisplayWidth(got) > 5 || strings.Contains(got, "\U0001f44d\u2026") {
+		t.Fatalf("emoji truncateLine = %q width=%d", got, codextui.DisplayWidth(got))
+	}
+}
+
 func TestZeroWidth(t *testing.T) {
 	v := NewView(0)
 	v.AddFile(FileDiff{
-		Path: "x.go",
+		Path:  "x.go",
 		Hunks: []Hunk{{Lines: []DiffLine{{Kind: LineContext, Content: "x"}}}},
 	})
 	out := v.Render()

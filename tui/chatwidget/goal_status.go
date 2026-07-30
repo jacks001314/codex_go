@@ -136,7 +136,7 @@ func GoalStatusLabel(status appserver.GoalStatus) string {
 	case appserver.GoalPaused:
 		return "paused"
 	case appserver.GoalBlocked:
-		return "blocked"
+		return "stalled"
 	case appserver.GoalUsageLimited:
 		return "usage limited"
 	case appserver.GoalBudgetLimited:

@@ -59,6 +59,18 @@ func (r *Runtime) DeferredToolNamespaces() map[string]string {
 	return r.router.DeferredToolNamespaces()
 }
 
+func (r *Runtime) StandaloneWebSearchRegistered() bool {
+	if r == nil || r.router == nil {
+		return false
+	}
+	executor, ok := r.router.Executor(tool.NamespacedName(WebSearchNamespace, WebSearchRunTool))
+	if !ok {
+		return false
+	}
+	_, ok = executor.(*WebSearchHandler)
+	return ok
+}
+
 func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoopResult, error) {
 	if r == nil || r.agent == nil {
 		return nil, errors.New("turn runtime agent is nil")
@@ -146,7 +158,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 		}
 		if codemode.HasExecTool(visibleSpecs) {
-			visibleSpecs = codemode.AugmentToolSpecs(visibleSpecs)
+			visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 		}
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
@@ -171,6 +183,25 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+func augmentCodeModeWinnerSpecs(specs []tool.Spec, nestedSpecs []tool.Spec) []tool.Spec {
+	winners := make(map[string]struct{}, len(nestedSpecs))
+	for _, spec := range nestedSpecs {
+		winners[spec.Name.Key()] = struct{}{}
+	}
+	out := append([]tool.Spec(nil), specs...)
+	for index := range out {
+		name := out[index].Name
+		if codemode.IsPublicToolName(name) || name.Key() == codemode.WaitToolName {
+			out[index] = codemode.AugmentToolSpec(out[index])
+			continue
+		}
+		if _, ok := winners[name.Key()]; ok {
+			out[index] = codemode.AugmentToolSpec(out[index])
+		}
+	}
+	return out
 }
 
 func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {

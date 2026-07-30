@@ -303,6 +303,50 @@ func TestNetworkApprovalPolicyAmendmentPersistsAndOverlaysStartupLikeRust(t *tes
 	}
 }
 
+func TestNetworkApprovalFailedAllowAmendmentDeniesAndPromptsAgainLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	home := router.services.Config.CodexHome()
+	if err := os.WriteFile(filepath.Join(home, "rules"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile(rules blocker) error = %v", err)
+	}
+	var requests atomic.Int32
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests.Add(1)
+		decision := map[string]any{
+			string(CommandExecutionApprovalApplyNetworkPolicyAmendment): map[string]any{
+				"network_policy_amendment": map[string]any{"host": "failed.example", "action": string(NetworkPolicyRuleAllow)},
+			},
+		}
+		_, _ = router.requireServerRequests().Resolve(&Response{ID: request.ID, Result: map[string]any{"decision": decision}})
+	}))
+	invocation := &tool.Invocation{CallID: "call-failed-amendment", ToolName: tool.PlainName("exec_command")}
+	router.networkApproval.registerActiveCall("thread-network", "turn-network", invocation)
+	policyRequest := network.ProxyPolicyRequest{Protocol: network.ProxyProtocolHTTPSConnect, Host: "failed.example", Port: 443, EnvironmentID: "local"}
+	for attempt := 0; attempt < 2; attempt++ {
+		decision := router.networkApproval.Decide(context.Background(), policyRequest)
+		if decision.Allow || decision.Decision != network.ProxyPolicyDecisionDeny {
+			t.Fatalf("attempt %d decision = %#v, want deny", attempt+1, decision)
+		}
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("approval requests = %d, want a new prompt after each failed amendment", requests.Load())
+	}
+	key := networkApprovalKey{threadID: "thread-network", environmentID: "local", protocol: network.ProxyProtocolHTTPSConnect, host: "failed.example", port: 443}
+	router.networkApproval.mu.Lock()
+	_, allowed := router.networkApproval.allowed[key]
+	_, denied := router.networkApproval.denied[key]
+	router.networkApproval.mu.Unlock()
+	if allowed || denied {
+		t.Fatalf("failed amendment was cached: allowed=%t denied=%t", allowed, denied)
+	}
+	if fragments := router.networkApproval.takeNetworkRulesSaved("thread-network", "turn-network"); len(fragments) != 0 {
+		t.Fatalf("failed amendment emitted saved fragments: %#v", fragments)
+	}
+	if outcome := router.networkApproval.finishActiveCall("thread-network", "turn-network", invocation); !strings.Contains(outcome, "blocked by policy") {
+		t.Fatalf("active call outcome = %q", outcome)
+	}
+}
+
 func TestNetworkApprovalSavedRuleIsInjectedAfterToolLikeRust(t *testing.T) {
 	router := newNetworkApprovalTestRouter(t, "on-request")
 	router.networkApproval.rememberNetworkRuleSaved("thread-network", "turn-network", &NetworkPolicyAmendment{Host: "api.example.test", Action: NetworkPolicyRuleAllow})

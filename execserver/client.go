@@ -805,15 +805,35 @@ func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, err
 }
 
 func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDiscoveryParams) (*CapabilityDiscoveryResponse, error) {
-	var response CapabilityDiscoveryResponse
-	if err := c.call(ctx, MethodCapabilitiesDiscover, params, &response); err != nil {
-		return nil, err
+	response := CapabilityDiscoveryResponse{Manifests: []CapabilityManifest{}, Errors: []CapabilityDiscoveryError{}}
+	if params == nil || len(params.Roots) == 0 {
+		return &response, nil
 	}
-	if response.Manifests == nil {
-		response.Manifests = []CapabilityManifest{}
+	normalizedRoots := make([]CapabilityDiscoveryRoot, len(params.Roots))
+	for i := range params.Roots {
+		normalizedRoots[i] = params.Roots[i]
+		var err error
+		normalizedRoots[i].Path, err = normalizeFSPathForWire(params.Roots[i].Path)
+		if err != nil {
+			return nil, fmt.Errorf("capability root %q path: %w", params.Roots[i].ID, err)
+		}
+		normalizedRoots[i].Sandbox, err = normalizeFSSandboxForWire(params.Roots[i].Sandbox)
+		if err != nil {
+			return nil, fmt.Errorf("capability root %q sandbox: %w", params.Roots[i].ID, err)
+		}
 	}
-	if response.Errors == nil {
-		response.Errors = []CapabilityDiscoveryError{}
+	for start := 0; start < len(normalizedRoots); start += maxCapabilityDiscoveryRoots {
+		end := start + maxCapabilityDiscoveryRoots
+		if end > len(normalizedRoots) {
+			end = len(normalizedRoots)
+		}
+		batchParams := CapabilityDiscoveryParams{Roots: append([]CapabilityDiscoveryRoot(nil), normalizedRoots[start:end]...)}
+		var batch CapabilityDiscoveryResponse
+		if err := c.call(ctx, MethodCapabilitiesDiscover, &batchParams, &batch); err != nil {
+			return nil, err
+		}
+		response.Manifests = append(response.Manifests, batch.Manifests...)
+		response.Errors = append(response.Errors, batch.Errors...)
 	}
 	return &response, nil
 }

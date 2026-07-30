@@ -285,23 +285,25 @@ func frontTruncate(text string, maxWidth int) string {
 	if maxWidth == 1 {
 		return "…"
 	}
-	kept := []rune{}
+	clusters := make([]string, 0, uniseg.GraphemeClusterCount(text))
+	graphemes := uniseg.NewGraphemes(text)
+	for graphemes.Next() {
+		clusters = append(clusters, graphemes.Str())
+	}
+	kept := make([]string, 0, len(clusters))
 	used := 1
-	for _, r := range reverseRunes([]rune(text)) {
-		width := DisplayWidth(string(r))
+	for i := len(clusters) - 1; i >= 0; i-- {
+		width := DisplayWidth(clusters[i])
 		if used+width > maxWidth {
 			break
 		}
-		kept = append([]rune{r}, kept...)
+		kept = append(kept, clusters[i])
 		used += width
 	}
-	return "…" + string(kept)
-}
-
-func reverseRunes(in []rune) []rune {
-	out := append([]rune(nil), in...)
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
+	var out strings.Builder
+	out.WriteRune('\u2026')
+	for i := len(kept) - 1; i >= 0; i-- {
+		out.WriteString(kept[i])
 	}
-	return out
+	return out.String()
 }

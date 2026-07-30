@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	codextui "codex_go/tui"
+	"github.com/rivo/uniseg"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/request_user_input/render.rs.
@@ -231,16 +232,18 @@ func truncateLineWordBoundaryWithEllipsis(line string, maxWidth int) string {
 	lastFitByteEnd := -1
 	lastWordBreakByteEnd := -1
 	overflowed := false
-	for byteIdx, r := range line {
-		runeWidth := codextui.DisplayWidth(string(r))
-		if used+runeWidth > limit {
+	graphemes := uniseg.NewGraphemes(line)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		_, byteEnd := graphemes.Positions()
+		graphemeWidth := codextui.DisplayWidth(grapheme)
+		if used+graphemeWidth > limit {
 			overflowed = true
 			break
 		}
-		used += runeWidth
-		byteEnd := byteIdx + len(string(r))
+		used += graphemeWidth
 		lastFitByteEnd = byteEnd
-		if unicode.IsSpace(r) {
+		if strings.TrimSpace(grapheme) == "" {
 			lastWordBreakByteEnd = byteEnd
 		}
 	}
@@ -268,20 +271,21 @@ func breakLongWord(value string, width int) []string {
 	out := []string{}
 	var builder strings.Builder
 	used := 0
-	for _, r := range value {
-		ch := string(r)
-		runeWidth := codextui.DisplayWidth(ch)
-		if used > 0 && used+runeWidth > width {
+	graphemes := uniseg.NewGraphemes(value)
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		graphemeWidth := codextui.DisplayWidth(grapheme)
+		if used > 0 && used+graphemeWidth > width {
 			out = append(out, builder.String())
 			builder.Reset()
 			used = 0
 		}
-		if used == 0 && runeWidth > width {
-			out = append(out, ch)
+		if used == 0 && graphemeWidth > width {
+			out = append(out, grapheme)
 			continue
 		}
-		builder.WriteRune(r)
-		used += runeWidth
+		builder.WriteString(grapheme)
+		used += graphemeWidth
 	}
 	if builder.Len() > 0 {
 		out = append(out, builder.String())

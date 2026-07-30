@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,6 +121,23 @@ func TestMCPServerStatusPreservesRawServerAndToolNames(t *testing.T) {
 	}
 	if strings.Join(statusTools["some-server"], ",") != "look-up.raw" || strings.Join(statusTools["some_server"], ",") != "underscore_lookup" {
 		t.Fatalf("status tools = %#v", statusTools)
+	}
+}
+
+func TestMCPAuthStatusIsUnknownWhenCredentialDiscoveryFailsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, mcpOAuthFallbackFilename), []byte("not-json"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{
+		CodexHome: home,
+		Servers: map[string]ServerRegistration{
+			"remote": {Config: ServerConfig{URL: "https://mcp.example.test/mcp", Enabled: true}},
+		},
+	})
+	statuses := service.ListStatus(&MCPListServerStatusParams{})
+	if len(statuses.Servers) != 1 || statuses.Servers[0].AuthStatus != MCPAuthUnknown {
+		t.Fatalf("auth statuses = %#v, want unknown", statuses.Servers)
 	}
 }
 
@@ -257,6 +275,18 @@ func TestListStatusCheckedOptionalStartupUsesSharedGraceAndWarmsCache(t *testing
 	}
 	if len(response.Data) != 1 || len(response.Data[0].Tools) != 0 {
 		t.Fatalf("pending optional response = %#v", response.Data)
+	}
+	started = time.Now()
+	second, err := service.ListStatusChecked(&MCPListServerStatusParams{
+		Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: 50 * time.Millisecond,
+	})
+	if err != nil || second == nil {
+		t.Fatalf("second ListStatusChecked() response=%#v error=%v", second, err)
+	}
+	if elapsed := time.Since(started); elapsed > 25*time.Millisecond {
+		t.Fatalf("second capture restarted optional startup grace: %v", elapsed)
 	}
 	if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
 		t.Fatalf("release optional helper: %v", err)

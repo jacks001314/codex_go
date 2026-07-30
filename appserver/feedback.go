@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"codex_go/rollout"
 )
 
 var ErrInvalidFeedbackRequest = errors.New("invalid feedback request")
@@ -229,6 +231,48 @@ func (s *FeedbackSnapshot) PrepareUpload(options *FeedbackUploadOptions) *Prepar
 	}
 	s.LastPrepared = prepared.Clone()
 	return prepared
+}
+
+type feedbackTurnContext struct {
+	TurnID *string `json:"turn_id"`
+	Model  string  `json:"model"`
+	Effort *string `json:"effort"`
+}
+
+func feedbackModelAndEffortFromRollout(path string, turnID *string) (string, string, bool) {
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return "", "", false
+	}
+	for index := len(lines) - 1; index >= 0; index-- {
+		if len(lines[index].TurnContext) == 0 {
+			continue
+		}
+		var context feedbackTurnContext
+		if err := json.Unmarshal(lines[index].TurnContext, &context); err != nil {
+			continue
+		}
+		if turnID != nil && (context.TurnID == nil || *context.TurnID != *turnID) {
+			continue
+		}
+		return context.Model, feedbackReasoningEffortTag(context.Effort), true
+	}
+	return "", "", false
+}
+
+func feedbackReasoningEffortTag(effort *string) string {
+	if effort == nil {
+		return "None"
+	}
+	name := strings.ToLower(strings.TrimSpace(*effort))
+	variants := map[string]string{
+		"none": "None", "minimal": "Minimal", "low": "Low", "medium": "Medium",
+		"high": "High", "xhigh": "XHigh", "max": "Max", "ultra": "Ultra",
+	}
+	if variant, ok := variants[name]; ok {
+		return "Some(" + variant + ")"
+	}
+	return fmt.Sprintf("Some(Custom(%q))", strings.TrimSpace(*effort))
 }
 
 func (p *PreparedFeedbackUpload) Clone() *PreparedFeedbackUpload {

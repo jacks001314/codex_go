@@ -59,6 +59,7 @@ type Spec struct {
 	Search               *SearchInfo    `json:"search,omitempty"`
 	Exposure             Exposure       `json:"exposure,omitempty"`
 	Parallel             bool           `json:"parallel,omitempty"`
+	ReadOnlyHint         *bool          `json:"-"`
 	NamespaceDescription string         `json:"-"`
 }
 
@@ -135,6 +136,12 @@ type Executor interface {
 	Execute(ctx context.Context, invocation *Invocation) (*Output, error)
 }
 
+// ReadinessWaiter lets an exact tool runtime wait for external readiness before
+// it enters the response's parallel/serial execution gate.
+type ReadinessWaiter interface {
+	WaitUntilReady(ctx context.Context, invocation *Invocation) error
+}
+
 type ExecutorFunc struct {
 	spec Spec
 	run  func(context.Context, *Invocation) (*Output, error)
@@ -159,29 +166,78 @@ type Registry struct {
 	mu        sync.RWMutex
 	executors map[string]Executor
 	specs     map[string]Spec
+	order     []string
 }
 
 func NewRegistry() *Registry {
-	return &Registry{executors: map[string]Executor{}, specs: map[string]Spec{}}
+	return &Registry{executors: map[string]Executor{}, specs: map[string]Spec{}, order: []string{}}
 }
 
 func (r *Registry) Register(executor Executor) error {
+	_, err := r.register(executor, false, false)
+	return err
+}
+
+// RegisterExternal retains the first runtime registered for a name. External
+// tool sources are untrusted input and name collisions must not replace host
+// runtimes or abort construction of the turn.
+func (r *Registry) RegisterExternal(executor Executor) (bool, error) {
+	return r.register(executor, true, false)
+}
+
+// Prepend registers a trusted synthetic runtime ahead of existing runtimes.
+func (r *Registry) Prepend(executor Executor) error {
+	_, err := r.register(executor, false, true)
+	return err
+}
+
+func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool) (bool, error) {
 	if executor == nil {
-		return fmt.Errorf("%w: executor is nil", ErrToolInvalidCall)
+		return false, fmt.Errorf("%w: executor is nil", ErrToolInvalidCall)
 	}
 	spec := executor.Spec()
 	key := spec.Name.Key()
 	if key == "" {
-		return fmt.Errorf("%w: name is required", ErrToolInvalidCall)
+		return false, fmt.Errorf("%w: name is required", ErrToolInvalidCall)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.executors[key]; exists {
-		return fmt.Errorf("%w: %s", ErrDuplicateToolName, key)
+		if skipDuplicate {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: %s", ErrDuplicateToolName, key)
 	}
 	r.executors[key] = executor
 	r.specs[key] = spec
-	return nil
+	if prepend {
+		r.order = append([]string{key}, r.order...)
+	} else {
+		r.order = append(r.order, key)
+	}
+	return true, nil
+}
+
+func (r *Registry) Remove(name ToolName) (Executor, bool) {
+	if r == nil {
+		return nil, false
+	}
+	key := name.Key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	executor, ok := r.executors[key]
+	if !ok {
+		return nil, false
+	}
+	delete(r.executors, key)
+	delete(r.specs, key)
+	for index, orderedKey := range r.order {
+		if orderedKey == key {
+			r.order = append(r.order[:index], r.order[index+1:]...)
+			break
+		}
+	}
+	return executor, true
 }
 
 func (r *Registry) Lookup(name ToolName) (Executor, bool) {
@@ -202,12 +258,12 @@ func (r *Registry) ModelVisibleSpecs() []Spec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]Spec, 0, len(r.specs))
-	for _, spec := range r.specs {
+	for _, key := range r.order {
+		spec := r.specs[key]
 		if spec.Exposure == "" || spec.Exposure == ExposureModelVisible || spec.Exposure == ExposureDirectModelOnly {
 			out = append(out, spec)
 		}
 	}
-	sortSpecs(out)
 	return out
 }
 
@@ -215,12 +271,12 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]Spec, 0, len(r.specs))
-	for _, spec := range r.specs {
+	for _, key := range r.order {
+		spec := r.specs[key]
 		if spec.Exposure == ExposureDiscoverable {
 			out = append(out, spec)
 		}
 	}
-	sortSpecs(out)
 	return out
 }
 
@@ -242,11 +298,10 @@ func (r *Registry) DeferredToolNamespaces() map[string]string {
 func (r *Registry) Names() []ToolName {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]ToolName, 0, len(r.specs))
-	for _, spec := range r.specs {
-		out = append(out, spec.Name)
+	out := make([]ToolName, 0, len(r.order))
+	for _, key := range r.order {
+		out = append(out, r.specs[key].Name)
 	}
-	sortNames(out)
 	return out
 }
 
@@ -291,6 +346,13 @@ func (r *Router) ModelVisibleSpecs() []Spec {
 		return nil
 	}
 	return r.registry.ModelVisibleSpecs()
+}
+
+func (r *Router) Executor(name ToolName) (Executor, bool) {
+	if r == nil || r.registry == nil {
+		return nil, false
+	}
+	return r.registry.Lookup(name)
 }
 
 func (r *Router) DeclaresOutputSchema(name ToolName) bool {
@@ -361,7 +423,39 @@ func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {
 	if item.Type == "custom_tool_call" {
 		payload = Payload{Kind: PayloadCustom, Input: item.Input}
 	}
-	return &Invocation{CallID: item.CallID, ToolName: name, Payload: payload, StartedAt: r.now().UTC()}, true, nil
+	source := ""
+	if directPlaintextCollaborationCall(name, item.EncryptedFunctionArgs) {
+		source = "direct_plaintext_message"
+	}
+	invocation := &Invocation{CallID: item.CallID, ToolName: name, Payload: payload, Source: source, StartedAt: r.now().UTC()}
+	if r != nil && r.registry != nil {
+		if spec, ok := r.registry.Spec(name); ok {
+			applySpecInvocationContext(invocation, spec)
+		}
+	}
+	return invocation, true, nil
+}
+
+func directPlaintextCollaborationCall(name ToolName, encryptedFunctionArgs *[]string) bool {
+	if encryptedFunctionArgs == nil || len(*encryptedFunctionArgs) != 0 || name.Namespace != "collaboration" {
+		return false
+	}
+	switch name.Name {
+	case "spawn_agent", "send_message", "followup_task":
+		return true
+	default:
+		return false
+	}
+}
+
+func applySpecInvocationContext(invocation *Invocation, spec Spec) {
+	if invocation == nil || spec.ReadOnlyHint == nil {
+		return
+	}
+	if invocation.Context == nil {
+		invocation.Context = map[string]any{}
+	}
+	invocation.Context["read_only_hint"] = *spec.ReadOnlyHint
 }
 
 func (r *Router) resolveResponseToolName(name ToolName) ToolName {
@@ -472,6 +566,36 @@ func (r *Router) SupportsParallel(name ToolName) bool {
 	return ok && spec.Parallel
 }
 
+func (r *Router) HasReadinessWait(name ToolName) bool {
+	if r == nil || r.registry == nil {
+		return false
+	}
+	executor, ok := r.registry.Lookup(name)
+	if !ok {
+		return false
+	}
+	_, ok = executor.(ReadinessWaiter)
+	return ok
+}
+
+func (r *Router) WaitUntilReady(ctx context.Context, invocation *Invocation) error {
+	if r == nil || r.registry == nil || invocation == nil {
+		return nil
+	}
+	executor, ok := r.registry.Lookup(invocation.ToolName)
+	if !ok {
+		return nil
+	}
+	waiter, ok := executor.(ReadinessWaiter)
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return waiter.WaitUntilReady(ctx, invocation)
+}
+
 func (r *Router) DispatchParallel(ctx context.Context, invocations []Invocation) ([]Output, error) {
 	results := make([]Output, len(invocations))
 	for i := range invocations {
@@ -507,14 +631,15 @@ func (r *Router) DispatchParallel(ctx context.Context, invocations []Invocation)
 }
 
 type ResponseItem struct {
-	Type      string
-	Namespace string
-	Name      string
-	CallID    string
-	Arguments string
-	Input     string
-	Execution string
-	Search    map[string]any
+	Type                  string
+	Namespace             string
+	Name                  string
+	CallID                string
+	Arguments             string
+	EncryptedFunctionArgs *[]string
+	Input                 string
+	Execution             string
+	Search                map[string]any
 }
 
 type LifecycleEvent struct {

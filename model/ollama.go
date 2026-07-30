@@ -66,10 +66,20 @@ type OllamaClient struct {
 }
 
 func NewOllamaClient(baseURL string) *OllamaClient {
+	return NewOllamaClientWithHTTPClient(baseURL, nil)
+}
+
+func NewOllamaClientWithHTTPClient(baseURL string, shared *http.Client) *OllamaClient {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "http://127.0.0.1:11434"
 	}
-	return &OllamaClient{BaseURL: strings.TrimRight(baseURL, "/"), HTTPClient: &http.Client{Timeout: 10 * time.Second}}
+	client := &http.Client{Timeout: 10 * time.Second}
+	if shared != nil {
+		cloned := *shared
+		cloned.Timeout = 10 * time.Second
+		client = &cloned
+	}
+	return &OllamaClient{BaseURL: strings.TrimRight(baseURL, "/"), HTTPClient: client}
 }
 
 func (c *OllamaClient) FetchModels(ctx context.Context) ([]string, error) {

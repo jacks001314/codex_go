@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -111,6 +112,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		options = DefaultToolRegistryOptions("")
 	}
 	registry := tool.NewRegistry()
+	var codeModeCommandTool tool.ToolName
 	if options.EnableCore {
 		if err := tool.RegisterCoreHandlersWithOptions(registry, &tool.CoreHandlerOptions{
 			PlanStore:                      options.PlanStore,
@@ -146,13 +148,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
 				return nil, err
 			}
-			execExecutor, waitExecutor := tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, shellOptions.ToolName)
-			if err := registry.Register(execExecutor); err != nil {
-				return nil, err
-			}
-			if err := registry.Register(waitExecutor); err != nil {
-				return nil, err
-			}
+			codeModeCommandTool = shellOptions.ToolName
 		} else if err := registry.Register(shellExecutor); err != nil {
 			return nil, err
 		}
@@ -180,16 +176,6 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options.EnableApplyPatch {
 		if err := tool.RegisterApplyPatchHandler(registry, options.ApplyPatch); err != nil {
 			return nil, err
-		}
-	}
-	if options.EnableMCP {
-		if err := registerMCPTools(registry, options); err != nil {
-			return nil, err
-		}
-		if !options.EnableToolSearch {
-			if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if err := registerSkillsTools(registry, options); err != nil {
@@ -224,18 +210,36 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			return nil, err
 		}
 	}
+	if options.ViewImage != nil {
+		if err := registry.Register(tool.NewViewImageHandler(*options.ViewImage)); err != nil {
+			return nil, err
+		}
+	}
+	if options.EnableWaitForEnvironment {
+		if err := registry.Register(tool.NewWaitForEnvironmentHandler(options.EnvironmentWaiter, options.SelectedEnvironmentIDs, options.WaitForEnvironmentToolConfig)); err != nil {
+			return nil, err
+		}
+	}
+
+	// Runtime-provided tools are external input. Keep the first registered
+	// runtime for a name so they cannot replace host-owned tools or abort a turn.
+	if options.EnableMCP {
+		if err := registerMCPTools(registry, options); err != nil {
+			return nil, err
+		}
+		if !options.EnableToolSearch {
+			if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if options.WebSearch != nil {
-		if err := registry.Register(NewWebSearchHandler(options.WebSearch)); err != nil {
+		if _, err := registry.RegisterExternal(NewWebSearchHandler(options.WebSearch)); err != nil {
 			return nil, err
 		}
 	}
 	if options.ImageGeneration != nil {
-		if err := registry.Register(NewImageGenerationHandler(options.ImageGeneration)); err != nil {
-			return nil, err
-		}
-	}
-	if options.ViewImage != nil {
-		if err := registry.Register(tool.NewViewImageHandler(*options.ViewImage)); err != nil {
+		if _, err := registry.RegisterExternal(NewImageGenerationHandler(options.ImageGeneration)); err != nil {
 			return nil, err
 		}
 	}
@@ -254,18 +258,37 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		// searchable. Advertising an empty search tool causes models to emit a
 		// useless tool_search_call/output pair which is then persisted into
 		// resumed Responses history.
-		if len(registry.DiscoverableSpecs()) > 0 {
+		if registryHasSearchableDeferredTool(registry) {
+			registry.Remove(tool.PlainName(tool.ToolSearchName))
 			if err := tool.RegisterToolSearchFromRegistryWithOptions(registry, options.OmitToolSearchSources); err != nil {
 				return nil, err
 			}
 		}
 	}
-	if options.EnableWaitForEnvironment {
-		if err := registry.Register(tool.NewWaitForEnvironmentHandler(options.EnvironmentWaiter, options.SelectedEnvironmentIDs, options.WaitForEnvironmentToolConfig)); err != nil {
+	if options.EnableCodeMode {
+		registry.Remove(tool.PlainName(tool.CodeModeExecToolName))
+		registry.Remove(tool.PlainName("wait"))
+		execExecutor, waitExecutor := tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, codeModeCommandTool)
+		if err := registry.Prepend(waitExecutor); err != nil {
+			return nil, err
+		}
+		if err := registry.Prepend(execExecutor); err != nil {
 			return nil, err
 		}
 	}
 	return registry, nil
+}
+
+func registryHasSearchableDeferredTool(registry *tool.Registry) bool {
+	if registry == nil {
+		return false
+	}
+	for _, spec := range registry.DiscoverableSpecs() {
+		if spec.Name.Key() != tool.ToolSearchName && spec.Search != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func BuildToolRouter(options *ToolRegistryOptions) (*tool.Router, error) {
@@ -312,11 +335,14 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			OpenAIFileInputOptionalFields: info.OpenAIFileInputOptionalFields,
 		})
 		spec := executor.Spec()
-		spec.NamespaceDescription = strings.TrimSpace(info.NamespaceDescription)
+		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)
+		if spec.Search != nil && spec.Search.Source != nil {
+			spec.Search.Source.Description = spec.NamespaceDescription
+		}
 		if exposure != "" && exposure != tool.ExposureModelVisible {
 			spec.Exposure = exposure
 		}
-		if err := registry.Register(&specOverrideExecutor{Executor: executor, spec: spec}); err != nil {
+		if _, err := registry.RegisterExternal(&specOverrideExecutor{Executor: executor, spec: spec}); err != nil {
 			return err
 		}
 	}
@@ -344,6 +370,17 @@ func (e *specOverrideExecutor) Spec() tool.Spec {
 		return tool.Spec{}
 	}
 	return e.spec
+}
+
+func (e *specOverrideExecutor) WaitUntilReady(ctx context.Context, invocation *tool.Invocation) error {
+	if e == nil {
+		return nil
+	}
+	waiter, ok := e.Executor.(tool.ReadinessWaiter)
+	if !ok {
+		return nil
+	}
+	return waiter.WaitUntilReady(ctx, invocation)
 }
 
 func (e *specOverrideExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.PreToolUsePayload, bool) {

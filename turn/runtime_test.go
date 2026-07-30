@@ -215,6 +215,32 @@ func TestRuntimeAugmentsWebRunDescriptionOnlyWithCodeMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeStandaloneWebSearchRegisteredFollowsWinningExecutor(t *testing.T) {
+	name := tool.NamespacedName(WebSearchNamespace, WebSearchRunTool)
+	for _, testCase := range []struct {
+		name       string
+		first      tool.Executor
+		standalone bool
+	}{
+		{name: "standalone wins", first: NewWebSearchHandler(&WebSearchOptions{}), standalone: true},
+		{name: "external collision wins", first: tool.NewExecutorFunc(tool.Spec{Name: name, Description: "MCP winner"}, nil)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry := tool.NewRegistry()
+			if registered, err := registry.RegisterExternal(testCase.first); err != nil || !registered {
+				t.Fatalf("register first = %t, %v", registered, err)
+			}
+			if _, err := registry.RegisterExternal(NewWebSearchHandler(&WebSearchOptions{})); err != nil {
+				t.Fatal(err)
+			}
+			runtime := NewRuntime(&RuntimeOptions{Router: tool.NewRouter(registry)})
+			if got := runtime.StandaloneWebSearchRegistered(); got != testCase.standalone {
+				t.Fatalf("StandaloneWebSearchRegistered() = %t, want %t", got, testCase.standalone)
+			}
+		})
+	}
+}
+
 func TestRuntimeCodeModeOnlyKeepsOnlyExecWaitAndDirectModelToolsVisible(t *testing.T) {
 	agent := &singleTurnAgent{response: &model.AgentResponse{
 		Message: "done",

@@ -418,6 +418,7 @@ type execAgentCommunication struct {
 	recipient string
 	message   string
 	trigger   bool
+	plaintext bool
 }
 
 func newExecAgentController(runner *Runner, ctx context.Context, req *Request, parentID string, maxAgents int) agent.ToolController {
@@ -496,7 +497,7 @@ func (c *execAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnA
 	s.tasks[id] = task
 	s.mu.Unlock()
 
-	c.startTask(task, args, []execAgentCommunication{c.communication(task.path, prompt, true)}, false)
+	c.startTask(task, args, []execAgentCommunication{c.communication(task.path, prompt, true, args.Plaintext)}, false)
 	return &agent.SpawnAgentResult{AgentID: id, TaskName: path, Nickname: &nickname}, nil
 }
 
@@ -612,7 +613,7 @@ func (c *execAgentController) SendInput(ctx context.Context, args *agent.SendInp
 	}
 	s.mu.Unlock()
 	spawnArgs := &agent.SpawnAgentArgs{Items: append([]any(nil), args.Items...), ForkTurns: execStringPointer("none")}
-	c.startTask(task, spawnArgs, []execAgentCommunication{c.communication(task.path, message, true)}, true)
+	c.startTask(task, spawnArgs, []execAgentCommunication{c.communication(task.path, message, true, false)}, true)
 	return &agent.SendInputResult{SubmissionID: deterministicTurnID(firstNonEmpty(message, task.id))}, nil
 }
 
@@ -778,12 +779,13 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 	}()
 }
 
-func (c *execAgentController) communication(recipient, message string, trigger bool) execAgentCommunication {
+func (c *execAgentController) communication(recipient, message string, trigger bool, plaintext bool) execAgentCommunication {
 	return execAgentCommunication{
 		author:    cleanExecAgentPath(firstNonEmpty(c.scopePath, "/root")),
 		recipient: cleanExecAgentPath(recipient),
 		message:   strings.TrimSpace(message),
 		trigger:   trigger,
+		plaintext: plaintext,
 	}
 }
 
@@ -798,6 +800,16 @@ func execAgentCommunicationInputItem(communication execAgentCommunication) map[s
 		cleanExecAgentPath(communication.recipient),
 		cleanExecAgentPath(communication.author),
 	)
+	if communication.plaintext {
+		return map[string]any{
+			"type":      "agent_message",
+			"author":    cleanExecAgentPath(communication.author),
+			"recipient": cleanExecAgentPath(communication.recipient),
+			"content": []any{
+				map[string]any{"type": "input_text", "text": envelope + communication.message},
+			},
+		}
+	}
 	return map[string]any{
 		"type":      "agent_message",
 		"author":    cleanExecAgentPath(communication.author),
@@ -827,7 +839,19 @@ func (c *execAgentController) parentInputItems(forkTurns *string) []any {
 		}
 		record = execLastTurnsRecord(record, count)
 	}
-	return session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: record.Metadata.CWD})
+	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: record.Metadata.CWD})
+	return stripParentAgentMessages(items)
+}
+
+func stripParentAgentMessages(items []any) []any {
+	filtered := make([]any, 0, len(items))
+	for _, item := range items {
+		if raw, ok := item.(map[string]any); ok && strings.TrimSpace(execStringFromAny(raw["type"])) == "agent_message" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func (c *execAgentController) task(target string) *execAgentTask {
@@ -917,7 +941,7 @@ func (c *execAgentController) SendMessage(ctx context.Context, args *agent.SendM
 		s.mu.Unlock()
 		return fmt.Errorf("agent %s is shut down", args.Target)
 	}
-	task.pendingMessages = append(task.pendingMessages, c.communication(task.path, args.Message, false))
+	task.pendingMessages = append(task.pendingMessages, c.communication(task.path, args.Message, false, args.Plaintext))
 	s.mu.Unlock()
 	return nil
 }
@@ -938,7 +962,7 @@ func (c *execAgentController) FollowupTask(ctx context.Context, args *agent.Foll
 	}
 	switch task.status.Kind {
 	case agent.AgentMessageStatusRunning, agent.AgentMessageStatusPendingInit:
-		task.pendingFollowup = append(task.pendingFollowup, c.communication(task.path, args.Message, true))
+		task.pendingFollowup = append(task.pendingFollowup, c.communication(task.path, args.Message, true, args.Plaintext))
 		s.mu.Unlock()
 		return nil
 	case agent.AgentMessageStatusShutdown:
@@ -946,7 +970,7 @@ func (c *execAgentController) FollowupTask(ctx context.Context, args *agent.Foll
 		return fmt.Errorf("agent %s is shut down", args.Target)
 	}
 	s.mu.Unlock()
-	c.startTask(task, &agent.SpawnAgentArgs{TaskName: task.taskName, ForkTurns: execStringPointer("none")}, []execAgentCommunication{c.communication(task.path, args.Message, true)}, true)
+	c.startTask(task, &agent.SpawnAgentArgs{TaskName: task.taskName, ForkTurns: execStringPointer("none")}, []execAgentCommunication{c.communication(task.path, args.Message, true, args.Plaintext)}, true)
 	return nil
 }
 

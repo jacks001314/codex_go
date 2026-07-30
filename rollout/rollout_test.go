@@ -317,8 +317,9 @@ func TestRecordFromPathReplaysRustTokenCountMetadata(t *testing.T) {
 	data := strings.Join([]string{
 		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z"}}`,
 		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-usage"}}`,
-		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":40,"output_tokens":50,"reasoning_output_tokens":15,"total_tokens":230},"last_token_usage":{"input_tokens":90,"cached_input_tokens":30,"output_tokens":40,"reasoning_output_tokens":12,"total_tokens":130},"model_context_window":200000},"rate_limits":null}}`,
-		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-usage","reason":"interrupted"}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":40,"output_tokens":50,"reasoning_output_tokens":15,"total_tokens":230},"last_token_usage":{"input_tokens":90,"cached_input_tokens":30,"output_tokens":40,"reasoning_output_tokens":12,"total_tokens":130},"model_context_window":200000},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":60},"secondary":{"used_percent":0.000000000001,"window_minutes":10080}}}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"event_msg","payload":{"type":"agent_message","message":"answer after fractional rate limits"}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-usage","reason":"interrupted"}}`,
 		``,
 	}, "\n")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -339,6 +340,9 @@ func TestRecordFromPathReplaysRustTokenCountMetadata(t *testing.T) {
 	last, ok := info["last_token_usage"].(map[string]any)
 	if !ok || last["total_tokens"] != float64(130) {
 		t.Fatalf("last token usage = %#v", info["last_token_usage"])
+	}
+	if len(record.Items) != 1 || record.Items[0].Text != "answer after fractional rate limits" {
+		t.Fatalf("items after fractional rate limits = %#v", record.Items)
 	}
 }
 

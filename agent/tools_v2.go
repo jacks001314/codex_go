@@ -29,13 +29,15 @@ type V2ToolController interface {
 }
 
 type SendMessageArgs struct {
-	Target  string `json:"target"`
-	Message string `json:"message"`
+	Target    string `json:"target"`
+	Message   string `json:"message"`
+	Plaintext bool   `json:"-"`
 }
 
 type FollowupTaskArgs struct {
-	Target  string `json:"target"`
-	Message string `json:"message"`
+	Target    string `json:"target"`
+	Message   string `json:"message"`
+	Plaintext bool   `json:"-"`
 }
 
 type WaitForActivityArgs struct {
@@ -231,6 +233,7 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 			if err = validateForkTurns(args.ForkTurns); err != nil {
 				return nil, tool.RespondToModel(err.Error())
 			}
+			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			result, err = e.controller.SpawnAgent(ctx, &args)
 			if spawned, ok := result.(*SpawnAgentResult); ok && spawned != nil && err == nil {
 				output := map[string]any{"task_name": firstNonEmptyAgentString(spawned.TaskName, args.TaskName)}
@@ -246,6 +249,7 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 			err = validateTargetMessage(args.Target, args.Message)
 		}
 		if err == nil {
+			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			err = e.controller.SendMessage(ctx, &args)
 			result = nil
 		}
@@ -255,6 +259,7 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 			err = validateTargetMessage(args.Target, args.Message)
 		}
 		if err == nil {
+			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			err = e.controller.FollowupTask(ctx, &args)
 			result = nil
 		}

@@ -424,6 +424,7 @@ func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 			Kind:    compactKindFromSessionItem(&item),
 			Created: item.CreatedAt,
 			Data:    cloneAnyMapForRouter(item.Data),
+			Raw:     append(json.RawMessage(nil), item.Raw...),
 		}
 		for j := range item.Content {
 			compactItem.Content = append(compactItem.Content, compact.ContentPart{
@@ -466,6 +467,7 @@ func sessionItemsFromCompactItems(items []compact.Item, now time.Time) []session
 				"kind":    item.Kind,
 			},
 			Data: cloneAnyMapForRouter(item.Data),
+			Raw:  append(json.RawMessage(nil), item.Raw...),
 		}
 		if sessionItem.CreatedAt.IsZero() {
 			sessionItem.CreatedAt = now
@@ -717,6 +719,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadApproveGuardianDeniedAction(request)
 	case MethodThreadMetadataUpdate:
 		return r.handleThreadMetadataUpdate(request)
+	case MethodThreadSectionMove:
+		return r.handleThreadSectionMove(request)
 	case MethodThreadList:
 		return r.handleThreadList(request)
 	case MethodThreadSectionList:
@@ -2139,6 +2143,37 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	}
 	path := r.threadRolloutPath(record)
 	return &ThreadMetadataUpdateResponse{Thread: BuildThread(record, path, false)}, nil
+}
+
+func (r *Router) handleThreadSectionMove(request *Request) (*ThreadSectionMoveResponse, error) {
+	var params ThreadSectionMoveParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	var beforeThreadID *session.ThreadID
+	if params.BeforeThreadID != nil {
+		value := session.ThreadID(*params.BeforeThreadID)
+		beforeThreadID = &value
+	}
+	_, err := r.store.MoveThreadToSection(session.ThreadID(params.ThreadID), params.SectionID.Value, beforeThreadID)
+	if err != nil {
+		switch {
+		case errors.Is(err, session.ErrThreadNotFound):
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(params.ThreadID)))
+		case errors.Is(err, session.ErrThreadSectionMissing):
+			sectionID := ""
+			if params.SectionID.Value != nil {
+				sectionID = strings.TrimSpace(*params.SectionID.Value)
+			}
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread section not found: %s", sectionID))
+		default:
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+	}
+	return &ThreadSectionMoveResponse{}, nil
 }
 
 func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error) {

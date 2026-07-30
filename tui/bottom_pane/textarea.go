@@ -3,6 +3,9 @@ package bottompane
 import (
 	"strings"
 	"unicode/utf8"
+
+	codextui "codex_go/tui"
+	"github.com/rivo/uniseg"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/textarea.rs.
@@ -306,16 +309,25 @@ func (t *TextAreaState) WrappedLines(width int) []string {
 	}
 	lines := []string{}
 	for _, logical := range strings.Split(t.Text, "\n") {
-		runes := []rune(logical)
-		if len(runes) == 0 {
+		if logical == "" {
 			lines = append(lines, "")
 			continue
 		}
-		for len(runes) > width {
-			lines = append(lines, string(runes[:width]))
-			runes = runes[width:]
+		var line strings.Builder
+		used := 0
+		graphemes := uniseg.NewGraphemes(logical)
+		for graphemes.Next() {
+			grapheme := graphemes.Str()
+			graphemeWidth := codextui.DisplayWidth(grapheme)
+			if used > 0 && used+graphemeWidth > width {
+				lines = append(lines, line.String())
+				line.Reset()
+				used = 0
+			}
+			line.WriteString(grapheme)
+			used += graphemeWidth
 		}
-		lines = append(lines, string(runes))
+		lines = append(lines, line.String())
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "")
@@ -334,17 +346,20 @@ func (t *TextAreaState) CursorPosition(width int, height int) (int, int) {
 	prefix := t.Text[:cursor]
 	row := 0
 	col := 0
-	for _, r := range prefix {
-		if r == '\n' {
-			row++
-			col = 0
-			continue
-		}
-		if col >= width {
+	for lineIndex, logical := range strings.Split(prefix, "\n") {
+		if lineIndex > 0 {
 			row++
 			col = 0
 		}
-		col++
+		graphemes := uniseg.NewGraphemes(logical)
+		for graphemes.Next() {
+			graphemeWidth := codextui.DisplayWidth(graphemes.Str())
+			if col > 0 && col+graphemeWidth > width {
+				row++
+				col = 0
+			}
+			col += graphemeWidth
+		}
 	}
 	if height > 0 {
 		if row < t.Scroll {

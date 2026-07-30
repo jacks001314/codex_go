@@ -406,6 +406,7 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 		codextui.CommandPets,
 		codextui.CommandSide,
 		codextui.CommandResume,
+		codextui.CommandFork,
 		codextui.CommandSandboxReadRoot:
 		return true
 	default:

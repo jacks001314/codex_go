@@ -1762,7 +1762,7 @@ func TestModelRendersMCPStartupProgressLikeRust(t *testing.T) {
 	}
 }
 
-func TestModelQueuesInputUntilMCPStartupFinishes(t *testing.T) {
+func TestModelMCPStartupDoesNotBlockConfiguredInput(t *testing.T) {
 	state := codextui.NewState(nil)
 	var submitted []string
 	model := NewModel(state, Options{
@@ -1773,15 +1773,15 @@ func TestModelQueuesInputUntilMCPStartupFinishes(t *testing.T) {
 		},
 	})
 	model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
-	typeText(t, model, "queued during startup")
+	typeText(t, model, "submitted during startup")
 	model.Update(key(bubbletea.KeyEnter))
-	if len(submitted) != 0 || len(model.QueuedRequests()) != 1 {
-		t.Fatalf("input should remain queued during MCP startup: submitted=%#v queued=%#v", submitted, model.QueuedRequests())
+	if !reflect.DeepEqual(submitted, []string{"submitted during startup"}) || len(model.QueuedRequests()) != 0 {
+		t.Fatalf("MCP startup blocked input: submitted=%#v queued=%#v", submitted, model.QueuedRequests())
 	}
 
 	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
-	if len(submitted) != 0 {
-		t.Fatalf("queued input should wait for MCP startup lag: %#v", submitted)
+	if len(submitted) != 1 {
+		t.Fatalf("MCP update resubmitted input: %#v", submitted)
 	}
 	if cmd == nil {
 		t.Fatal("ready update should schedule MCP startup finish lag")
@@ -1790,8 +1790,8 @@ func TestModelQueuesInputUntilMCPStartupFinishes(t *testing.T) {
 		t.Fatalf("finish lag not pending: generation=%d pending=%v", model.mcpStartupGeneration, model.mcpStartupFinishPending)
 	}
 	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
-	if !reflect.DeepEqual(submitted, []string{"queued during startup"}) {
-		t.Fatalf("queued input was not released after MCP startup: %#v", submitted)
+	if !reflect.DeepEqual(submitted, []string{"submitted during startup"}) {
+		t.Fatalf("MCP finish changed submitted input: %#v", submitted)
 	}
 }
 
@@ -2717,8 +2717,8 @@ func TestModelSideReturnClosesRuntimeSideConversation(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("side Ctrl+C did not return close command")
 	}
-	if state.ThreadID != "thread-side" {
-		t.Fatalf("thread id before close result = %q, want side", state.ThreadID)
+	if state.ThreadID != "thread-parent" {
+		t.Fatalf("thread id before background close result = %q, want parent", state.ThreadID)
 	}
 	runTeaCmd(t, model, cmd)
 
@@ -2730,7 +2730,7 @@ func TestModelSideReturnClosesRuntimeSideConversation(t *testing.T) {
 	}
 }
 
-func TestModelSideCloseFailureKeepsSideVisible(t *testing.T) {
+func TestModelSideCloseFailureDoesNotReopenAbandonedSide(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-parent")
 	model := NewModel(state, Options{
@@ -2750,11 +2750,16 @@ func TestModelSideCloseFailureKeepsSideVisible(t *testing.T) {
 	_, cmd = model.Update(key(bubbletea.KeyCtrlC))
 	runTeaCmd(t, model, cmd)
 
-	if state.ThreadID != "thread-side" {
-		t.Fatalf("thread id after failed side close = %q, want side", state.ThreadID)
+	if state.ThreadID != "thread-parent" {
+		t.Fatalf("thread id after failed background side close = %q, want parent", state.ThreadID)
 	}
-	if view := model.View(); !strings.Contains(view, "Failed to close side conversation thread-side") {
-		t.Fatalf("missing close failure:\n%s", view)
+	if view := model.View(); strings.Contains(view, "Failed to close side conversation thread-side") {
+		t.Fatalf("background close failure reopened side state:\n%s", view)
+	}
+	before := len(state.Messages)
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-side", Event: protocol.ThreadEvent{Type: "item.delta", Delta: &protocol.Delta{Text: "late"}}})
+	if len(state.Messages) != before {
+		t.Fatalf("late abandoned side event changed main transcript: %#v", state.Messages)
 	}
 }
 
@@ -6831,6 +6836,36 @@ func TestModelForkCommandForksCurrentSessionImmediately(t *testing.T) {
 	}
 	if model.modal != nil {
 		t.Fatalf("fork opened modal = %#v, want immediate action", model.modal)
+	}
+}
+
+func TestModelForkCommandNamesForkAndKeepsItOpenOnRenameFailure(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-source")
+	var actions []codextui.SessionSelection
+	var renameName string
+	model := NewModel(state, Options{
+		OnSessionAction: func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
+			actions = append(actions, selection)
+			return &codextui.SessionSummary{ThreadID: "thread-forked", Title: "Old"}, nil
+		},
+		OnRenameThread: func(_ string, name string) error {
+			renameName = name
+			return errors.New("rename failed")
+		},
+	})
+
+	typeText(t, model, "/fork Add User")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if len(actions) != 1 || actions[0].Name != "Add User" || renameName != "Add User" {
+		t.Fatalf("named fork actions = %#v rename=%q", actions, renameName)
+	}
+	if state.ThreadID != "thread-forked" {
+		t.Fatalf("rename failure did not keep fork open: %q", state.ThreadID)
+	}
+	if view := model.View(); !strings.Contains(view, "Failed to name the forked session: rename failed") {
+		t.Fatalf("rename failure missing from history:\n%s", view)
 	}
 }
 

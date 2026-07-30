@@ -154,7 +154,7 @@ func codexCompletionSpec() *completionNode {
 			node("apply", []string{"--attempt"}),
 			node("diff", []string{"--attempt"}),
 		),
-		node("exec-server", []string{"--strict-config", "--listen", "--remote", "--environment-id", "--name", "--use-agent-identity-auth"}),
+		node("exec-server", []string{"--strict-config", "--listen", "--remote", "--environment-id", "--name", "--use-agent-identity-auth", "--exit-on-stdin-close"}),
 		node("features", nil,
 			node("list", nil),
 			node("enable", nil),

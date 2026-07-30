@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,58 @@ func TestJoinWindowsPaths(t *testing.T) {
 	}
 	if _, err := base.Join(`D:tmp`); err == nil {
 		t.Fatalf("drive relative path should fail")
+	}
+}
+
+func TestWindowsNamespacePathsNormalizeToCanonicalURIs(t *testing.T) {
+	base, err := Parse("file:///C:/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		`\\?\D:\reports\report.pdf`:               "file:///D:/reports/report.pdf",
+		`\\.\D:\reports\report.pdf`:               "file:///D:/reports/report.pdf",
+		`\\?\UNC\server\share\reports\report.pdf`: "file://server/share/reports/report.pdf",
+		`\\.\UNC\server\share\reports\report.pdf`: "file://server/share/reports/report.pdf",
+	}
+	for nativePath, want := range cases {
+		joined, err := base.Join(nativePath)
+		if err != nil {
+			t.Fatalf("Join(%q) error = %v", nativePath, err)
+		}
+		if joined.String() != want {
+			t.Fatalf("Join(%q) = %q, want %q", nativePath, joined.String(), want)
+		}
+		legacy := NewLegacyAppPathString(nativePath)
+		converted, err := legacy.ToPathURI(ConventionWindows)
+		if err != nil || converted.String() != want {
+			t.Fatalf("ToPathURI(%q) = %v, %v", nativePath, converted, err)
+		}
+	}
+}
+
+func TestWindowsNamespacePathsPreserveUnsafeFormsAsOpaque(t *testing.T) {
+	base, err := Parse("file:///C:/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, nativePath := range []string{
+		`\\?\UNC\server`,
+		`\\.\UNC\localhost\share\report.pdf`,
+		`\\?\UNC\.\share\report.pdf`,
+		`\\.\COM1`,
+		`\\?\Volume{00000000-0000-0000-0000-000000000000}\report.pdf`,
+	} {
+		joined, err := base.Join(nativePath)
+		if err != nil {
+			t.Fatalf("Join(%q) error = %v", nativePath, err)
+		}
+		if !strings.HasPrefix(joined.String(), badPathURIPrefix) {
+			t.Fatalf("Join(%q) = %q, want opaque URI", nativePath, joined.String())
+		}
+		if got := joined.NativePathString(); got != nativePath {
+			t.Fatalf("opaque NativePathString(%q) = %q", nativePath, got)
+		}
 	}
 }
 

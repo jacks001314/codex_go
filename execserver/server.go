@@ -214,8 +214,9 @@ type processState struct {
 type processNotifier func(method string, params any)
 
 type CapabilityDiscoveryRoot struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
+	ID      string                    `json:"id"`
+	Path    string                    `json:"path"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
 type CapabilityDiscoveryParams struct {
@@ -287,7 +288,8 @@ type EnvironmentInfo struct {
 }
 
 type EnvironmentCapabilities struct {
-	NetworkProxyLaunch bool `json:"networkProxyLaunch"`
+	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
+	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
 }
 
 type EnvironmentStatus struct {
@@ -2978,7 +2980,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 	return &EnvironmentInfo{
 		Shell:        ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
 		CWD:          stringPtr(cwd),
-		Capabilities: EnvironmentCapabilities{NetworkProxyLaunch: true},
+		Capabilities: EnvironmentCapabilities{NetworkProxyLaunch: true, CapabilityDiscoverySandbox: true},
 	}
 }
 
@@ -2997,19 +2999,30 @@ func childEnv(params *ExecParams) map[string]string {
 	if params == nil {
 		return map[string]string{}
 	}
+	var env map[string]string
 	if params.EnvPolicy == nil {
-		return copyEnv(params.Env)
+		env = copyEnv(params.Env)
+	} else {
+		env = populateEnv(params.EnvPolicy, os.Environ())
+		for key, value := range params.Env {
+			env[key] = value
+		}
 	}
-	env := populateEnv(params.EnvPolicy, os.Environ())
-	for key, value := range params.Env {
-		env[key] = value
-	}
+	deleteEnvKey(env, CodexExecServerExitOnStdinCloseEnvVar)
 	if runtime.GOOS == "windows" {
 		if !hasEnvKey(env, "PATHEXT") {
 			env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
 		}
 	}
 	return env
+}
+
+func deleteEnvKey(env map[string]string, key string) {
+	for existing := range env {
+		if strings.EqualFold(existing, key) {
+			delete(env, existing)
+		}
+	}
 }
 
 func populateEnv(policy *ExecEnvPolicy, environ []string) map[string]string {

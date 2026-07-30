@@ -71,8 +71,9 @@ func (p *EnvironmentInfoParams) Validate() error {
 }
 
 type EnvironmentInfoResponse struct {
-	Shell EnvironmentShellInfo `json:"shell"`
-	CWD   *string              `json:"cwd"`
+	Shell        EnvironmentShellInfo                     `json:"shell"`
+	CWD          *string                                  `json:"cwd"`
+	Capabilities execserverclient.EnvironmentCapabilities `json:"capabilities"`
 }
 
 type EnvironmentStatusParams struct {
@@ -392,8 +393,9 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 			return nil, err
 		}
 		response := &EnvironmentInfoResponse{
-			Shell: EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
-			CWD:   cloneString(info.CWD),
+			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
+			CWD:          cloneString(info.CWD),
+			Capabilities: info.Capabilities,
 		}
 		if err := response.Shell.Validate(); err != nil {
 			return nil, err

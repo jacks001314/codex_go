@@ -32,6 +32,7 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	metadata.TurnID = "turn"
 	metadata.RequestKind = ClientRequestTurn
 	metadata.ParentThreadID = "parent"
+	metadata.ParentTurnID = "parent-turn"
 	metadata.SubagentHeader = "review"
 	metadata.Extra = map[string]string{"workspace_kind": "git", "thread_id": "bad"}
 	client := metadata.ClientMetadata()
@@ -40,6 +41,9 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	}
 	if client[ClientCodexParentThreadIDHeader] != "parent" || client[ClientOpenAISubagentHeader] != "review" {
 		t.Fatalf("ClientMetadata() missing compatibility fields: %v", client)
+	}
+	if client["parent_turn_id"] != "parent-turn" || !strings.Contains(client[ClientCodexTurnMetadataHeader], `"parent_turn_id":"parent-turn"`) {
+		t.Fatalf("ClientMetadata() missing parent turn: %v", client)
 	}
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"workspace_kind":"git"`) {
 		t.Fatalf("turn metadata missing extra: %s", client[ClientCodexTurnMetadataHeader])
@@ -88,10 +92,11 @@ func TestClientMetadataMemoryRequestOmitsTurnIdentity(t *testing.T) {
 func TestClientFilterExtraMetadata(t *testing.T) {
 	got := ClientFilterExtraMetadata(map[string]string{
 		"thread_id":          "bad",
+		"parent_turn_id":     "spoofed",
 		CodeModeToolNamesKey: "bad",
 		"workspace_kind":     "git",
 	})
-	if got["thread_id"] != "" || got[CodeModeToolNamesKey] != "" || got["workspace_kind"] != "git" {
+	if got["thread_id"] != "" || got["parent_turn_id"] != "" || got[CodeModeToolNamesKey] != "" || got["workspace_kind"] != "git" {
 		t.Fatalf("ClientFilterExtraMetadata() = %v", got)
 	}
 }

@@ -58,18 +58,19 @@ type AgentUsage struct {
 }
 
 type AgentItem struct {
-	ID        string
-	Type      string
-	Text      string
-	Name      string
-	Namespace string
-	CallID    string
-	Arguments string
-	Input     string
-	Status    string
-	Execution string
-	Search    map[string]any
-	Data      map[string]any
+	ID                    string
+	Type                  string
+	Text                  string
+	Name                  string
+	Namespace             string
+	CallID                string
+	Arguments             string
+	EncryptedFunctionArgs *[]string `json:"encrypted_function_args,omitempty"`
+	Input                 string
+	Status                string
+	Execution             string
+	Search                map[string]any
+	Data                  map[string]any
 
 	// Locally observed metadata is intentionally private so JSON input cannot
 	// forge warehouse-only executed-tool records.
@@ -83,19 +84,21 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 	switch i.Type {
 	case "function_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID        string `json:"id,omitempty"`
-			Type      string `json:"type"`
-			Name      string `json:"name"`
-			Namespace string `json:"namespace,omitempty"`
-			Arguments string `json:"arguments"`
-			CallID    string `json:"call_id"`
+			ID                    string    `json:"id,omitempty"`
+			Type                  string    `json:"type"`
+			Name                  string    `json:"name"`
+			Namespace             string    `json:"namespace,omitempty"`
+			Arguments             string    `json:"arguments"`
+			EncryptedFunctionArgs *[]string `json:"encrypted_function_args,omitempty"`
+			CallID                string    `json:"call_id"`
 		}{
-			ID:        i.ID,
-			Type:      i.Type,
-			Name:      i.Name,
-			Namespace: i.Namespace,
-			Arguments: i.Arguments,
-			CallID:    firstAgentItemValue(i.CallID, i.ID),
+			ID:                    i.ID,
+			Type:                  i.Type,
+			Name:                  i.Name,
+			Namespace:             i.Namespace,
+			Arguments:             i.Arguments,
+			EncryptedFunctionArgs: cloneAgentStringSlicePtr(i.EncryptedFunctionArgs),
+			CallID:                firstAgentItemValue(i.CallID, i.ID),
 		})
 	case "custom_tool_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
@@ -196,6 +199,14 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 			Text string `json:"text,omitempty"`
 		}{ID: i.ID, Type: i.Type, Text: i.Text})
 	}
+}
+
+func cloneAgentStringSlicePtr(value *[]string) *[]string {
+	if value == nil {
+		return nil
+	}
+	cloned := append([]string{}, (*value)...)
+	return &cloned
 }
 
 func marshalAgentItemWithExecutedToolCalls(item *AgentItem, value any) ([]byte, error) {

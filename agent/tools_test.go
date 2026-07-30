@@ -101,6 +101,63 @@ func (c *limitV2Controller) SpawnAgent(context.Context, *SpawnAgentArgs) (*Spawn
 	return nil, ErrAgentLimitReached
 }
 
+type plaintextCaptureV2Controller struct {
+	*MemoryToolController
+	spawn    *SpawnAgentArgs
+	send     *SendMessageArgs
+	followup *FollowupTaskArgs
+}
+
+func (c *plaintextCaptureV2Controller) SpawnAgent(_ context.Context, args *SpawnAgentArgs) (*SpawnAgentResult, error) {
+	copy := *args
+	c.spawn = &copy
+	return &SpawnAgentResult{TaskName: "/root/worker"}, nil
+}
+
+func (c *plaintextCaptureV2Controller) SendMessage(_ context.Context, args *SendMessageArgs) error {
+	copy := *args
+	c.send = &copy
+	return nil
+}
+
+func (c *plaintextCaptureV2Controller) FollowupTask(_ context.Context, args *FollowupTaskArgs) error {
+	copy := *args
+	c.followup = &copy
+	return nil
+}
+
+func TestMultiAgentV2ToolsPropagatePlaintextMessageSource(t *testing.T) {
+	controller := &plaintextCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		arguments string
+	}{
+		{name: "spawn_agent", arguments: `{"task_name":"worker","message":"start","fork_turns":"none"}`},
+		{name: "send_message", arguments: `{"target":"worker","message":"context"}`},
+		{name: "followup_task", arguments: `{"target":"worker","message":"continue"}`},
+	}
+	for _, test := range cases {
+		executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, test.name))
+		if !ok {
+			t.Fatalf("missing %s", test.name)
+		}
+		if _, err := executor.Execute(context.Background(), &tool.Invocation{
+			Source: "direct_plaintext_message", Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: test.arguments},
+		}); err != nil {
+			t.Fatalf("Execute(%s) error = %v", test.name, err)
+		}
+	}
+	if controller.spawn == nil || !controller.spawn.Plaintext || controller.send == nil || !controller.send.Plaintext || controller.followup == nil || !controller.followup.Plaintext {
+		t.Fatalf("plaintext args = spawn %#v send %#v followup %#v", controller.spawn, controller.send, controller.followup)
+	}
+}
+
 func TestMultiAgentToolsLifecycle(t *testing.T) {
 	controller := NewMemoryToolController()
 	spawn := NewMultiAgentToolExecutor(MultiAgentToolSpawn, controller)

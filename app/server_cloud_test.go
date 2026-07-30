@@ -825,6 +825,25 @@ func TestExecServerRemoteValidationLikeRust(t *testing.T) {
 	}
 }
 
+func TestExecServerRemoteParentContextCancelsOnStdinClose(t *testing.T) {
+	reader, writer := io.Pipe()
+	ctx, cancel := execServerRemoteParentContext(context.Background(), reader)
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		t.Fatal("parent context cancelled while stdin remained open")
+	default:
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("parent context was not cancelled after stdin closed")
+	}
+}
+
 type lockedAppTestBuffer struct {
 	mu   sync.Mutex
 	data bytes.Buffer

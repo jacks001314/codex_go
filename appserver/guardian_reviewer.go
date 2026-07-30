@@ -149,6 +149,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		OutputSchema: guardianAssessmentOutputSchema(),
 		ClientMetadata: map[string]string{
 			"x-openai-subagent": "guardian",
+			"parent_turn_id":    turnID,
 			"target_item_id":    targetItemID,
 		},
 	})

@@ -31,6 +31,7 @@ import (
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/eventmap"
+	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
@@ -1197,7 +1198,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -1385,7 +1386,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
@@ -2521,14 +2522,15 @@ func stringPointerIfNotEmpty(value string) *string {
 }
 
 type turnCompletionAnalyticsContext struct {
-	ConnectionID             string
-	Params                   *turn.TurnStartParams
-	RunConfig                *appTurnRunConfig
-	Result                   *turn.AgentLoopResult
-	SteerCount               int
-	TurnError                CodexErrorInfo
-	CodexErrorKind           *string
-	CodexErrorHTTPStatusCode *uint16
+	ConnectionID                         string
+	Params                               *turn.TurnStartParams
+	RunConfig                            *appTurnRunConfig
+	Result                               *turn.AgentLoopResult
+	SteerCount                           int
+	TurnError                            CodexErrorInfo
+	CodexErrorKind                       *string
+	CodexErrorHTTPStatusCode             *uint16
+	ExplicitClientInterruptRequestedAtMS *uint64
 }
 
 func analyticsContextFromActiveRuntimeTurn(active *activeRuntimeTurn) *turnCompletionAnalyticsContext {
@@ -2666,7 +2668,7 @@ func (r *RuntimeRouter) emitTurnCompletionAnalytics(ctx context.Context, analyti
 	}
 	startedAt := time.UnixMilli(startedAtMS).UTC()
 	record := &turn.TurnRecord{ID: turnID}
-	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode)
+	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.ExplicitClientInterruptRequestedAtMS)
 }
 
 type turnAnalyticsErrorFields struct {
@@ -4746,6 +4748,7 @@ type appTurnRunConfig struct {
 	ThreadSource                 string
 	SubagentSource               string
 	ParentThreadID               string
+	ParentTurnID                 string
 	Ephemeral                    bool
 	WorkspaceKind                string
 	NumInputImages               int
@@ -4887,7 +4890,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
-	hostedTools, err := r.hostedToolsForTurn(params)
+	hostedTools, err := r.hostedToolsForTurn(params, turnRuntime)
 	if err != nil {
 		return nil, err
 	}
@@ -4925,6 +4928,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ThreadSource:                 lineage.ThreadSource,
 		SubagentSource:               lineage.SubagentKind,
 		ParentThreadID:               lineage.ParentThreadID,
+		ParentTurnID:                 strings.TrimSpace(params.ParentTurnID),
 		Ephemeral:                    threadSnapshot.Ephemeral,
 		WorkspaceKind:                strings.TrimSpace(extraMetadata["workspace_kind"]),
 		NumInputImages:               countTurnStartInputImages(params),
@@ -4963,6 +4967,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			RequestKind:        codexapi.ClientRequestTurn,
 			ForkedFromThreadID: lineage.ForkedFromThreadID,
 			ParentThreadID:     lineage.ParentThreadID,
+			ParentTurnID:       params.ParentTurnID,
 			SubagentHeader:     lineage.SubagentHeader,
 			SubagentKind:       lineage.SubagentKind,
 			ThreadSource:       lineage.ThreadSource,
@@ -4981,33 +4986,55 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartPa
 	if params == nil || len(params.Environments) == 0 {
 		return nil
 	}
-	cwd := strings.TrimSpace(firstNonEmpty(turnCWD(params), r.services.DefaultCWD))
-	shellName := ""
-	if environments := r.unifiedExecEnvironmentsForTurn(params); len(environments) > 0 {
-		if shell := environments[0].Shell; shell != nil {
-			shellName = string(shell.Type)
-		}
+	environments := r.unifiedExecEnvironmentsForTurn(params)
+	if len(environments) == 0 {
+		return nil
 	}
-	if shellName == "" && r != nil && r.services.Environment != nil {
-		if info := r.services.Environment.defaultShell; strings.TrimSpace(info.Name) != "" {
-			shellName = strings.TrimSpace(info.Name)
-		} else if strings.TrimSpace(info.Path) != "" {
-			shellName = string(tool.DetectShellType(info.Path))
-		}
-	}
-	if shellName == "" {
-		if runtime.GOOS == "windows" {
-			shellName = "powershell"
-		} else {
-			shellName = "sh"
-		}
-	}
+	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
 	b.WriteString("<environment_context>\n")
-	fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
-	fmt.Fprintf(&b, "  <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
+	if len(environments) == 1 {
+		cwd := strings.TrimSpace(firstNonEmpty(environments[0].CWD, turnCWD(params), r.services.DefaultCWD))
+		shellName := unifiedEnvironmentShellName(environments[0], defaultShellName)
+		fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
+		fmt.Fprintf(&b, "  <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
+	} else {
+		b.WriteString("  <environments>\n")
+		for i, environment := range environments {
+			fmt.Fprintf(&b, "    <environment id=\"%s\" primary=\"%t\">\n", escapeEnvironmentXML(environment.ID), i == 0)
+			fmt.Fprintf(&b, "      <cwd>%s</cwd>\n", escapeEnvironmentXML(strings.TrimSpace(environment.CWD)))
+			if shellName := unifiedEnvironmentShellName(environment, ""); shellName != "" {
+				fmt.Fprintf(&b, "      <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
+			} else {
+				b.WriteString("      <status>starting</status>\n")
+			}
+			b.WriteString("    </environment>\n")
+		}
+		b.WriteString("  </environments>\n")
+	}
 	b.WriteString("</environment_context>")
 	return model.UserMessageInputItem(b.String())
+}
+
+func (r *RuntimeRouter) defaultEnvironmentShellName() string {
+	if r != nil && r.services.Environment != nil {
+		if info := r.services.Environment.defaultShell; strings.TrimSpace(info.Name) != "" {
+			return strings.TrimSpace(info.Name)
+		} else if strings.TrimSpace(info.Path) != "" {
+			return string(tool.DetectShellType(info.Path))
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
+	return "sh"
+}
+
+func unifiedEnvironmentShellName(environment tool.UnifiedExecEnvironment, fallback string) string {
+	if environment.Shell != nil && environment.Shell.Type != "" {
+		return string(environment.Shell.Type)
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func escapeEnvironmentXML(value string) string {
@@ -5132,7 +5159,7 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 	return count
 }
 
-func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16) {
+func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, explicitClientInterruptRequestedAtMS *uint64) {
 	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil {
 		return
 	}
@@ -5141,42 +5168,43 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		return
 	}
 	event := telemetry.NewCodexTurnEvent(telemetry.CodexTurnEventInput{
-		ThreadID:                 params.ThreadID,
-		SessionID:                firstNonEmpty(runConfig.SessionID, params.ThreadID),
-		TurnID:                   record.ID,
-		AppServerClient:          client,
-		ThreadOriginator:         runConfig.Originator,
-		Runtime:                  telemetry.CurrentRuntimeMetadata(),
-		Ephemeral:                runConfig.Ephemeral,
-		ThreadSource:             stringPtrIfNotEmpty(runConfig.ThreadSource),
-		InitializationMode:       "new",
-		SubagentSource:           stringPtrIfNotEmpty(runConfig.SubagentSource),
-		ParentThreadID:           stringPtrIfNotEmpty(runConfig.ParentThreadID),
-		Model:                    stringPtrIfNotEmpty(runConfig.Model),
-		ModelProvider:            runConfig.ProviderID,
-		SandboxPolicy:            stringPtrIfNotEmpty(runConfig.SandboxPolicy),
-		ReasoningEffort:          stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningEffort)),
-		ReasoningSummary:         stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningSummary)),
-		ServiceTier:              runConfig.ServiceTier,
-		ApprovalPolicy:           firstNonEmpty(runConfig.ApprovalPolicy, string(sandbox.ApprovalOnRequest)),
-		ApprovalsReviewer:        firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
-		SandboxNetworkAccess:     runConfig.SandboxNetworkAccess,
-		CollaborationMode:        stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),
-		Personality:              stringPtrIfNotEmpty(runConfig.Personality),
-		WorkspaceKind:            stringPtrIfNotEmpty(runConfig.WorkspaceKind),
-		NumInputImages:           runConfig.NumInputImages,
-		IsFirstTurn:              runConfig.IsFirstTurn,
-		Status:                   stringPtrIfNotEmpty(string(status)),
-		TurnError:                turnError,
-		CodexErrorKind:           codexErrorKind,
-		CodexErrorHTTPStatusCode: codexErrorHTTPStatusCode,
-		SteerCount:               intPtrAppserver(steerCount),
-		ToolCounts:               analyticsTurnToolCounts(result),
-		TokenUsage:               analyticsTurnTokenUsage(result),
-		TimingProfile:            analyticsTurnTimingProfile(result),
-		DurationMS:               uint64PtrFromNonNegativeInt64(durationMS),
-		StartedAt:                uint64PtrFromUnixSeconds(startedAt),
-		CompletedAt:              uint64PtrFromUnixSeconds(completedAt),
+		ThreadID:                             params.ThreadID,
+		SessionID:                            firstNonEmpty(runConfig.SessionID, params.ThreadID),
+		TurnID:                               record.ID,
+		AppServerClient:                      client,
+		ThreadOriginator:                     runConfig.Originator,
+		Runtime:                              telemetry.CurrentRuntimeMetadata(),
+		Ephemeral:                            runConfig.Ephemeral,
+		ThreadSource:                         stringPtrIfNotEmpty(runConfig.ThreadSource),
+		InitializationMode:                   "new",
+		SubagentSource:                       stringPtrIfNotEmpty(runConfig.SubagentSource),
+		ParentThreadID:                       stringPtrIfNotEmpty(runConfig.ParentThreadID),
+		Model:                                stringPtrIfNotEmpty(runConfig.Model),
+		ModelProvider:                        runConfig.ProviderID,
+		SandboxPolicy:                        stringPtrIfNotEmpty(runConfig.SandboxPolicy),
+		ReasoningEffort:                      stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningEffort)),
+		ReasoningSummary:                     stringPtrIfNotEmpty(analyticsOptionalModeString(runConfig.ReasoningSummary)),
+		ServiceTier:                          runConfig.ServiceTier,
+		ApprovalPolicy:                       firstNonEmpty(runConfig.ApprovalPolicy, string(sandbox.ApprovalOnRequest)),
+		ApprovalsReviewer:                    firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
+		SandboxNetworkAccess:                 runConfig.SandboxNetworkAccess,
+		CollaborationMode:                    stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),
+		Personality:                          stringPtrIfNotEmpty(runConfig.Personality),
+		WorkspaceKind:                        stringPtrIfNotEmpty(runConfig.WorkspaceKind),
+		NumInputImages:                       runConfig.NumInputImages,
+		IsFirstTurn:                          runConfig.IsFirstTurn,
+		Status:                               stringPtrIfNotEmpty(string(status)),
+		ExplicitClientInterruptRequestedAtMS: explicitClientInterruptRequestedAtMS,
+		TurnError:                            turnError,
+		CodexErrorKind:                       codexErrorKind,
+		CodexErrorHTTPStatusCode:             codexErrorHTTPStatusCode,
+		SteerCount:                           intPtrAppserver(steerCount),
+		ToolCounts:                           analyticsTurnToolCounts(result),
+		TokenUsage:                           analyticsTurnTokenUsage(result),
+		TimingProfile:                        analyticsTurnTimingProfile(result),
+		DurationMS:                           uint64PtrFromNonNegativeInt64(durationMS),
+		StartedAt:                            uint64PtrFromUnixSeconds(startedAt),
+		CompletedAt:                          uint64PtrFromUnixSeconds(completedAt),
 	})
 	r.services.Analytics.TrackCodexTurnEvent(ctx, event)
 }
@@ -5319,6 +5347,10 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		modelID = stringConfigValue(cfg, "model")
 	}
 	lineage := r.responsesMetadataLineage(params.ThreadID)
+	parentTurnID := ""
+	if active.Params != nil {
+		parentTurnID = active.Params.ParentTurnID
+	}
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:     installationID,
 		SessionID:          firstNonEmpty(lineage.SessionID, params.ThreadID),
@@ -5328,6 +5360,7 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		RequestKind:        codexapi.ClientRequestTurn,
 		ForkedFromThreadID: lineage.ForkedFromThreadID,
 		ParentThreadID:     lineage.ParentThreadID,
+		ParentTurnID:       parentTurnID,
 		SubagentHeader:     lineage.SubagentHeader,
 		SubagentKind:       lineage.SubagentKind,
 		ThreadSource:       lineage.ThreadSource,
@@ -5707,9 +5740,9 @@ func suggestedPluginsEnabledForConfig(cfg *config.Config) bool {
 		return false
 	}
 	settings := cfg.FeatureSettings()
-	return features.Enabled(settings, "plugins") &&
-		features.Enabled(settings, "remote_plugin") &&
-		features.Enabled(settings, "tool_suggest")
+	return features.Enabled(settings, "apps") &&
+		features.Enabled(settings, "plugins") &&
+		(features.Enabled(settings, "tool_suggest") || features.Enabled(settings, "recommended_plugins"))
 }
 
 func sortedBoolKeys(values map[string]bool) []string {
@@ -6094,7 +6127,12 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	}
 	skillEntries = append(skillEntries, pluginSkillEntries...)
 	hostSkillEntries := cloneSkills(skillEntries)
-	selectedCapabilitySkillEntries, selectedCapabilitySkillWarnings, err := r.selectedCapabilitySkillEntriesForRuntime(threadID)
+	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	executorSkillProviders := r.executorSkillProviderForThreadWithSandbox(threadID, executorSandboxContexts)
+	selectedCapabilitySkillEntries, selectedCapabilitySkillWarnings, err := r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx, threadID, executorSandboxContexts)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -6127,7 +6165,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
 	postToolInputItems := r.implicitSkillInvocationEventProvider(threadID, turnID, modelID, params, skillMetadata)
 	if cfg != nil && !cfg.IncludeSkillInstructions() {
-		skillInputItems := r.explicitSkillInputItemsForTurn(threadID, turnID, modelID, params, skillMetadata)
+		skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skillMetadata, executorSkillProviders)
 		return strings.TrimSpace(instructions), skillInputItems, postToolInputItems, nil
 	}
 	includeUsageInstructions := r.includeSkillsUsageInstructionsForTurn(cfg, params)
@@ -6148,7 +6186,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 			})
 		}
 	}
-	skillInputItems := r.explicitSkillInputItemsForTurn(threadID, turnID, modelID, params, skillMetadata)
+	skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skillMetadata, executorSkillProviders)
 	rendered := make([]string, 0, 3)
 	if hostAvailable != nil {
 		rendered = append(rendered, hostAvailable.Body)
@@ -6255,6 +6293,10 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime() ([]SkillsListEnt
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string) ([]SkillsListEntry, []string, error) {
+	return r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(context.Background(), threadID, nil)
+}
+
+func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx context.Context, threadID string, sandboxContexts map[string]*execserver.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
 	if r == nil || strings.TrimSpace(threadID) == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, nil, nil
 	}
@@ -6272,10 +6314,21 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 		if selected.Location.Type != CapabilityRootLocationEnvironment {
 			continue
 		}
+		environmentID := firstNonEmpty(strings.TrimSpace(selected.Location.EnvironmentID), "local")
+		sandboxContext, sandboxErr := executorSkillSandboxContextForEnvironment(sandboxContexts, environmentID)
+		if sandboxErr != nil {
+			warnings = append(warnings, fmt.Sprintf("executor skills unavailable for environment `%s`: filesystem sandbox context is missing", environmentID))
+			continue
+		}
+		if sandboxErr := validateExecutorSkillSandboxAvailability(sandboxContext, selected.Location.Path); sandboxErr != nil {
+			warnings = append(warnings, "executor skills unavailable: "+sandboxErr.Error())
+			continue
+		}
+		cacheKey := string(raw) + "\x00" + executorSkillSandboxContextKey(sandboxContext)
 		if environmentRecord, ok := r.selectedCapabilityEnvironmentRecord(&selected.Location); ok {
-			cached := r.selectedCapabilitySkillCatalog(threadID, string(raw))
+			cached := r.selectedCapabilitySkillCatalog(threadID, cacheKey)
 			cached.once.Do(func() {
-				cached.entries, cached.warnings, cached.err = discoverRemoteEnvironmentSkills(context.Background(), environmentRecord, selected.Location.Path)
+				cached.entries, cached.warnings, cached.err = discoverRemoteEnvironmentSkillsWithSandbox(ctx, environmentRecord, selected.Location.Path, sandboxContext)
 				if cached.err != nil {
 					cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
 					cached.err = nil
@@ -6293,10 +6346,14 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
-		cached := r.selectedCapabilitySkillCatalog(threadID, string(raw))
+		cached := r.selectedCapabilitySkillCatalog(threadID, cacheKey)
 		cached.once.Do(func() {
 			var discoveredErrors []SkillErrorInfo
-			cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"})
+			if sandboxContext != nil {
+				cached.entries, cached.warnings, cached.err = discoverLocalEnvironmentSkillsWithSandbox(ctx, selected.Location.Path, sandboxContext)
+			} else {
+				cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"})
+			}
 			if cached.err != nil {
 				cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
 				cached.err = nil
@@ -7144,6 +7201,10 @@ func (r *RuntimeRouter) explicitSkillInputItems(threadID string, params *turn.Tu
 }
 
 func (r *RuntimeRouter) explicitSkillInputItemsForTurn(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) []any {
+	return r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skills, nil)
+}
+
+func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata, executorProviders *skillprovider.Registry) []any {
 	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params),
 		Skills: skills,
@@ -7153,7 +7214,7 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurn(threadID string, turnID s
 	}
 	items := make([]any, 0, len(selected))
 	for _, skill := range selected {
-		item, truncated, err := r.skillInstructionsInputItem(threadID, skill)
+		item, truncated, err := r.skillInstructionsInputItemWithProvider(threadID, skill, executorProviders)
 		if err != nil {
 			if r != nil {
 				r.notify(NotificationWarning, &WarningNotification{
@@ -7184,6 +7245,10 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurn(threadID string, turnID s
 }
 
 func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill promptctx.InstructionsSkillMetadata) (any, bool, error) {
+	return r.skillInstructionsInputItemWithProvider(threadID, skill, nil)
+}
+
+func (r *RuntimeRouter) skillInstructionsInputItemWithProvider(threadID string, skill promptctx.InstructionsSkillMetadata, executorProviders *skillprovider.Registry) (any, bool, error) {
 	contents := skill.Contents
 	if strings.TrimSpace(contents) == "" {
 		if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), "orchestrator") {
@@ -7196,7 +7261,10 @@ func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill prompt
 			}
 			contents = read
 		} else if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), string(skillprovider.SourceExecutor)) {
-			providers := r.executorSkillProviderForThread(threadID)
+			providers := executorProviders
+			if providers == nil {
+				providers = r.executorSkillProviderForThread(threadID)
+			}
 			if providers == nil {
 				return nil, false, errors.New("executor skill provider is not configured")
 			}
@@ -7969,6 +8037,7 @@ func appToolInvocationData(invocation *tool.Invocation) map[string]any {
 		data["search"] = invocation.Payload.Search
 		data["arguments_map"] = invocation.Payload.Search
 	}
+	addInvocationReadOnlyHint(data, invocation)
 	return data
 }
 
@@ -7995,6 +8064,7 @@ func appToolOutputData(invocation *tool.Invocation, output *tool.Output) map[str
 			data["arguments"] = invocation.Payload.Arguments
 			addShellCommandData(data, invocation.Payload.Arguments)
 		}
+		addInvocationReadOnlyHint(data, invocation)
 		if appToolOutputIsMCP(output) {
 			markMCPToolData(data, invocation.ToolName)
 		} else if appToolOutputIsDynamic(output) {
@@ -8006,6 +8076,15 @@ func appToolOutputData(invocation *tool.Invocation, output *tool.Output) map[str
 		}
 	}
 	return data
+}
+
+func addInvocationReadOnlyHint(data map[string]any, invocation *tool.Invocation) {
+	if data == nil || invocation == nil || invocation.Context == nil {
+		return
+	}
+	if hint, ok := invocation.Context["read_only_hint"].(bool); ok {
+		data["read_only_hint"] = hint
+	}
 }
 
 func addShellCommandData(data map[string]any, arguments string) {

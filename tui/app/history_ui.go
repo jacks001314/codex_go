@@ -4,7 +4,7 @@ import "strings"
 
 // Rust parity subset: codex-rs/tui/src/app/history_ui.rs.
 
-const DesktopThreadOpenedMessage = "Opened this session in Codex Desktop."
+const DesktopThreadOpenedMessage = "Opened this session in the Desktop app."
 
 type HistoryUIState struct {
 	Rows []string
@@ -29,7 +29,7 @@ func DesktopThreadURL(threadID string) string {
 }
 
 func DesktopThreadOpenErrorMessage(err string) string {
-	return "Failed to open this session in Codex Desktop: " + err + ". Install or launch Codex Desktop and try again."
+	return "Failed to open this session in the Desktop app: " + err + ". Install or launch the Desktop app and try again."
 }
 
 func PowershellSingleQuotedString(value string) string {
@@ -39,24 +39,40 @@ func PowershellSingleQuotedString(value string) string {
 func WindowsDesktopAppLaunchScript(url string) string {
 	quotedURL := PowershellSingleQuotedString(url)
 	return `
+try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = 'Stop'
 $url = ` + quotedURL + `
 
-$installLocation = (Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue).InstallLocation
-if ([string]::IsNullOrWhiteSpace($installLocation)) {
-    Write-Error 'Codex Desktop package is not installed'
+$package = Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue
+if ($null -eq $package) {
+    Write-Error 'Desktop app package is not installed'
     exit 1
 }
 
-$appDir = Join-Path $installLocation 'app'
-$exe = Join-Path $appDir 'Codex.exe'
+$manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+$application = $manifest.Package.Applications.Application |
+    Where-Object {
+        @($_.Extensions.Extension) | Where-Object {
+            $_.Category -eq 'windows.protocol' -and $_.Protocol.Name -eq 'codex'
+        }
+    } |
+    Select-Object -First 1
+if ($null -eq $application -or [string]::IsNullOrWhiteSpace($application.Executable)) {
+    Write-Error 'Desktop app package does not declare a codex protocol executable'
+    exit 1
+}
+
+# Launch the package-declared protocol executable rather than an internal Electron shim.
+# Windows can deny direct starts of internal executables under WindowsApps.
+$exe = Join-Path $package.InstallLocation $application.Executable
+$appDir = Split-Path -Parent $exe
 $app = Join-Path $appDir 'resources\app.asar'
 if (-not (Test-Path $exe)) {
-    Write-Error "Codex Desktop executable not found at $exe"
+    Write-Error "Desktop app executable not found at $exe"
     exit 1
 }
 if (-not (Test-Path $app)) {
-    Write-Error "Codex Desktop app bundle not found at $app"
+    Write-Error "Desktop app bundle not found at $app"
     exit 1
 }
 

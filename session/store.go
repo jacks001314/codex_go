@@ -21,9 +21,10 @@ const (
 	ForkNone  ForkMode = "none"
 	ForkLastN ForkMode = "last-n"
 
-	SortCreatedAt SortKey = "created_at"
-	SortUpdatedAt SortKey = "updated_at"
-	SortRecencyAt SortKey = "recency_at"
+	SortCreatedAt       SortKey = "created_at"
+	SortUpdatedAt       SortKey = "updated_at"
+	SortRecencyAt       SortKey = "recency_at"
+	SortSectionPosition SortKey = "section_position"
 
 	SortAsc  SortDirection = "asc"
 	SortDesc SortDirection = "desc"
@@ -40,6 +41,7 @@ var (
 const (
 	PinnedThreadSectionID   = "01984de2-8f74-7c91-a3b2-5c5e937cf318"
 	PinnedThreadSectionName = "Pinned"
+	sectionPositionGap      = int64(1_000_000)
 )
 
 type ForkMode string
@@ -249,24 +251,26 @@ type TurnSnapshot struct {
 }
 
 type Record struct {
-	ID             ThreadID         `json:"id"`
-	SessionID      string           `json:"session_id,omitempty"`
-	ForkedFromID   ThreadID         `json:"forked_from_id,omitempty"`
-	ParentThreadID ThreadID         `json:"parent_thread_id,omitempty"`
-	Title          string           `json:"title,omitempty"`
-	Preview        string           `json:"preview,omitempty"`
-	Archived       bool             `json:"archived"`
-	Section        *ThreadSection   `json:"section,omitempty"`
-	IsPinned       bool             `json:"is_pinned,omitempty"` // Legacy on-disk migration field.
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
-	RecencyAt      time.Time        `json:"recency_at"`
-	Metadata       Metadata         `json:"metadata"`
-	HistoryBase    *HistoryPosition `json:"history_base,omitempty"`
-	Items          []Item           `json:"items,omitempty"`
-	FromRollout    bool             `json:"-"`
-	InheritedItems int              `json:"-"`
-	InheritedTurns int              `json:"-"`
+	ID               ThreadID         `json:"id"`
+	SessionID        string           `json:"session_id,omitempty"`
+	ForkedFromID     ThreadID         `json:"forked_from_id,omitempty"`
+	ParentThreadID   ThreadID         `json:"parent_thread_id,omitempty"`
+	Title            string           `json:"title,omitempty"`
+	Preview          string           `json:"preview,omitempty"`
+	Archived         bool             `json:"archived"`
+	Section          *ThreadSection   `json:"section,omitempty"`
+	SectionPosition  *int64           `json:"section_position,omitempty"`
+	SectionEnteredAt *time.Time       `json:"section_entered_at,omitempty"`
+	IsPinned         bool             `json:"is_pinned,omitempty"` // Legacy on-disk migration field.
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+	RecencyAt        time.Time        `json:"recency_at"`
+	Metadata         Metadata         `json:"metadata"`
+	HistoryBase      *HistoryPosition `json:"history_base,omitempty"`
+	Items            []Item           `json:"items,omitempty"`
+	FromRollout      bool             `json:"-"`
+	InheritedItems   int              `json:"-"`
+	InheritedTurns   int              `json:"-"`
 }
 
 // HistoryPosition freezes the materialized prefix inherited by a paginated
@@ -695,6 +699,184 @@ func (s *Store) UpdateMetadata(threadID ThreadID, patch *MetadataPatch, includeA
 	return s.updateMetadataLocked(threadID, patch, includeArchived)
 }
 
+// MoveThreadToSection moves a thread into, within, or out of a persisted
+// section. Positions are sparse so most reorders only rewrite the moved thread.
+func (s *Store) MoveThreadToSection(threadID ThreadID, sectionID *string, beforeThreadID *ThreadID) (*Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := validateThreadID(threadID); err != nil {
+		return nil, err
+	}
+	if beforeThreadID != nil {
+		if err := validateThreadID(*beforeThreadID); err != nil {
+			return nil, err
+		}
+	}
+	section, err := threadSectionForID(sectionID)
+	if err != nil {
+		return nil, err
+	}
+	if section == nil && beforeThreadID != nil {
+		return nil, fmt.Errorf("before thread cannot be specified without a section")
+	}
+	if beforeThreadID != nil && *beforeThreadID == threadID {
+		return nil, fmt.Errorf("thread %s cannot be moved before itself", threadID)
+	}
+	records, err := s.loadAllLocked()
+	if err != nil {
+		return nil, err
+	}
+	targetIndex := -1
+	for i := range records {
+		if records[i].ID == threadID {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return nil, fmt.Errorf("%w: %s", ErrThreadNotFound, threadID)
+	}
+	target := &records[targetIndex]
+	if section == nil {
+		target.Section = nil
+		target.SectionPosition = nil
+		target.SectionEnteredAt = nil
+		target.IsPinned = false
+		if err := s.saveLocked(target); err != nil {
+			return nil, err
+		}
+		return cloneRecord(target), nil
+	}
+
+	members := make([]*Record, 0)
+	for i := range records {
+		record := &records[i]
+		if record.ID != threadID && record.Section != nil && record.Section.ID == section.ID {
+			members = append(members, record)
+		}
+	}
+	if beforeThreadID != nil {
+		found := false
+		for _, member := range members {
+			if member.ID == *beforeThreadID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("before thread %s is not in section %s", *beforeThreadID, section.ID)
+		}
+	}
+
+	changed := make([]*Record, 0)
+	if sectionMembersNeedRanks(members) {
+		sort.SliceStable(members, func(i, j int) bool {
+			left, right := members[i], members[j]
+			if left.SectionPosition != nil && right.SectionPosition != nil && *left.SectionPosition != *right.SectionPosition {
+				return *left.SectionPosition < *right.SectionPosition
+			}
+			if left.SectionPosition != nil || right.SectionPosition != nil {
+				return left.SectionPosition != nil
+			}
+			if !left.RecencyAt.Equal(right.RecencyAt) {
+				return left.RecencyAt.After(right.RecencyAt)
+			}
+			return left.ID < right.ID
+		})
+		for i, member := range members {
+			position := int64(i+1) * sectionPositionGap
+			if member.SectionPosition == nil || *member.SectionPosition != position {
+				member.SectionPosition = int64Ptr(position)
+				if member.SectionEnteredAt == nil {
+					entered := member.RecencyAt.UTC()
+					if entered.IsZero() {
+						entered = member.UpdatedAt.UTC()
+					}
+					member.SectionEnteredAt = &entered
+				}
+				changed = append(changed, member)
+			}
+		}
+	}
+
+	position, renumbered := sectionMovePosition(members, beforeThreadID)
+	if renumbered {
+		changed = changed[:0]
+		sort.SliceStable(members, func(i, j int) bool {
+			left, right := *members[i].SectionPosition, *members[j].SectionPosition
+			if left != right {
+				return left < right
+			}
+			return members[i].ID < members[j].ID
+		})
+		for i, member := range members {
+			value := int64(i+1) * sectionPositionGap
+			member.SectionPosition = int64Ptr(value)
+			changed = append(changed, member)
+		}
+		position, _ = sectionMovePosition(members, beforeThreadID)
+	}
+	oldSectionID := ""
+	if target.Section != nil {
+		oldSectionID = target.Section.ID
+	}
+	target.Section = cloneThreadSection(section)
+	target.SectionPosition = int64Ptr(position)
+	target.IsPinned = section.ID == PinnedThreadSectionID
+	if oldSectionID != section.ID || target.SectionEnteredAt == nil {
+		now := time.Now().UTC()
+		target.SectionEnteredAt = &now
+	}
+	changed = append(changed, target)
+	for _, record := range changed {
+		if err := s.saveLocked(record); err != nil {
+			return nil, err
+		}
+	}
+	return cloneRecord(target), nil
+}
+
+func sectionMembersNeedRanks(members []*Record) bool {
+	for _, member := range members {
+		if member.SectionPosition == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func sectionMovePosition(members []*Record, beforeThreadID *ThreadID) (int64, bool) {
+	if beforeThreadID == nil {
+		maxPosition := int64(0)
+		for _, member := range members {
+			if member.SectionPosition != nil && *member.SectionPosition > maxPosition {
+				maxPosition = *member.SectionPosition
+			}
+		}
+		return maxPosition + sectionPositionGap, false
+	}
+	var upper int64
+	for _, member := range members {
+		if member.ID == *beforeThreadID && member.SectionPosition != nil {
+			upper = *member.SectionPosition
+			break
+		}
+	}
+	var lower int64
+	for _, member := range members {
+		if member.SectionPosition != nil && *member.SectionPosition < upper && *member.SectionPosition > lower {
+			lower = *member.SectionPosition
+		}
+	}
+	if lower == 0 && upper > 1 {
+		return upper / 2, false
+	}
+	if upper-lower > 1 {
+		return lower + (upper-lower)/2, false
+	}
+	return 0, true
+}
+
 func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, includeArchived bool) (*Record, error) {
 	record, err := s.readLocked(threadID, includeArchived, true)
 	if err != nil {
@@ -984,12 +1166,12 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 		if legacyCursor {
 			nextCursor = fmt.Sprintf("%d", end)
 		} else if end > start {
-			nextCursor = listTimeCursor(sortTime(&filtered[end-1], options.SortKey))
+			nextCursor = listCursor(&filtered[end-1], options.SortKey)
 		}
 	}
 	backwardsCursor := ""
 	if end > start {
-		backwardsCursor = listBackwardsCursor(sortTime(&filtered[start], options.SortKey), options.SortDirection)
+		backwardsCursor = listBackwardsRecordCursor(&filtered[start], options.SortKey, options.SortDirection)
 	}
 	return &Page{
 		Records:         append([]Record(nil), filtered[start:end]...),
@@ -1433,9 +1615,35 @@ func sortRecords(records []Record, key SortKey, direction SortDirection) {
 		key = SortCreatedAt
 	}
 	if direction == "" {
-		direction = SortDesc
+		if key == SortSectionPosition {
+			direction = SortAsc
+		} else {
+			direction = SortDesc
+		}
 	}
 	sort.SliceStable(records, func(i int, j int) bool {
+		if key == SortSectionPosition {
+			left, right := records[i].SectionPosition, records[j].SectionPosition
+			if left == nil || right == nil {
+				if left == nil && right == nil {
+					if direction == SortAsc {
+						return records[i].ID < records[j].ID
+					}
+					return records[i].ID > records[j].ID
+				}
+				return right == nil
+			}
+			if *left != *right {
+				if direction == SortAsc {
+					return *left < *right
+				}
+				return *left > *right
+			}
+			if direction == SortAsc {
+				return records[i].ID < records[j].ID
+			}
+			return records[i].ID > records[j].ID
+		}
 		left := sortTime(&records[i], key)
 		right := sortTime(&records[j], key)
 		if left.Equal(right) {
@@ -1599,6 +1807,30 @@ func listStartIndex(records []Record, options ListOptions) (int, bool, error) {
 	if cursor == "" {
 		return 0, false, nil
 	}
+	if options.SortKey == SortSectionPosition {
+		position, threadID, err := parseSectionPositionCursor(cursor)
+		if err != nil {
+			return 0, false, err
+		}
+		direction := options.SortDirection
+		if direction == "" {
+			direction = SortAsc
+		}
+		for i := range records {
+			if records[i].SectionPosition == nil {
+				continue
+			}
+			value := *records[i].SectionPosition
+			if direction == SortAsc {
+				if value > position || (value == position && records[i].ID > threadID) {
+					return i, false, nil
+				}
+			} else if value < position || (value == position && records[i].ID < threadID) {
+				return i, false, nil
+			}
+		}
+		return len(records), false, nil
+	}
 	if start, ok := parseLegacyOffsetCursor(cursor); ok {
 		return start, true, nil
 	}
@@ -1608,7 +1840,11 @@ func listStartIndex(records []Record, options ListOptions) (int, bool, error) {
 	}
 	direction := options.SortDirection
 	if direction == "" {
-		direction = SortDesc
+		if options.SortKey == SortSectionPosition {
+			direction = SortAsc
+		} else {
+			direction = SortDesc
+		}
 	}
 	for i := range records {
 		value := sortTime(&records[i], options.SortKey)
@@ -1644,6 +1880,48 @@ func listTimeCursor(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
+}
+
+func listCursor(record *Record, key SortKey) string {
+	if key == SortSectionPosition {
+		if record == nil || record.SectionPosition == nil {
+			return ""
+		}
+		return fmt.Sprintf("%d|%s", *record.SectionPosition, record.ID)
+	}
+	return listTimeCursor(sortTime(record, key))
+}
+
+func parseSectionPositionCursor(cursor string) (int64, ThreadID, error) {
+	positionText, threadText, ok := strings.Cut(cursor, "|")
+	if !ok || strings.TrimSpace(threadText) == "" {
+		return 0, "", fmt.Errorf("%w: invalid cursor %q", ErrInvalidThreadID, cursor)
+	}
+	position, err := strconv.ParseInt(positionText, 10, 64)
+	if err != nil {
+		return 0, "", fmt.Errorf("%w: invalid cursor %q", ErrInvalidThreadID, cursor)
+	}
+	threadID := ThreadID(threadText)
+	if err := validateThreadID(threadID); err != nil {
+		return 0, "", fmt.Errorf("%w: invalid cursor %q", ErrInvalidThreadID, cursor)
+	}
+	return position, threadID, nil
+}
+
+func listBackwardsRecordCursor(record *Record, key SortKey, direction SortDirection) string {
+	if key == SortSectionPosition {
+		if record == nil || record.SectionPosition == nil {
+			return ""
+		}
+		position := *record.SectionPosition
+		if direction == SortDesc {
+			position--
+		} else {
+			position++
+		}
+		return fmt.Sprintf("%d|%s", position, record.ID)
+	}
+	return listBackwardsCursor(sortTime(record, key), direction)
 }
 
 func listBackwardsCursor(value time.Time, direction SortDirection) string {
@@ -1711,6 +1989,8 @@ func cloneRecord(record *Record) *Record {
 	}
 	clone := *record
 	clone.Section = cloneThreadSection(record.Section)
+	clone.SectionPosition = cloneInt64(record.SectionPosition)
+	clone.SectionEnteredAt = cloneTime(record.SectionEnteredAt)
 	clone.Metadata = cloneMetadata(record.Metadata)
 	clone.HistoryBase = cloneHistoryPosition(record.HistoryBase)
 	clone.Items = cloneItems(record.Items)
@@ -1747,7 +2027,29 @@ func normalizeRecordSection(record *Record) {
 	if record.Section == nil && record.IsPinned {
 		record.Section = pinnedThreadSection()
 	}
+	if record.Section == nil {
+		record.SectionPosition = nil
+		record.SectionEnteredAt = nil
+	}
 	record.IsPinned = record.Section != nil && record.Section.ID == PinnedThreadSectionID
+}
+
+func int64Ptr(value int64) *int64 { return &value }
+
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 // LocalRecord returns the physical, non-inherited portion of a record. It is

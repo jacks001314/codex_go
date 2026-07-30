@@ -580,6 +580,110 @@ func TestBuildToolRegistryToolSearchFindsDeferredTools(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryProtectsHostSyntheticToolsFromDynamicCollisions(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.EnableCodeMode = true
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName: "drive",
+		Tool:       mcp.RuntimeTool{Name: "create_doc", Description: "searchable MCP tool"},
+	}}
+	options.DynamicTools = []DynamicToolSpec{
+		{Type: "function", Function: &DynamicToolFunctionSpec{Name: tool.ToolSearchName, Description: "client shadow", InputSchema: map[string]any{"type": "object"}}},
+		{Type: "function", Function: &DynamicToolFunctionSpec{Name: tool.CodeModeExecToolName, Description: "exec shadow", InputSchema: map[string]any{"type": "object"}}},
+		{Type: "function", Function: &DynamicToolFunctionSpec{Name: "wait", Description: "wait shadow", InputSchema: map[string]any{"type": "object"}}},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchExecutor, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName))
+	if !ok {
+		t.Fatal("host tool_search is missing")
+	}
+	if _, ok := searchExecutor.(*tool.ToolSearchHandler); !ok {
+		t.Fatalf("tool_search runtime = %T, want host handler", searchExecutor)
+	}
+	execSpec, ok := registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok || execSpec.Freeform == nil || execSpec.Description == "exec shadow" {
+		t.Fatalf("exec spec = %#v", execSpec)
+	}
+	waitSpec, ok := registry.Spec(tool.PlainName("wait"))
+	if !ok || waitSpec.Description == "wait shadow" {
+		t.Fatalf("wait spec = %#v", waitSpec)
+	}
+}
+
+func TestBuildToolRegistryExternalCollisionKeepsMCPRuntime(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.EnableCodeMode = false
+	options.EnableToolSearch = false
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName: "drive",
+		Tool:       mcp.RuntimeTool{Name: "create_doc", Description: "MCP winner"},
+	}}
+	options.DynamicTools = []DynamicToolSpec{{
+		Type: "namespace",
+		Namespace: &DynamicToolNamespaceSpec{Name: "mcp__drive", Tools: []DynamicToolFunctionSpec{{
+			Name: "create_doc", Description: "dynamic shadow", InputSchema: map[string]any{"type": "object"},
+		}}},
+	}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Spec(tool.NamespacedName("mcp__drive", "create_doc"))
+	if !ok || spec.Description != "MCP winner" {
+		t.Fatalf("winning spec = %#v", spec)
+	}
+}
+
+func TestBuildToolRegistryCodeModeUsesFirstNormalizedDynamicTool(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.EnableMCP = false
+	options.EnableToolSearch = false
+	options.EnableCodeMode = true
+	options.DynamicTools = []DynamicToolSpec{
+		{Type: "function", Function: &DynamicToolFunctionSpec{Name: "foo-bar", Description: "first winner", InputSchema: map[string]any{"type": "object"}}},
+		{Type: "function", Function: &DynamicToolFunctionSpec{Name: "foo_bar", Description: "shadowed tool", InputSchema: map[string]any{"type": "object"}}},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := tool.NewRouter(registry)
+	metadata := router.CodeModeToolNames()
+	if len(metadata) != 1 || metadata["foo_bar"].Name != "foo-bar" {
+		t.Fatalf("code mode metadata = %#v", metadata)
+	}
+	winners := router.CodeModeToolSpecs()
+	if len(winners) != 1 || winners[0].Name.Key() != "foo-bar" {
+		t.Fatalf("code mode winners = %#v", winners)
+	}
+	visible := augmentCodeModeWinnerSpecs(registry.ModelVisibleSpecs(), winners)
+	byName := map[string]tool.Spec{}
+	for _, spec := range visible {
+		byName[spec.Name.Key()] = spec
+	}
+	if !strings.Contains(byName["foo-bar"].Description, "exec tool declaration") {
+		t.Fatalf("winning description was not augmented: %q", byName["foo-bar"].Description)
+	}
+	if byName["foo_bar"].Description != "shadowed tool" {
+		t.Fatalf("shadowed description = %q", byName["foo_bar"].Description)
+	}
+}
+
 func TestBuildToolRegistryMCPToolSearchDispatchesUniqueBareName(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false
@@ -695,6 +799,37 @@ func TestBuildToolRegistryOmitsDeferredSourcesFromSearchDescription(t *testing.T
 	}
 	if got := registry.DeferredToolNamespaces(); got["mcp__drive"] != "Drive tools" {
 		t.Fatalf("deferred namespaces = %#v", got)
+	}
+}
+
+func TestBuildToolRegistryBoundsMCPNamespaceDescriptionAndForwardsReadiness(t *testing.T) {
+	expected := strings.Repeat("é", 499)
+	full := expected + "🦀keep the complete MCP metadata"
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableAgents = false
+	options.MCPService = mcp.NewMCPService(nil)
+	options.MCPTools = []mcp.RuntimeToolInfo{{
+		ServerName:           "drive",
+		NamespaceDescription: full,
+		Tool:                 mcp.RuntimeTool{Name: "create_doc", Description: "Create a document"},
+	}}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := tool.NamespacedName("mcp__drive", "create_doc")
+	spec, ok := registry.Spec(name)
+	if !ok || spec.NamespaceDescription != expected || spec.Search == nil || spec.Search.Source == nil || spec.Search.Source.Description != expected {
+		t.Fatalf("MCP spec = %#v", spec)
+	}
+	if full == spec.NamespaceDescription {
+		t.Fatal("model-facing namespace description was not bounded")
+	}
+	if !tool.NewRouter(registry).HasReadinessWait(name) {
+		t.Fatal("MCP readiness hook was not forwarded through the spec override")
 	}
 }
 

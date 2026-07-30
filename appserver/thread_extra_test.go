@@ -300,6 +300,22 @@ func TestBackgroundTerminalsListResponseMarshalRequiredArray(t *testing.T) {
 	}
 }
 
+func TestBackgroundTerminalCWDAllowsForeignPathConventions(t *testing.T) {
+	for _, cwd := range []string{"/workspace/project", `C:\\workspace\\project`, `\\\\server\\share\\project`} {
+		data, err := json.Marshal(BackgroundTerminal{ProcessID: "proc-1", CWD: cwd})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded BackgroundTerminal
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.CWD != cwd {
+			t.Fatalf("cwd round trip = %q, want %q", decoded.CWD, cwd)
+		}
+	}
+}
+
 func TestThreadExtraServiceZeroValueIsUsable(t *testing.T) {
 	var service ThreadExtraService
 	objective := "ship"

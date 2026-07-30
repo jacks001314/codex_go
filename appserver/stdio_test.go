@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +42,28 @@ func TestStdioServerHandlesJSONRPCLine(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"id":1`) || !strings.Contains(out.String(), `"result"`) {
 		t.Fatalf("output = %s", out.String())
+	}
+}
+
+func TestStdioServerEOFClosesRemoteControlBackendLikeRust(t *testing.T) {
+	enrollmentStore, err := remotecontrol.OpenEnrollmentStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenEnrollmentStore() error = %v", err)
+	}
+	if err := enrollmentStore.EnsureSchema(context.Background()); err != nil {
+		t.Fatalf("EnsureSchema() before serve error = %v", err)
+	}
+	manager := remotecontrol.NewManagerWithBackend("codex", "installation", &remotecontrol.ManagerBackendOptions{
+		Store:             enrollmentStore,
+		CloseStoreOnClose: true,
+	})
+	router := NewRuntimeRouter(RuntimeServices{Remote: manager})
+	server := NewStdioServer(router)
+	if err := server.Serve(strings.NewReader(""), io.Discard); err != nil {
+		t.Fatalf("Serve() on stdio EOF error = %v", err)
+	}
+	if err := enrollmentStore.EnsureSchema(context.Background()); err == nil {
+		t.Fatal("remote-control backend store remained open after stdio EOF")
 	}
 }
 

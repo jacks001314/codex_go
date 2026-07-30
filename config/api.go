@@ -910,6 +910,7 @@ type ExternalAgentConfigImportItemTypeSuccess struct {
 	CWD      *string           `json:"cwd"`
 	Source   *string           `json:"source"`
 	Target   *string           `json:"target"`
+	Title    *string           `json:"title"`
 }
 
 type ExternalAgentConfigImportItemTypeFailure struct {
@@ -941,8 +942,22 @@ func (r *ExternalAgentConfigImportTypeResult) MarshalJSON() ([]byte, error) {
 }
 
 type ExternalAgentConfigImportHistoryRecordParams struct {
-	ProviderID      string                                `json:"providerId"`
-	ItemTypeResults []ExternalAgentConfigImportTypeResult `json:"itemTypeResults"`
+	ProviderID      string                                                   `json:"providerId"`
+	ItemTypeResults []ExternalAgentConfigImportHistoryRecordTypeResultParams `json:"itemTypeResults"`
+}
+
+type ExternalAgentConfigImportHistoryRecordSuccessParams struct {
+	ItemType MigrationItemType `json:"itemType"`
+	CWD      *string           `json:"cwd"`
+	Source   *string           `json:"source"`
+	Target   *string           `json:"target"`
+	Title    *string           `json:"title"`
+}
+
+type ExternalAgentConfigImportHistoryRecordTypeResultParams struct {
+	ItemType  MigrationItemType                                     `json:"itemType"`
+	Successes []ExternalAgentConfigImportHistoryRecordSuccessParams `json:"successes"`
+	Failures  []ExternalAgentConfigImportItemTypeFailure            `json:"failures"`
 }
 
 type ExternalAgentConfigImportHistoryRecordResponse struct {
@@ -2061,8 +2076,8 @@ func (s *ConfigService) RecordExternalAgentImportHistory(params *ExternalAgentCo
 		ImportID:      importID,
 		ProviderID:    stringPtrIfNotEmpty(providerID),
 		CompletedAtMS: s.now().UTC().UnixMilli(),
-		Successes:     collectImportSuccesses(params.ItemTypeResults),
-		Failures:      collectImportFailures(params.ItemTypeResults),
+		Successes:     collectImportHistoryRecordSuccesses(params.ItemTypeResults),
+		Failures:      collectImportHistoryRecordFailures(params.ItemTypeResults),
 	}
 	s.importHistory = append(s.importHistory, history)
 	return &ExternalAgentConfigImportHistoryRecordResponse{ImportID: importID}
@@ -3092,6 +3107,7 @@ func cloneImportSuccesses(values []ExternalAgentConfigImportItemTypeSuccess) []E
 			CWD:      cloneStringPtr(values[i].CWD),
 			Source:   cloneStringPtr(values[i].Source),
 			Target:   cloneStringPtr(values[i].Target),
+			Title:    cloneStringPtr(values[i].Title),
 		}
 	}
 	return out
@@ -3125,6 +3141,29 @@ func collectImportSuccesses(values []ExternalAgentConfigImportTypeResult) []Exte
 	var out []ExternalAgentConfigImportItemTypeSuccess
 	for i := range values {
 		out = append(out, cloneImportSuccesses(values[i].Successes)...)
+	}
+	return out
+}
+
+func collectImportHistoryRecordSuccesses(values []ExternalAgentConfigImportHistoryRecordTypeResultParams) []ExternalAgentConfigImportItemTypeSuccess {
+	var out []ExternalAgentConfigImportItemTypeSuccess
+	for i := range values {
+		for j := range values[i].Successes {
+			success := values[i].Successes[j]
+			out = append(out, ExternalAgentConfigImportItemTypeSuccess{
+				ItemType: success.ItemType,
+				CWD:      cloneStringPtr(success.CWD), Source: cloneStringPtr(success.Source),
+				Target: cloneStringPtr(success.Target), Title: cloneStringPtr(success.Title),
+			})
+		}
+	}
+	return out
+}
+
+func collectImportHistoryRecordFailures(values []ExternalAgentConfigImportHistoryRecordTypeResultParams) []ExternalAgentConfigImportItemTypeFailure {
+	var out []ExternalAgentConfigImportItemTypeFailure
+	for i := range values {
+		out = append(out, cloneImportFailures(values[i].Failures)...)
 	}
 	return out
 }

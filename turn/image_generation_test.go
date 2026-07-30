@@ -61,6 +61,9 @@ func TestImageGenerationHandlerPostsGenerationAndReturnsRustOutputShape(t *testi
 		if got := r.Header.Get("X-Provider-Test"); got != "provider" {
 			t.Fatalf("provider header = %q", got)
 		}
+		if got := r.Header.Get(imageTurnIDHeader); got != "turn-image-generate" {
+			t.Fatalf("image turn header = %q", got)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 			t.Fatalf("Decode(body) error = %v", err)
 		}
@@ -89,6 +92,7 @@ func TestImageGenerationHandlerPostsGenerationAndReturnsRustOutputShape(t *testi
 			Kind:      tool.PayloadFunction,
 			Arguments: `{"prompt":"paint a red square"}`,
 		},
+		Context: map[string]any{"turn_id": "turn-image-generate"},
 	}
 	output, err := handler.Execute(context.Background(), invocation)
 	if err != nil {
@@ -131,6 +135,9 @@ func TestImageGenerationHandlerPostsEditForReferencedImages(t *testing.T) {
 		if r.URL.Path != "/v1/images/edits" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
+		if got := r.Header.Get(imageTurnIDHeader); got != "turn-image-edit" {
+			t.Fatalf("image turn header = %q", got)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 			t.Fatalf("Decode(body) error = %v", err)
 		}
@@ -153,6 +160,7 @@ func TestImageGenerationHandlerPostsEditForReferencedImages(t *testing.T) {
 			Kind:      tool.PayloadFunction,
 			Arguments: `{"prompt":"add a frame","referenced_image_paths":["` + filepath.ToSlash(imagePath) + `"]}`,
 		},
+		Context: map[string]any{"turnId": "turn-image-edit"},
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

@@ -34,7 +34,7 @@ func TestSearchMessageOccurrencesFiltersAssistantCommentary(t *testing.T) {
 	}
 }
 
-func TestStoreSectionUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
+func TestStoreSectionMovePersistsOrdersAndFiltersBeforePagination(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()
 	for i, id := range []ThreadID{"thread-1", "thread-2", "thread-3"} {
@@ -44,7 +44,7 @@ func TestStoreSectionUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
 		}
 	}
 	pinnedID := PinnedThreadSectionID
-	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{SectionSet: true, SectionID: &pinnedID}, true); err != nil {
+	if _, err := store.MoveThreadToSection("thread-2", &pinnedID, nil); err != nil {
 		t.Fatalf("section thread error = %v", err)
 	}
 	page, err := store.List(ListOptions{PageSize: 1, SectionSet: true, SectionID: &pinnedID})
@@ -58,7 +58,7 @@ func TestStoreSectionUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
 	if err != nil || loaded.Section == nil || loaded.Section.ID != pinnedID {
 		t.Fatalf("Load(thread-2) = %#v, %v; want persisted section", loaded, err)
 	}
-	if _, err := store.UpdateMetadata("thread-2", &MetadataPatch{SectionSet: true}, true); err != nil {
+	if _, err := store.MoveThreadToSection("thread-2", nil, nil); err != nil {
 		t.Fatalf("clear section error = %v", err)
 	}
 	loaded, err = store.Load("thread-2")
@@ -68,6 +68,47 @@ func TestStoreSectionUpdatePersistsAndFiltersBeforePagination(t *testing.T) {
 	sections, next, err := store.ListSections("", 1)
 	if err != nil || len(sections) != 1 || sections[0].ID != pinnedID || next != "" {
 		t.Fatalf("ListSections() = %#v, %q, %v", sections, next, err)
+	}
+}
+
+func TestStoreSectionMoveManualOrderAndRankCursor(t *testing.T) {
+	store := NewStore(t.TempDir())
+	now := fixedTime()
+	for i, id := range []ThreadID{"thread-1", "thread-2", "thread-3"} {
+		at := now.Add(time.Duration(i) * time.Minute)
+		if err := store.Save(&Record{ID: id, CreatedAt: at, UpdatedAt: at, RecencyAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sectionID := PinnedThreadSectionID
+	for _, id := range []ThreadID{"thread-1", "thread-2", "thread-3"} {
+		if _, err := store.MoveThreadToSection(id, &sectionID, nil); err != nil {
+			t.Fatalf("MoveThreadToSection(%s) error = %v", id, err)
+		}
+	}
+	third, err := store.Load("thread-3")
+	if err != nil || third.SectionEnteredAt == nil {
+		t.Fatalf("Load(thread-3) = %#v, %v", third, err)
+	}
+	enteredAt := *third.SectionEnteredAt
+	before := ThreadID("thread-2")
+	moved, err := store.MoveThreadToSection("thread-3", &sectionID, &before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.SectionPosition == nil || *moved.SectionPosition != 1_500_000 || moved.SectionEnteredAt == nil || !moved.SectionEnteredAt.Equal(enteredAt) {
+		t.Fatalf("reordered thread = %#v", moved)
+	}
+	page, err := store.List(ListOptions{PageSize: 2, SectionSet: true, SectionID: &sectionID, SortKey: SortSectionPosition, SortDirection: SortAsc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(page.Records); !reflect.DeepEqual(got, []ThreadID{"thread-1", "thread-3"}) || page.NextCursor != "1500000|thread-3" {
+		t.Fatalf("first page = %v cursor %q", got, page.NextCursor)
+	}
+	next, err := store.List(ListOptions{Cursor: page.NextCursor, PageSize: 2, SectionSet: true, SectionID: &sectionID, SortKey: SortSectionPosition, SortDirection: SortAsc})
+	if err != nil || !reflect.DeepEqual(ids(next.Records), []ThreadID{"thread-2"}) {
+		t.Fatalf("next page = %#v, %v", next, err)
 	}
 }
 
@@ -907,6 +948,12 @@ func TestStoreForkBeforeTurnIDPreservesSourceAndKeepsPrefixLikeRust(t *testing.T
 	}
 	if _, err := store.Fork("source", ForkOptions{NewID: "missing", BeforeTurnID: "turn-missing"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "beforeTurnId 'turn-missing' was not found") {
 		t.Fatalf("missing error = %v", err)
+	}
+	if err := store.Save(&Record{ID: "legacy-before", Items: []Item{{ID: "legacy-item"}}}); err != nil {
+		t.Fatalf("Save(legacy-before) error = %v", err)
+	}
+	if _, err := store.Fork("legacy-before", ForkOptions{NewID: "legacy-before-fork", BeforeTurnID: "turn-1"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "beforeTurnId 'turn-1' is not a persisted canonical turn in the source thread") {
+		t.Fatalf("synthetic before turn error = %v, want ErrInvalidThreadID", err)
 	}
 	if _, err := store.Fork("source", ForkOptions{NewID: "both", LastTurnID: "turn-1", BeforeTurnID: "turn-2"}); !errors.Is(err, ErrInvalidThreadID) || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("mutual exclusion error = %v", err)

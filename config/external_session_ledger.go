@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +27,7 @@ type externalSessionImportRecord struct {
 	ImportedAt       int64    `json:"imported_at"`
 	SourceModifiedAt *int64   `json:"source_modified_at,omitempty"`
 	ConnectorNames   []string `json:"connector_names"`
+	Title            *string  `json:"title,omitempty"`
 }
 
 // ExternalSessionImportCompletion identifies a persisted external session that
@@ -33,6 +35,8 @@ type externalSessionImportRecord struct {
 type ExternalSessionImportCompletion struct {
 	SourcePath       string
 	ImportedThreadID string
+	ConnectorNames   []string
+	Title            *string
 }
 
 func externalSessionImportIsCurrent(codexHome string, sourcePath string) bool {
@@ -71,6 +75,7 @@ func RecordExternalSessionImports(codexHome string, imports []ExternalSessionImp
 	if len(imports) == 0 {
 		return nil
 	}
+	detectedConnectorNames := externalSessionConnectorNames(imports)
 	externalSessionLedgerMu.Lock()
 	defer externalSessionLedgerMu.Unlock()
 	ledger, err := loadExternalSessionImportLedger(codexHome)
@@ -82,13 +87,19 @@ func RecordExternalSessionImports(codexHome string, imports []ExternalSessionImp
 		if stateErr != nil {
 			return stateErr
 		}
+		connectorNames := append([]string(nil), completed.ConnectorNames...)
+		if len(connectorNames) == 0 {
+			sessionID := strings.TrimSpace(strings.TrimSuffix(filepath.Base(completed.SourcePath), filepath.Ext(completed.SourcePath)))
+			connectorNames = append(connectorNames, detectedConnectorNames[sessionID]...)
+		}
 		record := externalSessionImportRecord{
 			SourcePath:       canonical,
 			ContentSHA256:    hash,
 			ImportedThreadID: completed.ImportedThreadID,
 			ImportedAt:       time.Now().Unix(),
 			SourceModifiedAt: modifiedAt,
-			ConnectorNames:   []string{},
+			ConnectorNames:   connectorNames,
+			Title:            cloneStringPtr(completed.Title),
 		}
 		for index := len(ledger.Records) - 1; index >= 0; index-- {
 			existing := ledger.Records[index]

@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -272,9 +273,66 @@ func TestCompactRemotelyUsesRunnerAndProcessesHistory(t *testing.T) {
 	if result.Summary != "remote summary" {
 		t.Fatalf("summary = %q", result.Summary)
 	}
-	if len(result.NewHistory) != 2 || result.NewHistory[0].ID != "ctx" || result.NewHistory[1].ID != "summary" {
+	if len(result.NewHistory) != 3 || result.NewHistory[0].ID != "ctx" || result.NewHistory[1].ID != "u1" || result.NewHistory[2].ID != "summary" {
 		t.Fatalf("new history = %+v", result.NewHistory)
 	}
+}
+
+func TestCompactRemotelyRetainsBoundedDelegatedTasksAndDropsCompletions(t *testing.T) {
+	delegated := structuredAgentMessageItem(t, "task", "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n", strings.Repeat("x", 40_000))
+	completion := structuredAgentMessageItem(t, "completion", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\ndone", "")
+	oversized := structuredAgentMessageItem(t, "oversized", "Message Type: NEW_TASK\nTask name: /root/large\nSender: /root\nPayload:\n", strings.Repeat("y", 80_000))
+	runner := remoteRunnerFunc(func(context.Context, *Request) (*Result, error) {
+		return &Result{Status: StatusCompleted, Summary: "remote summary", NewHistory: []Item{{ID: "summary", Type: "message", Role: "user", Kind: "compaction_summary", Text: SummaryPrefix + "\nremote summary"}}}, nil
+	})
+	result, err := CompactRemotely(context.Background(), &Request{
+		ThreadID: "thread-agent", Trigger: TriggerManual, Reason: ReasonUserRequested, Phase: PhaseStandaloneTurn,
+		History: []Item{
+			{ID: "user", Type: "message", Role: "user", Kind: "user_message", Text: "delegate work"},
+			completion,
+			delegated,
+			oversized,
+		},
+	}, &RemoteOptions{Runner: runner, InitialContext: []Item{{ID: "ctx", Type: "message", Role: "developer", Text: "context"}}, InjectBeforeLastUser: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(result.NewHistory))
+	for _, item := range result.NewHistory {
+		ids = append(ids, item.ID)
+	}
+	if strings.Join(ids, ",") != "user,ctx,task,summary" {
+		t.Fatalf("retained history ids = %v", ids)
+	}
+	if string(result.NewHistory[2].Raw) != string(delegated.Raw) {
+		t.Fatal("delegated task raw payload was not preserved")
+	}
+	if EstimateItemTokens(&delegated) > MaxRetainedAgentMessageTokens || EstimateItemTokens(&oversized) <= MaxRetainedAgentMessageTokens {
+		t.Fatalf("agent token estimates delegated=%d oversized=%d", EstimateItemTokens(&delegated), EstimateItemTokens(&oversized))
+	}
+}
+
+func TestEncryptedAgentMessageTokenEstimateUsesPlaintextApproximation(t *testing.T) {
+	encrypted := strings.Repeat("z", 160)
+	item := structuredAgentMessageItem(t, "task", "Message Type: NEW_TASK\n", encrypted)
+	visibleBytes := len(item.Raw) - len(encrypted) + (len(encrypted)*9+15)/16
+	want := (visibleBytes + 3) / 4
+	if got := EstimateItemTokens(&item); got != want {
+		t.Fatalf("EstimateItemTokens() = %d, want %d", got, want)
+	}
+}
+
+func structuredAgentMessageItem(t *testing.T, id string, envelope string, encrypted string) Item {
+	t.Helper()
+	content := []any{map[string]any{"type": "input_text", "text": envelope}}
+	if encrypted != "" {
+		content = append(content, map[string]any{"type": "encrypted_content", "encrypted_content": encrypted})
+	}
+	raw, err := json.Marshal(map[string]any{"type": "agent_message", "author": "/root", "recipient": "/root/worker", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Item{ID: id, Type: "agent_message", Raw: raw}
 }
 
 func TestCompactRemotelyFallsBackToLocal(t *testing.T) {

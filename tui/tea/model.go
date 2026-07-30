@@ -828,6 +828,7 @@ type Model struct {
 	onReadReviewBranches             ReviewBranchesReaderFunc
 	onReadReviewCommits              ReviewCommitsReaderFunc
 	activeSide                       *activeSideConversation
+	abandonedSideThreads             map[string]struct{}
 	sideStartPending                 bool
 	statusControls                   *chatwidget.StatusControlsState
 	statusLineConfiguredByUser       bool
@@ -1483,7 +1484,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.keyMatches("composer", "submit", keySpec) {
 			m.clearComposerPasteWindow()
-			if m.isTaskRunning() {
+			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
 				}
@@ -1493,7 +1494,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.keyMatches("composer", "queue", keySpec) {
 			m.clearComposerPasteWindow()
-			if m.isTaskRunning() {
+			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
 				}
@@ -1969,8 +1970,12 @@ func (m *Model) isTaskRunning() bool {
 	return m != nil && ((m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) || m.mcpStartupActive)
 }
 
+func (m *Model) isUserTurnPendingOrRunning() bool {
+	return m != nil && ((m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "running")) || m.reviewState.IsReviewMode)
+}
+
 func (m *Model) isIdle() bool {
-	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "idle") && !m.mcpStartupActive
+	return m != nil && m.State != nil && strings.EqualFold(strings.TrimSpace(m.State.Status), "idle") && !m.reviewState.IsReviewMode
 }
 
 func (m *Model) setStatus(status string) {
@@ -3771,7 +3776,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandResume:
 		return m.applyResumeCommand(invocation.Args)
 	case codextui.CommandFork:
-		return m.applyForkCurrentSession()
+		return m.applyForkCurrentSession(invocation.Args)
 	case codextui.CommandArchive:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
 	case codextui.CommandUnarchive:

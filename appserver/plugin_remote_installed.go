@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/config"
@@ -37,12 +38,16 @@ type remoteInstalledPluginPage struct {
 }
 
 type remoteInstalledPlugin struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
-	Scope              string   `json:"scope"`
-	Discoverability    string   `json:"discoverability"`
-	Enabled            bool     `json:"enabled"`
-	DisabledSkillNames []string `json:"disabled_skill_names"`
+	ID                 string                       `json:"id"`
+	Name               string                       `json:"name"`
+	Scope              string                       `json:"scope"`
+	Discoverability    string                       `json:"discoverability"`
+	InstalledAt        *time.Time                   `json:"installed_at"`
+	Enabled            bool                         `json:"enabled"`
+	Availability       plugin.PluginAvailability    `json:"status"`
+	DisabledReason     *plugin.PluginDisabledReason `json:"disabled_reason"`
+	EligiblePlanTypes  *[]string                    `json:"eligible_plan_types"`
+	DisabledSkillNames []string                     `json:"disabled_skill_names"`
 	Release            struct {
 		Version           *string         `json:"version"`
 		DisplayName       string          `json:"display_name"`
@@ -199,18 +204,27 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		if err != nil || root == "" || !candidate.Enabled {
 			continue
 		}
+		var installedAt *int64
+		if candidate.InstalledAt != nil {
+			seconds := candidate.InstalledAt.Unix()
+			installedAt = &seconds
+		}
 		detailsByMarketplace[marketplaceName] = append(detailsByMarketplace[marketplaceName], plugin.PluginDetail{
 			MarketplaceName: marketplaceName,
 			MarketplaceRoot: root,
 			Summary: plugin.PluginSummary{
-				Name:            name,
-				DisplayName:     firstNonEmpty(strings.TrimSpace(candidate.Release.DisplayName), name),
-				Description:     strings.TrimSpace(candidate.Release.Description),
-				MarketplaceName: marketplaceName,
-				RemotePluginID:  strings.TrimSpace(candidate.ID),
-				HasSkills:       remotePluginCacheHasSkills(root),
-				Installed:       true,
-				Enabled:         true,
+				Name:              name,
+				DisplayName:       firstNonEmpty(strings.TrimSpace(candidate.Release.DisplayName), name),
+				Description:       strings.TrimSpace(candidate.Release.Description),
+				MarketplaceName:   marketplaceName,
+				RemotePluginID:    strings.TrimSpace(candidate.ID),
+				Availability:      candidate.Availability,
+				DisabledReason:    candidate.DisabledReason,
+				EligiblePlanTypes: candidate.EligiblePlanTypes,
+				HasSkills:         remotePluginCacheHasSkills(root),
+				Installed:         true,
+				InstalledAt:       installedAt,
+				Enabled:           true,
 			},
 		})
 	}

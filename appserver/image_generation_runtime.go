@@ -62,7 +62,7 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 	}, nil
 }
 
-func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams) ([]any, error) {
+func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRuntimes ...*turn.Runtime) ([]any, error) {
 	if turnStartReviewRuntime(params) {
 		return nil, nil
 	}
@@ -106,7 +106,11 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams) ([]any,
 	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
-	if standaloneWebSearch == nil && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
+	standaloneWebSearchRegistered := standaloneWebSearch != nil
+	if len(turnRuntimes) > 0 && turnRuntimes[0] != nil {
+		standaloneWebSearchRegistered = turnRuntimes[0].StandaloneWebSearchRegistered()
+	}
+	if !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
 		mode := webSearchModeFromConfig(cfg)
 		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)

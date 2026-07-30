@@ -82,6 +82,11 @@ type RuntimeConfig struct {
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
 	ProtocolMode         MCPProtocolMode
+	HTTPClient           HTTPDoer
+}
+
+type HTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
 }
 
 type RuntimeAuth struct {

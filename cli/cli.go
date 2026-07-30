@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -113,7 +114,6 @@ type ExecOptions struct {
 	Ephemeral             bool
 	IgnoreUserConfig      bool
 	IgnoreRules           bool
-	RemovedFullAuto       bool
 	OutputSchema          string
 	Color                 string
 	JSON                  bool
@@ -249,7 +249,10 @@ type ExecServerOptions struct {
 	EnvironmentID        string
 	Name                 string
 	UseAgentIdentityAuth bool
+	ExitOnStdinClose     bool
 }
+
+const execServerExitOnStdinCloseEnv = "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE"
 
 type AppServerOptions struct {
 	Subcommand              []string
@@ -512,9 +515,6 @@ func (p *Parsed) Validate() error {
 			return err
 		}
 	}
-	if p.Command == CommandExec && p.Exec.RemovedFullAuto && (p.Root.Shared.DangerouslyBypassApprovalsAndSandbox || p.Exec.Shared.DangerouslyBypassApprovalsAndSandbox) {
-		return errors.New("`--full-auto` conflicts with `--dangerously-bypass-approvals-and-sandbox`")
-	}
 	if p.Root.StrictConfig {
 		if name := p.unsupportedStrictConfigSubcommandName(); name != "" {
 			return fmt.Errorf("`--strict-config` is not supported for `codex %s`", name)
@@ -690,8 +690,6 @@ func parseExec(args []string, exec *ExecOptions) error {
 			exec.IgnoreUserConfig = true
 		case arg == "--ignore-rules":
 			exec.IgnoreRules = true
-		case arg == "--full-auto":
-			exec.RemovedFullAuto = true
 		case arg == "--output-schema":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -776,8 +774,6 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			exec.IgnoreUserConfig = true
 		case arg == "--ignore-rules":
 			exec.IgnoreRules = true
-		case arg == "--full-auto":
-			exec.RemovedFullAuto = true
 		case arg == "--output-schema":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2067,11 +2063,22 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.Name = strings.TrimPrefix(arg, "--name=")
 		case arg == "--use-agent-identity-auth":
 			execServer.UseAgentIdentityAuth = true
+		case arg == "--exit-on-stdin-close":
+			execServer.ExitOnStdinClose = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown exec-server option %s", arg)
 			}
 			return fmt.Errorf("exec-server does not accept argument %s", arg)
+		}
+	}
+	if !execServer.ExitOnStdinClose {
+		if value, ok := os.LookupEnv(execServerExitOnStdinCloseEnv); ok {
+			enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+			if err != nil {
+				return fmt.Errorf("invalid %s value %q: %w", execServerExitOnStdinCloseEnv, value, err)
+			}
+			execServer.ExitOnStdinClose = enabled
 		}
 	}
 	if execServer.Remote != "" && execServer.EnvironmentID == "" {
@@ -2082,6 +2089,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	}
 	if execServer.UseAgentIdentityAuth && execServer.Remote == "" {
 		return errors.New("--use-agent-identity-auth requires --remote")
+	}
+	if execServer.ExitOnStdinClose && execServer.Remote == "" {
+		return errors.New("--exit-on-stdin-close requires --remote")
 	}
 	return nil
 }

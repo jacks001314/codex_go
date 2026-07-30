@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"net/http"
 )
 
 func DefaultModelForProvider(providerID string) (string, bool) {
@@ -55,6 +56,7 @@ func OSSModelCatalog(providerID string) ModelsResponse {
 type ReadyConfig struct {
 	LMStudioClient *LMStudioClient
 	OllamaClient   *OllamaClient
+	HTTPClient     *http.Client
 	Model          string
 }
 
@@ -67,7 +69,7 @@ func EnsureProviderReady(ctx context.Context, providerID string, config ReadyCon
 		return wrapSetupError(EnsureLMStudioOSSReady(ctx, config.LMStudioClient, config.Model))
 	case OllamaOSSProviderID:
 		if config.OllamaClient == nil {
-			config.OllamaClient = NewOllamaClient("")
+			config.OllamaClient = NewOllamaClientWithHTTPClient("", config.HTTPClient)
 		}
 		if err := EnsureOllamaResponsesSupported(ctx, config.OllamaClient); err != nil {
 			return err

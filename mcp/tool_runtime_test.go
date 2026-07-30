@@ -1,6 +1,20 @@
 package mcp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestBoundedMCPNamespaceDescriptionPreservesUTF8Boundary(t *testing.T) {
+	expected := strings.Repeat("é", 499)
+	full := expected + "🦀keep the complete MCP metadata"
+	if got := BoundedMCPNamespaceDescription(full); got != expected || len(got) > MaxMCPNamespaceDescriptionBytes {
+		t.Fatalf("bounded description bytes=%d value=%q", len(got), got)
+	}
+	if full == expected {
+		t.Fatal("test metadata unexpectedly mutated")
+	}
+}
 
 func TestNormalizeRuntimeToolsForModelMatchesRustNames(t *testing.T) {
 	tools := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{

@@ -15,6 +15,90 @@ import (
 	"time"
 )
 
+type mcpTestRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f mcpTestRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestMCPHTTPAndOAuthReuseSharedHTTPClient(t *testing.T) {
+	var runtimeHeader string
+	var oauthHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mcp":
+			runtimeHeader = r.Header.Get("X-Codex-Shared-Client")
+		case "/oauth":
+			oauthHeader = r.Header.Get("X-Codex-Shared-Client")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	baseTransport := server.Client().Transport
+	shared := &http.Client{Transport: mcpTestRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		cloned := request.Clone(request.Context())
+		cloned.Header = request.Header.Clone()
+		cloned.Header.Set("X-Codex-Shared-Client", "configured")
+		return baseTransport.RoundTrip(cloned)
+	})}
+	config := ServerConfig{URL: server.URL + "/mcp", Enabled: true}
+	service := NewMCPService(&RuntimeConfig{
+		Servers:    map[string]ServerRegistration{"docs": {Config: config}},
+		HTTPClient: shared,
+	})
+
+	runtimeConfig, _ := service.serverConfig("docs")
+	client := service.httpClientForServer("docs", &runtimeConfig)
+	response, err := client.doHTTPRequest(runtimeConfig.URL, []byte(`{}`), "", "")
+	if err != nil {
+		t.Fatalf("MCP request error = %v", err)
+	}
+	_ = response.Body.Close()
+	oauthRequest, err := http.NewRequest(http.MethodGet, server.URL+"/oauth", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	oauthResponse, err := client.oauthHTTPClient(time.Second).Do(oauthRequest)
+	if err != nil {
+		t.Fatalf("OAuth request error = %v", err)
+	}
+	_ = oauthResponse.Body.Close()
+	if runtimeHeader != "configured" || oauthHeader != "configured" {
+		t.Fatalf("shared client headers runtime=%q oauth=%q", runtimeHeader, oauthHeader)
+	}
+}
+
+func TestApplyRuntimeConfigReplacesConnectionWhenSharedHTTPClientChanges(t *testing.T) {
+	config := ServerConfig{URL: "https://example.test/mcp", Enabled: true}
+	firstShared := &http.Client{Transport: mcpTestRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("first")
+	})}
+	service := NewMCPService(&RuntimeConfig{
+		Servers:    map[string]ServerRegistration{"docs": {Config: config}},
+		HTTPClient: firstShared,
+	})
+	runtimeConfig, _ := service.serverConfig("docs")
+	first := service.httpClientForServer("docs", &runtimeConfig)
+
+	secondShared := &http.Client{Transport: mcpTestRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("second")
+	})}
+	service.ApplyRuntimeConfig(&RuntimeConfig{
+		Servers:    map[string]ServerRegistration{"docs": {Config: config}},
+		HTTPClient: secondShared,
+	})
+	runtimeConfig, _ = service.serverConfig("docs")
+	second := service.httpClientForServer("docs", &runtimeConfig)
+	if second == first {
+		t.Fatal("ApplyRuntimeConfig() reused an MCP connection after the shared HTTP client changed")
+	}
+	if !first.isClosed() {
+		t.Fatal("ApplyRuntimeConfig() did not close the connection using the old shared HTTP client")
+	}
+}
+
 func TestHTTPMCPToolListCallAndResource(t *testing.T) {
 	var authHeader string
 	var toolCallParams map[string]any
@@ -326,6 +410,42 @@ func TestHTTPMCPInventoryFollowsPagination(t *testing.T) {
 	}
 	if strings.Join(resourceCursors, ",") != ",resource-page-2" {
 		t.Fatalf("resource cursors = %#v", resourceCursors)
+	}
+}
+
+func TestHTTPMCPCatalogPaginationUsesOneConfiguredTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Decode() error = %v", err)
+			return
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "session-timeout")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": defaultMCPProtocol, "capabilities": map[string]any{}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			time.Sleep(45 * time.Millisecond)
+			next := "second"
+			if mcpTestCursorParam(t, request.Params) == "second" {
+				next = "third"
+			}
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []map[string]any{}, "nextCursor": next})
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true, ToolTimeout: 70 * time.Millisecond})
+	_, err := listMCPHTTPTools(client, nil)
+	if err == nil || err.Error() != "tools/list pagination timed out after 70ms" {
+		t.Fatalf("listMCPHTTPTools() error = %v", err)
 	}
 }
 

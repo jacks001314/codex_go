@@ -53,7 +53,8 @@ type remoteFSReadFileResponse struct {
 }
 
 type remoteFSGetMetadataResponse struct {
-	IsFile bool `json:"isFile"`
+	IsFile bool  `json:"isFile"`
+	Size   int64 `json:"size"`
 }
 
 type remoteEnvironmentFSCaller interface {
@@ -106,7 +107,70 @@ func (c clientRemoteEnvironmentFSCaller) Call(ctx context.Context, _ int, method
 	return json.Marshal(response)
 }
 
+type localEnvironmentFSCaller struct {
+	fileSystem execserverclient.LocalFileSystem
+}
+
+func (c localEnvironmentFSCaller) Call(_ context.Context, _ int, method string, params any) (json.RawMessage, error) {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	var response any
+	switch method {
+	case execserverclient.MethodFSWalk:
+		var request execserverclient.FSWalkParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.fileSystem.Walk(&request)
+	case execserverclient.MethodFSReadFile:
+		var request execserverclient.FSReadFileParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.fileSystem.ReadFile(&request)
+	case execserverclient.MethodFSGetMetadata:
+		var request execserverclient.FSGetMetadataParams
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			return nil, err
+		}
+		response, err = c.fileSystem.GetMetadata(&request)
+	default:
+		return nil, fmt.Errorf("unsupported local filesystem method %s", method)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
+}
+
+type sandboxedEnvironmentFSCaller struct {
+	inner   remoteEnvironmentFSCaller
+	sandbox *execserverclient.FileSystemSandboxContext
+}
+
+func (c sandboxedEnvironmentFSCaller) Call(ctx context.Context, id int, method string, params any) (json.RawMessage, error) {
+	if c.sandbox == nil {
+		return c.inner.Call(ctx, id, method, params)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	var values map[string]any
+	if err := json.Unmarshal(encoded, &values); err != nil {
+		return nil, err
+	}
+	values["sandbox"] = c.sandbox
+	return c.inner.Call(ctx, id, method, values)
+}
+
 func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRecord, rootPath string) ([]SkillsListEntry, []string, error) {
+	return discoverRemoteEnvironmentSkillsWithSandbox(ctx, record, rootPath, nil)
+}
+
+func discoverRemoteEnvironmentSkillsWithSandbox(ctx context.Context, record *EnvironmentRecord, rootPath string, sandboxContext *execserverclient.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
 	if record == nil {
 		return nil, nil, nil
 	}
@@ -151,6 +215,15 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 		}
 		caller = websocketRemoteEnvironmentFSCaller{conn: conn}
 	}
+	return discoverEnvironmentSkillsWithCaller(ctx, record.EnvironmentID, rootPath, caller, sandboxContext)
+}
+
+func discoverLocalEnvironmentSkillsWithSandbox(ctx context.Context, rootPath string, sandboxContext *execserverclient.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
+	return discoverEnvironmentSkillsWithCaller(ctx, "local", rootPath, localEnvironmentFSCaller{}, sandboxContext)
+}
+
+func discoverEnvironmentSkillsWithCaller(ctx context.Context, environmentID string, rootPath string, caller remoteEnvironmentFSCaller, sandboxContext *execserverclient.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
+	caller = sandboxedEnvironmentFSCaller{inner: caller, sandbox: sandboxContext}
 	walkRaw, err := caller.Call(ctx, 2, "fs/walk", map[string]any{
 		"path": rootPath,
 		"options": map[string]any{
@@ -199,7 +272,7 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 			metadataContents, _ = readRemoteEnvironmentText(ctx, caller, &nextID, metadataPath)
 		}
 		pluginNamespace := pluginDescriptor.Name
-		if skillEntry, warning, ok := remoteSkillEntryFromContents(record.EnvironmentID, entry.Path, contents, metadataContents, pluginNamespace); ok {
+		if skillEntry, warning, ok := remoteSkillEntryFromContents(environmentID, entry.Path, contents, metadataContents, pluginNamespace); ok {
 			if !skillMatchesCodexProductRestriction(&skillEntry) {
 				continue
 			}
@@ -218,6 +291,10 @@ func discoverRemoteEnvironmentSkills(ctx context.Context, record *EnvironmentRec
 }
 
 func readRemoteEnvironmentSkillText(ctx context.Context, record *EnvironmentRecord, resourcePath string) (string, error) {
+	return readRemoteEnvironmentSkillTextWithSandbox(ctx, record, resourcePath, nil)
+}
+
+func readRemoteEnvironmentSkillTextWithSandbox(ctx context.Context, record *EnvironmentRecord, resourcePath string, sandboxContext *execserverclient.FileSystemSandboxContext) (string, error) {
 	if record == nil {
 		return "", errors.New("remote environment is unavailable")
 	}
@@ -248,7 +325,14 @@ func readRemoteEnvironmentSkillText(ctx context.Context, record *EnvironmentReco
 		}
 		caller = websocketRemoteEnvironmentFSCaller{conn: conn}
 	}
+	caller = sandboxedEnvironmentFSCaller{inner: caller, sandbox: sandboxContext}
 	nextID := 2
+	return readRemoteEnvironmentText(ctx, caller, &nextID, resourcePath)
+}
+
+func readLocalEnvironmentSkillTextWithSandbox(ctx context.Context, resourcePath string, sandboxContext *execserverclient.FileSystemSandboxContext) (string, error) {
+	caller := sandboxedEnvironmentFSCaller{inner: localEnvironmentFSCaller{}, sandbox: sandboxContext}
+	nextID := 1
 	return readRemoteEnvironmentText(ctx, caller, &nextID, resourcePath)
 }
 
@@ -483,6 +567,16 @@ func readRemoteEnvironmentText(ctx context.Context, caller remoteEnvironmentFSCa
 	if nextID == nil {
 		return "", fmt.Errorf("remote fs request id is nil")
 	}
+	metadata, err := getRemoteEnvironmentMetadata(ctx, caller, nextID, path)
+	if err != nil {
+		return "", err
+	}
+	if metadata == nil || !metadata.IsFile {
+		return "", fmt.Errorf("environment skill resource is not a file: %s", path)
+	}
+	if metadata.Size > maxExecutorSkillResourceBytes {
+		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
+	}
 	id := *nextID
 	*nextID = *nextID + 1
 	raw, err := caller.Call(ctx, id, "fs/readFile", map[string]any{"path": path})
@@ -496,6 +590,9 @@ func readRemoteEnvironmentText(ctx context.Context, caller remoteEnvironmentFSCa
 	data, err := base64.StdEncoding.DecodeString(response.DataBase64)
 	if err != nil {
 		return "", err
+	}
+	if len(data) > maxExecutorSkillResourceBytes {
+		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
 	}
 	return string(data), nil
 }

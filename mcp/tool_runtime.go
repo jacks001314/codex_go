@@ -6,7 +6,22 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
+
+const MaxMCPNamespaceDescriptionBytes = 1000
+
+func BoundedMCPNamespaceDescription(description string) string {
+	description = strings.TrimSpace(description)
+	if len(description) <= MaxMCPNamespaceDescriptionBytes {
+		return description
+	}
+	end := MaxMCPNamespaceDescriptionBytes
+	for end > 0 && !utf8.ValidString(description[:end]) {
+		end--
+	}
+	return description[:end]
+}
 
 const RuntimeCodexAppsMCPServerName = "codex_apps"
 

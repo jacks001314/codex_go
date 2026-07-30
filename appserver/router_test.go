@@ -1528,7 +1528,7 @@ func TestRouterThreadSectionsListUpdateFilterAndClearLikeRust(t *testing.T) {
 	}
 
 	unknown := "01984de2-8f74-7c91-a3b2-5c5e937cf319"
-	rejected := router.Handle(requestWithParams(t, IntID(2), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+	rejected := router.Handle(requestWithParams(t, IntID(2), MethodThreadSectionMove, ThreadSectionMoveParams{
 		ThreadID: string(threadID), SectionID: OptionalString{Set: true, Value: &unknown},
 	}))
 	if rejected.Error == nil || rejected.Error.Message != "thread section not found: "+unknown {
@@ -1536,14 +1536,14 @@ func TestRouterThreadSectionsListUpdateFilterAndClearLikeRust(t *testing.T) {
 	}
 
 	pinnedID := session.PinnedThreadSectionID
-	updated := router.Handle(requestWithParams(t, IntID(3), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+	updated := router.Handle(requestWithParams(t, IntID(3), MethodThreadSectionMove, ThreadSectionMoveParams{
 		ThreadID: string(threadID), SectionID: OptionalString{Set: true, Value: &pinnedID},
 	}))
 	if updated.Error != nil {
-		t.Fatalf("section update error = %+v", updated.Error)
+		t.Fatalf("section move error = %+v", updated.Error)
 	}
-	if section := updated.Result.(*ThreadMetadataUpdateResponse).Thread.Section; section == nil || section.ID != pinnedID {
-		t.Fatalf("updated section = %#v", section)
+	if _, ok := updated.Result.(*ThreadSectionMoveResponse); !ok {
+		t.Fatalf("section move response = %#v", updated.Result)
 	}
 
 	filtered := router.Handle(requestWithParams(t, IntID(4), MethodThreadList, ThreadListParams{
@@ -1553,11 +1553,15 @@ func TestRouterThreadSectionsListUpdateFilterAndClearLikeRust(t *testing.T) {
 		t.Fatalf("section-filtered thread/list = %#v", filtered)
 	}
 
-	cleared := router.Handle(requestWithParams(t, IntID(5), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+	cleared := router.Handle(requestWithParams(t, IntID(5), MethodThreadSectionMove, ThreadSectionMoveParams{
 		ThreadID: string(threadID), SectionID: OptionalString{Set: true},
 	}))
-	if cleared.Error != nil || cleared.Result.(*ThreadMetadataUpdateResponse).Thread.Section != nil {
+	if cleared.Error != nil {
 		t.Fatalf("section clear response = %#v", cleared)
+	}
+	read := router.Handle(requestWithParams(t, IntID(6), MethodThreadRead, ThreadReadParams{ThreadID: string(threadID)}))
+	if read.Error != nil || read.Result.(*ThreadReadResponse).Thread.Section != nil || read.Result.(*ThreadReadResponse).Thread.SectionEnteredAt != nil {
+		t.Fatalf("thread after section clear = %#v", read)
 	}
 }
 

@@ -92,6 +92,7 @@ var Registry = []Spec{
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
 	{Key: "unavailable_dummy_tools", Stage: StageRemoved},
 	{Key: "tool_suggest", Stage: StageStable, DefaultEnabled: true},
+	{Key: "recommended_plugins", Stage: StageStable, DefaultEnabled: false},
 	{Key: "plugins", Stage: StageStable, DefaultEnabled: true},
 	{Key: "executor_capability_discovery", Stage: StageUnderDevelopment},
 	{Key: "plugin_hooks", Stage: StageRemoved},

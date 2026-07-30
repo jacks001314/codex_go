@@ -3,6 +3,8 @@ package appserver
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,6 +18,39 @@ func TestFeedbackUploadParamsValidateRequiresClassification(t *testing.T) {
 	}
 	if err := (*FeedbackUploadParams)(nil).Validate(); !errors.Is(err, ErrInvalidFeedbackRequest) {
 		t.Fatalf("Validate(nil) error = %v, want ErrInvalidFeedbackRequest", err)
+	}
+}
+
+func TestFeedbackModelAndEffortSelectsTurnContextLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	contents := strings.Join([]string{
+		`{"timestamp":"2026-07-29T00:00:00Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"reported-model","effort":"high"}}`,
+		`{"timestamp":"2026-07-29T00:00:01Z","type":"turn_context","payload":{"turn_id":"turn-2","model":"latest-model","effort":"xhigh"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	reportedTurn := "turn-1"
+	if model, effort, ok := feedbackModelAndEffortFromRollout(path, &reportedTurn); !ok || model != "reported-model" || effort != "Some(High)" {
+		t.Fatalf("reported turn = model %q effort %q ok %t", model, effort, ok)
+	}
+	if model, effort, ok := feedbackModelAndEffortFromRollout(path, nil); !ok || model != "latest-model" || effort != "Some(XHigh)" {
+		t.Fatalf("latest turn = model %q effort %q ok %t", model, effort, ok)
+	}
+	missingTurn := "missing"
+	if model, effort, ok := feedbackModelAndEffortFromRollout(path, &missingTurn); ok {
+		t.Fatalf("missing turn substituted model %q effort %q", model, effort)
+	}
+}
+
+func TestFeedbackModelAndEffortPreservesUnspecifiedEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, []byte("{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"turn-1\",\"model\":\"reported-model\",\"effort\":null}}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if model, effort, ok := feedbackModelAndEffortFromRollout(path, nil); !ok || model != "reported-model" || effort != "None" {
+		t.Fatalf("unspecified effort = model %q effort %q ok %t", model, effort, ok)
 	}
 }
 

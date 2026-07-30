@@ -7,8 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"codex_go/plugin"
 )
 
 func TestActiveRemotePluginRootPrefersLocalThenRustSemverOrder(t *testing.T) {
@@ -72,7 +76,7 @@ func TestFetchInstalledRemotePluginDetailsPaginatesAndKeepsDisabledCacheLikeRust
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case scope == "GLOBAL" && pageToken == "":
-			_, _ = w.Write([]byte(`{"plugins":[{"id":"remote-alpha","name":"alpha","scope":"GLOBAL","enabled":true,"release":{"display_name":"Alpha","description":"Alpha plugin"}}],"pagination":{"next_page_token":"next"}}`))
+			_, _ = w.Write([]byte(`{"plugins":[{"id":"remote-alpha","name":"alpha","scope":"GLOBAL","enabled":true,"installed_at":"2026-07-29T01:02:03Z","status":"DISABLED_BY_ADMIN","disabled_reason":"plan_not_eligible","eligible_plan_types":["team","enterprise"],"release":{"display_name":"Alpha","description":"Alpha plugin"}}],"pagination":{"next_page_token":"next"}}`))
 		case scope == "GLOBAL" && pageToken == "next":
 			_, _ = w.Write([]byte(`{"plugins":[{"id":"remote-beta","name":"beta","scope":"GLOBAL","enabled":false,"release":{"display_name":"Beta","description":"Beta plugin"}}],"pagination":{"next_page_token":null}}`))
 		case scope == "WORKSPACE":
@@ -89,6 +93,14 @@ func TestFetchInstalledRemotePluginDetailsPaginatesAndKeepsDisabledCacheLikeRust
 	}
 	if len(details[remoteInstalledGlobalMarketplace]) != 1 || details[remoteInstalledGlobalMarketplace][0].Summary.Name != "alpha" {
 		t.Fatalf("global details = %#v", details[remoteInstalledGlobalMarketplace])
+	}
+	alpha := details[remoteInstalledGlobalMarketplace][0].Summary
+	wantInstalledAt := time.Date(2026, time.July, 29, 1, 2, 3, 0, time.UTC).Unix()
+	if alpha.InstalledAt == nil || *alpha.InstalledAt != wantInstalledAt || alpha.Availability != plugin.PluginDisabledByAdmin {
+		t.Fatalf("alpha install metadata = %#v", alpha)
+	}
+	if alpha.DisabledReason == nil || *alpha.DisabledReason != plugin.PluginPlanNotEligibleReason || alpha.EligiblePlanTypes == nil || strings.Join(*alpha.EligiblePlanTypes, ",") != "team,enterprise" {
+		t.Fatalf("alpha eligibility metadata = %#v", alpha)
 	}
 	if len(details[remoteInstalledWorkspaceSharedMarketplace]) != 1 || details[remoteInstalledWorkspaceSharedMarketplace][0].Summary.Name != "gamma" {
 		t.Fatalf("shared workspace details = %#v", details[remoteInstalledWorkspaceSharedMarketplace])
