@@ -18,6 +18,7 @@ import (
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
 	"codex_go/config"
+	"codex_go/eventmap"
 	"codex_go/filesearch"
 	"codex_go/plugin"
 	"codex_go/protocol"
@@ -4408,6 +4409,9 @@ func renderTranscript(state *codextui.State, raw bool, width int, themeID string
 
 func richMessageDisplayLines(message codextui.Message, width int, themeID string) []string {
 	text := strings.TrimRight(message.Text, "\r\n")
+	if message.Role == codextui.RoleAssistant {
+		text = eventmap.StripHiddenAssistantMarkup(text, false)
+	}
 	switch message.Role {
 	case codextui.RoleHistory:
 		return rawLinesTrimmed(text)

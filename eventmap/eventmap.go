@@ -300,6 +300,11 @@ func sanitizePathPart(value string) string {
 }
 
 func stripCitations(text string) string {
+	// Rust hides memory citations and Web search citation controls before
+	// rendering assistant text. An unterminated opening tag is hidden to EOF,
+	// matching the Rust stream parser's finish behavior.
+	text = stripInlineHiddenTag(text, "<oai-mem-citation>", "</oai-mem-citation>")
+	text = stripInlineHiddenTag(text, "\uE000cite\uE002", "\uE001")
 	for {
 		start := strings.Index(text, "【")
 		if start < 0 {
@@ -310,6 +315,21 @@ func stripCitations(text string) string {
 			return text
 		}
 		text = text[:start] + text[start+end+len("】"):]
+	}
+}
+
+func stripInlineHiddenTag(text string, open string, close string) string {
+	for {
+		start := strings.Index(text, open)
+		if start < 0 {
+			return text
+		}
+		rest := text[start+len(open):]
+		end := strings.Index(rest, close)
+		if end < 0 {
+			return text[:start]
+		}
+		text = text[:start] + rest[end+len(close):]
 	}
 }
 

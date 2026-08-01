@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 
+	"codex_go/eventmap"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
@@ -65,9 +66,13 @@ func (t *TranscriptComponent) refreshTranscript(state *codextui.State, width int
 		if role == "" {
 			role = string(codextui.RoleSystem)
 		}
+		text := msg.Text
+		if msg.Role == codextui.RoleAssistant {
+			text = eventmap.StripHiddenAssistantMarkup(text, false)
+		}
 		roleTitle := strings.ToUpper(role[:1]) + role[1:]
 		lines = append(lines, roleTitle+":")
-		for _, line := range strings.Split(strings.TrimSpace(msg.Text), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
 			lines = append(lines, "  "+strings.TrimRight(line, " \t"))
 		}
 	}

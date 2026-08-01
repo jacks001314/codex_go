@@ -1506,6 +1506,24 @@ func TestModelRendersWebSearchLifecycleLikeRust(t *testing.T) {
 	}
 }
 
+func TestModelHidesWebCitationsFromAssistantView(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 100, Height: 30})
+	citation := "21°C\uE000cite\uE002turn7forecast0\uE001"
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("weather-answer", "| Kunming | "+citation+" |\n")})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItem("weather-answer", "| Kunming | "+citation+" |\n"))})
+
+	view := utils.StripANSI(model.View())
+	if strings.Contains(view, "turn7forecast0") || strings.Contains(view, "\uE000cite\uE002") {
+		t.Fatalf("assistant view leaked provider citation:\n%s", view)
+	}
+	if !strings.Contains(view, "21°C") {
+		t.Fatalf("assistant view lost visible weather value:\n%s", view)
+	}
+}
+
 func TestModelWeatherLifecycleShowsRunningAndNoDuplicateResults(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 100, Height: 30})

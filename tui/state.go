@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"codex_go/eventmap"
 )
 
 type MessageRole string
@@ -600,9 +602,13 @@ func (s *State) RenderFrame() string {
 			if role == "" {
 				role = string(RoleSystem)
 			}
+			text := message.Text
+			if message.Role == RoleAssistant {
+				text = eventmap.StripHiddenAssistantMarkup(text, false)
+			}
 			builder.WriteString(roleTitle(role))
 			builder.WriteString(":\n")
-			builder.WriteString(indentLines(message.Text, "  "))
+			builder.WriteString(indentLines(text, "  "))
 			builder.WriteString("\n")
 		}
 	}

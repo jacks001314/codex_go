@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/eventmap"
 	"codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
@@ -319,6 +320,9 @@ func (c *PlanStreamController) HasLiveTail() bool {
 }
 
 func renderSourceLines(source string, width int) []string {
+	// Keep provider citation controls out of the human transcript. The raw
+	// source remains available from Finalize for protocol/history consumers.
+	source = eventmap.StripHiddenAssistantMarkup(source, false)
 	source = strings.TrimRight(source, "\n")
 	if source == "" {
 		return nil
