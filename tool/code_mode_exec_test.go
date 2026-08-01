@@ -559,7 +559,7 @@ func TestCodeModeRemoteSuccessDoesNotRunInProcessFallback(t *testing.T) {
 	}
 }
 
-func TestCodeModeRemoteFailureFallsBackInProcess(t *testing.T) {
+func TestCodeModeRemoteFailureNeverFallsBackInProcess(t *testing.T) {
 	registry := NewRegistry()
 	remote := &recordingCodeModeRemoteSession{err: errors.New("remote unavailable")}
 	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
@@ -567,11 +567,42 @@ func TestCodeModeRemoteFailureFallsBackInProcess(t *testing.T) {
 		CallID:  "remote-fallback",
 		Payload: Payload{Kind: PayloadCustom, Input: `text("LOCAL_OK")`},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || output != nil || !strings.Contains(err.Error(), "code-mode remote host unavailable: remote unavailable") || remote.executeCalls != 1 {
+		t.Fatalf("output = %#v error = %v execute calls = %d", output, err, remote.executeCalls)
 	}
-	if output.Body != "LOCAL_OK" || remote.executeCalls != 1 {
-		t.Fatalf("output = %#v execute calls = %d", output, remote.executeCalls)
+}
+
+func TestCodeModeRemoteRuntimeErrorRespondsToModel(t *testing.T) {
+	registry := NewRegistry()
+	remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{
+		CellID:    "remote-error-cell",
+		State:     "completed",
+		ErrorText: "apply_patch verification failed",
+	}}
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID: "remote-runtime-error", Payload: Payload{Kind: PayloadCustom, Input: `await tools.apply_patch("broken")`},
+	})
+	var callErr *FunctionCallError
+	if output != nil || !AsFunctionCallError(err, &callErr) || callErr.IsFatal() || !strings.Contains(callErr.ModelMessage(), "apply_patch verification failed") {
+		t.Fatalf("output = %#v error = %v call error = %#v", output, err, callErr)
+	}
+}
+
+func TestCodeModeRemoteWaitRuntimeErrorRespondsToModel(t *testing.T) {
+	registry := NewRegistry()
+	remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{
+		CellID:    "remote-wait-error-cell",
+		State:     "completed",
+		ErrorText: "asynchronous execution failed",
+	}}
+	_, wait := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	output, err := wait.Execute(context.Background(), &Invocation{
+		CallID: "remote-wait-runtime-error", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"remote-wait-error-cell"}`},
+	})
+	var callErr *FunctionCallError
+	if output != nil || !AsFunctionCallError(err, &callErr) || callErr.IsFatal() || !strings.Contains(callErr.ModelMessage(), "asynchronous execution failed") {
+		t.Fatalf("output = %#v error = %v call error = %#v", output, err, callErr)
 	}
 }
 

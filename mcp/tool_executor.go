@@ -19,6 +19,7 @@ const (
 type ToolExecutorOptions struct {
 	Service                       *MCPService
 	ServerName                    string
+	ServerOrigin                  string
 	ToolInfo                      *MCPToolInfo
 	ToolName                      tool.ToolName
 	Parallel                      bool
@@ -33,6 +34,7 @@ type ToolExecutorOptions struct {
 type ToolExecutor struct {
 	service                       *MCPService
 	serverName                    string
+	serverOrigin                  string
 	toolInfo                      MCPToolInfo
 	toolName                      tool.ToolName
 	parallel                      bool
@@ -54,6 +56,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 		executor.service = options.Service
 	}
 	executor.serverName = strings.TrimSpace(options.ServerName)
+	executor.serverOrigin = strings.TrimSpace(options.ServerOrigin)
 	if options.ToolInfo != nil {
 		executor.toolInfo = *options.ToolInfo
 	}
@@ -87,6 +90,7 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 		if err := RegisterToolExecutor(registry, &ToolExecutorOptions{
 			Service:                       service,
 			ServerName:                    tools[i].ServerName,
+			ServerOrigin:                  tools[i].ServerOrigin,
 			ToolInfo:                      info,
 			ToolName:                      tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
 			OpenAIFileInputOptionalFields: tools[i].OpenAIFileInputOptionalFields,
@@ -95,6 +99,17 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 		}
 	}
 	return nil
+}
+
+func (e *ToolExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
+	if e == nil {
+		return nil
+	}
+	tags := map[string]string{"mcp_server": e.resolvedServerName()}
+	if e.serverOrigin != "" {
+		tags["mcp_server_origin"] = e.serverOrigin
+	}
+	return tags
 }
 
 func (e *ToolExecutor) Spec() tool.Spec {

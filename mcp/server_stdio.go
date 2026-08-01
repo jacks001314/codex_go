@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -49,9 +50,11 @@ type CodexToolReplyCall struct {
 }
 
 type CodexToolResult struct {
-	ThreadID string `json:"threadId"`
-	Content  string `json:"content"`
-	IsError  *bool  `json:"-"`
+	ThreadID string   `json:"threadId"`
+	Content  string   `json:"content"`
+	IsError  *bool    `json:"-"`
+	TurnID   string   `json:"-"`
+	Warnings []string `json:"-"`
 }
 
 type CodexToolRunner interface {
@@ -62,16 +65,16 @@ type CodexToolRunner interface {
 // ExecApprovalElicitRequestParams mirrors Rust's ExecApprovalElicitRequestParams.
 // It is sent as the params of an elicitation/create request to the MCP client.
 type ExecApprovalElicitRequestParams struct {
-	Message            string         `json:"message"`
-	RequestedSchema    any            `json:"requestedSchema"`
-	ThreadID           string         `json:"threadId"`
-	CodexElicitation   string         `json:"codex_elicitation"`
-	CodexMCPToolCallID string         `json:"codex_mcp_tool_call_id"`
-	CodexEventID       string         `json:"codex_event_id"`
-	CodexCallID        string         `json:"codex_call_id"`
-	CodexCommand       []string       `json:"codex_command"`
-	CodexCWD           string         `json:"codex_cwd"`
-	CodexParsedCmd     []any          `json:"codex_parsed_cmd"`
+	Message            string   `json:"message"`
+	RequestedSchema    any      `json:"requestedSchema"`
+	ThreadID           string   `json:"threadId"`
+	CodexElicitation   string   `json:"codex_elicitation"`
+	CodexMCPToolCallID string   `json:"codex_mcp_tool_call_id"`
+	CodexEventID       string   `json:"codex_event_id"`
+	CodexCallID        string   `json:"codex_call_id"`
+	CodexCommand       []string `json:"codex_command"`
+	CodexCWD           string   `json:"codex_cwd"`
+	CodexParsedCmd     []any    `json:"codex_parsed_cmd"`
 }
 
 // ExecApprovalResponse mirrors Rust's ExecApprovalResponse.
@@ -390,6 +393,8 @@ type stdioMCPServer struct {
 	version   string
 	userAgent string
 	runner    CodexToolRunner
+	writer    io.Writer
+	writeMu   *sync.Mutex
 
 	initialized     bool
 	shutdown        bool
@@ -438,6 +443,8 @@ func ServeStdio(ctx context.Context, options *StdioServerOptions, stdin io.Reade
 	var writeMu sync.Mutex
 	approvalHandler := newStdioApprovalHandler(stdout, &writeMu)
 	server.approvalHandler = approvalHandler
+	server.writer = stdout
+	server.writeMu = &writeMu
 	server.runner = NewApprovalCodexToolRunner(server.runner, approvalHandler)
 
 	return server.Serve(ctx, stdin, stdout)
@@ -601,7 +608,7 @@ func (s *stdioMCPServer) handleRequest(ctx context.Context, request *stdioMCPReq
 	case "tools/list":
 		return map[string]any{"tools": codexMCPTools()}, nil
 	case "tools/call":
-		return s.handleCallTool(ctx, request.Params)
+		return s.handleCallTool(ctx, request.ID, request.Params)
 	case "resources/list":
 		return map[string]any{"resources": []any{}}, nil
 	case "resources/templates/list":
@@ -654,7 +661,7 @@ func (s *stdioMCPServer) handleInitialize(request *stdioMCPRequest) (any, error)
 	}, nil
 }
 
-func (s *stdioMCPServer) handleCallTool(ctx context.Context, raw json.RawMessage) (any, error) {
+func (s *stdioMCPServer) handleCallTool(ctx context.Context, requestID json.RawMessage, raw json.RawMessage) (any, error) {
 	var params callToolParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
@@ -674,6 +681,9 @@ func (s *stdioMCPServer) handleCallTool(ctx context.Context, raw json.RawMessage
 		if err != nil {
 			return callToolErrorResult(codexToolCallErrorMessage(err, "Missing arguments for codex tool-call; the `prompt` field is required.")), nil
 		}
+		if err := s.emitCodexToolWarnings(requestID, result); err != nil {
+			return nil, err
+		}
 		return callToolResult(result), nil
 	case "codex-reply":
 		if len(bytes.TrimSpace(params.Arguments)) == 0 {
@@ -687,10 +697,72 @@ func (s *stdioMCPServer) handleCallTool(ctx context.Context, raw json.RawMessage
 		if err != nil {
 			return callToolErrorResult(codexToolCallErrorMessage(err, "Missing arguments for codex-reply tool-call; the `threadId` and `prompt` fields are required.")), nil
 		}
+		if err := s.emitCodexToolWarnings(requestID, result); err != nil {
+			return nil, err
+		}
 		return callToolResult(result), nil
 	default:
 		return callToolErrorResult(fmt.Sprintf("Unknown tool '%s'", params.Name)), nil
 	}
+}
+
+const maxMCPServerWarningBytes = 256
+
+func (s *stdioMCPServer) emitCodexToolWarnings(requestID json.RawMessage, result *CodexToolResult) error {
+	if s == nil || result == nil || len(result.Warnings) == 0 || s.writer == nil {
+		return nil
+	}
+	turnID := strings.TrimSpace(result.TurnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(string(requestID))
+	}
+	for _, warning := range result.Warnings {
+		warning = truncateUTF8Bytes(warning, maxMCPServerWarningBytes)
+		if warning == "" {
+			continue
+		}
+		notification := map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "codex/event",
+			"params": map[string]any{
+				"id": turnID,
+				"msg": map[string]any{
+					"type":    "warning",
+					"message": warning,
+				},
+				"_meta": map[string]any{
+					"requestId": json.RawMessage(append([]byte(nil), requestID...)),
+					"threadId":  result.ThreadID,
+				},
+			},
+		}
+		if s.writeMu != nil {
+			s.writeMu.Lock()
+			err := writeMCPFrame(s.writer, notification)
+			s.writeMu.Unlock()
+			if err != nil {
+				return err
+			}
+		} else if err := writeMCPFrame(s.writer, notification); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	data := []byte(value)
+	if len(data) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.Valid(data[:end]) {
+		end--
+	}
+	return string(data[:end])
 }
 
 func decodeToolArguments(raw json.RawMessage, target any) error {

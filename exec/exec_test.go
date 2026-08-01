@@ -65,8 +65,8 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 		t.Fatal("LastMessage is empty")
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("json lines = %d, want 4: %q", len(lines), stdout.String())
+	if len(lines) != 5 {
+		t.Fatalf("json lines = %d, want 5: %q", len(lines), stdout.String())
 	}
 	var first protocol.ThreadEvent
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
@@ -74,6 +74,13 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	}
 	if first.Type != "thread.started" || first.ThreadID == "" {
 		t.Fatalf("first event = %#v", first)
+	}
+	var warning protocol.ThreadEvent
+	if err := json.Unmarshal([]byte(lines[2]), &warning); err != nil {
+		t.Fatalf("Unmarshal warning event returned error: %v", err)
+	}
+	if warning.Item == nil || warning.Item.Type != "error" || !strings.Contains(warning.Item.Message, "Code Mode is unavailable") {
+		t.Fatalf("warning event = %#v", warning)
 	}
 	data, err := os.ReadFile(lastMessage)
 	if err != nil {
@@ -194,7 +201,7 @@ func TestRunJSONEmitsLegacyFeatureDeprecationBeforeTurnStarted(t *testing.T) {
 		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
 	}
 	events := decodeExecJSONLines(t, stdout.String())
-	wantTypes := "thread.started,item.completed,turn.started,item.completed,turn.completed"
+	wantTypes := "thread.started,item.completed,turn.started,item.completed,item.completed,turn.completed"
 	if got := strings.Join(execEventTypes(events), ","); got != wantTypes {
 		t.Fatalf("event types = %q, want %q", got, wantTypes)
 	}
@@ -231,14 +238,67 @@ func TestRunJSONRustPromptStdinGolden(t *testing.T) {
 		t.Fatalf("prompt result=%q agent=%#v want %q", result.Prompt, agent.request, wantPrompt)
 	}
 	events := decodeExecJSONLines(t, stdout.String())
-	if got := execEventTypes(events); strings.Join(got, ",") != "thread.started,turn.started,item.completed,turn.completed" {
+	if got := execEventTypes(events); strings.Join(got, ",") != "thread.started,turn.started,item.completed,item.completed,turn.completed" {
 		t.Fatalf("event types = %#v stdout=%q", got, stdout.String())
 	}
-	if events[2].Item == nil || events[2].Item.Type != "agent_message" || events[2].Item.Text != "fixture hello" {
-		t.Fatalf("agent message event = %#v", events[2])
+	if events[3].Item == nil || events[3].Item.Type != "agent_message" || events[3].Item.Text != "fixture hello" {
+		t.Fatalf("agent message event = %#v", events[3])
 	}
-	if events[3].Usage == nil || events[3].Usage.InputTokens != 2 || events[3].Usage.OutputTokens != 3 {
-		t.Fatalf("turn completed usage = %#v", events[3].Usage)
+	if events[4].Usage == nil || events[4].Usage.InputTokens != 2 || events[4].Usage.OutputTokens != 3 {
+		t.Fatalf("turn completed usage = %#v", events[4].Usage)
+	}
+}
+
+func TestExecDefaultRouterUsesStandaloneCodeModePolicy(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		toolMode        string
+		disableFallback bool
+		wantExec        bool
+		wantDirect      bool
+		warningCause    string
+		warningBehavior string
+	}{
+		{name: "optional-falls-back-to-direct", toolMode: model.ToolModeCodeMode, wantDirect: true, warningCause: "code-mode host is disabled", warningBehavior: "Falling back to direct tools"},
+		{name: "code-mode-only-fails-closed", toolMode: model.ToolModeCodeModeOnly, wantExec: true, warningCause: "code-mode host is disabled", warningBehavior: "Code mode will fail closed"},
+		{name: "disabled-fallback-fails-closed", toolMode: model.ToolModeCodeMode, disableFallback: true, wantExec: true, warningCause: "failed to spawn code-mode host", warningBehavior: "Code mode will fail closed"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			agent := &recordingAgent{message: "done"}
+			collector := &execStreamEventCollector{}
+			runner := NewRunner(t.TempDir())
+			_, err := runner.runAgentTurn(context.Background(), &Request{}, agent, &agentRunConfig{
+				Prompt:                  "run",
+				Model:                   "test-model",
+				ToolMode:                testCase.toolMode,
+				DisableCodeModeFallback: testCase.disableFallback,
+				StreamEvents:            collector,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := agentRequestToolsContainResponsesTool(agent.request, "custom", tool.CodeModeExecToolName); got != testCase.wantExec {
+				t.Fatalf("exec visible = %t, want %t; tools = %#v", got, testCase.wantExec, agent.request.Tools)
+			}
+			if got := agentRequestToolsContainPlainFunction(agent.request, tool.DefaultShellCommandToolName); got != testCase.wantDirect {
+				t.Fatalf("direct shell visible = %t, want %t; tools = %#v", got, testCase.wantDirect, agent.request.Tools)
+			}
+			events := collector.Events()
+			if len(events) != 1 || events[0].Item == nil || events[0].Item.Type != "error" ||
+				!strings.Contains(events[0].Item.Message, testCase.warningCause) ||
+				!strings.Contains(events[0].Item.Message, testCase.warningBehavior) {
+				t.Fatalf("warning events = %#v", events)
+			}
+		})
+	}
+}
+
+func TestExecHumanRendererRendersRuntimeWarningLikeRust(t *testing.T) {
+	var stderr bytes.Buffer
+	renderer := newExecHumanRenderer(&stderr, "never")
+	renderer.HandleEvent(protocol.ItemCompleted(protocol.ErrorItem("warning-1", "host missing")))
+	if got := stderr.String(); got != "warning: host missing\n" {
+		t.Fatalf("warning output = %q", got)
 	}
 }
 
@@ -5107,6 +5167,19 @@ func agentRequestToolsContainPlainFunction(request *model.AgentRequest, name str
 	for _, toolValue := range request.Tools {
 		toolMap, ok := toolValue.(map[string]any)
 		if ok && fmt.Sprint(toolMap["type"]) == "function" && fmt.Sprint(toolMap["name"]) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func agentRequestToolsContainResponsesTool(request *model.AgentRequest, toolType string, name string) bool {
+	if request == nil {
+		return false
+	}
+	for _, toolValue := range request.Tools {
+		toolMap, ok := toolValue.(map[string]any)
+		if ok && fmt.Sprint(toolMap["type"]) == toolType && fmt.Sprint(toolMap["name"]) == name {
 			return true
 		}
 	}

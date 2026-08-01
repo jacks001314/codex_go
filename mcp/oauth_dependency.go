@@ -68,6 +68,9 @@ func (s *MCPService) LoginOAuthDependency(ctx context.Context, options *OAuthDep
 	if !ok || strings.TrimSpace(config.URL) == "" || strings.TrimSpace(config.BearerTokenEnvVar) != "" {
 		return false, nil
 	}
+	if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
+		return false, nil
+	}
 	client := options.HTTPClient
 	if client == nil {
 		client = s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryMaxTimeout)
@@ -103,7 +106,7 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		timeout = mcpOAuthDependencyLoginTimeout
 	}
 	login, err := StartOAuthLoginServer(contextOrBackground(ctx), &OAuthLoginServerOptions{
-		ServerName:            name,
+		ServerName:            config.OAuthCredentialName(name),
 		ServerURL:             config.URL,
 		ClientID:              config.OAuthClientID,
 		RegistrationEndpoint:  discovery.RegistrationEndpoint,

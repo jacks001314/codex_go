@@ -1115,6 +1115,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
+	addMemoryGenerationHeader(httpRequest.Header, apiRequest.ClientMetadata)
 	addHeaders(httpRequest.Header, r.providerHeaders())
 	if err := r.addAttestationHeader(ctx, httpRequest.Header, request); err != nil {
 		return nil, err
@@ -1796,6 +1797,15 @@ func addCompatibilityMetadataHeaders(headers http.Header, metadata map[string]st
 			continue
 		}
 		headers.Set(key, value)
+	}
+}
+
+func addMemoryGenerationHeader(headers http.Header, metadata map[string]string) {
+	if headers == nil {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(metadata[codexapi.ClientOpenAISubagentHeader]), "memory_consolidation") {
+		headers.Set(codexapi.ClientOpenAIMemgenRequestHeader, "true")
 	}
 }
 

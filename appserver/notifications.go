@@ -305,7 +305,7 @@ type FuzzyFileSearchSessionCompletedNotification struct {
 type ThreadRealtimeStartedNotification struct {
 	ThreadID          string  `json:"threadId"`
 	Version           string  `json:"version"`
-	RealtimeSessionID *string `json:"sessionId"`
+	RealtimeSessionID *string `json:"realtimeSessionId"`
 }
 
 type ThreadRealtimeItemAddedNotification struct {

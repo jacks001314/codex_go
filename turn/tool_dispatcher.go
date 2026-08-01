@@ -24,6 +24,8 @@ type ToolDispatcherOptions struct {
 	OnCodeModeNotify            CodeModeNotifyCallback
 	ThreadID                    string
 	TurnID                      string
+	ExecutedToolCalls           *ExecutedToolCallRecorder
+	ToolMode                    string
 }
 
 type ToolDispatcher struct {
@@ -37,16 +39,19 @@ type ToolDispatcher struct {
 	onCodeModeNotify            CodeModeNotifyCallback
 	threadID                    string
 	turnID                      string
+	executedToolCalls           *ExecutedToolCallRecorder
+	toolMode                    string
 	clockMu                     sync.Mutex
 }
 
 type ToolExecutionResult struct {
-	Invocation *tool.Invocation
-	Output     *tool.Output
-	Response   *ToolResponseItem
-	InputItems []any
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Invocation    *tool.Invocation
+	Output        *tool.Output
+	Response      *ToolResponseItem
+	InputItems    []any
+	TelemetryTags map[string]string
+	StartedAt     time.Time
+	FinishedAt    time.Time
 }
 
 type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
@@ -63,6 +68,31 @@ type ToolResponseItem struct {
 	Execution string                     `json:"execution,omitempty"`
 	Output    *FunctionCallOutputPayload `json:"output,omitempty"`
 	Tools     []any                      `json:"tools,omitempty"`
+
+	executedToolCalls []model.ExecutedToolCall
+}
+
+func (i *ToolResponseItem) ExecutedToolCalls() []model.ExecutedToolCall {
+	if i == nil {
+		return nil
+	}
+	return append([]model.ExecutedToolCall(nil), i.executedToolCalls...)
+}
+
+func (i *ToolResponseItem) ReplaceExecutedToolCalls(calls []model.ExecutedToolCall) {
+	if i != nil {
+		i.executedToolCalls = append([]model.ExecutedToolCall(nil), calls...)
+	}
+}
+
+func (i *ToolResponseItem) CloneForExecutedToolCallPrompt() model.ExecutedToolCallCarrier {
+	if i == nil {
+		return (*ToolResponseItem)(nil)
+	}
+	clone := *i
+	clone.Tools = append([]any(nil), i.Tools...)
+	clone.executedToolCalls = append([]model.ExecutedToolCall(nil), i.executedToolCalls...)
+	return &clone
 }
 
 func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
@@ -75,7 +105,7 @@ func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 		if tools == nil {
 			tools = []any{}
 		}
-		return json.Marshal(struct {
+		return marshalToolResponseItem(i, struct {
 			Type      string  `json:"type"`
 			CallID    *string `json:"call_id"`
 			Status    string  `json:"status"`
@@ -89,7 +119,7 @@ func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 			Tools:     tools,
 		})
 	case "custom_tool_call_output":
-		return json.Marshal(struct {
+		return marshalToolResponseItem(i, struct {
 			Type   string                     `json:"type"`
 			CallID string                     `json:"call_id"`
 			Name   string                     `json:"name,omitempty"`
@@ -101,7 +131,7 @@ func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 			Output: functionCallOutputPayloadForJSON(i.Output),
 		})
 	default:
-		return json.Marshal(struct {
+		return marshalToolResponseItem(i, struct {
 			Type   string                     `json:"type"`
 			CallID string                     `json:"call_id"`
 			Output *FunctionCallOutputPayload `json:"output"`
@@ -111,6 +141,21 @@ func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 			Output: functionCallOutputPayloadForJSON(i.Output),
 		})
 	}
+}
+
+func marshalToolResponseItem(item *ToolResponseItem, value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil || item == nil || len(item.executedToolCalls) == 0 {
+		return encoded, err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+	object["internal_chat_message_metadata_passthrough"] = map[string]any{
+		"executed_tool_calls": item.executedToolCalls,
+	}
+	return json.Marshal(object)
 }
 
 type FunctionCallOutputPayload struct {
@@ -137,6 +182,8 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		onCodeModeNotify:            options.OnCodeModeNotify,
 		threadID:                    strings.TrimSpace(options.ThreadID),
 		turnID:                      strings.TrimSpace(options.TurnID),
+		executedToolCalls:           options.ExecutedToolCalls,
+		toolMode:                    strings.TrimSpace(options.ToolMode),
 	}
 }
 
@@ -161,6 +208,9 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 			continue
 		}
 		d.addInvocationContext(invocation)
+		if d.executedToolCalls != nil {
+			d.executedToolCalls.RecordToolCall(invocation, d.toolMode)
+		}
 		invocations = append(invocations, invocation)
 	}
 	if len(invocations) == 0 {
@@ -326,6 +376,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		if invocation.Context == nil {
 			invocation.Context = map[string]any{}
 		}
+		invocation.Context[tool.CodeModeOutputCallIDContextKey] = invocation.CallID
 		invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID string, text string) {
 			if strings.TrimSpace(text) == "" {
 				return
@@ -338,14 +389,17 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				d.onCodeModeNotify(toolCtx, callID, text)
 			}
 		})
-		if d.emitCodeModeNestedLifecycle {
+		if d.emitCodeModeNestedLifecycle || d.executedToolCalls != nil {
 			invocation.Context["code_mode_nested_tool_started"] = tool.CodeModeNestedToolStartedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedStartedAt time.Time) {
-				if d.onToolStarted != nil {
+				if d.executedToolCalls != nil {
+					d.executedToolCalls.RecordToolCall(nested, d.toolMode)
+				}
+				if d.emitCodeModeNestedLifecycle && d.onToolStarted != nil {
 					d.onToolStarted(nestedCtx, nested, nestedStartedAt)
 				}
 			})
 			invocation.Context["code_mode_nested_tool_completed"] = tool.CodeModeNestedToolCompletedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedOutput *tool.Output, nestedErr error, nestedStartedAt, nestedFinishedAt time.Time) {
-				if d.onToolCompleted == nil {
+				if !d.emitCodeModeNestedLifecycle || d.onToolCompleted == nil {
 					return
 				}
 				if nestedOutput == nil {
@@ -354,7 +408,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 						nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
 					}
 				}
-				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
+				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), TelemetryTags: d.router.TelemetryTags(nested), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
 			})
 		}
 	}
@@ -362,6 +416,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	if d.onToolStarted != nil {
 		d.onToolStarted(toolCtx, invocation, startedAt)
 	}
+	telemetryTags := d.router.TelemetryTags(invocation)
 	output, dispatchErr := d.router.DispatchWithHooks(toolCtx, invocation, d.hooks)
 	if dispatchErr != nil {
 		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
@@ -392,6 +447,20 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	if output == nil {
 		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, CompletedAt: d.nowUTC()}
 	}
+	if d.executedToolCalls != nil && invocation.ToolName.Namespace == "" {
+		switch invocation.ToolName.Name {
+		case tool.CodeModeExecToolName, "wait":
+			cellID := ""
+			if output.Data != nil {
+				cellID, _ = output.Data["cell_id"].(string)
+			}
+			if strings.TrimSpace(cellID) != "" {
+				d.executedToolCalls.RegisterCell(cellID, invocation.CallID)
+			} else if invocation.ToolName.Name == tool.CodeModeExecToolName {
+				d.executedToolCalls.RegisterOutputCall(invocation.CallID)
+			}
+		}
+	}
 	finishedAt := output.CompletedAt
 	if finishedAt.IsZero() {
 		finishedAt = d.nowUTC()
@@ -401,12 +470,13 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	inputItems = append(notifyItems, inputItems...)
 	notifyMu.Unlock()
 	result := &ToolExecutionResult{
-		Invocation: invocation,
-		Output:     output,
-		Response:   ToolResponseFromOutput(invocation, output),
-		InputItems: inputItems,
-		StartedAt:  startedAt,
-		FinishedAt: finishedAt,
+		Invocation:    invocation,
+		Output:        output,
+		Response:      ToolResponseFromOutput(invocation, output),
+		InputItems:    inputItems,
+		TelemetryTags: telemetryTags,
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
 	}
 	if d.onToolCompleted != nil {
 		d.onToolCompleted(toolCtx, result)

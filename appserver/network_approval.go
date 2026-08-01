@@ -14,6 +14,7 @@ import (
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/turn"
 )
@@ -34,10 +35,16 @@ type pendingNetworkApproval struct {
 	cancel       context.CancelFunc
 }
 
+type pendingNetworkApprovalKey struct {
+	networkApprovalKey
+	turnID string
+	callID string
+}
+
 type networkApprovalService struct {
 	router  *RuntimeRouter
 	mu      sync.Mutex
-	pending map[networkApprovalKey]*pendingNetworkApproval
+	pending map[pendingNetworkApprovalKey]*pendingNetworkApproval
 	allowed map[networkApprovalKey]struct{}
 	denied  map[networkApprovalKey]struct{}
 	saved   map[string][]networkRuleSavedFragment
@@ -46,11 +53,24 @@ type networkApprovalService struct {
 }
 
 type activeNetworkApprovalCall struct {
-	threadID string
-	turnID   string
-	callID   string
-	cancel   context.CancelCauseFunc
-	outcome  string
+	threadID      string
+	turnID        string
+	callID        string
+	environmentID string
+	trigger       *guardianNetworkAccessTrigger
+	cancel        context.CancelCauseFunc
+	outcome       string
+}
+
+type guardianNetworkAccessTrigger struct {
+	CallID                string                               `json:"callId"`
+	Command               []string                             `json:"command"`
+	CWD                   string                               `json:"cwd"`
+	SandboxPermissions    string                               `json:"sandboxPermissions"`
+	AdditionalPermissions *sandbox.AdditionalPermissionProfile `json:"additionalPermissions,omitempty"`
+	Justification         *string                              `json:"justification,omitempty"`
+	ToolName              string                               `json:"toolName"`
+	TTY                   bool                                 `json:"tty"`
 }
 
 type networkRuleSavedFragment struct {
@@ -69,7 +89,7 @@ type networkApprovalTurn struct {
 func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 	return &networkApprovalService{
 		router:  router,
-		pending: map[networkApprovalKey]*pendingNetworkApproval{},
+		pending: map[pendingNetworkApprovalKey]*pendingNetworkApproval{},
 		allowed: map[networkApprovalKey]struct{}{},
 		denied:  map[networkApprovalKey]struct{}{},
 		saved:   map[string][]networkRuleSavedFragment{},
@@ -106,6 +126,14 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		host:          network.NormalizeProxyHost(request.Host),
 		port:          request.Port,
 	}
+	ownerCall := s.activeCallForApproval(active, key.environmentID, request.ExecutionID)
+	if strings.TrimSpace(request.ExecutionID) != "" && ownerCall == nil {
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	}
+	pendingKey := pendingNetworkApprovalKey{networkApprovalKey: key, turnID: active.turnID}
+	if ownerCall != nil {
+		pendingKey.callID = ownerCall.callID
+	}
 
 	s.mu.Lock()
 	if _, ok := s.denied[key]; ok {
@@ -117,7 +145,7 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		s.mu.Unlock()
 		return network.AllowProxyDecision()
 	}
-	if pending := s.pending[key]; pending != nil {
+	if pending := s.pending[pendingKey]; pending != nil {
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -133,13 +161,13 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		connectionID: active.connectionID,
 		cancel:       approvalCancel,
 	}
-	s.pending[key] = pending
+	s.pending[pendingKey] = pending
 	s.mu.Unlock()
 
-	decision, cache := s.requestApproval(approvalCtx, active, key, request)
+	decision, cache := s.requestApproval(approvalCtx, active, key, request, ownerCall)
 	approvalCancel()
 	s.mu.Lock()
-	if s.pending[key] != pending {
+	if s.pending[pendingKey] != pending {
 		decision = pending.decision
 		s.mu.Unlock()
 		return decision
@@ -153,15 +181,18 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		s.denied[key] = struct{}{}
 	}
 	pending.decision = decision
-	delete(s.pending, key)
+	delete(s.pending, pendingKey)
 	close(pending.done)
 	s.mu.Unlock()
 	return decision
 }
 
-func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest) (network.ProxyDecision, NetworkPolicyRuleAction) {
+func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall) (network.ProxyDecision, NetworkPolicyRuleAction) {
 	protocol := networkApprovalProtocol(request.Protocol)
 	target := networkApprovalTarget(request.Protocol, request.Host, request.Port)
+	if s.routesApprovalToGuardian(active) {
+		return s.requestGuardianApproval(ctx, active, request, protocol, target, ownerCall), ""
+	}
 	approvalID := fmt.Sprintf("network#%s#%s#%s#%d", key.environmentID, networkApprovalProtocolKey(protocol), key.host, key.port)
 	environmentID := key.environmentID
 	reason := fmt.Sprintf("%s is not in the allowed_domains", request.Host)
@@ -215,6 +246,52 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	}
 }
 
+func (s *networkApprovalService) routesApprovalToGuardian(active *networkApprovalTurn) bool {
+	if s == nil || s.router == nil || active == nil {
+		return false
+	}
+	cfg, err := s.router.effectiveConfigForTurn(active.params)
+	if err != nil {
+		return false
+	}
+	reviewer := state.ReviewerFromString(turnApprovalsReviewerForTurn(cfg, active.params))
+	return reviewer.RoutesToGuardian()
+}
+
+func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, active *networkApprovalTurn, request network.ProxyPolicyRequest, protocol NetworkApprovalProtocol, target string, ownerCall *activeNetworkApprovalCall) network.ProxyDecision {
+	reviewer := s.router.services.GuardianReviewer
+	if reviewer == nil && s.router.services.Agent != nil {
+		reviewer = s.router.ensureGuardianReviewer(s.router.services.Agent)
+	}
+	action := state.Action{
+		Type:     "network_access",
+		Host:     request.Host,
+		Protocol: string(protocol),
+		Port:     request.Port,
+		Target:   target,
+	}
+	if ownerCall != nil && ownerCall.trigger != nil {
+		action.Extra = map[string]any{"trigger": *ownerCall.trigger}
+	}
+	if reviewer == nil {
+		s.recordGuardianOutcome(ownerCall, "Auto-approval review is unavailable; the request was denied.")
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	}
+	decision, reason, err := reviewer.Review(ctx, active.threadID, active.turnID, "", action)
+	if err == nil && decision == state.DecisionApproved {
+		return network.AllowProxyDecision()
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" && err != nil {
+		reason = strings.TrimSpace(err.Error())
+	}
+	if reason == "" {
+		reason = "Auto-approval review denied the request."
+	}
+	s.recordGuardianOutcome(ownerCall, reason)
+	return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+}
+
 func networkApprovalCallKey(threadID string, turnID string, callID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) + "\x00" + strings.TrimSpace(callID)
 }
@@ -225,9 +302,103 @@ func (s *networkApprovalService) registerActiveCall(threadID string, turnID stri
 	}
 	callID := firstNonEmpty(strings.TrimSpace(invocation.CallID), invocation.ToolName.Key())
 	key := networkApprovalCallKey(threadID, turnID, callID)
+	environmentID, trigger := s.guardianTriggerForInvocation(threadID, invocation)
 	s.callsMu.Lock()
-	s.calls[key] = &activeNetworkApprovalCall{threadID: threadID, turnID: turnID, callID: callID, cancel: invocation.Cancel}
+	s.calls[key] = &activeNetworkApprovalCall{threadID: threadID, turnID: turnID, callID: callID, environmentID: environmentID, trigger: trigger, cancel: invocation.Cancel}
 	s.callsMu.Unlock()
+}
+
+func (s *networkApprovalService) guardianTriggerForInvocation(threadID string, invocation *tool.Invocation) (string, *guardianNetworkAccessTrigger) {
+	environmentID := "local"
+	if s == nil || s.router == nil || invocation == nil {
+		return environmentID, nil
+	}
+	var args tool.ExecCommandArgs
+	if err := invocation.DecodeArguments(&args); err != nil || strings.TrimSpace(args.Cmd) == "" {
+		return environmentID, nil
+	}
+	params := s.router.activeTurnParams(threadID)
+	cwd := firstNonEmpty(strings.TrimSpace(turnCWD(params)), s.router.services.DefaultCWD)
+	shell := tool.NewDefaultShell()
+	environments := s.router.unifiedExecEnvironmentsForTurn(params)
+	requestedEnvironmentID := strings.TrimSpace(args.EnvironmentID)
+	if requestedEnvironmentID == "" && len(environments) > 0 {
+		requestedEnvironmentID = strings.TrimSpace(environments[0].ID)
+	}
+	if requestedEnvironmentID != "" {
+		environmentID = requestedEnvironmentID
+	}
+	for i := range environments {
+		if strings.TrimSpace(environments[i].ID) != environmentID {
+			continue
+		}
+		cwd = firstNonEmpty(strings.TrimSpace(environments[i].CWD), cwd)
+		if environments[i].Shell != nil {
+			shell = environments[i].Shell
+		}
+		break
+	}
+	if override := firstNonEmpty(strings.TrimSpace(args.CWD), strings.TrimSpace(args.Workdir)); override != "" {
+		cwd = override
+	}
+	resolved, err := tool.ResolveCommand(&args, shell, false)
+	if err != nil {
+		return environmentID, nil
+	}
+	permissions := args.SandboxPermissions
+	if permissions == "" {
+		permissions = sandbox.SandboxPermissionsUseDefault
+	}
+	return environmentID, &guardianNetworkAccessTrigger{
+		CallID:                firstNonEmpty(strings.TrimSpace(invocation.CallID), invocation.ToolName.Key()),
+		Command:               append([]string(nil), resolved.Command...),
+		CWD:                   cwd,
+		SandboxPermissions:    string(permissions),
+		AdditionalPermissions: cloneAdditionalPermissionProfile(args.AdditionalPermissions),
+		Justification:         stringPtrIfNotEmpty(strings.TrimSpace(args.Justification)),
+		ToolName:              invocation.ToolName.Key(),
+		TTY:                   args.TTY,
+	}
+}
+
+func (s *networkApprovalService) activeCallForApproval(active *networkApprovalTurn, environmentID string, executionID string) *activeNetworkApprovalCall {
+	if s == nil || active == nil {
+		return nil
+	}
+	environmentID = firstNonEmpty(strings.TrimSpace(environmentID), "local")
+	executionID = strings.TrimSpace(executionID)
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	if executionID != "" {
+		call := s.calls[networkApprovalCallKey(active.threadID, active.turnID, executionID)]
+		if call != nil && firstNonEmpty(strings.TrimSpace(call.environmentID), "local") == environmentID {
+			return call
+		}
+		return nil
+	}
+	var selected *activeNetworkApprovalCall
+	for _, call := range s.calls {
+		if call == nil || call.threadID != active.threadID || call.turnID != active.turnID || firstNonEmpty(strings.TrimSpace(call.environmentID), "local") != environmentID {
+			continue
+		}
+		if selected != nil {
+			return nil
+		}
+		selected = call
+	}
+	return selected
+}
+
+func (s *networkApprovalService) recordGuardianOutcome(call *activeNetworkApprovalCall, message string) {
+	if s == nil || call == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	key := networkApprovalCallKey(call.threadID, call.turnID, call.callID)
+	if active := s.calls[key]; active == call && active.outcome == "" {
+		active.outcome = message
+	}
 }
 
 func (s *networkApprovalService) finishActiveCall(threadID string, turnID string, invocation *tool.Invocation) string {
@@ -287,11 +458,11 @@ func (s *networkApprovalService) cancelPending(matches func(networkApprovalKey, 
 	denied := network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	var cancels []context.CancelFunc
 	s.mu.Lock()
-	for key, pending := range s.pending {
-		if pending == nil || !matches(key, pending) {
+	for pendingKey, pending := range s.pending {
+		if pending == nil || !matches(pendingKey.networkApprovalKey, pending) {
 			continue
 		}
-		delete(s.pending, key)
+		delete(s.pending, pendingKey)
 		pending.decision = denied
 		close(pending.done)
 		if pending.cancel != nil {

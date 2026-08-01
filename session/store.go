@@ -277,9 +277,11 @@ type Record struct {
 // fork. The JSON store has item and turn ordinals rather than Rust's physical
 // rollout byte offsets, so the prefix lengths are the durable equivalent.
 type HistoryPosition struct {
-	ThreadID ThreadID `json:"thread_id"`
-	ItemEnd  int      `json:"item_end_exclusive"`
-	TurnEnd  int      `json:"turn_end_exclusive"`
+	ThreadID            ThreadID `json:"thread_id"`
+	EndOrdinalExclusive uint64   `json:"end_ordinal_exclusive,omitempty"`
+	EndByteOffset       uint64   `json:"end_byte_offset,omitempty"`
+	ItemEnd             int      `json:"item_end_exclusive,omitempty"`
+	TurnEnd             int      `json:"turn_end_exclusive,omitempty"`
 }
 
 type MetadataPatch struct {
@@ -419,6 +421,8 @@ type ForkOptions struct {
 	SessionID      string
 	ParentThreadID ThreadID
 	Ephemeral      bool
+	HistoryBase    *HistoryPosition
+	HistoryBaseSet bool
 	Now            time.Time
 }
 
@@ -448,9 +452,18 @@ type PreparedFork struct {
 	RolloutTurns []TurnSnapshot
 }
 
+type ResolvedPhysicalHistory struct {
+	Items        []Item
+	RolloutTurns []TurnSnapshot
+}
+
+type PhysicalHistoryResolver func(HistoryPosition) (*ResolvedPhysicalHistory, error)
+
 type Store struct {
 	root                  string
 	mu                    *sync.RWMutex
+	resolverMu            sync.RWMutex
+	physicalResolver      PhysicalHistoryResolver
 	writerLocksOnce       sync.Once
 	writerLockCoordinator *writerLockCoordinator
 }
@@ -475,6 +488,28 @@ func storeRootLock(root string) *sync.RWMutex {
 
 func (s *Store) Root() string {
 	return s.root
+}
+
+// SetPhysicalHistoryResolver installs the rollout-backed reader used for
+// Rust-compatible paginated history references. The resolver is read-only and
+// is never used for legacy item/turn-count references.
+func (s *Store) SetPhysicalHistoryResolver(resolver PhysicalHistoryResolver) {
+	if s == nil {
+		return
+	}
+	s.resolverMu.Lock()
+	s.physicalResolver = resolver
+	s.resolverMu.Unlock()
+}
+
+func (s *Store) resolvePhysicalHistory(position HistoryPosition) (*ResolvedPhysicalHistory, error) {
+	s.resolverMu.RLock()
+	resolver := s.physicalResolver
+	s.resolverMu.RUnlock()
+	if resolver == nil {
+		return nil, errors.New("physical history resolver is not configured")
+	}
+	return resolver(position)
 }
 
 func (s *Store) Path(threadID ThreadID) (string, error) {
@@ -628,6 +663,22 @@ func (s *Store) readMaterializedLocked(threadID ThreadID, includeArchived bool, 
 	base := *record.HistoryBase
 	if base.ThreadID == "" || base.ThreadID == record.ID || base.ItemEnd < 0 || base.TurnEnd < 0 {
 		return nil, fmt.Errorf("%w: invalid history reference for thread %s", ErrInvalidThreadID, threadID)
+	}
+	if base.EndOrdinalExclusive != 0 || base.EndByteOffset != 0 {
+		resolved, resolveErr := s.resolvePhysicalHistory(base)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("%w: resolve physical history base for thread %s: %v", ErrInvalidThreadID, threadID, resolveErr)
+		}
+		if resolved == nil {
+			return nil, fmt.Errorf("%w: physical history resolver returned no history for thread %s", ErrInvalidThreadID, threadID)
+		}
+		localItems := cloneItems(record.Items)
+		localTurns := cloneTurnSnapshots(record.Metadata.RolloutTurns)
+		record.Items = append(cloneItems(resolved.Items), localItems...)
+		record.Metadata.RolloutTurns = append(cloneTurnSnapshots(resolved.RolloutTurns), localTurns...)
+		record.InheritedItems = len(resolved.Items)
+		record.InheritedTurns = len(resolved.RolloutTurns)
+		return record, nil
 	}
 	source, err := s.readMaterializedLocked(base.ThreadID, true, visiting)
 	if err != nil {
@@ -1225,6 +1276,9 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	if err != nil {
 		return nil, err
 	}
+	if options.HistoryBaseSet {
+		prepared.HistoryBase = cloneHistoryPosition(options.HistoryBase)
+	}
 	items := prepared.Items
 	title := options.Title
 	if title == "" && source.Title != "" {
@@ -1241,11 +1295,7 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	metadata := forkMetadata(source, options, now, len(items))
 	metadata.RolloutTurns = cloneTurnSnapshots(prepared.RolloutTurns)
 	if prepared.HistoryBase != nil {
-		metadata.Extra["history_base"] = map[string]any{
-			"thread_id":          string(prepared.HistoryBase.ThreadID),
-			"item_end_exclusive": prepared.HistoryBase.ItemEnd,
-			"turn_end_exclusive": prepared.HistoryBase.TurnEnd,
-		}
+		metadata.Extra["history_base"] = historyPositionMetadata(prepared.HistoryBase)
 	}
 	record := &Record{
 		ID:             newID,
@@ -1264,7 +1314,11 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	}
 	if record.HistoryBase != nil {
 		record.InheritedItems = len(items)
-		record.InheritedTurns = record.HistoryBase.TurnEnd
+		if record.HistoryBase.EndOrdinalExclusive != 0 || record.HistoryBase.EndByteOffset != 0 {
+			record.InheritedTurns = len(metadata.RolloutTurns)
+		} else {
+			record.InheritedTurns = record.HistoryBase.TurnEnd
+		}
 	}
 	if options.Ephemeral {
 		if record.Metadata.Extra == nil {
@@ -1277,6 +1331,20 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 		return nil, err
 	}
 	return record, nil
+}
+
+func historyPositionMetadata(position *HistoryPosition) map[string]any {
+	if position == nil {
+		return nil
+	}
+	if position.EndOrdinalExclusive != 0 || position.EndByteOffset != 0 {
+		return map[string]any{
+			"thread_id": string(position.ThreadID), "end_ordinal_exclusive": position.EndOrdinalExclusive, "end_byte_offset": position.EndByteOffset,
+		}
+	}
+	return map[string]any{
+		"thread_id": string(position.ThreadID), "item_end_exclusive": position.ItemEnd, "turn_end_exclusive": position.TurnEnd,
+	}
 }
 
 func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*PreparedFork, error) {

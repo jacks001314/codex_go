@@ -39,6 +39,110 @@ type ExternalSessionImportCompletion struct {
 	Title            *string
 }
 
+// ExternalSessionImportMapping describes the ledger target for one canonical
+// external transcript. Ambiguous is true when legacy records map the same
+// source to more than one imported thread.
+type ExternalSessionImportMapping struct {
+	Found               bool
+	Ambiguous           bool
+	SourceContentSHA256 string
+	ImportedThreadID    string
+}
+
+// FindExternalSessionImport resolves the unique imported thread previously
+// associated with sourcePath. Multiple records fail closed as ambiguous.
+func FindExternalSessionImport(codexHome string, sourcePath string) (ExternalSessionImportMapping, error) {
+	externalSessionLedgerMu.Lock()
+	defer externalSessionLedgerMu.Unlock()
+	canonical, _, _, err := externalSessionSourceState(sourcePath)
+	if err != nil {
+		return ExternalSessionImportMapping{}, err
+	}
+	ledger, err := loadExternalSessionImportLedger(codexHome)
+	if err != nil {
+		return ExternalSessionImportMapping{}, err
+	}
+	var matches []externalSessionImportRecord
+	for _, record := range ledger.Records {
+		if externalSamePath(record.SourcePath, canonical) {
+			matches = append(matches, record)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return ExternalSessionImportMapping{}, nil
+	case 1:
+		return ExternalSessionImportMapping{
+			Found:               true,
+			SourceContentSHA256: matches[0].ContentSHA256,
+			ImportedThreadID:    matches[0].ImportedThreadID,
+		}, nil
+	default:
+		return ExternalSessionImportMapping{Found: true, Ambiguous: true}, nil
+	}
+}
+
+// ExternalSessionContentSHA256 returns the canonical source path and current
+// content hash used by conditional import checkpoints.
+func ExternalSessionContentSHA256(sourcePath string) (string, string, error) {
+	canonical, hash, _, err := externalSessionSourceState(sourcePath)
+	return canonical, hash, err
+}
+
+// CheckpointExternalSessionImport advances one unique source mapping only when
+// both the ledger and the source file still match the state used for append.
+func CheckpointExternalSessionImport(codexHome string, sourcePath string, importedThreadID string, expectedHash string, newHash string) (bool, error) {
+	if strings.TrimSpace(expectedHash) == "" || expectedHash == newHash {
+		return false, nil
+	}
+	externalSessionLedgerMu.Lock()
+	defer externalSessionLedgerMu.Unlock()
+
+	canonical, currentHash, modifiedAt, err := externalSessionSourceState(sourcePath)
+	if err != nil {
+		return false, err
+	}
+	if currentHash != newHash {
+		return false, nil
+	}
+	_, verifiedHash, verifiedModifiedAt, err := externalSessionSourceState(canonical)
+	if err != nil {
+		return false, err
+	}
+	if verifiedHash != newHash || !equalExternalSessionModifiedAt(modifiedAt, verifiedModifiedAt) {
+		return false, nil
+	}
+
+	ledger, err := loadExternalSessionImportLedger(codexHome)
+	if err != nil {
+		return false, err
+	}
+	matchingIndex := -1
+	for index := range ledger.Records {
+		if !externalSamePath(ledger.Records[index].SourcePath, canonical) {
+			continue
+		}
+		if matchingIndex >= 0 {
+			return false, nil
+		}
+		matchingIndex = index
+	}
+	if matchingIndex < 0 {
+		return false, nil
+	}
+	record := &ledger.Records[matchingIndex]
+	if record.ImportedThreadID != importedThreadID || record.ContentSHA256 != expectedHash {
+		return false, nil
+	}
+	record.ContentSHA256 = newHash
+	record.ImportedAt = time.Now().Unix()
+	record.SourceModifiedAt = modifiedAt
+	if err := saveExternalSessionImportLedger(codexHome, ledger); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func externalSessionImportIsCurrent(codexHome string, sourcePath string) bool {
 	if codexHome == "" || sourcePath == "" {
 		return false
@@ -110,6 +214,10 @@ func RecordExternalSessionImports(codexHome string, imports []ExternalSessionImp
 		}
 		ledger.Records = append(ledger.Records, record)
 	}
+	return saveExternalSessionImportLedger(codexHome, ledger)
+}
+
+func saveExternalSessionImportLedger(codexHome string, ledger externalSessionImportLedger) error {
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return err
 	}
@@ -117,7 +225,36 @@ func RecordExternalSessionImports(codexHome string, imports []ExternalSessionImp
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(codexHome, externalSessionImportLedgerFile), append(data, '\n'), 0o600)
+	path := filepath.Join(codexHome, externalSessionImportLedgerFile)
+	temporary, err := os.CreateTemp(codexHome, externalSessionImportLedgerFile+".*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(append(data, '\n')); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func equalExternalSessionModifiedAt(left *int64, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func loadExternalSessionImportLedger(codexHome string) (externalSessionImportLedger, error) {

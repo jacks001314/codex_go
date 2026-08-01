@@ -976,7 +976,9 @@ func TestRuntimeRouterTurnStartEmptyInputRunsAgent(t *testing.T) {
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 	request := waitForRuntimeAgentRequest(t, agent)
-	if request.Prompt != "" || len(request.InputItems) != 1 {
+	if request.Prompt != "" || !slices.ContainsFunc(messageInputTextsForRole(request.InputItems, "user"), func(text string) bool {
+		return strings.Contains(text, "<environment_context>")
+	}) {
 		t.Fatalf("agent request = %#v", request)
 	}
 }
@@ -3988,6 +3990,13 @@ func TestAccountPlanTypeFromBackendMapsEnt26(t *testing.T) {
 	plan := accountPlanTypeFromBackend(chatgptapi.PlanEnt26)
 	if plan == nil || *plan != auth.PlanEnt26 {
 		t.Fatalf("plan = %+v, want ent26", plan)
+	}
+}
+
+func TestAccountPlanTypeFromBackendMapsEnterpriseAutomation(t *testing.T) {
+	plan := accountPlanTypeFromBackend(chatgptapi.PlanEnterpriseCbpAutomation)
+	if plan == nil || *plan != auth.PlanEnterpriseCBPAutomation {
+		t.Fatalf("plan = %+v, want enterprise_cbp_automation", plan)
 	}
 }
 
@@ -8524,7 +8533,7 @@ func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildItemsResponse() error = %v", err)
 	}
-	if len(items.Data) != 1 || threadItemWireType(&items.Data[0]) != "commandExecution" || items.Data[0].ID != "call-unified" {
+	if len(items.Data) != 1 || threadItemWireType(&items.Data[0].Item) != "commandExecution" || items.Data[0].Item.ID != "call-unified" {
 		t.Fatalf("visible persisted items = %#v", items.Data)
 	}
 }
@@ -9114,10 +9123,45 @@ func TestTurnEnvironmentContextMarksPrimaryWhenMultipleSelectedLikeRust(t *testi
 		"      <cwd>/secondary</cwd>\n" +
 		"      <shell>bash</shell>\n" +
 		"    </environment>\n" +
-		"  </environments>\n" +
-		"</environment_context>"
-	if text != want {
-		t.Fatalf("environment context = %q, want %q", text, want)
+		"  </environments>\n"
+	if !strings.HasPrefix(text, want) || !strings.Contains(text, "<current_date>") || !strings.Contains(text, "<timezone>"+localTimezoneName()+"</timezone>") || !strings.HasSuffix(text, "</environment_context>") {
+		t.Fatalf("environment context = %q, want prefix %q with current date/timezone", text, want)
+	}
+}
+
+func TestTurnEnvironmentContextRefreshesConfiguredClockEachTurnLikeRust(t *testing.T) {
+	threadRouter := NewRouter(session.NewStore(filepath.Join(t.TempDir(), "sessions")))
+	current := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	threadRouter.SetClock(func() time.Time { return current })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, DefaultCWD: t.TempDir()})
+	params := &turn.TurnStartParams{ThreadID: "thread-clock", CWD: t.TempDir()}
+	cfg := &config.Config{Values: map[string]any{}}
+
+	first, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = current.Add(24 * time.Hour)
+	second, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstText := messageInputTextsForRole([]any{first}, "user")
+	secondText := messageInputTextsForRole([]any{second}, "user")
+	firstDate := current.Add(-24 * time.Hour).In(time.Local).Format("2006-01-02")
+	secondDate := current.In(time.Local).Format("2006-01-02")
+	if len(firstText) != 1 || !strings.Contains(firstText[0], "<current_date>"+firstDate+"</current_date>") {
+		t.Fatalf("first environment context = %#v", firstText)
+	}
+	if len(secondText) != 1 || !strings.Contains(secondText[0], "<current_date>"+secondDate+"</current_date>") {
+		t.Fatalf("second environment context = %#v", secondText)
+	}
+	if firstText[0] == secondText[0] {
+		t.Fatal("environment context retained a stale date")
+	}
+	disabled, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, &config.Config{Values: map[string]any{"include_environment_context": false}})
+	if err != nil || disabled != nil {
+		t.Fatalf("disabled environment context = %#v, %v", disabled, err)
 	}
 }
 
@@ -9347,7 +9391,7 @@ func TestRuntimeRouterDispatchesThreadExtrasAndRealtime(t *testing.T) {
 		t.Fatalf("realtime stop = %+v", stop)
 	}
 	closed := realtimeNotification[*ThreadRealtimeClosedNotification](t, realtimeSink, NotificationThreadRealtimeClosed)
-	if closed.ThreadID != "thread-1" || closed.Reason == nil || *closed.Reason != "client" {
+	if closed.ThreadID != "thread-1" || closed.Reason == nil || *closed.Reason != "requested" {
 		t.Fatalf("realtime closed notification = %+v", closed)
 	}
 	webrtc := realtimeRouter.Handle(requestWithParams(t, IntID(11), MethodThreadRealtimeStart, map[string]any{
@@ -10640,7 +10684,15 @@ func TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRus
 	if ok, err := broker.Resolve(OK(pending.ID, &FileChangeRequestApprovalResponse{Decision: FileChangeApprovalAcceptForSession})); err != nil || !ok {
 		t.Fatalf("resolve file approval ok=%v err=%v", ok, err)
 	}
-	waitForItemCompleted(t, sink, "patch-call-1")
+	resolved := waitForNotificationMethod(t, sink, NotificationServerRequestResolved)
+	resolvedParams, ok := resolved.Params.(*ServerRequestResolvedNotification)
+	if !ok || resolvedParams.ThreadID != threadID || resolvedParams.RequestID.String() != pending.ID.String() {
+		t.Fatalf("serverRequest/resolved params = %#v", resolved.Params)
+	}
+	completedFirst := waitForItemCompleted(t, sink, "patch-call-1")
+	if completedFirst.ThreadID != threadID || completedFirst.TurnID != firstTurnID {
+		t.Fatalf("first completed file change = %#v", completedFirst)
+	}
 	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
 	readmePath := filepath.Join(workspace, "README.md")
 	if data, err := os.ReadFile(readmePath); err != nil || string(data) != "new line\n" {
@@ -10666,7 +10718,10 @@ func TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRus
 		t.Fatalf("unexpected file approval request after acceptForSession: %+v", unexpected)
 	case <-time.After(150 * time.Millisecond):
 	}
-	waitForItemCompleted(t, sink, "patch-call-2")
+	completedSecond := waitForItemCompleted(t, sink, "patch-call-2")
+	if completedSecond.ThreadID != threadID || completedSecond.TurnID != secondTurnID {
+		t.Fatalf("second completed file change = %#v", completedSecond)
+	}
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 	if data, err := os.ReadFile(readmePath); err != nil || string(data) != "updated line\n" {
 		t.Fatalf("README after second patch = %q/%v", string(data), err)
@@ -13561,7 +13616,7 @@ func TestRuntimeRouterExplicitSkillInstructionsPersistForNextTurnLikeRust(t *tes
 		t.Fatalf("BuildItemsResponse() error = %v", err)
 	}
 	for _, item := range itemsResponse.Data {
-		if item.ID == skillItem.ID || strings.Contains(item.Text, "<name>imagegen</name>") {
+		if item.Item.ID == skillItem.ID || strings.Contains(item.Item.Text, "<name>imagegen</name>") {
 			t.Fatalf("visible thread items leaked skill instructions: %#v", itemsResponse.Data)
 		}
 	}
@@ -13602,6 +13657,10 @@ func TestPromptSkillMetadataPreservesPluginID(t *testing.T) {
 	}
 	if metadata[0].Description != "Short review guidance" {
 		t.Fatalf("prompt skill description = %q, want short description", metadata[0].Description)
+	}
+	hostMetadata := promptHostSkillMetadataFromEntries(entries)
+	if len(hostMetadata) != 1 || hostMetadata[0].Description != "Long plugin review guidance" {
+		t.Fatalf("host prompt skill metadata = %#v, want core-compatible full description", hostMetadata)
 	}
 }
 
@@ -14083,7 +14142,8 @@ func TestInstructionsWithSkillsContextEmitsHostCatalogWarningsLikeRust(t *testin
 
 func TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust(t *testing.T) {
 	sink := NewNotificationBuffer()
-	router := &RuntimeRouter{}
+	metrics := state.NewTaskMetrics()
+	router := &RuntimeRouter{services: RuntimeServices{SkillInjectionMetrics: metrics}}
 	router.SetNotificationSink(sink)
 	missingPath := filepath.Join(t.TempDir(), "missing", SkillFilename)
 	items := router.explicitSkillInputItems("thread-host-read", &turn.TurnStartParams{
@@ -14099,6 +14159,10 @@ func TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust(t *testing.T) {
 	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Message, "Failed to load skill `missing-skill`: failed to read host skill resource "+missingPath+": ") {
 		t.Fatalf("warnings = %#v", warnings)
 	}
+	records := metrics.Records()
+	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "error" || records[0].Tags["skill"] != "missing-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit {
+		t.Fatalf("skill injection metrics = %#v", records)
+	}
 }
 
 func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing.T) {
@@ -14108,7 +14172,8 @@ func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	analytics := newRecordingTurnEventSink()
-	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	metrics := state.NewTaskMetrics()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics, SkillInjectionMetrics: metrics}}
 	items := router.explicitSkillInputItemsForTurn("thread-explicit", "turn-explicit", "model-explicit", &turn.TurnStartParams{
 		Input: []turn.TurnUserInput{{Type: "skill", Name: "tracked-skill", Path: skillPath}},
 	}, []promptctx.InstructionsSkillMetadata{{
@@ -14128,6 +14193,22 @@ func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for explicit skill invocation analytics")
+	}
+	records := metrics.Records()
+	if len(records) != 1 || records[0].Name != "codex.skill.injected" || records[0].Tags["status"] != "success" || records[0].Tags["skill"] != "tracked-skill" || records[0].Tags["invoke_type"] != telemetry.SkillInvocationTypeExplicit {
+		t.Fatalf("skill injection metrics = %#v", records)
+	}
+}
+
+func TestSanitizeMetricTagValueMatchesRust(t *testing.T) {
+	for input, want := range map[string]string{
+		" skill name ": "skill_name",
+		"---":          "unspecified",
+		"valid/a.b-c":  "valid/a.b-c",
+	} {
+		if got := sanitizeMetricTagValue(input); got != want {
+			t.Fatalf("sanitizeMetricTagValue(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -15938,6 +16019,7 @@ stream_max_retries = 0
 	})
 	router.SetNotificationSink(sink)
 	var threadID string
+	var currentTimeReads atomic.Int32
 	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
 		if request.Method != ServerRequestCurrentTimeRead {
 			t.Errorf("server request method = %s", request.Method)
@@ -15946,6 +16028,7 @@ stream_max_retries = 0
 		if !ok || params.ThreadID != threadID {
 			t.Errorf("currentTime/read params = %#v, want thread %q", request.Params, threadID)
 		}
+		currentTimeReads.Add(1)
 		go func() {
 			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
 		}()
@@ -15981,6 +16064,113 @@ stream_max_retries = 0
 	if !slicesContainString(userTexts, "What time is it?") {
 		t.Fatalf("user input texts = %#v; body=%#v", userTexts, bodies[0])
 	}
+	currentDate := time.Unix(1781717655, 0).In(time.Local).Format("2006-01-02")
+	if !slices.ContainsFunc(userTexts, func(text string) bool {
+		return strings.Contains(text, "<environment_context>") && strings.Contains(text, "<current_date>"+currentDate+"</current_date>")
+	}) {
+		t.Fatalf("user input texts do not contain refreshed environment date %s: %#v", currentDate, userTexts)
+	}
+	if currentTimeReads.Load() < 2 {
+		t.Fatalf("currentTime/read count = %d, want environment and reminder reads", currentTimeReads.Load())
+	}
+}
+
+func TestRuntimeRouterEnvironmentClockFailureStopsBeforeInferenceLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[features.current_time_reminder]
+enabled = true
+clock_source = "external"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := newRecordingRuntimeAgent("must not run")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(ErrorResponse(request.ID, -32603, "test clock unavailable", nil))
+		}()
+	}))
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "fail before inference"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusFailed)
+	if completed.Turn.Error == nil || !strings.Contains(completed.Turn.Error.Message, "failed to read current time") || !strings.Contains(completed.Turn.Error.Message, "test clock unavailable") {
+		t.Fatalf("turn completion error = %#v", completed.Turn.Error)
+	}
+	select {
+	case request := <-agent.requests:
+		t.Fatalf("model inference ran after clock failure: %#v", request)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestGuardianReviewRefreshesEnvironmentDateWithoutPrewarmClockReadLikeRust(t *testing.T) {
+	threadRouter := NewRouter(session.NewStore(filepath.Join(t.TempDir(), "sessions")))
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	threadRouter.SetClock(func() time.Time { return now })
+	var captured *model.AgentRequest
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		copyRequest := *request
+		copyRequest.InputItems = append([]any(nil), request.InputItems...)
+		captured = &copyRequest
+		return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"clock"}`}, nil
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		Config:       config.NewConfigService(t.TempDir()),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		DefaultCWD:   t.TempDir(),
+	})
+	const threadID = "guardian-clock-thread"
+	const turnID = "guardian-clock-turn"
+	params := &turn.TurnStartParams{ThreadID: threadID, CWD: t.TempDir()}
+	if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, now.UnixMilli(), params); err != nil {
+		t.Fatal(err)
+	}
+	reviewer := router.ensureGuardianReviewer(agent)
+	decision, _, err := reviewer.Review(context.Background(), threadID, turnID, "call-1", state.Action{Type: "apply_patch", CWD: params.CWD, Files: []string{"clock.txt"}})
+	if err != nil || decision != state.DecisionApproved {
+		t.Fatalf("review decision = %s, %v", decision, err)
+	}
+	texts := messageInputTextsForRole(captured.InputItems, "user")
+	wantDate := now.In(time.Local).Format("2006-01-02")
+	if len(texts) != 1 || !strings.Contains(texts[0], "<current_date>"+wantDate+"</current_date>") {
+		t.Fatalf("Guardian environment input = %#v", texts)
+	}
+}
+
+func TestCompactEnvironmentContextRefreshesConfiguredClockLikeRust(t *testing.T) {
+	threadRouter := NewRouter(session.NewStore(filepath.Join(t.TempDir(), "sessions")))
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	threadRouter.SetClock(func() time.Time { return now })
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, Config: config.NewConfigService(t.TempDir()), DefaultCWD: t.TempDir()})
+	request := &compact.Request{ThreadID: "compact-clock-thread", TurnID: "compact-clock-turn"}
+	items, err := router.compactEnvironmentContext(context.Background(), &session.Record{Metadata: session.Metadata{CWD: t.TempDir()}}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDate := now.In(time.Local).Format("2006-01-02")
+	if len(items) != 1 || items[0].Role != "user" || !strings.Contains(items[0].Text, "<current_date>"+wantDate+"</current_date>") {
+		t.Fatalf("compact environment context = %#v", items)
+	}
 }
 
 func TestRuntimeRouterCurrentTimeRemindersFollowIntervalAndPersistInHistoryLikeRust(t *testing.T) {
@@ -16015,6 +16205,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
+include_environment_context = false
 
 [features.current_time_reminder]
 enabled = true
@@ -16110,6 +16301,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
+include_environment_context = false
 
 [features.current_time_reminder]
 enabled = true
@@ -16210,6 +16402,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
+include_environment_context = false
 
 [features.current_time_reminder]
 enabled = true
@@ -16313,6 +16506,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
+include_environment_context = false
 
 [features.current_time_reminder]
 enabled = true
@@ -16379,6 +16573,8 @@ stream_max_retries = 0
 func TestRuntimeRouterExternalClockSleepEmitsSleepItemsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+include_environment_context = false
+
 [features.current_time_reminder]
 enabled = true
 clock_source = "external"
@@ -20782,6 +20978,100 @@ func TestRuntimeRouterThreadResumeReplaysPendingServerRequestApprovalLikeRust(t 
 	}
 }
 
+func TestRuntimeRouterThreadResumeReplaysPendingFileChangeApprovalWithWaitingStatusLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := "thread-pending-file-approval"
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		Preview:   "seed",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			ModelProvider: "openai",
+			Source:        "cli",
+			HistoryMode:   string(ThreadHistoryLegacy),
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 2)
+	status := NewThreadStatusManager()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:   NewRouter(store),
+		ServerRequests: broker,
+		ThreadStatus:   status,
+	})
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+	if err := router.registerActiveRuntimeTurn(threadID, "turn-running", func() {}, now.UnixMilli(), &turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "needs file approval",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		var response FileChangeRequestApprovalResponse
+		done <- broker.Request(ctx, ServerRequestFileChangeApproval, &FileChangeRequestApprovalParams{
+			ThreadID:    threadID,
+			TurnID:      "turn-running",
+			ItemID:      "patch-call-1",
+			StartedAtMS: uint64(now.UnixMilli()),
+		}, &response)
+	}()
+
+	readPending := func(label string) *ServerRequest {
+		t.Helper()
+		select {
+		case request := <-requests:
+			return request
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %s server request", label)
+			return nil
+		}
+	}
+	original := readPending("original file approval")
+	if original.Method != ServerRequestFileChangeApproval || serverRequestThreadID(original) != threadID {
+		t.Fatalf("original request = %+v", original)
+	}
+	loaded := status.LoadedStatusForThread(threadID)
+	if loaded.Type != "active" || !reflect.DeepEqual(loaded.ActiveFlags, []ThreadActiveFlag{ThreadActiveFlagWaitingOnApproval}) {
+		t.Fatalf("pending file approval status = %#v", loaded)
+	}
+
+	resume := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{ThreadID: threadID}))
+	if resume.Error != nil {
+		t.Fatalf("thread/resume error: %+v", resume.Error)
+	}
+	replayed := readPending("replayed file approval")
+	if !reflect.DeepEqual(replayed, original) {
+		t.Fatalf("replayed request = %+v, want %+v", replayed, original)
+	}
+	if loaded = status.LoadedStatusForThread(threadID); loaded.Type != "active" || !reflect.DeepEqual(loaded.ActiveFlags, []ThreadActiveFlag{ThreadActiveFlagWaitingOnApproval}) {
+		t.Fatalf("replayed file approval status = %#v", loaded)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("broker request error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for file approval request to exit")
+	}
+	if loaded = status.LoadedStatusForThread(threadID); len(loaded.ActiveFlags) != 0 {
+		t.Fatalf("resolved file approval status = %#v", loaded)
+	}
+}
+
 func TestRuntimeRouterThreadTurnsListPreservesRolloutSnapshotsAfterRepair(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	path := filepath.Join(store.Root(), rollout.SessionsSubdir, "2026", "06", "29", "rollout-2026-06-29T01-02-03-thread-rollout-events.jsonl")
@@ -21430,6 +21720,55 @@ func TestRuntimeRouterUpdatePlanToolFollowsConfig(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterExecutedToolCallMetadataFeatureAttachesToOutputLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nexecuted_tool_call_metadata = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newExecutedToolCallRuntimeAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "make a plan"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	_ = waitForExecutedToolCallRuntimeRequest(t, agent)
+	second := waitForExecutedToolCallRuntimeRequest(t, agent)
+	var output *turn.ToolResponseItem
+	for _, input := range second.InputItems {
+		if item, ok := input.(*turn.ToolResponseItem); ok && item.CallID == "plan-metadata-call" {
+			output = item
+			break
+		}
+	}
+	if output == nil {
+		t.Fatalf("update_plan output missing: %#v", second.InputItems)
+	}
+	calls := output.ExecutedToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("executed metadata = %#v", calls)
+	}
+	encoded, err := json.Marshal(calls[0])
+	if err != nil || !strings.Contains(string(encoded), `"name":"update_plan"`) {
+		t.Fatalf("executed metadata JSON = %s, error = %v", encoded, err)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
 func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	home := t.TempDir()
@@ -21826,7 +22165,7 @@ func TestRuntimeRouterImageGenerationRecordsRustOutputHint(t *testing.T) {
 		t.Fatalf("BuildItemsResponse() error = %v", err)
 	}
 	for _, item := range itemsResponse.Data {
-		if item.ID == instructionsItem.ID {
+		if item.Item.ID == instructionsItem.ID {
 			t.Fatalf("visible thread items leaked image generation instructions: %#v", itemsResponse.Data)
 		}
 	}
@@ -22708,6 +23047,41 @@ func (a *mcpToolRuntimeAgent) Run(ctx context.Context, request *model.AgentReque
 
 type updatePlanRuntimeAgent struct {
 	calls int
+}
+
+type executedToolCallRuntimeAgent struct {
+	requests chan model.AgentRequest
+	calls    int
+}
+
+func newExecutedToolCallRuntimeAgent() *executedToolCallRuntimeAgent {
+	return &executedToolCallRuntimeAgent{requests: make(chan model.AgentRequest, 2)}
+}
+
+func (a *executedToolCallRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests <- *request
+	a.calls++
+	if a.calls == 1 {
+		return &model.AgentResponse{ResponseID: "resp-tool", Items: []model.AgentItem{{
+			ID: "plan-metadata-call", Type: "function_call", Name: "update_plan", CallID: "plan-metadata-call",
+			Arguments: `{"plan":[{"step":"verify metadata","status":"in_progress"}]}`,
+		}}}, nil
+	}
+	return &model.AgentResponse{ResponseID: "resp-done", Message: "done", Items: []model.AgentItem{{Type: "agent_message", Text: "done"}}}, nil
+}
+
+func waitForExecutedToolCallRuntimeRequest(t *testing.T, agent *executedToolCallRuntimeAgent) model.AgentRequest {
+	t.Helper()
+	select {
+	case request := <-agent.requests:
+		return request
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for executed-tool-call runtime request")
+		return model.AgentRequest{}
+	}
 }
 
 func (a *updatePlanRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
@@ -24312,15 +24686,19 @@ func threadStatusChangedStatuses(sink *NotificationBuffer, threadID string) []Th
 func realtimeNotification[T any](t *testing.T, sink *NotificationBuffer, method NotificationMethod) T {
 	t.Helper()
 	var zero T
-	for _, notification := range sink.List() {
-		if notification.Method != method {
-			continue
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, notification := range sink.List() {
+			if notification.Method != method {
+				continue
+			}
+			payload, ok := notification.Params.(T)
+			if !ok {
+				t.Fatalf("notification %s params = %#v", method, notification.Params)
+			}
+			return payload
 		}
-		payload, ok := notification.Params.(T)
-		if !ok {
-			t.Fatalf("notification %s params = %#v", method, notification.Params)
-		}
-		return payload
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("notification %s missing in %#v", method, sink.List())
 	return zero

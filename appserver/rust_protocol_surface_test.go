@@ -257,6 +257,7 @@ func readRustProtocolSource(t *testing.T, path string) string {
 func rustAppserverRustRoot(t *testing.T) string {
 	t.Helper()
 	candidates := []string{
+		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),

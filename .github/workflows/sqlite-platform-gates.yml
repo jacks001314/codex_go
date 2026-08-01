@@ -1,0 +1,60 @@
+name: SQLite platform gates
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'state/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/sqlite-platform-gates.yml'
+  pull_request:
+    paths:
+      - 'state/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/sqlite-platform-gates.yml'
+
+jobs:
+  sqlite-native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - name: windows-amd64
+            runner: windows-2025
+            goos: windows
+            goarch: amd64
+          - name: windows-arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+          - name: macos-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - name: macos-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify native SQLite runtime, migrations, and WAL recovery
+        env:
+          CODEX_EXPECT_GOOS: ${{ matrix.goos }}
+          CODEX_EXPECT_GOARCH: ${{ matrix.goarch }}
+        run: go test ./state -run 'Test(BundledSQLiteMeetsRustMinimum|NativeSQLiteArtifactPlatform|SQLiteRecoversCommittedWALAfterAbruptExit|StateRuntimeOwnsRustDatabaseLifecycle)$' -v -count=1

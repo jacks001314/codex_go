@@ -260,7 +260,7 @@ func (u *PathURI) Parent() (*PathURI, bool) {
 	if !ok {
 		return nil, false
 	}
-	segments := nonEmptySegments(u.segments())
+	segments := decodedNonEmptySegments(u.segments())
 	anchorDepth := 0
 	if convention == ConventionWindows {
 		anchorDepth = 1
@@ -338,18 +338,20 @@ func (u *PathURI) Join(nativePath string) (*PathURI, error) {
 		return absolute, nil
 	}
 	if convention == ConventionWindows && isDriveRelative(nativePath) {
-		return nil, &ParseError{Reason: "invalid file URI path", Path: nativePath}
+		segments := decodedNonEmptySegments(u.segments())
+		drive := nativePath[0]
+		if len(segments) == 0 || !isWindowsDriveSegment(segments[0]) || !strings.EqualFold(segments[0][:1], string(drive)) {
+			return nil, &ParseError{Reason: "invalid file URI path", Path: nativePath}
+		}
+		nativePath = nativePath[2:]
 	}
 	if opaqueFallbackBytes(u.url) != nil {
 		return nil, &ParseError{Reason: "invalid file URI path", Path: u.String()}
 	}
-	segments := nonEmptySegments(u.segments())
+	segments := decodedNonEmptySegments(u.segments())
 	anchorDepth := 0
 	if convention == ConventionWindows {
 		anchorDepth = 1
-	}
-	if len(segments) > anchorDepth && !strings.HasSuffix(u.url.EscapedPath(), "/") {
-		segments = segments[:len(segments)-1]
 	}
 	relative := nativePath
 	if convention == ConventionWindows {
@@ -536,6 +538,16 @@ func nonEmptySegments(segments []string) []string {
 	for _, segment := range segments {
 		if segment != "" {
 			out = append(out, segment)
+		}
+	}
+	return out
+}
+
+func decodedNonEmptySegments(segments []string) []string {
+	out := nonEmptySegments(segments)
+	for i := range out {
+		if decoded, err := url.PathUnescape(out[i]); err == nil {
+			out[i] = decoded
 		}
 	}
 	return out

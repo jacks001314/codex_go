@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -51,6 +52,31 @@ type ExecCommandArgs struct {
 	AdditionalPermissions *sandbox.AdditionalPermissionProfile `json:"additional_permissions,omitempty"`
 	Justification         string                               `json:"justification,omitempty"`
 	PrefixRule            []string                             `json:"prefix_rule,omitempty"`
+	sandboxPermissionsSet bool
+	justificationSet      bool
+}
+
+func (a *ExecCommandArgs) UnmarshalJSON(data []byte) error {
+	if a == nil {
+		return errors.New("exec command args are required")
+	}
+	type execCommandArgsAlias ExecCommandArgs
+	var decoded execCommandArgsAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = ExecCommandArgs(decoded)
+	if value, ok := raw["sandbox_permissions"]; ok && strings.TrimSpace(string(value)) != "null" {
+		a.sandboxPermissionsSet = true
+	}
+	if value, ok := raw["justification"]; ok && strings.TrimSpace(string(value)) != "null" {
+		a.justificationSet = true
+	}
+	return nil
 }
 
 type ShellRequest struct {
@@ -68,6 +94,7 @@ type ShellRequest struct {
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile
 	PermissionProfileJSON           string
+	ProcessSandboxType              *sandbox.SandboxType
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
@@ -263,6 +290,11 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if args == nil {
 		return nil, errors.New("exec command args are required")
 	}
+	justificationPresent := args.justificationSet || args.Justification != ""
+	sandboxPermissionsPresent := args.sandboxPermissionsSet || args.SandboxPermissions != ""
+	if justificationPresent && !sandboxPermissionsPresent {
+		return nil, errors.New("`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`.")
+	}
 	cwd, err := resolveShellRequestCWD(opts.CWD, firstNonEmptyString(args.CWD, args.Workdir))
 	if err != nil {
 		return nil, err
@@ -297,13 +329,16 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if err != nil {
 		return nil, err
 	}
-	permissionProfileID, permissionProfile := effectiveShellPermissionProfile(
+	permissionProfileID, permissionProfile, err := effectiveShellPermissionProfile(
 		opts.PermissionProfileID,
 		opts.PermissionProfile,
 		sandboxPermissions,
 		additionalPermissions,
 		opts.PermissionsPreapproved,
 	)
+	if err != nil {
+		return nil, err
+	}
 	sandboxProfile := buildShellSandboxProfile(permissionProfile, additionalPermissions, cwd)
 	escalationApprovalRequired := RequestsSandboxOverride(sandboxPermissions) && !opts.PermissionsPreapproved
 	if escalationApprovalRequired && opts.ApprovalPolicy != sandbox.ApprovalOnRequest {
@@ -363,24 +398,22 @@ func cloneManagedNetworkSandboxContext(value *network.ProxyManagedNetworkSandbox
 	}
 }
 
-func effectiveShellPermissionProfile(profileID string, profile *sandbox.PermissionProfile, permissions sandbox.SandboxPermissions, additional *sandbox.AdditionalPermissionProfile, preapproved bool) (string, *sandbox.PermissionProfile) {
+func effectiveShellPermissionProfile(profileID string, profile *sandbox.PermissionProfile, permissions sandbox.SandboxPermissions, additional *sandbox.AdditionalPermissionProfile, preapproved bool) (string, *sandbox.PermissionProfile, error) {
 	if permissions == sandbox.SandboxPermissionsRequireEscalated && preapproved {
 		fullAccess := sandbox.FullAccessPermissionProfile()
-		return sandbox.BuiltInPermissionProfileDangerFullAccess, &fullAccess
+		return sandbox.BuiltInPermissionProfileDangerFullAccess, &fullAccess, nil
 	}
 	if profile == nil && additional == nil {
-		return "", nil
+		return "", nil, nil
 	}
-	effective := cloneShellPermissionProfile(profile)
-	if effective == nil {
-		workspace := sandbox.WorkspaceWritePermissionProfile()
-		effective = &workspace
+	effective, err := sandbox.PermissionProfileWithAdditionalPermissions(profile, additional)
+	if err != nil {
+		return "", nil, err
 	}
-	applyAdditionalPermissionsToShellProfile(effective, additional)
 	if strings.TrimSpace(profileID) == "" {
 		profileID = "resolved"
 	}
-	return strings.TrimSpace(profileID), effective
+	return strings.TrimSpace(profileID), effective, nil
 }
 
 func RequestsSandboxOverride(permissions sandbox.SandboxPermissions) bool {
@@ -430,50 +463,6 @@ func buildShellSandboxProfile(profile *sandbox.PermissionProfile, additional *sa
 		out.WritableRoots = mergeStringSet(out.WritableRoots, additional.FileSystem)
 	}
 	return out
-}
-
-func cloneShellPermissionProfile(profile *sandbox.PermissionProfile) *sandbox.PermissionProfile {
-	if profile == nil {
-		return nil
-	}
-	clone := *profile
-	if profile.SandboxPolicy != nil {
-		policy := *profile.SandboxPolicy
-		policy.WritableRoots = append([]string(nil), profile.SandboxPolicy.WritableRoots...)
-		clone.SandboxPolicy = &policy
-	}
-	clone.DeniedReadEntries = append([]sandbox.FileSystemSandboxEntry(nil), profile.DeniedReadEntries...)
-	return &clone
-}
-
-func applyAdditionalPermissionsToShellProfile(profile *sandbox.PermissionProfile, additional *sandbox.AdditionalPermissionProfile) {
-	if profile == nil || additional == nil || profile.Disabled {
-		return
-	}
-	if additional.Network != nil && *additional.Network {
-		profile.NetworkEnabled = true
-		policy := profile.LegacySandboxPolicy()
-		switch policy.Kind {
-		case "external-sandbox":
-			policy.ExternalNetwork = sandbox.NetworkEnabled
-		default:
-			policy.NetworkAccess = true
-		}
-		profile.SandboxPolicy = policy
-	}
-	if len(additional.FileSystem) == 0 {
-		return
-	}
-	policy := profile.LegacySandboxPolicy()
-	if policy.HasFullDiskWriteAccess() {
-		profile.SandboxPolicy = policy
-		return
-	}
-	if policy.Kind != sandbox.SandboxWorkspaceWrite {
-		policy = sandbox.NewWorkspaceWritePolicy()
-	}
-	policy.WritableRoots = mergeStringSet(policy.WritableRoots, additional.FileSystem)
-	profile.SandboxPolicy = policy
 }
 
 func resolveShellRequestCWD(base string, override string) (string, error) {

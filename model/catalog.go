@@ -48,11 +48,17 @@ During longer work, send short progress updates at meaningful points. Do not wai
 const personalityPlaceholder = "{{ personality }}"
 
 type ModelMessages struct {
-	InstructionsTemplate string                  `json:"instructions_template,omitempty"`
-	PersonalityDefault   string                  `json:"-"`
-	PersonalityFriendly  string                  `json:"-"`
-	PersonalityPragmatic string                  `json:"-"`
-	TokenBudget          *ModelTokenBudgetConfig `json:"token_budget,omitempty"`
+	InstructionsTemplate string                     `json:"instructions_template,omitempty"`
+	PersonalityDefault   string                     `json:"-"`
+	PersonalityFriendly  string                     `json:"-"`
+	PersonalityPragmatic string                     `json:"-"`
+	CollaborationModes   *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
+	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
+}
+
+type CollaborationModeMessages struct {
+	Default *string `json:"default"`
+	Plan    *string `json:"plan"`
 }
 
 // ModelTokenBudgetConfig contains model-owned defaults for the context-window
@@ -67,14 +73,16 @@ type ModelTokenBudgetConfig struct {
 
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		InstructionsTemplate  string                  `json:"instructions_template"`
-		InstructionsVariables map[string]string       `json:"instructions_variables"`
-		TokenBudget           *ModelTokenBudgetConfig `json:"token_budget"`
+		InstructionsTemplate  string                     `json:"instructions_template"`
+		InstructionsVariables map[string]string          `json:"instructions_variables"`
+		CollaborationModes    *CollaborationModeMessages `json:"collaboration_modes"`
+		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	m.InstructionsTemplate = raw.InstructionsTemplate
+	m.CollaborationModes = raw.CollaborationModes
 	m.TokenBudget = raw.TokenBudget
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
@@ -753,11 +761,25 @@ func WithConfigOverrides(model ModelInfo, config *ModelsManagerConfig) ModelInfo
 	}
 	if config.BaseInstructions != "" {
 		model.BaseInstructions = config.BaseInstructions
-		model.ModelMessages = nil
+		clearInstructionMessages(&model)
 	} else if !config.PersonalityEnabled {
-		model.ModelMessages = nil
+		clearInstructionMessages(&model)
 	}
 	return model
+}
+
+func clearInstructionMessages(model *ModelInfo) {
+	if model == nil || model.ModelMessages == nil {
+		return
+	}
+	messages := model.ModelMessages
+	messages.InstructionsTemplate = ""
+	messages.PersonalityDefault = ""
+	messages.PersonalityFriendly = ""
+	messages.PersonalityPragmatic = ""
+	if messages.CollaborationModes == nil && messages.TokenBudget == nil {
+		model.ModelMessages = nil
+	}
 }
 
 func ConstructModelInfoFromCandidates(model string, candidates []ModelInfo, config *ModelsManagerConfig) ModelInfo {
@@ -894,6 +916,12 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 	out.InputModalities = cloneStrings(out.InputModalities)
 	if out.ModelMessages != nil {
 		messages := *out.ModelMessages
+		if messages.CollaborationModes != nil {
+			collaborationModes := *messages.CollaborationModes
+			collaborationModes.Default = cloneStringPointer(collaborationModes.Default)
+			collaborationModes.Plan = cloneStringPointer(collaborationModes.Plan)
+			messages.CollaborationModes = &collaborationModes
+		}
 		if messages.TokenBudget != nil {
 			tokenBudget := *messages.TokenBudget
 			messages.TokenBudget = &tokenBudget
@@ -901,6 +929,14 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 		out.ModelMessages = &messages
 	}
 	return out
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneStrings(in []string) []string {

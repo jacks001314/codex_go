@@ -3,6 +3,7 @@ package appserver
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -40,5 +41,25 @@ func TestCommandExecutionStartedThreadItemSupportsRustLegacyShellCommand(t *test
 	}
 	if item.Data["cwd"] != wantWorkdir {
 		t.Fatalf("cwd = %#v, want %q", item.Data["cwd"], wantWorkdir)
+	}
+}
+
+func TestCommandExecutionActionsPreserveExecutorPathsLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		cwd  string
+		path string
+		want string
+	}{
+		{cwd: "file:///home/alice/repo", path: "src/main.rs", want: "/home/alice/repo/src/main.rs"},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `C:src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file://server/share/repo", path: `src\main.rs`, want: `\\server\share\repo\src\main.rs`},
+	} {
+		command := "cat " + test.path
+		got := commandExecutionActions([]string{"cat", test.path}, command, test.cwd)
+		want := []map[string]any{{"type": "read", "command": command, "name": "main.rs", "path": test.want}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("commandExecutionActions(%q, %q) = %#v, want %#v", test.cwd, test.path, got, want)
+		}
 	}
 }

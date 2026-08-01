@@ -83,6 +83,68 @@ func TestOAuthStoreSaveLoadStatusAndDelete(t *testing.T) {
 	}
 }
 
+func TestOAuthStoreIsolatesHostAndExecutorCredentials(t *testing.T) {
+	home := t.TempDir()
+	store := NewOAuthStore(home)
+	serverURL := "https://mcp.example.test/mcp"
+	executorConfig := ServerConfig{EnvironmentID: "executor-1"}
+	executorName := executorConfig.OAuthCredentialName("docs")
+
+	if err := store.Save(&OAuthTokenSet{ServerName: "docs", ServerURL: serverURL, ClientID: "host-client", AccessToken: "host-token"}); err != nil {
+		t.Fatalf("Save(host) error = %v", err)
+	}
+	if tokens, err := store.Load(executorName, serverURL); err != nil || tokens != nil {
+		t.Fatalf("executor loaded host tokens = %#v, err = %v", tokens, err)
+	}
+	if err := store.Save(&OAuthTokenSet{ServerName: executorName, ServerURL: serverURL, ClientID: "executor-client", AccessToken: "executor-token"}); err != nil {
+		t.Fatalf("Save(executor) error = %v", err)
+	}
+
+	host, err := store.Load("docs", serverURL)
+	if err != nil || host == nil || host.AccessToken != "host-token" {
+		t.Fatalf("Load(host) = %#v, err = %v", host, err)
+	}
+	executor, err := store.Load(executorName, serverURL)
+	if err != nil || executor == nil || executor.AccessToken != "executor-token" {
+		t.Fatalf("Load(executor) = %#v, err = %v", executor, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, mcpOAuthFallbackFilename))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	entries := map[string]*oauthFallbackEntry{}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("stored entries = %d, want 2", len(entries))
+	}
+	foundExecutor := false
+	for _, entry := range entries {
+		if entry.ServerName == executorName {
+			foundExecutor = entry.ExecutorOwned && entry.AccessToken == "executor-token"
+		}
+		if entry.ServerName == "docs" && entry.ExecutorOwned {
+			t.Fatalf("host entry marked executor-owned: %#v", entry)
+		}
+	}
+	if !foundExecutor {
+		t.Fatalf("executor-owned entry missing: %#v", entries)
+	}
+
+	removed, err := store.Delete(executorName, serverURL)
+	if err != nil || !removed {
+		t.Fatalf("Delete(executor) removed=%v err=%v", removed, err)
+	}
+	if host, err := store.Load("docs", serverURL); err != nil || host == nil || host.AccessToken != "host-token" {
+		t.Fatalf("executor delete affected host = %#v, err = %v", host, err)
+	}
+	if executor, err := store.Load(executorName, serverURL); err != nil || executor != nil {
+		t.Fatalf("executor remains after delete = %#v, err = %v", executor, err)
+	}
+}
+
 func TestResolveOAuthScopesAndRetryMatchRust(t *testing.T) {
 	tests := []struct {
 		name               string

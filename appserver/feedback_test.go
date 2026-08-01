@@ -21,9 +21,10 @@ func TestFeedbackUploadParamsValidateRequiresClassification(t *testing.T) {
 	}
 }
 
-func TestFeedbackModelAndEffortSelectsTurnContextLikeRust(t *testing.T) {
+func TestFeedbackMetadataSelectsTurnContextAndHashesPromptLikeRust(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	contents := strings.Join([]string{
+		`{"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"thread-1","base_instructions":"actual  developer\r\nprompt\t"}}`,
 		`{"timestamp":"2026-07-29T00:00:00Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"reported-model","effort":"high"}}`,
 		`{"timestamp":"2026-07-29T00:00:01Z","type":"turn_context","payload":{"turn_id":"turn-2","model":"latest-model","effort":"xhigh"}}`,
 	}, "\n") + "\n"
@@ -32,15 +33,15 @@ func TestFeedbackModelAndEffortSelectsTurnContextLikeRust(t *testing.T) {
 	}
 
 	reportedTurn := "turn-1"
-	if model, effort, ok := feedbackModelAndEffortFromRollout(path, &reportedTurn); !ok || model != "reported-model" || effort != "Some(High)" {
-		t.Fatalf("reported turn = model %q effort %q ok %t", model, effort, ok)
+	if metadata, ok := feedbackTurnMetadataFromRollout(path, &reportedTurn); !ok || metadata.Model != "reported-model" || metadata.Effort != "Some(High)" || metadata.PromptHash != "9ae77301cc2a30e729c28661b7a0f9490c80a72e7d23277e7e74f0ac81779541" {
+		t.Fatalf("reported turn = metadata %#v ok %t", metadata, ok)
 	}
-	if model, effort, ok := feedbackModelAndEffortFromRollout(path, nil); !ok || model != "latest-model" || effort != "Some(XHigh)" {
-		t.Fatalf("latest turn = model %q effort %q ok %t", model, effort, ok)
+	if metadata, ok := feedbackTurnMetadataFromRollout(path, nil); !ok || metadata.Model != "latest-model" || metadata.Effort != "Some(XHigh)" {
+		t.Fatalf("latest turn = metadata %#v ok %t", metadata, ok)
 	}
 	missingTurn := "missing"
-	if model, effort, ok := feedbackModelAndEffortFromRollout(path, &missingTurn); ok {
-		t.Fatalf("missing turn substituted model %q effort %q", model, effort)
+	if metadata, ok := feedbackTurnMetadataFromRollout(path, &missingTurn); ok {
+		t.Fatalf("missing turn substituted metadata %#v", metadata)
 	}
 }
 
@@ -49,8 +50,25 @@ func TestFeedbackModelAndEffortPreservesUnspecifiedEffort(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"turn-1\",\"model\":\"reported-model\",\"effort\":null}}\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if model, effort, ok := feedbackModelAndEffortFromRollout(path, nil); !ok || model != "reported-model" || effort != "None" {
-		t.Fatalf("unspecified effort = model %q effort %q ok %t", model, effort, ok)
+	if metadata, ok := feedbackTurnMetadataFromRollout(path, nil); !ok || metadata.Model != "reported-model" || metadata.Effort != "None" {
+		t.Fatalf("unspecified effort = metadata %#v ok %t", metadata, ok)
+	}
+}
+
+func TestApplyFeedbackMetadataRejectsClientPromptTagsLikeRust(t *testing.T) {
+	tags := applyFeedbackTurnMetadata(map[string]string{
+		"custom":         "preserved",
+		"prompt_hash":    "unverified",
+		"prompt_version": "client-v1",
+	}, feedbackTurnMetadata{}, false)
+	if len(tags) != 1 || tags["custom"] != "preserved" {
+		t.Fatalf("tags without rollout metadata = %#v", tags)
+	}
+	tags = applyFeedbackTurnMetadata(map[string]string{"prompt_hash": "unverified"}, feedbackTurnMetadata{
+		Model: "reported-model", Effort: "Some(High)", PromptHash: "rollout-hash",
+	}, true)
+	if tags["model"] != "reported-model" || tags["effort"] != "Some(High)" || tags["prompt_hash"] != "rollout-hash" {
+		t.Fatalf("derived tags = %#v", tags)
 	}
 }
 

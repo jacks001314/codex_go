@@ -56,6 +56,41 @@ func TestToolDispatcherExecutesFunctionAndCustomCalls(t *testing.T) {
 	}
 }
 
+type dispatcherTelemetryTagExecutor struct {
+	*tool.ExecutorFunc
+}
+
+func (e *dispatcherTelemetryTagExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
+	return map[string]string{"mcp_server": "calendar", "mcp_server_origin": "stdio"}
+}
+
+func TestToolDispatcherCollectsTelemetryTagsSynchronouslyLikeRust(t *testing.T) {
+	registry := tool.NewRegistry()
+	executor := &dispatcherTelemetryTagExecutor{ExecutorFunc: tool.NewExecutorFunc(
+		tool.Spec{Name: tool.NamespacedName("mcp__calendar", "events")},
+		func(context.Context, *tool.Invocation) (*tool.Output, error) {
+			return &tool.Output{Success: true, Body: "ok"}, nil
+		},
+	)}
+	if err := registry.Register(executor); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		Type:      "function_call",
+		Namespace: "mcp__calendar",
+		Name:      "events",
+		CallID:    "call-telemetry",
+		Arguments: `{}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].TelemetryTags["mcp_server"] != "calendar" || results[0].TelemetryTags["mcp_server_origin"] != "stdio" {
+		t.Fatalf("tool execution results = %#v", results)
+	}
+}
+
 func TestToolDispatcherAddsThreadAndTurnContextToInvocations(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("inspect")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
@@ -115,6 +150,7 @@ func TestToolDispatcherCollectsCodeModeNotifyBeforeFinalOutput(t *testing.T) {
 
 func TestToolDispatcherEmitsNestedCodeModeToolLifecycleWhenEnabled(t *testing.T) {
 	registry := tool.NewRegistry()
+	executedToolCalls := NewExecutedToolCallRecorder()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName(tool.DefaultExecCommandToolName)}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
 		return &tool.Output{Success: true, Body: "weather\n", Data: map[string]any{"hook_response": "weather\n", "exit_code": 0}}, nil
 	})); err != nil {
@@ -126,7 +162,7 @@ func TestToolDispatcherEmitsNestedCodeModeToolLifecycleWhenEnabled(t *testing.T)
 	}
 	var started []*tool.Invocation
 	var completed []*ToolExecutionResult
-	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), EmitCodeModeNestedLifecycle: true, OnToolStarted: func(_ context.Context, invocation *tool.Invocation, _ time.Time) {
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), ExecutedToolCalls: executedToolCalls, ToolMode: model.ToolModeCodeMode, EmitCodeModeNestedLifecycle: true, OnToolStarted: func(_ context.Context, invocation *tool.Invocation, _ time.Time) {
 		started = append(started, invocation)
 	}, OnToolCompleted: func(_ context.Context, result *ToolExecutionResult) {
 		completed = append(completed, result)
@@ -146,6 +182,71 @@ func TestToolDispatcherEmitsNestedCodeModeToolLifecycleWhenEnabled(t *testing.T)
 	}
 	if len(results[0].InputItems) != 0 {
 		t.Fatalf("nested lifecycle leaked into model history: %#v", results[0].InputItems)
+	}
+	prompt, attachment := executedToolCalls.AttachPendingToPrompt([]any{results[0].Response})
+	if attachment == nil {
+		t.Fatal("nested attempted-tool metadata was not attached")
+	}
+	calls := prompt[0].(*ToolResponseItem).ExecutedToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("nested attempted-tool metadata = %#v", calls)
+	}
+	encoded, err := json.Marshal(calls[0])
+	if err != nil || !strings.Contains(string(encoded), `"name":"exec_command"`) {
+		t.Fatalf("nested attempted-tool metadata JSON = %s, error = %v", encoded, err)
+	}
+}
+
+func TestToolDispatcherRecordsNestedAttemptOnWaitOutputLikeRust(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "later"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	exec, wait := tool.NewCodeModeExecutors(registry)
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(wait); err != nil {
+		t.Fatal(err)
+	}
+	recorder := NewExecutedToolCallRecorder()
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+		Router: tool.NewRouter(registry), ExecutedToolCalls: recorder, ToolMode: model.ToolModeCodeMode,
+	})
+	execResults, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		Type: "custom_tool_call", CallID: "exec-yield", Name: tool.CodeModeExecToolName,
+		Input: `yield_control(); const r = await tools.echo({"message":"later"}); text(r);`,
+	}})
+	if err != nil {
+		t.Fatalf("exec error = %v", err)
+	}
+	cellID, _ := execResults[0].Output.Data["cell_id"].(string)
+	if cellID == "" {
+		t.Fatalf("exec output = %#v", execResults[0].Output)
+	}
+	waitResults, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{{
+		Type: "function_call", CallID: "wait-output", Name: "wait",
+		Arguments: `{"cell_id":"` + cellID + `","yield_time_ms":1000}`,
+	}})
+	if err != nil {
+		t.Fatalf("wait error = %v", err)
+	}
+	prompt, attachment := recorder.AttachPendingToPrompt([]any{execResults[0].Response, waitResults[0].Response})
+	if attachment == nil {
+		t.Fatal("nested call was not attached to wait output")
+	}
+	if calls := prompt[0].(*ToolResponseItem).ExecutedToolCalls(); len(calls) != 0 {
+		t.Fatalf("exec output calls = %#v", calls)
+	}
+	calls := prompt[1].(*ToolResponseItem).ExecutedToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("wait output calls = %#v", calls)
+	}
+	encoded, err := json.Marshal(calls[0])
+	if err != nil || !strings.Contains(string(encoded), `"name":"echo"`) {
+		t.Fatalf("wait metadata JSON = %s, error = %v", encoded, err)
 	}
 }
 

@@ -25,6 +25,26 @@ func TestInputItemsFromRecordUsesRawItem(t *testing.T) {
 	}
 }
 
+func TestInputItemsFromRecordRemovesOnlyTopLevelPassthroughMetadata(t *testing.T) {
+	raw := json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","internal_chat_message_metadata_passthrough":{"nested":true}}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-secret"}}`)
+	items := InputItemsFromItems([]Item{{Raw: raw}}, &HistoryBuildOptions{})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("item = %#v", items[0])
+	}
+	if _, ok := item["internal_chat_message_metadata_passthrough"]; ok {
+		t.Fatalf("top-level passthrough metadata leaked: %#v", item)
+	}
+	content := item["content"].([]any)
+	nested := content[0].(map[string]any)
+	if _, ok := nested["internal_chat_message_metadata_passthrough"]; !ok {
+		t.Fatalf("nested passthrough metadata was removed: %#v", nested)
+	}
+}
+
 func TestInputItemsFromRecordOmitsNonModelVisibleThreadItemsLikeRust(t *testing.T) {
 	rawCommand := json.RawMessage(`{"type":"command_execution","id":"cmd-raw","command":"pwd","aggregated_output":"workspace"}`)
 	rawReasoning := json.RawMessage(`{"type":"reasoning","id":"reasoning-raw","summary":[],"encrypted_content":null}`)

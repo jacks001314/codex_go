@@ -17,10 +17,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"codex_go/network"
+	"codex_go/sandbox"
 	"codex_go/utils"
 
 	"github.com/coder/websocket"
@@ -868,6 +870,48 @@ func TestProcessReadMaxBytesIncludesFirstOversizedChunkAndNormalExitHasNoFailure
 	}
 }
 
+func TestProcessStateTransportsLocallyClassifiedSandboxDenialLikeRust(t *testing.T) {
+	state := &processState{
+		id:          "sandbox-denial",
+		nextSeq:     1,
+		sandboxType: sandbox.SandboxTypeLinuxSeccomp,
+	}
+	state.cond = sync.NewCond(&state.mu)
+	state.mu.Lock()
+	state.appendLocked("stderr", []byte("bash: /workspace/locked: Permission denied"))
+	state.mu.Unlock()
+	exitCode := 1
+	state.finishWithCode(nil, &exitCode)
+
+	state.mu.Lock()
+	response := state.readLocked(0, nil)
+	state.mu.Unlock()
+	if !response.Exited || !response.SandboxDenied || response.ExitCode == nil || *response.ExitCode != 1 {
+		t.Fatalf("read response = %#v", response)
+	}
+}
+
+func TestProcessSandboxTypeProtocolMappingMatchesRust(t *testing.T) {
+	tests := []struct {
+		internal sandbox.SandboxType
+		wire     ProcessSandboxType
+	}{
+		{sandbox.SandboxTypeNone, ProcessSandboxNone},
+		{sandbox.SandboxTypeMacosSeatbelt, ProcessSandboxMacosSeatbelt},
+		{sandbox.SandboxTypeLinuxSeccomp, ProcessSandboxLinuxSeccomp},
+		{sandbox.SandboxTypeWindowsRestrictedToken, ProcessSandboxWindowsRestrictedToken},
+	}
+	for _, test := range tests {
+		if got := processSandboxTypeToProtocol(test.internal); got != test.wire {
+			t.Fatalf("protocol type for %q = %q", test.internal, got)
+		}
+		wire := test.wire
+		if got := SandboxTypeFromProtocol(&wire); got == nil || *got != test.internal {
+			t.Fatalf("internal type for %q = %#v", test.wire, got)
+		}
+	}
+}
+
 func TestStdioJSONRPCProtocolErrors(t *testing.T) {
 	input := stdioInitialization + `{"id":1,"method":"unknown/method","params":{}}` + "\n" +
 		`{"id":2,"method":"process/read","params":{"processId":123}}` + "\n"
@@ -917,7 +961,7 @@ func TestStdioProcessStartRejectsInvalidOrUnsupportedSandboxAndMissingManagedNet
 }
 
 func TestPrepareExecProcessNativeLaunchIgnoresManagedNetworkWithoutSandboxLikeRust(t *testing.T) {
-	command, _, err := prepareExecProcess(&ExecParams{
+	command, _, _, err := prepareExecProcess(&ExecParams{
 		Argv:                  []string{"go", "version"},
 		EnforceManagedNetwork: true,
 	})
@@ -948,7 +992,7 @@ func TestPrepareExecProcessWithoutSandboxAcceptsPathURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromHostNativePath() error = %v", err)
 	}
-	command, cwd, err := prepareExecProcess(&ExecParams{Argv: []string{"go", "version"}, CWD: uri.String()})
+	command, cwd, _, err := prepareExecProcess(&ExecParams{Argv: []string{"go", "version"}, CWD: uri.String()})
 	if err != nil {
 		t.Fatalf("prepareExecProcess() error = %v", err)
 	}

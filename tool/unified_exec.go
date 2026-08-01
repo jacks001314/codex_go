@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -175,6 +176,7 @@ type unifiedExecProcess struct {
 	networkPolicyDecider network.ProxyPolicyDecider
 	networkPolicyTimeout time.Duration
 	sandbox              unifiedExecSandboxProcess
+	sandboxType          *sandbox.SandboxType
 	done                 chan struct{}
 	eventDone            chan struct{}
 	eventSink            UnifiedExecEventSink
@@ -191,7 +193,7 @@ type unifiedExecProcess struct {
 	eventMu       sync.Mutex
 	output        *unifiedExecHeadTailBuffer
 	transcript    *unifiedExecHeadTailBuffer
-	eventPending  []byte
+	eventPending  bytes.Buffer
 	emittedDeltas int
 	exited        bool
 	exitCode      int
@@ -293,6 +295,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 		threadID:      req.UnifiedExecThreadID,
 		turnID:        req.UnifiedExecTurnID,
 		eventsStarted: true,
+		sandboxType:   req.ProcessSandboxType,
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -357,6 +360,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 		threadID:      req.UnifiedExecThreadID,
 		turnID:        req.UnifiedExecTurnID,
 		eventsStarted: true,
+		sandboxType:   req.ProcessSandboxType,
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -435,7 +439,14 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		return nil, err
 	}
 	if req.NetworkPolicyDecider != nil {
-		if err := client.RegisterNetworkPolicyController(remoteID, req.NetworkPolicyDecisionTimeout, req.NetworkPolicyDecider); err != nil {
+		decider := req.NetworkPolicyDecider
+		if executionID := strings.TrimSpace(callID); executionID != "" {
+			decider = network.ProxyPolicyDeciderFunc(func(ctx context.Context, request network.ProxyPolicyRequest) network.ProxyDecision {
+				request.ExecutionID = executionID
+				return req.NetworkPolicyDecider.Decide(ctx, request)
+			})
+		}
+		if err := client.RegisterNetworkPolicyController(remoteID, req.NetworkPolicyDecisionTimeout, decider); err != nil {
 			events.Close()
 			_ = client.Close()
 			m.releaseProcessID(processID)
@@ -473,7 +484,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			return nil, err
 		}
 	}
-	_, err = client.Start(startCtx, &execserver.ExecParams{
+	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
 		Argv:                  append([]string(nil), req.Command...),
 		CWD:                   remoteCWD,
@@ -516,6 +527,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		startedAt:            time.Now(),
 		threadID:             req.UnifiedExecThreadID,
 		turnID:               req.UnifiedExecTurnID,
+		sandboxType:          execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -589,13 +601,13 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 	if options.PermissionProfile == nil {
 		return nil, errors.New("permission profile is required")
 	}
-	profileJSON := strings.TrimSpace(options.PermissionProfileJSON)
-	if profileJSON == "" {
-		var err error
-		profileJSON, err = sandbox.RuntimePermissionProfileJSON(*options.PermissionProfile)
-		if err != nil {
-			return nil, err
-		}
+	profile, err := sandbox.CanonicalPermissionProfile(options.PermissionProfile, options.PermissionProfileJSON)
+	if err != nil {
+		return nil, err
+	}
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(*profile)
+	if err != nil {
+		return nil, err
 	}
 	portableJSON, err := portablePermissionProfileJSON(profileJSON, options.CWD)
 	if err != nil {
@@ -1054,6 +1066,17 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 	} else if err != nil {
 		p.exitCode = -1
 	}
+	var violationOutput *sandbox.SandboxExecOutput
+	var violationSandboxType sandbox.SandboxType
+	if p.sandboxType != nil {
+		transcript, _ := p.transcript.Snapshot()
+		output := sandbox.SandboxExecOutput{ExitCode: p.exitCode, AggregatedOutput: string(transcript)}
+		if sandbox.IsLikelySandboxDenied(*p.sandboxType, output) {
+			p.sandboxDenied = true
+			violationOutput = &output
+			violationSandboxType = *p.sandboxType
+		}
+	}
 	remote := p.remote
 	p.remote = nil
 	remoteEvents := p.remoteEvents
@@ -1063,6 +1086,9 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 		p.stdin = nil
 	}
 	p.mu.Unlock()
+	if violationOutput != nil {
+		sandbox.RecordFileSystemSandboxViolation(violationSandboxType, *violationOutput)
+	}
 	if remoteEvents != nil {
 		remoteEvents.Close()
 	}
@@ -1453,16 +1479,16 @@ func (p *unifiedExecProcess) outputDeltasLocked(data []byte) []string {
 	if p == nil || p.eventSink == nil || p.emittedDeltas >= unifiedExecMaxOutputDeltas || len(data) == 0 {
 		return nil
 	}
-	p.eventPending = append(p.eventPending, data...)
+	_, _ = p.eventPending.Write(data)
 	remaining := unifiedExecMaxOutputDeltas - p.emittedDeltas
 	deltas := make([]string, 0, min(remaining, 4))
-	for len(p.eventPending) > 0 && len(deltas) < remaining {
-		prefix, rest, ok := splitUnifiedExecValidUTF8Prefix(p.eventPending, unifiedExecOutputDeltaMaxBytes)
+	for p.eventPending.Len() > 0 && len(deltas) < remaining {
+		prefix, _, ok := splitUnifiedExecValidUTF8Prefix(p.eventPending.Bytes(), unifiedExecOutputDeltaMaxBytes)
 		if !ok {
 			break
 		}
 		deltas = append(deltas, string(prefix))
-		p.eventPending = rest
+		p.eventPending.Next(len(prefix))
 		p.emittedDeltas++
 	}
 	return deltas
@@ -1473,17 +1499,21 @@ func splitUnifiedExecValidUTF8Prefix(buffer []byte, maxBytes int) ([]byte, []byt
 		return nil, buffer, false
 	}
 	maxLen := min(len(buffer), maxBytes)
-	for split := maxLen; split > 0; split-- {
-		if utf8.Valid(buffer[:split]) {
-			prefix := append([]byte(nil), buffer[:split]...)
-			rest := append([]byte(nil), buffer[split:]...)
-			return prefix, rest, true
+	split := maxLen
+	if !utf8.Valid(buffer[:maxLen]) {
+		split = 0
+		for split < maxLen {
+			_, size := utf8.DecodeRune(buffer[split:maxLen])
+			if size == 0 || (size == 1 && buffer[split] >= utf8.RuneSelf) {
+				break
+			}
+			split += size
 		}
-		if maxLen-split > utf8.UTFMax {
-			break
+		if split == 0 {
+			split = 1
 		}
 	}
-	return nil, buffer, false
+	return buffer[:split], buffer[split:], true
 }
 
 func (p *unifiedExecProcess) emitEvent(event UnifiedExecEvent) {

@@ -102,6 +102,8 @@ func (h *execHumanRenderer) renderItemCompleted(item protocol.ThreadItem) {
 		h.renderMCPToolCallCompleted(item)
 	case "web_search":
 		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiBold, "web search:"), item.Query)
+	case "error":
+		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiYellow+ansiBold, "warning:"), item.Message)
 	}
 }
 

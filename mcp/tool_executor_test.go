@@ -51,6 +51,18 @@ func TestMCPToolExecutorRunsCall(t *testing.T) {
 	}
 }
 
+func TestMCPToolExecutorTelemetryTagsAreSynchronousLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:   "calendar",
+		ServerOrigin: "https://mcp.example.test",
+		ToolInfo:     &MCPToolInfo{Name: "events"},
+	})
+	tags := executor.TelemetryTags(&tool.Invocation{})
+	if tags["mcp_server"] != "calendar" || tags["mcp_server_origin"] != "https://mcp.example.test" || len(tags) != 2 {
+		t.Fatalf("TelemetryTags() = %#v", tags)
+	}
+}
+
 func TestMCPToolExecutorRequestMetaIncludesThreadIDLikeRust(t *testing.T) {
 	static := map[string]any{"plugin_id": "sample@test"}
 	executor := NewToolExecutor(&ToolExecutorOptions{ThreadID: "thread-live", RequestMeta: static})

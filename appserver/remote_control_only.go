@@ -32,8 +32,21 @@ func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptio
 	if storeRoot == "" {
 		storeRoot = filepath.Join(codexHome, "sessions")
 	}
-	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(storeRoot), codexHome, options.RuntimeOptions)
+	preparedRuntimeOptions, ownedStateRuntime, err := prepareSharedStateRuntime(ctx, codexHome, options.RuntimeOptions)
+	if err != nil {
+		return err
+	}
+	if ownedStateRuntime != nil {
+		defer ownedStateRuntime.Close()
+	}
+	if preparedRuntimeOptions.logDBInstallation != nil {
+		defer preparedRuntimeOptions.logDBInstallation.Close(context.Background())
+	}
+	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(storeRoot), codexHome, preparedRuntimeOptions)
 	defer router.Close()
+	if err := router.StartupError(); err != nil {
+		return err
+	}
 	manager := router.requireRemote()
 	if manager.StatusChanged().Status == remotecontrol.StatusDisabled {
 		manager.PublishConnectionStatus(remotecontrol.StatusConnecting)
@@ -51,7 +64,7 @@ func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptio
 		errCh <- ServeRemoteControlTransport(runCtx, router, loop.TransportEvents())
 	}()
 
-	err := <-errCh
+	err = <-errCh
 	cancel()
 	waitForRemoteControlOnlyPeer(errCh, 2*time.Second)
 	return err

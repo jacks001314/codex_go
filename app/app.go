@@ -109,7 +109,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandCompletion:
 		return runCompletion(parsed.Completion, stdout)
 	case cli.CommandDebug:
-		return runDebug(parsed.Debug, stdout)
+		return runDebug(parsed.Debug, &parsed.Root, stdout)
 	case cli.CommandDoctor:
 		report, err := doctor.Run(&doctor.Options{
 			JSON:    parsed.Doctor.JSON,
@@ -983,6 +983,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		return err
 	}
 	runtimeOptions.Requirements = requirements
+	runtimeOptions.EnableLogDB = true
 	runtimeOptions.RemoteControlDisabledByRequirements = remoteControlDisabledByRequirements
 	runtimeOptions.RemoteControlBackendEnabled = true
 	runtimeOptions.RemoteControlURL = loadedConfig.ChatGPTBaseURL()
@@ -1126,6 +1127,9 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 		RemoteControlStartupMode: mode,
 		AnalyticsDefaultEnabled:  opts.AnalyticsDefaultEnabled,
 	}
+	if loadedConfig != nil {
+		options.CodeModeHostEnabled = features.Enabled(loadedConfig.FeatureSettings(), "code_mode_host")
+	}
 	hostURL := strings.TrimSpace(opts.CodeModeHostURL)
 	if hostURL != "" {
 		if loadedConfig == nil || !features.Enabled(loadedConfig.FeatureSettings(), "code_mode_host") {
@@ -1237,7 +1241,7 @@ func runUpdate(ctx context.Context, opts *cli.UpdateOptions, stdout, stderr io.W
 	return nil
 }
 
-func runDebug(opts cli.DebugOptions, stdout io.Writer) error {
+func runDebug(opts cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) error {
 	switch opts.Subcommand {
 	case "models":
 		_ = opts.BundledModels
@@ -1246,26 +1250,53 @@ func runDebug(opts cli.DebugOptions, stdout io.Writer) error {
 	case "app-server":
 		return runDebugAppServer(&opts, stdout)
 	case "prompt-input":
-		payload := map[string]any{
-			"items": []map[string]any{
-				{
-					"type": "message",
-					"role": "user",
-					"content": []map[string]string{
-						{
-							"type": "input_text",
-							"text": opts.Prompt,
-						},
-					},
-				},
-			},
+		codexHome := auth.DefaultCodexHome()
+		cwd := ""
+		var rawOverrides, enableFeatures, disableFeatures []string
+		images := append([]string(nil), opts.Images...)
+		if root != nil {
+			cwd = strings.TrimSpace(root.Shared.CWD)
+			rawOverrides = append(rawOverrides, root.ConfigOverrides...)
+			enableFeatures = append(enableFeatures, root.EnableFeatures...)
+			disableFeatures = append(disableFeatures, root.DisableFeatures...)
+			images = append(append([]string(nil), root.Shared.Images...), images...)
 		}
-		if len(opts.Images) > 0 {
-			payload["images"] = opts.Images
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		cfg, err := config.LoadEffective(codexHome, rawOverrides, enableFeatures, disableFeatures, cwd)
+		if err != nil {
+			return err
+		}
+		skills, err := appserver.BuildHostSkillsPromptContext(&appserver.HostSkillsPromptOptions{
+			CodexHome: codexHome,
+			CWD:       cwd,
+			Config:    cfg,
+			Prompt:    opts.Prompt,
+		})
+		if err != nil {
+			return err
+		}
+		items := make([]any, 0, len(skills.InputItems)+2)
+		if strings.TrimSpace(skills.Instructions) != "" {
+			items = append(items, debugPromptMessage("developer", []map[string]any{{"type": "input_text", "text": skills.Instructions}}))
+		}
+		items = append(items, skills.InputItems...)
+		content := make([]map[string]any, 0, len(images)+1)
+		for _, image := range images {
+			if image = strings.TrimSpace(image); image != "" {
+				content = append(content, map[string]any{"type": "input_image", "image_url": image})
+			}
+		}
+		if opts.Prompt != "" {
+			content = append(content, map[string]any{"type": "input_text", "text": opts.Prompt})
+		}
+		if len(content) > 0 {
+			items = append(items, debugPromptMessage("user", content))
 		}
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(payload)
+		return encoder.Encode(items)
 	case "trace-reduce":
 		output, _, err := rollout.ReduceTraceBundle(&rollout.TraceReduceOptions{
 			BundleDir: opts.TraceBundle,
@@ -1282,6 +1313,14 @@ func runDebug(opts cli.DebugOptions, stdout io.Writer) error {
 		return runDebugConfig(stdout)
 	default:
 		return fmt.Errorf("unknown debug subcommand %s", opts.Subcommand)
+	}
+}
+
+func debugPromptMessage(role string, content []map[string]any) map[string]any {
+	return map[string]any{
+		"type":    "message",
+		"role":    role,
+		"content": content,
 	}
 }
 

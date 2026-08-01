@@ -598,12 +598,21 @@ func TestFeaturesListHonorsRootOverrides(t *testing.T) {
 }
 
 func TestDebugPromptInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	skillDir := filepath.Join(home, "skills", "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), []string{"debug", "prompt-input", "--image", "a.png", "hello"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("debug prompt-input returned error: %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, `"role": "user"`) || !strings.Contains(output, `"text": "hello"`) || !strings.Contains(output, `"a.png"`) {
+	if !strings.HasPrefix(strings.TrimSpace(output), "[") || !strings.Contains(output, `"role": "developer"`) || !strings.Contains(output, `- demo: Demo skill.`) || !strings.Contains(output, `"role": "user"`) || !strings.Contains(output, `"text": "hello"`) || !strings.Contains(output, `"image_url": "a.png"`) {
 		t.Fatalf("debug prompt-input output = %q", output)
 	}
 }

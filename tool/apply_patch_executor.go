@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"codex_go/applypatch"
+	"codex_go/sandbox"
 )
 
 const DefaultApplyPatchToolName = "apply_patch"
@@ -17,6 +18,8 @@ type ApplyPatchExecutorOptions struct {
 	IncludeEnvironmentID bool
 	ToolName             ToolName
 	Approval             ApplyPatchApprovalFunc
+	PermissionProfile    *sandbox.PermissionProfile
+	SandboxPolicy        *sandbox.SandboxPolicy
 }
 
 type ApplyPatchExecutor struct {
@@ -24,6 +27,8 @@ type ApplyPatchExecutor struct {
 	includeEnvironmentID bool
 	toolName             ToolName
 	approval             ApplyPatchApprovalFunc
+	permissionProfile    *sandbox.PermissionProfile
+	sandboxPolicy        *sandbox.SandboxPolicy
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -48,6 +53,8 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.cwdPath = options.CWD
 	executor.includeEnvironmentID = options.IncludeEnvironmentID
 	executor.approval = options.Approval
+	executor.permissionProfile = options.PermissionProfile
+	executor.sandboxPolicy = options.SandboxPolicy
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -92,6 +99,17 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd()}
+	if deniedPath := applyPatchDeniedPath(action, e.cwd(), e.permissionProfile, e.sandboxPolicy); deniedPath != "" {
+		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
+		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
+		return &Output{
+			Success:    false,
+			Body:       body,
+			Error:      body,
+			Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, e.cwd())),
+			LogPreview: shellLogPreview(body),
+		}, nil
+	}
 	if err := action.FillDeleteContent(applyOptions); err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
@@ -145,6 +163,38 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		Data:       applyPatchResultData(result, action, e.cwd()),
 		LogPreview: shellLogPreview(body),
 	}, nil
+}
+
+func applyPatchDeniedPath(action *applypatch.Action, cwd string, profile *sandbox.PermissionProfile, legacyPolicy *sandbox.SandboxPolicy) string {
+	policy := legacyPolicy
+	if profile != nil {
+		policy = profile.LegacySandboxPolicy()
+	}
+	if action == nil || policy == nil || policy.HasFullDiskWriteAccess() {
+		return ""
+	}
+	roots := policy.GetWritableRootsWithCWD(cwd)
+	for _, path := range action.FilePaths() {
+		resolved := filepath.Clean(path)
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(cwd, resolved)
+		}
+		resolved, err := filepath.Abs(resolved)
+		if err != nil {
+			return path
+		}
+		writable := false
+		for i := range roots {
+			if roots[i].IsPathWritable(resolved) {
+				writable = true
+				break
+			}
+		}
+		if !writable {
+			return path
+		}
+	}
+	return ""
 }
 
 func ApplyPatchChanges(invocation *Invocation, cwd string) []map[string]any {

@@ -32,6 +32,8 @@ type PermissionProfile struct {
 	SandboxPolicy     *SandboxPolicy
 	NetworkEnabled    bool
 	DeniedReadEntries []FileSystemSandboxEntry `json:"denyReadEntries,omitempty"`
+
+	runtimeJSON string
 }
 
 type AdditionalPermissionProfile struct {
@@ -200,7 +202,13 @@ func (p *PermissionProfile) HasDenyReadEntries() bool {
 	if p == nil {
 		return false
 	}
-	return len(p.DeniedReadEntries) > 0
+	for _, entry := range p.DeniedReadEntries {
+		if !supportsSymbolicSlashTmp() && isSymbolicSlashTmpPath(entry.Path) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func UnsandboxedExecutionAllowed(profile *PermissionProfile) bool {

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -190,6 +191,52 @@ func TestParseAssessmentAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Action:") || !strings.Contains(prompt, "user: list files") {
 		t.Fatalf("prompt = %s", prompt)
+	}
+}
+
+func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
+	prompt, err := BuildPrompt(Action{
+		Type:     "network_access",
+		Host:     "example.test",
+		Protocol: "http",
+		Port:     80,
+		Target:   "http://example.test:80",
+		Extra: map[string]any{"trigger": map[string]any{
+			"callId":             "call-1",
+			"command":            []string{"/bin/sh", "-c", "curl example.test"},
+			"cwd":                "/repo",
+			"sandboxPermissions": "use_default",
+			"toolName":           "exec_command",
+			"tty":                false,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "Review the planned action and decide whether to allow it.\n\nAction:\n"
+	if !strings.HasPrefix(prompt, prefix) {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	var action map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, prefix)), &action); err != nil {
+		t.Fatalf("decode action: %v", err)
+	}
+	if len(action) != 6 || action["tool"] != "network_access" || action["host"] != "example.test" || action["protocol"] != "http" || action["target"] != "http://example.test:80" || action["port"] != float64(80) {
+		t.Fatalf("action = %#v", action)
+	}
+	trigger, ok := action["trigger"].(map[string]any)
+	if !ok || len(trigger) != 6 || trigger["callId"] != "call-1" || trigger["cwd"] != "/repo" || trigger["sandboxPermissions"] != "use_default" || trigger["toolName"] != "exec_command" || trigger["tty"] != false {
+		t.Fatalf("trigger = %#v", action["trigger"])
+	}
+	command, ok := trigger["command"].([]any)
+	if !ok || len(command) != 3 || command[0] != "/bin/sh" || command[1] != "-c" || command[2] != "curl example.test" {
+		t.Fatalf("trigger command = %#v", trigger["command"])
+	}
+	if _, ok := action["type"]; ok {
+		t.Fatalf("network action leaked internal type: %#v", action)
+	}
+	if _, ok := action["extra"]; ok {
+		t.Fatalf("network action leaked internal extra wrapper: %#v", action)
 	}
 }
 

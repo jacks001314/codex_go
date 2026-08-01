@@ -1,0 +1,185 @@
+package rollout
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+const SessionIndexFilename = "session_index.jsonl"
+
+var sessionIndexMu sync.Mutex
+
+type SessionIndexEntry struct {
+	ID         string `json:"id"`
+	ThreadName string `json:"thread_name"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+func AppendThreadName(codexHome string, threadID string, name string) error {
+	return AppendSessionIndexEntry(codexHome, SessionIndexEntry{
+		ID:         threadID,
+		ThreadName: name,
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func AppendSessionIndexEntry(codexHome string, entry SessionIndexEntry) error {
+	sessionIndexMu.Lock()
+	defer sessionIndexMu.Unlock()
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(sessionIndexPath(codexHome), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func RemoveThreadNameEntries(codexHome string, threadID string) error {
+	sessionIndexMu.Lock()
+	defer sessionIndexMu.Unlock()
+	path := sessionIndexPath(codexHome)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	removed := false
+	var remaining bytes.Buffer
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry SessionIndexEntry
+		if json.Unmarshal(bytes.TrimSpace(line), &entry) == nil && entry.ID == threadID {
+			removed = true
+			continue
+		}
+		remaining.Write(line)
+		remaining.WriteByte('\n')
+	}
+	if !removed {
+		return nil
+	}
+	temporary := strings.TrimSuffix(path, ".jsonl") + ".jsonl.tmp"
+	if err := os.WriteFile(temporary, remaining.Bytes(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
+}
+
+func FindThreadNameByID(codexHome string, threadID string) (string, bool, error) {
+	entries, err := readSessionIndex(codexHome)
+	if err != nil {
+		return "", false, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].ID == threadID {
+			return entries[i].ThreadName, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func FindThreadNamesByIDs(codexHome string, threadIDs map[string]struct{}) (map[string]string, error) {
+	if len(threadIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	entries, err := readSessionIndex(codexHome)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(threadIDs))
+	for _, entry := range entries {
+		if _, ok := threadIDs[entry.ID]; ok && strings.TrimSpace(entry.ThreadName) != "" {
+			names[entry.ID] = entry.ThreadName
+		}
+	}
+	return names, nil
+}
+
+// FindThreadMetaByName returns the newest current name whose active rollout
+// has a readable session header. Older names for a renamed thread are ignored.
+func FindThreadMetaByName(codexHome string, name string) (string, *SessionMeta, bool, error) {
+	return FindThreadMetaByNameInCollection(codexHome, name, false)
+}
+
+func FindThreadMetaByNameInCollection(codexHome string, name string, archived bool) (string, *SessionMeta, bool, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", nil, false, nil
+	}
+	entries, err := readSessionIndex(codexHome)
+	if err != nil {
+		return "", nil, false, err
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if _, ok := seen[entry.ID]; ok {
+			continue
+		}
+		seen[entry.ID] = struct{}{}
+		if entry.ThreadName != name {
+			continue
+		}
+		path, findErr := FindThreadPath(codexHome, entry.ID, archived)
+		if findErr != nil {
+			continue
+		}
+		lines, _, loadErr := Load(path)
+		if loadErr != nil {
+			continue
+		}
+		for lineIndex := range lines {
+			if lines[lineIndex].Meta != nil {
+				return path, lines[lineIndex].Meta, true, nil
+			}
+		}
+	}
+	return "", nil, false, nil
+}
+
+func readSessionIndex(codexHome string) ([]SessionIndexEntry, error) {
+	data, err := os.ReadFile(sessionIndexPath(codexHome))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	physicalLines := bytes.Split(data, []byte{'\n'})
+	entries := make([]SessionIndexEntry, 0, len(physicalLines))
+	for _, line := range physicalLines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var entry SessionIndexEntry
+		if json.Unmarshal(line, &entry) != nil {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func sessionIndexPath(codexHome string) string {
+	return filepath.Join(codexHome, SessionIndexFilename)
+}

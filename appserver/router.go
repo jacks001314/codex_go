@@ -1,6 +1,8 @@
 package appserver
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +15,12 @@ import (
 
 	"codex_go/agent"
 	"codex_go/compact"
+	"codex_go/memories"
 	"codex_go/model"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/state"
 
 	"github.com/google/uuid"
 )
@@ -26,11 +30,25 @@ type Router struct {
 	now        func() time.Time
 	spawnGraph agent.Store
 	threads    *ThreadManager
+	state      *state.StateRuntime
 }
 
 func NewRouter(store *session.Store) *Router {
 	threads := NewThreadManager(nil)
-	return &Router{store: store, now: time.Now, threads: threads}
+	router := &Router{store: store, now: time.Now, threads: threads}
+	if store != nil {
+		codexHome := codexHomeFromSessionStore(store)
+		store.SetPhysicalHistoryResolver(func(position session.HistoryPosition) (*session.ResolvedPhysicalHistory, error) {
+			items, turns, err := rollout.ResolveHistoryPrefix(codexHome, rollout.HistoryPosition{
+				ThreadID: string(position.ThreadID), EndOrdinalExclusive: position.EndOrdinalExclusive, EndByteOffset: position.EndByteOffset,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &session.ResolvedPhysicalHistory{Items: items, RolloutTurns: turns}, nil
+		})
+	}
+	return router
 }
 
 func (r *Router) Close() error {
@@ -60,10 +78,17 @@ func (r *Router) releaseLiveThreads(threadIDs []session.ThreadID) {
 }
 
 func (r *Router) readThreadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
+	var record *session.Record
+	var err error
 	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
-		return liveThread.Read(includeArchived, includeHistory)
+		record, err = liveThread.Read(includeArchived, includeHistory)
+	} else {
+		record, err = r.store.Read(threadID, includeArchived, includeHistory)
 	}
-	return r.store.Read(threadID, includeArchived, includeHistory)
+	if err == nil {
+		r.applyIndexedThreadName(record)
+	}
+	return record, err
 }
 
 func (r *Router) saveThreadRecord(record *session.Record) error {
@@ -115,6 +140,12 @@ func (r *Router) SetSpawnGraph(store agent.Store) {
 		return
 	}
 	r.spawnGraph = store
+}
+
+func (r *Router) SetStateRuntime(runtime *state.StateRuntime) {
+	if r != nil {
+		r.state = runtime
+	}
 }
 
 func (r *Router) createThreadRollout(record *session.Record, now time.Time) error {
@@ -215,7 +246,7 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 	if codexHome == "" {
 		return nil, nil
 	}
-	return rollout.NewRecorder(&rollout.CreateParams{
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:               codexHome,
 		SessionID:               record.SessionID,
 		SessionPrefix:           record.Metadata.SessionPrefix,
@@ -228,6 +259,7 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 		Model:                   record.Metadata.Model,
 		ModelProvider:           record.Metadata.ModelProvider,
 		HistoryMode:             record.Metadata.HistoryMode,
+		HistoryBase:             rolloutHistoryPositionFromRecord(record.HistoryBase),
 		MemoryMode:              record.Metadata.MemoryMode,
 		ParentThreadID:          string(record.ParentThreadID),
 		BaseInstructions:        record.Metadata.BaseInstructions,
@@ -243,6 +275,69 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 		Extra:                   record.Metadata.Extra,
 		Now:                     now,
 	})
+	if err != nil {
+		return nil, err
+	}
+	r.configureThreadHistoryRecorder(recorder, record.ID)
+	return recorder, nil
+}
+
+func rolloutHistoryPositionFromRecord(value *session.HistoryPosition) *rollout.HistoryPosition {
+	if value == nil || value.EndOrdinalExclusive == 0 || value.EndByteOffset == 0 {
+		return nil
+	}
+	return &rollout.HistoryPosition{
+		ThreadID:            string(value.ThreadID),
+		EndOrdinalExclusive: value.EndOrdinalExclusive,
+		EndByteOffset:       value.EndByteOffset,
+	}
+}
+
+func (r *Router) configureThreadHistoryRecorder(recorder *rollout.Recorder, threadID session.ThreadID) {
+	if r == nil || recorder == nil {
+		return
+	}
+	paginated := recorder.IsPaginated()
+	recorder.SetAfterFlush(func(path string) {
+		if r.state != nil {
+			_ = r.state.ReconcileRollout(context.Background(), path, false)
+		}
+		if paginated {
+			_ = r.materializeThreadHistory(threadID, path)
+		}
+	})
+}
+
+func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string) error {
+	if r == nil || strings.TrimSpace(string(threadID)) == "" || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	codexHome := codexHomeFromSessionStore(r.store)
+	if codexHome == "" {
+		return nil
+	}
+	initialOrdinal := uint64(0)
+	var subagentHistoryStartOrdinal *uint64
+	if meta, err := rollout.FirstSessionMeta(path); err == nil && meta != nil {
+		if meta.HistoryBase != nil {
+			initialOrdinal = meta.HistoryBase.EndOrdinalExclusive
+		}
+		subagentHistoryStartOrdinal = meta.SubagentHistoryStartOrdinal
+	}
+	if r.state != nil {
+		db, err := r.state.ThreadHistoryDB(context.Background())
+		if err != nil {
+			return err
+		}
+		return state.MaterializeThreadHistory(context.Background(), db, string(threadID), path, initialOrdinal, subagentHistoryStartOrdinal)
+	}
+	sqliteHome := rustSQLiteHome(codexHome)
+	db, err := state.OpenThreadHistoryDB(context.Background(), sqliteHome)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return state.MaterializeThreadHistory(context.Background(), db, string(threadID), path, initialOrdinal, subagentHistoryStartOrdinal)
 }
 
 func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Time) error {
@@ -253,7 +348,7 @@ func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Ti
 	if codexHome == "" {
 		return nil
 	}
-	path, err := rollout.FindThreadPath(codexHome, string(record.ID), record.Archived)
+	path, err := r.findThreadRolloutPath(record.ID, record.Archived)
 	if err != nil {
 		return nil
 	}
@@ -261,6 +356,7 @@ func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Ti
 	if err != nil {
 		return err
 	}
+	r.configureThreadHistoryRecorder(recorder, record.ID)
 	defer recorder.Close()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -293,6 +389,7 @@ func rolloutSessionMetaFromRecord(record *session.Record) *rollout.SessionMeta {
 		Originator:              record.Metadata.Originator,
 		ModelProvider:           record.Metadata.ModelProvider,
 		HistoryMode:             record.Metadata.HistoryMode,
+		HistoryBase:             rolloutHistoryPositionFromRecord(record.HistoryBase),
 		MemoryMode:              record.Metadata.MemoryMode,
 		ParentThreadID:          string(record.ParentThreadID),
 		BaseInstructions:        record.Metadata.BaseInstructions,
@@ -313,8 +410,7 @@ func (r *Router) appendThreadRollout(threadID session.ThreadID, items []session.
 	if r == nil || r.store == nil {
 		return nil
 	}
-	codexHome := codexHomeFromSessionStore(r.store)
-	path, err := rollout.FindThreadPath(codexHome, string(threadID), false)
+	path, err := r.findThreadRolloutPath(threadID, false)
 	if err != nil {
 		return nil
 	}
@@ -322,6 +418,7 @@ func (r *Router) appendThreadRollout(threadID session.ThreadID, items []session.
 	if err != nil {
 		return err
 	}
+	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
 	return rollout.AppendSessionItems(recorder, items, now)
 }
@@ -330,8 +427,7 @@ func (r *Router) appendThreadRollback(threadID session.ThreadID, numTurns int, n
 	if r == nil || r.store == nil || numTurns < 0 {
 		return nil
 	}
-	codexHome := codexHomeFromSessionStore(r.store)
-	path, err := rollout.FindThreadPath(codexHome, string(threadID), false)
+	path, err := r.findThreadRolloutPath(threadID, false)
 	if err != nil {
 		return nil
 	}
@@ -339,6 +435,7 @@ func (r *Router) appendThreadRollback(threadID session.ThreadID, numTurns int, n
 	if err != nil {
 		return err
 	}
+	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
 	return recorder.AppendThreadRolledBack(uint32(numTurns), now)
 }
@@ -347,8 +444,7 @@ func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string
 	if r == nil || r.store == nil {
 		return nil
 	}
-	codexHome := codexHomeFromSessionStore(r.store)
-	path, err := rollout.FindThreadPath(codexHome, string(threadID), false)
+	path, err := r.findThreadRolloutPath(threadID, false)
 	if err != nil {
 		return nil
 	}
@@ -356,6 +452,7 @@ func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string
 	if err != nil {
 		return err
 	}
+	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
 	items := make([]rollout.Item, 0, len(replacement))
 	for i := range replacement {
@@ -376,7 +473,7 @@ func (r *Router) threadRolloutPath(record *session.Record) string {
 	if codexHome == "" {
 		return ""
 	}
-	path, err := rollout.FindThreadPath(codexHome, string(record.ID), record.Archived)
+	path, err := r.findThreadRolloutPath(record.ID, record.Archived)
 	if err == nil {
 		return path
 	}
@@ -410,6 +507,23 @@ func codexHomeFromSessionStore(store *session.Store) string {
 		return filepath.Dir(root)
 	}
 	return root
+}
+
+func (r *Router) applyIndexedThreadName(record *session.Record) {
+	if r == nil || record == nil {
+		return
+	}
+	name, found, err := rollout.FindThreadNameByID(codexHomeFromSessionStore(r.store), string(record.ID))
+	if err != nil || !found {
+		return
+	}
+	record.Title = name
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	if strings.TrimSpace(name) == "" {
+		delete(record.Metadata.Extra, explicitThreadNameExtraKey)
+	} else {
+		record.Metadata.Extra[explicitThreadNameExtraKey] = true
+	}
 }
 
 func compactItemsFromSessionItems(items []session.Item) []compact.Item {
@@ -916,8 +1030,23 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 			}
 		}
 	}
-	if includeTurns {
+	paginatedResume := false
+	if r.state != nil {
+		mode, found, modeErr := r.threadHistoryModeWithRepair(sourceID)
+		if modeErr != nil {
+			return nil, modeErr
+		}
+		paginatedResume = found && strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated))
+	}
+	if includeTurns && !paginatedResume {
 		r.attachRolloutTurnSnapshots(record)
+	}
+	var paginatedTurns []Turn
+	if includeTurns && paginatedResume {
+		paginatedTurns, err = r.loadPaginatedThreadFullTurns(string(sourceID))
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := r.retainLiveThread(record); err != nil {
 		return nil, err
@@ -928,9 +1057,12 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	}
 	cwd := firstNonEmpty(stringPtrValue(params.CWD), record.Metadata.CWD)
 	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, cwd, params.RuntimeWorkspaceRoots)
-	thread := BuildThread(record, path, includeTurns)
+	thread := BuildThread(record, path, includeTurns && !paginatedResume)
 	if thread != nil {
 		thread.Status = IdleStatus()
+		if includeTurns && paginatedResume {
+			thread.Turns = paginatedTurns
+		}
 	}
 	response := &ThreadResumeResponse{
 		Thread:                  thread,
@@ -945,50 +1077,60 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		InstructionSources:      threadRecordInstructionSources(record),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}
-	cursorRecord := record
-	if !includeTurns {
-		if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
-			cursorRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
-		} else {
-			cursorRecord, err = r.readThreadRecord(sourceID, true, true)
-			if err != nil {
-				cursorRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
-			}
-		}
+	if paginatedResume {
+		response.TurnsBackwardsCursor, response.ItemsBackwardsCursor, err = r.paginatedResumeBackwardsCursors(string(sourceID))
 		if err != nil {
 			return nil, err
 		}
-		r.attachRolloutTurnSnapshots(cursorRecord)
+	} else if r.state == nil {
+		cursorRecord := record
+		if !includeTurns {
+			if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
+				cursorRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
+			} else {
+				cursorRecord, err = r.readThreadRecord(sourceID, true, true)
+				if err != nil {
+					cursorRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+			r.attachRolloutTurnSnapshots(cursorRecord)
+		}
+		response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(cursorRecord)
 	}
-	response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(cursorRecord)
 	if ShouldRedactThreadResumePayloads(params.ClientName) && response.Thread != nil {
 		response.Thread.Turns = RedactThreadResumePayloads(response.Thread.Turns)
 	}
 	if params.InitialTurnsPage != nil {
-		pageRecord := record
-		if !includeTurns {
-			if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
-				pageRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
-				if err != nil {
-					return nil, err
-				}
-			} else {
-				pageRecord, err = r.readThreadRecord(sourceID, true, true)
-				if err != nil {
-					pageRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
+		var page *TurnsPage
+		if paginatedResume {
+			page, err = r.buildPaginatedResumeInitialTurnsPage(string(sourceID), params.InitialTurnsPage, nil)
+		} else {
+			pageRecord := record
+			if !includeTurns {
+				if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
+					pageRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
+				} else {
+					pageRecord, err = r.readThreadRecord(sourceID, true, true)
 					if err != nil {
-						return nil, err
+						pageRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
 					}
 				}
+				if err == nil {
+					r.attachRolloutTurnSnapshots(pageRecord)
+				}
 			}
-			r.attachRolloutTurnSnapshots(pageRecord)
+			if err == nil {
+				page, err = BuildTurnsResponse(pageRecord, &ThreadTurnsListParams{
+					ThreadID:      string(sourceID),
+					Limit:         params.InitialTurnsPage.Limit,
+					SortDirection: params.InitialTurnsPage.SortDirection,
+					ItemsView:     params.InitialTurnsPage.ItemsView,
+				})
+			}
 		}
-		page, err := BuildTurnsResponse(pageRecord, &ThreadTurnsListParams{
-			ThreadID:      string(sourceID),
-			Limit:         params.InitialTurnsPage.Limit,
-			SortDirection: params.InitialTurnsPage.SortDirection,
-			ItemsView:     params.InitialTurnsPage.ItemsView,
-		})
 		if err != nil {
 			return nil, err
 		}
@@ -998,6 +1140,57 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		response.InitialTurnsPage = page
 	}
 	return response, nil
+}
+
+func (r *Router) paginatedResumeBackwardsCursors(threadID string) (*string, *string, error) {
+	turns, err := r.state.ListThreadHistoryTurns(context.Background(), state.ThreadHistoryListTurnsParams{
+		ThreadID: threadID, PageSize: 1, SortDirection: state.ThreadHistorySortDesc, ItemsView: state.ThreadHistoryItemsNotLoaded,
+	})
+	if err != nil {
+		return nil, nil, paginatedThreadHistoryError(err, false)
+	}
+	items, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
+		ThreadID: threadID, PageSize: 1, SortDirection: state.ThreadHistorySortDesc,
+	})
+	if err != nil {
+		return nil, nil, paginatedThreadHistoryError(err, false)
+	}
+	return turns.BackwardsCursor, items.BackwardsCursor, nil
+}
+
+func (r *Router) buildPaginatedResumeInitialTurnsPage(threadID string, params *ThreadInitialPageParams, options *turnsResponseOptions) (*TurnsPage, error) {
+	if params == nil {
+		return nil, nil
+	}
+	return r.buildPaginatedThreadTurnsResponse(&ThreadTurnsListParams{
+		ThreadID: threadID, Limit: params.Limit, SortDirection: params.SortDirection, ItemsView: params.ItemsView,
+	}, options)
+}
+
+func (r *Router) loadPaginatedThreadFullTurns(threadID string) ([]Turn, error) {
+	return r.loadPaginatedThreadFullTurnsWithOptions(threadID, nil)
+}
+
+func (r *Router) loadPaginatedThreadFullTurnsWithOptions(threadID string, options *turnsResponseOptions) ([]Turn, error) {
+	limit := threadTurnsMaxLimit
+	var cursor *string
+	turns := []Turn{}
+	for {
+		page, err := r.buildPaginatedThreadTurnsResponse(&ThreadTurnsListParams{
+			ThreadID: threadID, Cursor: cursor, Limit: &limit, SortDirection: SortAsc, ItemsView: TurnItemsFull,
+		}, options)
+		if err != nil {
+			return nil, err
+		}
+		turns = append(turns, page.Data...)
+		if page.NextCursor == nil {
+			return turns, nil
+		}
+		if cursor != nil && *cursor == *page.NextCursor {
+			return nil, fmt.Errorf("failed to load full thread turns for %s: thread store returned a repeated cursor", threadID)
+		}
+		cursor = page.NextCursor
+	}
 }
 
 func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResumeParams, includeTurns bool) (*ThreadResumeResponse, error) {
@@ -1056,7 +1249,9 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}
-	response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(record)
+	if r.state == nil {
+		response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(record)
+	}
 	if params.InitialTurnsPage != nil {
 		page, err := BuildTurnsResponse(record, &ThreadTurnsListParams{
 			ThreadID:      string(threadID),
@@ -1276,22 +1471,22 @@ func (r *Router) readThreadRecordFromRollout(threadID session.ThreadID, includeA
 	if r == nil || r.store == nil {
 		return nil, session.ErrThreadNotFound
 	}
-	codexHome := codexHomeFromSessionStore(r.store)
 	for _, archived := range []bool{false, true} {
 		if archived && !includeArchived {
 			continue
 		}
-		path, err := rollout.FindThreadPath(codexHome, string(threadID), archived)
+		path, err := r.findThreadRolloutPath(threadID, archived)
 		if err != nil {
 			continue
 		}
-		record, err := rollout.RecordFromPath(path, archived)
+		record, err := rollout.RecordFromPathResolved(codexHomeFromSessionStore(r.store), path, archived)
 		if err != nil {
 			return nil, err
 		}
 		if !includeHistory {
 			record.Items = nil
 		}
+		r.applyIndexedThreadName(record)
 		return record, nil
 	}
 	return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
@@ -1313,13 +1508,14 @@ func (r *Router) readThreadRecordFromRolloutPath(path string, includeArchived bo
 	if archived && !includeArchived {
 		return nil, fmt.Errorf("%w: %s", session.ErrThreadArchived, trimmed)
 	}
-	record, err := rollout.RecordFromPath(trimmed, archived)
+	record, err := rollout.RecordFromPathResolved(codexHomeFromSessionStore(r.store), trimmed, archived)
 	if err != nil {
 		return nil, err
 	}
 	if !includeHistory {
 		record.Items = nil
 	}
+	r.applyIndexedThreadName(record)
 	return record, nil
 }
 
@@ -1439,14 +1635,21 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		return nil, err
 	}
 	r.attachRolloutTurnSnapshots(sourceRecord)
-	record, err := r.store.ForkRecord(sourceRecord, session.ForkOptions{
+	forkOptions := session.ForkOptions{
 		Mode:         mode,
 		LastN:        params.LastN,
 		LastTurnID:   params.LastTurnID,
 		BeforeTurnID: params.BeforeTurnID,
 		Ephemeral:    params.Ephemeral,
 		Now:          r.now().UTC(),
-	})
+	}
+	if historyBase, prepared, prepareErr := r.preparePaginatedForkHistoryBase(sourceRecord, &params); prepareErr != nil {
+		return nil, prepareErr
+	} else if prepared {
+		forkOptions.HistoryBase = historyBase
+		forkOptions.HistoryBaseSet = true
+	}
+	record, err := r.store.ForkRecord(sourceRecord, forkOptions)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
@@ -1474,6 +1677,18 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
 			r.rollbackThreadForkInitialization(record)
 			return nil, err
+		}
+	}
+	if !params.Ephemeral && explicitThreadName(record) {
+		if err := rollout.AppendThreadName(codexHomeFromSessionStore(r.store), string(record.ID), record.Title); err != nil {
+			r.rollbackThreadForkInitialization(record)
+			return nil, err
+		}
+	}
+	if !params.Ephemeral && params.DeferGoalContinuation {
+		if _, err := r.inheritThreadGoalSnapshot(sourceRecord.ID, record.ID); err != nil {
+			r.rollbackThreadForkInitialization(record)
+			return nil, fmt.Errorf("failed to inherit source thread goal: %w", err)
 		}
 	}
 	if params.ExcludeTurns {
@@ -1506,6 +1721,52 @@ func validatePaginatedForkParams(source *session.Record, params *ThreadForkParam
 		return jsonRPCInvalidRequest("ephemeral paginated thread/fork requires `excludeTurns: true`")
 	}
 	return nil
+}
+
+func (r *Router) preparePaginatedForkHistoryBase(source *session.Record, params *ThreadForkParams) (*session.HistoryPosition, bool, error) {
+	if !threadUsesPaginatedHistory(source) || r == nil || r.state == nil {
+		return nil, false, nil
+	}
+	// A fresh paginated thread has a planned rollout path but no physical
+	// history yet. Its latest fork boundary is the empty prefix, so querying the
+	// SQLite lineage would incorrectly classify the absent rollout as corrupt.
+	if unmaterializedThread(source) && (params == nil || (strings.TrimSpace(params.LastTurnID) == "" && strings.TrimSpace(params.BeforeTurnID) == "")) {
+		return nil, true, nil
+	}
+	kind := state.ThreadHistoryForkLatest
+	turnID := ""
+	if params != nil {
+		if strings.TrimSpace(params.LastTurnID) != "" {
+			kind, turnID = state.ThreadHistoryForkThroughTurn, strings.TrimSpace(params.LastTurnID)
+		} else if strings.TrimSpace(params.BeforeTurnID) != "" {
+			kind, turnID = state.ThreadHistoryForkBeforeTurn, strings.TrimSpace(params.BeforeTurnID)
+		}
+	}
+	position, err := r.state.PreparePaginatedFork(context.Background(), string(source.ID), kind, turnID)
+	if err != nil {
+		return nil, true, paginatedForkPrepareError(err)
+	}
+	if position == nil {
+		return nil, true, nil
+	}
+	return &session.HistoryPosition{
+		ThreadID: session.ThreadID(position.ThreadID), EndOrdinalExclusive: position.EndOrdinalExclusive, EndByteOffset: position.EndByteOffset,
+	}, true, nil
+}
+
+func paginatedForkPrepareError(err error) error {
+	var historyErr *state.ThreadHistoryError
+	if errors.As(err, &historyErr) {
+		switch historyErr.Kind {
+		case state.ThreadHistoryInvalidRequest:
+			return jsonRPCInvalidRequest(historyErr.Error())
+		case state.ThreadHistoryUnsupported:
+			return methodNotFound("paginated_threads is not supported yet")
+		case state.ThreadHistoryNotFound:
+			return jsonRPCInvalidRequest("no rollout found for thread id " + historyErr.ThreadID)
+		}
+	}
+	return fmt.Errorf("failed to prepare paginated fork: %w", err)
 }
 
 func (r *Router) rollbackThreadForkInitialization(record *session.Record) {
@@ -1767,15 +2028,23 @@ func (r *Router) archiveThreadRollout(threadID session.ThreadID, archived bool) 
 	if codexHome == "" {
 		return false, false
 	}
-	path, err := rollout.FindThreadPath(codexHome, string(threadID), !archived)
+	path, err := r.findThreadRolloutPath(threadID, !archived)
 	if err != nil {
 		return false, false
 	}
 	if archived {
-		_, err = rollout.Archive(path, codexHome)
+		var archivedPath string
+		archivedPath, err = rollout.Archive(path, codexHome)
+		if err == nil && r.state != nil {
+			_ = r.state.MarkThreadArchived(context.Background(), string(threadID), archivedPath, time.Now().UTC())
+		}
 		return true, err == nil
 	}
-	_, err = rollout.Unarchive(path, codexHome)
+	var restoredPath string
+	restoredPath, err = rollout.Unarchive(path, codexHome)
+	if err == nil && r.state != nil {
+		_ = r.state.MarkThreadUnarchived(context.Background(), string(threadID), restoredPath)
+	}
 	return true, err == nil
 }
 
@@ -1796,11 +2065,31 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 		return nil, err
 	}
 	defer closeTemporaryWriters(lifecycleLocks)
-	for _, threadID := range session.DeleteOrderForSubtree(threadIDs) {
+	deleteOrder := session.DeleteOrderForSubtree(threadIDs)
+	for _, threadID := range deleteOrder {
 		if err := r.store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
 		}
-		r.deleteThreadRollouts(threadID)
+		if r.state != nil {
+			if err := r.state.DeleteThreadHistory(context.Background(), string(threadID)); err != nil {
+				return nil, err
+			}
+		}
+		if err := r.deleteThreadRolloutsStrict(threadID); err != nil {
+			return nil, err
+		}
+		if err := rollout.RemoveThreadNameEntries(codexHomeFromSessionStore(r.store), string(threadID)); err != nil {
+			return nil, err
+		}
+	}
+	if r.state != nil {
+		ids := make([]string, 0, len(threadIDs))
+		for _, threadID := range threadIDs {
+			ids = append(ids, string(threadID))
+		}
+		if _, err := r.state.DeleteThreadsStrict(context.Background(), ids); err != nil {
+			return nil, err
+		}
 	}
 	r.releaseLiveThreads(threadIDs)
 	return &ThreadDeleteResponse{}, nil
@@ -1814,20 +2103,27 @@ func threadDeleteError(threadID string, err error) error {
 }
 
 func (r *Router) deleteThreadRollouts(threadID session.ThreadID) {
+	_ = r.deleteThreadRolloutsStrict(threadID)
+}
+
+func (r *Router) deleteThreadRolloutsStrict(threadID session.ThreadID) error {
 	if r == nil || r.store == nil || threadID == "" {
-		return
+		return nil
 	}
 	codexHome := codexHomeFromSessionStore(r.store)
 	if codexHome == "" {
-		return
+		return nil
 	}
 	for _, archived := range []bool{false, true} {
-		path, err := rollout.FindThreadPath(codexHome, string(threadID), archived)
+		path, err := r.findThreadRolloutPath(threadID, archived)
 		if err != nil {
 			continue
 		}
-		_ = rollout.Delete(path)
+		if err := rollout.Delete(path); err != nil && !strings.Contains(err.Error(), "rollout not found:") {
+			return err
+		}
 	}
+	return nil
 }
 
 func (r *Router) threadRolloutExists(threadID session.ThreadID, archived bool) bool {
@@ -1838,8 +2134,43 @@ func (r *Router) threadRolloutExists(threadID session.ThreadID, archived bool) b
 	if codexHome == "" {
 		return false
 	}
-	_, err := rollout.FindThreadPath(codexHome, string(threadID), archived)
+	_, err := r.findThreadRolloutPath(threadID, archived)
 	return err == nil
+}
+
+func (r *Router) findThreadRolloutPath(threadID session.ThreadID, archived bool) (string, error) {
+	if r == nil || r.store == nil || strings.TrimSpace(string(threadID)) == "" {
+		return "", session.ErrThreadNotFound
+	}
+	codexHome := codexHomeFromSessionStore(r.store)
+	if codexHome == "" {
+		return "", session.ErrThreadNotFound
+	}
+	var unverified string
+	if r.state != nil {
+		if dbPath, found, err := r.state.FindRolloutPathByID(context.Background(), string(threadID), &archived); err == nil && found {
+			if existing, ok := rollout.ExistingRolloutPath(dbPath); ok {
+				if actualID, verifyErr := rollout.ThreadIDFromPath(existing); verifyErr == nil {
+					if actualID == string(threadID) {
+						return existing, nil
+					}
+				} else {
+					unverified = existing
+				}
+			}
+		}
+	}
+	path, err := rollout.FindThreadPath(codexHome, string(threadID), archived)
+	if err == nil {
+		if r.state != nil {
+			_ = r.state.ReadRepairRolloutPath(context.Background(), string(threadID), path, archived)
+		}
+		return path, nil
+	}
+	if unverified != "" {
+		return unverified, nil
+	}
+	return "", err
 }
 
 func (r *Router) threadRolloutExistsAny(threadID session.ThreadID) bool {
@@ -1950,7 +2281,17 @@ func (r *Router) markExplicitThreadName(record *session.Record) error {
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	record.Metadata.Extra[explicitThreadNameExtraKey] = true
-	return r.saveThreadRecord(record)
+	if err := r.saveThreadRecord(record); err != nil {
+		return err
+	}
+	codexHome := codexHomeFromSessionStore(r.store)
+	if err := updateRustStateThreadName(codexHome, string(record.ID), record.Title); err != nil {
+		return fmt.Errorf("failed to update sqlite thread name: %w", err)
+	}
+	if err := rollout.AppendThreadName(codexHome, string(record.ID), record.Title); err != nil {
+		return fmt.Errorf("failed to index thread name: %w", err)
+	}
+	return nil
 }
 
 func threadMetadataWriteError(threadID string, err error) error {
@@ -2019,34 +2360,19 @@ func (r *Router) handleMemoryReset(request *Request) (*MemoryResetResponse, erro
 		return nil, fmt.Errorf("%w: router is not configured", ErrInvalidRequest)
 	}
 	codexHome := codexHomeFromSessionStore(r.store)
-	if err := clearRustMemoriesSQLiteData(codexHome); err != nil {
+	var err error
+	if r.state != nil {
+		err = r.state.ClearMemoryData(context.Background())
+	} else {
+		err = clearRustMemoriesSQLiteData(codexHome)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("failed to clear memory rows in memories db: %w", err)
 	}
-	if err := clearMemoryRootContents(codexHome); err != nil {
+	if err := memories.ClearRootsContents(codexHome); err != nil {
 		return nil, fmt.Errorf("failed to clear memory directories under %s: %w", codexHome, err)
 	}
 	return &MemoryResetResponse{}, nil
-}
-
-func clearMemoryRootContents(codexHome string) error {
-	codexHome = strings.TrimSpace(codexHome)
-	if codexHome == "" {
-		return nil
-	}
-	memoryRoot := filepath.Join(codexHome, "memories")
-	entries, err := os.ReadDir(memoryRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(memoryRoot, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStartResponse, error) {
@@ -2185,21 +2511,130 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 	if err != nil {
 		return nil, err
 	}
-	records, err := r.store.AllRecords()
-	if err != nil {
-		return nil, err
-	}
-	records = materializedThreadRecords(records)
 	var page *session.Page
-	if params.UseStateDBOnly {
-		page, err = session.ListRecords(records, options)
+	if r.state != nil {
+		if !params.UseStateDBOnly {
+			r.repairStateThreadListing(options.Search != "")
+		}
+		page, err = r.listRecordsFromState(options)
 	} else {
-		page, err = r.listRecordsIncludingRollouts(records, options, false)
+		records, readErr := r.store.AllRecords()
+		if readErr != nil {
+			return nil, readErr
+		}
+		records = materializedThreadRecords(records)
+		if params.UseStateDBOnly {
+			page, err = session.ListRecords(records, options)
+		} else {
+			page, err = r.listRecordsIncludingRollouts(records, options, false)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	return BuildListResponse(page, r.store, false)
+}
+
+func (r *Router) repairStateThreadListing(fullReconcile bool) {
+	if r == nil || r.state == nil || r.store == nil {
+		return
+	}
+	codexHome := codexHomeFromSessionStore(r.store)
+	for _, archived := range []bool{false, true} {
+		paths, err := rollout.CollectRolloutPaths(filepath.Join(codexHome, map[bool]string{false: rollout.SessionsSubdir, true: rollout.ArchivedSessionsSubdir}[archived]))
+		if err != nil {
+			continue
+		}
+		for _, path := range paths {
+			threadID, err := rollout.ThreadIDFromPath(path)
+			if err != nil {
+				continue
+			}
+			if fullReconcile {
+				_ = r.state.ReconcileRollout(context.Background(), path, archived)
+			} else {
+				_ = r.state.ReadRepairRolloutPath(context.Background(), threadID, path, archived)
+			}
+		}
+	}
+}
+
+func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Page, error) {
+	rows, err := r.state.ListThreadRows(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	records := make([]session.Record, 0, len(rows))
+	for i := range rows {
+		row := &rows[i]
+		path, exists := rollout.ExistingRolloutPath(row.RolloutPath)
+		if !exists {
+			continue
+		}
+		record := session.Record{
+			ID:             session.ThreadID(row.ID),
+			SessionID:      row.ID,
+			ParentThreadID: session.ThreadID(nullString(row.ParentThreadID)),
+			Title:          nullString(row.Name),
+			Preview:        nullString(row.Preview),
+			Archived:       row.Archived,
+			CreatedAt:      time.UnixMilli(row.CreatedAtMS).UTC(),
+			UpdatedAt:      time.UnixMilli(row.UpdatedAtMS).UTC(),
+			RecencyAt:      time.UnixMilli(row.RecencyAtMS).UTC(),
+			Metadata: session.Metadata{
+				CWD:            nullString(row.CWD),
+				Model:          nullString(row.Model),
+				ModelProvider:  nullString(row.ModelProvider),
+				Source:         row.Source,
+				ThreadSource:   nullString(row.ThreadSource),
+				HistoryMode:    row.HistoryMode,
+				MemoryMode:     nullString(row.MemoryMode),
+				AgentNickname:  nullString(row.AgentNickname),
+				AgentRole:      nullString(row.AgentRole),
+				AgentPath:      nullString(row.AgentPath),
+				CLIVersion:     nullString(row.CLIVersion),
+				SandboxPolicy:  nullString(row.SandboxPolicy),
+				ApprovalPolicy: nullString(row.ApprovalMode),
+				Extra: map[string]any{
+					"rollout_path":       path,
+					"rollout_title":      nullString(row.Title),
+					"first_user_message": nullString(row.FirstUserMessage),
+					"reasoning_effort":   nullString(row.ReasoningEffort),
+					"tokens_used":        row.TokensUsed,
+				},
+			},
+		}
+		if row.Name.Valid && strings.TrimSpace(row.Name.String) != "" {
+			record.Metadata.Extra[explicitThreadNameExtraKey] = true
+		}
+		if row.GitSHA.Valid || row.GitBranch.Valid || row.GitOriginURL.Valid {
+			record.Metadata.Git = map[string]string{
+				"sha":        nullString(row.GitSHA),
+				"branch":     nullString(row.GitBranch),
+				"origin_url": nullString(row.GitOriginURL),
+			}
+		}
+		if row.SectionID.Valid {
+			record.Section = &session.ThreadSection{ID: row.SectionID.String, Name: nullString(row.SectionName)}
+		}
+		if row.SectionPosition.Valid {
+			position := row.SectionPosition.Int64
+			record.SectionPosition = &position
+		}
+		if row.SectionEnteredAtMS.Valid {
+			entered := time.UnixMilli(row.SectionEnteredAtMS.Int64).UTC()
+			record.SectionEnteredAt = &entered
+		}
+		records = append(records, record)
+	}
+	return session.ListRecords(records, options)
+}
+
+func nullString(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
 }
 
 func (r *Router) handleThreadSectionList(request *Request) (*ThreadSectionListResponse, error) {
@@ -2284,6 +2719,16 @@ func (r *Router) handleThreadItemsList(request *Request) (*ThreadItemsListRespon
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	if r.state != nil {
+		mode, _, err := r.threadHistoryModeWithRepair(session.ThreadID(params.ThreadID))
+		if err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+			return r.buildPaginatedThreadItemsResponse(&params)
+		}
+		return nil, methodNotFound("thread/items/list is not supported yet")
+	}
 	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, true)
@@ -2305,6 +2750,15 @@ func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	if r.state != nil {
+		mode, found, err := r.threadHistoryModeWithRepair(session.ThreadID(params.ThreadID))
+		if err != nil {
+			return nil, err
+		}
+		if found && strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+			return r.buildPaginatedThreadTurnsResponse(&params, nil)
+		}
+	}
 	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
 		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, true)
@@ -2317,6 +2771,204 @@ func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {
 	}
 	r.attachRolloutTurnSnapshots(record)
 	return BuildTurnsResponse(record, &params)
+}
+
+func (r *Router) threadHistoryModeWithRepair(threadID session.ThreadID) (string, bool, error) {
+	if r == nil || r.state == nil {
+		return "", false, nil
+	}
+	ctx := context.Background()
+	mode, found, err := r.state.ThreadHistoryMode(ctx, string(threadID))
+	if err != nil || found {
+		return mode, found, err
+	}
+	for _, archived := range []bool{false, true} {
+		if _, findErr := r.findThreadRolloutPath(threadID, archived); findErr == nil {
+			break
+		}
+	}
+	return r.state.ThreadHistoryMode(ctx, string(threadID))
+}
+
+func (r *Router) buildPaginatedThreadItemsResponse(params *ThreadItemsListParams) (*ThreadItemsListResponse, error) {
+	limit := threadItemsDefaultLimit
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > threadItemsMaxLimit {
+		limit = threadItemsMaxLimit
+	}
+	direction := state.ThreadHistorySortAsc
+	if params.SortDirection == SortDesc {
+		direction = state.ThreadHistorySortDesc
+	}
+	page, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
+		ThreadID:      params.ThreadID,
+		TurnID:        params.TurnID,
+		Cursor:        params.Cursor,
+		PageSize:      limit,
+		SortDirection: direction,
+	})
+	if err != nil {
+		return nil, paginatedThreadHistoryError(err, true)
+	}
+	data := make([]ThreadItemEntry, 0, len(page.Items))
+	for _, stored := range page.Items {
+		item, err := deserializeStateThreadItem(stored)
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, ThreadItemEntry{TurnID: stored.TurnID, Item: item})
+	}
+	return &ThreadItemsListResponse{Data: data, NextCursor: page.NextCursor, BackwardsCursor: page.BackwardsCursor}, nil
+}
+
+func (r *Router) buildPaginatedThreadTurnsResponse(params *ThreadTurnsListParams, options *turnsResponseOptions) (*TurnsPage, error) {
+	limit := threadTurnsDefaultLimit
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > threadTurnsMaxLimit {
+		limit = threadTurnsMaxLimit
+	}
+	direction := state.ThreadHistorySortDesc
+	if params.SortDirection == SortAsc {
+		direction = state.ThreadHistorySortAsc
+	}
+	itemsView := params.ItemsView
+	if itemsView == "" {
+		itemsView = TurnItemsSummary
+	}
+	storedView := state.ThreadHistoryItemsNotLoaded
+	if itemsView == TurnItemsSummary {
+		storedView = state.ThreadHistoryItemsSummary
+	}
+	page, err := r.state.ListThreadHistoryTurns(context.Background(), state.ThreadHistoryListTurnsParams{
+		ThreadID:      params.ThreadID,
+		Cursor:        params.Cursor,
+		PageSize:      limit,
+		SortDirection: direction,
+		ItemsView:     storedView,
+	})
+	if err != nil {
+		return nil, paginatedThreadHistoryError(err, false)
+	}
+	turns := make([]Turn, 0, len(page.Turns))
+	for _, stored := range page.Turns {
+		turn, err := stateThreadTurnToAPI(stored, itemsView)
+		if err != nil {
+			return nil, err
+		}
+		if itemsView == TurnItemsFull {
+			items, err := r.loadPaginatedTurnFullItems(params.ThreadID, turn.ID)
+			if err != nil {
+				return nil, err
+			}
+			turn.Items = items
+		}
+		turns = append(turns, turn)
+	}
+	if options == nil {
+		normalizeThreadTurnsStatus(turns, IdleStatus(), false)
+	} else {
+		normalizeThreadTurnsStatus(turns, options.LoadedStatus, options.HasLiveRunningThread)
+	}
+	return &TurnsPage{Data: turns, NextCursor: page.NextCursor, BackwardsCursor: page.BackwardsCursor}, nil
+}
+
+func (r *Router) loadPaginatedTurnFullItems(threadID, turnID string) ([]ThreadItem, error) {
+	var cursor *string
+	items := []ThreadItem{}
+	for {
+		page, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
+			ThreadID: threadID, TurnID: &turnID, Cursor: cursor, PageSize: threadItemsMaxLimit, SortDirection: state.ThreadHistorySortAsc,
+		})
+		if err != nil {
+			return nil, paginatedThreadHistoryError(err, false)
+		}
+		for _, stored := range page.Items {
+			item, err := deserializeStateThreadItem(stored)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		if page.NextCursor == nil {
+			return items, nil
+		}
+		if cursor != nil && *cursor == *page.NextCursor {
+			return nil, fmt.Errorf("failed to load full turn items for %s: thread store returned a repeated cursor", turnID)
+		}
+		cursor = page.NextCursor
+	}
+}
+
+func deserializeStateThreadItem(stored state.ThreadHistoryItem) (ThreadItem, error) {
+	var item ThreadItem
+	if err := json.Unmarshal(stored.ItemJSON, &item); err != nil {
+		return ThreadItem{}, fmt.Errorf("failed to deserialize stored thread item %s: %w", stored.ItemID, err)
+	}
+	return item, nil
+}
+
+func stateThreadTurnToAPI(stored state.ThreadHistoryTurn, itemsView TurnItemsView) (Turn, error) {
+	turn := Turn{
+		ID: stored.TurnID, Items: []ThreadItem{}, ItemsView: itemsView, Status: TurnStatus(stored.Status),
+		StartedAt: stored.StartedAt, CompletedAt: stored.CompletedAt, DurationMS: stored.DurationMS,
+	}
+	if len(stored.ErrorJSON) > 0 {
+		var decoded struct {
+			Message                string         `json:"message"`
+			CodexErrorInfo         CodexErrorInfo `json:"codexErrorInfo"`
+			CodexErrorInfoSnake    CodexErrorInfo `json:"codex_error_info"`
+			AdditionalDetails      *string        `json:"additionalDetails"`
+			AdditionalDetailsSnake *string        `json:"additional_details"`
+		}
+		if err := json.Unmarshal(stored.ErrorJSON, &decoded); err != nil {
+			return Turn{}, fmt.Errorf("failed to deserialize stored turn error %s: %w", stored.TurnID, err)
+		}
+		info := decoded.CodexErrorInfo
+		if info == nil {
+			info = decoded.CodexErrorInfoSnake
+		}
+		details := decoded.AdditionalDetails
+		if details == nil {
+			details = decoded.AdditionalDetailsSnake
+		}
+		turn.Error = &TurnError{Message: decoded.Message, CodexErrorInfo: info, AdditionalDetails: details}
+	}
+	for _, storedItem := range stored.Items {
+		item, err := deserializeStateThreadItem(storedItem)
+		if err != nil {
+			return Turn{}, err
+		}
+		turn.Items = append(turn.Items, item)
+	}
+	return turn, nil
+}
+
+func paginatedThreadHistoryError(err error, itemsMethod bool) error {
+	var historyErr *state.ThreadHistoryError
+	if errors.As(err, &historyErr) {
+		switch historyErr.Kind {
+		case state.ThreadHistoryInvalidRequest:
+			return jsonRPCInvalidRequest(historyErr.Error())
+		case state.ThreadHistoryUnsupported:
+			if itemsMethod {
+				return methodNotFound("thread/items/list is not supported yet")
+			}
+			return methodNotFound(historyErr.Operation + " is not supported yet")
+		case state.ThreadHistoryNotFound:
+			return jsonRPCInvalidRequest("no rollout found for thread id " + historyErr.ThreadID)
+		}
+	}
+	return fmt.Errorf("failed to list thread history: %w", err)
 }
 
 func threadItemsListReadError(threadID string, err error) error {
@@ -2392,6 +3044,19 @@ func (r *Router) handleThreadSearchOccurrences(request *Request) (*ThreadSearchO
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	if r.state != nil {
+		mode, found, err := r.threadHistoryModeWithRepair(session.ThreadID(strings.TrimSpace(params.ThreadID)))
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, jsonRPCInvalidRequest("no rollout found for thread id " + strings.TrimSpace(params.ThreadID))
+		}
+		if !strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+			return nil, methodNotFound("thread/searchOccurrences is not supported yet")
+		}
+		return r.buildPaginatedThreadSearchOccurrencesResponse(&params)
+	}
 	record, err := r.readThreadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), true, true)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
@@ -2403,6 +3068,45 @@ func (r *Router) handleThreadSearchOccurrences(request *Request) (*ThreadSearchO
 		}
 	}
 	return buildThreadSearchOccurrences(record, &params)
+}
+
+func (r *Router) buildPaginatedThreadSearchOccurrencesResponse(params *ThreadSearchOccurrencesParams) (*ThreadSearchOccurrencesResponse, error) {
+	pageSize := threadSearchOccurrencesDefaultLimit
+	if params.Limit != nil {
+		pageSize = int(*params.Limit)
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if pageSize > threadSearchOccurrencesMaxLimit {
+		pageSize = threadSearchOccurrencesMaxLimit
+	}
+	page, err := r.state.SearchThreadHistoryOccurrences(context.Background(), state.ThreadHistorySearchOccurrencesParams{
+		ThreadID: params.ThreadID, SearchTerm: params.SearchTerm, Cursor: params.Cursor, PageSize: pageSize,
+	})
+	if err != nil {
+		var historyErr *state.ThreadHistoryError
+		if errors.As(err, &historyErr) {
+			switch historyErr.Kind {
+			case state.ThreadHistoryInvalidRequest:
+				return nil, jsonRPCInvalidRequest(historyErr.Error())
+			case state.ThreadHistoryUnsupported:
+				return nil, methodNotFound(historyErr.Operation + " is not supported yet")
+			case state.ThreadHistoryNotFound:
+				return nil, jsonRPCInvalidRequest("no rollout found for thread id " + historyErr.ThreadID)
+			}
+		}
+		return nil, fmt.Errorf("failed to search thread occurrences: %w", err)
+	}
+	data := make([]ThreadSearchOccurrence, 0, len(page.Items))
+	for _, item := range page.Items {
+		data = append(data, ThreadSearchOccurrence{
+			TurnID: item.TurnID, ItemID: item.ItemID, Snippet: item.Snippet,
+			SnippetMatchRange: ThreadSearchTextRange{Start: item.SnippetMatchRange.Start, End: item.SnippetMatchRange.End},
+			TurnCursor:        item.TurnCursor,
+		})
+	}
+	return &ThreadSearchOccurrencesResponse{Data: data, NextCursor: page.NextCursor}, nil
 }
 
 func (r *Router) handleThreadLoadedList(request *Request) (*ThreadLoadedListResponse, error) {

@@ -80,15 +80,25 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	if codexHome == "" {
 		codexHome = ".codex"
 	}
+	preparedRuntimeOptions, ownedStateRuntime, err := prepareSharedStateRuntime(ctx, codexHome, options.RuntimeOptions)
+	if err != nil {
+		return err
+	}
+	if ownedStateRuntime != nil {
+		defer ownedStateRuntime.Close()
+	}
+	if preparedRuntimeOptions.logDBInstallation != nil {
+		defer preparedRuntimeOptions.logDBInstallation.Close(context.Background())
+	}
 	socketPath, err := UnixSocketPath(options.Listen, codexHome)
 	if err != nil {
 		return err
 	}
 	return serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
 		if strings.TrimSpace(options.StoreRoot) != "" {
-			return NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, options.RuntimeOptions)
+			return NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
 		}
-		return NewUnixSocketRouterWithOptions(codexHome, options.RuntimeOptions)
+		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
 	})
 }
 

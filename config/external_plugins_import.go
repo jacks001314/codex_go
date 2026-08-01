@@ -170,7 +170,7 @@ func (s *ConfigService) externalConfiguredPlugins() (map[string]bool, map[string
 	configuredIDs := map[string]bool{}
 	if data, err := os.ReadFile(filepath.Join(s.codexHome, "config.toml")); err == nil {
 		values := map[string]any{}
-		if toml.Unmarshal(data, &values) == nil {
+		if toml.Unmarshal(stripUTF8BOM(data), &values) == nil {
 			if plugins, ok := values["plugins"].(map[string]any); ok {
 				for pluginID := range plugins {
 					configuredIDs[pluginID] = true

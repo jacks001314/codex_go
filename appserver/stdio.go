@@ -42,7 +42,16 @@ func NewDefaultStdioServer(options *StdioOptions) *StdioServer {
 		storeRoot = filepath.Join(codexHome, "sessions")
 	}
 	store := session.NewStore(storeRoot)
-	return NewStdioServer(NewDefaultRuntimeRouterWithOptions(store, codexHome, options.RuntimeOptions))
+	prepared, ownedStateRuntime, err := prepareSharedStateRuntime(context.Background(), codexHome, options.RuntimeOptions)
+	if ownedStateRuntime != nil {
+		prepared.closeStateRuntimeOnRouterClose = true
+	}
+	if prepared != nil && prepared.logDBInstallation != nil {
+		prepared.closeLogDBInstallationOnRouterClose = true
+	}
+	router := NewDefaultRuntimeRouterWithOptions(store, codexHome, prepared)
+	router.startupErr = err
+	return NewStdioServer(router)
 }
 
 func (s *StdioServer) Serve(stdin io.Reader, stdout io.Writer) error {
@@ -50,6 +59,9 @@ func (s *StdioServer) Serve(stdin io.Reader, stdout io.Writer) error {
 		return errors.New("app-server stdio router is not configured")
 	}
 	defer s.router.Close()
+	if err := s.router.StartupError(); err != nil {
+		return err
+	}
 	return serveJSONLineConnection(s.router, stdin, stdout)
 }
 

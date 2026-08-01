@@ -349,6 +349,7 @@ func rustExecEventsSourcePath(t *testing.T) string {
 		candidates = append(candidates, filepath.Join(env, "exec", "src", "exec_events.rs"))
 	}
 	candidates = append(candidates,
+		filepath.Join("..", "..", "git", "codex", "codex-rs", "exec", "src", "exec_events.rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs", "exec", "src", "exec_events.rs"),
 		filepath.Join("..", "codex-main", "codex-rs", "exec", "src", "exec_events.rs"),
 	)

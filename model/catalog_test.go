@@ -140,6 +140,9 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 					"personality_friendly": "Friendly",
 					"personality_pragmatic": "Pragmatic"
 				},
+				"collaboration_modes": {
+					"default": ""
+				},
 				"token_budget": {
 					"reminder_threshold_tokens": 12000,
 					"reminder_message_template": "remaining: {n_remaining}",
@@ -170,13 +173,21 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	if model.ModelMessages == nil || model.ModelMessages.PersonalityFriendly != "Friendly" {
 		t.Fatalf("model messages = %#v", model.ModelMessages)
 	}
+	if model.ModelMessages.CollaborationModes == nil || model.ModelMessages.CollaborationModes.Default == nil || *model.ModelMessages.CollaborationModes.Default != "" || model.ModelMessages.CollaborationModes.Plan != nil {
+		t.Fatalf("collaboration mode messages = %#v", model.ModelMessages.CollaborationModes)
+	}
 	if model.ModelMessages.TokenBudget == nil || model.ModelMessages.TokenBudget.GuidanceMessage != "keep notes" || model.ModelMessages.TokenBudget.AutoCompactFallbackBufferTokens != 8000 {
 		t.Fatalf("model token budget = %#v", model.ModelMessages.TokenBudget)
 	}
 	cloned := cloneModelInfo(model)
 	cloned.ModelMessages.TokenBudget.GuidanceMessage = "changed"
+	changedDefault := "changed"
+	cloned.ModelMessages.CollaborationModes.Default = &changedDefault
 	if model.ModelMessages.TokenBudget.GuidanceMessage != "keep notes" {
 		t.Fatalf("clone shares model token budget = %#v", model.ModelMessages.TokenBudget)
+	}
+	if model.ModelMessages.CollaborationModes.Default == nil || *model.ModelMessages.CollaborationModes.Default != "" {
+		t.Fatalf("clone shares collaboration messages = %#v", model.ModelMessages.CollaborationModes)
 	}
 }
 
@@ -588,6 +599,40 @@ func TestPersonalityDisabledClearsModelMessages(t *testing.T) {
 	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
 	if updated.ModelMessages != nil {
 		t.Fatal("ModelMessages should be cleared")
+	}
+}
+
+func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
+	defaultInstructions := "catalog default"
+	planInstructions := "catalog plan"
+	for _, test := range []struct {
+		name   string
+		config *ModelsManagerConfig
+	}{
+		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: "override", PersonalityEnabled: true}},
+		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			info := ModelInfo{
+				BaseInstructions: "base",
+				ModelMessages: &ModelMessages{
+					InstructionsTemplate: "Hello {{ personality }}",
+					PersonalityFriendly:  "friendly",
+					PersonalityPragmatic: "pragmatic",
+					CollaborationModes: &CollaborationModeMessages{
+						Default: &defaultInstructions,
+						Plan:    &planInstructions,
+					},
+				},
+			}
+			updated := WithConfigOverrides(info, test.config)
+			if updated.ModelMessages == nil || updated.ModelMessages.CollaborationModes == nil || updated.ModelMessages.CollaborationModes.Default == nil || *updated.ModelMessages.CollaborationModes.Default != defaultInstructions || updated.ModelMessages.CollaborationModes.Plan == nil || *updated.ModelMessages.CollaborationModes.Plan != planInstructions {
+				t.Fatalf("collaboration messages were not preserved: %#v", updated.ModelMessages)
+			}
+			if updated.ModelMessages.InstructionsTemplate != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
+				t.Fatalf("instruction messages were not cleared: %#v", updated.ModelMessages)
+			}
+		})
 	}
 }
 

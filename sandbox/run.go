@@ -41,6 +41,7 @@ type CommandRunRequest struct {
 type CommandRunPlan struct {
 	Command                 []string
 	CWD                     string
+	SandboxType             SandboxType
 	PermissionProfileID     string
 	PermissionProfile       *PermissionProfile
 	PermissionProfileJSON   string
@@ -99,6 +100,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 	plan := &CommandRunPlan{
 		Command:              cloneSandboxStrings(req.Command),
 		CWD:                  strings.TrimSpace(req.CWD),
+		SandboxType:          SandboxTypeNone,
 		UseLegacyLandlock:    req.UseLegacyLandlock,
 		AllowNetworkForProxy: req.AllowNetworkForProxy,
 		CodexLinuxSandboxExe: cleanRunPath(req.CodexLinuxSandboxExe),
@@ -107,14 +109,22 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 	var sandboxState *SandboxState
 	permissionUnsupportedAdded := false
 	if req.ResolvedPermissionProfile != nil {
-		profile := clonePermissionProfile(req.ResolvedPermissionProfile)
+		canonical, err := CanonicalPermissionProfile(req.ResolvedPermissionProfile, req.ResolvedPermissionProfileJSON)
+		if err != nil {
+			return nil, fmt.Errorf("%w: resolved permission profile JSON is invalid: %v", ErrInvalidSandboxRunRequest, err)
+		}
+		profile := clonePermissionProfile(canonical)
 		profileID := strings.TrimSpace(req.ResolvedPermissionProfileID)
 		if profileID == "" {
 			profileID = "resolved"
 		}
 		plan.PermissionProfileID = profileID
 		plan.PermissionProfile = &profile
-		plan.PermissionProfileJSON = strings.TrimSpace(req.ResolvedPermissionProfileJSON)
+		profileJSON, err := RuntimePermissionProfileJSON(profile)
+		if err != nil {
+			return nil, err
+		}
+		plan.PermissionProfileJSON = profileJSON
 		if !profile.Disabled && !platformSupportsPermissionProfileSandbox() {
 			unsupported = append(unsupported, fmt.Sprintf("permission profile %q", profileID))
 			permissionUnsupportedAdded = true
@@ -201,12 +211,16 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			return nil, err
 		}
 		plan.Command = wrapped
+		plan.SandboxType = SandboxTypeLinuxSeccomp
 	} else if runtime.GOOS == "darwin" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
 		wrapped, err := createSeatbeltCommandArgs(plan.Command, plan.CWD, plan.PermissionProfile, req.AllowUnixSockets)
 		if err != nil {
 			return nil, err
 		}
 		plan.Command = wrapped
+		plan.SandboxType = SandboxTypeMacosSeatbelt
+	} else if runtime.GOOS == "windows" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
+		plan.SandboxType = SandboxTypeWindowsRestrictedToken
 	}
 	return plan, nil
 }
@@ -278,7 +292,11 @@ func applySandboxStateOverrides(plan *CommandRunPlan, req *CommandRunRequest) er
 	if err != nil {
 		return err
 	}
-	plan.PermissionProfileJSON = string(data)
+	profile, err = canonicalPermissionProfileFromJSON(data)
+	if err != nil {
+		return err
+	}
+	plan.PermissionProfileJSON = profile.runtimeJSON
 	plan.PermissionProfile = &profile
 	return nil
 }
@@ -338,7 +356,16 @@ func (r *rustPermissionProfileWire) canReadPathWithCWD(path string, cwd string) 
 func parsePermissionProfileJSON(raw json.RawMessage) (*PermissionProfile, error) {
 	var rust rustPermissionProfileWire
 	if err := json.Unmarshal(raw, &rust); err == nil && rust.Type != "" {
-		return rust.toPermissionProfile()
+		profile, err := rust.toPermissionProfile()
+		if err != nil {
+			return nil, err
+		}
+		canonical, marshalErr := json.Marshal(rust)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		profile.runtimeJSON = string(canonical)
+		return profile, nil
 	}
 	var profile PermissionProfile
 	if err := json.Unmarshal(raw, &profile); err != nil {
@@ -355,7 +382,28 @@ func ParseRuntimePermissionProfileJSON(raw string) (*PermissionProfile, error) {
 }
 
 func RuntimePermissionProfileJSON(profile PermissionProfile) (string, error) {
+	if strings.TrimSpace(profile.runtimeJSON) != "" {
+		return profile.runtimeJSON, nil
+	}
 	return rustPermissionProfileJSON(profile)
+}
+
+// CanonicalPermissionProfile folds the legacy parallel JSON input into the
+// profile once. A profile that already owns canonical runtime data always wins.
+func CanonicalPermissionProfile(profile *PermissionProfile, legacyJSON string) (*PermissionProfile, error) {
+	if profile == nil {
+		return nil, fmt.Errorf("%w: permission profile is required", ErrInvalidSandboxRunRequest)
+	}
+	if strings.TrimSpace(profile.runtimeJSON) != "" || strings.TrimSpace(legacyJSON) == "" {
+		clone := clonePermissionProfile(profile)
+		return &clone, nil
+	}
+	parsed, err := ParseRuntimePermissionProfileJSON(legacyJSON)
+	if err != nil {
+		return nil, err
+	}
+	clone := clonePermissionProfile(parsed)
+	return &clone, nil
 }
 
 type rustPermissionProfileWire struct {
@@ -405,22 +453,53 @@ func (r rustPermissionProfileWire) toPermissionProfile() (*PermissionProfile, er
 		if r.FileSys != nil && r.FileSys.Type == "unrestricted" {
 			policy = NewDangerFullAccessPolicy()
 		} else if r.FileSys != nil {
+			slashTmpWritable := false
+			ensureWorkspacePolicy := func() {
+				if policy.Kind == SandboxWorkspaceWrite {
+					return
+				}
+				policy = NewWorkspaceWritePolicy()
+				policy.ExcludeSlashTmp = true
+				policy.ExcludeTmpdirEnvVar = true
+			}
 			for _, entry := range r.FileSys.Entries {
+				if !supportsSymbolicSlashTmp() && entry.Path.isSymbolicSlashTmp() {
+					if strings.EqualFold(entry.Access, string(FileSystemAccessWrite)) {
+						slashTmpWritable = true
+					}
+					continue
+				}
 				if strings.EqualFold(entry.Access, string(FileSystemAccessDeny)) {
 					deniedReadEntries = append(deniedReadEntries, entry.toFileSystemSandboxEntry())
 					continue
 				}
 				if strings.EqualFold(entry.Access, string(FileSystemAccessWrite)) {
-					if path := entry.Path.resolvedSandboxPolicyPath(); path != "" {
-						if policy.Kind != SandboxWorkspaceWrite {
-							policy = NewWorkspaceWritePolicy()
-							policy.ExcludeSlashTmp = true
-							policy.ExcludeTmpdirEnvVar = true
+					ensureWorkspacePolicy()
+					if entry.Path.Type == "special" {
+						switch strings.ToLower(entry.Path.Value.Kind) {
+						case "project_roots", "current_working_directory":
+							if entry.Path.Value.Subpath != nil && *entry.Path.Value.Subpath != "" {
+								policy.WritableRoots = append(policy.WritableRoots, *entry.Path.Value.Subpath)
+							}
+						case "tmpdir":
+							policy.ExcludeTmpdirEnvVar = false
+						case "slash_tmp":
+							policy.ExcludeSlashTmp = false
+						default:
+							if path := entry.Path.resolvedSandboxPolicyPath(); path != "" {
+								policy.WritableRoots = append(policy.WritableRoots, path)
+							}
 						}
+					} else if path := entry.Path.resolvedSandboxPolicyPath(); path != "" {
 						policy.WritableRoots = append(policy.WritableRoots, path)
 					}
 				}
 			}
+			if policy.Kind == SandboxWorkspaceWrite && slashTmpWritable {
+				policy.ExcludeSlashTmp = false
+			}
+			policy.fullDiskWriteAccess = r.FileSys.hasFullDiskWriteAccess()
+			policy.fullDiskWriteAccessSet = true
 		}
 		policy.NetworkAccess = networkEnabled
 		profile := PermissionProfile{SandboxPolicy: policy, NetworkEnabled: networkEnabled, DeniedReadEntries: deniedReadEntries}
@@ -445,13 +524,84 @@ func linuxPermissionProfileJSONForPlan(plan *CommandRunPlan) (string, error) {
 	if plan == nil {
 		return "", fmt.Errorf("%w: run plan is nil", ErrInvalidSandboxRunRequest)
 	}
-	if strings.TrimSpace(plan.PermissionProfileJSON) != "" {
-		return plan.PermissionProfileJSON, nil
-	}
 	if plan.PermissionProfile == nil {
 		return "", fmt.Errorf("%w: permission profile is required", ErrInvalidSandboxRunRequest)
 	}
-	return rustPermissionProfileJSON(*plan.PermissionProfile)
+	profileJSON, err := RuntimePermissionProfileJSON(*plan.PermissionProfile)
+	if err != nil {
+		return "", err
+	}
+	plan.PermissionProfileJSON = profileJSON
+	return profileJSON, nil
+}
+
+func canonicalPermissionProfileFromJSON(raw []byte) (PermissionProfile, error) {
+	profile, err := ParseRuntimePermissionProfileJSON(string(raw))
+	if err != nil {
+		return PermissionProfile{}, err
+	}
+	return clonePermissionProfile(profile), nil
+}
+
+// PermissionProfileWithAdditionalPermissions applies per-command grants to
+// the canonical runtime profile without dropping read/deny entries.
+func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, additional *AdditionalPermissionProfile) (*PermissionProfile, error) {
+	if profile == nil {
+		base := WorkspaceWritePermissionProfile()
+		profile = &base
+	}
+	cloned := clonePermissionProfile(profile)
+	if additional == nil || cloned.Disabled {
+		return &cloned, nil
+	}
+	raw, err := RuntimePermissionProfileJSON(cloned)
+	if err != nil {
+		return nil, err
+	}
+	wire, err := parseRustPermissionProfileWireJSON([]byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	if additional.Network != nil && *additional.Network {
+		wire.Network = string(NetworkEnabled)
+	}
+	if len(additional.FileSystem) > 0 && wire.Type == "managed" {
+		if wire.FileSys == nil {
+			wire.FileSys = &rustPermissionFilesystem{Type: "restricted"}
+		}
+		if wire.FileSys.Type != "unrestricted" {
+			if wire.FileSys.Type == "" {
+				wire.FileSys.Type = "restricted"
+			}
+			for _, path := range additional.FileSystem {
+				cleaned := cleanRunPath(path)
+				if cleaned == "" || runtimeProfileHasPathAccess(wire.FileSys.Entries, cleaned, string(FileSystemAccessWrite)) {
+					continue
+				}
+				wire.FileSys.Entries = append(wire.FileSys.Entries, rustPermissionFilesystemEntry{
+					Path: rustPermissionFilesystemPath{Type: "path", Path: cleaned}, Access: string(FileSystemAccessWrite),
+				})
+			}
+		}
+	}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := canonicalPermissionProfileFromJSON(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return &canonical, nil
+}
+
+func runtimeProfileHasPathAccess(entries []rustPermissionFilesystemEntry, path string, access string) bool {
+	for _, entry := range entries {
+		if entry.Access == access && entry.Path.Type == "path" && cleanRunPath(entry.Path.Path) == path {
+			return true
+		}
+	}
+	return false
 }
 
 func rustPermissionProfileJSON(profile PermissionProfile) (string, error) {
@@ -648,12 +798,103 @@ func (p rustPermissionFilesystemPath) resolvedRuntimePath(cwd string) string {
 			}
 			return cleanRunPath(cwd)
 		case "slash_tmp":
-			return cleanRunPath(slashTmpPath())
+			if slashTmp := slashTmpPath(); slashTmp != "" {
+				return cleanRunPath(slashTmp)
+			}
 		case "tmpdir":
 			return cleanRunPath(os.TempDir())
 		}
 	}
 	return ""
+}
+
+func (p rustPermissionFilesystemPath) isSymbolicSlashTmp() bool {
+	return p.Type == "special" && strings.EqualFold(p.Value.Kind, "slash_tmp")
+}
+
+func (f *rustPermissionFilesystem) hasFullDiskWriteAccess() bool {
+	if f == nil {
+		return false
+	}
+	if strings.EqualFold(f.Type, "unrestricted") {
+		return true
+	}
+	rootWritable := false
+	for _, entry := range f.Entries {
+		if entry.Path.Type == "special" && strings.EqualFold(entry.Path.Value.Kind, "root") && strings.EqualFold(entry.Access, string(FileSystemAccessWrite)) {
+			rootWritable = true
+			break
+		}
+	}
+	if !rootWritable {
+		return false
+	}
+	for _, entry := range f.Entries {
+		if strings.EqualFold(entry.Access, string(FileSystemAccessWrite)) {
+			continue
+		}
+		if !supportsSymbolicSlashTmp() && entry.Path.isSymbolicSlashTmp() {
+			continue
+		}
+		switch entry.Path.Type {
+		case "glob_pattern":
+			return false
+		case "path":
+			if !f.hasWriteOverrideForPath(entry.Path) {
+				return false
+			}
+		case "special":
+			switch strings.ToLower(entry.Path.Value.Kind) {
+			case "root":
+				if strings.EqualFold(entry.Access, string(FileSystemAccessDeny)) {
+					return false
+				}
+			case "minimal":
+			case "project_roots", "current_working_directory", "tmpdir", "slash_tmp":
+				if !f.hasWriteOverrideForPath(entry.Path) {
+					return false
+				}
+			default:
+			}
+		}
+	}
+	return true
+}
+
+func (f *rustPermissionFilesystem) hasWriteOverrideForPath(path rustPermissionFilesystemPath) bool {
+	for _, candidate := range f.Entries {
+		if strings.EqualFold(candidate.Access, string(FileSystemAccessWrite)) && permissionFilesystemPathsEqual(candidate.Path, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func permissionFilesystemPathsEqual(left, right rustPermissionFilesystemPath) bool {
+	if left.Type != right.Type {
+		return false
+	}
+	switch left.Type {
+	case "path":
+		return cleanRunPath(left.Path) == cleanRunPath(right.Path)
+	case "glob_pattern":
+		return left.Pattern == right.Pattern
+	case "special":
+		if !strings.EqualFold(left.Value.Kind, right.Value.Kind) {
+			return false
+		}
+		leftSubpath := ""
+		if left.Value.Subpath != nil {
+			leftSubpath = *left.Value.Subpath
+		}
+		rightSubpath := ""
+		if right.Value.Subpath != nil {
+			rightSubpath = *right.Value.Subpath
+		}
+		return leftSubpath == rightSubpath
+	default:
+		return false
+	}
 }
 
 func runtimeAccessCanRead(access string) bool {

@@ -131,6 +131,7 @@ func rustCLIWorkspaceRoot(t *testing.T) string {
 		candidates = append(candidates, env)
 	}
 	candidates = append(candidates,
+		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
 	)

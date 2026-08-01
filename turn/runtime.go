@@ -14,23 +14,25 @@ import (
 )
 
 type RuntimeOptions struct {
-	Agent        model.AgentRunner
-	Router       *tool.Router
-	Hooks        tool.HookRunner
-	SteerMailbox *SteerMailbox
-	HostedTools  []any
-	Now          func() time.Time
-	MaxTurns     int
+	Agent             model.AgentRunner
+	Router            *tool.Router
+	Hooks             tool.HookRunner
+	SteerMailbox      *SteerMailbox
+	HostedTools       []any
+	Now               func() time.Time
+	MaxTurns          int
+	ExecutedToolCalls *ExecutedToolCallRecorder
 }
 
 type Runtime struct {
-	agent        model.AgentRunner
-	router       *tool.Router
-	hooks        tool.HookRunner
-	steerMailbox *SteerMailbox
-	hostedTools  []any
-	now          func() time.Time
-	maxTurns     int
+	agent             model.AgentRunner
+	router            *tool.Router
+	hooks             tool.HookRunner
+	steerMailbox      *SteerMailbox
+	hostedTools       []any
+	now               func() time.Time
+	maxTurns          int
+	executedToolCalls *ExecutedToolCallRecorder
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -41,14 +43,19 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 	if now == nil {
 		now = time.Now
 	}
+	executedToolCalls := options.ExecutedToolCalls
+	if executedToolCalls == nil {
+		executedToolCalls = NewExecutedToolCallRecorder()
+	}
 	return &Runtime{
-		agent:        options.Agent,
-		router:       options.Router,
-		hooks:        options.Hooks,
-		steerMailbox: options.SteerMailbox,
-		hostedTools:  append([]any(nil), options.HostedTools...),
-		now:          now,
-		maxTurns:     options.MaxTurns,
+		agent:             options.Agent,
+		router:            options.Router,
+		hooks:             options.Hooks,
+		steerMailbox:      options.SteerMailbox,
+		hostedTools:       append([]any(nil), options.HostedTools...),
+		now:               now,
+		maxTurns:          options.MaxTurns,
+		executedToolCalls: executedToolCalls,
 	}
 }
 
@@ -71,12 +78,38 @@ func (r *Runtime) StandaloneWebSearchRegistered() bool {
 	return ok
 }
 
+// PrepareToolMode resolves code-mode availability and consumes the per-thread
+// warning before a turn starts. Run calls it as a fallback for non-app-server
+// callers that do not preflight the turn.
+func (r *Runtime) PrepareToolMode(requestedToolMode string, disableCodeModeFallback bool) (string, string) {
+	requestedToolMode = strings.ToLower(strings.TrimSpace(requestedToolMode))
+	if requestedToolMode == "" {
+		requestedToolMode = model.ToolModeCodeMode
+	}
+	effectiveToolMode := requestedToolMode
+	if r == nil || r.router == nil {
+		return effectiveToolMode, ""
+	}
+	codeModeErr := r.router.CodeModeAvailability()
+	if codeModeErr != nil && requestedToolMode == model.ToolModeCodeMode && !disableCodeModeFallback {
+		effectiveToolMode = model.ToolModeDirect
+	}
+	if codeModeErr == nil || (requestedToolMode != model.ToolModeCodeMode && requestedToolMode != model.ToolModeCodeModeOnly) {
+		return effectiveToolMode, ""
+	}
+	return effectiveToolMode, r.router.TakeCodeModeUnavailableWarning(effectiveToolMode)
+}
+
 func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoopResult, error) {
 	if r == nil || r.agent == nil {
 		return nil, errors.New("turn runtime agent is nil")
 	}
 	if request == nil {
 		return nil, model.ErrInvalidAgentRequest
+	}
+	var executedToolCalls *ExecutedToolCallRecorder
+	if request.ExecutedToolCallMetadataEnabled {
+		executedToolCalls = r.executedToolCalls
 	}
 	if r.router == nil {
 		inputItems := append([]any(nil), request.InputItems...)
@@ -94,6 +127,10 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			timing = NewTimingState()
 		}
 		timing.MarkTurnStarted(r.now())
+		var executedToolCallAttachment *ExecutedToolCallAttachment
+		if executedToolCalls != nil {
+			inputItems, executedToolCallAttachment = executedToolCalls.AttachPendingToPrompt(inputItems)
+		}
 		sampling := timing.BeginSampling(r.now())
 		response, err := r.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       request.Prompt,
@@ -128,6 +165,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		if err != nil {
 			return nil, err
 		}
+		if executedToolCalls != nil {
+			executedToolCalls.CommitAttachment(executedToolCallAttachment)
+		}
 		recordResponseTiming(timing, response, r.now())
 		resultInputItems := append([]any(nil), inputItems...)
 		if strings.TrimSpace(request.Prompt) != "" {
@@ -151,9 +191,16 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	if loopRequest.SteerMailbox == nil {
 		loopRequest.SteerMailbox = r.steerMailbox
 	}
+	effectiveToolMode, warning := r.PrepareToolMode(loopRequest.ToolMode, loopRequest.DisableCodeModeFallback)
+	if warning != "" && loopRequest.OnWarning != nil {
+		loopRequest.OnWarning(warning)
+	}
+	loopRequest.ToolMode = effectiveToolMode
 	if len(loopRequest.Tools) == 0 {
 		visibleSpecs := r.router.ModelVisibleSpecs()
-		if strings.EqualFold(strings.TrimSpace(loopRequest.ToolMode), model.ToolModeCodeModeOnly) && codemode.HasExecTool(visibleSpecs) {
+		if effectiveToolMode == model.ToolModeDirect {
+			visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+		} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
 			visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
 			visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 		}
@@ -162,12 +209,17 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		}
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
-	loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router)
-	loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)
+	if effectiveToolMode == model.ToolModeCodeMode || effectiveToolMode == model.ToolModeCodeModeOnly {
+		loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router)
+	}
+	if loopRequest.ClientMetadataTransform != nil {
+		loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)
+	}
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	return NewAgentLoop(&AgentLoopOptions{
-		Agent:        r.agent,
-		SteerMailbox: r.steerMailbox,
+		Agent:             r.agent,
+		SteerMailbox:      r.steerMailbox,
+		ExecutedToolCalls: executedToolCalls,
 		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{
 			Router:                      r.router,
 			Hooks:                       r.hooks,
@@ -179,10 +231,36 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			OnCodeModeNotify:            request.OnCodeModeNotify,
 			ThreadID:                    request.ThreadID,
 			TurnID:                      request.TurnID,
+			ExecutedToolCalls:           executedToolCalls,
+			ToolMode:                    loopRequest.ToolMode,
 		}),
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+func directModeVisibleSpecs(visibleSpecs []tool.Spec, codeModeSpecs []tool.Spec) []tool.Spec {
+	out := make([]tool.Spec, 0, len(visibleSpecs)+1)
+	seen := make(map[string]struct{}, len(visibleSpecs)+1)
+	for _, spec := range visibleSpecs {
+		if codemode.IsPublicToolName(spec.Name) || spec.Name.Key() == codemode.WaitToolName {
+			continue
+		}
+		out = append(out, spec)
+		seen[spec.Name.Key()] = struct{}{}
+	}
+	for _, spec := range codeModeSpecs {
+		if spec.Exposure != tool.ExposureHidden {
+			continue
+		}
+		if _, exists := seen[spec.Name.Key()]; exists {
+			continue
+		}
+		spec.Exposure = tool.ExposureModelVisible
+		out = append(out, spec)
+		seen[spec.Name.Key()] = struct{}{}
+	}
+	return out
 }
 
 func augmentCodeModeWinnerSpecs(specs []tool.Spec, nestedSpecs []tool.Spec) []tool.Spec {

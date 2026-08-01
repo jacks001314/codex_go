@@ -3,6 +3,7 @@ package sandbox
 import (
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -61,11 +62,10 @@ func TestWorkspaceWritableRootsIncludeCWDAndProtectMetadata(t *testing.T) {
 	if !workspace.IsPathWritable(filepath.Join(cwd, "src", "main.go")) {
 		t.Fatal("workspace file should be writable")
 	}
-	if workspace.IsPathWritable(filepath.Join(cwd, ".git", "config")) {
-		t.Fatal(".git should be read-only under workspace root")
-	}
-	if workspace.IsPathWritable(filepath.Join(cwd, ".codex", "config.toml")) {
-		t.Fatal(".codex should be read-only under workspace root")
+	for _, directory := range []string{".git", ".agents", ".codex"} {
+		if workspace.IsPathWritable(filepath.Join(cwd, directory, "protected.txt")) {
+			t.Fatalf("%s should be read-only under workspace root", directory)
+		}
 	}
 }
 
@@ -78,6 +78,26 @@ func TestWorkspaceWritableRootsHonorExclusions(t *testing.T) {
 	roots := policy.GetWritableRootsWithCWD(cwd)
 	if len(roots) != 1 || roots[0].Root != cleanAbs(cwd) {
 		t.Fatalf("roots = %#v", roots)
+	}
+}
+
+func TestWindowsWorkspaceWritableRootsDoNotTreatSlashTmpAsTempDir(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific symbolic slash_tmp semantics")
+	}
+	t.Setenv("TMPDIR", "")
+	cwd := t.TempDir()
+	policy := NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	roots := policy.GetWritableRootsWithCWD(cwd)
+	if len(roots) != 1 || roots[0].Root != cleanAbs(cwd) {
+		t.Fatalf("roots = %#v, want only cwd", roots)
+	}
+
+	policy.WritableRoots = []string{"/tmp"}
+	roots = policy.GetWritableRootsWithCWD("")
+	if len(roots) != 1 || roots[0].Root != cleanAbs("/tmp") {
+		t.Fatalf("literal /tmp roots = %#v", roots)
 	}
 }
 

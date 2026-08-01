@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -279,6 +280,22 @@ func TestBuildShellRequestRejectsEscalationWhenApprovalIsNever(t *testing.T) {
 	}
 }
 
+func TestBuildShellRequestRejectsJustificationWithoutExplicitSandboxPermissionsLikeRust(t *testing.T) {
+	const want = "`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`."
+	for _, payload := range []string{
+		`{"cmd":"echo should not run","justification":"Allow this command"}`,
+		`{"cmd":"echo should not run","justification":""}`,
+	} {
+		var args ExecCommandArgs
+		if err := json.Unmarshal([]byte(payload), &args); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildShellRequest(&args, &Shell{Type: ShellBash, Path: "/bin/bash"}, ShellValidationOptions{CWD: t.TempDir()}); err == nil || err.Error() != want {
+			t.Fatalf("BuildShellRequest() error = %v, want %q", err, want)
+		}
+	}
+}
+
 func TestBuildShellRequestMarksApprovalRequiredForSandboxOverride(t *testing.T) {
 	req, err := BuildShellRequest(&ExecCommandArgs{
 		Cmd:                "echo hi",
@@ -446,6 +463,36 @@ func TestBuildShellRequestMergesAdditionalPermissionsIntoProfile(t *testing.T) {
 	policy := req.PermissionProfile.LegacySandboxPolicy()
 	if policy.Kind != sandbox.SandboxWorkspaceWrite || len(policy.WritableRoots) != 1 || policy.WritableRoots[0] != filepath.Clean(extra) {
 		t.Fatalf("policy = %#v, want workspace write with extra root", policy)
+	}
+}
+
+func TestBuildShellRequestAdditionalPermissionsPreserveCanonicalProfileLikeRust(t *testing.T) {
+	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"glob_pattern","pattern":"**/*.env"},"access":"deny"}]},"network":"restricted"}`
+	profile, err := sandbox.ParseRuntimePermissionProfileJSON(canonical)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	network := true
+	extra := filepath.Join(t.TempDir(), "cache")
+	req, err := BuildShellRequest(&ExecCommandArgs{
+		Cmd: "go test ./...", SandboxPermissions: sandbox.SandboxPermissionsWithAdditionalPermissions,
+		AdditionalPermissions: &sandbox.AdditionalPermissionProfile{Network: &network, FileSystem: []string{extra}},
+	}, &Shell{Type: ShellBash, Path: "/bin/bash"}, ShellValidationOptions{
+		AdditionalPermissionsAllowed: true, ApprovalPolicy: sandbox.ApprovalOnRequest, CWD: t.TempDir(),
+		PermissionProfileID: "canonical", PermissionProfile: profile, PermissionsPreapproved: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest() error = %v", err)
+	}
+	raw, err := sandbox.RuntimePermissionProfileJSON(*req.PermissionProfile)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	escapedExtra := strings.ReplaceAll(filepath.Clean(extra), `\`, `\\`)
+	for _, want := range []string{`"kind":"root"`, `"access":"deny"`, `"network":"enabled"`, escapedExtra} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("canonical profile missing %q: %s", want, raw)
+		}
 	}
 }
 

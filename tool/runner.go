@@ -80,10 +80,21 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 	if strings.TrimSpace(plan.PermissionProfileID) != "" {
 		env["CODEX_PERMISSION_PROFILE"] = plan.PermissionProfileID
 	}
+	var result *ShellResult
 	if runtime.GOOS == "windows" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
-		return r.runWindowsSandbox(ctx, req, plan, env, started)
+		result, err = r.runWindowsSandbox(ctx, req, plan, env, started)
+	} else {
+		result, err = r.runDirect(ctx, plan.Command, plan.CWD, env, started)
 	}
-	return r.runDirect(ctx, plan.Command, plan.CWD, env, started)
+	if err == nil && result != nil {
+		sandbox.RecordFileSystemSandboxViolation(plan.SandboxType, sandbox.SandboxExecOutput{
+			ExitCode:         result.ExitCode,
+			Stdout:           result.Stdout,
+			Stderr:           result.Stderr,
+			AggregatedOutput: shellOutputText(result),
+		})
+	}
+	return result, err
 }
 
 func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequest, plan *sandbox.CommandRunPlan, env map[string]string, started time.Time) (*ShellResult, error) {

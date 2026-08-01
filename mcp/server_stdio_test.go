@@ -128,6 +128,40 @@ func TestStdioServerCallCodexReplyTool(t *testing.T) {
 	}
 }
 
+func TestStdioServerForwardsWarningBeforeToolResponse(t *testing.T) {
+	runner := warningCodexToolRunner{}
+	var stdin bytes.Buffer
+	writeMCPTestFrame(t, &stdin, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "request-7",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "codex",
+			"arguments": map[string]any{"prompt": "hello"},
+		},
+	})
+
+	var stdout bytes.Buffer
+	if err := ServeStdio(context.Background(), &StdioServerOptions{Runner: runner}, &stdin, &stdout); err != nil {
+		t.Fatalf("ServeStdio() error = %v", err)
+	}
+	reader := bufio.NewReader(&stdout)
+	warning := readMCPTestFrame(t, reader)
+	if warning["method"] != "codex/event" {
+		t.Fatalf("first frame = %#v, want codex/event warning", warning)
+	}
+	params := warning["params"].(map[string]any)
+	meta := params["_meta"].(map[string]any)
+	msg := params["msg"].(map[string]any)
+	if params["id"] != "turn-7" || meta["requestId"] != "request-7" || meta["threadId"] != "thread-7" || msg["type"] != "warning" || msg["message"] != strings.Repeat("a", 255) {
+		t.Fatalf("warning params = %#v", params)
+	}
+	response := readMCPTestFrame(t, reader)
+	if response["id"] != "request-7" {
+		t.Fatalf("response after warning = %#v", response)
+	}
+}
+
 func TestStdioServerRejectsUnknownCodexToolField(t *testing.T) {
 	var stdin bytes.Buffer
 	writeMCPTestFrame(t, &stdin, map[string]any{
@@ -164,6 +198,21 @@ func TestStdioServerRejectsUnknownCodexToolField(t *testing.T) {
 type recordingCodexToolRunner struct {
 	codex *CodexToolCall
 	reply *CodexToolReplyCall
+}
+
+type warningCodexToolRunner struct{}
+
+func (warningCodexToolRunner) RunCodexTool(context.Context, *CodexToolCall) (*CodexToolResult, error) {
+	return &CodexToolResult{
+		ThreadID: "thread-7",
+		TurnID:   "turn-7",
+		Content:  "done",
+		Warnings: []string{strings.Repeat("a", 255) + "é"},
+	}, nil
+}
+
+func (warningCodexToolRunner) ReplyCodexTool(context.Context, *CodexToolReplyCall) (*CodexToolResult, error) {
+	return &CodexToolResult{}, nil
 }
 
 func (r *recordingCodexToolRunner) RunCodexTool(ctx context.Context, params *CodexToolCall) (*CodexToolResult, error) {

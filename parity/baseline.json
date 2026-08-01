@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "frozenAt": "2026-08-01",
+  "plan": "update/plan_2026_08_01.md",
+  "verified": {
+    "rustCommit": "bbbf396839b3bab872291354878980ba82ad4aee",
+    "parityManifest": "parity.json"
+  },
+  "target": {
+    "rustCommit": "bbbf396839b3bab872291354878980ba82ad4aee",
+    "rustBranch": "main",
+    "goStartCommit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e"
+  },
+  "requirements": {
+    "minimumSQLiteVersion": "3.51.3",
+    "zeroExceptions": true,
+    "requiredPlatforms": [
+      "windows/amd64",
+      "windows/arm64",
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/amd64",
+      "darwin/arm64"
+    ],
+    "requiredConsecutiveDifferentialRuns": 3,
+    "requiredConsecutiveSDKRuns": 3
+  },
+  "evidence": {
+    "cleanSDKRuns": [
+      "sdktests/artifacts/suites/2026-08-01T024647417Z-parity",
+      "sdktests/artifacts/suites/2026-08-01T033419130Z-parity"
+    ],
+    "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
+    "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
+    "nativeSQLite": ["windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"]
+  },
+  "certificationBlockers": [
+    "one additional clean 42-scenario SDK differential run is required; Rust 5.6 provider currently returns server_overloaded",
+    "Rust bbbf396839 Windows interrupted-command leaves a descendant alive and cannot resume",
+    "five non-local native platform artifacts are pending; GitHub Actions account is locked by billing"
+  ],
+  "certificationReady": false
+}

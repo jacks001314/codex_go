@@ -233,6 +233,54 @@ func (m ClientToHost) MarshalJSON() ([]byte, error) {
 	}
 }
 
+func (m *ClientToHost) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return fmt.Errorf("client-to-host message is nil")
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	*m = ClientToHost{Type: envelope.Type}
+	switch envelope.Type {
+	case "connection/hello":
+		var hello ClientHello
+		if err := json.Unmarshal(data, &hello); err != nil {
+			return err
+		}
+		m.Hello = &hello
+	case "operation/request":
+		var value struct {
+			ID      RequestID   `json:"id"`
+			Request HostRequest `json:"request"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.ID, m.Request = value.ID, &value.Request
+	case "operation/cancel":
+		if err := json.Unmarshal(data, &struct {
+			ID *RequestID `json:"id"`
+		}{ID: &m.ID}); err != nil {
+			return err
+		}
+	case "delegate/response":
+		var value struct {
+			ID     DelegateRequestID            `json:"id"`
+			Result WireResult[DelegateResponse] `json:"result"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		m.DelegateID, m.DelegateResponse = value.ID, &value.Result
+	default:
+		return fmt.Errorf("unknown client-to-host type %q", envelope.Type)
+	}
+	return nil
+}
+
 type HostToClient struct {
 	Type       string
 	ID         RequestID
@@ -415,6 +463,39 @@ type HostRequest struct {
 	Request   *ExecuteRequest `json:"request,omitempty"`
 	Wait      *WaitRequest    `json:"-"`
 	CellID    CellID          `json:"cellId,omitempty"`
+}
+
+func (r *HostRequest) UnmarshalJSON(data []byte) error {
+	if r == nil {
+		return fmt.Errorf("host request is nil")
+	}
+	var envelope struct {
+		Method    string          `json:"method"`
+		SessionID SessionID       `json:"sessionId"`
+		Request   json.RawMessage `json:"request"`
+		CellID    CellID          `json:"cellId"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID}
+	if len(envelope.Request) == 0 || string(envelope.Request) == "null" {
+		return nil
+	}
+	if envelope.Method == "session/wait" {
+		var request WaitRequest
+		if err := json.Unmarshal(envelope.Request, &request); err != nil {
+			return err
+		}
+		r.Wait = &request
+		return nil
+	}
+	var request ExecuteRequest
+	if err := json.Unmarshal(envelope.Request, &request); err != nil {
+		return err
+	}
+	r.Request = &request
+	return nil
 }
 
 func OpenSessionRequest(sessionID SessionID) HostRequest {

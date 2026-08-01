@@ -85,6 +85,9 @@ type SandboxPolicy struct {
 	NetworkAccess       bool
 	ExcludeTmpdirEnvVar bool
 	ExcludeSlashTmp     bool
+
+	fullDiskWriteAccess    bool
+	fullDiskWriteAccessSet bool
 }
 
 func (p *SandboxPolicy) UnmarshalJSON(data []byte) error {
@@ -276,7 +279,10 @@ func (p *SandboxPolicy) HasFullDiskWriteAccess() bool {
 	if p == nil {
 		return false
 	}
-	return p.Kind == SandboxDangerFullAccess || p.Kind == "external-sandbox"
+	if p.Kind == SandboxDangerFullAccess || p.Kind == "external-sandbox" {
+		return true
+	}
+	return p.fullDiskWriteAccessSet && p.fullDiskWriteAccess
 }
 
 func (p *SandboxPolicy) HasFullNetworkAccess() bool {
@@ -299,16 +305,21 @@ func (p *SandboxPolicy) GetWritableRootsWithCWD(cwd string) []WritableRoot {
 	if p == nil || p.Kind != SandboxWorkspaceWrite {
 		return nil
 	}
+	if p.HasFullDiskWriteAccess() {
+		return nil
+	}
 	var roots []string
 	roots = append(roots, p.WritableRoots...)
 	if cwd != "" {
 		roots = append(roots, cwd)
 	}
 	if !p.ExcludeSlashTmp {
-		roots = append(roots, slashTmpPath())
+		if slashTmp := slashTmpPath(); slashTmp != "" {
+			roots = append(roots, slashTmp)
+		}
 	}
 	if !p.ExcludeTmpdirEnvVar {
-		if tmpdir := strings.TrimSpace(os.Getenv("TMPDIR")); tmpdir != "" {
+		if tmpdir := strings.TrimSpace(os.TempDir()); tmpdir != "" {
 			roots = append(roots, tmpdir)
 		}
 	}
@@ -369,7 +380,7 @@ func buildWritableRoots(paths []string) []WritableRoot {
 		out = append(out, WritableRoot{
 			Root:                   path,
 			ReadOnlySubpaths:       protectedSubpaths(path),
-			ProtectedMetadataNames: []string{".git", ".codex"},
+			ProtectedMetadataNames: []string{".git", ".agents", ".codex"},
 		})
 	}
 	return out
@@ -378,6 +389,7 @@ func buildWritableRoots(paths []string) []WritableRoot {
 func protectedSubpaths(root string) []string {
 	return []string{
 		filepath.Join(root, ".git"),
+		filepath.Join(root, ".agents"),
 		filepath.Join(root, ".codex"),
 	}
 }
@@ -407,10 +419,10 @@ func sameOrWithin(path, root string) bool {
 }
 
 func slashTmpPath() string {
-	if filepath.Separator == '/' {
-		return "/tmp"
+	if !supportsSymbolicSlashTmp() {
+		return ""
 	}
-	return os.TempDir()
+	return "/tmp"
 }
 
 func requireNonEmpty(value, name string) error {

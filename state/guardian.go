@@ -501,7 +501,7 @@ func BuildPrompt(action Action, transcript []string) (string, error) {
 	var builder strings.Builder
 	builder.WriteString("Review the planned action and decide whether to allow it.\n\n")
 	builder.WriteString("Action:\n")
-	data, err := json.MarshalIndent(action, "", "  ")
+	data, err := json.MarshalIndent(guardianPromptAction(action), "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -518,6 +518,23 @@ func BuildPrompt(action Action, transcript []string) (string, error) {
 		}
 	}
 	return builder.String(), nil
+}
+
+func guardianPromptAction(action Action) any {
+	if action.Type != "network_access" {
+		return action
+	}
+	value := map[string]any{
+		"host":     action.Host,
+		"port":     action.Port,
+		"protocol": action.Protocol,
+		"target":   action.Target,
+		"tool":     "network_access",
+	}
+	if trigger := action.Extra["trigger"]; trigger != nil {
+		value["trigger"] = trigger
+	}
+	return value
 }
 
 func recordRecent(state *turnState, denied bool) {

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "targetRustCommit": "bbbf396839b3bab872291354878980ba82ad4aee",
+  "contracts": [
+    {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
+    {"id":"cli","kind":"source-surface","rustPaths":["cli/src/main.rs"],"goPaths":["cli"],"phase":"P1","status":"complete","verifier":"TestRustCliSubcommandSurfaceAgainstGoParser"},
+    {"id":"app-server-schema-stable","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-stable.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-stable.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExportsAreWrittenToDiskLikeRust"},
+    {"id":"app-server-schema-experimental","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-experimental.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust"},
+    {"id":"exec-server-protocol","kind":"wire-protocol","rustPaths":["exec-server-protocol/src/protocol.rs"],"goPaths":["execserver"],"phase":"P1","status":"complete","verifier":"TestRustExecServerProtocolSurfaceAgainstGo"},
+    {"id":"state-migrations","kind":"sqlite-schema","rustPaths":["state/migrations","state/logs_migrations","state/goals_migrations","state/memory_migrations","state/thread_history_migrations"],"goPaths":["state/migrations","state/migrations.go"],"phase":"P2","status":"complete","verifier":"TestStateMigrationsMatchRustTarget"},
+    {"id":"rollout-layout","kind":"durable-data","rustPaths":["rollout/src/recorder.rs","rollout/src/session_index.rs"],"goPaths":["rollout/rollout.go","rollout/projection.go","rollout/lineage_record.go","rollout/session_index.go","session/store.go"],"phase":"P3","status":"complete","verifier":"TestRouterPaginatedForkPersistsPhysicalHistoryReferenceOnly"},
+    {"id":"tui-snapshots","kind":"terminal-ui","rustPaths":["tui/src"],"goPaths":["tui"],"phase":"P7","status":"complete","verifier":"TestRustTUISnapshotManifestCoversPrioritySurfaces"}
+  ]
+}

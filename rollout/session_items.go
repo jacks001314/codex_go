@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/session"
+	"codex_go/utils"
 )
 
 func ItemFromSessionItem(item *session.Item) *Item {
@@ -47,6 +48,33 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		return nil
 	}
 	for i := range items {
+		if recorder.IsPaginated() {
+			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&items[i])
+			if err != nil {
+				return err
+			}
+			if len(raw) == 0 {
+				continue
+			}
+			completedAt := itemTime(items[i].CreatedAt, now)
+			if value, ok := rolloutInt64FromAny(firstPresentAny(items[i].Metadata, items[i].Data, "completedAtMs", "completed_at_ms")); ok && value > 0 {
+				completedAt = time.UnixMilli(value).UTC()
+			}
+			startedAt := completedAt
+			if value, ok := rolloutInt64FromAny(firstPresentAny(items[i].Metadata, items[i].Data, "startedAtMs", "started_at_ms")); ok && value > 0 {
+				startedAt = time.UnixMilli(value).UTC()
+			}
+			if coreTurnItemIsInProgress(raw) {
+				if err := recorder.AppendItemStarted(raw, turnID, startedAt); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := recorder.AppendItemCompleted(raw, turnID, startedAt, completedAt); err != nil {
+				return err
+			}
+			continue
+		}
 		item := ItemFromSessionItem(&items[i])
 		if item == nil {
 			continue
@@ -60,6 +88,35 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		}
 	}
 	return nil
+}
+
+func coreTurnItemIsInProgress(raw json.RawMessage) bool {
+	var item struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return false
+	}
+	status := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(item.Status)))
+	return status == "inprogress"
+}
+
+// FirstSessionMeta reads the immutable session header used to resolve
+// paginated rollout lineage. Later session_meta records are metadata updates.
+func FirstSessionMeta(path string) (*SessionMeta, error) {
+	lines, _, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	for i := range lines {
+		if lines[i].Meta != nil {
+			meta := *lines[i].Meta
+			meta.HistoryBase = cloneHistoryPosition(lines[i].Meta.HistoryBase)
+			meta.SubagentHistoryStartOrdinal = cloneUint64Ptr(lines[i].Meta.SubagentHistoryStartOrdinal)
+			return &meta, nil
+		}
+	}
+	return nil, errMissingSessionMeta(path)
 }
 
 func RecordFromPath(path string, archived bool) (*session.Record, error) {
@@ -143,6 +200,13 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		},
 		Items:       items,
 		FromRollout: true,
+	}
+	if meta.HistoryBase != nil {
+		record.HistoryBase = &session.HistoryPosition{
+			ThreadID:            session.ThreadID(meta.HistoryBase.ThreadID),
+			EndOrdinalExclusive: meta.HistoryBase.EndOrdinalExclusive,
+			EndByteOffset:       meta.HistoryBase.EndByteOffset,
+		}
 	}
 	applyRolloutContextMetadata(record, lines)
 	applyRolloutTokenUsageMetadata(record, lines)
@@ -570,16 +634,18 @@ func sessionItemFromRolloutEventItem(raw json.RawMessage, line *Line, lineIndex 
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return session.Item{}, false
 	}
+	var rawData map[string]any
+	_ = json.Unmarshal(raw, &rawData)
+	rawType := strings.TrimSpace(stringFromMap(rawData, "type"))
 	item.Raw = append(json.RawMessage(nil), raw...)
 	item.Type = normalizeRolloutItemType(item.Type)
-	if item.Type == "" || item.Type == "message" {
+	if item.Type == "" || (item.Type == "message" && rawType != "UserMessage" && rawType != "userMessage" && rawType != "user_message") {
 		return session.Item{}, false
 	}
 	if item.Data == nil {
 		item.Data = map[string]any{}
 	}
-	var rawData map[string]any
-	if err := json.Unmarshal(raw, &rawData); err == nil {
+	if rawData != nil {
 		for key, value := range rawData {
 			if _, ok := item.Data[key]; !ok {
 				item.Data[key] = value
@@ -1082,7 +1148,7 @@ func markRolloutCommandItem(out *session.Item, raw map[string]any) {
 		out.Data["duration_ms"] = durationMS
 	}
 	if _, ok := out.Data["commandActions"]; !ok {
-		if actions := rolloutCommandActionsFromAny(firstPresentAny(raw, out.Data, "parsed_cmd", "parsedCmd")); len(actions) > 0 {
+		if actions := rolloutCommandActionsFromAny(firstPresentAny(raw, out.Data, "parsed_cmd", "parsedCmd"), rolloutPathStringFromAny(firstPresentAny(raw, out.Data, "cwd"))); len(actions) > 0 {
 			out.Data["commandActions"] = actions
 			out.Data["command_actions"] = actions
 		}
@@ -1242,12 +1308,12 @@ func rolloutInt64FromAny(value any) (int64, bool) {
 	}
 }
 
-func rolloutCommandActionsFromAny(value any) []map[string]any {
+func rolloutCommandActionsFromAny(value any, cwd string) []map[string]any {
 	switch typed := value.(type) {
 	case []map[string]any:
 		out := make([]map[string]any, 0, len(typed))
 		for _, action := range typed {
-			normalized := rolloutCommandActionFromMap(action)
+			normalized := rolloutCommandActionFromMap(action, cwd)
 			if len(normalized) > 0 {
 				out = append(out, normalized)
 			}
@@ -1256,7 +1322,7 @@ func rolloutCommandActionsFromAny(value any) []map[string]any {
 	case []any:
 		out := make([]map[string]any, 0, len(typed))
 		for _, entry := range typed {
-			action := rolloutCommandActionFromMap(mapFromAny(entry))
+			action := rolloutCommandActionFromMap(mapFromAny(entry), cwd)
 			if len(action) > 0 {
 				out = append(out, action)
 			}
@@ -1264,7 +1330,7 @@ func rolloutCommandActionsFromAny(value any) []map[string]any {
 		return out
 	default:
 		if mapped := mapFromAny(value); mapped != nil {
-			action := rolloutCommandActionFromMap(mapped)
+			action := rolloutCommandActionFromMap(mapped, cwd)
 			if len(action) > 0 {
 				return []map[string]any{action}
 			}
@@ -1273,7 +1339,7 @@ func rolloutCommandActionsFromAny(value any) []map[string]any {
 	}
 }
 
-func rolloutCommandActionFromMap(value map[string]any) map[string]any {
+func rolloutCommandActionFromMap(value map[string]any, cwd string) map[string]any {
 	if value == nil {
 		return nil
 	}
@@ -1286,7 +1352,11 @@ func rolloutCommandActionFromMap(value map[string]any) map[string]any {
 			out["name"] = name
 		}
 		if path := rolloutPathStringFromAny(value["path"]); path != "" {
-			out["path"] = path
+			if resolved, err := utils.ResolveExecutorPath(cwd, path); err == nil {
+				out["path"] = resolved.Value
+			} else {
+				out["path"] = path
+			}
 		}
 		return out
 	case "listfiles", "list_files":

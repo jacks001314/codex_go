@@ -172,6 +172,8 @@ const (
 	NotificationThreadNameUpdated               NotificationMethod = "thread/name/updated"
 	NotificationThreadGoalUpdated               NotificationMethod = "thread/goal/updated"
 	NotificationThreadGoalCleared               NotificationMethod = "thread/goal/cleared"
+	NotificationThreadEnvironmentConnected      NotificationMethod = "thread/environment/connected"
+	NotificationThreadEnvironmentDisconnected   NotificationMethod = "thread/environment/disconnected"
 	NotificationThreadSettingsUpdated           NotificationMethod = "thread/settings/updated"
 	NotificationThreadTokenUsageUpdated         NotificationMethod = "thread/tokenUsage/updated"
 	NotificationTurnStarted                     NotificationMethod = "turn/started"
@@ -1709,6 +1711,7 @@ type ThreadForkParams struct {
 	ThreadSource          *ThreadSource    `json:"threadSource,omitempty"`
 	Ephemeral             bool             `json:"ephemeral,omitempty"`
 	ExcludeTurns          bool             `json:"excludeTurns,omitempty"`
+	DeferGoalContinuation bool             `json:"deferGoalContinuation,omitempty"`
 }
 
 func (p *ThreadForkParams) UnmarshalJSON(data []byte) error {
@@ -2192,10 +2195,7 @@ func (p *ThreadSearchOccurrencesParams) Validate() error {
 		return jsonRPCInvalidRequest("threadId is required")
 	}
 	if strings.TrimSpace(p.SearchTerm) == "" {
-		return jsonRPCInvalidRequest("searchTerm is required")
-	}
-	if p.Limit != nil && (*p.Limit == 0 || *p.Limit > 100) {
-		return jsonRPCInvalidRequest("limit must be between 1 and 100")
+		return jsonRPCInvalidRequest("thread/searchOccurrences requires a non-empty searchTerm")
 	}
 	return nil
 }
@@ -2503,20 +2503,25 @@ func (p *ThreadItemsListParams) Validate() error {
 }
 
 type ThreadItemsListResponse struct {
-	Data            []ThreadItem `json:"data"`
-	NextCursor      *string      `json:"nextCursor"`
-	BackwardsCursor *string      `json:"backwardsCursor"`
+	Data            []ThreadItemEntry `json:"data"`
+	NextCursor      *string           `json:"nextCursor"`
+	BackwardsCursor *string           `json:"backwardsCursor"`
+}
+
+type ThreadItemEntry struct {
+	TurnID string     `json:"turnId"`
+	Item   ThreadItem `json:"item"`
 }
 
 func (r *ThreadItemsListResponse) MarshalJSON() ([]byte, error) {
-	data := append([]ThreadItem(nil), r.Data...)
+	data := append([]ThreadItemEntry(nil), r.Data...)
 	if data == nil {
-		data = []ThreadItem{}
+		data = []ThreadItemEntry{}
 	}
 	return json.Marshal(struct {
-		Data            []ThreadItem `json:"data"`
-		NextCursor      *string      `json:"nextCursor"`
-		BackwardsCursor *string      `json:"backwardsCursor"`
+		Data            []ThreadItemEntry `json:"data"`
+		NextCursor      *string           `json:"nextCursor"`
+		BackwardsCursor *string           `json:"backwardsCursor"`
 	}{
 		Data:            data,
 		NextCursor:      r.NextCursor,
@@ -2618,6 +2623,11 @@ type ThreadIDNotification struct {
 type ThreadNameUpdatedNotification struct {
 	ThreadID   string  `json:"threadId"`
 	ThreadName *string `json:"threadName"`
+}
+
+type EnvironmentConnectionNotification struct {
+	ThreadID      string `json:"threadId"`
+	EnvironmentID string `json:"environmentId"`
 }
 
 func BuildThread(record *session.Record, path string, includeTurns bool) *Thread {
@@ -2956,9 +2966,9 @@ func BuildListResponse(page *session.Page, store *session.Store, includeTurns bo
 	data := make([]Thread, 0, len(page.Records))
 	for i := range page.Records {
 		record := &page.Records[i]
-		path := ""
+		path, _ := record.Metadata.Extra["rollout_path"].(string)
 		if store != nil {
-			if value, err := rollout.FindThreadPath(codexHomeForProtocolStore(store), string(record.ID), record.Archived); err == nil {
+			if value, err := rollout.FindThreadPath(codexHomeForProtocolStore(store), string(record.ID), record.Archived); strings.TrimSpace(path) == "" && err == nil {
 				path = value
 			}
 		}
@@ -2993,9 +3003,9 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 		return nil, err
 	}
 	if record == nil {
-		return &ThreadItemsListResponse{Data: []ThreadItem{}}, nil
+		return &ThreadItemsListResponse{Data: []ThreadItemEntry{}}, nil
 	}
-	items := make([]ThreadItem, 0, len(record.Items))
+	items := make([]ThreadItemEntry, 0, len(record.Items))
 	for _, item := range record.Items {
 		if sessionItemIsHiddenThreadItem(&item) {
 			continue
@@ -3004,10 +3014,12 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 		if params.TurnID != nil && threadItem.TurnID != *params.TurnID {
 			continue
 		}
-		items = append(items, threadItem)
+		items = append(items, ThreadItemEntry{TurnID: threadItem.TurnID, Item: threadItem})
 	}
 	if params.SortDirection == SortDesc {
-		reverseItems(items)
+		for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+			items[left], items[right] = items[right], items[left]
+		}
 	}
 	start, err := parseCursor(params.Cursor)
 	if err != nil {
@@ -3023,12 +3035,31 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 			limit = threadItemsMaxLimit
 		}
 	}
-	page, next := paginateItems(items, start, limit)
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	page := append([]ThreadItemEntry(nil), items[start:end]...)
+	next := ""
+	if end < len(items) {
+		next = strconv.Itoa(end)
+	}
 	return &ThreadItemsListResponse{
 		Data:            page,
 		NextCursor:      stringPtrIfNotEmpty(next),
-		BackwardsCursor: itemCursor(page),
+		BackwardsCursor: itemEntryCursor(page),
 	}, nil
+}
+
+func itemEntryCursor(items []ThreadItemEntry) *string {
+	if len(items) == 0 {
+		return nil
+	}
+	value := "0"
+	return &value
 }
 
 func BuildTurnsResponse(record *session.Record, params *ThreadTurnsListParams) (*TurnsPage, error) {
@@ -3263,6 +3294,8 @@ func normalizeThreadItemType(itemType string) string {
 	case "message", "user_message", "userMessage":
 		return "userMessage"
 	case "agent_message", "agentMessage":
+		return "agentMessage"
+	case "external_session_import_marker":
 		return "agentMessage"
 	case "hook_prompt", "hookPrompt":
 		return "hookPrompt"
@@ -4742,10 +4775,12 @@ func paginateItems(items []ThreadItem, start int, limit int) ([]ThreadItem, stri
 }
 
 const (
-	threadItemsDefaultLimit = 25
-	threadItemsMaxLimit     = 100
-	threadTurnsDefaultLimit = 25
-	threadTurnsMaxLimit     = 100
+	threadItemsDefaultLimit             = 25
+	threadItemsMaxLimit                 = 100
+	threadTurnsDefaultLimit             = 25
+	threadTurnsMaxLimit                 = 100
+	threadSearchOccurrencesDefaultLimit = 50
+	threadSearchOccurrencesMaxLimit     = 250
 )
 
 type threadTurnsCursor struct {

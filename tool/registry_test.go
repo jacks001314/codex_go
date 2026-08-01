@@ -87,6 +87,18 @@ func TestRegistryDirectModelOnlySpecsAreVisibleButNotDiscoverable(t *testing.T) 
 	}
 }
 
+func TestRegistryRegisterExternalReservesPlainShellCommandLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	plain, err := registry.RegisterExternal(NewExecutorFunc(Spec{Name: PlainName(DefaultShellCommandToolName)}, noopExecutor))
+	if err != nil || plain {
+		t.Fatalf("plain shell_command registered=%t err=%v", plain, err)
+	}
+	namespaced, err := registry.RegisterExternal(NewExecutorFunc(Spec{Name: NamespacedName("client", DefaultShellCommandToolName)}, noopExecutor))
+	if err != nil || !namespaced {
+		t.Fatalf("namespaced shell_command registered=%t err=%v", namespaced, err)
+	}
+}
+
 func TestRouterRegisterIfAbsentUpdatesSharedCodeModeRegistry(t *testing.T) {
 	registry := NewRegistry()
 	router := NewRouter(registry)

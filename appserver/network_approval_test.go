@@ -18,9 +18,16 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/turn"
 )
+
+type networkGuardianReviewerFunc func(context.Context, string, string, string, state.Action) (state.ReviewDecision, string, error)
+
+func (f networkGuardianReviewerFunc) Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+	return f(ctx, threadID, turnID, targetItemID, action)
+}
 
 func TestNetworkApprovalDeciderRequestsOnceAndCachesSessionLikeRust(t *testing.T) {
 	router := newNetworkApprovalTestRouter(t, "on-request")
@@ -51,6 +58,240 @@ func TestNetworkApprovalDeciderRequestsOnceAndCachesSessionLikeRust(t *testing.T
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("approval requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestRemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust(t *testing.T) {
+	const (
+		threadID    = "thread-remote-guardian"
+		host        = "network.test"
+		remoteID    = "remote-primary"
+		remoteCWD   = "/remote/workspace"
+		localCWD    = "/local/workspace"
+		sessionCall = "remote-guardian-session-approval"
+		probeCall   = "remote-guardian-session-probe"
+	)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("approval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environments := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, localCWD)
+	if _, err := environments.Add(&EnvironmentAddParams{EnvironmentID: remoteID, ExecServerURL: "ws://remote.invalid"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := environments.SetInfo(remoteID, EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, remoteCWD); err != nil {
+		t.Fatal(err)
+	}
+	if err := environments.SetInfo("local", EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, localCWD); err != nil {
+		t.Fatal(err)
+	}
+
+	type reviewRecord struct {
+		threadID       string
+		turnID         string
+		targetItemID   string
+		environmentID  string
+		environmentCWD string
+		action         state.Action
+	}
+	type guardianCase struct {
+		callID         string
+		command        string
+		environmentID  string
+		environmentCWD string
+		approved       bool
+	}
+	decisions := map[string]state.ReviewDecision{
+		"remote-guardian-deny":       state.DecisionDenied,
+		"remote-guardian-allow":      state.DecisionApproved,
+		"remote-guardian-deny-again": state.DecisionDenied,
+		"local-guardian-deny":        state.DecisionDenied,
+	}
+	rationales := map[string]string{
+		"remote-guardian-deny":       "The first remote request must be denied.",
+		"remote-guardian-allow":      "This remote request is safe to allow once.",
+		"remote-guardian-deny-again": "A previous remote approval must not approve a later request.",
+		"local-guardian-deny":        "A remote approval must not approve the local environment.",
+	}
+	var router *RuntimeRouter
+	var reviews []reviewRecord
+	reviewer := networkGuardianReviewerFunc(func(_ context.Context, gotThreadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+		trigger, ok := action.Extra["trigger"].(guardianNetworkAccessTrigger)
+		if !ok {
+			t.Fatalf("network trigger = %#v", action.Extra["trigger"])
+		}
+		params := router.activeTurnParams(gotThreadID)
+		if params == nil || len(params.Environments) != 1 {
+			t.Fatalf("Guardian environment params = %#v", params)
+		}
+		environment := params.Environments[0]
+		reviews = append(reviews, reviewRecord{
+			threadID:       gotThreadID,
+			turnID:         turnID,
+			targetItemID:   targetItemID,
+			environmentID:  stringFromAny(environment["environmentId"]),
+			environmentCWD: stringFromAny(environment["cwd"]),
+			action:         action,
+		})
+		decision, ok := decisions[trigger.CallID]
+		if !ok {
+			t.Fatalf("unexpected Guardian call id %q", trigger.CallID)
+		}
+		return decision, rationales[trigger.CallID], nil
+	})
+	router = NewRuntimeRouter(RuntimeServices{
+		Config:           config.NewConfigService(home),
+		DefaultCWD:       home,
+		Environment:      environments,
+		GuardianReviewer: reviewer,
+	})
+	defer router.Close()
+
+	var userPrompts atomic.Int32
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		userPrompts.Add(1)
+		params, ok := request.Params.(*CommandExecutionRequestApprovalParams)
+		if !ok || params.EnvironmentID == nil || *params.EnvironmentID != remoteID || params.NetworkApprovalContext == nil {
+			t.Errorf("session approval params = %#v", request.Params)
+		}
+		_, _ = router.requireServerRequests().Resolve(&Response{ID: request.ID, Result: map[string]any{
+			"decision": string(CommandExecutionApprovalAcceptForSession),
+		}})
+	}))
+
+	currentTurnID := ""
+	beginTurn := func(turnID, reviewerName, environmentID, environmentCWD string) {
+		t.Helper()
+		if currentTurnID != "" {
+			router.clearActiveRuntimeTurn(threadID, currentTurnID)
+		}
+		currentTurnID = turnID
+		params := &turn.TurnStartParams{
+			ThreadID:          threadID,
+			CWD:               home,
+			ApprovalsReviewer: &reviewerName,
+			Environments: []map[string]any{{
+				"environmentId": environmentID,
+				"cwd":           environmentCWD,
+			}},
+		}
+		if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, 1, params); err != nil {
+			t.Fatal(err)
+		}
+		router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "connection-remote-guardian", &appTurnRunConfig{
+			ApprovalPolicy:    "on-request",
+			ApprovalsReviewer: reviewerName,
+		})
+	}
+	defer func() {
+		if currentTurnID != "" {
+			router.clearActiveRuntimeTurn(threadID, currentTurnID)
+		}
+	}()
+
+	runRequest := func(callID, command, reviewerName, environmentID, environmentCWD string) (network.ProxyDecision, string) {
+		t.Helper()
+		turnID := "turn-" + callID
+		beginTurn(turnID, reviewerName, environmentID, environmentCWD)
+		arguments, err := json.Marshal(tool.ExecCommandArgs{Cmd: command, EnvironmentID: environmentID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation := &tool.Invocation{
+			CallID:   callID,
+			ToolName: tool.PlainName("exec_command"),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)},
+		}
+		router.networkApproval.registerActiveCall(threadID, turnID, invocation)
+		decision := router.networkApproval.decideForThread(context.Background(), threadID, network.ProxyPolicyRequest{
+			Protocol:      network.ProxyProtocolHTTP,
+			Host:          host,
+			Port:          80,
+			EnvironmentID: environmentID,
+			ExecutionID:   callID,
+			Method:        "GET",
+		})
+		outcome := router.networkApproval.finishActiveCall(threadID, turnID, invocation)
+		return decision, outcome
+	}
+
+	cases := []guardianCase{
+		{callID: "remote-guardian-deny", command: "printf REMOTE_GUARDIAN_DENY", environmentID: remoteID, environmentCWD: remoteCWD},
+		{callID: "remote-guardian-allow", command: "printf REMOTE_GUARDIAN_ALLOW", environmentID: remoteID, environmentCWD: remoteCWD, approved: true},
+		{callID: "remote-guardian-deny-again", command: "printf REMOTE_GUARDIAN_DENY_AGAIN", environmentID: remoteID, environmentCWD: remoteCWD},
+	}
+	for _, testCase := range cases {
+		decision, outcome := runRequest(testCase.callID, testCase.command, "auto_review", testCase.environmentID, testCase.environmentCWD)
+		if decision.Allow != testCase.approved {
+			t.Fatalf("%s decision = %#v", testCase.callID, decision)
+		}
+		if testCase.approved && outcome != "" {
+			t.Fatalf("%s outcome = %q", testCase.callID, outcome)
+		}
+		if !testCase.approved && outcome != rationales[testCase.callID] {
+			t.Fatalf("%s outcome = %q", testCase.callID, outcome)
+		}
+	}
+
+	if decision, outcome := runRequest(sessionCall, "printf REMOTE_GUARDIAN_SESSION", "user", remoteID, remoteCWD); !decision.Allow || outcome != "" {
+		t.Fatalf("session approval decision=%#v outcome=%q", decision, outcome)
+	}
+	localCase := guardianCase{callID: "local-guardian-deny", command: "printf LOCAL_GUARDIAN_DENY", environmentID: "local", environmentCWD: localCWD}
+	if decision, outcome := runRequest(localCase.callID, localCase.command, "auto_review", "local", localCWD); decision.Allow || outcome != rationales[localCase.callID] {
+		t.Fatalf("local decision=%#v outcome=%q", decision, outcome)
+	}
+	if decision, outcome := runRequest(probeCall, "printf REMOTE_GUARDIAN_SESSION_PROBE", "user", remoteID, remoteCWD); !decision.Allow || outcome != "" {
+		t.Fatalf("session probe decision=%#v outcome=%q", decision, outcome)
+	}
+	beginTurn("turn-unknown-execution", "user", remoteID, remoteCWD)
+	unknownInvocation := &tool.Invocation{CallID: "known-call", ToolName: tool.PlainName("exec_command"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"printf KNOWN","environment_id":"remote-primary"}`}}
+	router.networkApproval.registerActiveCall(threadID, "turn-unknown-execution", unknownInvocation)
+	unknownDecision := router.networkApproval.decideForThread(context.Background(), threadID, network.ProxyPolicyRequest{
+		Protocol: network.ProxyProtocolHTTP, Host: host, Port: 80, EnvironmentID: remoteID, ExecutionID: "unknown-call",
+	})
+	_ = router.networkApproval.finishActiveCall(threadID, "turn-unknown-execution", unknownInvocation)
+	if unknownDecision.Allow {
+		t.Fatalf("unknown execution reused a session approval: %#v", unknownDecision)
+	}
+
+	if userPrompts.Load() != 1 {
+		t.Fatalf("user network prompts = %d, want only the explicit session approval", userPrompts.Load())
+	}
+	if len(reviews) != 4 {
+		t.Fatalf("Guardian reviews = %d, want 4", len(reviews))
+	}
+	router.networkApproval.mu.Lock()
+	allowedKeys := make([]networkApprovalKey, 0, len(router.networkApproval.allowed))
+	for key := range router.networkApproval.allowed {
+		allowedKeys = append(allowedKeys, key)
+	}
+	deniedCount := len(router.networkApproval.denied)
+	pendingCount := len(router.networkApproval.pending)
+	router.networkApproval.mu.Unlock()
+	if len(allowedKeys) != 1 || allowedKeys[0].threadID != threadID || allowedKeys[0].environmentID != remoteID || allowedKeys[0].host != host || allowedKeys[0].protocol != network.ProxyProtocolHTTP || allowedKeys[0].port != 80 || deniedCount != 0 || pendingCount != 0 {
+		t.Fatalf("network approval cache allowed=%#v denied=%d pending=%d", allowedKeys, deniedCount, pendingCount)
+	}
+	expectedCases := append(append([]guardianCase(nil), cases...), localCase)
+	for index, review := range reviews {
+		expected := expectedCases[index]
+		if review.threadID != threadID || review.turnID != "turn-"+expected.callID || review.targetItemID != "" || review.environmentID != expected.environmentID || review.environmentCWD != expected.environmentCWD {
+			t.Fatalf("review %d context = %#v", index, review)
+		}
+		action := review.action
+		if action.Type != "network_access" || action.Host != host || action.Protocol != "http" || action.Port != 80 || action.Target != "http://"+host+":80" {
+			t.Fatalf("review %d action = %#v", index, action)
+		}
+		trigger, ok := action.Extra["trigger"].(guardianNetworkAccessTrigger)
+		if !ok {
+			t.Fatalf("review %d trigger = %#v", index, action.Extra["trigger"])
+		}
+		wantCommand := []string{"/bin/sh", "-c", expected.command}
+		if trigger.CallID != expected.callID || trigger.ToolName != "exec_command" || trigger.CWD != expected.environmentCWD || trigger.SandboxPermissions != "use_default" || trigger.TTY || strings.Join(trigger.Command, "\x00") != strings.Join(wantCommand, "\x00") {
+			t.Fatalf("review %d trigger = %#v, want command %#v", index, trigger, wantCommand)
+		}
+		if trigger.AdditionalPermissions != nil || trigger.Justification != nil {
+			t.Fatalf("review %d optional trigger fields = %#v", index, trigger)
+		}
 	}
 }
 
@@ -145,7 +386,7 @@ func TestNetworkApprovalTurnTerminalCancelsPendingAndIgnoresLateResponseLikeRust
 	router.networkApproval.mu.Lock()
 	_, allowed := router.networkApproval.allowed[key]
 	_, denied := router.networkApproval.denied[key]
-	_, pending := router.networkApproval.pending[key]
+	_, pending := router.networkApproval.pending[pendingNetworkApprovalKey{networkApprovalKey: key, turnID: "turn-network"}]
 	router.networkApproval.mu.Unlock()
 	if allowed || denied || pending {
 		t.Fatalf("terminal approval leaked state: allowed=%t denied=%t pending=%t", allowed, denied, pending)

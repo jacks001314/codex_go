@@ -1141,7 +1141,7 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 			if !explicitLocalProxyAllowlisted(allowlist, normalizedHost) {
 				return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 			}
-		} else if proxyHostResolvesToNonPublicIP(normalizedHost, request.Port) {
+		} else if (allowed || s.policyDecider != nil) && proxyHostResolvesToNonPublicIP(normalizedHost, request.Port) {
 			return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 		}
 	}

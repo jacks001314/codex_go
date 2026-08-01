@@ -18,8 +18,147 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/config"
+	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/state"
 )
+
+func TestLocalSessionCommandsOperateOnRustRolloutWithoutGoSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const threadID = "0198f100-0000-7000-8000-000000000001"
+	now := fixedAppSessionTime()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: threadID, Source: "cli", CWD: home,
+		ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"type": "user_message", "message": "from rust rollout"})
+	if err := recorder.AppendLine(rollout.Line{Type: "event_msg", Timestamp: now.Add(time.Second).Format(time.RFC3339Nano), Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollout.AppendThreadName(home, threadID, "Rust Session"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "sessions", threadID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("test unexpectedly created Go snapshot: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"resume"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout picker error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), threadID) || !strings.Contains(stdout.String(), "Rust Session") {
+		t.Fatalf("rollout picker output = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"resume", "Rust Session"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout resume error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "resumed"`) || !strings.Contains(stdout.String(), `"id": "`+threadID+`"`) {
+		t.Fatalf("rollout resume output = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"archive", "Rust Session"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout archive error: %v", err)
+	}
+	if _, err := rollout.FindThreadPath(home, threadID, true); err != nil {
+		t.Fatalf("archived rollout missing: %v", err)
+	}
+	assertCLIStateThreadArchived(t, home, threadID, true)
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"unarchive", "Rust Session"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout unarchive error: %v", err)
+	}
+	if _, err := rollout.FindThreadPath(home, threadID, false); err != nil {
+		t.Fatalf("unarchived rollout missing: %v", err)
+	}
+	assertCLIStateThreadArchived(t, home, threadID, false)
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"delete", "--force", threadID}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout delete error: %v", err)
+	}
+	if _, err := rollout.FindThreadPath(home, threadID, false); err == nil {
+		t.Fatal("rollout remained after delete")
+	}
+	config, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := config.OpenStateDB(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM threads WHERE id = ?`, threadID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("deleted state row count = %d, %v", count, err)
+	}
+	if _, found, err := rollout.FindThreadNameByID(home, threadID); err != nil || found {
+		t.Fatalf("deleted name index found=%v error=%v", found, err)
+	}
+}
+
+func TestLocalSessionForksRustRolloutWithoutGoSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const threadID = "0198f100-0000-7000-8000-000000000011"
+	now := fixedAppSessionTime()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: threadID, Source: "cli", CWD: home,
+		ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollout.AppendThreadName(home, threadID, "Rust Fork Source"); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"fork", "Rust Fork Source"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("rollout fork error: %v", err)
+	}
+	var summary struct {
+		Action string `json:"action"`
+		ID     string `json:"id"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil || summary.Action != "forked" || summary.ID == "" || summary.ID == threadID {
+		t.Fatalf("rollout fork summary = %+v, %v; output=%q", summary, err, stdout.String())
+	}
+	if _, err := rollout.FindThreadPath(home, summary.ID, false); err != nil {
+		t.Fatalf("forked rollout missing: %v", err)
+	}
+}
+
+func assertCLIStateThreadArchived(t *testing.T, home, threadID string, want bool) {
+	t.Helper()
+	config, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := config.OpenStateDB(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var archived bool
+	if err := db.QueryRow(`SELECT archived FROM threads WHERE id = ?`, threadID).Scan(&archived); err != nil || archived != want {
+		t.Fatalf("state archived = %v, %v; want %v", archived, err, want)
+	}
+}
 
 func TestSessionArchiveUnarchiveForkAndDeleteFlow(t *testing.T) {
 	home := t.TempDir()

@@ -61,7 +61,7 @@ func TestParentAncestorsJoinAndStartsWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if joined.String() != "file:///workspace/tests/test.rs" {
+	if joined.String() != "file:///workspace/src/tests/test.rs" {
 		t.Fatalf("joined = %s", joined)
 	}
 	base, _ := Parse("file:///workspace")
@@ -90,8 +90,30 @@ func TestJoinWindowsPaths(t *testing.T) {
 	if rootRelative.String() != "file:///C:/Windows" {
 		t.Fatalf("root relative = %s", rootRelative)
 	}
+	sameDrive, err := base.Join(`C:tmp`)
+	if err != nil || sameDrive.String() != "file:///C:/workspace/src/tmp" {
+		t.Fatalf("same-drive relative path = %v, %v", sameDrive, err)
+	}
 	if _, err := base.Join(`D:tmp`); err == nil {
-		t.Fatalf("drive relative path should fail")
+		t.Fatalf("other-drive relative path should fail")
+	}
+}
+
+func TestResolveExecutorPathPreservesForeignConventions(t *testing.T) {
+	for _, test := range []struct {
+		base string
+		path string
+		want string
+	}{
+		{base: "file:///home/alice/repo", path: "src/main.rs", want: "/home/alice/repo/src/main.rs"},
+		{base: "file:///C:/Users/Alice%20Smith/repo", path: `src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{base: "file:///C:/Users/Alice%20Smith/repo", path: `C:src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{base: "file://server/share/repo", path: `src\main.rs`, want: `\\server\share\repo\src\main.rs`},
+	} {
+		got, err := ResolveExecutorPath(test.base, test.path)
+		if err != nil || got.Value != test.want {
+			t.Fatalf("ResolveExecutorPath(%q, %q) = %q, %v; want %q", test.base, test.path, got.Value, err, test.want)
+		}
 	}
 }
 

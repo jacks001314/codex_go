@@ -106,6 +106,9 @@ func (p *GoalSetParams) Validate() error {
 	if p.Objective != nil && strings.TrimSpace(*p.Objective) == "" {
 		return fmt.Errorf("%w: objective is required", ErrInvalidThreadExtraRequest)
 	}
+	if p.Objective != nil && len([]rune(strings.TrimSpace(*p.Objective))) > 4000 {
+		return fmt.Errorf("%w: goal objective must be at most 4000 characters", ErrInvalidThreadExtraRequest)
+	}
 	if (p.TokenBudgetSet || p.TokenBudget != nil) && p.TokenBudget != nil && *p.TokenBudget <= 0 {
 		return fmt.Errorf("%w: tokenBudget must be positive", ErrInvalidThreadExtraRequest)
 	}

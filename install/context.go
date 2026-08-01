@@ -21,6 +21,13 @@ const (
 	zshDirname                = "zsh"
 )
 
+func codeModeHostExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "codex-code-mode-host.exe"
+	}
+	return "codex-code-mode-host"
+}
+
 type StandalonePlatform string
 
 const (
@@ -107,6 +114,42 @@ func (c *InstallContext) RGCommand() string {
 		}
 	}
 	return defaultRGCommand()
+}
+
+// CodeModeHostProgram resolves the standalone host next to the installed
+// Codex executable without requiring the host to be started.
+func (c *InstallContext) CodeModeHostProgram() string {
+	exe, _ := os.Executable()
+	return c.CodeModeHostProgramFromExe(exe)
+}
+
+func (c *InstallContext) CodeModeHostProgramFromExe(currentExe string) string {
+	if resource := c.BundledResource(codeModeHostExecutableName()); resource != nil {
+		return *resource
+	}
+	executableDir := ""
+	if c != nil && c.PackageLayout != nil {
+		executableDir = c.PackageLayout.BinDir
+	} else if c != nil && c.Method.Kind == InstallStandalone {
+		executableDir = c.Method.ReleaseDir
+	} else if currentExe != "" {
+		if parent, err := filepath.Abs(filepath.Dir(currentExe)); err == nil {
+			if resolved, resolveErr := filepath.EvalSymlinks(parent); resolveErr == nil {
+				parent = resolved
+			}
+			executableDir = parent
+		}
+	}
+	if executableDir != "" {
+		candidate := filepath.Join(executableDir, codeModeHostExecutableName())
+		if isFile(candidate) {
+			return candidate
+		}
+	}
+	if currentExe != "" {
+		return filepath.Join(filepath.Dir(currentExe), codeModeHostExecutableName())
+	}
+	return codeModeHostExecutableName()
 }
 
 func (c *InstallContext) BundledResource(fileName string) *string {

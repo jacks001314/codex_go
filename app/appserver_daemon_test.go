@@ -294,7 +294,7 @@ func runAppServerUntilCanceled(args []string) error {
 	go func() {
 		done <- Run(ctx, args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	}()
-	timer := time.NewTimer(250 * time.Millisecond)
+	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
 	case err := <-done:
@@ -308,15 +308,16 @@ func runAppServerUntilCanceled(args []string) error {
 
 func TestAppServerRuntimeOptionsRequireFeatureForRemoteCodeModeHost(t *testing.T) {
 	opts := cli.AppServerOptions{CodeModeHostURL: "ws://127.0.0.1:8765"}
-	if _, err := appServerRuntimeOptionsFromCLI(opts, &config.Config{Values: map[string]any{}}); err == nil || !strings.Contains(err.Error(), "requires the code_mode_host feature") {
+	disabled := &config.Config{Values: map[string]any{"features": map[string]any{"code_mode_host": false}}}
+	if _, err := appServerRuntimeOptionsFromCLI(opts, disabled); err == nil || !strings.Contains(err.Error(), "requires the code_mode_host feature") {
 		t.Fatalf("disabled feature error = %v", err)
 	}
-	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"code_mode_host": map[string]any{"enabled": true}}}}
+	cfg := &config.Config{Values: map[string]any{}}
 	got, err := appServerRuntimeOptionsFromCLI(opts, cfg)
 	if err != nil {
 		t.Fatalf("appServerRuntimeOptionsFromCLI() error = %v", err)
 	}
-	if got.CodeModeHostURL != opts.CodeModeHostURL || got.CodeModeHostHTTPClient == nil || !got.DisableCodeModeInProcessFallback {
+	if got.CodeModeHostURL != opts.CodeModeHostURL || got.CodeModeHostHTTPClient == nil || !got.CodeModeHostEnabled || !got.DisableCodeModeInProcessFallback {
 		t.Fatalf("runtime options = %#v", got)
 	}
 }
@@ -327,23 +328,23 @@ func TestAppServerGenerateArtifacts(t *testing.T) {
 	if err := Run(context.Background(), []string{"app-server", "generate-ts", "--out", dir}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("generate-ts returned error: %v", err)
 	}
-	tsData, err := os.ReadFile(filepath.Join(dir, "protocol.ts"))
+	tsData, err := os.ReadFile(filepath.Join(dir, "ClientRequest.ts"))
 	if err != nil {
-		t.Fatalf("ReadFile protocol.ts error = %v", err)
+		t.Fatalf("ReadFile ClientRequest.ts error = %v", err)
 	}
-	if !strings.Contains(string(tsData), "protocolSchema") {
-		t.Fatalf("protocol.ts = %q", string(tsData))
+	if !strings.Contains(string(tsData), "ClientRequest") {
+		t.Fatalf("ClientRequest.ts = %q", string(tsData))
 	}
 
 	stdout.Reset()
 	if err := Run(context.Background(), []string{"app-server", "generate-json-schema", "--out", dir, "--experimental"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("generate-json-schema returned error: %v", err)
 	}
-	jsonData, err := os.ReadFile(filepath.Join(dir, "protocol.schema.json"))
+	jsonData, err := os.ReadFile(filepath.Join(dir, "ClientRequest.json"))
 	if err != nil {
-		t.Fatalf("ReadFile protocol.schema.json error = %v", err)
+		t.Fatalf("ReadFile ClientRequest.json error = %v", err)
 	}
-	if !strings.Contains(string(jsonData), `"method": "thread/realtime/start"`) {
-		t.Fatalf("protocol.schema.json = %q", string(jsonData))
+	if !strings.Contains(string(jsonData), `"thread/realtime/start"`) {
+		t.Fatalf("ClientRequest.json = %q", string(jsonData))
 	}
 }

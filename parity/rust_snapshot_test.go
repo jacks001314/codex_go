@@ -1,6 +1,7 @@
 package parity
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -36,6 +37,28 @@ func TestRustCriticalFileHashesSnapshot(t *testing.T) {
 	}
 }
 
+func TestPrecomputedAppServerExportsMatchRustTarget(t *testing.T) {
+	rustRoot := rustSnapshotRoot(t)
+	for _, name := range []string{
+		"app-server-exports-stable.json.zst",
+		"app-server-exports-experimental.json.zst",
+	} {
+		rustPath := filepath.Join(rustRoot, "app-server-protocol", "schema", "precomputed", name)
+		goPath := filepath.Join("..", "appserver", "schema", "precomputed", name)
+		rustData, err := os.ReadFile(rustPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", rustPath, err)
+		}
+		goData, err := os.ReadFile(goPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", goPath, err)
+		}
+		if !bytes.Equal(goData, rustData) {
+			t.Fatalf("vendored precomputed export %s differs from Rust target", name)
+		}
+	}
+}
+
 func rustSnapshotRoot(t *testing.T) string {
 	t.Helper()
 	candidates := []string{}
@@ -43,6 +66,7 @@ func rustSnapshotRoot(t *testing.T) string {
 		candidates = append(candidates, env)
 	}
 	candidates = append(candidates,
+		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "codex-main", "codex-rs"),
@@ -107,6 +131,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"app-server-daemon",
 		"app-server-client",
 		"app-server-protocol",
+		"app-server-protocol-noop-macros",
 		"app-server-test-client",
 		"apply-patch",
 		"arg0",
@@ -117,6 +142,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"code-mode",
 		"code-mode-host",
 		"code-mode-protocol",
+		"code-mode-runtime",
 		"codex-home",
 		"cloud-config",
 		"cloud-tasks",
@@ -141,11 +167,13 @@ func rustWorkspaceMembersSnapshot() []string {
 		"file-system",
 		"exec-server-protocol",
 		"exec-server",
+		"exec-server/tests/support",
 		"execpolicy",
 		"ext/agent",
 		"ext/connectors",
 		"ext/extension-api",
 		"ext/goal",
+		"ext/git-attribution",
 		"ext/guardian",
 		"ext/image-generation",
 		"ext/items",
@@ -228,15 +256,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "0a3885a821d9acc57049d1b70bc6cc5ac84b09bf26dbaf2b42a25a8edcce2911"},
+		{Path: "Cargo.toml", SHA256: "ca75d0f70dc20ea4af7e55e17c691309b21414dfdac94a1477bef78da2483476"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "ad0f1496c40d58cce47125ba1182124d7310827d08f53b00817b813ebf706626"},
+		{Path: "exec/src/lib.rs", SHA256: "ff90d8f906d07573e83b79ae40369fc5b49984fa9230bd3d13b05e1635a3c4c4"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
-		{Path: "prompts/templates/review/rubric.md", SHA256: "860da0aac99e47d7faebfc90d0d035fb04c1847f2d3c748824f6f3b9d185882c"},
-		{Path: "core/src/client.rs", SHA256: "0c2290962e281732c5c3102bb5331ace06533926ff6e409cc0e37a200cf09fa8"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "ac5a2eee89ddfff3dc80ab030634a99da0267120001744bd81da6d229871db41"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "fb2c47eb74480300527308f2405dfdb9f6e2851ded1171cc2db042cc21390f11"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "30df8c3ea5b4ef72be36d6b7ce34fc617ad26554745e2e4e407bc9793248fa53"},
+		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
+		{Path: "core/src/client.rs", SHA256: "3d6a5ffadd4a942d1ac40a85c5651854ebea2c538f389314c367ddcd995a2881"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "17a7dc8de4e41220664777d23a05e57198bf0cd67e5c1021a3b3a822dacc5170"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "058ce7b2232c415e3fc53458518487e4982040e906b8aa731b9c18ac79ac5cba"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "f2b8f51fe52f0e7cc2526dae577af5d146374a2d64f141f8d6045f4331bfd1ae"},
 	}
 }
 

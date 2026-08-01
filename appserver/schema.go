@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -58,9 +59,16 @@ func GenerateTypeScript(options *SchemaGenerateOptions) error {
 	if options.OutDir == "" {
 		return fmt.Errorf("output directory is required")
 	}
-	schema := BuildTypeScriptProtocolSchema(options.Experimental, options.Internal)
-	body := renderTypeScriptSchema(schema)
-	return writeGeneratedFile(filepath.Join(options.OutDir, "protocol.ts"), []byte(body))
+	tsOptions := DefaultGenerateTypeScriptOptions()
+	tsOptions.Experimental = options.Experimental
+	return generatePrecomputedTypeScript(options.OutDir, options.Prettier, tsOptions)
+}
+
+func GenerateTypeScriptWithOptions(outDir string, prettier string, options GenerateTypeScriptOptions) error {
+	if strings.TrimSpace(outDir) == "" {
+		return fmt.Errorf("output directory is required")
+	}
+	return generatePrecomputedTypeScript(outDir, prettier, options)
 }
 
 func GenerateJSONSchema(options *SchemaGenerateOptions) error {
@@ -70,16 +78,7 @@ func GenerateJSONSchema(options *SchemaGenerateOptions) error {
 	if options.OutDir == "" {
 		return fmt.Errorf("output directory is required")
 	}
-	schema := BuildProtocolSchema(options.Experimental, options.Internal)
-	data, err := json.MarshalIndent(schema, "", "  ")
-	if err != nil {
-		return err
-	}
-	name := "protocol.schema.json"
-	if options.Internal {
-		name = "internal.schema.json"
-	}
-	return writeGeneratedFile(filepath.Join(options.OutDir, name), append(data, '\n'))
+	return generatePrecomputedJSON(options.OutDir, options.Experimental, options.Internal)
 }
 
 func BuildProtocolSchema(experimental bool, internal bool) *ProtocolSchema {
@@ -224,6 +223,8 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadRead)},
 		{Method: string(MethodThreadResume)},
 		{Method: string(MethodThreadRollback)},
+		{Method: string(MethodThreadSectionMove)},
+		{Method: string(MethodThreadSectionList)},
 		{Method: string(MethodThreadShellCommand)},
 		{Method: string(MethodThreadStart)},
 		{Method: string(MethodThreadUnarchive)},
@@ -355,6 +356,8 @@ func notificationMethods(includeExperimental bool) []ProtocolMethod {
 		{Method: string(NotificationThreadArchived)},
 		{Method: string(NotificationThreadClosed)},
 		{Method: string(NotificationThreadDeleted)},
+		{Method: string(NotificationThreadEnvironmentConnected)},
+		{Method: string(NotificationThreadEnvironmentDisconnected)},
 		{Method: string(NotificationThreadGoalCleared)},
 		{Method: string(NotificationThreadGoalUpdated)},
 		{Method: string(NotificationThreadNameUpdated)},
@@ -555,6 +558,8 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodThreadRealtimeStop):                     {Params: "ThreadRealtimeStopParams", Result: "ThreadRealtimeStopResponse"},
 		string(MethodThreadResume):                           {Params: "ThreadResumeParams", Result: "ThreadResumeResponse"},
 		string(MethodThreadRollback):                         {Params: "ThreadRollbackParams", Result: "ThreadRollbackResponse"},
+		string(MethodThreadSectionMove):                      {Params: "ThreadSectionMoveParams", Result: "ThreadSectionMoveResponse"},
+		string(MethodThreadSectionList):                      {Params: "ThreadSectionListParams", Result: "ThreadSectionListResponse"},
 		string(MethodThreadSearch):                           {Params: "ThreadSearchParams", Result: "ThreadSearchResponse"},
 		string(MethodThreadSearchOccurrences):                {Params: "ThreadSearchOccurrencesParams", Result: "ThreadSearchOccurrencesResponse"},
 		string(MethodThreadSetName):                          {Params: "ThreadSetNameParams", Result: "ThreadSetNameResponse"},
@@ -626,6 +631,8 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(NotificationThreadArchived):                      {Params: "ThreadArchivedNotification"},
 		string(NotificationThreadClosed):                        {Params: "ThreadClosedNotification"},
 		string(NotificationThreadDeleted):                       {Params: "ThreadDeletedNotification"},
+		string(NotificationThreadEnvironmentConnected):          {Params: "EnvironmentConnectionNotification"},
+		string(NotificationThreadEnvironmentDisconnected):       {Params: "EnvironmentConnectionNotification"},
 		string(NotificationThreadGoalCleared):                   {Params: "ThreadGoalClearedNotification"},
 		string(NotificationThreadGoalUpdated):                   {Params: "ThreadGoalUpdatedNotification"},
 		string(NotificationThreadNameUpdated):                   {Params: "ThreadNameUpdatedNotification"},

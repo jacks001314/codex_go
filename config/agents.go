@@ -145,7 +145,7 @@ func parseAgentRoleFile(path string, roleName string) (agent.RoleConfig, error) 
 		return agent.RoleConfig{}, err
 	}
 	var values map[string]any
-	if err := toml.Unmarshal(data, &values); err != nil {
+	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
 		return agent.RoleConfig{}, fmt.Errorf("failed to parse agent role file at %s: %w", path, err)
 	}
 	role := agent.RoleConfig{Settings: map[string]string{}}

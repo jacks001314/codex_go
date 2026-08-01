@@ -16,6 +16,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/state"
+	"codex_go/tool"
 )
 
 func TestMCPRuntimeCoordinatorKeepsThreadConfigIndependent(t *testing.T) {
@@ -36,6 +37,109 @@ func TestMCPRuntimeCoordinatorKeepsThreadConfigIndependent(t *testing.T) {
 		t.Fatalf("unchanged thread runtime was replaced: old=%p new=%p", serviceA, serviceA2)
 	}
 	assertMCPConfiguredServerNames(t, serviceB, []string{"beta"})
+}
+
+func TestMCPToolCallsStayBoundToEachThread(t *testing.T) {
+	firstServer := newThreadBoundMCPTestServer(t, "first-runtime")
+	defer firstServer.Close()
+	secondServer := newThreadBoundMCPTestServer(t, "second-runtime")
+	defer secondServer.Close()
+
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	defer router.Close()
+	makeConfig := func(url string) *config.Config {
+		return &config.Config{Values: map[string]any{"mcp_servers": map[string]any{
+			"shared": map[string]any{"url": url, "enabled": true},
+		}}}
+	}
+	firstConfig := makeConfig(firstServer.URL)
+	secondConfig := makeConfig(secondServer.URL)
+	firstService := router.mcpServiceForThread("thread-first", firstConfig)
+	secondService := router.mcpServiceForThread("thread-second", secondConfig)
+	if firstService == nil || secondService == nil || firstService == secondService {
+		t.Fatalf("thread services = %p/%p, want independent services", firstService, secondService)
+	}
+
+	makeExecutor := func(threadID string, cfg *config.Config, service *mcp.MCPService) *mcp.ToolExecutor {
+		t.Helper()
+		tools, _ := router.mcpRuntimeInputsForService(threadID, cfg, service)
+		if len(tools) != 1 || tools[0].ServerName != "shared" || tools[0].Tool.Name != "echo" {
+			t.Fatalf("runtime tools for %s = %#v", threadID, tools)
+		}
+		return mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
+			Service: service, ServerName: "shared", ThreadID: threadID,
+			ToolInfo: &mcp.MCPToolInfo{Name: "echo", InputSchema: map[string]any{"type": "object"}},
+		})
+	}
+	firstExecutor := makeExecutor("thread-first", firstConfig, firstService)
+	secondExecutor := makeExecutor("thread-second", secondConfig, secondService)
+
+	calls := []struct {
+		executor *mcp.ToolExecutor
+		callID   string
+		marker   string
+	}{
+		{firstExecutor, "first-call", "first-runtime"},
+		{secondExecutor, "second-call", "second-runtime"},
+		{firstExecutor, "first-again", "first-runtime"},
+	}
+	for _, call := range calls {
+		output, err := call.executor.Execute(context.Background(), &tool.Invocation{
+			CallID:  call.callID,
+			Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"message":"` + call.callID + `"}`},
+		})
+		if err != nil {
+			t.Fatalf("Execute(%s) error = %v", call.callID, err)
+		}
+		structured, _ := output.Data["structuredContent"].(map[string]any)
+		if structured["marker"] != call.marker {
+			t.Fatalf("Execute(%s) structured content = %#v, want marker %q", call.callID, structured, call.marker)
+		}
+	}
+}
+
+func newThreadBoundMCPTestServer(t *testing.T, marker string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var rpc struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Errorf("Decode(%s) error = %v", marker, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		write := func(result any) {
+			writeRuntimeRouterMCPResponse(t, w, rpc.ID, result)
+		}
+		switch rpc.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", marker)
+			write(map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": marker, "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			write(map[string]any{"tools": []any{map[string]any{
+				"name": "echo", "description": "Echo", "inputSchema": map[string]any{"type": "object"},
+			}}})
+		case "tools/call":
+			write(map[string]any{
+				"content":           []any{},
+				"structuredContent": map[string]any{"marker": marker},
+			})
+		default:
+			write(map[string]any{})
+		}
+	}))
 }
 
 func TestMCPRuntimeRequirementsChangeRefreshesActiveThreadLikeRust(t *testing.T) {

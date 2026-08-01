@@ -201,7 +201,7 @@ func TestThreadRealtimeNotificationsUseRustWireShape(t *testing.T) {
 		t.Fatalf("Marshal realtime started returned error: %v", err)
 	}
 	startedOutput := string(startedData)
-	if !strings.Contains(startedOutput, `"sessionId":null`) || strings.Contains(startedOutput, `"realtimeSessionId"`) {
+	if !strings.Contains(startedOutput, `"realtimeSessionId":null`) || strings.Contains(startedOutput, `"sessionId"`) {
 		t.Fatalf("realtime started payload = %s", startedData)
 	}
 

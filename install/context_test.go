@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -18,6 +19,10 @@ func TestDetectsStandaloneReleaseLayout(t *testing.T) {
 	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
 		t.Fatalf("WriteFile(exe) error = %v", err)
 	}
+	hostPath := filepath.Join(releaseDir, codeModeHostExecutableName())
+	if err := os.WriteFile(hostPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(host) error = %v", err)
+	}
 	rgPath := filepath.Join(resourcesDir, defaultRGCommand())
 	if err := os.WriteFile(rgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("WriteFile(rg) error = %v", err)
@@ -28,6 +33,9 @@ func TestDetectsStandaloneReleaseLayout(t *testing.T) {
 	}
 	if context.RGCommand() != rgPath {
 		t.Fatalf("RGCommand() = %q, want %q", context.RGCommand(), rgPath)
+	}
+	if got := context.CodeModeHostProgramFromExe(exePath); got != hostPath {
+		t.Fatalf("CodeModeHostProgramFromExe() = %q, want %q", got, hostPath)
 	}
 }
 
@@ -64,9 +72,71 @@ func TestDetectsPackageLayout(t *testing.T) {
 	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
 		t.Fatalf("WriteFile(exe) error = %v", err)
 	}
+	hostPath := filepath.Join(binDir, codeModeHostExecutableName())
+	if err := os.WriteFile(hostPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(host) error = %v", err)
+	}
+	resourceHostPath := filepath.Join(resourcesDir, codeModeHostExecutableName())
+	if err := os.WriteFile(resourceHostPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(resource host) error = %v", err)
+	}
 	layout := PackageLayoutFromExe(exePath)
 	if layout == nil || layout.PackageDir != packageDir || layout.ResourcesDir == nil || layout.PathDir == nil {
 		t.Fatalf("layout = %+v", layout)
+	}
+	context := &InstallContext{Method: InstallMethod{Kind: InstallOther}, PackageLayout: layout}
+	if got := context.CodeModeHostProgramFromExe(exePath); got != resourceHostPath {
+		t.Fatalf("CodeModeHostProgramFromExe() = %q, want %q", got, resourceHostPath)
+	}
+}
+
+func TestCodeModeHostProgramFallsBackNextToCurrentExecutable(t *testing.T) {
+	dir := t.TempDir()
+	exePath := filepath.Join(dir, managedCodexFileName())
+	context := &InstallContext{Method: InstallMethod{Kind: InstallOther}}
+	want := filepath.Join(dir, codeModeHostExecutableName())
+	if got := context.CodeModeHostProgramFromExe(exePath); got != want {
+		t.Fatalf("CodeModeHostProgramFromExe() = %q, want %q", got, want)
+	}
+	if got := context.CodeModeHostProgramFromExe(""); got != codeModeHostExecutableName() {
+		t.Fatalf("unknown executable fallback = %q", got)
+	}
+}
+
+func TestCodeModeHostProgramRejectsDirectoryCandidate(t *testing.T) {
+	packageDir := t.TempDir()
+	binDir := filepath.Join(packageDir, binDirname)
+	if err := os.MkdirAll(filepath.Join(binDir, codeModeHostExecutableName()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fallbackExe := filepath.Join(packageDir, "fallback-codex")
+	context := &InstallContext{PackageLayout: &CodexPackageLayout{PackageDir: packageDir, BinDir: binDir}}
+	want := filepath.Join(packageDir, codeModeHostExecutableName())
+	if got := context.CodeModeHostProgramFromExe(fallbackExe); got != want {
+		t.Fatalf("CodeModeHostProgramFromExe() = %q, want %q", got, want)
+	}
+}
+
+func TestCodeModeHostProgramAcceptsSymlinkToFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated privileges on some Windows hosts")
+	}
+	packageDir := t.TempDir()
+	binDir := filepath.Join(packageDir, binDirname)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(packageDir, "host-target")
+	if err := os.WriteFile(target, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostPath := filepath.Join(binDir, codeModeHostExecutableName())
+	if err := os.Symlink(target, hostPath); err != nil {
+		t.Fatal(err)
+	}
+	context := &InstallContext{PackageLayout: &CodexPackageLayout{PackageDir: packageDir, BinDir: binDir}}
+	if got := context.CodeModeHostProgramFromExe(filepath.Join(binDir, "codex")); got != hostPath {
+		t.Fatalf("CodeModeHostProgramFromExe() = %q, want %q", got, hostPath)
 	}
 }
 

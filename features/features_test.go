@@ -40,6 +40,14 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	if defaults["recommended_plugins"] {
 		t.Fatal("recommended_plugins default = true, want false")
 	}
+	if !defaults["code_mode_host"] {
+		t.Fatal("code_mode_host default = false, want true")
+	}
+	for _, spec := range Registry {
+		if spec.Key == "code_mode_host" && spec.Stage != StageStable {
+			t.Fatalf("code_mode_host stage = %q, want %q", spec.Stage, StageStable)
+		}
+	}
 }
 
 func TestModelClientBetaFeaturesHeader(t *testing.T) {

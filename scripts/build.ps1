@@ -80,6 +80,14 @@ Write-Host "==> Building Codex Go $ResolvedVersion for $GOOS/$GOARCH"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> Built $Output"
+$HostOutput = Join-Path (Split-Path -Parent $Output) "codex-code-mode-host$Extension"
+$hostArguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $HostOutput)
+if ($Race) { $hostArguments += "-race" }
+if ($Rebuild) { $hostArguments += "-a" }
+$hostArguments += "./cmd/codex-code-mode-host"
+& go @hostArguments
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "==> Built $HostOutput"
 if ($GOOS -eq $HostGOOS -and $GOARCH -eq $HostGOARCH) {
     & $Output --version
 }

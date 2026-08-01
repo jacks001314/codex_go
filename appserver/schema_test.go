@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,8 +14,11 @@ import (
 	"testing"
 
 	"codex_go/apps"
+	authpkg "codex_go/auth"
+	configpkg "codex_go/config"
 	"codex_go/mcp"
 	sandboxpkg "codex_go/sandbox"
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestGenerateJSONSchemaIncludesExperimentalMethods(t *testing.T) {
@@ -22,12 +26,12 @@ func TestGenerateJSONSchemaIncludesExperimentalMethods(t *testing.T) {
 	if err := GenerateJSONSchema(&SchemaGenerateOptions{OutDir: dir, Experimental: true}); err != nil {
 		t.Fatalf("GenerateJSONSchema() error = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "protocol.schema.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "ClientRequest.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	output := string(data)
-	if !strings.Contains(output, `"method": "initialize"`) || !strings.Contains(output, `"method": "thread/realtime/start"`) {
+	if !strings.Contains(output, `"initialize"`) || !strings.Contains(output, `"thread/realtime/start"`) {
 		t.Fatalf("schema output = %q", output)
 	}
 }
@@ -37,16 +41,139 @@ func TestGenerateTypeScriptWritesProtocolSchema(t *testing.T) {
 	if err := GenerateTypeScript(&SchemaGenerateOptions{OutDir: dir}); err != nil {
 		t.Fatalf("GenerateTypeScript() error = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "protocol.ts"))
+	data, err := os.ReadFile(filepath.Join(dir, "ClientRequest.ts"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	output := string(data)
-	if !strings.Contains(output, "export const protocolSchema") ||
-		!strings.Contains(output, `"method": "initialize"`) ||
-		!strings.Contains(output, `"method": "getAuthStatus"`) {
+	if !strings.HasPrefix(output, generatedTypeScriptHeader) ||
+		!strings.Contains(output, `"initialize"`) ||
+		!strings.Contains(output, `"getAuthStatus"`) {
 		t.Fatalf("typescript output = %q", output)
 	}
+}
+
+func TestPrecomputedExportsAreWrittenToDiskLikeRust(t *testing.T) {
+	exports, err := loadPrecomputedProtocolExports(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typescriptDir := t.TempDir()
+	jsonDir := t.TempDir()
+	internalJSONDir := t.TempDir()
+	if err := GenerateTypeScript(&SchemaGenerateOptions{OutDir: typescriptDir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateJSONSchema(&SchemaGenerateOptions{OutDir: jsonDir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateJSONSchema(&SchemaGenerateOptions{OutDir: internalJSONDir, Internal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := collectGeneratedExports(t, typescriptDir); !reflect.DeepEqual(got, exports.TypeScript) {
+		t.Fatalf("TypeScript export tree differs: got %d files, want %d", len(got), len(exports.TypeScript))
+	}
+	if got := collectGeneratedExports(t, jsonDir); !reflect.DeepEqual(got, exports.JSONSchema) {
+		t.Fatalf("JSON export tree differs: got %d files, want %d", len(got), len(exports.JSONSchema))
+	}
+	if got := collectGeneratedExports(t, internalJSONDir); !reflect.DeepEqual(got, exports.InternalJSONSchema) {
+		t.Fatalf("internal JSON export tree differs: got %d files, want %d", len(got), len(exports.InternalJSONSchema))
+	}
+}
+
+func TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust(t *testing.T) {
+	exports, err := loadPrecomputedProtocolExports(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typescriptDir := t.TempDir()
+	jsonDir := t.TempDir()
+	if err := GenerateTypeScript(&SchemaGenerateOptions{OutDir: typescriptDir, Experimental: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateJSONSchema(&SchemaGenerateOptions{OutDir: jsonDir, Experimental: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := collectGeneratedExports(t, typescriptDir); !reflect.DeepEqual(got, exports.TypeScript) {
+		t.Fatalf("experimental TypeScript export tree differs: got %d files, want %d", len(got), len(exports.TypeScript))
+	}
+	if got := collectGeneratedExports(t, jsonDir); !reflect.DeepEqual(got, exports.JSONSchema) {
+		t.Fatalf("experimental JSON export tree differs: got %d files, want %d", len(got), len(exports.JSONSchema))
+	}
+}
+
+func TestPrecomputedTypeScriptOptionsPreserveRustBehavior(t *testing.T) {
+	options := DefaultGenerateTypeScriptOptions()
+	options.GenerateIndices = false
+	options.EnsureHeaders = false
+	options.RunPrettier = false
+	dir := t.TempDir()
+	if err := GenerateTypeScriptWithOptions(dir, "", options); err != nil {
+		t.Fatal(err)
+	}
+	files := collectGeneratedExports(t, dir)
+	for path, contents := range files {
+		if filepath.Base(filepath.FromSlash(path)) == "index.ts" {
+			t.Fatalf("generated disabled index %s", path)
+		}
+		if strings.HasPrefix(contents, generatedTypeScriptHeader) {
+			t.Fatalf("generated header for %s", path)
+		}
+	}
+}
+
+func TestPrecomputedExportPathsRejectTraversalLikeRust(t *testing.T) {
+	for _, path := range []string{"", "/absolute.json", "../escape.json", "v2/../escape.json", "v2//empty.json", "./local.json"} {
+		if _, err := writePrecomputedExport(t.TempDir(), path, "{}"); err == nil {
+			t.Fatalf("path %q was accepted", path)
+		}
+	}
+}
+
+func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"stable", stablePrecomputedExports, "2e7ea6908c648299c718d7529441c8db450a511c3983e84b175842e2aa7dc788"},
+		{"experimental", experimentalPrecomputedExports, "3736fff423681ff8ee2515aff14e3854019377f6f661e804b1dab2fa0ebdd5c9"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sum := sha256.Sum256(test.data)
+			if got := fmt.Sprintf("%x", sum[:]); got != test.want {
+				t.Fatalf("artifact SHA-256 = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func collectGeneratedExports(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(relative)] = string(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
 
 func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
@@ -77,6 +204,8 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolSignature(t, stable.Notifications, string(NotificationItemGuardianApprovalReviewCompleted), "ItemGuardianApprovalReviewCompletedNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationMCPServerStatusUpdated), "McpServerStatusUpdatedNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationModelSafetyBufferingUpdated), "ModelSafetyBufferingUpdatedNotification", "")
+	requireProtocolSignature(t, stable.Notifications, string(NotificationThreadEnvironmentConnected), "EnvironmentConnectionNotification", "")
+	requireProtocolSignature(t, stable.Notifications, string(NotificationThreadEnvironmentDisconnected), "EnvironmentConnectionNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationThreadRealtimeStarted), "ThreadRealtimeStartedNotification", "")
 	requireProtocolMethodAbsent(t, stable.ClientRequests, string(MethodProcessSpawn))
 	requireProtocolMethodAbsent(t, stable.ClientRequests, string(MethodAccountSessionsList))
@@ -219,6 +348,9 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadSearchOccurrencesResponse", &ThreadSearchOccurrencesResponse{Data: []ThreadSearchOccurrence{{TurnID: "turn-1", ItemID: "item-1", Snippet: "needle", SnippetMatchRange: ThreadSearchTextRange{Start: 0, End: 6}, TurnCursor: "0"}}}},
 		{"EnvironmentStatusParams", &EnvironmentStatusParams{EnvironmentID: "environment-schema"}},
 		{"EnvironmentStatusResponse", &EnvironmentStatusResponse{Status: EnvironmentStatusDisconnected, Error: stringPtr("connection closed")}},
+		{"EnvironmentConnectionNotification", &EnvironmentConnectionNotification{ThreadID: "thread-schema", EnvironmentID: "environment-schema"}},
+		{"ExternalAgentConfigDetectResponse", &configpkg.ExternalAgentConfigDetectResponse{Connectors: []configpkg.ExternalAgentDetectedConnectorCandidate{{Name: "Google Drive", SessionCount: 3, Source: configpkg.ExternalAgentConnectorSessionToolUse}}}},
+		{"GetAccountResponse", &authpkg.GetAccountResponse{Account: &authpkg.Account{Type: authpkg.AccountChatGPT, PlanType: authpkg.PlanEnterpriseCBPAutomation}, RequiresOpenAIAuth: true}},
 		{"RawResponseCompletedNotification", &RawResponseCompletedNotification{ThreadID: "thread-schema", TurnID: "turn-schema", ResponseID: "resp-schema", Usage: &TokenUsageBreakdown{TotalTokens: 15, InputTokens: 10, CachedInputTokens: 2, CacheWriteInputTokens: 3, OutputTokens: 5, ReasoningOutputTokens: 1}}},
 		{"TurnStartedNotification", &TurnStartedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusInProgress)}},
 		{"TurnCompletedNotification", &TurnCompletedNotification{ThreadID: "thread-schema", Turn: sampleRustSchemaTurn(TurnStatusCompleted)}},
@@ -606,6 +738,7 @@ func rustAppServerProtocolSchemaRoot(t *testing.T) string {
 		candidates = append(candidates, env)
 	}
 	candidates = append(candidates,
+		filepath.Join("..", "..", "git", "codex", "codex-rs", "app-server-protocol", "schema", "json"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs", "app-server-protocol", "schema", "json"),
 		filepath.Join("..", "codex-main", "codex-rs", "app-server-protocol", "schema", "json"),
 	)
@@ -648,6 +781,7 @@ func rustAppServerProtocolRustRoot(t *testing.T) string {
 		candidates = append(candidates, env)
 	}
 	candidates = append(candidates,
+		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
 	)
@@ -814,7 +948,10 @@ func requireProtocolSchemaTypesHaveRustFixtures(t *testing.T, root string, metho
 }
 
 func rustSchemaFixtureExists(root string, typeName string) bool {
-	_, ok := rustSchemaFixturePath(root, typeName)
+	if _, ok := rustSchemaFixturePath(root, typeName); ok {
+		return true
+	}
+	_, _, ok := rustExperimentalSchemaFixture(root, typeName)
 	return ok
 }
 
@@ -873,6 +1010,35 @@ func rustSchemaFixturePath(root string, typeName string) (string, bool) {
 	return "", false
 }
 
+func rustExperimentalSchemaFixture(root string, typeName string) ([]byte, string, bool) {
+	path := filepath.Clean(filepath.Join(root, "..", "precomputed", "app-server-exports-experimental.json.zst"))
+	compressed, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", false
+	}
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, "", false
+	}
+	decompressed, err := decoder.DecodeAll(compressed, nil)
+	decoder.Close()
+	if err != nil {
+		return nil, "", false
+	}
+	var exports struct {
+		JSONSchema map[string]string `json:"json_schema"`
+	}
+	if err := json.Unmarshal(decompressed, &exports); err != nil {
+		return nil, "", false
+	}
+	for _, name := range []string{typeName + ".json", "v1/" + typeName + ".json", "v2/" + typeName + ".json"} {
+		if schema, ok := exports.JSONSchema[name]; ok {
+			return []byte(schema), path + ":" + name, true
+		}
+	}
+	return nil, "", false
+}
+
 type rustJSONSchemaRequired struct {
 	Required []string `json:"required"`
 }
@@ -915,12 +1081,18 @@ type rustSchemaDocument struct {
 func rustSchemaForType(t *testing.T, root string, typeName string) *rustSchemaDocument {
 	t.Helper()
 	path, ok := rustSchemaFixturePath(root, typeName)
-	if !ok {
-		t.Fatalf("Rust schema fixture for %s not found under %s", typeName, root)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	var data []byte
+	var err error
+	if ok {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+	} else {
+		data, path, ok = rustExperimentalSchemaFixture(root, typeName)
+		if !ok {
+			t.Fatalf("Rust schema fixture for %s not found under %s or the experimental precomputed exports", typeName, root)
+		}
 	}
 	var node rustJSONSchemaNode
 	if err := json.Unmarshal(data, &node); err != nil {
@@ -935,12 +1107,18 @@ func rustSchemaForType(t *testing.T, root string, typeName string) *rustSchemaDo
 func rustSchemaRequiredFields(t *testing.T, root string, typeName string) []string {
 	t.Helper()
 	path, ok := rustSchemaFixturePath(root, typeName)
-	if !ok {
-		t.Fatalf("Rust schema fixture for %s not found under %s", typeName, root)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	var data []byte
+	var err error
+	if ok {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+	} else {
+		data, path, ok = rustExperimentalSchemaFixture(root, typeName)
+		if !ok {
+			t.Fatalf("Rust schema fixture for %s not found under %s or the experimental precomputed exports", typeName, root)
+		}
 	}
 	var schema rustJSONSchemaRequired
 	if err := json.Unmarshal(data, &schema); err != nil {

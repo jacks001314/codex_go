@@ -89,11 +89,14 @@ func TestExternalAgentSessionImportParsesCursorTranscriptByMigrationSource(t *te
 		t.Fatalf("imported records = %+v err=%v", page, err)
 	}
 	record := page.Records[0]
-	if record.Title != title || record.Metadata.CWD != `C:\repo` || len(record.Items) != 2 {
+	if record.Title != title || record.Metadata.CWD != `C:\repo` || record.Metadata.ModelProvider != "openai" || len(record.Items) != 3 {
 		t.Fatalf("record = %+v", record)
 	}
 	if record.Items[0].Role != "user" || record.Items[0].Text != "first request" || record.Items[1].Role != "assistant" || record.Items[1].Text != "first answer" {
 		t.Fatalf("record items = %+v", record.Items)
+	}
+	if record.Items[2].Type != externalSessionImportedMarkerType || record.Items[2].Text != externalSessionImportedMarker {
+		t.Fatalf("record import marker = %+v", record.Items[2])
 	}
 	if record.CreatedAt.Format(time.RFC3339) != "2024-01-02T03:04:05Z" || record.UpdatedAt.Format(time.RFC3339) != "2024-03-01T04:05:06Z" {
 		t.Fatalf("record chronology = %+v", record)
@@ -172,7 +175,7 @@ func TestExternalAgentImportReturnsBeforeBackgroundSessionCompletionLikeRust(t *
 	}
 }
 
-func TestExternalAgentSessionImportReportsLedgerFailureAfterSuccess(t *testing.T) {
+func TestExternalAgentSessionImportRejectsUnreadableLedgerBeforeCreatingThread(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	blockedHome := filepath.Join(t.TempDir(), "not-a-directory")
@@ -189,11 +192,15 @@ func TestExternalAgentSessionImportReportsLedgerFailureAfterSuccess(t *testing.T
 	results := router.importExternalAgentSessions(&config.ExternalAgentConfigImportParams{
 		MigrationItems: []config.ExternalAgentConfigMigrationItem{{ItemType: config.MigrationSessions, Details: details}},
 	})
-	if len(results) != 1 || len(results[0].Successes) != 1 || len(results[0].Failures) != 1 {
+	if len(results) != 1 || len(results[0].Successes) != 0 || len(results[0].Failures) != 1 {
 		t.Fatalf("session import results = %#v", results)
 	}
 	failure := results[0].Failures[0]
-	if failure.FailureStage != "session_ledger_update" || externalAgentStringValue(failure.SubErrorType) != "failed_to_update_session_ledger" || failure.Source != nil {
+	if failure.FailureStage != "session_prepare" || externalAgentStringValue(failure.SubErrorType) != "session_ledger_read_failed" || externalAgentStringValue(failure.Source) != sourcePath {
 		t.Fatalf("ledger failure = %#v", failure)
+	}
+	page, err := store.List(session.ListOptions{PageSize: 10, IncludeHistory: true})
+	if err != nil || len(page.Records) != 0 {
+		t.Fatalf("threads created with unreadable ledger = %+v err=%v", page, err)
 	}
 }

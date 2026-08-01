@@ -311,7 +311,7 @@ func TestShellExecutorResolvesManagedNetworkForSelectedEnvironmentLikeRust(t *te
 			if runner.request.Env["HTTP_PROXY"] != "http://127.0.0.1:"+fmt.Sprint(port) {
 				t.Fatalf("local managed network env/context mismatch: %#v", runner.request)
 			}
-		} else if runner.request.RemoteNetworkProxy == nil || runner.request.ManagedNetwork != nil || runner.request.Env["HTTP_PROXY"] != "" || runner.request.RemoteNetworkProxy.EnvironmentID == nil || *runner.request.RemoteNetworkProxy.EnvironmentID != "remote" {
+		} else if runner.request.RemoteNetworkProxy == nil || runner.request.ManagedNetwork != nil || runner.request.Env["HTTP_PROXY"] != "" || runner.request.RemoteNetworkProxy.EnvironmentID == nil || *runner.request.RemoteNetworkProxy.EnvironmentID != "remote" || runner.request.RemoteNetworkProxy.ExecutionID == nil || *runner.request.RemoteNetworkProxy.ExecutionID != "call-network" {
 			t.Fatalf("remote managed network launch request = %#v", runner.request)
 		}
 	}

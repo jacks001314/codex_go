@@ -71,9 +71,52 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 }
 
+func TestExistingRolloutPathPrefersPlainAndFallsBackToCompressed(t *testing.T) {
+	home := t.TempDir()
+	plain := filepath.Join(home, "rollout-2026-07-31T01-02-03-thread.jsonl")
+	compressed := plain + ".zst"
+	if _, found := ExistingRolloutPath(plain); found {
+		t.Fatal("missing rollout unexpectedly resolved")
+	}
+	if err := os.WriteFile(compressed, []byte("compressed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := ExistingRolloutPath(plain); !found || got != compressed {
+		t.Fatalf("compressed resolution = %q found=%v", got, found)
+	}
+	if err := os.WriteFile(plain, []byte("plain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := ExistingRolloutPath(compressed); !found || got != plain {
+		t.Fatalf("plain resolution = %q found=%v", got, found)
+	}
+}
+
 func TestNewRecorderRequiresParams(t *testing.T) {
 	if _, err := NewRecorder(nil); err == nil {
 		t.Fatal("NewRecorder(nil) error = nil")
+	}
+}
+
+func TestPathForThreadUsesRustNestedLocalDateLayout(t *testing.T) {
+	home := t.TempDir()
+	local := time.FixedZone("UTC+8", 8*60*60)
+	now := time.Date(2026, 7, 31, 1, 2, 3, 0, local)
+	want := filepath.Join(home, SessionsSubdir, "2026", "07", "31", "rollout-2026-07-31T01-02-03-thread-1.jsonl")
+	if got := PathForThread(home, "thread-1", now); got != want {
+		t.Fatalf("PathForThread() = %q, want %q", got, want)
+	}
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-1", Now: now})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	defer recorder.Close()
+	if recorder.Path() != want {
+		t.Fatalf("recorder path = %q, want %q", recorder.Path(), want)
+	}
+	lines := mustLoadLines(t, recorder.Path())
+	if got := lines[0].Meta.Timestamp; got != "2026-07-30T17:02:03Z" {
+		t.Fatalf("session timestamp = %q, want UTC timestamp", got)
 	}
 }
 
@@ -482,6 +525,29 @@ func TestRecordFromPathReplaysRustItemCompletedThreadItems(t *testing.T) {
 	}
 }
 
+func TestRolloutReadCommandActionsPreserveExecutorPathsLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		cwd  string
+		path string
+		want string
+	}{
+		{cwd: "file:///home/alice/repo", path: "src/main.rs", want: "/home/alice/repo/src/main.rs"},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `C:src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file://server/share/repo", path: `src\main.rs`, want: `\\server\share\repo\src\main.rs`},
+	} {
+		got := rolloutCommandActionFromMap(map[string]any{
+			"type": "read",
+			"cmd":  "cat " + test.path,
+			"name": "main.rs",
+			"path": test.path,
+		}, test.cwd)
+		if got["path"] != test.want {
+			t.Fatalf("rollout read path for %q + %q = %#v, want %q", test.cwd, test.path, got["path"], test.want)
+		}
+	}
+}
+
 func TestRecordFromPathNormalizesRustComplexThreadItems(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-1.jsonl")
@@ -662,6 +728,23 @@ func TestInputItemsFromLinesReconstructsResponsesInput(t *testing.T) {
 	}
 }
 
+func TestInputItemsFromItemsRemovesOnlyTopLevelPassthroughMetadata(t *testing.T) {
+	raw := json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","internal_chat_message_metadata_passthrough":{"nested":true}}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-secret"}}`)
+	items := InputItemsFromItems([]Item{{Raw: raw}}, true)
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item := items[0].(map[string]any)
+	if _, ok := item["internal_chat_message_metadata_passthrough"]; ok {
+		t.Fatalf("top-level passthrough metadata leaked: %#v", item)
+	}
+	content := item["content"].([]any)
+	nested := content[0].(map[string]any)
+	if _, ok := nested["internal_chat_message_metadata_passthrough"]; !ok {
+		t.Fatalf("nested passthrough metadata was removed: %#v", nested)
+	}
+}
+
 func TestResumeAppendsExistingRollout(t *testing.T) {
 	home := t.TempDir()
 	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-1", Now: fixedTime()})
@@ -835,7 +918,7 @@ func TestUnarchiveDeleteAndFindThreadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unarchive() error = %v", err)
 	}
-	if filepath.Dir(active) != filepath.Join(home, SessionsSubdir) {
+	if filepath.Dir(active) != filepath.Join(home, SessionsSubdir, "2026", "06", "29") {
 		t.Fatalf("Unarchive() path = %q", active)
 	}
 	if err := Delete(active); err != nil {
@@ -843,6 +926,25 @@ func TestUnarchiveDeleteAndFindThreadPath(t *testing.T) {
 	}
 	if _, err := os.Stat(active); !os.IsNotExist(err) {
 		t.Fatalf("deleted rollout still exists: %v", err)
+	}
+}
+
+func TestListThreadsStillReadsLegacyFlatRollout(t *testing.T) {
+	home := t.TempDir()
+	flatPath := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-flat-thread.jsonl")
+	if err := os.MkdirAll(filepath.Dir(flatPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	contents := "{\"timestamp\":\"2026-06-29T01:02:03Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"flat-thread\",\"timestamp\":\"2026-06-29T01:02:03Z\",\"cwd\":\"/repo\",\"source\":\"cli\",\"model_provider\":\"openai\"}}\n"
+	if err := os.WriteFile(flatPath, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	page, err := ListThreads(home, ListOptions{})
+	if err != nil {
+		t.Fatalf("ListThreads() error = %v", err)
+	}
+	if got := threadIDs(page.Items); !reflect.DeepEqual(got, []string{"flat-thread"}) {
+		t.Fatalf("legacy flat threads = %v, want flat-thread", got)
 	}
 }
 

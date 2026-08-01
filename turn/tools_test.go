@@ -505,6 +505,36 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 	}
 }
 
+func TestBuildToolRegistryRestrictsLegacyShellCommandToSingleLocalEnvironmentLikeRust(t *testing.T) {
+	for _, ids := range [][]string{{"remote"}, {"local", "remote"}, {"local", "local"}} {
+		options := DefaultToolRegistryOptions(t.TempDir())
+		options.EnableUnifiedExec = true
+		options.SelectedEnvironmentIDs = ids
+		registry, err := BuildToolRegistry(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := registry.Lookup(tool.PlainName(tool.DefaultShellCommandToolName)); ok {
+			t.Fatalf("shell_command registered for environments %#v", ids)
+		}
+		if _, ok := registry.Lookup(tool.PlainName(tool.DefaultExecCommandToolName)); !ok {
+			t.Fatalf("exec_command missing for environments %#v", ids)
+		}
+	}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableUnifiedExec = false
+	options.SelectedEnvironmentIDs = []string{"remote"}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{tool.DefaultShellCommandToolName, tool.DefaultExecCommandToolName, tool.DefaultWriteStdinToolName} {
+		if _, ok := registry.Lookup(tool.PlainName(name)); ok {
+			t.Fatalf("%s registered for remote-only non-unified turn", name)
+		}
+	}
+}
+
 func TestBuildToolRegistryGatesAdditionalPermissionsSchemaLikeRust(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableUnifiedExec = true

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -239,10 +240,24 @@ type feedbackTurnContext struct {
 	Effort *string `json:"effort"`
 }
 
-func feedbackModelAndEffortFromRollout(path string, turnID *string) (string, string, bool) {
+type feedbackTurnMetadata struct {
+	Model      string
+	Effort     string
+	PromptHash string
+}
+
+func feedbackTurnMetadataFromRollout(path string, turnID *string) (feedbackTurnMetadata, bool) {
 	lines, _, err := rollout.Load(path)
 	if err != nil {
-		return "", "", false
+		return feedbackTurnMetadata{}, false
+	}
+	promptHash := ""
+	for i := range lines {
+		if lines[i].Meta == nil || strings.TrimSpace(lines[i].Meta.BaseInstructions) == "" {
+			continue
+		}
+		promptHash = normalizedFeedbackPromptHash(lines[i].Meta.BaseInstructions)
+		break
 	}
 	for index := len(lines) - 1; index >= 0; index-- {
 		if len(lines[index].TurnContext) == 0 {
@@ -255,9 +270,36 @@ func feedbackModelAndEffortFromRollout(path string, turnID *string) (string, str
 		if turnID != nil && (context.TurnID == nil || *context.TurnID != *turnID) {
 			continue
 		}
-		return context.Model, feedbackReasoningEffortTag(context.Effort), true
+		return feedbackTurnMetadata{
+			Model:      context.Model,
+			Effort:     feedbackReasoningEffortTag(context.Effort),
+			PromptHash: promptHash,
+		}, true
 	}
-	return "", "", false
+	return feedbackTurnMetadata{}, false
+}
+
+func applyFeedbackTurnMetadata(tags map[string]string, metadata feedbackTurnMetadata, ok bool) map[string]string {
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	delete(tags, "prompt_hash")
+	delete(tags, "prompt_version")
+	if !ok {
+		return tags
+	}
+	tags["model"] = metadata.Model
+	tags["effort"] = metadata.Effort
+	if metadata.PromptHash != "" {
+		tags["prompt_hash"] = metadata.PromptHash
+	}
+	return tags
+}
+
+func normalizedFeedbackPromptHash(prompt string) string {
+	normalized := strings.Join(strings.Fields(prompt), " ")
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func feedbackReasoningEffortTag(effort *string) string {

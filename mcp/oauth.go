@@ -9,8 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+var oauthFallbackMu sync.Mutex
 
 const (
 	mcpOAuthFallbackFilename = ".credentials.json"
@@ -42,6 +45,7 @@ type oauthFallbackEntry struct {
 	ExpiresAtMillis *int64   `json:"expires_at,omitempty"`
 	RefreshToken    *string  `json:"refresh_token,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
+	ExecutorOwned   bool     `json:"executor_owned,omitempty"`
 }
 
 func NewOAuthStore(codexHome string) *OAuthStore {
@@ -52,6 +56,8 @@ func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, 
 	if s == nil {
 		return nil, errors.New("MCP OAuth store is nil")
 	}
+	oauthFallbackMu.Lock()
+	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()
 	if err != nil || len(file) == 0 {
 		return nil, err
@@ -60,18 +66,18 @@ func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, 
 	if err != nil {
 		return nil, err
 	}
-	if entry := file[key]; entry != nil {
-		return oauthTokenSetFromFallbackEntry(entry), nil
-	}
-	for _, entry := range file {
+	localServerName := strings.TrimPrefix(serverName, "local:")
+	for storedKey, entry := range file {
 		if entry == nil {
 			continue
 		}
-		entryKey, err := computeMCPOAuthStoreKey(entry.ServerName, entry.ServerURL)
-		if err != nil {
-			return nil, err
+		matches := false
+		if strings.HasPrefix(serverName, "executor:") {
+			matches = storedKey == key && entry.ExecutorOwned && entry.ServerName == serverName && entry.ServerURL == serverURL
+		} else if !entry.ExecutorOwned {
+			matches = entry.ServerURL == serverURL && (entry.ServerName == localServerName || (storedKey == key && entry.ServerName == serverName))
 		}
-		if entryKey == key {
+		if matches {
 			return oauthTokenSetFromFallbackEntry(entry), nil
 		}
 	}
@@ -94,6 +100,8 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 	if strings.TrimSpace(tokens.AccessToken) == "" {
 		return errors.New("MCP OAuth access token is required")
 	}
+	oauthFallbackMu.Lock()
+	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()
 	if err != nil {
 		return err
@@ -105,6 +113,9 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 	if err != nil {
 		return err
 	}
+	if existing := file[key]; strings.HasPrefix(tokens.ServerName, "executor:") && existing != nil && !existing.ExecutorOwned {
+		return errors.New("executor OAuth credential key conflicts with a host-owned credential")
+	}
 	file[key] = oauthFallbackEntryFromTokenSet(tokens)
 	return s.writeFallbackFile(file)
 }
@@ -113,6 +124,8 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 	if s == nil {
 		return false, errors.New("MCP OAuth store is nil")
 	}
+	oauthFallbackMu.Lock()
+	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()
 	if err != nil || len(file) == 0 {
 		return false, err
@@ -122,19 +135,21 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 		return false, err
 	}
 	removed := false
-	if _, ok := file[key]; ok {
-		delete(file, key)
-		removed = true
-	}
+	localServerName := strings.TrimPrefix(serverName, "local:")
 	for entryKey, entry := range file {
 		if entry == nil {
 			continue
 		}
-		computed, err := computeMCPOAuthStoreKey(entry.ServerName, entry.ServerURL)
-		if err != nil {
-			return false, err
+		matches := false
+		if strings.HasPrefix(serverName, "executor:") {
+			if entryKey == key && !entry.ExecutorOwned {
+				return false, errors.New("executor OAuth credential key conflicts with a host-owned credential")
+			}
+			matches = entryKey == key && entry.ExecutorOwned && entry.ServerName == serverName && entry.ServerURL == serverURL
+		} else if !entry.ExecutorOwned {
+			matches = entry.ServerURL == serverURL && (entry.ServerName == localServerName || (entryKey == key && entry.ServerName == serverName))
 		}
-		if computed == key {
+		if matches {
 			delete(file, entryKey)
 			removed = true
 		}
@@ -152,7 +167,8 @@ func (s *OAuthStore) AuthStatus(serverName string, config *ServerConfig) (MCPAut
 	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
 		return MCPAuthBearerToken, nil
 	}
-	tokens, err := s.Load(serverName, config.URL)
+	credentialName := config.OAuthCredentialName(serverName)
+	tokens, err := s.Load(credentialName, config.URL)
 	if err != nil {
 		return MCPAuthUnsupported, err
 	}
@@ -255,6 +271,7 @@ func oauthFallbackEntryFromTokenSet(tokens *OAuthTokenSet) *oauthFallbackEntry {
 		AccessToken:     strings.TrimSpace(tokens.AccessToken),
 		Scopes:          append([]string(nil), tokens.Scopes...),
 		ExpiresAtMillis: cloneInt64Pointer(tokens.ExpiresAtMillis),
+		ExecutorOwned:   strings.HasPrefix(strings.TrimSpace(tokens.ServerName), "executor:"),
 	}
 	if refresh := strings.TrimSpace(tokens.RefreshToken); refresh != "" {
 		entry.RefreshToken = &refresh
@@ -271,6 +288,8 @@ func computeMCPOAuthStoreKey(serverName string, serverURL string) (string, error
 	if serverName == "" || serverURL == "" {
 		return "", fmt.Errorf("MCP OAuth server name and URL are required")
 	}
+	executorOwned := strings.HasPrefix(serverName, "executor:")
+	serverName = strings.TrimPrefix(serverName, "local:")
 	payload := map[string]any{
 		"type":    mcpOAuthServerType,
 		"url":     serverURL,
@@ -281,7 +300,11 @@ func computeMCPOAuthStoreKey(serverName string, serverURL string) (string, error
 		return "", err
 	}
 	sum := sha256.Sum256(encoded)
-	return serverName + "|" + hex.EncodeToString(sum[:])[:16], nil
+	separator := "|"
+	if executorOwned {
+		separator = ":"
+	}
+	return serverName + separator + hex.EncodeToString(sum[:])[:16], nil
 }
 
 func tokenNeedsRefresh(expiresAtMillis *int64, now time.Time) bool {

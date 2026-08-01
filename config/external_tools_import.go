@@ -122,7 +122,7 @@ func (s *ConfigService) importExternalMCP(scope externalMigrationScope, result *
 	}
 	existing := map[string]any{}
 	if data, err := os.ReadFile(target); err == nil && strings.TrimSpace(string(data)) != "" {
-		if err := toml.Unmarshal(data, &existing); err != nil {
+		if err := toml.Unmarshal(stripUTF8BOM(data), &existing); err != nil {
 			return fmt.Errorf("invalid existing config.toml: %w", err)
 		}
 	}
@@ -346,7 +346,7 @@ func convertExternalMCPServer(raw map[string]any) (map[string]any, bool) {
 func missingExternalMCPServers(target string, servers map[string]any) []string {
 	existing := map[string]any{}
 	if data, err := os.ReadFile(target); err == nil {
-		_ = toml.Unmarshal(data, &existing)
+		_ = toml.Unmarshal(stripUTF8BOM(data), &existing)
 	}
 	existingServers, _ := existing["mcp_servers"].(map[string]any)
 	missing := make([]string, 0, len(servers))

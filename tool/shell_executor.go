@@ -483,6 +483,13 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
 		req.UnifiedExecNoiseProvider = environment.NoiseProvider
 	}
+	if req.RemoteNetworkProxy != nil {
+		launch := *req.RemoteNetworkProxy
+		if executionID := strings.TrimSpace(invocation.CallID); executionID != "" {
+			launch.ExecutionID = &executionID
+		}
+		req.RemoteNetworkProxy = &launch
+	}
 	var result *ShellResult
 	if e.shouldUseUnifiedExec(req) {
 		req, err = prepareUnifiedExecShellRequest(req)
@@ -625,6 +632,7 @@ func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
 	prepared := *req
 	prepared.Command = append([]string(nil), plan.Command...)
 	prepared.CWD = plan.CWD
+	prepared.ProcessSandboxType = cloneSandboxType(plan.SandboxType)
 	prepared.Env = cloneEnv(req.Env)
 	if prepared.Env == nil {
 		prepared.Env = map[string]string{}
@@ -633,6 +641,11 @@ func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
 		prepared.Env["CODEX_PERMISSION_PROFILE"] = profileID
 	}
 	return &prepared, nil
+}
+
+func cloneSandboxType(value sandbox.SandboxType) *sandbox.SandboxType {
+	cloned := value
+	return &cloned
 }
 
 func clampShellMaxOutputTokens(requested *int, policy *int) *int {

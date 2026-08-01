@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/sandbox"
 )
 
 func TestExecServerTTYHelperProcess(t *testing.T) {
@@ -449,15 +452,19 @@ func TestClientConsumesOrderedPushedProcessEventsLikeRust(t *testing.T) {
 	}
 	defer events.Close()
 	command := []string{os.Args[0], "-test.run=^TestExecServerTTYHelperProcess$"}
-	if _, err := client.Start(context.Background(), &ExecParams{
+	startResponse, err := client.Start(context.Background(), &ExecParams{
 		ProcessID: "pushed",
 		Argv:      command,
 		EnvPolicy: &ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
 		Env:       map[string]string{"CODEX_GO_EXEC_SERVER_TTY_HELPER": "1"},
 		TTY:       true,
 		PipeStdin: false,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Start() error = %v", err)
+	}
+	if startResponse.SandboxType == nil || *startResponse.SandboxType != ProcessSandboxNone {
+		t.Fatalf("unsandboxed start response = %#v", startResponse)
 	}
 
 	var output strings.Builder
@@ -536,6 +543,37 @@ func TestClientLegacyExitedNotificationPreservesMissingSandboxMetadataLikeRust(t
 	event, err := subscription.Next(context.Background())
 	if err != nil || event.Kind != ProcessEventExited || event.SandboxDenied != nil {
 		t.Fatalf("legacy exit event = %#v, %v", event, err)
+	}
+}
+
+func TestExecResponseDistinguishesUnknownFromExplicitlyUnsandboxedLikeRust(t *testing.T) {
+	var unknown ExecResponse
+	if err := json.Unmarshal([]byte(`{"processId":"legacy"}`), &unknown); err != nil {
+		t.Fatal(err)
+	}
+	var unsandboxed ExecResponse
+	if err := json.Unmarshal([]byte(`{"processId":"current","sandboxType":"none"}`), &unsandboxed); err != nil {
+		t.Fatal(err)
+	}
+	if unknown.SandboxType != nil {
+		t.Fatalf("legacy sandbox type = %q", *unknown.SandboxType)
+	}
+	if unsandboxed.SandboxType == nil || *unsandboxed.SandboxType != ProcessSandboxNone {
+		t.Fatalf("explicit sandbox type = %#v", unsandboxed.SandboxType)
+	}
+	if got := SandboxTypeFromProtocol(unknown.SandboxType); got != nil {
+		t.Fatalf("legacy mapped sandbox type = %q", *got)
+	}
+	if got := SandboxTypeFromProtocol(unsandboxed.SandboxType); got == nil || *got != sandbox.SandboxTypeNone {
+		t.Fatalf("explicit mapped sandbox type = %#v", got)
+	}
+	encoded, err := json.Marshal(unknown)
+	if err != nil || !bytes.Contains(encoded, []byte(`"sandboxType":null`)) {
+		t.Fatalf("unknown response JSON = %s, %v", encoded, err)
+	}
+	var invalid ExecResponse
+	if err := json.Unmarshal([]byte(`{"processId":"invalid","sandboxType":"futureSandbox"}`), &invalid); err == nil {
+		t.Fatal("unknown sandbox type was accepted")
 	}
 }
 

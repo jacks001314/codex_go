@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -41,6 +42,73 @@ func TestServerRequestBrokerResolvesResponse(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broker response")
+	}
+}
+
+func TestServerRequestBrokerIntersectsPermissionsApprovalLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific symbolic slash_tmp semantics")
+	}
+	broker := NewServerRequestBroker()
+	sent := make(chan *ServerRequest, 1)
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) { sent <- request }))
+	done := make(chan error, 1)
+	var response PermissionsRequestApprovalResponse
+	go func() {
+		done <- broker.Request(context.Background(), ServerRequestPermissionsApproval, &PermissionsRequestApprovalParams{
+			CWD: t.TempDir(),
+			Permissions: map[string]any{
+				"fileSystem": map[string]any{"write": []string{"/tmp"}},
+			},
+		}, &response)
+	}()
+
+	request := <-sent
+	slashTmpGrant := map[string]any{
+		"path":   map[string]any{"type": "special", "value": map[string]any{"kind": "slash_tmp"}},
+		"access": "write",
+	}
+	if ok, err := broker.Resolve(OK(request.ID, &PermissionsRequestApprovalResponse{
+		Permissions: &GrantedPermissionProfile{FileSystem: &AdditionalFileSystemPermissions{Entries: []any{slashTmpGrant}}},
+		Scope:       PermissionGrantScopeTurn,
+	})); err != nil || !ok {
+		t.Fatalf("Resolve() ok=%v error=%v", ok, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if response.Permissions == nil || response.Permissions.FileSystem != nil || response.Permissions.Network != nil {
+		t.Fatalf("intersected response = %#v", response)
+	}
+}
+
+func TestServerRequestBrokerRejectsSessionScopedStrictAutoReviewLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	sent := make(chan *ServerRequest, 1)
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) { sent <- request }))
+	done := make(chan error, 1)
+	var response PermissionsRequestApprovalResponse
+	go func() {
+		done <- broker.Request(context.Background(), ServerRequestPermissionsApproval, &PermissionsRequestApprovalParams{
+			Permissions: map[string]any{"network": map[string]any{"enabled": true}},
+		}, &response)
+	}()
+
+	request := <-sent
+	enabled := true
+	strict := true
+	if ok, err := broker.Resolve(OK(request.ID, &PermissionsRequestApprovalResponse{
+		Permissions:      &GrantedPermissionProfile{Network: &AdditionalNetworkPermissions{Enabled: &enabled}},
+		Scope:            PermissionGrantScopeSession,
+		StrictAutoReview: &strict,
+	})); err != nil || !ok {
+		t.Fatalf("Resolve() ok=%v error=%v", ok, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if response.Scope != PermissionGrantScopeTurn || response.StrictAutoReview == nil || *response.StrictAutoReview || response.Permissions == nil || response.Permissions.Network != nil {
+		t.Fatalf("normalized response = %#v", response)
 	}
 }
 

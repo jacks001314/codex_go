@@ -1,0 +1,43 @@
+name: Frozen Rust parity baseline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'features/**'
+      - 'parity/**'
+      - 'parity.json'
+      - 'update/plan_2026_08_01.md'
+      - '.github/workflows/parity-baseline.yml'
+  pull_request:
+    paths:
+      - 'features/**'
+      - 'parity/**'
+      - 'parity.json'
+      - 'update/plan_2026_08_01.md'
+      - '.github/workflows/parity-baseline.yml'
+
+jobs:
+  parity-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out codex_go
+        uses: actions/checkout@v4
+        with:
+          path: codex-go
+      - name: Check out frozen Rust baseline
+        uses: actions/checkout@v4
+        with:
+          repository: openai/codex
+          ref: bbbf396839b3bab872291354878980ba82ad4aee
+          path: rust-codex
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: codex-go/go.mod
+          cache-dependency-path: codex-go/go.sum
+      - name: Verify candidate control plane and Rust source oracles
+        working-directory: codex-go
+        env:
+          CODEX_RUST_ROOT: ${{ github.workspace }}/rust-codex/codex-rs
+        run: go test ./parity ./features -count=1

@@ -36,6 +36,15 @@ type Client struct {
 	done         chan struct{}
 	closeOnce    sync.Once
 	closed       bool
+	metadataMu   sync.Mutex
+	metadata     map[string]*inFlightMetadataRequest
+}
+
+type inFlightMetadataRequest struct {
+	done      chan struct{}
+	response  *FSGetMetadataResponse
+	err       error
+	abandoned bool
 }
 
 type clientConnection interface {
@@ -804,12 +813,12 @@ func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, err
 	return &response, nil
 }
 
-func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDiscoveryParams) (*CapabilityDiscoveryResponse, error) {
-	response := CapabilityDiscoveryResponse{Manifests: []CapabilityManifest{}, Errors: []CapabilityDiscoveryError{}}
+func (c *Client) DiscoverCapabilityRoots(ctx context.Context, params *CapabilityRootsDiscoverParams) (*CapabilityRootsDiscoverResponse, error) {
+	response := CapabilityRootsDiscoverResponse{Roots: []CapabilityRootDiscovery{}}
 	if params == nil || len(params.Roots) == 0 {
 		return &response, nil
 	}
-	normalizedRoots := make([]CapabilityDiscoveryRoot, len(params.Roots))
+	normalizedRoots := make([]CapabilityRootDiscoverRequest, len(params.Roots))
 	for i := range params.Roots {
 		normalizedRoots[i] = params.Roots[i]
 		var err error
@@ -827,15 +836,18 @@ func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDis
 		if end > len(normalizedRoots) {
 			end = len(normalizedRoots)
 		}
-		batchParams := CapabilityDiscoveryParams{Roots: append([]CapabilityDiscoveryRoot(nil), normalizedRoots[start:end]...)}
-		var batch CapabilityDiscoveryResponse
-		if err := c.call(ctx, MethodCapabilitiesDiscover, &batchParams, &batch); err != nil {
+		batchParams := CapabilityRootsDiscoverParams{Roots: append([]CapabilityRootDiscoverRequest(nil), normalizedRoots[start:end]...)}
+		var batch CapabilityRootsDiscoverResponse
+		if err := c.call(ctx, MethodCapabilityRootsDiscover, &batchParams, &batch); err != nil {
 			return nil, err
 		}
-		response.Manifests = append(response.Manifests, batch.Manifests...)
-		response.Errors = append(response.Errors, batch.Errors...)
+		response.Roots = append(response.Roots, batch.Roots...)
 	}
 	return &response, nil
+}
+
+func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDiscoveryParams) (*CapabilityDiscoveryResponse, error) {
+	return c.DiscoverCapabilityRoots(ctx, params)
 }
 
 func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
@@ -994,7 +1006,9 @@ func (c *Client) FSWriteFile(ctx context.Context, params *FSWriteFileParams) (*F
 		return nil, fmt.Errorf("fs/writeFile: %w", err)
 	}
 	var response FSWriteFileResponse
-	if err := c.call(ctx, MethodFSWriteFile, &normalized, &response); err != nil {
+	err = c.call(ctx, MethodFSWriteFile, &normalized, &response)
+	c.clearInFlightMetadataRequests()
+	if err != nil {
 		return nil, err
 	}
 	return &response, nil
@@ -1015,7 +1029,9 @@ func (c *Client) FSCreateDirectory(ctx context.Context, params *FSCreateDirector
 		return nil, fmt.Errorf("fs/createDirectory: %w", err)
 	}
 	var response FSCreateDirectoryResponse
-	if err := c.call(ctx, MethodFSCreateDirectory, &normalized, &response); err != nil {
+	err = c.call(ctx, MethodFSCreateDirectory, &normalized, &response)
+	c.clearInFlightMetadataRequests()
+	if err != nil {
 		return nil, err
 	}
 	return &response, nil
@@ -1035,11 +1051,77 @@ func (c *Client) FSGetMetadata(ctx context.Context, params *FSGetMetadataParams)
 	if err != nil {
 		return nil, fmt.Errorf("fs/getMetadata: %w", err)
 	}
+	if normalized.Sandbox != nil {
+		return c.fsGetMetadataUncoalesced(ctx, &normalized)
+	}
+	return c.fsGetMetadataCoalesced(ctx, &normalized)
+}
+
+func (c *Client) fsGetMetadataCoalesced(ctx context.Context, params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		c.metadataMu.Lock()
+		if c.metadata == nil {
+			c.metadata = make(map[string]*inFlightMetadataRequest)
+		}
+		request := c.metadata[params.Path]
+		owner := request == nil
+		if owner {
+			request = &inFlightMetadataRequest{done: make(chan struct{})}
+			c.metadata[params.Path] = request
+		}
+		c.metadataMu.Unlock()
+
+		if owner {
+			response, err := c.fsGetMetadataUncoalesced(ctx, params)
+			c.metadataMu.Lock()
+			if c.metadata[params.Path] == request {
+				delete(c.metadata, params.Path)
+			}
+			if err != nil && ctx.Err() != nil {
+				request.abandoned = true
+			} else {
+				request.response = response
+				request.err = err
+			}
+			close(request.done)
+			c.metadataMu.Unlock()
+			return response, err
+		}
+
+		select {
+		case <-request.done:
+			if request.abandoned {
+				continue
+			}
+			if request.response == nil {
+				return nil, request.err
+			}
+			response := *request.response
+			return &response, request.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (c *Client) fsGetMetadataUncoalesced(ctx context.Context, params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
 	var response FSGetMetadataResponse
-	if err := c.call(ctx, MethodFSGetMetadata, &normalized, &response); err != nil {
+	if err := c.call(ctx, MethodFSGetMetadata, params, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil
+}
+
+func (c *Client) clearInFlightMetadataRequests() {
+	if c == nil {
+		return
+	}
+	c.metadataMu.Lock()
+	clear(c.metadata)
+	c.metadataMu.Unlock()
 }
 
 func (c *Client) FSCanonicalize(ctx context.Context, params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error) {
@@ -1120,7 +1202,9 @@ func (c *Client) FSRemove(ctx context.Context, params *FSRemoveParams) (*FSRemov
 		return nil, fmt.Errorf("fs/remove: %w", err)
 	}
 	var response FSRemoveResponse
-	if err := c.call(ctx, MethodFSRemove, &normalized, &response); err != nil {
+	err = c.call(ctx, MethodFSRemove, &normalized, &response)
+	c.clearInFlightMetadataRequests()
+	if err != nil {
 		return nil, err
 	}
 	return &response, nil
@@ -1146,7 +1230,9 @@ func (c *Client) FSCopy(ctx context.Context, params *FSCopyParams) (*FSCopyRespo
 		return nil, fmt.Errorf("fs/copy: %w", err)
 	}
 	var response FSCopyResponse
-	if err := c.call(ctx, MethodFSCopy, &normalized, &response); err != nil {
+	err = c.call(ctx, MethodFSCopy, &normalized, &response)
+	c.clearInFlightMetadataRequests()
+	if err != nil {
 		return nil, err
 	}
 	return &response, nil

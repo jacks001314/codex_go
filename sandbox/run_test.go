@@ -179,6 +179,120 @@ func TestBuildCommandRunPlanUsesRequestLinuxSandboxHelper(t *testing.T) {
 	}
 }
 
+func TestBuildCommandRunPlanCanonicalProfileWinsOverStaleJSONLikeRust(t *testing.T) {
+	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"glob_pattern","pattern":"**/*.env"},"access":"deny"}]},"network":"enabled"}`
+	profile, err := ParseRuntimePermissionProfileJSON(canonical)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	plan, err := BuildCommandRunPlan(&CommandRunRequest{
+		ResolvedPermissionProfile:     profile,
+		ResolvedPermissionProfileID:   "canonical",
+		ResolvedPermissionProfileJSON: `{"type":"disabled"}`,
+		Command:                       []string{"go", "version"},
+		CWD:                           t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("BuildCommandRunPlan() error = %v", err)
+	}
+	if !strings.Contains(plan.PermissionProfileJSON, `"access":"deny"`) || !strings.Contains(plan.PermissionProfileJSON, `"network":"enabled"`) || strings.Contains(plan.PermissionProfileJSON, `"type":"disabled"`) {
+		t.Fatalf("plan used stale derived JSON: %s", plan.PermissionProfileJSON)
+	}
+	if plan.PermissionProfile == nil || !plan.PermissionProfile.HasDenyReadEntries() || !plan.PermissionProfile.AllowsNetwork() {
+		t.Fatalf("plan profile = %#v", plan.PermissionProfile)
+	}
+}
+
+func TestPermissionProfileAdditionalGrantsPreserveCanonicalEntriesLikeRust(t *testing.T) {
+	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"glob_pattern","pattern":"**/*.env"},"access":"deny"}]},"network":"restricted"}`
+	profile, err := ParseRuntimePermissionProfileJSON(canonical)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	writeRoot := filepath.Join(t.TempDir(), "generated")
+	networkEnabled := true
+	effective, err := PermissionProfileWithAdditionalPermissions(profile, &AdditionalPermissionProfile{
+		Network: &networkEnabled, FileSystem: []string{writeRoot},
+	})
+	if err != nil {
+		t.Fatalf("PermissionProfileWithAdditionalPermissions() error = %v", err)
+	}
+	raw, err := RuntimePermissionProfileJSON(*effective)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	if !strings.Contains(raw, `"kind":"root"`) || !strings.Contains(raw, `"access":"deny"`) || !strings.Contains(raw, `"network":"enabled"`) {
+		t.Fatalf("canonical entries were lost: %s", raw)
+	}
+	if access := permissionProfilePathAccess(t, raw, cleanRunPath(writeRoot)); access != string(FileSystemAccessWrite) {
+		t.Fatalf("write root access = %q in %s", access, raw)
+	}
+}
+
+func TestWindowsPermissionProfilesIgnoreSymbolicSlashTmpLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific symbolic slash_tmp semantics")
+	}
+	cwd := t.TempDir()
+	slashTmpOnly := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"special","value":{"kind":"slash_tmp"}},"access":"write"}]},"network":"restricted"}`
+	profile, err := ParseRuntimePermissionProfileJSON(slashTmpOnly)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	if profile.SandboxPolicy.Kind != SandboxReadOnly || profile.SandboxPolicy.HasFullDiskWriteAccess() {
+		t.Fatalf("symbolic slash_tmp write profile = %#v", profile)
+	}
+	if roots := profile.SandboxPolicy.GetWritableRootsWithCWD(cwd); len(roots) != 0 {
+		t.Fatalf("symbolic slash_tmp produced Windows writable roots: %#v", roots)
+	}
+	canonical, err := RuntimePermissionProfileJSON(*profile)
+	if err != nil || !strings.Contains(canonical, `"kind":"slash_tmp"`) {
+		t.Fatalf("canonical profile = %q, error = %v", canonical, err)
+	}
+
+	for _, access := range []string{"read", "deny"} {
+		raw := fmt.Sprintf(`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"write"},{"path":{"type":"special","value":{"kind":"slash_tmp"}},"access":%q}]},"network":"restricted"}`, access)
+		rootProfile, parseErr := ParseRuntimePermissionProfileJSON(raw)
+		if parseErr != nil {
+			t.Fatalf("ParseRuntimePermissionProfileJSON(%s) error = %v", access, parseErr)
+		}
+		if !rootProfile.SandboxPolicy.HasFullDiskWriteAccess() || !rootProfile.SandboxPolicy.HasFullDiskReadAccess() || rootProfile.HasDenyReadEntries() {
+			t.Fatalf("root write + slash_tmp %s profile = %#v", access, rootProfile)
+		}
+		wire, wireErr := parseRustPermissionProfileWireJSON([]byte(raw))
+		if wireErr != nil || !wire.canReadPathWithCWD(filepath.Join(cwd, "file.txt"), cwd) {
+			t.Fatalf("root write + slash_tmp %s access check failed: wire=%#v error=%v", access, wire, wireErr)
+		}
+	}
+
+	literalSlashTmp := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"path","path":"/tmp"},"access":"write"}]},"network":"restricted"}`
+	literalProfile, err := ParseRuntimePermissionProfileJSON(literalSlashTmp)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON(literal /tmp) error = %v", err)
+	}
+	if literalProfile.SandboxPolicy.Kind != SandboxWorkspaceWrite || len(literalProfile.SandboxPolicy.WritableRoots) != 1 || literalProfile.SandboxPolicy.WritableRoots[0] != "/tmp" {
+		t.Fatalf("literal /tmp profile = %#v", literalProfile)
+	}
+
+	legacy := WorkspaceWritePermissionProfile()
+	legacyRaw, err := RuntimePermissionProfileJSON(legacy)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON(legacy workspace) error = %v", err)
+	}
+	roundTrip, err := ParseRuntimePermissionProfileJSON(legacyRaw)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON(legacy workspace) error = %v", err)
+	}
+	if roundTrip.SandboxPolicy.Kind != SandboxWorkspaceWrite || roundTrip.SandboxPolicy.ExcludeSlashTmp || roundTrip.SandboxPolicy.ExcludeTmpdirEnvVar || len(roundTrip.SandboxPolicy.WritableRoots) != 0 {
+		t.Fatalf("legacy workspace round-trip profile = %#v", roundTrip)
+	}
+	wantRoots := legacy.SandboxPolicy.GetWritableRootsWithCWD(cwd)
+	gotRoots := roundTrip.SandboxPolicy.GetWritableRootsWithCWD(cwd)
+	if fmt.Sprint(gotRoots) != fmt.Sprint(wantRoots) {
+		t.Fatalf("legacy workspace roots = %#v, want %#v", gotRoots, wantRoots)
+	}
+}
+
 func TestBuildCommandRunPlanAllowsNetworkForProxy(t *testing.T) {
 	profile := WorkspaceWritePermissionProfile()
 	plan, err := BuildCommandRunPlan(&CommandRunRequest{

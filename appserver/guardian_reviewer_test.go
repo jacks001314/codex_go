@@ -108,6 +108,47 @@ func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	}
 }
 
+func TestGuardianUsesCatalogAutoReviewModelOverrideLikeRust(t *testing.T) {
+	const (
+		threadID    = "thread-auto-review-model"
+		turnID      = "turn-auto-review-model"
+		parent      = "remote-auto-review-parent"
+		reviewModel = "remote-auto-review-reviewer"
+	)
+	var captured *model.AgentRequest
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		copyRequest := *request
+		captured = &copyRequest
+		return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"catalog override"}`}, nil
+	})
+	router := NewRuntimeRouter(RuntimeServices{
+		Agent: agent,
+		Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+			Slug: parent, AutoReviewModelOverride: reviewModel,
+		}}})),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{ThreadID: threadID, Model: parent}); err != nil {
+		t.Fatalf("register active turn: %v", err)
+	}
+	info := router.modelInfoForRuntimeWithConfig(parent, nil)
+	if info == nil || info.AutoReviewModelOverride != reviewModel {
+		t.Fatalf("catalog model info = %#v", info)
+	}
+	router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "", &appTurnRunConfig{
+		Model:                   parent,
+		AutoReviewModelOverride: info.AutoReviewModelOverride,
+	})
+	reviewer := router.ensureGuardianReviewer(agent)
+	decision, _, err := reviewer.Review(context.Background(), threadID, turnID, "patch-call", state.Action{Type: "apply_patch", CWD: t.TempDir(), Files: []string{"override.txt"}})
+	if err != nil || decision != state.DecisionApproved {
+		t.Fatalf("Guardian review decision=%s err=%v", decision, err)
+	}
+	if captured == nil || captured.Model != reviewModel {
+		t.Fatalf("Guardian request = %#v, want model %q", captured, reviewModel)
+	}
+}
+
 func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 	reviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,

@@ -455,6 +455,12 @@ func rustPermissionProfileFromSandbox(profile *coresandbox.PermissionProfile) *r
 	if profile == nil {
 		return nil
 	}
+	if raw, err := coresandbox.RuntimePermissionProfileJSON(*profile); err == nil {
+		var canonical rustPermissionProfile
+		if json.Unmarshal([]byte(raw), &canonical) == nil && canonical.Type != "" {
+			return &canonical
+		}
+	}
 	if profile.Disabled {
 		return &rustPermissionProfile{Type: "disabled"}
 	}
@@ -493,6 +499,11 @@ func rustPermissionProfileFromSandbox(profile *coresandbox.PermissionProfile) *r
 func sandboxPermissionProfileFromRust(profile *rustPermissionProfile) *coresandbox.PermissionProfile {
 	if profile == nil {
 		return nil
+	}
+	if raw, err := json.Marshal(profile); err == nil {
+		if canonical, parseErr := coresandbox.ParseRuntimePermissionProfileJSON(string(raw)); parseErr == nil {
+			return canonical
+		}
 	}
 	networkEnabled := strings.EqualFold(profile.Network, "enabled")
 	switch profile.Type {

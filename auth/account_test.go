@@ -106,7 +106,7 @@ func TestAccountFromAuth(t *testing.T) {
 }
 
 func TestPlanTypeClassificationsMatchRust(t *testing.T) {
-	if !PlanBusiness.IsBusinessLike() || !PlanEnt26.IsBusinessLike() || !PlanEnterpriseCBPUsageBased.IsBusinessLike() {
+	if !PlanBusiness.IsBusinessLike() || !PlanEnt26.IsBusinessLike() || !PlanEnterpriseCBPAutomation.IsBusinessLike() || !PlanEnterpriseCBPUsageBased.IsBusinessLike() {
 		t.Fatal("business-like workspace plans must be classified together")
 	}
 	if PlanTeam.IsBusinessLike() || PlanEnterprise.IsBusinessLike() {
@@ -120,13 +120,33 @@ func TestPlanTypeClassificationsMatchRust(t *testing.T) {
 	if PlanBusiness.IsTeamLike() || PlanProlite.IsTeamLike() {
 		t.Fatal("enterprise and individual Pro Lite plans are not team-like")
 	}
-	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
 		if !plan.IsWorkspaceAccount() {
 			t.Fatalf("plan %q should be a workspace account", plan)
 		}
 	}
 	if PlanPlus.IsWorkspaceAccount() || PlanUnknown.IsWorkspaceAccount() {
 		t.Fatal("individual or unknown plans must not be workspace accounts")
+	}
+}
+
+func TestAccountFromAuthParsesEnterpriseCBPAutomation(t *testing.T) {
+	account := AccountFromAuth(&AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{"access_token": fakeJWTAccount(map[string]any{
+			"email":                       "service-account@example.com",
+			"https://api.openai.com/auth": map[string]any{"chatgpt_plan_type": "enterprise_cbp_automation"},
+		})},
+	})
+	if account == nil || account.PlanType != PlanEnterpriseCBPAutomation || !account.PlanType.IsBusinessLike() || !account.PlanType.IsWorkspaceAccount() {
+		t.Fatalf("automation account = %+v", account)
+	}
+	encoded, err := json.Marshal(&AccountUpdatedNotification{PlanType: &account.PlanType})
+	if err != nil {
+		t.Fatalf("Marshal notification: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"planType":"enterprise_cbp_automation"`) {
+		t.Fatalf("notification JSON = %s", encoded)
 	}
 }
 

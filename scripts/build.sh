@@ -86,6 +86,13 @@ set -- "$@" ./cmd/codex
 echo "==> Building Codex Go $VERSION for $TARGET_GOOS/$TARGET_GOARCH"
 (cd "$ROOT" && go "$@")
 echo "==> Built $OUTPUT"
+HOST_OUTPUT=$(dirname -- "$OUTPUT")/codex-code-mode-host$EXT
+set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$HOST_OUTPUT"
+[ "$RACE" -eq 1 ] && set -- "$@" -race
+[ "$REBUILD" -eq 1 ] && set -- "$@" -a
+set -- "$@" ./cmd/codex-code-mode-host
+(cd "$ROOT" && go "$@")
+echo "==> Built $HOST_OUTPUT"
 if [ "$TARGET_GOOS/$TARGET_GOARCH" = "$HOST_GOOS/$HOST_GOARCH" ]; then
   "$OUTPUT" --version
 fi

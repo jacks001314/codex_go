@@ -85,6 +85,53 @@ test("suite resume rejects changed explicit model settings", () => {
   }
 });
 
+test("suite records infrastructure retry policy and attempt history", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-suite-"));
+  try {
+    const summary = createSuiteSummary({
+      suiteDir: root,
+      identity,
+      order: ["rust", "go"],
+      scenarioNames: ["one"],
+      infraRetries: 3,
+      failFastInfra: true,
+    });
+    updateSuiteScenario(root, summary, "one", {
+      status: "running",
+      attempts: [
+        {
+          number: 1,
+          status: "completed",
+          startedAt: "2026-08-01T00:00:00.000Z",
+          completedAt: "2026-08-01T00:01:00.000Z",
+          artifactDir: "artifact-infra",
+          comparison: {
+            status: "infra_failure",
+            classification: "infra-failure",
+            firstMismatch: "provider overloaded",
+          },
+        },
+      ],
+    });
+
+    const resumed = loadSuiteSummary(root, identity, undefined, 3, true);
+    assert.equal(resumed.infraRetries, 3);
+    assert.equal(resumed.failFastInfra, true);
+    assert.equal(resumed.scenarios[0].attempts?.length, 1);
+    assert.equal(resumed.scenarios[0].attempts?.[0].artifactDir, "artifact-infra");
+    assert.throws(
+      () => loadSuiteSummary(root, identity, undefined, 2),
+      /different --infra-retries; expected 3/,
+    );
+    assert.throws(
+      () => loadSuiteSummary(root, identity, undefined, 3, false),
+      /different --fail-fast-infra; expected true/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("suite resume rejects a changed order without modifying the summary", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-suite-"));
   try {
@@ -115,6 +162,8 @@ test("suite exit code preserves completed mismatches across resume", () => {
     status: "running" as const,
     identity,
     order: ["rust", "go"] as ("rust" | "go")[],
+    infraRetries: 0,
+    failFastInfra: false,
     scenarioNames: ["one", "two"],
     scenarios: [
       {

@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	agent := &fakeLoopAgent{}
+	executedToolCalls := NewExecutedToolCallRecorder()
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
 		return &tool.Output{Success: true, Body: "tool result"}, nil
@@ -20,9 +22,10 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 		t.Fatalf("register echo: %v", err)
 	}
 	loop := NewAgentLoop(&AgentLoopOptions{
-		Agent:      agent,
-		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
-		MaxTurns:   3,
+		Agent:             agent,
+		Dispatcher:        NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), ExecutedToolCalls: executedToolCalls}),
+		ExecutedToolCalls: executedToolCalls,
+		MaxTurns:          3,
 	})
 
 	var commentary []string
@@ -84,12 +87,83 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	if !ok || call.Type != "function_call" || call.CallID != "call-1" {
 		t.Fatalf("tool call input = %#v", agent.requests[1].InputItems[1])
 	}
-	if calls := call.ExecutedToolCalls(); len(calls) != 1 {
-		t.Fatalf("executed tool call metadata = %#v", calls)
+	if calls := call.ExecutedToolCalls(); len(calls) != 0 {
+		t.Fatalf("tool call input carried executed metadata = %#v", calls)
 	}
 	item, ok := agent.requests[1].InputItems[3].(*ToolResponseItem)
 	if !ok || item.Type != "function_call_output" || item.Output.Text() != "tool result" {
 		t.Fatalf("tool output input = %#v", agent.requests[1].InputItems[2])
+	}
+	if calls := item.ExecutedToolCalls(); len(calls) != 1 {
+		t.Fatalf("tool output executed metadata = %#v", calls)
+	}
+}
+
+func TestRuntimeGatesExecutedToolCallMetadataLikeRust(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			agent := &fakeLoopAgent{}
+			registry := tool.NewRegistry()
+			if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+				return &tool.Output{Success: true, Body: "ok"}, nil
+			})); err != nil {
+				t.Fatalf("register echo: %v", err)
+			}
+			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run", ExecutedToolCallMetadataEnabled: enabled}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if len(agent.requests) != 2 {
+				t.Fatalf("requests = %d", len(agent.requests))
+			}
+			var output *ToolResponseItem
+			for _, input := range agent.requests[1].InputItems {
+				if item, ok := input.(*ToolResponseItem); ok {
+					output = item
+				}
+			}
+			if output == nil {
+				t.Fatalf("tool output missing: %#v", agent.requests[1].InputItems)
+			}
+			if got := len(output.ExecutedToolCalls()); (got == 1) != enabled {
+				t.Fatalf("executed metadata count = %d, enabled = %v", got, enabled)
+			}
+		})
+	}
+}
+
+func TestRuntimeRetainsAttemptedToolMetadataAfterFailedSamplingLikeRust(t *testing.T) {
+	agent := &failAfterToolLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+	_, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run", ExecutedToolCallMetadataEnabled: true})
+	if err == nil || err.Error() != "sampling failed" {
+		t.Fatalf("first Run() error = %v", err)
+	}
+
+	agent.recover = true
+	_, err = runtime.Run(context.Background(), &AgentLoopRequest{
+		ExecutedToolCallMetadataEnabled: true,
+		InputItems: []any{
+			map[string]any{"type": "function_call", "call_id": "call-retry", "name": "echo", "arguments": `{}`},
+			map[string]any{"type": "function_call_output", "call_id": "call-retry", "output": "ok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if len(agent.requests) != 3 {
+		t.Fatalf("requests = %d", len(agent.requests))
+	}
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(agent.requests[2].InputItems)[1])
+	calls := executedToolCallsFromObject(t, object)
+	if len(calls) != 1 || calls[0]["name"] != "echo" {
+		t.Fatalf("replayed metadata = %#v", calls)
 	}
 }
 
@@ -389,6 +463,24 @@ type emptyInputLoopAgent struct {
 }
 
 type followUpLoopAgent struct{ requests []model.AgentRequest }
+
+type failAfterToolLoopAgent struct {
+	requests []model.AgentRequest
+	recover  bool
+}
+
+func (a *failAfterToolLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		return &model.AgentResponse{ResponseID: "resp-tool", Items: []model.AgentItem{{
+			Type: "function_call", CallID: "call-retry", Name: "echo", Arguments: `{}`,
+		}}}, nil
+	}
+	if !a.recover {
+		return nil, errors.New("sampling failed")
+	}
+	return &model.AgentResponse{ResponseID: "resp-done", Message: "done", Items: []model.AgentItem{{Type: "agent_message", Text: "done"}}}, nil
+}
 
 func (a *followUpLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	a.requests = append(a.requests, *request)

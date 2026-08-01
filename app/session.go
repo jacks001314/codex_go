@@ -18,7 +18,9 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/state"
 )
 
 const sessionPickerPageSize = 20
@@ -41,6 +43,20 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdout io
 	target, err := resolveSessionTarget(store, opts)
 	if err != nil {
 		return err
+	}
+	if localSessionHasRollout(store, target, nil) {
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadRead, appserver.ThreadReadParams{ThreadID: string(target), IncludeTurns: false})
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
+			return err
+		}
+		response, ok := result.(*appserver.ThreadReadResponse)
+		if !ok || response.Thread == nil {
+			return session.ErrThreadNotFound
+		}
+		return writeSessionSummary(stdout, "resumed", sessionRecordFromAppServerThread(response.Thread, false))
 	}
 	record, err := store.Read(target, true, true)
 	if err != nil {
@@ -65,7 +81,15 @@ func runSessionArchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout i
 	if err != nil {
 		return err
 	}
-	if err := store.Archive(target); err != nil {
+	if localSessionHasRollout(store, target, sessionArchivedFilter(false)) {
+		_, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadArchive, appserver.ThreadArchiveParams{ThreadID: string(target)})
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
+			return err
+		}
+	} else if err := store.Archive(target); err != nil {
 		return err
 	}
 	name := ""
@@ -92,13 +116,27 @@ func runSessionUnarchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout
 	if err != nil {
 		return err
 	}
-	record, err := store.Unarchive(target)
-	if err != nil {
-		return err
-	}
 	name := ""
-	if record != nil {
-		name = record.Title
+	if localSessionHasRollout(store, target, sessionArchivedFilter(true)) {
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadUnarchive, appserver.ThreadUnarchiveParams{ThreadID: string(target)})
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
+			return err
+		}
+		response, ok := result.(*appserver.ThreadUnarchiveResponse)
+		if ok && response.Thread != nil {
+			name = remoteThreadDisplayName(response.Thread)
+		}
+	} else {
+		record, err := store.Unarchive(target)
+		if err != nil {
+			return err
+		}
+		if record != nil {
+			name = record.Title
+		}
 	}
 	fmt.Fprint(stdout, sessionMutationSuccessMessage("Unarchived", target, name))
 	return nil
@@ -134,13 +172,23 @@ func runSessionDelete(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 			return nil
 		}
 	}
-	threadIDs, err := store.SubtreeThreadIDs(target)
-	if err != nil {
-		return err
-	}
-	for _, threadID := range session.DeleteOrderForSubtree(threadIDs) {
-		if err := store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
+	if localSessionHasRollout(store, target, nil) {
+		_, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadDelete, appserver.ThreadDeleteParams{ThreadID: string(target)})
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
 			return err
+		}
+	} else {
+		threadIDs, err := store.SubtreeThreadIDs(target)
+		if err != nil {
+			return err
+		}
+		for _, threadID := range session.DeleteOrderForSubtree(threadIDs) {
+			if err := store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
+				return err
+			}
 		}
 	}
 	fmt.Fprint(stdout, sessionMutationSuccessMessage("Deleted", target, ""))
@@ -149,13 +197,28 @@ func runSessionDelete(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 
 func sessionNameForDeletePrompt(store *session.Store, target session.ThreadID) (string, error) {
 	record, err := store.Read(target, true, false)
-	if err != nil {
+	if err == nil && record != nil {
+		return strings.TrimSpace(record.Title), nil
+	}
+	if !errors.Is(err, session.ErrThreadNotFound) {
 		return "", err
 	}
-	if record == nil {
-		return "", session.ErrThreadNotFound
+	if name, found, nameErr := rollout.FindThreadNameByID(sessionCodexHome(store), string(target)); nameErr != nil {
+		return "", nameErr
+	} else if found {
+		return strings.TrimSpace(name), nil
 	}
-	return strings.TrimSpace(record.Title), nil
+	for _, archived := range []bool{false, true} {
+		path, findErr := rollout.FindThreadPath(sessionCodexHome(store), string(target), archived)
+		if findErr != nil {
+			continue
+		}
+		fromRollout, readErr := rollout.RecordFromPath(path, archived)
+		if readErr == nil && fromRollout != nil {
+			return strings.TrimSpace(fromRollout.Title), nil
+		}
+	}
+	return "", session.ErrThreadNotFound
 }
 
 func confirmSessionDelete(stdin io.Reader, stderr io.Writer, target session.ThreadID, sessionName string) (bool, error) {
@@ -216,6 +279,20 @@ func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.W
 	if err != nil {
 		return err
 	}
+	if localSessionHasRollout(store, target, sessionArchivedFilter(false)) {
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadFork, appserver.ThreadForkParams{ThreadID: string(target), HistoryMode: session.ForkAll})
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
+			return err
+		}
+		response, ok := result.(*appserver.ThreadForkResponse)
+		if !ok || response.Thread == nil {
+			return session.ErrThreadNotFound
+		}
+		return writeSessionSummary(stdout, "forked", sessionRecordFromAppServerThread(response.Thread, false))
+	}
 	forked, err := store.Fork(target, session.ForkOptions{Mode: session.ForkAll})
 	if err != nil {
 		return err
@@ -225,6 +302,60 @@ func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.W
 
 func newSessionStore() *session.Store {
 	return session.NewStore(filepath.Join(auth.DefaultCodexHome(), "sessions"))
+}
+
+func localSessionHasRollout(store *session.Store, threadID session.ThreadID, archived *bool) bool {
+	if store == nil || strings.TrimSpace(string(threadID)) == "" {
+		return false
+	}
+	for _, archivedValue := range []bool{false, true} {
+		if archived != nil && *archived != archivedValue {
+			continue
+		}
+		if _, err := rollout.FindThreadPath(sessionCodexHome(store), string(threadID), archivedValue); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func localSessionRouterRequest(store *session.Store, method appserver.Method, params any) (any, func(), error) {
+	if store == nil {
+		return nil, nil, errors.New("session store is nil")
+	}
+	codexHome := sessionCodexHome(store)
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		return nil, nil, err
+	}
+	var router *appserver.Router
+	closeRuntime := func() {
+		if router != nil {
+			_ = router.Close()
+		}
+		_ = runtime.Close()
+	}
+	if err := state.WaitForRolloutBackfill(context.Background(), runtime, codexHome, state.RolloutBackfillOptions{}); err != nil {
+		closeRuntime()
+		return nil, nil, err
+	}
+	router = appserver.NewRouter(store)
+	router.SetStateRuntime(runtime)
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		closeRuntime()
+		return nil, nil, err
+	}
+	response := router.Handle(&appserver.Request{ID: appserver.IntID(1), Method: method, Params: rawParams})
+	if response.Error != nil {
+		closeRuntime()
+		return nil, nil, errors.New(response.Error.Message)
+	}
+	return response.Result, closeRuntime, nil
 }
 
 func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) error {
@@ -724,6 +855,15 @@ func latestSessionID(store *session.Store, opts *cli.SessionOptions) (session.Th
 }
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {
+	if store != nil {
+		_, meta, found, err := rollout.FindThreadMetaByName(sessionCodexHome(store), name)
+		if err != nil {
+			return "", err
+		}
+		if found && meta != nil && (opts != nil && opts.IncludeNonInteractive || interactiveSessionSource(meta.Source)) {
+			return session.ThreadID(meta.ID), nil
+		}
+	}
 	records, err := listSessionPickerRecords(store, opts, sessionPickerPageSize*10)
 	if err != nil {
 		return "", err
@@ -748,6 +888,18 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archived *bool) (session.ThreadID, error) {
 	if store == nil {
 		return "", errors.New("session store is nil")
+	}
+	for _, archivedValue := range []bool{false, true} {
+		if archived != nil && *archived != archivedValue {
+			continue
+		}
+		_, meta, found, err := rollout.FindThreadMetaByNameInCollection(sessionCodexHome(store), name, archivedValue)
+		if err != nil {
+			return "", err
+		}
+		if found && meta != nil && interactiveSessionSource(meta.Source) {
+			return session.ThreadID(meta.ID), nil
+		}
 	}
 	var records []session.Record
 	if archived == nil || !*archived {
@@ -906,7 +1058,51 @@ func listSessionsByArchived(store *session.Store, archived bool) ([]session.Reco
 	if err != nil {
 		return nil, err
 	}
-	return append([]session.Record(nil), page.Records...), nil
+	records := append([]session.Record(nil), page.Records...)
+	ids := make(map[string]struct{}, len(records))
+	for i := range records {
+		ids[string(records[i].ID)] = struct{}{}
+	}
+	rolloutPage, rolloutErr := rollout.ListThreads(sessionCodexHome(store), rollout.ListOptions{Archived: archived, PageSize: 0})
+	if rolloutErr == nil {
+		for i := range rolloutPage.Items {
+			threadID := rolloutPage.Items[i].ThreadID
+			if _, exists := ids[threadID]; exists {
+				continue
+			}
+			record, err := rollout.RecordFromPath(rolloutPage.Items[i].Path, archived)
+			if err != nil || record == nil {
+				continue
+			}
+			record.Items = nil
+			records = append(records, *record)
+			ids[threadID] = struct{}{}
+		}
+	}
+	if names, nameErr := rollout.FindThreadNamesByIDs(sessionCodexHome(store), ids); nameErr == nil {
+		for i := range records {
+			if name, ok := names[string(records[i].ID)]; ok {
+				records[i].Title = name
+			}
+		}
+	}
+	return records, nil
+}
+
+func sessionCodexHome(store *session.Store) string {
+	if store == nil {
+		return ""
+	}
+	root := store.Root()
+	if filepath.Base(root) == rollout.SessionsSubdir {
+		return filepath.Dir(root)
+	}
+	return root
+}
+
+func interactiveSessionSource(source string) bool {
+	normalized := normalizeSessionSource(source)
+	return normalized == "" || normalized == "cli" || normalized == "vscode"
 }
 
 func filterSessionPickerRecords(records []session.Record, opts *cli.SessionOptions) []session.Record {

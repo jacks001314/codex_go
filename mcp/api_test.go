@@ -58,6 +58,27 @@ func TestListStatusAndToolCall(t *testing.T) {
 	}
 }
 
+func TestExecutorOwnedChatGPTMCPFailsBeforeConnecting(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: ServerConfig{
+			URL:           "http://127.0.0.1:1/mcp",
+			Auth:          ServerAuthChatGPT,
+			EnvironmentID: "customer-executor",
+			Enabled:       true,
+		}},
+	}})
+	_, err := service.CallTool(&MCPToolCallParams{ServerName: "docs", ToolName: "read"})
+	if err == nil || err.Error() != "executor-owned MCP server `docs` cannot use hosted ChatGPT authentication; configure executor-owned credentials instead" {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if status := service.authStatusForConfig("docs", &ServerConfig{URL: "https://example.test/mcp", Auth: ServerAuthChatGPT, EnvironmentID: "customer-executor"}); status != MCPAuthUnsupported {
+		t.Fatalf("unsafe remote ChatGPT auth status = %s, want %s", status, MCPAuthUnsupported)
+	}
+	if status := service.authStatusForConfig("docs", &ServerConfig{URL: "https://example.test/mcp", Auth: ServerAuthChatGPT, EnvironmentID: "customer-executor", HTTPHeaders: map[string]string{"Authorization": "Bearer executor"}}); status != MCPAuthBearerToken {
+		t.Fatalf("safe remote ChatGPT auth status = %s, want %s", status, MCPAuthBearerToken)
+	}
+}
+
 func TestMCPServerStatusPreservesRawServerAndToolNames(t *testing.T) {
 	service := NewMCPService(nil)
 	title := "Lookup Server"

@@ -1,14 +1,16 @@
 package appserver
 
 import (
+	"context"
+	"strings"
+	"time"
+
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/turn"
-	"context"
-	"time"
 )
 
 func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID string) model.AgentRunner {
@@ -58,6 +60,8 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		modelReviewer.notify = r.notifyGuardianReviewEvent
 		modelReviewer.interrupt = r.interruptTurnForGuardianCircuitBreaker
 		modelReviewer.transcript = r.guardianReviewTranscript
+		modelReviewer.model = r.guardianReviewModelForTurn
+		modelReviewer.environment = r.guardianEnvironmentInputItems
 		r.services.GuardianReviewer = reviewer
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -66,6 +70,30 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		}()
 	}
 	return reviewer
+}
+
+func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threadID, turnID string) ([]any, error) {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil, nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil {
+		return nil, err
+	}
+	item, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, active.Params, cfg)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	return []any{item}, nil
+}
+
+func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) string {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.RunConfig == nil {
+		return ""
+	}
+	return strings.TrimSpace(active.RunConfig.AutoReviewModelOverride)
 }
 
 func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*model.ResponsesAgentRunner, error) {

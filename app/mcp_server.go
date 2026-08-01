@@ -5,13 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
+	"codex_go/appserver"
 	"codex_go/cli"
+	"codex_go/config"
 	codexexec "codex_go/exec"
 	"codex_go/mcp"
+	"codex_go/model"
+	"codex_go/session"
 )
 
 type codexMCPRunner struct {
@@ -54,11 +60,18 @@ func (r *codexMCPRunner) ReplyCodexTool(ctx context.Context, params *mcp.CodexTo
 			},
 		},
 	}
+	if record, err := session.NewStore(filepath.Join(r.codexHome, "sessions")).Load(session.ThreadID(threadID)); err == nil && record != nil {
+		request.Exec.Shared.CWD = strings.TrimSpace(record.Metadata.CWD)
+	}
 	return r.runExecRequest(ctx, request)
 }
 
 func (r *codexMCPRunner) runExecRequest(ctx context.Context, request *codexexec.Request) (*mcp.CodexToolResult, error) {
 	r.applyRootToRequest(request)
+	warnings, err := r.applySkillsToRequest(request)
+	if err != nil {
+		return nil, err
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	result, err := newCodexExecRunner(r.codexHome).RunContext(ctx, request, strings.NewReader(""), &stdout, &stderr)
@@ -74,8 +87,62 @@ func (r *codexMCPRunner) runExecRequest(ctx context.Context, request *codexexec.
 	}
 	return &mcp.CodexToolResult{
 		ThreadID: result.ThreadID,
+		TurnID:   result.TurnID,
 		Content:  result.LastMessage,
+		Warnings: warnings,
 	}, nil
+}
+
+func (r *codexMCPRunner) applySkillsToRequest(request *codexexec.Request) ([]string, error) {
+	if r == nil || request == nil {
+		return nil, nil
+	}
+	cwd := strings.TrimSpace(request.Exec.Shared.CWD)
+	if cwd == "" {
+		cwd = strings.TrimSpace(request.Root.Shared.CWD)
+	}
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	overrides := append([]string(nil), request.Root.ConfigOverrides...)
+	overrides = append(overrides, request.Exec.ConfigOverrides...)
+	cfg, err := config.LoadEffective(r.codexHome, overrides, request.Root.EnableFeatures, request.Root.DisableFeatures, cwd)
+	if err != nil {
+		return nil, err
+	}
+	modelID := strings.TrimSpace(stringConfigValueApp(cfg.Values, "model"))
+	contextWindow := model.ModelInfoFromSlug(modelID).ContextWindow
+	skills, err := appserver.BuildHostSkillsPromptContext(&appserver.HostSkillsPromptOptions{
+		CodexHome:     r.codexHome,
+		CWD:           cwd,
+		Config:        cfg,
+		Prompt:        mcpExecRequestPrompt(request),
+		ContextWindow: contextWindow,
+	})
+	if err != nil {
+		return nil, err
+	}
+	request.AdditionalInstructions = strings.Join(nonEmptyStringsApp([]string{skills.Instructions, request.AdditionalInstructions}), "\n\n")
+	request.AdditionalInputItems = append(request.AdditionalInputItems, skills.InputItems...)
+	return append([]string(nil), skills.Warnings...), nil
+}
+
+func mcpExecRequestPrompt(request *codexexec.Request) string {
+	if request == nil {
+		return ""
+	}
+	if strings.TrimSpace(request.Exec.Prompt) != "" {
+		return request.Exec.Prompt
+	}
+	return request.Exec.Resume.Prompt
+}
+
+func stringConfigValueApp(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func (r *codexMCPRunner) rootOptions() cli.RootOptions {

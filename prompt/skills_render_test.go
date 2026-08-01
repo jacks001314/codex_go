@@ -42,6 +42,21 @@ func TestRenderAvailableSkillsOrdersAndFilters(t *testing.T) {
 	}
 }
 
+func TestSkillAliasesFollowRootDiscoveryOrderLikeRust(t *testing.T) {
+	skills := []InstructionsSkillMetadata{
+		{Name: "alpha", Path: "C:/second/alpha/SKILL.md", Root: "C:/second", RootOrder: 1, HasRootOrder: true},
+		{Name: "zulu", Path: "C:/first/zulu/SKILL.md", Root: "C:/first", RootOrder: 0, HasRootOrder: true},
+	}
+	lines := orderedSkillRenderLines(skills)
+	if lines[0].name != "alpha" {
+		t.Fatalf("render order changed = %#v", lines)
+	}
+	plan, ok := buildSkillAliasPlan(lines, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 1 << 20})
+	if !ok || len(plan.rootLines) != 2 || plan.rootLines[0] != "- `r0` = `C:/first`" || plan.rootLines[1] != "- `r1` = `C:/second`" {
+		t.Fatalf("root aliases = %#v", plan)
+	}
+}
+
 func TestRenderAvailableSkillsCustomResourceLocatorLikeRust(t *testing.T) {
 	available := RenderAvailableSkills([]InstructionsSkillMetadata{{
 		Name:        "private-search",

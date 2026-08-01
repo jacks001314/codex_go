@@ -220,6 +220,7 @@ type ProxyPolicyRequest struct {
 	Host          string
 	Port          uint16
 	EnvironmentID string
+	ExecutionID   string
 	ClientAddr    string
 	Method        string
 }

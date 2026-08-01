@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { runCLI, type RunCLIOptions, type RunProcessCLIOptions } from "./cli.ts";
+import { infraRetryDelay, runCLI, type RunCLIOptions, type RunProcessCLIOptions } from "./cli.ts";
 import { HarnessAbortError } from "./runner.ts";
 import { isProcessAlive, waitForProcessExit } from "./process_tree.ts";
 import { readLockOwner } from "./live_lock.ts";
@@ -86,6 +86,13 @@ export class Codex {
   }
 }
 `;
+
+test("infrastructure retry delay is exponential and capped", () => {
+  assert.equal(infraRetryDelay(0), 15_000);
+  assert.equal(infraRetryDelay(1), 30_000);
+  assert.equal(infraRetryDelay(2), 60_000);
+  assert.equal(infraRetryDelay(8), 60_000);
+});
 
 test("CLI abort cleans the process tree, releases the lock, and resumes an interrupted suite", { timeout: 30000 }, async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-cli-"));

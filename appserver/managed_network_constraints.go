@@ -10,6 +10,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/network"
+	"codex_go/sandbox"
 )
 
 func (r *RuntimeRouter) buildManagedNetworkProxyConfig(values map[string]any) (*network.ProxyConfig, bool, error) {
@@ -52,9 +53,7 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]a
 
 	result := spec.Config()
 	result.EnvironmentID = "local"
-	if hasRequirements {
-		result.BlockedObserver = r.networkApproval
-	}
+	result.BlockedObserver = r.managedNetworkBlockedObserver("", hasRequirements)
 	if hasRequirements && !spec.HardDenyAllowlistMisses() {
 		result.PolicyDecider = r.networkApproval
 	}
@@ -130,14 +129,19 @@ func (r *RuntimeRouter) scopeManagedNetworkConfigForThread(threadID string, prox
 			return r.networkApproval.decideForThread(ctx, threadID, request)
 		})
 	}
-	if proxyConfig.BlockedObserver != nil {
-		proxyConfig.BlockedObserver = network.ProxyBlockedRequestObserverFunc(func(_ context.Context, blocked network.ProxyBlockedRequest) {
-			r.networkApproval.onBlockedRequestForThread(threadID, blocked)
-		})
-	}
+	proxyConfig.BlockedObserver = r.managedNetworkBlockedObserver(threadID, r.services.ManagedNetworkRequirements != nil)
 	proxyConfig.AuditMetadataProvider = func(request network.ProxyPolicyRequest) network.ProxyAuditMetadata {
 		return r.networkProxyAuditMetadataForThread(threadID, request)
 	}
+}
+
+func (r *RuntimeRouter) managedNetworkBlockedObserver(threadID string, includeApproval bool) network.ProxyBlockedRequestObserver {
+	return network.ProxyBlockedRequestObserverFunc(func(_ context.Context, blocked network.ProxyBlockedRequest) {
+		sandbox.RecordNetworkSandboxViolation(blocked)
+		if includeApproval && r != nil && r.networkApproval != nil {
+			r.networkApproval.onBlockedRequestForThread(threadID, blocked)
+		}
+	})
 }
 
 func (r *RuntimeRouter) closeThreadManagedNetworks() error {

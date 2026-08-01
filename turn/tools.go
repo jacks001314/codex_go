@@ -65,6 +65,7 @@ type ToolRegistryOptions struct {
 	EnableUnifiedExec        bool
 	EnableCodeMode           bool
 	CodeModeProvider         tool.CodeModeRemoteProvider
+	CodeModeRuntime          *tool.CodeModeRuntime
 	DisableCodeModeFallback  bool
 	EnableApplyPatch         bool
 	EnableMCP                bool
@@ -129,6 +130,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.EnableShell {
+		supportsShellCommand := SupportsLegacyShellCommand(options.SelectedEnvironmentIDs)
 		shellOptions := options.Shell
 		if shellOptions == nil {
 			shellOptions = &tool.ShellExecutorOptions{}
@@ -141,18 +143,20 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			shellOptions.ToolName = tool.PlainName(tool.DefaultExecCommandToolName)
 			shellOptions.UnifiedExec = options.UnifiedExec
 		}
-		shellExecutor := tool.NewShellExecutor(shellOptions)
-		if options.EnableCodeMode {
-			shellSpec := shellExecutor.Spec()
-			shellSpec.Exposure = tool.ExposureHidden
-			if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
+		if options.EnableUnifiedExec || supportsShellCommand {
+			shellExecutor := tool.NewShellExecutor(shellOptions)
+			if options.EnableCodeMode {
+				shellSpec := shellExecutor.Spec()
+				shellSpec.Exposure = tool.ExposureHidden
+				if err := registry.Register(tool.NewExecutorFunc(shellSpec, shellExecutor.Execute)); err != nil {
+					return nil, err
+				}
+				codeModeCommandTool = shellOptions.ToolName
+			} else if err := registry.Register(shellExecutor); err != nil {
 				return nil, err
 			}
-			codeModeCommandTool = shellOptions.ToolName
-		} else if err := registry.Register(shellExecutor); err != nil {
-			return nil, err
 		}
-		if options.EnableUnifiedExec {
+		if options.EnableUnifiedExec && supportsShellCommand {
 			legacyOptions := *shellOptions
 			legacyOptions.ToolName = tool.PlainName(tool.DefaultShellCommandToolName)
 			legacyOptions.UnifiedExec = nil
@@ -268,7 +272,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options.EnableCodeMode {
 		registry.Remove(tool.PlainName(tool.CodeModeExecToolName))
 		registry.Remove(tool.PlainName("wait"))
-		execExecutor, waitExecutor := tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, codeModeCommandTool)
+		var execExecutor, waitExecutor tool.Executor
+		if options.CodeModeRuntime != nil {
+			execExecutor, waitExecutor = options.CodeModeRuntime.Executors(registry, codeModeCommandTool)
+		} else {
+			execExecutor, waitExecutor = tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, codeModeCommandTool)
+		}
 		if err := registry.Prepend(waitExecutor); err != nil {
 			return nil, err
 		}
@@ -277,6 +286,15 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	return registry, nil
+}
+
+// SupportsLegacyShellCommand matches Rust's single-local-environment gate.
+// An omitted selection denotes the implicit local environment.
+func SupportsLegacyShellCommand(environmentIDs []string) bool {
+	if len(environmentIDs) == 0 {
+		return true
+	}
+	return len(environmentIDs) == 1 && strings.EqualFold(strings.TrimSpace(environmentIDs[0]), "local")
 }
 
 func registryHasSearchableDeferredTool(registry *tool.Registry) bool {

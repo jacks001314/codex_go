@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"codex_go/session"
+	"codex_go/state"
 )
 
 const DefaultWebSocketMaxMessageSize int64 = 128 << 20
@@ -96,6 +97,20 @@ func ServeWebSocket(ctx context.Context, options *WebSocketOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	codexHome := strings.TrimSpace(options.CodexHome)
+	if codexHome == "" {
+		codexHome = ".codex"
+	}
+	preparedRuntimeOptions, ownedStateRuntime, err := prepareSharedStateRuntime(ctx, codexHome, options.RuntimeOptions)
+	if err != nil {
+		return err
+	}
+	if ownedStateRuntime != nil {
+		defer ownedStateRuntime.Close()
+	}
+	if preparedRuntimeOptions.logDBInstallation != nil {
+		defer preparedRuntimeOptions.logDBInstallation.Close(context.Background())
+	}
 	address, err := WebSocketListenAddress(options.Listen)
 	if err != nil {
 		return err
@@ -116,7 +131,7 @@ func ServeWebSocket(ctx context.Context, options *WebSocketOptions) error {
 		fmt.Fprintf(options.Ready, "app-server websocket listening on %s\n", WebSocketURLFromAddr(listener.Addr()))
 	}
 	server := &http.Server{
-		Handler: NewWebSocketServer(policy, NewWebSocketRouterFactoryWithOptions(options.CodexHome, options.StoreRoot, options.RuntimeOptions)),
+		Handler: NewWebSocketServer(policy, NewWebSocketRouterFactoryWithOptions(codexHome, options.StoreRoot, preparedRuntimeOptions)),
 	}
 	go func() {
 		<-ctx.Done()
@@ -130,6 +145,28 @@ func ServeWebSocket(ctx context.Context, options *WebSocketOptions) error {
 		return nil
 	}
 	return err
+}
+
+func prepareSharedStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions) (*RuntimeRouterOptions, *state.StateRuntime, error) {
+	prepared := &RuntimeRouterOptions{}
+	if options != nil {
+		*prepared = *options
+	}
+	if prepared.StateRuntime != nil {
+		if prepared.EnableLogDB && prepared.logDBInstallation == nil {
+			prepared.logDBInstallation = state.InstallLogDBHandler(prepared.StateRuntime)
+		}
+		return prepared, nil, nil
+	}
+	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared)
+	if err != nil {
+		return nil, nil, err
+	}
+	prepared.StateRuntime = runtime
+	if prepared.EnableLogDB {
+		prepared.logDBInstallation = state.InstallLogDBHandler(runtime)
+	}
+	return prepared, runtime, nil
 }
 
 func WebSocketURLFromAddr(addr net.Addr) string {

@@ -965,6 +965,9 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 	if c.config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(c.config) {
 		return "", false
 	}
+	if c.config.EffectiveAuth() == ServerAuthChatGPT && !c.config.IsLocalEnvironment() {
+		return "", false
+	}
 	codexHome := strings.TrimSpace(c.config.CodexHome)
 	if codexHome == "" {
 		return "", false
@@ -973,6 +976,7 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 	if serverName == "" {
 		return "", false
 	}
+	serverName = c.config.OAuthCredentialName(serverName)
 	tokens, err := NewOAuthStore(codexHome).Load(serverName, c.config.URL)
 	if err != nil || tokens == nil {
 		return "", false

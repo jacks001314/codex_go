@@ -1272,6 +1272,9 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	}
 	url := "http://localhost/oauth/" + name
 	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
+		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
+			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
+		}
 		if loginURL, ok := s.startOAuthLoginServer(name, &config, params); ok {
 			url = loginURL
 		} else {
@@ -1329,7 +1332,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		return "", false
 	}
 	login, err := StartOAuthLoginServer(ctx, &OAuthLoginServerOptions{
-		ServerName:            name,
+		ServerName:            config.OAuthCredentialName(name),
 		ServerURL:             config.URL,
 		ClientID:              clientID,
 		RegistrationEndpoint:  discovery.RegistrationEndpoint,
@@ -1474,6 +1477,9 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	var err error
 	if config, ok := s.serverConfig(server); ok {
 		if strings.TrimSpace(config.URL) != "" {
+			if err := ValidateServerAuth(server, &config); err != nil {
+				return nil, err
+			}
 			response, err = readMCPHTTPResourceWithClient(s.httpClientForServer(server, &config), server, roots, s.elicitationHandler(), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
@@ -1517,6 +1523,9 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	roots := s.rootsForThread(params.ThreadID)
 	if config, ok := s.serverConfig(server); ok {
 		if strings.TrimSpace(config.URL) != "" {
+			if err := ValidateServerAuth(server, &config); err != nil {
+				return nil, err
+			}
 			return callMCPHTTPToolWithClient(s.httpClientForServer(server, &config), server, params.ThreadID, params.TurnID, params.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, params.Arguments, meta)
 		}
 		if strings.TrimSpace(config.Command) != "" {
@@ -1608,6 +1617,9 @@ func (s *MCPService) serverConfig(name string) (ServerConfig, bool) {
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string) (*stdioInventory, error) {
 	roots := s.rootsForThread(threadID)
 	if config != nil && strings.TrimSpace(config.URL) != "" {
+		if err := ValidateServerAuth(name, config); err != nil {
+			return nil, err
+		}
 		return listMCPHTTPInventoryWithOptions(s.httpClientForServer(name, config), name, threadID, roots)
 	}
 	if config != nil && strings.TrimSpace(config.Command) != "" {
@@ -1805,6 +1817,12 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 	}
 	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
 		return MCPAuthBearerToken
+	}
+	if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
+		if config.SafeRemoteChatGPTAuthorization() {
+			return MCPAuthBearerToken
+		}
+		return MCPAuthUnsupported
 	}
 	if config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(config) {
 		return MCPAuthBearerToken

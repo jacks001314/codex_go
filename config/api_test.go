@@ -102,6 +102,31 @@ func TestConfigReadResponseMarshalRustShape(t *testing.T) {
 	}
 }
 
+func TestExternalAgentConfigDetectResponseConnectorsMatchRust(t *testing.T) {
+	var legacy ExternalAgentConfigDetectResponse
+	if err := json.Unmarshal([]byte(`{"items":[]}`), &legacy); err != nil {
+		t.Fatalf("Unmarshal legacy response: %v", err)
+	}
+	if legacy.Connectors == nil || len(legacy.Connectors) != 0 {
+		t.Fatalf("legacy connectors = %#v, want non-nil empty slice", legacy.Connectors)
+	}
+
+	encoded, err := json.Marshal(&ExternalAgentConfigDetectResponse{
+		Connectors: []ExternalAgentDetectedConnectorCandidate{{
+			Name:         "Google Drive",
+			SessionCount: 3,
+			Source:       ExternalAgentConnectorSessionToolUse,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal response: %v", err)
+	}
+	want := `{"items":[],"connectors":[{"name":"Google Drive","sessionCount":3,"source":"sessionToolUse"}]}`
+	if string(encoded) != want {
+		t.Fatalf("response JSON = %s, want %s", encoded, want)
+	}
+}
+
 func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	model := "gpt-5"
 	disableAutoReview := true

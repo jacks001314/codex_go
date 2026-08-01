@@ -2619,3 +2619,21 @@ func TestResponsesInputItemsStripEncryptedFunctionArgsForNonOpenAIProviders(t *t
 		t.Fatalf("non-OpenAI map marker = %#v", nonOpenAI[1])
 	}
 }
+
+func TestAddMemoryGenerationHeaderForConsolidationAgentLikeRust(t *testing.T) {
+	headers := http.Header{}
+	addMemoryGenerationHeader(headers, map[string]string{
+		codexapi.ClientOpenAISubagentHeader: "memory_consolidation",
+	})
+	if got := headers.Get(codexapi.ClientOpenAIMemgenRequestHeader); got != "true" {
+		t.Fatalf("memory generation header = %q, want true", got)
+	}
+
+	ordinary := http.Header{}
+	addMemoryGenerationHeader(ordinary, map[string]string{
+		codexapi.ClientOpenAISubagentHeader: "review",
+	})
+	if got := ordinary.Get(codexapi.ClientOpenAIMemgenRequestHeader); got != "" {
+		t.Fatalf("ordinary subagent memory generation header = %q, want empty", got)
+	}
+}

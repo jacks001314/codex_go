@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 599 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 599", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 624 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 624", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -65,7 +65,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 	return []rustTUISnapshotDir{
 		{
 			Path:     "tui/src/app/snapshots",
-			Files:    5,
+			Files:    6,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -86,7 +86,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/bottom_pane/request_user_input/snapshots",
-			Files:    15,
+			Files:    16,
 			Owner:    "tui/bottom_pane/request_user_input",
 			Focus:    "request_user_input options, free-form input, countdowns, remapped keys, and tight-height layout",
 			Priority: []string{"approval", "request-user-input"},
@@ -97,7 +97,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/bottom_pane/snapshots",
-			Files:    169,
+			Files:    178,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -111,7 +111,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/snapshots",
-			Files:    209,
+			Files:    212,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -123,7 +123,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/tests/snapshots",
-			Files:    11,
+			Files:    12,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -143,8 +143,19 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
+			Path:     "tui/src/external_agent_config_migration/snapshots",
+			Files:    9,
+			Owner:    "tui/external_agent_config_migration",
+			Focus:    "external agent configuration migration prompts, customization, source choice, and Windows variants",
+			Priority: []string{"external-agent", "migration"},
+			Required: []string{
+				"tui/src/external_agent_config_migration/snapshots/codex_tui__external_agent_config_migration__tests__external_agent_config_migration_prompt.snap",
+				"tui/src/external_agent_config_migration/snapshots/codex_tui__external_agent_config_migration__tests__external_agent_config_migration_prompt_windows.snap",
+			},
+		},
+		{
 			Path:     "tui/src/history_cell/snapshots",
-			Files:    46,
+			Files:    51,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -156,7 +167,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/onboarding/snapshots",
-			Files:    2,
+			Files:    3,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},
@@ -176,7 +187,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    117,
+			Files:    111,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -188,7 +199,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/status/snapshots",
-			Files:    19,
+			Files:    20,
 			Owner:    "tui/status, tui/chatwidget",
 			Focus:    "status command snapshots for account, limits, reasoning, profiles, fork metadata, stale data, and narrow layouts",
 			Priority: []string{"status"},

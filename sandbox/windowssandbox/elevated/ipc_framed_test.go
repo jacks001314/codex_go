@@ -129,6 +129,32 @@ func TestSpawnRequestSerializesPermissionProfile(t *testing.T) {
 	}
 }
 
+func TestCanonicalPermissionProfileRoundTripIgnoresSymbolicSlashTmpOnWindows(t *testing.T) {
+	readOnlyRaw := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"special","value":{"kind":"slash_tmp"}},"access":"write"}]},"network":"restricted"}`
+	readOnly, err := coresandbox.ParseRuntimePermissionProfileJSON(readOnlyRaw)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	wire := rustPermissionProfileFromSandbox(readOnly)
+	if wire == nil || wire.FileSystem == nil || len(wire.FileSystem.Entries) != 2 {
+		t.Fatalf("wire profile = %#v", wire)
+	}
+	roundTrip := sandboxPermissionProfileFromRust(wire)
+	if roundTrip == nil || roundTrip.SandboxPolicy == nil || roundTrip.SandboxPolicy.Kind != coresandbox.SandboxReadOnly {
+		t.Fatalf("round-trip profile = %#v", roundTrip)
+	}
+
+	rootWriteRaw := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"write"},{"path":{"type":"special","value":{"kind":"slash_tmp"}},"access":"deny"}]},"network":"restricted"}`
+	rootWrite, err := coresandbox.ParseRuntimePermissionProfileJSON(rootWriteRaw)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON(root write) error = %v", err)
+	}
+	rootRoundTrip := sandboxPermissionProfileFromRust(rustPermissionProfileFromSandbox(rootWrite))
+	if rootRoundTrip == nil || rootRoundTrip.SandboxPolicy == nil || !rootRoundTrip.SandboxPolicy.HasFullDiskWriteAccess() || rootRoundTrip.HasDenyReadEntries() {
+		t.Fatalf("root-write round-trip profile = %#v", rootRoundTrip)
+	}
+}
+
 func TestReadFrameEOFAndOversize(t *testing.T) {
 	got, err := ReadFrame(bytes.NewReader(nil))
 	if err != nil || got != nil {

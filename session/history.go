@@ -262,6 +262,7 @@ func sanitizeHistoryInputItem(input any) any {
 		if nonModelVisibleHistoryItemType(itemType) {
 			return nil
 		}
+		delete(typed, "internal_chat_message_metadata_passthrough")
 		if itemType == "image_generation_call" {
 			result, _ := typed["result"].(string)
 			status, _ := typed["status"].(string)
@@ -287,7 +288,7 @@ func nonModelVisibleHistoryItemType(itemType string) bool {
 	switch strings.TrimSpace(itemType) {
 	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "todo_list", "error",
 		"enteredReviewMode", "entered_review_mode", "exitedReviewMode", "exited_review_mode",
-		"contextCompaction", "context_compaction":
+		"contextCompaction", "context_compaction", "external_session_import_marker":
 		return true
 	default:
 		return false

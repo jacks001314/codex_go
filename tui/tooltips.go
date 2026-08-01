@@ -196,7 +196,7 @@ func paidTooltipPlan(plan auth.PlanType) bool {
 	switch plan {
 	case auth.PlanPlus, auth.PlanEnterprise, auth.PlanPro, auth.PlanProlite,
 		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased,
-		auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased:
+		auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased:
 		return true
 	default:
 		return false
@@ -323,7 +323,7 @@ func normalizeAnnouncementPlan(plan auth.PlanType) (auth.PlanType, bool) {
 	switch plan {
 	case auth.PlanFree, auth.PlanGo, auth.PlanPlus, auth.PlanPro, auth.PlanProlite,
 		auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased, auth.PlanBusiness,
-		auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise, auth.PlanEdu:
+		auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise, auth.PlanEdu:
 		return plan, true
 	default:
 		return "", false

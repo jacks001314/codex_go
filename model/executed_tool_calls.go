@@ -30,6 +30,15 @@ type ExecutedToolCallTruncation struct {
 	OriginalNameBytes *int `json:"original_name_bytes,omitempty"`
 }
 
+// ExecutedToolCallCarrier is implemented by locally trusted prompt items that
+// can carry attempted-tool metadata. Implementations must return an independent
+// clone so request bounding never mutates conversation history.
+type ExecutedToolCallCarrier interface {
+	ExecutedToolCalls() []ExecutedToolCall
+	ReplaceExecutedToolCalls([]ExecutedToolCall)
+	CloneForExecutedToolCallPrompt() ExecutedToolCallCarrier
+}
+
 func NewExecutedToolCall(name string, arguments any) ExecutedToolCall {
 	if object, ok := arguments.(map[string]any); ok {
 		if _, forged := object[executedToolCallTruncatedField]; forged {
@@ -37,6 +46,12 @@ func NewExecutedToolCall(name string, arguments any) ExecutedToolCall {
 		}
 	}
 	return ExecutedToolCall{Name: name, arguments: arguments}
+}
+
+func NewTruncatedExecutedToolCall(name string, originalBytes int, maxBytes int) ExecutedToolCall {
+	call := NewExecutedToolCall(name, nil)
+	setExecutedToolCallTruncation(&call, originalBytes, maxBytes, nil, nil)
+	return call
 }
 
 func (c ExecutedToolCall) MarshalJSON() ([]byte, error) {
@@ -70,6 +85,23 @@ func (i *AgentItem) ExecutedToolCalls() []ExecutedToolCall {
 	return append([]ExecutedToolCall(nil), i.executedToolCalls...)
 }
 
+func (i *AgentItem) ReplaceExecutedToolCalls(calls []ExecutedToolCall) {
+	if i != nil {
+		i.executedToolCalls = append([]ExecutedToolCall(nil), calls...)
+	}
+}
+
+func (i *AgentItem) CloneForExecutedToolCallPrompt() ExecutedToolCallCarrier {
+	if i == nil {
+		return (*AgentItem)(nil)
+	}
+	clone := *i
+	clone.Data = cloneAgentItemMap(i.Data)
+	clone.Search = cloneAgentItemMap(i.Search)
+	clone.executedToolCalls = append([]ExecutedToolCall(nil), i.executedToolCalls...)
+	return &clone
+}
+
 func RecordExecutedToolCall(item *AgentItem) {
 	if item == nil || len(item.executedToolCalls) > 0 {
 		return
@@ -98,11 +130,11 @@ func RecordExecutedToolCall(item *AgentItem) {
 // serialized metadata, and bounds locally attached records across the prompt.
 func BoundExecutedToolCallsForPrompt(items []any) []any {
 	out := make([]any, 0, len(items))
-	trusted := make([]*AgentItem, 0)
+	trusted := make([]ExecutedToolCallCarrier, 0)
 	for _, item := range items {
 		sanitized, agentItem := clonePromptItemWithoutForgedExecutedToolCalls(item)
 		out = append(out, sanitized)
-		if agentItem != nil && len(agentItem.executedToolCalls) > 0 {
+		if agentItem != nil && len(agentItem.ExecutedToolCalls()) > 0 {
 			trusted = append(trusted, agentItem)
 		}
 	}
@@ -110,7 +142,7 @@ func BoundExecutedToolCallsForPrompt(items []any) []any {
 	return out
 }
 
-func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, *AgentItem) {
+func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, ExecutedToolCallCarrier) {
 	switch item := value.(type) {
 	case *AgentItem:
 		if item == nil {
@@ -140,17 +172,22 @@ func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, *AgentItem) 
 		}
 		return clone, nil
 	default:
+		if carrier, ok := value.(ExecutedToolCallCarrier); ok {
+			clone := carrier.CloneForExecutedToolCallPrompt()
+			return clone, clone
+		}
 		return value, nil
 	}
 }
 
-func boundExecutedToolCallItems(items []*AgentItem) {
+func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	remainingItems := len(items)
 	originalCalls := 0
 	originalBytes := 0
 	for _, item := range items {
-		for index := range item.executedToolCalls {
-			call := &item.executedToolCalls[index]
+		calls := item.ExecutedToolCalls()
+		for index := range calls {
+			call := &calls[index]
 			argumentBytes := executedToolCallArgumentBytes(*call)
 			if call.truncation == nil && argumentBytes > MaxExecutedToolCallArgumentBytes {
 				setExecutedToolCallTruncation(call, argumentBytes, MaxExecutedToolCallArgumentBytes, nil, nil)
@@ -160,18 +197,20 @@ func boundExecutedToolCallItems(items []*AgentItem) {
 				originalCalls += *call.truncation.OmittedCalls
 			}
 		}
+		item.ReplaceExecutedToolCalls(calls)
 		originalBytes += executedToolCallMetadataBytes(item)
 	}
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {
 		return
 	}
 
-	var fallbackItem *AgentItem
+	var fallbackItem ExecutedToolCallCarrier
 	var fallbackCall ExecutedToolCall
 	for _, item := range items {
-		if len(item.executedToolCalls) > 0 {
+		calls := item.ExecutedToolCalls()
+		if len(calls) > 0 {
 			fallbackItem = item
-			fallbackCall = item.executedToolCalls[0]
+			fallbackCall = calls[0]
 			break
 		}
 	}
@@ -180,7 +219,7 @@ func boundExecutedToolCallItems(items []*AgentItem) {
 	}})
 	remainingBytes := MaxExecutedToolCallMetadataBytes - minInt(MaxExecutedToolCallMetadataBytes, reservation)
 	for _, item := range items {
-		if len(item.executedToolCalls) == 0 {
+		if len(item.ExecutedToolCalls()) == 0 {
 			continue
 		}
 		fieldBytes := executedToolCallMetadataFieldBytes()
@@ -214,14 +253,15 @@ func boundExecutedToolCallItems(items []*AgentItem) {
 			originalName = intPointer(originalNameBytes)
 		}
 		setExecutedToolCallTruncation(&fallbackCall, originalArgumentBytes, 0, &omitted, originalName)
-		fallbackItem.executedToolCalls = []ExecutedToolCall{fallbackCall}
+		fallbackItem.ReplaceExecutedToolCalls([]ExecutedToolCall{fallbackCall})
 		return
 	}
 	for _, item := range items {
-		if len(item.executedToolCalls) == 0 {
+		calls := item.ExecutedToolCalls()
+		if len(calls) == 0 {
 			continue
 		}
-		call := &item.executedToolCalls[0]
+		call := &calls[0]
 		originalArgumentBytes := executedToolCallArgumentBytes(*call)
 		maxBytes := 0
 		previousOmissions := 0
@@ -234,14 +274,16 @@ func boundExecutedToolCallItems(items []*AgentItem) {
 		}
 		omitted := previousOmissions + originalCalls - represented
 		setExecutedToolCallTruncation(call, originalArgumentBytes, maxBytes, &omitted, nil)
+		item.ReplaceExecutedToolCalls(calls)
 		return
 	}
 }
 
-func boundExecutedToolCallsWithBudget(item *AgentItem, maxBytes int) {
+func boundExecutedToolCallsWithBudget(item ExecutedToolCallCarrier, maxBytes int) {
 	serializedBytes := 2
-	retained := make([]ExecutedToolCall, 0, len(item.executedToolCalls))
-	for _, original := range item.executedToolCalls {
+	calls := item.ExecutedToolCalls()
+	retained := make([]ExecutedToolCall, 0, len(calls))
+	for _, original := range calls {
 		call := original
 		separatorBytes := 0
 		if len(retained) > 0 {
@@ -268,13 +310,13 @@ func boundExecutedToolCallsWithBudget(item *AgentItem, maxBytes int) {
 		serializedBytes += separatorBytes + callBytes
 		retained = append(retained, call)
 	}
-	item.executedToolCalls = retained
+	item.ReplaceExecutedToolCalls(retained)
 }
 
-func representedExecutedToolCalls(items []*AgentItem) int {
+func representedExecutedToolCalls(items []ExecutedToolCallCarrier) int {
 	total := 0
 	for _, item := range items {
-		for _, call := range item.executedToolCalls {
+		for _, call := range item.ExecutedToolCalls() {
 			total++
 			if call.truncation != nil && call.truncation.OmittedCalls != nil {
 				total += *call.truncation.OmittedCalls
@@ -291,11 +333,11 @@ func executedToolCallArgumentBytes(call ExecutedToolCall) int {
 	return jsonSize(call.arguments)
 }
 
-func executedToolCallMetadataBytes(item *AgentItem) int {
-	if item == nil || len(item.executedToolCalls) == 0 {
+func executedToolCallMetadataBytes(item ExecutedToolCallCarrier) int {
+	if item == nil || len(item.ExecutedToolCalls()) == 0 {
 		return 0
 	}
-	return jsonSize(item.executedToolCalls) + executedToolCallMetadataFieldBytes()
+	return jsonSize(item.ExecutedToolCalls()) + executedToolCallMetadataFieldBytes()
 }
 
 func executedToolCallMetadataFieldBytes() int {

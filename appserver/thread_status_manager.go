@@ -129,6 +129,11 @@ func (m *ThreadStatusManager) NotePermissionRequested(threadID string) *ThreadSt
 	return &ThreadStatusActiveGuard{manager: m, threadID: threadID, guardType: guardPermission}
 }
 
+func (m *ThreadStatusManager) NotePermissionRequestedWithNotification(threadID string) (*ThreadStatusActiveGuard, *ThreadStatusNotification) {
+	notification := m.notePendingRequest(threadID, guardPermission)
+	return &ThreadStatusActiveGuard{manager: m, threadID: threadID, guardType: guardPermission}, notification
+}
+
 func (m *ThreadStatusManager) NoteUserInputRequested(threadID string) *ThreadStatusActiveGuard {
 	m.notePendingRequest(threadID, guardUserInput)
 	return &ThreadStatusActiveGuard{manager: m, threadID: threadID, guardType: guardUserInput}

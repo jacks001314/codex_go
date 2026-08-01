@@ -22,6 +22,8 @@ const (
 	ArchivedSessionsSubdir = "archived_sessions"
 )
 
+var materializeReferenceMu sync.Mutex
+
 type SortKey string
 
 const (
@@ -68,36 +70,45 @@ type ContentPart struct {
 }
 
 type SessionMeta struct {
-	ID                      string            `json:"id"`
-	SessionID               string            `json:"session_id,omitempty"`
-	SessionPrefix           string            `json:"session_prefix,omitempty"`
-	ForkedFromID            string            `json:"forked_from_id,omitempty"`
-	Timestamp               string            `json:"timestamp"`
-	CWD                     string            `json:"cwd,omitempty"`
-	Source                  string            `json:"source,omitempty"`
-	ThreadSource            string            `json:"thread_source,omitempty"`
-	Originator              string            `json:"originator,omitempty"`
-	Model                   string            `json:"model,omitempty"`
-	ModelProvider           string            `json:"model_provider,omitempty"`
-	HistoryMode             string            `json:"history_mode,omitempty"`
-	MemoryMode              string            `json:"memory_mode,omitempty"`
-	ParentThreadID          string            `json:"parent_thread_id,omitempty"`
-	BaseInstructions        string            `json:"base_instructions,omitempty"`
-	AgentNickname           string            `json:"agent_nickname,omitempty"`
-	AgentRole               string            `json:"agent_role,omitempty"`
-	AgentPath               string            `json:"agent_path,omitempty"`
-	DynamicTools            []json.RawMessage `json:"dynamic_tools,omitempty"`
-	SelectedCapabilityRoots []json.RawMessage `json:"selected_capability_roots,omitempty"`
-	MultiAgentVersion       string            `json:"multi_agent_version,omitempty"`
-	ContextWindow           json.RawMessage   `json:"context_window,omitempty"`
-	CLIVersion              string            `json:"cli_version,omitempty"`
-	Git                     map[string]string `json:"git,omitempty"`
-	Extra                   map[string]any    `json:"extra,omitempty"`
+	ID                          string            `json:"id"`
+	SessionID                   string            `json:"session_id,omitempty"`
+	SessionPrefix               string            `json:"session_prefix,omitempty"`
+	ForkedFromID                string            `json:"forked_from_id,omitempty"`
+	Timestamp                   string            `json:"timestamp"`
+	CWD                         string            `json:"cwd,omitempty"`
+	Source                      string            `json:"source,omitempty"`
+	ThreadSource                string            `json:"thread_source,omitempty"`
+	Originator                  string            `json:"originator,omitempty"`
+	Model                       string            `json:"model,omitempty"`
+	ModelProvider               string            `json:"model_provider,omitempty"`
+	HistoryMode                 string            `json:"history_mode,omitempty"`
+	HistoryBase                 *HistoryPosition  `json:"history_base,omitempty"`
+	SubagentHistoryStartOrdinal *uint64           `json:"subagent_history_start_ordinal,omitempty"`
+	MemoryMode                  string            `json:"memory_mode,omitempty"`
+	ParentThreadID              string            `json:"parent_thread_id,omitempty"`
+	BaseInstructions            string            `json:"base_instructions,omitempty"`
+	AgentNickname               string            `json:"agent_nickname,omitempty"`
+	AgentRole                   string            `json:"agent_role,omitempty"`
+	AgentPath                   string            `json:"agent_path,omitempty"`
+	DynamicTools                []json.RawMessage `json:"dynamic_tools,omitempty"`
+	SelectedCapabilityRoots     []json.RawMessage `json:"selected_capability_roots,omitempty"`
+	MultiAgentVersion           string            `json:"multi_agent_version,omitempty"`
+	ContextWindow               json.RawMessage   `json:"context_window,omitempty"`
+	CLIVersion                  string            `json:"cli_version,omitempty"`
+	Git                         map[string]string `json:"git,omitempty"`
+	Extra                       map[string]any    `json:"extra,omitempty"`
+}
+
+type HistoryPosition struct {
+	ThreadID            string `json:"thread_id"`
+	EndOrdinalExclusive uint64 `json:"end_ordinal_exclusive"`
+	EndByteOffset       uint64 `json:"end_byte_offset"`
 }
 
 type Line struct {
 	Type             string          `json:"type"`
 	Timestamp        string          `json:"timestamp,omitempty"`
+	Ordinal          *uint64         `json:"ordinal,omitempty"`
 	Meta             *SessionMeta    `json:"meta,omitempty"`
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	Item             json.RawMessage `json:"item,omitempty"`
@@ -124,39 +135,56 @@ type CompactedEvent struct {
 	WindowID           string          `json:"window_id,omitempty"`
 }
 
+type ThreadGoal struct {
+	ThreadID        string `json:"threadId"`
+	Objective       string `json:"objective"`
+	Status          string `json:"status"`
+	TokenBudget     *int64 `json:"tokenBudget,omitempty"`
+	TokensUsed      int64  `json:"tokensUsed"`
+	TimeUsedSeconds int64  `json:"timeUsedSeconds"`
+	CreatedAt       int64  `json:"createdAt"`
+	UpdatedAt       int64  `json:"updatedAt"`
+}
+
 type Recorder struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
+	mu          sync.Mutex
+	path        string
+	file        *os.File
+	paginated   bool
+	threadID    string
+	nextOrdinal uint64
+	afterFlush  func(string)
 }
 
 type CreateParams struct {
-	CodexHome               string
-	SessionID               string
-	SessionPrefix           string
-	ThreadID                string
-	ForkedFromID            string
-	Source                  string
-	ThreadSource            string
-	Originator              string
-	CWD                     string
-	Model                   string
-	ModelProvider           string
-	HistoryMode             string
-	MemoryMode              string
-	ParentThreadID          string
-	BaseInstructions        string
-	AgentNickname           string
-	AgentRole               string
-	AgentPath               string
-	DynamicTools            []json.RawMessage
-	SelectedCapabilityRoots []json.RawMessage
-	MultiAgentVersion       string
-	ContextWindow           json.RawMessage
-	CLIVersion              string
-	Git                     map[string]string
-	Extra                   map[string]any
-	Now                     time.Time
+	CodexHome                   string
+	SessionID                   string
+	SessionPrefix               string
+	ThreadID                    string
+	ForkedFromID                string
+	Source                      string
+	ThreadSource                string
+	Originator                  string
+	CWD                         string
+	Model                       string
+	ModelProvider               string
+	HistoryMode                 string
+	HistoryBase                 *HistoryPosition
+	SubagentHistoryStartOrdinal *uint64
+	MemoryMode                  string
+	ParentThreadID              string
+	BaseInstructions            string
+	AgentNickname               string
+	AgentRole                   string
+	AgentPath                   string
+	DynamicTools                []json.RawMessage
+	SelectedCapabilityRoots     []json.RawMessage
+	MultiAgentVersion           string
+	ContextWindow               json.RawMessage
+	CLIVersion                  string
+	Git                         map[string]string
+	Extra                       map[string]any
+	Now                         time.Time
 }
 
 func NewRecorder(params *CreateParams) (*Recorder, error) {
@@ -166,48 +194,58 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 	if params.ThreadID == "" {
 		return nil, errors.New("thread id is required")
 	}
-	now := params.Now.UTC()
+	now := params.Now
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
-	dir := filepath.Join(params.CodexHome, SessionsSubdir)
+	path := PathForThread(params.CodexHome, params.ThreadID, now)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	path := PathForThread(params.CodexHome, params.ThreadID, now)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	recorder := &Recorder{path: path, file: file}
-	meta := &SessionMeta{
-		ID:                      params.ThreadID,
-		SessionID:               params.SessionID,
-		SessionPrefix:           params.SessionPrefix,
-		ForkedFromID:            params.ForkedFromID,
-		Timestamp:               now.Format(time.RFC3339),
-		CWD:                     params.CWD,
-		Model:                   params.Model,
-		Source:                  params.Source,
-		ThreadSource:            params.ThreadSource,
-		Originator:              params.Originator,
-		ModelProvider:           params.ModelProvider,
-		HistoryMode:             params.HistoryMode,
-		MemoryMode:              params.MemoryMode,
-		ParentThreadID:          params.ParentThreadID,
-		BaseInstructions:        params.BaseInstructions,
-		AgentNickname:           params.AgentNickname,
-		AgentRole:               params.AgentRole,
-		AgentPath:               params.AgentPath,
-		DynamicTools:            cloneRawMessages(params.DynamicTools),
-		SelectedCapabilityRoots: cloneRawMessages(params.SelectedCapabilityRoots),
-		MultiAgentVersion:       params.MultiAgentVersion,
-		ContextWindow:           append(json.RawMessage(nil), params.ContextWindow...),
-		CLIVersion:              params.CLIVersion,
-		Git:                     cloneStringMap(params.Git),
-		Extra:                   cloneAnyMap(params.Extra),
+	recorder := &Recorder{
+		path:      path,
+		file:      file,
+		paginated: strings.EqualFold(strings.TrimSpace(params.HistoryMode), "paginated"),
+		threadID:  params.ThreadID,
 	}
-	if err := recorder.AppendLine(Line{Type: "session_meta", Meta: meta}); err != nil {
+	if recorder.paginated && params.HistoryBase != nil {
+		recorder.nextOrdinal = params.HistoryBase.EndOrdinalExclusive
+	}
+	meta := &SessionMeta{
+		ID:                          params.ThreadID,
+		SessionID:                   params.SessionID,
+		SessionPrefix:               params.SessionPrefix,
+		ForkedFromID:                params.ForkedFromID,
+		Timestamp:                   now.UTC().Format(time.RFC3339),
+		CWD:                         params.CWD,
+		Model:                       params.Model,
+		Source:                      params.Source,
+		ThreadSource:                params.ThreadSource,
+		Originator:                  params.Originator,
+		ModelProvider:               params.ModelProvider,
+		HistoryMode:                 params.HistoryMode,
+		HistoryBase:                 cloneHistoryPosition(params.HistoryBase),
+		SubagentHistoryStartOrdinal: cloneUint64Ptr(params.SubagentHistoryStartOrdinal),
+		MemoryMode:                  params.MemoryMode,
+		ParentThreadID:              params.ParentThreadID,
+		BaseInstructions:            params.BaseInstructions,
+		AgentNickname:               params.AgentNickname,
+		AgentRole:                   params.AgentRole,
+		AgentPath:                   params.AgentPath,
+		DynamicTools:                cloneRawMessages(params.DynamicTools),
+		SelectedCapabilityRoots:     cloneRawMessages(params.SelectedCapabilityRoots),
+		MultiAgentVersion:           params.MultiAgentVersion,
+		ContextWindow:               append(json.RawMessage(nil), params.ContextWindow...),
+		CLIVersion:                  params.CLIVersion,
+		Git:                         cloneStringMap(params.Git),
+		Extra:                       cloneAnyMap(params.Extra),
+	}
+	if err := recorder.AppendLine(Line{Type: "session_meta", Timestamp: now.UTC().Format(time.RFC3339Nano), Meta: meta}); err != nil {
 		file.Close()
 		return nil, err
 	}
@@ -215,19 +253,56 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 }
 
 func PathForThread(codexHome string, threadID string, now time.Time) string {
-	now = now.UTC()
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
-	return filepath.Join(codexHome, SessionsSubdir, fmt.Sprintf("rollout-%s-%s.jsonl", now.Format("2006-01-02T15-04-05"), threadID))
+	return filepath.Join(
+		codexHome,
+		SessionsSubdir,
+		now.Format("2006"),
+		now.Format("01"),
+		now.Format("02"),
+		fmt.Sprintf("rollout-%s-%s.jsonl", now.Format("2006-01-02T15-04-05"), threadID),
+	)
 }
 
 func Resume(path string) (*Recorder, error) {
+	lines, _, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	paginated := false
+	threadID := ""
+	nextOrdinal := uint64(0)
+	for i := range lines {
+		if lines[i].Meta != nil && strings.EqualFold(strings.TrimSpace(lines[i].Meta.HistoryMode), "paginated") {
+			paginated = true
+		}
+		if lines[i].Meta != nil && threadID == "" {
+			threadID = lines[i].Meta.ID
+		}
+		if lines[i].Ordinal != nil && *lines[i].Ordinal >= nextOrdinal {
+			nextOrdinal = *lines[i].Ordinal + 1
+		}
+	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{path: path, file: file}, nil
+	return &Recorder{path: path, file: file, paginated: paginated, threadID: threadID, nextOrdinal: nextOrdinal}, nil
+}
+
+func (line Line) MarshalJSON() ([]byte, error) {
+	if line.Type == "session_meta" && line.Meta != nil {
+		return json.Marshal(struct {
+			Timestamp string       `json:"timestamp"`
+			Ordinal   *uint64      `json:"ordinal,omitempty"`
+			Type      string       `json:"type"`
+			Payload   *SessionMeta `json:"payload"`
+		}{Timestamp: line.Timestamp, Ordinal: line.Ordinal, Type: line.Type, Payload: line.Meta})
+	}
+	type lineAlias Line
+	return json.Marshal(lineAlias(line))
 }
 
 func (r *Recorder) Path() string {
@@ -237,12 +312,115 @@ func (r *Recorder) Path() string {
 	return r.path
 }
 
+func (r *Recorder) IsPaginated() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.paginated
+}
+
+func (r *Recorder) SetAfterFlush(callback func(string)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.afterFlush = callback
+	r.mu.Unlock()
+}
+
 func (r *Recorder) AppendItem(item Item) error {
+	if r.IsPaginated() {
+		return r.appendPaginatedItem(item, time.Now().UTC())
+	}
 	line, err := LineFromItem(&item, time.Now().UTC())
 	if err != nil {
 		return err
 	}
 	return r.AppendLine(*line)
+}
+
+// AppendItemStarted persists the canonical lifecycle event emitted before a
+// paginated turn item reaches a terminal state.
+func (r *Recorder) AppendItemStarted(item json.RawMessage, turnID string, startedAt time.Time) error {
+	if len(item) == 0 {
+		return errors.New("started item payload is required")
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return errors.New("started item turn id is required")
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type":          "item_started",
+		"thread_id":     r.threadID,
+		"turn_id":       turnID,
+		"item":          json.RawMessage(item),
+		"started_at_ms": startedAt.UTC().UnixMilli(),
+	})
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{Type: "event_msg", Timestamp: startedAt.UTC().Format(time.RFC3339Nano), Payload: payload})
+}
+
+// AppendItemCompleted persists the canonical lifecycle event used by Rust
+// paginated rollouts and consumed by the thread-history SQLite projection.
+func (r *Recorder) AppendItemCompleted(item json.RawMessage, turnID string, startedAt time.Time, completedAt time.Time) error {
+	if len(item) == 0 {
+		return errors.New("completed item payload is required")
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return errors.New("completed item turn id is required")
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	payload := map[string]any{
+		"type":            "item_completed",
+		"thread_id":       r.threadID,
+		"turn_id":         turnID,
+		"item":            json.RawMessage(item),
+		"completed_at_ms": completedAt.UTC().UnixMilli(),
+	}
+	if !startedAt.IsZero() {
+		payload["started_at_ms"] = startedAt.UTC().UnixMilli()
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{Type: "event_msg", Timestamp: completedAt.UTC().Format(time.RFC3339Nano), Payload: raw})
+}
+
+func (r *Recorder) AppendThreadGoalUpdated(goal ThreadGoal, turnID string, now time.Time) error {
+	goal.ThreadID = strings.TrimSpace(goal.ThreadID)
+	if goal.ThreadID == "" {
+		goal.ThreadID = strings.TrimSpace(r.threadID)
+	}
+	if goal.ThreadID == "" || strings.TrimSpace(goal.Objective) == "" {
+		return errors.New("thread goal payload is invalid")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	payload := struct {
+		Type     string     `json:"type"`
+		ThreadID string     `json:"threadId"`
+		TurnID   string     `json:"turnId,omitempty"`
+		Goal     ThreadGoal `json:"goal"`
+	}{
+		Type: "thread_goal_updated", ThreadID: goal.ThreadID, TurnID: strings.TrimSpace(turnID), Goal: goal,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: raw})
 }
 
 func (r *Recorder) AppendThreadRolledBack(numTurns uint32, now time.Time) error {
@@ -457,6 +635,14 @@ func (r *Recorder) AppendLine(line Line) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.paginated {
+		if line.Ordinal == nil {
+			ordinal := r.nextOrdinal
+			line.Ordinal = &ordinal
+		} else if *line.Ordinal != r.nextOrdinal {
+			return fmt.Errorf("paginated rollout expected ordinal %d, got %d", r.nextOrdinal, *line.Ordinal)
+		}
+	}
 	data, err := json.Marshal(line)
 	if err != nil {
 		return err
@@ -464,27 +650,61 @@ func (r *Recorder) AppendLine(line Line) error {
 	if _, err := r.file.Write(append(data, '\n')); err != nil {
 		return err
 	}
+	if r.paginated {
+		r.nextOrdinal++
+	}
 	return nil
 }
 
 func (r *Recorder) Flush() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.file == nil {
+		r.mu.Unlock()
 		return nil
 	}
-	return r.file.Sync()
+	err := r.file.Sync()
+	path, callback := r.path, r.afterFlush
+	r.mu.Unlock()
+	if err == nil && callback != nil {
+		callback(path)
+	}
+	return err
 }
 
 func (r *Recorder) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.file == nil {
+		r.mu.Unlock()
 		return nil
 	}
-	err := r.file.Close()
+	syncErr := r.file.Sync()
+	closeErr := r.file.Close()
 	r.file = nil
-	return err
+	path, callback := r.path, r.afterFlush
+	r.mu.Unlock()
+	if syncErr == nil && callback != nil {
+		callback(path)
+	}
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
+}
+
+func cloneHistoryPosition(value *HistoryPosition) *HistoryPosition {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneUint64Ptr(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func Load(path string) ([]Line, int, error) {
@@ -525,6 +745,159 @@ func PlainRolloutPath(path string) string {
 		return strings.TrimSuffix(path, filepath.Ext(path))
 	}
 	return path
+}
+
+// ExistingRolloutPath resolves the canonical plain state-DB path to the
+// rollout file that currently exists, including its compressed representation.
+func ExistingRolloutPath(path string) (string, bool) {
+	plain := PlainRolloutPath(strings.TrimSpace(path))
+	if plain == "" {
+		return "", false
+	}
+	for _, candidate := range []string{plain, plain + ".zst"} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// MaterializeRolloutForReference restores a compressed rollout to its
+// canonical JSONL path before a HistoryPosition records physical byte offsets.
+func MaterializeRolloutForReference(path string) (string, error) {
+	materializeReferenceMu.Lock()
+	defer materializeReferenceMu.Unlock()
+
+	plain := PlainRolloutPath(strings.TrimSpace(path))
+	if plain == "" {
+		return "", errors.New("rollout path is required")
+	}
+	if info, err := os.Stat(plain); err == nil && info.Mode().IsRegular() {
+		return plain, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	compressed := plain + ".zst"
+	metadata, err := os.Stat(compressed)
+	if errors.Is(err, os.ErrNotExist) {
+		return plain, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if parent := filepath.Dir(plain); parent != "" && parent != "." {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return "", err
+		}
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(plain), "."+filepath.Base(plain)+".decompress-*")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	published := false
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(metadata.Mode().Perm()); err != nil {
+		return "", err
+	}
+	input, err := os.Open(compressed)
+	if err != nil {
+		return "", err
+	}
+	decoder, err := zstd.NewReader(input)
+	if err != nil {
+		_ = input.Close()
+		return "", err
+	}
+	_, copyErr := io.Copy(temporary, decoder)
+	decoder.Close()
+	closeInputErr := input.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeInputErr != nil {
+		return "", closeInputErr
+	}
+	if err := temporary.Sync(); err != nil {
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chtimes(temporaryPath, metadata.ModTime(), metadata.ModTime()); err != nil {
+		return "", err
+	}
+	if err := os.Link(temporaryPath, plain); err == nil {
+		published = true
+	} else if _, statErr := os.Stat(plain); statErr == nil {
+		published = true
+	} else {
+		destination, createErr := os.OpenFile(plain, os.O_CREATE|os.O_EXCL|os.O_WRONLY, metadata.Mode().Perm())
+		if createErr != nil {
+			return "", createErr
+		}
+		source, openErr := os.Open(temporaryPath)
+		if openErr != nil {
+			_ = destination.Close()
+			return "", openErr
+		}
+		_, copyErr = io.Copy(destination, source)
+		_ = source.Close()
+		if copyErr == nil {
+			copyErr = destination.Sync()
+		}
+		if closeErr := destination.Close(); copyErr == nil {
+			copyErr = closeErr
+		}
+		if copyErr != nil {
+			_ = os.Remove(plain)
+			return "", copyErr
+		}
+		published = true
+	}
+	if published {
+		if err := os.Chtimes(plain, metadata.ModTime(), metadata.ModTime()); err != nil {
+			return "", err
+		}
+		if err := os.Remove(compressed); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return plain, nil
+}
+
+// RolloutByteLength reports the uncompressed JSONL length used by persisted
+// HistoryPosition byte offsets.
+func RolloutByteLength(path string) (uint64, error) {
+	existing, ok := ExistingRolloutPath(path)
+	if !ok {
+		return 0, os.ErrNotExist
+	}
+	if !strings.HasSuffix(strings.ToLower(existing), ".zst") {
+		info, err := os.Stat(existing)
+		if err != nil {
+			return 0, err
+		}
+		return uint64(info.Size()), nil
+	}
+	file, err := os.Open(existing)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+	defer decoder.Close()
+	count, err := io.Copy(io.Discard, decoder)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(count), nil
 }
 
 func unmarshalLine(data []byte, line *Line) error {
@@ -811,6 +1184,9 @@ func inputItemFromItem(item *Item, includeToolOutputs bool) any {
 	if len(item.Raw) > 0 {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
+			if object, ok := raw.(map[string]any); ok {
+				delete(object, "internal_chat_message_metadata_passthrough")
+			}
 			return raw
 		}
 	}
@@ -1010,7 +1386,18 @@ func Archive(path string, codexHome string) (string, error) {
 }
 
 func Unarchive(path string, codexHome string) (string, error) {
-	target, err := moveRollout(path, filepath.Join(codexHome, SessionsSubdir))
+	createdAt, ok := ParseTimestampFromFilename(filepath.Base(PlainRolloutPath(path)))
+	if !ok {
+		return "", fmt.Errorf("rollout path %q missing filename timestamp", path)
+	}
+	targetDir := filepath.Join(
+		codexHome,
+		SessionsSubdir,
+		createdAt.Format("2006"),
+		createdAt.Format("01"),
+		createdAt.Format("02"),
+	)
+	target, err := moveRollout(path, targetDir)
 	if err != nil {
 		return "", err
 	}
@@ -1087,6 +1474,12 @@ func matchesOptions(item *ThreadItem, options *ListOptions) bool {
 }
 
 func collectRolloutPaths(root string) ([]string, error) {
+	return CollectRolloutPaths(root)
+}
+
+// CollectRolloutPaths recursively returns plain and zstd-compressed rollout
+// files. Both the legacy flat layout and the date-nested layout are accepted.
+func CollectRolloutPaths(root string) ([]string, error) {
 	info, err := os.Stat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -1105,7 +1498,8 @@ func collectRolloutPaths(root string) ([]string, error) {
 		if entry.IsDir() {
 			return nil
 		}
-		if filepath.Ext(entry.Name()) == ".jsonl" {
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".jsonl.zst") {
 			paths = append(paths, path)
 		}
 		return nil

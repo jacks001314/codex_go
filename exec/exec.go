@@ -23,6 +23,7 @@ import (
 	multiagent "codex_go/agent"
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
@@ -71,21 +72,22 @@ type Result struct {
 }
 
 type Runner struct {
-	CodexHome       string
-	Agent           model.AgentRunner
-	ToolRouter      *tool.Router
-	UnifiedExec     *tool.UnifiedExecManager
-	Hooks           tool.HookRunner
-	ShellApproval   tool.ShellApprovalFunc
-	UserInput       tool.UserInputResponder
-	MCPService      *mcp.MCPService
-	MCPTools        []mcp.RuntimeToolInfo
-	MCPConnectors   []mcp.RuntimeConnector
-	MCPElicitation  mcp.MCPElicitationHandler
-	MaxToolTurns    int
-	UseResponsesAPI bool
-	HTTPClient      model.HTTPDoer
-	Now             func() time.Time
+	CodexHome        string
+	Agent            model.AgentRunner
+	ToolRouter       *tool.Router
+	UnifiedExec      *tool.UnifiedExecManager
+	Hooks            tool.HookRunner
+	ShellApproval    tool.ShellApprovalFunc
+	UserInput        tool.UserInputResponder
+	MCPService       *mcp.MCPService
+	MCPTools         []mcp.RuntimeToolInfo
+	MCPConnectors    []mcp.RuntimeConnector
+	MCPElicitation   mcp.MCPElicitationHandler
+	CodeModeProvider tool.CodeModeRemoteProvider
+	MaxToolTurns     int
+	UseResponsesAPI  bool
+	HTTPClient       model.HTTPDoer
+	Now              func() time.Time
 }
 
 func NewRunner(codexHome string) *Runner {
@@ -309,6 +311,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		InputItems:                     inputItems,
 		Model:                          modelID,
 		ToolMode:                       modelInfo.ToolMode,
+		CodeModeHostEnabled:            features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
+		DisableCodeModeFallback:        cfg.DisableCodeModeInProcessFallback(),
 		ProviderID:                     providerID,
 		TaskKind:                       taskKind,
 		ThreadID:                       threadID,
@@ -441,6 +445,10 @@ type agentRunConfig struct {
 	InputItems                     []any
 	Model                          string
 	ToolMode                       string
+	CodeModeHostEnabled            bool
+	DisableCodeModeFallback        bool
+	CodeModeProvider               tool.CodeModeRemoteProvider
+	CodeModeRuntime                *tool.CodeModeRuntime
 	ProviderID                     string
 	TaskKind                       model.AgentTaskKind
 	ThreadID                       string
@@ -497,6 +505,7 @@ type execStreamEventCollector struct {
 	streamedAgentText     map[string]string
 	completedAgentItems   map[string]bool
 	retrying              bool
+	warningCount          int
 }
 
 func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
@@ -659,6 +668,14 @@ func (c *execStreamEventCollector) CodeModeNotify(_ context.Context, callID stri
 	// Rust injects notify into model history immediately. It does not create a
 	// separate SDK thread item, so keep the public event stream free of duplicates.
 	_ = callID
+}
+
+func (c *execStreamEventCollector) Warning(message string) {
+	if c == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	c.warningCount++
+	c.emit(protocol.ItemCompleted(protocol.ErrorItem(fmt.Sprintf("warning-%d", c.warningCount), message)))
 }
 
 func (c *execStreamEventCollector) AssistantMessage(response *model.AgentResponse, _ int, hasToolCalls bool) {
@@ -833,7 +850,28 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	if run == nil {
 		return nil, errors.New("agent run config is nil")
 	}
-	router, err := r.toolRouterForRequest(req, run)
+	runForRouter := *run
+	var ownedCodeModeProvider interface{ Close() error }
+	if r.ToolRouter == nil {
+		provider := r.CodeModeProvider
+		if provider == nil {
+			if run.CodeModeHostEnabled || run.DisableCodeModeFallback {
+				provider = codemode.NewProcessProvider(install.Current().CodeModeHostProgram())
+			} else {
+				provider = codemode.NewDisabledProvider()
+			}
+			ownedCodeModeProvider, _ = provider.(interface{ Close() error })
+		}
+		runForRouter.CodeModeProvider = provider
+		runForRouter.CodeModeRuntime = tool.NewCodeModeRuntime(provider, run.DisableCodeModeFallback)
+	}
+	if runForRouter.CodeModeRuntime != nil {
+		defer runForRouter.CodeModeRuntime.Close()
+	}
+	if ownedCodeModeProvider != nil {
+		defer ownedCodeModeProvider.Close()
+	}
+	router, err := r.toolRouterForRequest(req, &runForRouter)
 	if err != nil {
 		return nil, err
 	}
@@ -855,6 +893,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		HostedTools:                  append([]any(nil), run.HostedTools...),
 		Model:                        run.Model,
 		ToolMode:                     run.ToolMode,
+		DisableCodeModeFallback:      run.DisableCodeModeFallback,
 		ProviderID:                   run.ProviderID,
 		TaskKind:                     run.TaskKind,
 		ThreadID:                     run.ThreadID,
@@ -878,6 +917,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OnToolCompleted:              run.StreamEvents.ToolCompleted,
 		EmitCodeModeNestedLifecycle:  true,
 		OnCodeModeNotify:             run.StreamEvents.CodeModeNotify,
+		OnWarning:                    run.StreamEvents.Warning,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 	})
 }
@@ -898,6 +938,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	options.UnifiedExec = r.UnifiedExec
 	if run != nil {
 		options.EnableUnifiedExec = run.UnifiedExecEnabled
+		options.CodeModeProvider = run.CodeModeProvider
+		options.CodeModeRuntime = run.CodeModeRuntime
+		options.DisableCodeModeFallback = run.DisableCodeModeFallback
 	}
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval

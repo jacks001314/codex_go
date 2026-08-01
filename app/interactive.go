@@ -33,6 +33,7 @@ import (
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
+	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/tool"
 	codextui "codex_go/tui"
@@ -1834,7 +1835,10 @@ func interactiveRenameThreadHandler() codextea.ThreadRenameFunc {
 		}
 		extra["thread_name_explicit"] = true
 		_, err = store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Title: &name, Extra: extra}, false)
-		return err
+		if err != nil {
+			return err
+		}
+		return rollout.AppendThreadName(auth.DefaultCodexHome(), threadID, name)
 	}
 }
 

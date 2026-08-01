@@ -85,6 +85,8 @@ async function runParityCommand(
   const sdkPath = required(options.sdk, "--sdk");
   const model = stringOption(options.model);
   const modelReasoningEffort = parseReasoningEffort(options["reasoning-effort"]);
+  const infraRetries = parseNonNegativeInteger(options["infra-retries"], "--infra-retries", 0, 10);
+  const failFastInfra = options["fail-fast-infra"] === true;
   const identity = buildSuiteIdentity({ rustPath, goPath, sdkPath, model, modelReasoningEffort });
   let order = parseOrder(options.order) ?? ["rust", "go"];
   let suiteDir: string | null = null;
@@ -96,7 +98,13 @@ async function runParityCommand(
       throw new Error("--resume cannot be combined with --all, --scenario, or --from");
     }
     suiteDir = path.resolve(options.resume);
-    suite = loadSuiteSummary(suiteDir, identity, options.order ? order : undefined);
+    suite = loadSuiteSummary(
+      suiteDir,
+      identity,
+      options.order ? order : undefined,
+      infraRetries,
+      failFastInfra,
+    );
     order = suite.order;
     scenarioNames = remainingSuiteScenarios(suite);
   } else if (options.all) {
@@ -106,7 +114,14 @@ async function runParityCommand(
     const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
     const artifactsRoot = runOptions.artifactsRoot ?? path.join(sdktestsRoot, "artifacts");
     suiteDir = path.join(artifactsRoot, "suites", `${stamp}-parity`);
-    suite = createSuiteSummary({ suiteDir, identity, order, scenarioNames });
+    suite = createSuiteSummary({
+      suiteDir,
+      identity,
+      order,
+      scenarioNames,
+      infraRetries,
+      failFastInfra,
+    });
     log(`sdktests suite: ${suiteDir}`);
   } else {
     if (options.from) throw new Error("--from requires --all");
@@ -116,6 +131,7 @@ async function runParityCommand(
   let aggregateExitCode = suite ? suiteExitCode(suite) : 0;
   try {
     for (const scenario of scenarioNames) {
+      let stopAfterInfrastructureFailure = false;
       if (runOptions.signal.aborted) throw new Error("live SDK suite was aborted");
       if (suite && suiteDir) {
         updateSuiteScenario(suiteDir, suite, scenario, {
@@ -128,32 +144,83 @@ async function runParityCommand(
         });
       }
       try {
-        const result = await runParity({
-          scenario,
-          rustPath,
-          goPath,
-          sdkPath,
-          order,
-          signal: runOptions.signal,
-          artifactsRoot: runOptions.artifactsRoot,
-          tempRoot: runOptions.tempRoot,
-          model,
-          modelReasoningEffort,
-        });
-        log(`sdktests parity ${scenario}: ${result.comparison.status} (${result.comparison.classification})`);
-        log(`sdktests parity artifact: ${result.artifactDir}`);
-        aggregateExitCode = Math.max(aggregateExitCode, exitCode(result.comparison.status));
-        if (suite && suiteDir) {
-          updateSuiteScenario(suiteDir, suite, scenario, {
-            status: "completed",
-            artifactDir: result.artifactDir,
-            comparison: {
+        for (let retry = 0; ; retry += 1) {
+          const attemptStartedAt = new Date().toISOString();
+          try {
+            const result = await runParity({
+              scenario,
+              rustPath,
+              goPath,
+              sdkPath,
+              order,
+              signal: runOptions.signal,
+              artifactsRoot: runOptions.artifactsRoot,
+              tempRoot: runOptions.tempRoot,
+              model,
+              modelReasoningEffort,
+            });
+            const comparison = {
               status: result.comparison.status,
               classification: result.comparison.classification,
               firstMismatch: result.comparison.firstMismatch,
-            },
-            completedAt: new Date().toISOString(),
-          });
+            };
+            if (suite && suiteDir) {
+              const record = suite.scenarios.find((entry) => entry.name === scenario);
+              updateSuiteScenario(suiteDir, suite, scenario, {
+                attempts: [
+                  ...(record?.attempts ?? []),
+                  {
+                    number: (record?.attempts?.length ?? 0) + 1,
+                    status: "completed",
+                    startedAt: attemptStartedAt,
+                    completedAt: new Date().toISOString(),
+                    artifactDir: result.artifactDir,
+                    comparison,
+                  },
+                ],
+              });
+            }
+            log(`sdktests parity ${scenario}: ${result.comparison.status} (${result.comparison.classification})`);
+            log(`sdktests parity artifact: ${result.artifactDir}`);
+            if (result.comparison.status === "infra_failure" && retry < infraRetries) {
+              const delayMs = infraRetryDelay(retry);
+              log(
+                `sdktests parity ${scenario}: retrying infrastructure failure ` +
+                `(${retry + 1}/${infraRetries}) after ${delayMs}ms`,
+              );
+              await abortableDelay(delayMs, runOptions.signal);
+              continue;
+            }
+            aggregateExitCode = Math.max(aggregateExitCode, exitCode(result.comparison.status));
+            stopAfterInfrastructureFailure = result.comparison.status === "infra_failure" && failFastInfra;
+            if (suite && suiteDir) {
+              updateSuiteScenario(suiteDir, suite, scenario, {
+                status: "completed",
+                artifactDir: result.artifactDir,
+                comparison,
+                completedAt: new Date().toISOString(),
+              });
+            }
+            break;
+          } catch (error: any) {
+            if (suite && suiteDir) {
+              const record = suite.scenarios.find((entry) => entry.name === scenario);
+              updateSuiteScenario(suiteDir, suite, scenario, {
+                attempts: [
+                  ...(record?.attempts ?? []),
+                  {
+                    number: (record?.attempts?.length ?? 0) + 1,
+                    status: "incomplete",
+                    startedAt: attemptStartedAt,
+                    completedAt: new Date().toISOString(),
+                    artifactDir: typeof error?.artifactDir === "string" ? error.artifactDir : undefined,
+                    error: String(error?.message ?? error),
+                  },
+                ],
+              });
+            }
+            throw error;
+          }
         }
       } catch (error: any) {
         if (suite && suiteDir) {
@@ -165,6 +232,14 @@ async function runParityCommand(
           });
         }
         throw error;
+      }
+      if (stopAfterInfrastructureFailure) {
+        if (suite && suiteDir) {
+          finishSuite(suiteDir, suite, "interrupted");
+          log(`sdktests suite stopped after infrastructure failure: ${scenario}`);
+          log(`sdktests suite summary: ${path.join(suiteDir, "suite-summary.json")}`);
+        }
+        return aggregateExitCode;
       }
     }
     if (suite && suiteDir) finishSuite(suiteDir, suite, "completed");
@@ -213,7 +288,7 @@ function signalExitCode(signal: "SIGINT" | "SIGTERM"): number {
 
 function parseOptions(items: string[]): Record<string, string | boolean> {
   const parsed: Record<string, string | boolean> = {};
-  const booleanOptions = new Set(["all", "recover-lock"]);
+  const booleanOptions = new Set(["all", "recover-lock", "fail-fast-infra"]);
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (!item.startsWith("--")) continue;
@@ -255,6 +330,43 @@ function parseReasoningEffort(
     return value as "minimal" | "low" | "medium" | "high" | "xhigh";
   }
   throw new Error(`Invalid --reasoning-effort ${String(value)}; expected minimal, low, medium, high, or xhigh`);
+}
+
+function parseNonNegativeInteger(
+  value: string | boolean | undefined,
+  name: string,
+  fallback: number,
+  maximum: number,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new Error(`Invalid ${name} ${String(value)}; expected an integer from 0 to ${maximum}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+    throw new Error(`Invalid ${name} ${value}; expected an integer from 0 to ${maximum}`);
+  }
+  return parsed;
+}
+
+export function infraRetryDelay(retry: number): number {
+  return Math.min(15_000 * 2 ** retry, 60_000);
+}
+
+async function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw signal.reason ?? new Error("live SDK suite was aborted");
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, delayMs);
+    signal.addEventListener("abort", aborted, { once: true });
+    function done() {
+      signal.removeEventListener("abort", aborted);
+      resolve();
+    }
+    function aborted() {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("live SDK suite was aborted"));
+    }
+  });
 }
 
 function validatePlatformOption(value: string | boolean | undefined): void {

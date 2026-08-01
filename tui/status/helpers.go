@@ -60,6 +60,8 @@ func ComposeAccountDisplay(accountDisplay *AccountStatus) *AccountStatus {
 
 func PlanTypeDisplayName(planType auth.PlanType) string {
 	switch planType {
+	case auth.PlanEnterpriseCBPAutomation:
+		return "Enterprise (Automation)"
 	case auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased:
 		return "Business"
 	case auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise:

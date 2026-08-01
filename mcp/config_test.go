@@ -5,10 +5,98 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	managedconfig "codex_go/config"
-	"time"
 )
+
+func TestMCPServerOAuthCredentialNameIsolatedByEnvironment(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     ServerConfig
+		serverName string
+		want       string
+	}{
+		{name: "legacy local", config: ServerConfig{}, serverName: "docs", want: "docs"},
+		{name: "explicit local", config: ServerConfig{EnvironmentID: "local"}, serverName: "docs", want: "docs"},
+		{name: "local executor prefix", config: ServerConfig{}, serverName: "executor:docs", want: "local:executor:docs"},
+		{name: "local local prefix", config: ServerConfig{}, serverName: "local:docs", want: "local:local:docs"},
+		{name: "executor", config: ServerConfig{EnvironmentID: "executor-1"}, serverName: "docs", want: "executor:ZXhlY3V0b3ItMQ:ZG9jcw"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.config.OAuthCredentialName(test.serverName); got != test.want {
+				t.Fatalf("OAuthCredentialName(%q) = %q, want %q", test.serverName, got, test.want)
+			}
+		})
+	}
+}
+
+func TestExecutorOwnedChatGPTMCPAcceptsOnlySafeStaticAuthorization(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ServerConfig)
+		want   bool
+	}{
+		{name: "missing"},
+		{name: "empty", mutate: func(config *ServerConfig) { config.HTTPHeaders = map[string]string{"Authorization": ""} }},
+		{name: "whitespace", mutate: func(config *ServerConfig) { config.HTTPHeaders = map[string]string{"Authorization": " \t "} }},
+		{name: "newline", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor\r\nsecret"}
+		}},
+		{name: "nul", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor\x00secret"}
+		}},
+		{name: "del", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor\x7fsecret"}
+		}},
+		{name: "environment header", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor-secret"}
+			config.EnvHTTPHeaders = map[string]string{"X-Trace": "TRACE_TOKEN"}
+		}},
+		{name: "environment bearer", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor-secret"}
+			config.BearerTokenEnvVar = "EXECUTOR_TOKEN"
+		}},
+		{name: "runtime auth provider", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer executor-secret"}
+			config.ApplyHTTPRequest = func(*http.Request, []byte) error { return nil }
+		}},
+		{name: "mixed-case static header", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"aUtHoRiZaTiOn": "Bearer executor-secret"}
+		}, want: true},
+		{name: "horizontal tab is valid", mutate: func(config *ServerConfig) {
+			config.HTTPHeaders = map[string]string{"Authorization": "Bearer\texecutor-secret"}
+		}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := ServerConfig{Auth: ServerAuthChatGPT, EnvironmentID: "customer-executor"}
+			if test.mutate != nil {
+				test.mutate(&config)
+			}
+			if got := config.SafeRemoteChatGPTAuthorization(); got != test.want {
+				t.Fatalf("SafeRemoteChatGPTAuthorization() = %v, want %v", got, test.want)
+			}
+			err := ValidateServerAuth("docs", &config)
+			if test.want && err != nil {
+				t.Fatalf("ValidateServerAuth() error = %v", err)
+			}
+			if !test.want && (err == nil || err.Error() != "executor-owned MCP server `docs` cannot use hosted ChatGPT authentication; configure executor-owned credentials instead") {
+				t.Fatalf("ValidateServerAuth() error = %v", err)
+			}
+		})
+	}
+
+	local := ServerConfig{Auth: ServerAuthChatGPT, EnvironmentID: "local"}
+	if err := ValidateServerAuth("docs", &local); err != nil {
+		t.Fatalf("local ChatGPT auth error = %v", err)
+	}
+	apps := CodexAppsServerConfig("https://chatgpt.com", "", nil)
+	if apps.Auth != ServerAuthChatGPT || !apps.IsLocalEnvironment() {
+		t.Fatalf("CodexAppsServerConfig() = %#v", apps)
+	}
+}
 
 func TestRuntimeConfigAppliesManagedMCPRequirementsLikeRust(t *testing.T) {
 	command := "approved-command"

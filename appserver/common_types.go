@@ -200,6 +200,7 @@ type RealtimeConversationVersion string
 const (
 	RealtimeConversationV1 RealtimeConversationVersion = "v1"
 	RealtimeConversationV2 RealtimeConversationVersion = "v2"
+	RealtimeConversationV3 RealtimeConversationVersion = "v3"
 )
 
 type RealtimeOutputModality string

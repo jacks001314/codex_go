@@ -61,6 +61,8 @@ type SkillsListEntry struct {
 	Policy           *SkillPolicy       `json:"-"`
 	Contents         string             `json:"-"`
 	Root             string             `json:"-"`
+	RootOrder        int                `json:"-"`
+	HasRootOrder     bool               `json:"-"`
 	ApplicableCWDs   []string           `json:"-"`
 	AuthorityKind    string             `json:"-"`
 	AuthorityID      string             `json:"-"`
@@ -426,11 +428,12 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	roots = dedupeSkillsRoots(roots)
 	entries := make([]SkillsListEntry, 0)
 	skillErrors := make([]SkillErrorInfo, 0)
-	for _, root := range roots {
+	for rootOrder, root := range roots {
 		found, foundErrors, err := discover(root)
 		if err != nil {
 			return nil, err
 		}
+		setSkillRootOrder(found, rootOrder)
 		entries = append(entries, found...)
 		skillErrors = append(skillErrors, foundErrors...)
 	}
@@ -447,6 +450,14 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	})
 	s.cache[key] = skillsCacheEntry{skills: cloneSkills(entries), errors: cloneSkillErrors(skillErrors)}
 	return skillsListResponse(entries, skillErrors, params.CWDs), nil
+}
+
+func setSkillRootOrder(entries []SkillsListEntry, order int) {
+	for i := range entries {
+		entries[i].RootOrder = order
+		entries[i].HasRootOrder = true
+		setSkillRootOrder(entries[i].Skills, order)
+	}
 }
 
 func (s *SkillsService) ClearCache() {

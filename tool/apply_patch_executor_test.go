@@ -2,11 +2,14 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"codex_go/sandbox"
 )
 
 func TestApplyPatchExecutorRunsPatchAndFormatsOutput(t *testing.T) {
@@ -49,6 +52,86 @@ func TestApplyPatchExecutorRunsPatchAndFormatsOutput(t *testing.T) {
 	applied, ok := output.Data["appliedChanges"].([]map[string]any)
 	if !ok || len(applied) != 1 || applied[0]["kind"] != "add" || applied[0]["newContent"] != "hello\n" {
 		t.Fatalf("appliedChanges = %#v", output.Data["appliedChanges"])
+	}
+}
+
+func TestApplyPatchExecutorWorkspacePolicyProtectsMetadataLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	for _, directory := range []string{".git", ".agents", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(cwd, directory), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", directory, err)
+		}
+	}
+	policy := sandbox.NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	policy.ExcludeSlashTmp = true
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd, SandboxPolicy: policy})
+
+	allowed, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "workspace-root-allowed-patch",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: "*** Begin Patch\n*** Add File: allowed.txt\n+workspace root patch access\n*** End Patch\n"},
+	})
+	if err != nil || allowed == nil || !allowed.Success {
+		t.Fatalf("allowed patch = %#v, %v", allowed, err)
+	}
+	assertApplyPatchFile(t, filepath.Join(cwd, "allowed.txt"), "workspace root patch access\n")
+
+	for _, directory := range []string{".git", ".agents", ".codex"} {
+		t.Run(directory, func(t *testing.T) {
+			target := filepath.Join(cwd, directory, "protected.txt")
+			patch := fmt.Sprintf("*** Begin Patch\n*** Add File: %s/protected.txt\n+metadata write\n*** End Patch\n", directory)
+			output, err := executor.Execute(context.Background(), &Invocation{
+				CallID:   "workspace-root-protected-" + directory,
+				ToolName: PlainName(DefaultApplyPatchToolName),
+				Payload:  Payload{Kind: PayloadCustom, Input: patch},
+			})
+			if err != nil || output == nil || output.Success || !strings.Contains(output.Body, "outside of the project") {
+				t.Fatalf("protected patch output = %#v, %v", output, err)
+			}
+			assertApplyPatchMissing(t, target)
+		})
+	}
+}
+
+func TestApplyPatchExecutorWorkspacePolicyRejectsOutsideRootLikeRust(t *testing.T) {
+	parent := t.TempDir()
+	cwd := filepath.Join(parent, "workspace")
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	policy := sandbox.NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	policy.ExcludeSlashTmp = true
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: cwd, SandboxPolicy: policy})
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "workspace-root-outside-patch",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: "*** Begin Patch\n*** Add File: ../outside.txt\n+outside\n*** End Patch\n"},
+	})
+	if err != nil || output == nil || output.Success || !strings.Contains(output.Body, "outside of the project") {
+		t.Fatalf("outside patch output = %#v, %v", output, err)
+	}
+	assertApplyPatchMissing(t, filepath.Join(parent, "outside.txt"))
+}
+
+func TestApplyPatchExecutorCanonicalProfileWinsOverLegacyPolicyLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	profile.SandboxPolicy.ExcludeTmpdirEnvVar = true
+	profile.SandboxPolicy.ExcludeSlashTmp = true
+	policy := sandbox.NewDangerFullAccessPolicy()
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD: cwd, PermissionProfile: &profile, SandboxPolicy: policy,
+	})
+	patch := "*** Begin Patch\n*** Add File: " + filepath.ToSlash(outside) + "\n+outside\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{Payload: Payload{Kind: PayloadCustom, Input: patch}})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || output.Success || !strings.Contains(output.Body, "outside of the project workspace roots") {
+		t.Fatalf("output = %#v", output)
 	}
 }
 

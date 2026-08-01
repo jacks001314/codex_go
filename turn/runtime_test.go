@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
@@ -299,6 +300,114 @@ func TestRuntimeCodeModeOnlyKeepsOnlyExecWaitAndDirectModelToolsVisible(t *testi
 		if strings.Contains(execDescription, "declare const tools: { "+directOnly+"(") {
 			t.Fatalf("exec description contains direct-only tool %q: %q", directOnly, execDescription)
 		}
+	}
+}
+
+func TestRuntimeUnavailableOptionalCodeModeFallsBackToDirectOnce(t *testing.T) {
+	agent := &singleTurnAgent{response: &model.AgentResponse{Message: "done"}}
+	provider := codemode.NewDisabledProvider()
+	codeModeRuntime := tool.NewCodeModeRuntime(provider, false)
+	defer codeModeRuntime.Close()
+	warnings := []string{}
+	for range 2 {
+		registry := unavailableCodeModeTestRegistry(t)
+		execTool, waitTool := codeModeRuntime.Executors(registry, tool.PlainName(tool.DefaultExecCommandToolName))
+		if err := registry.Prepend(waitTool); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.Prepend(execTool); err != nil {
+			t.Fatal(err)
+		}
+		runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+		if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
+			Prompt: "edit", ToolMode: model.ToolModeCodeMode,
+			OnWarning: func(message string) { warnings = append(warnings, message) },
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "Falling back to direct tools") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	otherThreadRuntime := tool.NewCodeModeRuntime(provider, false)
+	defer otherThreadRuntime.Close()
+	otherRegistry := unavailableCodeModeTestRegistry(t)
+	otherExec, otherWait := otherThreadRuntime.Executors(otherRegistry, tool.PlainName(tool.DefaultExecCommandToolName))
+	if err := otherRegistry.Prepend(otherWait); err != nil {
+		t.Fatal(err)
+	}
+	if err := otherRegistry.Prepend(otherExec); err != nil {
+		t.Fatal(err)
+	}
+	otherWarning := ""
+	if _, err := NewRuntime(&RuntimeOptions{Agent: &singleTurnAgent{response: &model.AgentResponse{Message: "done"}}, Router: tool.NewRouter(otherRegistry)}).Run(context.Background(), &AgentLoopRequest{
+		Prompt: "edit", ToolMode: model.ToolModeCodeMode, OnWarning: func(message string) { otherWarning = message },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(otherWarning, "Falling back to direct tools") {
+		t.Fatalf("second thread warning = %q", otherWarning)
+	}
+	for index := range agent.requests {
+		visible := runtimeRequestToolNames(agent.requests[index].Tools)
+		if visible[tool.CodeModeExecToolName] || visible[codemode.WaitToolName] || !visible[tool.DefaultExecCommandToolName] || !visible["apply_patch"] {
+			t.Fatalf("request %d visible tools = %#v", index, visible)
+		}
+	}
+}
+
+func unavailableCodeModeTestRegistry(t *testing.T) *tool.Registry {
+	t.Helper()
+	registry := tool.NewRegistry()
+	for _, spec := range []tool.Spec{
+		{Name: tool.PlainName("apply_patch")},
+		{Name: tool.PlainName(tool.DefaultExecCommandToolName), Exposure: tool.ExposureHidden},
+	} {
+		if err := registry.Register(tool.NewExecutorFunc(spec, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+			return &tool.Output{Success: true}, nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return registry
+}
+
+func TestRuntimeUnavailableRequiredCodeModeFailsClosed(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		toolMode        string
+		disableFallback bool
+	}{
+		{name: "code-mode-only", toolMode: model.ToolModeCodeModeOnly},
+		{name: "fallback-disabled", toolMode: model.ToolModeCodeMode, disableFallback: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			agent := &singleTurnAgent{response: &model.AgentResponse{Message: "done"}}
+			registry := tool.NewRegistry()
+			provider := codemode.NewDisabledProvider()
+			execTool, waitTool := tool.NewCodeModeExecutorsWithProvider(registry, provider, testCase.disableFallback)
+			if err := registry.Register(execTool); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Register(waitTool); err != nil {
+				t.Fatal(err)
+			}
+			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+			warning := ""
+			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
+				Prompt: "run", ToolMode: testCase.toolMode, DisableCodeModeFallback: testCase.disableFallback,
+				OnWarning: func(message string) { warning = message },
+			}); err != nil {
+				t.Fatal(err)
+			}
+			visible := runtimeRequestToolNames(agent.requests[0].Tools)
+			if !visible[tool.CodeModeExecToolName] || !visible[codemode.WaitToolName] {
+				t.Fatalf("visible tools = %#v", visible)
+			}
+			if !strings.Contains(warning, "Code mode will fail closed") {
+				t.Fatalf("warning = %q", warning)
+			}
+		})
 	}
 }
 

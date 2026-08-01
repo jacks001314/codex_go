@@ -261,15 +261,6 @@ Use the ` + "`request_user_input`" + ` tool only when it is listed in the availa
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.`
 
-func collaborationModeInstructionsInputItem(params *turn.TurnStartParams) any {
-	instructions := collaborationModeDeveloperInstructions(params)
-	if strings.TrimSpace(instructions) == "" {
-		return nil
-	}
-	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<collaboration_mode>", "</collaboration_mode>", instructions))
-	return renderedFragmentInputItem(rendered)
-}
-
 func collaborationModeDeveloperInstructions(params *turn.TurnStartParams) string {
 	if params == nil || params.CollaborationMode == nil {
 		return ""
@@ -285,6 +276,55 @@ func collaborationModeDeveloperInstructions(params *turn.TurnStartParams) string
 		return collaborationModeDefaultInstructions
 	}
 	return ""
+}
+
+type collaborationModeWorldStateSnapshot struct {
+	Mode  string `json:"mode"`
+	Model string `json:"model"`
+}
+
+func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo) (string, bool) {
+	if params == nil || params.CollaborationMode == nil {
+		return "", false
+	}
+	mode := strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])))
+	if info != nil && info.ModelMessages != nil && info.ModelMessages.CollaborationModes != nil {
+		var catalogValue *string
+		switch mode {
+		case string(ModeKindDefault):
+			catalogValue = info.ModelMessages.CollaborationModes.Default
+		case string(ModeKindPlan):
+			catalogValue = info.ModelMessages.CollaborationModes.Plan
+		}
+		if catalogValue != nil {
+			return *catalogValue, true
+		}
+	}
+	if legacy := collaborationModeDeveloperInstructions(params); legacy != "" {
+		return legacy, true
+	}
+	return "", false
+}
+
+func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelInfo) (collaborationModeWorldStateSnapshot, bool) {
+	if params == nil || params.CollaborationMode == nil {
+		return collaborationModeWorldStateSnapshot{}, false
+	}
+	mode := strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])))
+	if mode == "" {
+		return collaborationModeWorldStateSnapshot{}, false
+	}
+	modelID := ""
+	if info != nil {
+		modelID = strings.TrimSpace(info.Slug)
+	}
+	if modelID == "" {
+		modelID = strings.TrimSpace(params.Model)
+	}
+	if modelID == "" {
+		modelID = strings.TrimSpace(stringFromAny(collaborationModeSettings(params.CollaborationMode)["model"]))
+	}
+	return collaborationModeWorldStateSnapshot{Mode: mode, Model: modelID}, true
 }
 
 func (s *responsesStreamNotificationState) planParserFor(itemID string) *proposedPlanStreamParser {
@@ -448,7 +488,8 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		state.rememberOutputItem(event)
 		if event.Item != nil && (event.Item.Type == "message" || event.Item.Type == "agent_message") {
 			itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID))
-			r.notifyRealtime(r.requireRealtime().FinishCodexOutput(threadID, itemID))
+			phase := state.agentItemPhases[itemID]
+			r.notifyRealtime(r.requireRealtime().CompleteCodexOutput(threadID, itemID, phase, event.Item.Text))
 			delete(state.agentItemPhases, itemID)
 		}
 		if len(event.RawItem) == 0 {
@@ -1000,9 +1041,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	appTurn := appTurnFromTurnRecord(record, nil, TurnStatusInProgress, nil, nil)
 	appTurn.Items = []ThreadItem{}
 	appTurn.ItemsView = TurnItemsNotLoaded
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
-	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
-	_ = r.appendRuntimeTurnStarted(threadID, turnID, startedAt)
+	r.beginStateThreadGoalTurn(threadID, turnID, startedAtMS, turnStartPlanMode(params), connectionID)
 	promptPersisted := false
 
 	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
@@ -1014,6 +1053,14 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 		return
 	}
+	preparedToolMode, warning := runtime.PrepareToolMode(runConfig.ToolMode, runConfig.DisableCodeModeFallback)
+	runConfig.ToolMode = preparedToolMode
+	if warning != "" {
+		r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: warning})
+	}
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
+	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
+	_ = r.appendRuntimeTurnStarted(threadID, turnID, startedAt)
 	// Rust records a full context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained
 	// and the sampling request sees the compacted history.
@@ -1059,6 +1106,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
 		ToolMode:                     runConfig.ToolMode,
+		DisableCodeModeFallback:      runConfig.DisableCodeModeFallback,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskRegular,
 		ThreadID:                     threadID,
@@ -1083,7 +1131,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 		OnToolCompleted:              r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 		EmitCodeModeNestedLifecycle:  true,
-		SamplingFollowUp:             r.autoCompactFallbackFollowUp(threadID, runConfig),
+		OnWarning: func(message string) {
+			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
+		},
+		SamplingFollowUp:                r.autoCompactFallbackFollowUp(threadID, runConfig),
+		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -1189,6 +1241,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	completedAt := time.Now().UTC()
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
+	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
@@ -1283,6 +1336,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		startedAt = time.Now().UTC()
 	}
 	startedAtMS := startedAt.UnixMilli()
+	r.beginStateThreadGoalTurn(threadID, turnID, startedAtMS, turnStartPlanMode(params), connectionID)
 	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
 	if err != nil {
 		r.clearActiveRuntimeTurn(threadID, turnID)
@@ -1298,6 +1352,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
 		ToolMode:                     runConfig.ToolMode,
+		DisableCodeModeFallback:      runConfig.DisableCodeModeFallback,
 		ProviderID:                   runConfig.ProviderID,
 		TaskKind:                     model.AgentTaskReview,
 		ThreadID:                     threadID,
@@ -1322,6 +1377,10 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 		OnToolCompleted:              r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
 		EmitCodeModeNestedLifecycle:  true,
+		OnWarning: func(message string) {
+			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
+		},
+		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
@@ -1381,6 +1440,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
+	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
@@ -1930,6 +1990,10 @@ func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionS
 	if command == "" {
 		command = strings.Join(event.Command, " ")
 	}
+	commandArgs := append([]string(nil), event.Command...)
+	if len(commandArgs) == 0 {
+		commandArgs = shell.SplitCommandLine(command)
+	}
 	data := map[string]any{
 		"command":        command,
 		"cwd":            event.CWD,
@@ -1937,7 +2001,7 @@ func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionS
 		"process_id":     event.ProcessID,
 		"source":         string(CommandExecutionSourceUnifiedExecStartup),
 		"status":         string(status),
-		"commandActions": []map[string]any{{"type": "unknown", "command": command}},
+		"commandActions": commandExecutionActions(commandArgs, command, event.CWD),
 	}
 	if !event.StartedAt.IsZero() {
 		data["startedAtMs"] = event.StartedAt.UTC().UnixMilli()
@@ -1986,8 +2050,11 @@ func commandExecutionStartedThreadItem(invocation *tool.Invocation, turnID strin
 	}
 	itemCWD := firstNonEmpty(args.CWD, args.Workdir, cwd)
 	if itemCWD != "" {
-		if abs, err := filepath.Abs(itemCWD); err == nil {
-			itemCWD = abs
+		legacy := utils.NewLegacyAppPathString(itemCWD)
+		if _, absolute := legacy.InferAbsolutePathConvention(); !absolute {
+			if abs, err := filepath.Abs(itemCWD); err == nil {
+				itemCWD = abs
+			}
 		}
 	}
 	callID := firstNonEmpty(invocation.CallID, "command-"+safeIdentifier(turnID))
@@ -2001,9 +2068,30 @@ func commandExecutionStartedThreadItem(invocation *tool.Invocation, turnID strin
 			"cwd":            itemCWD,
 			"source":         string(CommandExecutionSourceAgent),
 			"status":         string(CommandExecutionInProgress),
-			"commandActions": []map[string]any{{"type": "unknown", "command": command}},
+			"commandActions": commandExecutionActions(shell.SplitCommandLine(command), command, itemCWD),
 		},
 	}, true
+}
+
+func commandExecutionActions(commandArgs []string, command string, cwd string) []map[string]any {
+	paths := shell.ReadPaths(commandArgs)
+	if len(paths) == 0 {
+		return []map[string]any{{"type": "unknown", "command": command}}
+	}
+	actions := make([]map[string]any, 0, len(paths))
+	for _, path := range paths {
+		resolved, err := utils.ResolveExecutorPath(cwd, path)
+		if err != nil {
+			continue
+		}
+		actions = append(actions, map[string]any{
+			"type":    "read",
+			"command": command,
+			"name":    utils.CrossPlatformBase(path),
+			"path":    resolved.Value,
+		})
+	}
+	return actions
 }
 
 func fileChangeStartedThreadItem(invocation *tool.Invocation, turnID string, cwd string, startedAt time.Time) (ThreadItem, bool) {
@@ -2397,7 +2485,11 @@ func (r *RuntimeRouter) openRuntimeRollout(threadID string) (*rollout.Recorder, 
 		if recorder, replaced, replaceErr := r.replaceRuntimeSeedRollout(record, path); replaceErr != nil || replaced {
 			return recorder, replaceErr
 		}
-		return rollout.Resume(path)
+		recorder, resumeErr := rollout.Resume(path)
+		if resumeErr == nil {
+			r.services.ThreadRouter.configureThreadHistoryRecorder(recorder, session.ThreadID(threadID))
+		}
+		return recorder, resumeErr
 	}
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, nil
@@ -2417,7 +2509,11 @@ func (r *RuntimeRouter) openRuntimeRollout(threadID string) (*rollout.Recorder, 
 	if err != nil {
 		return nil, nil
 	}
-	return rollout.Resume(path)
+	recorder, resumeErr := rollout.Resume(path)
+	if resumeErr == nil {
+		r.services.ThreadRouter.configureThreadHistoryRecorder(recorder, session.ThreadID(threadID))
+	}
+	return recorder, resumeErr
 }
 
 func (r *RuntimeRouter) replaceRuntimeSeedRollout(record *session.Record, path string) (*rollout.Recorder, bool, error) {
@@ -2567,6 +2663,11 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		analytics.CodexErrorHTTPStatusCode = errorFields.HTTPStatusCode
 	}
 	_ = r.appendRuntimeTurnError(threadID, err.Error(), now)
+	tokenDelta := int64(0)
+	if analytics != nil && analytics.Result != nil {
+		tokenDelta = model.AgentUsageTotalTokens(analytics.Result.Usage)
+	}
+	r.finishStateThreadGoalTurn(threadID, turnID, now, tokenDelta, errorFields.TurnError)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusFailed)
@@ -2597,6 +2698,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
 	r.persistInterruptedTurnMarker(threadID, turnID, now)
+	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
@@ -2623,6 +2725,7 @@ func (r *RuntimeRouter) finishReviewRuntimeInterrupted(threadID string, turnID s
 	}
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
+	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
@@ -2649,6 +2752,7 @@ func (r *RuntimeRouter) finishReviewRuntimeFallbackCompleted(threadID string, tu
 	}
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
+	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
@@ -3911,6 +4015,12 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, err
 	}
+	environmentContext, err := r.compactEnvironmentContext(ctx, record, request)
+	if err != nil {
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		return nil, err
+	}
+	initialContext = append(initialContext, environmentContext...)
 	compactionItem := session.Item{
 		ID:        string(newThreadID()),
 		Type:      "contextCompaction",
@@ -4007,6 +4117,35 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		CompletedAt: compacted.CompletedAt.Format(time.RFC3339Nano),
 		TokenUsage:  compactUsageNotificationValue(compacted.Usage),
 	}, nil
+}
+
+func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *session.Record, request *compact.Request) ([]compact.Item, error) {
+	if r == nil || request == nil {
+		return nil, nil
+	}
+	params := &turn.TurnStartParams{ThreadID: request.ThreadID}
+	if record != nil {
+		params.CWD = record.Metadata.CWD
+	}
+	if active := r.activeRuntimeTurnStateSnapshot(request.ThreadID, request.TurnID); active != nil && active.Params != nil {
+		clone := *active.Params
+		params = &clone
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.IncludeEnvironmentContext() {
+		return nil, nil
+	}
+	current, err := r.environmentCurrentTime(ctx, request.ThreadID, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read current time: %w", err)
+	}
+	text := r.turnEnvironmentContextTextAt(r.environmentContextParams(request.ThreadID, params), current.In(time.Local), localTimezoneName())
+	return []compact.Item{{
+		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: current.UTC(),
+	}}, nil
 }
 
 func (r *RuntimeRouter) notifyContextCompactionItemStarted(threadID string, turnID string, item session.Item) {
@@ -4738,46 +4877,49 @@ func providerFromTurnStart(params *turn.TurnStartParams) string {
 }
 
 type appTurnRunConfig struct {
-	Model                        string
-	ToolMode                     string
-	ProviderID                   string
-	Instructions                 string
-	Originator                   string
-	ClientMetadata               map[string]string
-	SessionID                    string
-	ThreadSource                 string
-	SubagentSource               string
-	ParentThreadID               string
-	ParentTurnID                 string
-	Ephemeral                    bool
-	WorkspaceKind                string
-	NumInputImages               int
-	IsFirstTurn                  bool
-	ApprovalPolicy               string
-	ApprovalsReviewer            string
-	SandboxPolicy                string
-	SandboxNetworkAccess         bool
-	CollaborationMode            string
-	Personality                  string
-	InputItems                   []any
-	HostedTools                  []any
-	SessionItems                 []session.Item
-	ExtraSessionItems            func() []session.Item
-	PostToolInputItems           turn.ToolPostExecutionInputItems
-	PreviousResponseID           string
-	ParallelToolCalls            bool
-	ReasoningEffort              string
-	ReasoningSummary             string
-	ConcurrentReasoningSummaries bool
-	ModelVerbosity               string
-	IncludeTimingMetrics         bool
-	BetaFeaturesHeader           string
-	ItemIDsEnabled               bool
-	PromptCacheKey               string
-	ServiceTier                  string
-	Store                        bool
-	AttestationProvider          codexapi.AttestationProvider
-	UnifiedExecEnabled           bool
+	Model                           string
+	AutoReviewModelOverride         string
+	ToolMode                        string
+	DisableCodeModeFallback         bool
+	ProviderID                      string
+	Instructions                    string
+	Originator                      string
+	ClientMetadata                  map[string]string
+	SessionID                       string
+	ThreadSource                    string
+	SubagentSource                  string
+	ParentThreadID                  string
+	ParentTurnID                    string
+	Ephemeral                       bool
+	WorkspaceKind                   string
+	NumInputImages                  int
+	IsFirstTurn                     bool
+	ApprovalPolicy                  string
+	ApprovalsReviewer               string
+	SandboxPolicy                   string
+	SandboxNetworkAccess            bool
+	CollaborationMode               string
+	Personality                     string
+	InputItems                      []any
+	HostedTools                     []any
+	SessionItems                    []session.Item
+	ExtraSessionItems               func() []session.Item
+	PostToolInputItems              turn.ToolPostExecutionInputItems
+	PreviousResponseID              string
+	ParallelToolCalls               bool
+	ReasoningEffort                 string
+	ReasoningSummary                string
+	ConcurrentReasoningSummaries    bool
+	ModelVerbosity                  string
+	IncludeTimingMetrics            bool
+	BetaFeaturesHeader              string
+	ItemIDsEnabled                  bool
+	PromptCacheKey                  string
+	ServiceTier                     string
+	Store                           bool
+	AttestationProvider             codexapi.AttestationProvider
+	UnifiedExecEnabled              bool
+	ExecutedToolCallMetadataEnabled bool
 }
 
 type responsesMetadataLineage struct {
@@ -4835,13 +4977,30 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	realtimeStateSessionItems := []session.Item{}
+	if item, err := r.realtimeWorldStateInputItem(threadID, cfg); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+		if persisted, ok := realtimeWorldStateSessionItemForTurn(turnID, item, time.UnixMilli(startedAtMS).UTC()); ok {
+			realtimeStateSessionItems = append(realtimeStateSessionItems, persisted)
+		}
+	}
 	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
-	if item := r.turnEnvironmentContextInputItem(params); item != nil {
+	if item, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, params, cfg); err != nil {
+		return nil, err
+	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
 	inputItems = append(inputItems, additionalInputItems...)
-	if item := collaborationModeInstructionsInputItem(params); item != nil {
+	collaborationModeSessionItems := []session.Item{}
+	if item, err := r.collaborationModeWorldStateInputItem(threadID, params, modelInfo); err != nil {
+		return nil, err
+	} else if item != nil {
 		inputItems = append(inputItems, item)
+		if persisted, ok := collaborationModeWorldStateSessionItemForTurn(turnID, item, time.UnixMilli(startedAtMS).UTC()); ok {
+			collaborationModeSessionItems = append(collaborationModeSessionItems, persisted)
+		}
 	}
 	if item, err := r.multiAgentModeInputItem(threadID, params); err != nil {
 		return nil, err
@@ -4869,6 +5028,8 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
+	sessionItems = append(sessionItems, realtimeStateSessionItems...)
+	sessionItems = append(sessionItems, collaborationModeSessionItems...)
 	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
 	var extraSessionItemsMu sync.Mutex
 	extraSessionItems := []session.Item{}
@@ -4915,49 +5076,64 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		unifiedExecEnabled = false
 	}
 	toolMode := ""
+	autoReviewModelOverride := ""
 	if modelInfo != nil {
 		toolMode = modelInfo.ToolMode
+		autoReviewModelOverride = strings.TrimSpace(modelInfo.AutoReviewModelOverride)
+	}
+	if toolMode == "" {
+		switch {
+		case features.Enabled(cfg.FeatureSettings(), "code_mode_only"):
+			toolMode = model.ToolModeCodeModeOnly
+		case features.Enabled(cfg.FeatureSettings(), "code_mode"):
+			toolMode = model.ToolModeCodeMode
+		default:
+			toolMode = model.ToolModeDirect
+		}
 	}
 	return &appTurnRunConfig{
-		Model:                        modelProviderConfig.Model,
-		ToolMode:                     toolMode,
-		ProviderID:                   modelProviderConfig.ProviderID,
-		Instructions:                 instructions,
-		Originator:                   strings.TrimSpace(params.Originator),
-		SessionID:                    firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
-		ThreadSource:                 lineage.ThreadSource,
-		SubagentSource:               lineage.SubagentKind,
-		ParentThreadID:               lineage.ParentThreadID,
-		ParentTurnID:                 strings.TrimSpace(params.ParentTurnID),
-		Ephemeral:                    threadSnapshot.Ephemeral,
-		WorkspaceKind:                strings.TrimSpace(extraMetadata["workspace_kind"]),
-		NumInputImages:               countTurnStartInputImages(params),
-		IsFirstTurn:                  threadSnapshot.IsFirstTurn,
-		ApprovalPolicy:               string(approvalPolicy),
-		ApprovalsReviewer:            turnApprovalsReviewerForTurn(cfg, params),
-		SandboxPolicy:                analyticsSandboxPolicy(permissionProfile, cwd),
-		SandboxNetworkAccess:         analyticsSandboxNetworkAccess(permissionProfile),
-		CollaborationMode:            analyticsCollaborationMode(params),
-		Personality:                  analyticsOptionalModeString(personality),
-		InputItems:                   inputItems,
-		HostedTools:                  hostedTools,
-		SessionItems:                 sessionItems,
-		ExtraSessionItems:            extraSessionItemsSnapshot,
-		PostToolInputItems:           postToolInputItems,
-		PreviousResponseID:           previousResponseID,
-		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:              appReasoningEffortForTurn(cfg, params),
-		ReasoningSummary:             stringPtrValue(params.Summary),
-		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
-		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
-		IncludeTimingMetrics:         appIncludeTimingMetrics(cfg),
-		BetaFeaturesHeader:           features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
-		ItemIDsEnabled:               cfg.FeatureSettings()["item_ids"],
-		PromptCacheKey:               threadID,
-		ServiceTier:                  serviceTier,
-		Store:                        modelProviderConfig.Store,
-		AttestationProvider:          r.appServerAttestationProvider(),
-		UnifiedExecEnabled:           unifiedExecEnabled,
+		Model:                           modelProviderConfig.Model,
+		AutoReviewModelOverride:         autoReviewModelOverride,
+		ToolMode:                        toolMode,
+		DisableCodeModeFallback:         cfg.DisableCodeModeInProcessFallback(),
+		ProviderID:                      modelProviderConfig.ProviderID,
+		Instructions:                    instructions,
+		Originator:                      strings.TrimSpace(params.Originator),
+		SessionID:                       firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
+		ThreadSource:                    lineage.ThreadSource,
+		SubagentSource:                  lineage.SubagentKind,
+		ParentThreadID:                  lineage.ParentThreadID,
+		ParentTurnID:                    strings.TrimSpace(params.ParentTurnID),
+		Ephemeral:                       threadSnapshot.Ephemeral,
+		WorkspaceKind:                   strings.TrimSpace(extraMetadata["workspace_kind"]),
+		NumInputImages:                  countTurnStartInputImages(params),
+		IsFirstTurn:                     threadSnapshot.IsFirstTurn,
+		ApprovalPolicy:                  string(approvalPolicy),
+		ApprovalsReviewer:               turnApprovalsReviewerForTurn(cfg, params),
+		SandboxPolicy:                   analyticsSandboxPolicy(permissionProfile, cwd),
+		SandboxNetworkAccess:            analyticsSandboxNetworkAccess(permissionProfile),
+		CollaborationMode:               analyticsCollaborationMode(params),
+		Personality:                     analyticsOptionalModeString(personality),
+		InputItems:                      inputItems,
+		HostedTools:                     hostedTools,
+		SessionItems:                    sessionItems,
+		ExtraSessionItems:               extraSessionItemsSnapshot,
+		PostToolInputItems:              postToolInputItems,
+		PreviousResponseID:              previousResponseID,
+		ParallelToolCalls:               r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
+		ReasoningEffort:                 appReasoningEffortForTurn(cfg, params),
+		ReasoningSummary:                stringPtrValue(params.Summary),
+		ConcurrentReasoningSummaries:    features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
+		ModelVerbosity:                  firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
+		IncludeTimingMetrics:            appIncludeTimingMetrics(cfg),
+		BetaFeaturesHeader:              features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
+		ItemIDsEnabled:                  cfg.FeatureSettings()["item_ids"],
+		PromptCacheKey:                  threadID,
+		ServiceTier:                     serviceTier,
+		Store:                           modelProviderConfig.Store,
+		AttestationProvider:             r.appServerAttestationProvider(),
+		UnifiedExecEnabled:              unifiedExecEnabled,
+		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:     installationID,
 			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
@@ -4982,20 +5158,69 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 // In particular, the shell reported here must be the same primary environment
 // shell that exec_command will use, otherwise models can emit syntax for the
 // host shell (for example a POSIX heredoc) and hand it to remote PowerShell.
+func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Context, threadID string, params *turn.TurnStartParams, cfg *config.Config) (any, error) {
+	if cfg != nil && !cfg.IncludeEnvironmentContext() {
+		return nil, nil
+	}
+	current, err := r.environmentCurrentTime(ctx, threadID, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read current time: %w", err)
+	}
+	params = r.environmentContextParams(threadID, params)
+	text := r.turnEnvironmentContextTextAt(params, current.In(time.Local), localTimezoneName())
+	return model.UserMessageInputItem(text), nil
+}
+
 func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartParams) any {
-	if params == nil || len(params.Environments) == 0 {
-		return nil
+	params = r.environmentContextParams("", params)
+	return model.UserMessageInputItem(r.turnEnvironmentContextTextAt(params, runtimeRouterClockTime(r).In(time.Local), localTimezoneName()))
+}
+
+func (r *RuntimeRouter) environmentCurrentTime(ctx context.Context, threadID string, cfg *config.Config) (time.Time, error) {
+	if cfg != nil {
+		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled && reminder.ClockSource == config.CurrentTimeSourceExternal {
+			return r.requestCurrentTime(ctx, threadID)
+		}
 	}
+	return runtimeRouterClockTime(r), nil
+}
+
+func runtimeRouterClockTime(r *RuntimeRouter) time.Time {
+	if r != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.now != nil {
+		if now := r.services.ThreadRouter.now(); !now.IsZero() {
+			return now
+		}
+	}
+	return time.Now()
+}
+
+func (r *RuntimeRouter) environmentContextParams(threadID string, params *turn.TurnStartParams) *turn.TurnStartParams {
+	if params == nil {
+		params = &turn.TurnStartParams{}
+	} else {
+		clone := *params
+		params = &clone
+	}
+	if strings.TrimSpace(params.CWD) == "" && strings.TrimSpace(threadID) != "" {
+		if record, err := r.threadRecord(session.ThreadID(threadID), true, true); err == nil && record != nil {
+			params.CWD = strings.TrimSpace(record.Metadata.CWD)
+		}
+	}
+	return params
+}
+
+func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParams, now time.Time, timezone string) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
-	if len(environments) == 0 {
-		return nil
-	}
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
 	b.WriteString("<environment_context>\n")
-	if len(environments) == 1 {
-		cwd := strings.TrimSpace(firstNonEmpty(environments[0].CWD, turnCWD(params), r.services.DefaultCWD))
-		shellName := unifiedEnvironmentShellName(environments[0], defaultShellName)
+	if len(environments) <= 1 {
+		var environment tool.UnifiedExecEnvironment
+		if len(environments) == 1 {
+			environment = environments[0]
+		}
+		cwd := strings.TrimSpace(firstNonEmpty(environment.CWD, turnCWD(params), r.services.DefaultCWD, "."))
+		shellName := unifiedEnvironmentShellName(environment, defaultShellName)
 		fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
 		fmt.Fprintf(&b, "  <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
 	} else {
@@ -5012,8 +5237,10 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartPa
 		}
 		b.WriteString("  </environments>\n")
 	}
+	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(now.Format("2006-01-02")))
+	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	b.WriteString("</environment_context>")
-	return model.UserMessageInputItem(b.String())
+	return b.String()
 }
 
 func (r *RuntimeRouter) defaultEnvironmentShellName() string {
@@ -5871,7 +6098,7 @@ func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threa
 	if reminder == nil || !reminder.Enabled {
 		return nil, nil, nil
 	}
-	now := time.Now().UTC()
+	now := runtimeRouterClockTime(r).UTC()
 	location := "UTC"
 	if reminder.ClockSource == config.CurrentTimeSourceExternal {
 		current, err := r.requestCurrentTime(ctx, threadID)
@@ -6142,7 +6369,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	}
 	skillEntries = append(skillEntries, selectedCapabilitySkillEntries...)
 	r.notifySkillWarnings(threadID, selectedCapabilitySkillWarnings)
-	hostSkillMetadata := promptSkillMetadataFromEntries(hostSkillEntries)
+	hostSkillMetadata := promptHostSkillMetadataFromEntries(hostSkillEntries)
 	selectedCapabilitySkillMetadata := promptSkillMetadataFromEntries(selectedCapabilitySkillEntries)
 	skillMetadata := append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...)
 	orchestratorMetadata := []promptctx.InstructionsSkillMetadata(nil)
@@ -6491,6 +6718,14 @@ func prefixPluginSkillNames(entry *SkillsListEntry, pluginDisplayName string) {
 }
 
 func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.InstructionsSkillMetadata {
+	return promptSkillMetadataFromEntriesWithPolicy(entries, true)
+}
+
+func promptHostSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.InstructionsSkillMetadata {
+	return promptSkillMetadataFromEntriesWithPolicy(entries, false)
+}
+
+func promptSkillMetadataFromEntriesWithPolicy(entries []SkillsListEntry, preferShortDescription bool) []promptctx.InstructionsSkillMetadata {
 	out := make([]promptctx.InstructionsSkillMetadata, 0, len(entries))
 	var walk func([]SkillsListEntry)
 	walk = func(values []SkillsListEntry) {
@@ -6502,7 +6737,10 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 			if !entry.Enabled || strings.TrimSpace(entry.Name) == "" {
 				continue
 			}
-			description := firstNonEmpty(entry.ShortDescription, entry.Description)
+			description := entry.Description
+			if preferShortDescription {
+				description = firstNonEmpty(entry.ShortDescription, entry.Description)
+			}
 			var allowImplicit *bool
 			if entry.Policy != nil && entry.Policy.AllowImplicitInvocation != nil {
 				value := *entry.Policy.AllowImplicitInvocation
@@ -6519,6 +6757,8 @@ func promptSkillMetadataFromEntries(entries []SkillsListEntry) []promptctx.Instr
 				LocatorPath:             displayPath,
 				LocatorKind:             promptSkillLocatorKind(entry),
 				Root:                    entry.Root,
+				RootOrder:               entry.RootOrder,
+				HasRootOrder:            entry.HasRootOrder,
 				Description:             description,
 				ShortDescription:        entry.ShortDescription,
 				RoutingMetadata:         promptSkillRoutingMetadata(entry.Interface),
@@ -7216,6 +7456,7 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 	for _, skill := range selected {
 		item, truncated, err := r.skillInstructionsInputItemWithProvider(threadID, skill, executorProviders)
 		if err != nil {
+			r.emitExplicitSkillInjectionMetric(skill.Name, "error")
 			if r != nil {
 				r.notify(NotificationWarning, &WarningNotification{
 					ThreadID: stringPtrIfNotEmpty(threadID),
@@ -7224,6 +7465,7 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 			}
 			continue
 		}
+		r.emitExplicitSkillInjectionMetric(skill.Name, "success")
 		if item != nil {
 			items = append(items, item)
 			if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "file") || strings.TrimSpace(skill.LocatorKind) == "" {
@@ -7242,6 +7484,44 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 		}
 	}
 	return items
+}
+
+func (r *RuntimeRouter) emitExplicitSkillInjectionMetric(skillName string, status string) {
+	if r == nil || r.services.SkillInjectionMetrics == nil {
+		return
+	}
+	r.services.SkillInjectionMetrics.Counter("codex.skill.injected", 1, map[string]string{
+		"status":      status,
+		"skill":       sanitizeMetricTagValue(skillName),
+		"invoke_type": telemetry.SkillInvocationTypeExplicit,
+	})
+}
+
+func sanitizeMetricTagValue(value string) string {
+	const maxLength = 256
+	var builder strings.Builder
+	for _, ch := range value {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || strings.ContainsRune("._-/", ch) {
+			builder.WriteRune(ch)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	trimmed := strings.Trim(builder.String(), "_")
+	hasASCIIAlphanumeric := false
+	for _, ch := range trimmed {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			hasASCIIAlphanumeric = true
+			break
+		}
+	}
+	if trimmed == "" || !hasASCIIAlphanumeric {
+		return "unspecified"
+	}
+	if len(trimmed) > maxLength {
+		return trimmed[:maxLength]
+	}
+	return trimmed
 }
 
 func (r *RuntimeRouter) skillInstructionsInputItem(threadID string, skill promptctx.InstructionsSkillMetadata) (any, bool, error) {
@@ -8207,6 +8487,277 @@ const proactiveMultiAgentModeText = "Proactive multi-agent delegation is active.
 type personalityWorldStateSnapshot struct {
 	Model       string  `json:"model"`
 	Personality *string `json:"personality,omitempty"`
+}
+
+type realtimeWorldStateSnapshot struct {
+	Active bool `json:"active"`
+}
+
+const collaborationModeInstructionsKind = "collaboration_mode"
+
+func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, params *turn.TurnStartParams, info *model.ModelInfo) (any, error) {
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	current, currentValid := collaborationModeSnapshot(params, info)
+	instructions, hasInstructions := collaborationModeInstructions(params, info)
+
+	previousKind := "absent"
+	previous := collaborationModeWorldStateSnapshot{}
+	if len(state.CollaborationMode) > 0 {
+		if err := json.Unmarshal(state.CollaborationMode, &previous); err == nil && strings.TrimSpace(previous.Mode) != "" {
+			previous.Mode = strings.ToLower(strings.TrimSpace(previous.Mode))
+			previous.Model = strings.TrimSpace(previous.Model)
+			previousKind = "current"
+		} else {
+			var legacy string
+			if err := json.Unmarshal(state.CollaborationMode, &legacy); err == nil && strings.TrimSpace(legacy) != "" {
+				previousKind = "legacy"
+			} else {
+				previousKind = "unknown"
+			}
+		}
+	}
+
+	emit := false
+	switch previousKind {
+	case "absent":
+		emit = currentValid && hasInstructions
+	case "legacy":
+		emit = currentValid
+	case "current":
+		if !currentValid || previous != current {
+			emit = true
+		} else if hasInstructions && !recordHasRetainedCollaborationMode(record) && firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID) != "" {
+			emit = true
+		}
+	case "unknown":
+		// Unknown retained state is left visible for this turn, matching Rust.
+	}
+
+	var snapshot json.RawMessage
+	if currentValid && hasInstructions {
+		snapshot, err = json.Marshal(current)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !sameJSONValue(state.CollaborationMode, snapshot) {
+		state.CollaborationMode = snapshot
+		record.Metadata.WorldState, err = session.EncodeWorldState(state)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.runtimeSaveThreadRecord(record); err != nil {
+			return nil, err
+		}
+	}
+	if !emit {
+		return nil, nil
+	}
+	if !hasInstructions {
+		instructions = ""
+	}
+	rendered := contextfrag.RenderStandalone(contextfrag.NewSimpleFragment(
+		contextfrag.RoleDeveloper,
+		"<collaboration_mode>",
+		"</collaboration_mode>",
+		instructions,
+	))
+	return renderedFragmentInputItem(rendered), nil
+}
+
+func recordHasRetainedCollaborationMode(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(record.Metadata.CWD)})
+	for _, input := range items {
+		raw, ok := input.(map[string]any)
+		if !ok || strings.TrimSpace(stringFromAny(raw["role"])) != contextfrag.RoleDeveloper {
+			continue
+		}
+		text := textFromInputItemContent(raw["content"])
+		if strings.Contains(text, "<collaboration_mode>") && strings.Contains(text, "</collaboration_mode>") {
+			return true
+		}
+	}
+	return false
+}
+
+func collaborationModeWorldStateSessionItemForTurn(turnID string, input any, createdAt time.Time) (session.Item, bool) {
+	raw, ok := input.(map[string]any)
+	if !ok || strings.TrimSpace(stringFromAny(raw["type"])) != "message" {
+		return session.Item{}, false
+	}
+	role := strings.TrimSpace(stringFromAny(raw["role"]))
+	text := strings.TrimSpace(textFromInputItemContent(raw["content"]))
+	if role != contextfrag.RoleDeveloper || !strings.Contains(text, "<collaboration_mode>") || !strings.Contains(text, "</collaboration_mode>") {
+		return session.Item{}, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return session.Item{}, false
+	}
+	metadata := appTurnMetadata(turnID, map[string]any{
+		"kind":             collaborationModeInstructionsKind,
+		"hiddenFromThread": true,
+	})
+	return session.Item{
+		ID:        "collaboration-mode-" + safeIdentifier(turnID),
+		Type:      "message",
+		Role:      role,
+		Text:      text,
+		Content:   []session.ContentPart{{Type: "input_text", Text: text}},
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"kind":             collaborationModeInstructionsKind,
+			"hiddenFromThread": true,
+		},
+		Metadata: metadata,
+		Raw:      encoded,
+	}, true
+}
+
+const defaultRealtimeStartInstructions = `Realtime conversation started.
+
+You are operating as a backend executor behind an intermediary. The user does not talk to you directly. Any response you produce will be consumed by the intermediary and may be summarized before the user sees it.
+
+When invoked, you receive the latest conversation transcript and any relevant mode or metadata. The intermediary may invoke you even when backend help is not actually needed. Use the transcript to decide whether you should do work. If backend help is unnecessary, avoid verbose responses that add user-visible latency.
+
+When user text is routed from realtime, treat it as a transcript. It may be unpunctuated or contain recognition errors.
+
+- Keep responses concise and action-oriented. Your updates should help the intermediary respond to the user.`
+
+const defaultRealtimeEndInstructions = `Realtime conversation ended.
+
+Subsequent user input will return to typed text rather than transcript-style text. Do not assume recognition errors or missing punctuation once realtime has ended. Resume normal chat behavior.`
+
+const realtimeWorldStateInstructionsKind = "realtime_world_state"
+
+func realtimeWorldStateSessionItemForTurn(turnID string, input any, createdAt time.Time) (session.Item, bool) {
+	raw, ok := input.(map[string]any)
+	if !ok || strings.TrimSpace(stringFromAny(raw["type"])) != "message" {
+		return session.Item{}, false
+	}
+	role := strings.TrimSpace(stringFromAny(raw["role"]))
+	text := strings.TrimSpace(textFromInputItemContent(raw["content"]))
+	if role != contextfrag.RoleDeveloper || !strings.Contains(text, "<realtime_conversation>") || !strings.Contains(text, "</realtime_conversation>") {
+		return session.Item{}, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return session.Item{}, false
+	}
+	metadata := appTurnMetadata(turnID, map[string]any{
+		"kind":             realtimeWorldStateInstructionsKind,
+		"hiddenFromThread": true,
+	})
+	return session.Item{
+		ID:        "realtime-world-state-" + safeIdentifier(turnID),
+		Type:      "message",
+		Role:      role,
+		Text:      text,
+		Content:   []session.ContentPart{{Type: "input_text", Text: text}},
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"kind":             realtimeWorldStateInstructionsKind,
+			"hiddenFromThread": true,
+		},
+		Metadata: metadata,
+		Raw:      encoded,
+	}, true
+}
+
+func recordHasRetainedRealtimeStart(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(record.Metadata.CWD)})
+	for _, input := range items {
+		raw, ok := input.(map[string]any)
+		if !ok || strings.TrimSpace(stringFromAny(raw["role"])) != contextfrag.RoleDeveloper {
+			continue
+		}
+		if isRetainedRealtimeStartText(textFromInputItemContent(raw["content"])) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRetainedRealtimeStartText(text string) bool {
+	return strings.Contains(text, "<realtime_conversation>") &&
+		strings.Contains(text, "</realtime_conversation>") &&
+		!strings.Contains(text, strings.TrimSpace(defaultRealtimeEndInstructions))
+}
+
+func (r *RuntimeRouter) realtimeWorldStateInputItem(threadID string, cfg *config.Config) (any, error) {
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	current := realtimeWorldStateSnapshot{}
+	if realtimeState, ok := r.requireRealtime().State(threadID); ok && realtimeState != nil && realtimeState.ClosedAt == nil {
+		current.Active = true
+	}
+	previous := realtimeWorldStateSnapshot{}
+	previousKnown := len(state.RealtimeConversation) > 0
+	if previousKnown {
+		if err := json.Unmarshal(state.RealtimeConversation, &previous); err != nil {
+			previousKnown = false
+		}
+	}
+	if previousKnown && !recordHasRetainedRealtimeStart(record) {
+		previousKnown = false
+	}
+
+	var rendered *contextfrag.RenderedFragment
+	switch {
+	case current.Active && (!previousKnown || !previous.Active):
+		instructions := defaultRealtimeStartInstructions
+		if configured, ok := configStringValue(cfg, "experimental_realtime_start_instructions"); ok {
+			instructions = configured
+		}
+		rendered = contextfrag.RenderStandalone(contextfrag.NewSimpleFragment(
+			contextfrag.RoleDeveloper,
+			"<realtime_conversation>",
+			"</realtime_conversation>",
+			"\n"+instructions+"\n",
+		))
+	case previousKnown && previous.Active && !current.Active:
+		rendered = contextfrag.RenderStandalone(contextfrag.NewSimpleFragment(
+			contextfrag.RoleDeveloper,
+			"<realtime_conversation>",
+			"</realtime_conversation>",
+			"\n"+defaultRealtimeEndInstructions+"\n\nReason: inactive\n",
+		))
+	}
+
+	snapshot, err := json.Marshal(current)
+	if err != nil {
+		return nil, err
+	}
+	if !sameJSONValue(state.RealtimeConversation, snapshot) {
+		state.RealtimeConversation = snapshot
+		record.Metadata.WorldState, err = session.EncodeWorldState(state)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.runtimeSaveThreadRecord(record); err != nil {
+			return nil, err
+		}
+	}
+	return renderedFragmentInputItem(rendered), nil
 }
 
 func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, info *model.ModelInfo, personality string, baseInstructions string, personalityEnabled bool) ([]any, error) {

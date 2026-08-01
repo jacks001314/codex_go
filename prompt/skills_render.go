@@ -96,12 +96,14 @@ type SkillRenderReport struct {
 }
 
 type skillRenderLine struct {
-	name        string
-	description string
-	path        string
-	locatorKind string
-	root        string
-	scope       string
+	name         string
+	description  string
+	path         string
+	locatorKind  string
+	root         string
+	scope        string
+	rootOrder    int
+	hasRootOrder bool
 }
 
 type skillAliasPlan struct {
@@ -264,12 +266,14 @@ func orderedSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLi
 			locatorKind = "file"
 		}
 		lines = append(lines, skillRenderLine{
-			name:        skill.Name,
-			description: truncateSkillDescription(skill.Description),
-			path:        strings.ReplaceAll(path, "\\", "/"),
-			locatorKind: locatorKind,
-			root:        cleanSkillAliasRoot(skill.Root),
-			scope:       skill.Scope,
+			name:         skill.Name,
+			description:  truncateSkillDescription(skill.Description),
+			path:         strings.ReplaceAll(path, "\\", "/"),
+			locatorKind:  locatorKind,
+			root:         cleanSkillAliasRoot(skill.Root),
+			scope:        skill.Scope,
+			rootOrder:    skill.RootOrder,
+			hasRootOrder: skill.HasRootOrder,
 		})
 	}
 	sort.SliceStable(lines, func(i int, j int) bool {
@@ -479,8 +483,18 @@ func normalizedSkillMetadataBudget(budget SkillMetadataBudget) SkillMetadataBudg
 }
 
 func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*skillAliasPlan, bool) {
+	aliasLines := append([]skillRenderLine(nil), lines...)
+	sort.SliceStable(aliasLines, func(i int, j int) bool {
+		if aliasLines[i].hasRootOrder != aliasLines[j].hasRootOrder {
+			return aliasLines[i].hasRootOrder
+		}
+		if aliasLines[i].hasRootOrder && aliasLines[i].rootOrder != aliasLines[j].rootOrder {
+			return aliasLines[i].rootOrder < aliasLines[j].rootOrder
+		}
+		return false
+	})
 	usedRoots := make([]string, 0, len(lines))
-	for _, line := range lines {
+	for _, line := range aliasLines {
 		root := cleanSkillAliasRoot(line.root)
 		if root == "" || !skillPathHasRoot(line.path, root) {
 			continue

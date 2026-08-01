@@ -302,6 +302,8 @@ type InstructionsSkillMetadata struct {
 	LocatorPath             string
 	LocatorKind             string
 	Root                    string
+	RootOrder               int
+	HasRootOrder            bool
 	Description             string
 	ShortDescription        string
 	RoutingMetadata         string

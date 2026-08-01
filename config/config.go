@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	featureflags "codex_go/features"
 	"errors"
 	"fmt"
@@ -46,6 +47,17 @@ type CurrentTimeReminderConfig struct {
 	ClockSource             CurrentTimeSource
 	DeliveryMode            CurrentTimeReminderDeliveryMode
 	SleepTool               bool
+}
+
+func (c *Config) IncludeEnvironmentContext() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	value, ok := c.Values["include_environment_context"].(bool)
+	if !ok {
+		return true
+	}
+	return value
 }
 
 type ResumeCWDMode string
@@ -229,57 +241,63 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 }
 
 var knownTopLevelConfigFields = map[string]struct{}{
-	"analytics":                            {},
-	"agents":                               {},
-	"apps":                                 {},
-	"apps_mcp_product_sku":                 {},
-	"approval_policy":                      {},
-	"approvals_reviewer":                   {},
-	"chatgpt_base_url":                     {},
-	"cli_auth_credentials_store":           {},
-	"compact_prompt":                       {},
-	"desktop":                              {},
-	"developer_instructions":               {},
-	"experimental_realtime_ws_base_url":    {},
-	"experimental_use_unified_exec_tool":   {},
-	"features":                             {},
-	"forced_chatgpt_workspace_id":          {},
-	"forced_login_method":                  {},
-	"hooks":                                {},
-	"instructions":                         {},
-	"mcp_servers":                          {},
-	"model":                                {},
-	"model_auto_compact_token_limit":       {},
-	"model_auto_compact_token_limit_scope": {},
-	"model_context_window":                 {},
-	"model_instructions_file":              {},
-	"model_provider":                       {},
-	"model_providers":                      {},
-	"model_reasoning_effort":               {},
-	"model_reasoning_summary":              {},
-	"model_verbosity":                      {},
-	"notices":                              {},
-	"notify":                               {},
-	"openai_base_url":                      {},
-	"otel":                                 {},
-	"personality":                          {},
-	"profile":                              {},
-	"profiles":                             {},
-	"responsesapi_client_metadata":         {},
-	"review_model":                         {},
-	"resume_cwd":                           {},
-	"requirements":                         {},
-	"sandbox_mode":                         {},
-	"sandbox_workspace_write":              {},
-	"service_tier":                         {},
-	"shell_environment_policy":             {},
-	"tools":                                {},
-	"trusted_projects":                     {},
-	"tui":                                  {},
-	"tool_output_token_limit":              {},
-	"web_search":                           {},
-	"windows":                              {},
-	"windows_sandbox":                      {},
+	"analytics":                         {},
+	"agents":                            {},
+	"apps":                              {},
+	"apps_mcp_product_sku":              {},
+	"approval_policy":                   {},
+	"approvals_reviewer":                {},
+	"chatgpt_base_url":                  {},
+	"cli_auth_credentials_store":        {},
+	"compact_prompt":                    {},
+	"desktop":                           {},
+	"developer_instructions":            {},
+	"experimental_realtime_ws_base_url": {},
+	"experimental_realtime_webrtc_call_base_url": {},
+	"experimental_realtime_ws_model":             {},
+	"experimental_realtime_ws_backend_prompt":    {},
+	"experimental_realtime_ws_startup_context":   {},
+	"experimental_realtime_start_instructions":   {},
+	"experimental_use_unified_exec_tool":         {},
+	"features":                                   {},
+	"forced_chatgpt_workspace_id":                {},
+	"forced_login_method":                        {},
+	"hooks":                                      {},
+	"instructions":                               {},
+	"mcp_servers":                                {},
+	"model":                                      {},
+	"model_auto_compact_token_limit":             {},
+	"model_auto_compact_token_limit_scope":       {},
+	"model_context_window":                       {},
+	"model_instructions_file":                    {},
+	"model_provider":                             {},
+	"model_providers":                            {},
+	"model_reasoning_effort":                     {},
+	"model_reasoning_summary":                    {},
+	"model_verbosity":                            {},
+	"notices":                                    {},
+	"notify":                                     {},
+	"openai_base_url":                            {},
+	"otel":                                       {},
+	"personality":                                {},
+	"realtime":                                   {},
+	"profile":                                    {},
+	"profiles":                                   {},
+	"responsesapi_client_metadata":               {},
+	"review_model":                               {},
+	"resume_cwd":                                 {},
+	"requirements":                               {},
+	"sandbox_mode":                               {},
+	"sandbox_workspace_write":                    {},
+	"service_tier":                               {},
+	"shell_environment_policy":                   {},
+	"tools":                                      {},
+	"trusted_projects":                           {},
+	"tui":                                        {},
+	"tool_output_token_limit":                    {},
+	"web_search":                                 {},
+	"windows":                                    {},
+	"windows_sandbox":                            {},
 }
 
 func validateKnownTopLevelConfigFields(values map[string]any) error {
@@ -396,7 +414,7 @@ func validateKnownMCPServerFields(value any) error {
 	return nil
 }
 
-var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth_client_id": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true}
+var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth_client_id": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true, "auth": true}
 
 var knownStrictFeatureFields = map[string]bool{
 	"mcp_2026_07_28": true,
@@ -884,7 +902,7 @@ func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
 		return nil, false, err
 	}
 	var values map[string]any
-	if err := toml.Unmarshal(data, &values); err != nil {
+	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
 		return nil, false, err
 	}
 	if values == nil {
@@ -892,6 +910,10 @@ func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
 	}
 	resolveConfigFileRelativeValues(values, filepath.Dir(path))
 	return values, true, nil
+}
+
+func stripUTF8BOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 }
 
 func managedConfigPath(codexHome string, override string) string {
@@ -1102,6 +1124,12 @@ func sanitizeProjectConfigValues(values map[string]any) {
 		"profile",
 		"profiles",
 		"experimental_realtime_ws_base_url",
+		"experimental_realtime_webrtc_call_base_url",
+		"experimental_realtime_ws_model",
+		"experimental_realtime_ws_backend_prompt",
+		"experimental_realtime_ws_startup_context",
+		"experimental_realtime_start_instructions",
+		"realtime",
 		"otel",
 	} {
 		delete(values, key)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,6 +58,46 @@ func TestUnifiedExecHelperProcess(t *testing.T) {
 		os.Exit(7)
 	default:
 		os.Exit(2)
+	}
+}
+
+func TestUnifiedExecRecordsKnownSandboxViolationAndSkipsUnknownBackendLikeRust(t *testing.T) {
+	previous := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	knownType := sandbox.SandboxTypeLinuxSeccomp
+	known := &unifiedExecProcess{
+		done:        make(chan struct{}),
+		eventDone:   make(chan struct{}),
+		output:      newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:  newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		sandboxType: &knownType,
+		startedAt:   time.Now(),
+	}
+	_, _ = known.transcript.Write([]byte("bash: /workspace/locked: Permission denied"))
+	exitCode := 1
+	known.finishWithExit(nil, &exitCode)
+	known.mu.Lock()
+	denied := known.sandboxDenied
+	known.mu.Unlock()
+	if !denied || !strings.Contains(logs.String(), "resource=filesystem backend=linux_sandbox reason=permission_denied") {
+		t.Fatalf("known denial = %t, logs = %q", denied, logs.String())
+	}
+
+	logs.Reset()
+	unknown := &unifiedExecProcess{
+		done:       make(chan struct{}),
+		eventDone:  make(chan struct{}),
+		output:     newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript: newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		startedAt:  time.Now(),
+	}
+	_, _ = unknown.transcript.Write([]byte("Permission denied"))
+	unknown.finishWithExit(nil, &exitCode)
+	if logs.Len() != 0 {
+		t.Fatalf("unknown backend logs = %q", logs.String())
 	}
 }
 
@@ -474,6 +515,24 @@ func TestUnifiedExecRemoteNetworkProxyLaunchWireShapeLikeRust(t *testing.T) {
 			serverErrors <- err
 			return
 		}
+		if err := writeJSON(map[string]any{"id": 900, "method": execserver.MethodNetworkPolicyRequest, "params": map[string]any{
+			"processId": processID,
+			"request":   map[string]any{"protocol": "http", "host": "example.test", "port": 80},
+		}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		policyResponse, err := readRequest()
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		policyResult, _ := policyResponse["result"].(map[string]any)
+		policyDecision, _ := policyResult["decision"].(map[string]any)
+		if policyResponse["id"] != float64(900) || policyDecision["type"] != "allow" {
+			serverErrors <- fmt.Errorf("network policy response = %#v", policyResponse)
+			return
+		}
 		if err := writeJSON(map[string]any{"method": execserver.MethodProcessExited, "params": map[string]any{"processId": processID, "seq": 1, "exitCode": 0, "sandboxDenied": false}}); err != nil {
 			serverErrors <- err
 			return
@@ -489,18 +548,34 @@ func TestUnifiedExecRemoteNetworkProxyLaunchWireShapeLikeRust(t *testing.T) {
 	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
 	defer manager.Close()
 	environmentID := "remote-secondary"
+	timeoutMS := uint64(2_000)
+	policyRequests := make(chan network.ProxyPolicyRequest, 1)
 	result, err := manager.Exec(context.Background(), &ShellRequest{
 		Command:              []string{"ignored"},
 		CWD:                  t.TempDir(),
 		YieldTimeMS:          2_000,
 		UnifiedExecRemoteURL: "ws" + strings.TrimPrefix(server.URL, "http"),
 		RemoteNetworkProxy: &execserver.RemoteNetworkProxyLaunchConfig{
-			Proxy:         execserver.RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)},
-			EnvironmentID: &environmentID,
+			Proxy:                   execserver.RemoteNetworkProxyConfig{Enabled: true, Mode: string(network.ProxyModeFull)},
+			EnvironmentID:           &environmentID,
+			PolicyDecisionTimeoutMS: &timeoutMS,
 		},
+		NetworkPolicyDecider: network.ProxyPolicyDeciderFunc(func(_ context.Context, request network.ProxyPolicyRequest) network.ProxyDecision {
+			policyRequests <- request
+			return network.AllowProxyDecision()
+		}),
+		NetworkPolicyDecisionTimeout: 2 * time.Second,
 	}, "proxy-wire-call")
 	if err != nil || result == nil || !result.HasExitCode || result.ExitCode != 0 {
 		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+	select {
+	case request := <-policyRequests:
+		if request.ExecutionID != "proxy-wire-call" || request.Host != "example.test" || request.Protocol != network.ProxyProtocolHTTP || request.Port != 80 {
+			t.Fatalf("network policy request = %#v", request)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("network policy decider was not called")
 	}
 	select {
 	case err := <-serverErrors:
@@ -979,6 +1054,35 @@ func TestSplitUnifiedExecValidUTF8PrefixMatchesRustChunkBoundary(t *testing.T) {
 	}
 }
 
+func TestSplitUnifiedExecValidUTF8PrefixProgressesAcrossInvalidUTF8LikeRust(t *testing.T) {
+	input := append([]byte(strings.Repeat("a", 4096)), 0xff)
+	input = append(input, []byte(strings.Repeat("b", 4096))...)
+
+	first, rest, ok := splitUnifiedExecValidUTF8Prefix(input, 8192)
+	if !ok || string(first) != strings.Repeat("a", 4096) {
+		t.Fatalf("first prefix len = %d, ok = %v", len(first), ok)
+	}
+	second, rest, ok := splitUnifiedExecValidUTF8Prefix(rest, 8192)
+	if !ok || len(second) != 1 || second[0] != 0xff {
+		t.Fatalf("invalid prefix = %#v, ok = %v", second, ok)
+	}
+	third, rest, ok := splitUnifiedExecValidUTF8Prefix(rest, 8192)
+	if !ok || string(third) != strings.Repeat("b", 4096) || len(rest) != 0 {
+		t.Fatalf("third prefix len = %d, rest len = %d, ok = %v", len(third), len(rest), ok)
+	}
+}
+
+func TestSplitUnifiedExecValidUTF8PrefixReturnsViewsWithoutCopyingRemainder(t *testing.T) {
+	input := []byte("abcdef")
+	prefix, rest, ok := splitUnifiedExecValidUTF8Prefix(input, 3)
+	if !ok || string(prefix) != "abc" || string(rest) != "def" {
+		t.Fatalf("split = %q / %q, ok = %v", prefix, rest, ok)
+	}
+	if &prefix[0] != &input[0] || &rest[0] != &input[3] {
+		t.Fatal("split copied the prefix or remainder")
+	}
+}
+
 func TestUnifiedExecYieldClampsMatchRust(t *testing.T) {
 	manager := NewUnifiedExecManagerWithOptions(1, 20_000)
 	if got := manager.clampWriteYield(0, true); got != unifiedExecMinEmptyPollYieldMS {
@@ -1285,6 +1389,24 @@ func TestFileSystemSandboxContextKeepsCanonicalPermissionsSeparateFromWorkspaceR
 	}
 	if len(contextValue.WorkspaceRoots) != 1 || contextValue.WorkspaceRoots[0] != wantWorkspace {
 		t.Fatalf("workspace roots = %#v, want %q", contextValue.WorkspaceRoots, wantWorkspace)
+	}
+}
+
+func TestFileSystemSandboxContextCanonicalProfileWinsOverLegacyJSONLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"glob_pattern","pattern":"**/*.env"},"access":"deny"}]},"network":"restricted"}`
+	profile, err := sandbox.ParseRuntimePermissionProfileJSON(canonical)
+	if err != nil {
+		t.Fatalf("ParseRuntimePermissionProfileJSON() error = %v", err)
+	}
+	contextValue, err := NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile: profile, PermissionProfileJSON: `{"type":"disabled"}`, CWD: cwd,
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
+	}
+	if !strings.Contains(string(contextValue.Permissions), `"access":"deny"`) || strings.Contains(string(contextValue.Permissions), `"type":"disabled"`) {
+		t.Fatalf("context used legacy JSON: %s", contextValue.Permissions)
 	}
 }
 

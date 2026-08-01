@@ -1,7 +1,12 @@
 package app
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/cli"
@@ -89,5 +94,36 @@ func TestCodexMCPRunnerAppliesRootOptionsToExecRequests(t *testing.T) {
 	request.Root.ConfigOverrides[0] = `model="changed"`
 	if got := runner.rootOptions().ConfigOverrides[0]; got != `model="gpt-root"` {
 		t.Fatalf("runner root leaked request mutation: %q", got)
+	}
+}
+
+func TestCodexMCPRunnerInjectsHostSkillCatalogAndExplicitBody(t *testing.T) {
+	home := t.TempDir()
+	skillDir := filepath.Join(home, "skills", "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse this skill.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := newCodexMCPRunner(home, cli.RootOptions{})
+	request := &codexexec.Request{Exec: cli.ExecOptions{Prompt: "$demo handle this", Shared: cli.SharedOptions{CWD: t.TempDir()}}}
+	warnings, err := runner.applySkillsToRequest(request)
+	if err != nil {
+		t.Fatalf("applySkillsToRequest() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("applySkillsToRequest() warnings = %#v", warnings)
+	}
+	if !strings.Contains(request.AdditionalInstructions, "<skills_instructions>") || !strings.Contains(request.AdditionalInstructions, "- demo: Demo skill.") {
+		t.Fatalf("skill catalog = %q", request.AdditionalInstructions)
+	}
+	encoded, err := json.Marshal(request.AdditionalInputItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := fmt.Sprint(request.AdditionalInputItems)
+	if !strings.Contains(visible, "<skill>") || !strings.Contains(visible, "Use this skill.") {
+		t.Fatalf("explicit skill input = %s", encoded)
 	}
 }

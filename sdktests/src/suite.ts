@@ -18,6 +18,7 @@ export type SuiteIdentity = {
 export type SuiteScenarioRecord = {
   name: string;
   status: "pending" | "running" | "completed" | "incomplete";
+  attempts?: SuiteScenarioAttempt[];
   artifactDir?: string;
   comparison?: {
     status: "pass" | "behavior_mismatch" | "infra_failure";
@@ -29,6 +30,16 @@ export type SuiteScenarioRecord = {
   completedAt?: string;
 };
 
+export type SuiteScenarioAttempt = {
+  number: number;
+  status: "completed" | "incomplete";
+  startedAt: string;
+  completedAt: string;
+  artifactDir?: string;
+  comparison?: SuiteScenarioRecord["comparison"];
+  error?: string;
+};
+
 export type SuiteSummary = {
   version: 1;
   id: string;
@@ -37,6 +48,8 @@ export type SuiteSummary = {
   status: "running" | "completed" | "interrupted";
   identity: SuiteIdentity;
   order: ("rust" | "go")[];
+  infraRetries: number;
+  failFastInfra: boolean;
   scenarioNames: string[];
   scenarios: SuiteScenarioRecord[];
 };
@@ -74,6 +87,8 @@ export function createSuiteSummary(options: {
   identity: SuiteIdentity;
   order: ("rust" | "go")[];
   scenarioNames: string[];
+  infraRetries?: number;
+  failFastInfra?: boolean;
 }): SuiteSummary {
   const now = new Date().toISOString();
   const summary: SuiteSummary = {
@@ -84,6 +99,8 @@ export function createSuiteSummary(options: {
     status: "running",
     identity: options.identity,
     order: options.order,
+    infraRetries: options.infraRetries ?? 0,
+    failFastInfra: options.failFastInfra ?? false,
     scenarioNames: [...options.scenarioNames],
     scenarios: options.scenarioNames.map((name) => ({ name, status: "pending" })),
   };
@@ -95,6 +112,8 @@ export function loadSuiteSummary(
   suiteDir: string,
   identity: SuiteIdentity,
   requestedOrder?: ("rust" | "go")[],
+  requestedInfraRetries?: number,
+  requestedFailFastInfra?: boolean,
 ): SuiteSummary {
   const summaryPath = suiteSummaryPath(suiteDir);
   if (!existsSync(summaryPath)) throw new Error(`suite summary not found: ${summaryPath}`);
@@ -102,9 +121,21 @@ export function loadSuiteSummary(
   if (summary.version !== 1 || !Array.isArray(summary.scenarios)) {
     throw new Error(`unsupported suite summary: ${summaryPath}`);
   }
+  summary.infraRetries ??= 0;
+  summary.failFastInfra ??= false;
   assertSuiteIdentity(summary.identity, identity);
   if (requestedOrder && JSON.stringify(requestedOrder) !== JSON.stringify(summary.order)) {
     throw new Error(`cannot resume suite with a different --order; expected ${summary.order.join("-")}`);
+  }
+  if (requestedInfraRetries !== undefined && requestedInfraRetries !== summary.infraRetries) {
+    throw new Error(
+      `cannot resume suite with different --infra-retries; expected ${summary.infraRetries}`,
+    );
+  }
+  if (requestedFailFastInfra !== undefined && requestedFailFastInfra !== summary.failFastInfra) {
+    throw new Error(
+      `cannot resume suite with different --fail-fast-infra; expected ${summary.failFastInfra}`,
+    );
   }
   for (const scenario of summary.scenarios) {
     if (scenario.status === "running") {

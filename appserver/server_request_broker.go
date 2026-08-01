@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"codex_go/sandbox"
 )
 
 var ErrServerRequestNotFound = fmt.Errorf("%w: server request not found", ErrInvalidRequest)
@@ -29,12 +31,13 @@ func (f ServerRequestSinkFunc) SendServerRequest(request *ServerRequest) {
 }
 
 type ServerRequestBroker struct {
-	mu         sync.Mutex
-	nextID     atomic.Uint64
-	pending    map[string]*pendingServerRequest
-	sink       ServerRequestSink
-	onResolved func(request *ServerRequest)
-	onResponse func(request *ServerRequest, response *Response)
+	mu          sync.Mutex
+	nextID      atomic.Uint64
+	pending     map[string]*pendingServerRequest
+	sink        ServerRequestSink
+	onRequested func(request *ServerRequest)
+	onResolved  func(request *ServerRequest)
+	onResponse  func(request *ServerRequest, response *Response)
 }
 
 type serverRequestResult struct {
@@ -69,6 +72,15 @@ func (b *ServerRequestBroker) SetResolvedCallback(callback func(request *ServerR
 	b.onResolved = callback
 }
 
+func (b *ServerRequestBroker) SetRequestedCallback(callback func(request *ServerRequest)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onRequested = callback
+}
+
 func (b *ServerRequestBroker) SetResolvedResponseCallback(callback func(request *ServerRequest, response *Response)) {
 	if b == nil {
 		return
@@ -97,6 +109,7 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 		b.unregister(id)
 		return fmt.Errorf("%w: server request sink is not configured", ErrInvalidRequest)
 	}
+	b.notifyRequested(request)
 	if connectionID != "" {
 		if targeted, ok := sink.(TargetedServerRequestSink); ok {
 			targeted.SendServerRequestToConnection(connectionID, request)
@@ -123,8 +136,73 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 		if target == nil || len(result.data) == 0 {
 			return nil
 		}
-		return json.Unmarshal(result.data, target)
+		if err := json.Unmarshal(result.data, target); err != nil {
+			return err
+		}
+		return normalizeServerRequestResponse(method, params, target)
 	}
+}
+
+func normalizeServerRequestResponse(method ServerRequestMethod, params any, target any) error {
+	if method != ServerRequestPermissionsApproval {
+		return nil
+	}
+	request, ok := params.(*PermissionsRequestApprovalParams)
+	if !ok || request == nil {
+		return fmt.Errorf("%w: permissions approval params have type %T", ErrInvalidRequest, params)
+	}
+	response, ok := target.(*PermissionsRequestApprovalResponse)
+	if !ok || response == nil {
+		return fmt.Errorf("%w: permissions approval response target has type %T", ErrInvalidRequest, target)
+	}
+	if response.StrictAutoReview != nil && *response.StrictAutoReview && response.Scope == PermissionGrantScopeSession {
+		response.Permissions = &GrantedPermissionProfile{}
+		response.Scope = PermissionGrantScopeTurn
+		strict := false
+		response.StrictAutoReview = &strict
+		return nil
+	}
+
+	requestedJSON, err := json.Marshal(request.Permissions)
+	if err != nil {
+		return fmt.Errorf("%w: encode requested permissions: %v", ErrInvalidRequest, err)
+	}
+	var requested sandbox.RequestPermissionProfile
+	if err := json.Unmarshal(requestedJSON, &requested); err != nil {
+		return fmt.Errorf("%w: decode requested permissions: %v", ErrInvalidRequest, err)
+	}
+	grantedJSON, err := json.Marshal(response.Permissions)
+	if err != nil {
+		return fmt.Errorf("%w: encode granted permissions: %v", ErrInvalidRequest, err)
+	}
+	var granted sandbox.RequestPermissionProfile
+	if err := json.Unmarshal(grantedJSON, &granted); err != nil {
+		return fmt.Errorf("%w: decode granted permissions: %v", ErrInvalidRequest, err)
+	}
+	intersected := sandbox.IntersectPermissionProfiles(requested, granted, request.CWD)
+	intersectedJSON, err := json.Marshal(intersected)
+	if err != nil {
+		return fmt.Errorf("%w: encode intersected permissions: %v", ErrInvalidRequest, err)
+	}
+	var permissions GrantedPermissionProfile
+	if err := json.Unmarshal(intersectedJSON, &permissions); err != nil {
+		return fmt.Errorf("%w: decode intersected permissions: %v", ErrInvalidRequest, err)
+	}
+	response.Permissions = &permissions
+	return nil
+}
+
+func (b *ServerRequestBroker) notifyRequested(request *ServerRequest) {
+	callback := b.requestedCallback()
+	if callback != nil {
+		callback(request)
+	}
+}
+
+func (b *ServerRequestBroker) requestedCallback() func(request *ServerRequest) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.onRequested
 }
 
 func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {

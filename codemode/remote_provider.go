@@ -20,9 +20,23 @@ type WebSocketProvider struct {
 	nextSession atomic.Uint64
 }
 
+type remoteSessionProvider interface {
+	connect(context.Context) (*remoteConnection, error)
+}
+
+type remoteTransport interface {
+	Read(context.Context, any) (bool, error)
+	Write(context.Context, any) error
+	Close() error
+}
+
 func NewWebSocketProvider(url string, httpClient *http.Client) *WebSocketProvider {
 	return &WebSocketProvider{url: url, httpClient: httpClient}
 }
+
+func (p *WebSocketProvider) Availability() error { return nil }
+
+func (p *WebSocketProvider) TakeUnavailableWarning(string) string { return "" }
 
 func (p *WebSocketProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
 	value := p.nextSession.Add(1)
@@ -56,6 +70,15 @@ func (p *WebSocketProvider) connect(ctx context.Context) (*remoteConnection, err
 	if err != nil {
 		return nil, err
 	}
+	connection, err := connectRemoteTransport(ctx, transport)
+	if err != nil {
+		return nil, err
+	}
+	p.connection = connection
+	return connection, nil
+}
+
+func connectRemoteTransport(ctx context.Context, transport remoteTransport) (*remoteConnection, error) {
 	versions, _ := NewSupportedProtocolVersions(ProtocolV1)
 	hello, _ := NewClientHello(versions, CapabilitySet{}, CapabilitySet{})
 	if err := transport.Write(ctx, ClientHelloMessage(hello)); err != nil {
@@ -81,7 +104,6 @@ func (p *WebSocketProvider) connect(ctx context.Context) (*remoteConnection, err
 		return nil, fmt.Errorf("code-mode host returned an invalid handshake response")
 	}
 	connection := newRemoteConnection(transport)
-	p.connection = connection
 	go connection.readLoop()
 	return connection, nil
 }
@@ -97,7 +119,7 @@ func handshakeRejectMessage(reason *HandshakeRejectReason) string {
 }
 
 type remoteSession struct {
-	provider *WebSocketProvider
+	provider remoteSessionProvider
 	delegate tool.CodeModeRemoteDelegate
 	id       SessionID
 
@@ -285,7 +307,7 @@ type remoteInitialResult struct {
 }
 
 type remoteConnection struct {
-	transport *WebSocketTransport
+	transport remoteTransport
 	writeMu   sync.Mutex
 	mu        sync.Mutex
 	alive     bool
@@ -295,7 +317,7 @@ type remoteConnection struct {
 	cancels   map[DelegateRequestID]context.CancelFunc
 }
 
-func newRemoteConnection(transport *WebSocketTransport) *remoteConnection {
+func newRemoteConnection(transport remoteTransport) *remoteConnection {
 	return &remoteConnection{transport: transport, alive: true, nextID: 1, pending: map[RequestID]*remotePending{}, delegates: map[SessionID]tool.CodeModeRemoteDelegate{}, cancels: map[DelegateRequestID]context.CancelFunc{}}
 }
 

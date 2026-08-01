@@ -20,13 +20,15 @@ type GuardianReviewer interface {
 }
 
 type modelGuardianReviewer struct {
-	agent      model.AgentRunner
-	store      *state.ReviewStore
-	breaker    *state.CircuitBreaker
-	notify     func(threadID string, event *state.Event)
-	interrupt  func(threadID, turnID string)
-	transcript func(threadID string) []string
-	timeout    time.Duration
+	agent       model.AgentRunner
+	store       *state.ReviewStore
+	breaker     *state.CircuitBreaker
+	notify      func(threadID string, event *state.Event)
+	interrupt   func(threadID, turnID string)
+	transcript  func(threadID string) []string
+	model       func(threadID, turnID string) string
+	environment func(context.Context, string, string) ([]any, error)
+	timeout     time.Duration
 }
 
 type guardianSessionRunner struct {
@@ -140,8 +142,20 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var inputItems []any
+	if r.environment != nil {
+		inputItems, err = r.environment(reviewCtx, threadID, turnID)
+		if err != nil {
+			completed, _ := store.Abort(event.ID, err.Error())
+			r.emit(threadID, completed)
+			r.recordDecision(threadID, turnID, state.DecisionAborted)
+			return state.DecisionAborted, "", err
+		}
+	}
 	response, err := r.agent.Run(reviewCtx, &model.AgentRequest{
 		Prompt:       prompt,
+		InputItems:   inputItems,
+		Model:        r.modelForTurn(threadID, turnID),
 		TaskKind:     model.AgentTaskReview,
 		ThreadID:     threadID,
 		TurnID:       turnID,
@@ -190,6 +204,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision)
 	return decision, assessment.Rationale, nil
+}
+
+func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
+	if r == nil || r.model == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.model(threadID, turnID))
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

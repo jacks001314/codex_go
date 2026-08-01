@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +44,23 @@ func TestDefaultRuntimeRouterStartsManagedNetworkFromRequirementsWithoutUserConf
 	proxyURL, err := url.Parse(router.services.ManagedNetwork.Env["HTTP_PROXY"])
 	if err != nil || proxyURL.Port() == "" || proxyURL.Port() == "0" {
 		t.Fatalf("HTTP proxy URL = %q, err = %v", router.services.ManagedNetwork.Env["HTTP_PROXY"], err)
+	}
+}
+
+func TestManagedNetworkBlockedObserverRecordsWithoutRequirementsLikeRust(t *testing.T) {
+	previous := slog.Default()
+	var logs strings.Builder
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	router := &RuntimeRouter{}
+	observer := router.managedNetworkBlockedObserver("", false)
+	port := uint16(443)
+	observer.OnBlockedRequest(context.Background(), network.ProxyBlockedRequest{
+		Host: "blocked.example", Reason: "not_allowed", Protocol: "https", Port: &port, Timestamp: 42,
+	})
+	if !strings.Contains(logs.String(), "resource=network backend=managed_network_proxy protocol=https host=blocked.example") {
+		t.Fatalf("violation log = %q", logs.String())
 	}
 }
 

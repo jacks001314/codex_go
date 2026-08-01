@@ -14,19 +14,13 @@ import (
 	"codex_go/appserver"
 	"codex_go/auth"
 	"codex_go/config"
-
-	_ "modernc.org/sqlite"
+	"codex_go/state"
 )
 
-const rustStateDBFilename = "state_5.sqlite"
 const rustRemoteControlAppServerClientNameNone = ""
 
 func appServerStateDBPath(codexHome string) string {
-	sqliteHome := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME"))
-	if sqliteHome != "" {
-		return filepath.Join(sqliteHome, rustStateDBFilename)
-	}
-	return filepath.Join(codexHome, rustStateDBFilename)
+	return filepath.Join(state.ResolveSQLiteHome(codexHome), state.StateSQLiteFilename)
 }
 
 func appServerStateDBAvailable(codexHome string) bool {
@@ -57,7 +51,11 @@ func appServerPersistedRemoteControlEnabled(ctx context.Context, codexHome strin
 	if err != nil {
 		return false, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	sqliteConfig, err := state.NewSqliteConfig(filepath.Dir(dbPath))
+	if err != nil {
+		return false, err
+	}
+	db, err := sqliteConfig.OpenReadOnly(ctx, dbPath)
 	if err != nil {
 		return false, err
 	}

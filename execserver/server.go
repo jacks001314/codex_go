@@ -28,34 +28,50 @@ import (
 )
 
 const (
-	MethodInitialize           = "initialize"
-	MethodInitialized          = "initialized"
-	MethodEnvironmentInfo      = "environment/info"
-	MethodEnvironmentStatus    = "environment/status"
-	MethodProcessStart         = "process/start"
-	MethodProcessRead          = "process/read"
-	MethodProcessWrite         = "process/write"
-	MethodProcessTerminate     = "process/terminate"
-	MethodProcessSignal        = "process/signal"
-	MethodProcessOutput        = "process/output"
-	MethodProcessExited        = "process/exited"
-	MethodProcessClosed        = "process/closed"
-	MethodFSReadFile           = "fs/readFile"
-	MethodFSOpen               = "fs/open"
-	MethodFSReadBlock          = "fs/readBlock"
-	MethodFSClose              = "fs/close"
-	MethodFSWriteFile          = "fs/writeFile"
-	MethodFSCreateDirectory    = "fs/createDirectory"
-	MethodFSGetMetadata        = "fs/getMetadata"
-	MethodFSCanonicalize       = "fs/canonicalize"
-	MethodFSReadDirectory      = "fs/readDirectory"
-	MethodFSWalk               = "fs/walk"
-	MethodFSRemove             = "fs/remove"
-	MethodFSCopy               = "fs/copy"
-	MethodHTTPRequest          = "http/request"
-	MethodCapabilitiesDiscover = "capabilities/discover"
+	MethodInitialize              = "initialize"
+	MethodInitialized             = "initialized"
+	MethodEnvironmentInfo         = "environment/info"
+	MethodEnvironmentStatus       = "environment/status"
+	MethodProcessStart            = "process/start"
+	MethodProcessRead             = "process/read"
+	MethodProcessWrite            = "process/write"
+	MethodProcessTerminate        = "process/terminate"
+	MethodProcessSignal           = "process/signal"
+	MethodProcessOutput           = "process/output"
+	MethodProcessExited           = "process/exited"
+	MethodProcessClosed           = "process/closed"
+	MethodFSReadFile              = "fs/readFile"
+	MethodFSOpen                  = "fs/open"
+	MethodFSReadBlock             = "fs/readBlock"
+	MethodFSClose                 = "fs/close"
+	MethodFSWriteFile             = "fs/writeFile"
+	MethodFSCreateDirectory       = "fs/createDirectory"
+	MethodFSGetMetadata           = "fs/getMetadata"
+	MethodFSCanonicalize          = "fs/canonicalize"
+	MethodFSReadDirectory         = "fs/readDirectory"
+	MethodFSWalk                  = "fs/walk"
+	MethodFSRemove                = "fs/remove"
+	MethodFSCopy                  = "fs/copy"
+	MethodHTTPRequest             = "http/request"
+	MethodCapabilityRootsDiscover = "capabilityRoots/discoverV1"
+	// MethodCapabilitiesDiscover is retained as a source-compatible name for Go callers.
+	MethodCapabilitiesDiscover = MethodCapabilityRootsDiscover
 	MethodHTTPRequestBodyDelta = "http/request/bodyDelta"
 )
+
+func (s *ProcessSandboxType) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch ProcessSandboxType(value) {
+	case ProcessSandboxNone, ProcessSandboxMacosSeatbelt, ProcessSandboxLinuxSeccomp, ProcessSandboxWindowsRestrictedToken:
+		*s = ProcessSandboxType(value)
+		return nil
+	default:
+		return fmt.Errorf("unsupported process sandbox type %q", value)
+	}
+}
 
 const (
 	maxWalkDepth                  = 64
@@ -196,6 +212,8 @@ type processState struct {
 	exited           bool
 	exitSequenced    bool
 	exitCode         *int
+	sandboxType      sandbox.SandboxType
+	sandboxDenied    bool
 	failure          string
 	closed           bool
 	closedSequenced  bool
@@ -213,31 +231,50 @@ type processState struct {
 
 type processNotifier func(method string, params any)
 
-type CapabilityDiscoveryRoot struct {
+type CapabilityRootDiscoverRequest struct {
 	ID      string                    `json:"id"`
 	Path    string                    `json:"path"`
 	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
 }
 
-type CapabilityDiscoveryParams struct {
-	Roots []CapabilityDiscoveryRoot `json:"roots"`
+type CapabilityRootsDiscoverParams struct {
+	Roots []CapabilityRootDiscoverRequest `json:"roots"`
 }
 
-type CapabilityManifest struct {
-	RootID string `json:"rootId"`
-	Kind   string `json:"kind"`
-	Path   string `json:"path"`
+type CapabilityTextFile struct {
+	Path     string `json:"path"`
+	Contents string `json:"contents"`
 }
 
-type CapabilityDiscoveryError struct {
-	RootID  string `json:"rootId"`
-	Message string `json:"message"`
+type DiscoveredPluginFiles struct {
+	Manifest   CapabilityTextFile  `json:"manifest"`
+	MCPConfig  *CapabilityTextFile `json:"mcpConfig,omitempty"`
+	AppsConfig *CapabilityTextFile `json:"appsConfig,omitempty"`
 }
 
-type CapabilityDiscoveryResponse struct {
-	Manifests []CapabilityManifest       `json:"manifests"`
-	Errors    []CapabilityDiscoveryError `json:"errors"`
+type DiscoveredSkillFiles struct {
+	Instructions CapabilityTextFile  `json:"instructions"`
+	Metadata     *CapabilityTextFile `json:"metadata,omitempty"`
 }
+
+type CapabilityRootDiscovery struct {
+	ID                 string                 `json:"id"`
+	Path               string                 `json:"path"`
+	Plugin             *DiscoveredPluginFiles `json:"plugin,omitempty"`
+	Skills             []DiscoveredSkillFiles `json:"skills"`
+	NamespaceManifests []CapabilityTextFile   `json:"namespaceManifests"`
+	Warnings           []string               `json:"warnings"`
+	Error              *string                `json:"error,omitempty"`
+}
+
+type CapabilityRootsDiscoverResponse struct {
+	Roots []CapabilityRootDiscovery `json:"roots"`
+}
+
+// Compatibility aliases keep the existing Go API while its wire contract follows Rust V1.
+type CapabilityDiscoveryRoot = CapabilityRootDiscoverRequest
+type CapabilityDiscoveryParams = CapabilityRootsDiscoverParams
+type CapabilityDiscoveryResponse = CapabilityRootsDiscoverResponse
 
 type startedExecServerSandboxProcess struct {
 	stdin     io.WriteCloser
@@ -362,8 +399,18 @@ type ExecEnvPolicy struct {
 }
 
 type ExecResponse struct {
-	ProcessID string `json:"processId"`
+	ProcessID   string              `json:"processId"`
+	SandboxType *ProcessSandboxType `json:"sandboxType"`
 }
+
+type ProcessSandboxType string
+
+const (
+	ProcessSandboxNone                   ProcessSandboxType = "none"
+	ProcessSandboxMacosSeatbelt          ProcessSandboxType = "macosSeatbelt"
+	ProcessSandboxLinuxSeccomp           ProcessSandboxType = "linuxSeccomp"
+	ProcessSandboxWindowsRestrictedToken ProcessSandboxType = "windowsRestrictedToken"
+)
 
 type ReadParams struct {
 	ProcessID string  `json:"processId"`
@@ -1156,12 +1203,12 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		return localEnvironmentInfo(), nil
 	case MethodEnvironmentStatus:
 		return EnvironmentStatus{Status: EnvironmentStatusReady}, nil
-	case MethodCapabilitiesDiscover:
-		var params CapabilityDiscoveryParams
+	case MethodCapabilityRootsDiscover:
+		var params CapabilityRootsDiscoverParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return discoverCapabilities(&params)
+		return discoverCapabilityRoots(&params)
 	case MethodProcessStart:
 		var params ExecParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1329,7 +1376,7 @@ func execServerMethodFamily(method string) string {
 		return "environment info"
 	case MethodEnvironmentStatus:
 		return "environment status"
-	case MethodCapabilitiesDiscover:
+	case MethodCapabilityRootsDiscover:
 		return "capability discovery"
 	case MethodProcessStart, MethodProcessRead, MethodProcessWrite, MethodProcessTerminate, MethodProcessSignal:
 		return "exec"
@@ -1385,6 +1432,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, startErr
 		}
 		if supported {
+			state.mu.Lock()
+			state.sandboxType = sandbox.SandboxTypeWindowsRestrictedToken
+			state.mu.Unlock()
 			state.networkProxy = preparedProxy
 			state.policyCancel = policyCancel
 			preparedNetworkOwned = true
@@ -1439,11 +1489,11 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				}
 				state.finishWithCode(waitErr, &code)
 			}()
-			return &ExecResponse{ProcessID: params.ProcessID}, nil
+			return newExecResponse(params.ProcessID, sandbox.SandboxTypeWindowsRestrictedToken), nil
 		}
 		s.releaseStartingProcess(params.ProcessID, state)
 	}
-	command, cwd, err := prepareExecProcess(params)
+	command, cwd, sandboxType, err := prepareExecProcess(params)
 	if err != nil {
 		return nil, err
 	}
@@ -1464,6 +1514,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, startErr
 		}
 		if supported {
+			state.mu.Lock()
+			state.sandboxType = sandboxType
+			state.mu.Unlock()
 			state.networkProxy = preparedProxy
 			state.policyCancel = policyCancel
 			preparedNetworkOwned = true
@@ -1515,7 +1568,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				}
 				state.finishWithCode(waitErr, &code)
 			}()
-			return &ExecResponse{ProcessID: params.ProcessID}, nil
+			return newExecResponse(params.ProcessID, sandboxType), nil
 		}
 		s.releaseStartingProcess(params.ProcessID, state)
 	}
@@ -1543,6 +1596,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	}
 	state.networkProxy = preparedProxy
 	state.policyCancel = policyCancel
+	state.sandboxType = sandboxType
 	preparedNetworkOwned = true
 	if ctx.Err() != nil {
 		s.releaseStartingProcess(params.ProcessID, state)
@@ -1585,7 +1639,41 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		err := cmd.Wait()
 		state.finish(err)
 	}()
-	return &ExecResponse{ProcessID: params.ProcessID}, nil
+	return newExecResponse(params.ProcessID, sandboxType), nil
+}
+
+func newExecResponse(processID string, sandboxType sandbox.SandboxType) *ExecResponse {
+	wire := processSandboxTypeToProtocol(sandboxType)
+	return &ExecResponse{ProcessID: processID, SandboxType: &wire}
+}
+
+func processSandboxTypeToProtocol(sandboxType sandbox.SandboxType) ProcessSandboxType {
+	switch sandboxType {
+	case sandbox.SandboxTypeMacosSeatbelt:
+		return ProcessSandboxMacosSeatbelt
+	case sandbox.SandboxTypeLinuxSeccomp:
+		return ProcessSandboxLinuxSeccomp
+	case sandbox.SandboxTypeWindowsRestrictedToken:
+		return ProcessSandboxWindowsRestrictedToken
+	default:
+		return ProcessSandboxNone
+	}
+}
+
+func SandboxTypeFromProtocol(sandboxType *ProcessSandboxType) *sandbox.SandboxType {
+	if sandboxType == nil {
+		return nil
+	}
+	value := sandbox.SandboxTypeNone
+	switch *sandboxType {
+	case ProcessSandboxMacosSeatbelt:
+		value = sandbox.SandboxTypeMacosSeatbelt
+	case ProcessSandboxLinuxSeccomp:
+		value = sandbox.SandboxTypeLinuxSeccomp
+	case ProcessSandboxWindowsRestrictedToken:
+		value = sandbox.SandboxTypeWindowsRestrictedToken
+	}
+	return &value
 }
 
 func (s *Server) reserveProcessState(ctx context.Context, params *ExecParams) (*processState, error) {
@@ -1755,51 +1843,51 @@ func stringValue(value *string) string {
 	return *value
 }
 
-func prepareExecProcess(params *ExecParams) ([]string, string, error) {
+func prepareExecProcess(params *ExecParams) ([]string, string, sandbox.SandboxType, error) {
 	command := append([]string(nil), params.Argv...)
 	cwd, err := nativeExecServerPath(params.CWD, "cwd")
 	if err != nil {
-		return nil, "", err
+		return nil, "", sandbox.SandboxTypeNone, err
 	}
 	if cwd == "" {
 		cwd, err = os.Getwd()
 		if err != nil {
-			return nil, "", err
+			return nil, "", sandbox.SandboxTypeNone, err
 		}
 	}
 	if !hasJSONValue(params.Sandbox) {
-		return command, cwd, nil
+		return command, cwd, sandbox.SandboxTypeNone, nil
 	}
 	if params.EnforceManagedNetwork && params.ManagedNetwork == nil {
-		return nil, "", requestError(-32602, "managed network enforcement requires managedNetwork context")
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "managed network enforcement requires managedNetwork context")
 	}
 	if runtime.GOOS == "windows" {
-		return nil, "", requestError(-32602, "sandboxed remote process launch is not supported on Windows")
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandboxed remote process launch is not supported on Windows")
 	}
 	var sandboxContext FileSystemSandboxContext
 	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
-		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
 	}
 	if !hasJSONValue(sandboxContext.Permissions) {
-		return nil, "", requestError(-32602, "invalid sandbox context: permissions are required")
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
 	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
-		return nil, "", requestError(-32602, "invalid sandbox context: "+err.Error())
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "invalid sandbox context: "+err.Error())
 	}
 	sandboxCWD := cwd
 	if strings.TrimSpace(sandboxContext.CWD) != "" {
 		sandboxCWD, err = nativeExecServerPath(sandboxContext.CWD, "sandbox cwd")
 		if err != nil {
-			return nil, "", err
+			return nil, "", sandbox.SandboxTypeNone, err
 		}
 	}
 	profileJSON, err := nativePermissionProfileJSON(sandboxContext.Permissions)
 	if err != nil {
-		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox permission path URI: %v", err))
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox permission path URI: %v", err))
 	}
 	profile, err := sandbox.ParseRuntimePermissionProfileJSON(profileJSON)
 	if err != nil {
-		return nil, "", requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
 	}
 	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
 		ResolvedPermissionProfile:     profile,
@@ -1811,13 +1899,13 @@ func prepareExecProcess(params *ExecParams) ([]string, string, error) {
 		Command:                       command,
 	})
 	if err != nil {
-		return nil, "", requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", err))
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", err))
 	}
 	if err := plan.UnsupportedError(); err != nil {
-		return nil, "", requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandbox intent cannot be enforced on this executor")
 	}
 	if profile.Disabled {
-		return nil, "", requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandbox intent cannot be enforced on this executor")
 	}
 	plan.CWD = cwd
 	_ = sandboxCWD
@@ -1831,11 +1919,11 @@ func prepareExecProcess(params *ExecParams) ([]string, string, error) {
 			params.EnforceManagedNetwork,
 		)
 		if wrapErr != nil {
-			return nil, "", requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", wrapErr))
+			return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", wrapErr))
 		}
 		plan.Command = wrapped
 	}
-	return plan.Command, plan.CWD, nil
+	return plan.Command, plan.CWD, plan.SandboxType, nil
 }
 
 func nativeExecServerPath(raw string, label string) (string, error) {
@@ -2645,6 +2733,9 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 		code := p.cmd.ProcessState.ExitCode()
 		p.exitCode = &code
 	}
+	if p.exitCode != nil {
+		p.sandboxDenied = sandbox.IsLikelySandboxDenied(p.sandboxType, p.sandboxExecOutputLocked(*p.exitCode))
+	}
 	p.exited = true
 	var exited *ProcessExitedNotification
 	if !p.exitSequenced {
@@ -2655,7 +2746,7 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 		if p.exitCode != nil {
 			code = *p.exitCode
 		}
-		denied := false
+		denied := p.sandboxDenied
 		exited = &ProcessExitedNotification{ProcessID: p.id, Seq: seq, ExitCode: code, SandboxDenied: &denied}
 	}
 	var closed *ProcessClosedNotification
@@ -2729,6 +2820,31 @@ func (p *processState) appendLocked(stream string, data []byte) outputChunk {
 	}
 	p.cond.Broadcast()
 	return chunk
+}
+
+func (p *processState) sandboxExecOutputLocked(exitCode int) sandbox.SandboxExecOutput {
+	var stdout strings.Builder
+	var stderr strings.Builder
+	var aggregated strings.Builder
+	for _, chunk := range p.chunks {
+		decoded, err := base64.StdEncoding.DecodeString(chunk.Chunk)
+		if err != nil {
+			continue
+		}
+		aggregated.Write(decoded)
+		switch chunk.Stream {
+		case "stderr":
+			stderr.Write(decoded)
+		case "stdout":
+			stdout.Write(decoded)
+		}
+	}
+	return sandbox.SandboxExecOutput{
+		ExitCode:         exitCode,
+		Stdout:           stdout.String(),
+		Stderr:           stderr.String(),
+		AggregatedOutput: aggregated.String(),
+	}
 }
 
 func (p *processState) read(after uint64, maxBytes *int, waitMS *uint64, detached <-chan struct{}) (*ReadResponse, bool) {
@@ -2812,12 +2928,13 @@ func (p *processState) readLocked(after uint64, maxBytes *int) *ReadResponse {
 		failure = &value
 	}
 	return &ReadResponse{
-		Chunks:   chunks,
-		NextSeq:  nextSeq,
-		Exited:   p.exited,
-		ExitCode: p.exitCode,
-		Closed:   p.closed,
-		Failure:  failure,
+		Chunks:        chunks,
+		NextSeq:       nextSeq,
+		Exited:        p.exited,
+		ExitCode:      p.exitCode,
+		Closed:        p.closed,
+		Failure:       failure,
+		SandboxDenied: p.sandboxDenied,
 	}
 }
 

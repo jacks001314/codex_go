@@ -883,15 +883,44 @@ type ExternalAgentConfigDetectParams struct {
 }
 
 type ExternalAgentConfigDetectResponse struct {
-	Items []ExternalAgentConfigMigrationItem `json:"items"`
+	Items      []ExternalAgentConfigMigrationItem        `json:"items"`
+	Connectors []ExternalAgentDetectedConnectorCandidate `json:"connectors"`
+}
+
+type ExternalAgentDetectedConnectorSource string
+
+const (
+	ExternalAgentConnectorRemoteMCPServersConfig ExternalAgentDetectedConnectorSource = "remoteMcpServersConfig"
+	ExternalAgentConnectorSessionToolUse         ExternalAgentDetectedConnectorSource = "sessionToolUse"
+)
+
+type ExternalAgentDetectedConnectorCandidate struct {
+	Name         string                               `json:"name"`
+	SessionCount uint32                               `json:"sessionCount"`
+	Source       ExternalAgentDetectedConnectorSource `json:"source"`
 }
 
 func (r *ExternalAgentConfigDetectResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Items []ExternalAgentConfigMigrationItem `json:"items"`
+		Items      []ExternalAgentConfigMigrationItem        `json:"items"`
+		Connectors []ExternalAgentDetectedConnectorCandidate `json:"connectors"`
 	}{
-		Items: migrationItemsForJSON(r.Items),
+		Items:      migrationItemsForJSON(r.Items),
+		Connectors: detectedConnectorCandidatesForJSON(r.Connectors),
 	})
+}
+
+func (r *ExternalAgentConfigDetectResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Items      []ExternalAgentConfigMigrationItem        `json:"items"`
+		Connectors []ExternalAgentDetectedConnectorCandidate `json:"connectors"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	r.Items = migrationItemsForJSON(wire.Items)
+	r.Connectors = detectedConnectorCandidatesForJSON(wire.Connectors)
+	return nil
 }
 
 type ExternalAgentConfigImportParams struct {
@@ -3022,6 +3051,13 @@ func migrationItemsForJSON(values []ExternalAgentConfigMigrationItem) []External
 		out[i] = CloneExternalAgentMigrationItem(&values[i])
 	}
 	return out
+}
+
+func detectedConnectorCandidatesForJSON(values []ExternalAgentDetectedConnectorCandidate) []ExternalAgentDetectedConnectorCandidate {
+	if values == nil {
+		return []ExternalAgentDetectedConnectorCandidate{}
+	}
+	return append([]ExternalAgentDetectedConnectorCandidate(nil), values...)
 }
 
 func importTypeResultsForJSON(values []ExternalAgentConfigImportTypeResult) []ExternalAgentConfigImportTypeResult {

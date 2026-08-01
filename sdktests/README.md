@@ -66,6 +66,19 @@ Rust, Go, and SDK hashes, marks a previously running scenario incomplete, and
 skips scenarios already completed. Each scenario artifact also has a
 `run-state.json` with its running, completed, or incomplete state.
 
+Transient provider and worker failures can be retried per scenario without
+hiding their evidence:
+
+```powershell
+npm --prefix sdktests run test:parity -- --all --infra-retries 3 --fail-fast-infra --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+```
+
+The default is zero retries. Only `infra_failure` results are retried;
+behavior mismatches are final. Every attempt and artifact is retained in the
+suite summary, with a 15/30/60-second capped exponential delay between retries.
+With `--fail-fast-infra`, exhausting those retries stops the suite immediately
+and leaves its remaining scenarios pending instead of spending more live calls.
+
 Only one live runner can own the repository-wide lock. A second runner exits
 without disturbing the active process. Use `--recover-lock` only when the
 recorded owner is known to be stuck; recovery terminates that recorded process

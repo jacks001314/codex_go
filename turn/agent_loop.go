@@ -11,11 +11,12 @@ import (
 )
 
 type AgentLoopOptions struct {
-	Agent        model.AgentRunner
-	Dispatcher   *ToolDispatcher
-	SteerMailbox *SteerMailbox
-	MaxTurns     int
-	Now          func() time.Time
+	Agent             model.AgentRunner
+	Dispatcher        *ToolDispatcher
+	SteerMailbox      *SteerMailbox
+	MaxTurns          int
+	Now               func() time.Time
+	ExecutedToolCalls *ExecutedToolCallRecorder
 }
 
 type SamplingFollowUpContext struct {
@@ -28,54 +29,59 @@ type SamplingFollowUpContext struct {
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
 type AssistantMessageCallback func(response *model.AgentResponse, iteration int, hasToolCalls bool)
 type ClientMetadataTransform func(map[string]string) map[string]string
+type WarningCallback func(message string)
 
 type AgentLoop struct {
-	agent        model.AgentRunner
-	dispatcher   *ToolDispatcher
-	steerMailbox *SteerMailbox
-	now          func() time.Time
+	agent             model.AgentRunner
+	dispatcher        *ToolDispatcher
+	steerMailbox      *SteerMailbox
+	now               func() time.Time
+	executedToolCalls *ExecutedToolCallRecorder
 }
 
 type AgentLoopRequest struct {
-	Prompt                       string
-	Instructions                 string
-	Model                        string
-	ToolMode                     string
-	ProviderID                   string
-	TaskKind                     model.AgentTaskKind
-	ThreadID                     string
-	TurnID                       string
-	Originator                   string
-	InputItems                   []any
-	SteerMailbox                 *SteerMailbox
-	Tools                        []any
-	HostedTools                  []any
-	Store                        bool
-	PreviousResponseID           string
-	ParallelToolCalls            bool
-	ReasoningEffort              string
-	ReasoningSummary             string
-	ConcurrentReasoningSummaries bool
-	ModelVerbosity               string
-	IncludeTimingMetrics         bool
-	BetaFeaturesHeader           string
-	ItemIDsEnabled               bool
-	ServiceTier                  string
-	PromptCacheKey               string
-	ClientMetadata               map[string]string
-	ClientMetadataTransform      ClientMetadataTransform
-	AttestationProvider          codexapi.AttestationProvider
-	OutputSchema                 any
-	DisableHostedImageGeneration bool
-	PostToolInputItems           ToolPostExecutionInputItems
-	OnToolStarted                ToolStartedCallback
-	OnToolCompleted              ToolCompletedCallback
-	EmitCodeModeNestedLifecycle  bool
-	OnCodeModeNotify             CodeModeNotifyCallback
-	Timing                       *TimingState
-	SamplingFollowUp             SamplingFollowUp
-	OnAssistantMessage           AssistantMessageCallback
-	StreamHandler                model.ResponsesStreamHandler
+	Prompt                          string
+	Instructions                    string
+	Model                           string
+	ToolMode                        string
+	DisableCodeModeFallback         bool
+	ProviderID                      string
+	TaskKind                        model.AgentTaskKind
+	ThreadID                        string
+	TurnID                          string
+	Originator                      string
+	InputItems                      []any
+	SteerMailbox                    *SteerMailbox
+	Tools                           []any
+	HostedTools                     []any
+	Store                           bool
+	PreviousResponseID              string
+	ParallelToolCalls               bool
+	ReasoningEffort                 string
+	ReasoningSummary                string
+	ConcurrentReasoningSummaries    bool
+	ModelVerbosity                  string
+	IncludeTimingMetrics            bool
+	BetaFeaturesHeader              string
+	ItemIDsEnabled                  bool
+	ServiceTier                     string
+	PromptCacheKey                  string
+	ClientMetadata                  map[string]string
+	ClientMetadataTransform         ClientMetadataTransform
+	AttestationProvider             codexapi.AttestationProvider
+	OutputSchema                    any
+	DisableHostedImageGeneration    bool
+	PostToolInputItems              ToolPostExecutionInputItems
+	OnToolStarted                   ToolStartedCallback
+	OnToolCompleted                 ToolCompletedCallback
+	EmitCodeModeNestedLifecycle     bool
+	OnCodeModeNotify                CodeModeNotifyCallback
+	OnWarning                       WarningCallback
+	Timing                          *TimingState
+	SamplingFollowUp                SamplingFollowUp
+	OnAssistantMessage              AssistantMessageCallback
+	StreamHandler                   model.ResponsesStreamHandler
+	ExecutedToolCallMetadataEnabled bool
 }
 
 type AgentLoopResult struct {
@@ -122,10 +128,11 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 		now = time.Now
 	}
 	return &AgentLoop{
-		agent:        options.Agent,
-		dispatcher:   options.Dispatcher,
-		steerMailbox: options.SteerMailbox,
-		now:          now,
+		agent:             options.Agent,
+		dispatcher:        options.Dispatcher,
+		steerMailbox:      options.SteerMailbox,
+		now:               now,
+		executedToolCalls: options.ExecutedToolCalls,
 	}
 }
 
@@ -166,6 +173,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				inputItems = append(inputItems, userMessage)
 			}
 		}
+		var executedToolCallAttachment *ExecutedToolCallAttachment
+		if l.executedToolCalls != nil {
+			inputItems, executedToolCallAttachment = l.executedToolCalls.AttachPendingToPrompt(inputItems)
+		}
 		sampling := timing.BeginSampling(l.now())
 		response, err := l.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       prompt,
@@ -199,6 +210,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		sampling.CloseAt(l.now())
 		if err != nil {
 			return nil, err
+		}
+		if l.executedToolCalls != nil {
+			l.executedToolCalls.CommitAttachment(executedToolCallAttachment)
 		}
 		recordResponseTiming(timing, response, l.now())
 		result.Response = response
@@ -244,7 +258,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 		for i := range toolItems {
 			item := toolItems[i]
-			model.RecordExecutedToolCall(&item)
 			result.InputItems = append(result.InputItems, &item)
 		}
 		toolBlocking := timing.BeginToolBlocking(l.now())

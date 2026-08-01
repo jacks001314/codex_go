@@ -25,6 +25,7 @@ const (
 	PlanSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
 	PlanBusiness                    PlanType = "business"
 	PlanEnt26                       PlanType = "ent26"
+	PlanEnterpriseCBPAutomation     PlanType = "enterprise_cbp_automation"
 	PlanEnterpriseCBPUsageBased     PlanType = "enterprise_cbp_usage_based"
 	PlanEnterprise                  PlanType = "enterprise"
 	PlanEdu                         PlanType = "edu"
@@ -32,7 +33,7 @@ const (
 
 func (p PlanType) IsBusinessLike() bool {
 	switch p {
-	case PlanBusiness, PlanEnt26, PlanEnterpriseCBPUsageBased:
+	case PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased:
 		return true
 	default:
 		return false
@@ -51,7 +52,7 @@ func (p PlanType) IsTeamLike() bool {
 func (p PlanType) IsWorkspaceAccount() bool {
 	switch p {
 	case PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26,
-		PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu:
+		PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu:
 		return true
 	default:
 		return false
@@ -1436,6 +1437,8 @@ func planFromString(value string) PlanType {
 		return PlanBusiness
 	case string(PlanEnt26):
 		return PlanEnt26
+	case string(PlanEnterpriseCBPAutomation):
+		return PlanEnterpriseCBPAutomation
 	case string(PlanEnterpriseCBPUsageBased):
 		return PlanEnterpriseCBPUsageBased
 	case string(PlanEnterprise):

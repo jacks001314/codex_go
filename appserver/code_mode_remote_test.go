@@ -5,13 +5,16 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"codex_go/codemode"
+	"codex_go/model"
 	"codex_go/session"
 	"codex_go/tool"
+	"codex_go/turn"
 
 	"github.com/coder/websocket"
 )
@@ -46,6 +49,10 @@ func TestRuntimeRouterRemoteCodeModeExecutesAndClosesSharedConnection(t *testing
 		writeAppServerCodeModeFrame(t, ctx, conn, codemode.HostOperationResponse(execute.ID, codemode.ResultOK(codemode.ExecutionStarted(cellID))))
 		writeAppServerCodeModeFrame(t, ctx, conn, codemode.InitialResponse(execute.ID, codemode.ResultOK(codemode.Result(cellID, []codemode.ContentItem{codemode.InputText("REMOTE_APP_SERVER_OK")}, nil))))
 
+		var shutdown codemode.ClientToHost
+		if readAppServerCodeModeFrame(t, context.Background(), conn, &shutdown) && shutdown.Request != nil && shutdown.Request.Method == "session/shutdown" {
+			writeAppServerCodeModeFrame(t, context.Background(), conn, codemode.HostOperationResponse(shutdown.ID, codemode.ResultOK(codemode.SessionClosed(shutdown.Request.SessionID))))
+		}
 		_, _, _ = conn.Read(context.Background())
 		close(connectionClosed)
 	}))
@@ -106,6 +113,103 @@ func TestRuntimeRouterRemoteCodeModeNoFallbackReturnsFatalError(t *testing.T) {
 	var callErr *tool.FunctionCallError
 	if output != nil || !tool.AsFunctionCallError(err, &callErr) || !callErr.IsFatal() || !strings.Contains(callErr.ModelMessage(), "code-mode remote host unavailable") {
 		t.Fatalf("output = %#v error = %v call error = %#v", output, err, callErr)
+	}
+}
+
+func TestRuntimeRouterSelectsCodeModeProviderFromStartupPolicy(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(home, "codex-code-mode-host-does-not-exist")
+	for _, testCase := range []struct {
+		name    string
+		options *RuntimeRouterOptions
+		process bool
+	}{
+		{name: "disabled", options: &RuntimeRouterOptions{}},
+		{name: "feature-enabled", options: &RuntimeRouterOptions{CodeModeHostEnabled: true, CodeModeHostProgram: missing}, process: true},
+		{name: "fallback-disabled", options: &RuntimeRouterOptions{DisableCodeModeInProcessFallback: true, CodeModeHostProgram: missing}, process: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(filepath.Join(home, testCase.name)), filepath.Join(home, testCase.name), testCase.options)
+			defer router.Close()
+			_, isProcess := router.services.CodeModeProvider.(*codemode.ProcessProvider)
+			_, isDisabled := router.services.CodeModeProvider.(*codemode.DisabledProvider)
+			if isProcess != testCase.process || isDisabled == testCase.process {
+				t.Fatalf("provider = %T", router.services.CodeModeProvider)
+			}
+			availability := router.services.CodeModeProvider.(tool.CodeModeRemoteAvailabilityProvider).Availability()
+			if testCase.process && (availability == nil || !strings.Contains(availability.Error(), missing)) {
+				t.Fatalf("process availability = %v", availability)
+			}
+			if !testCase.process && (availability == nil || availability.Error() != "code-mode host is disabled") {
+				t.Fatalf("disabled availability = %v", availability)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterOwnsCodeModeRuntimePerThread(t *testing.T) {
+	home := t.TempDir()
+	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(home), home, &RuntimeRouterOptions{})
+	defer router.Close()
+	threadA := router.codeModeRuntimeForThread("thread-a")
+	if threadA == nil || router.codeModeRuntimeForThread("thread-a") != threadA {
+		t.Fatal("thread-a did not retain its code-mode runtime")
+	}
+	if threadB := router.codeModeRuntimeForThread("thread-b"); threadB == nil || threadB == threadA {
+		t.Fatal("distinct threads shared a code-mode runtime")
+	}
+	if err := router.deleteCodeModeRuntime("thread-a"); err != nil {
+		t.Fatal(err)
+	}
+	if replacement := router.codeModeRuntimeForThread("thread-a"); replacement == nil || replacement == threadA {
+		t.Fatal("unloaded thread reused its closed code-mode runtime")
+	}
+}
+
+func TestRuntimeRouterCodeModeWarningPrecedesTurnStarted(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(home, "codex-code-mode-host-does-not-exist")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:     NewRouter(session.NewStore(home)),
+		Turns:            turn.NewTurnService(),
+		Agent:            model.NewLocalAgentRunner(),
+		ThreadStatus:     NewThreadStatusManager(),
+		CodeModeProvider: codemode.NewProcessProvider(missing),
+	})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if started.Error != nil {
+		t.Fatalf("thread/start error = %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	turnStarted := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "check warning order"}))
+	if turnStarted.Error != nil {
+		t.Fatalf("turn/start error = %+v", turnStarted.Error)
+	}
+	turnID := turnStarted.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	warningIndex := -1
+	startedIndex := -1
+	for index, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationWarning:
+			warning, _ := notification.Params.(*WarningNotification)
+			if warning != nil && strings.Contains(warning.Message, missing) {
+				warningIndex = index
+			}
+		case NotificationTurnStarted:
+			payload, _ := notification.Params.(*TurnStartedNotification)
+			if payload != nil && payload.Turn.ID == turnID {
+				startedIndex = index
+			}
+		}
+	}
+	if warningIndex < 0 || startedIndex < 0 || warningIndex >= startedIndex {
+		t.Fatalf("code-mode warning index = %d, turn/started index = %d, notifications = %#v", warningIndex, startedIndex, sink.List())
 	}
 }
 

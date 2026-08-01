@@ -31,6 +31,35 @@ func NewLegacyAppPathString(value string) LegacyAppPathString {
 	return LegacyAppPathString{Value: value}
 }
 
+// ResolveExecutorPath resolves path text using the filesystem convention of
+// the executor-owned base path rather than the convention of the local host.
+func ResolveExecutorPath(base string, path string) (LegacyAppPathString, error) {
+	var baseURI *PathURI
+	var err error
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(base)), "file:") {
+		baseURI, err = Parse(strings.TrimSpace(base))
+	} else {
+		legacy := NewLegacyAppPathString(strings.TrimSpace(base))
+		convention, ok := legacy.InferAbsolutePathConvention()
+		if !ok {
+			return LegacyAppPathString{}, &LegacyError{Reason: "base path is not absolute", Path: base}
+		}
+		baseURI, err = legacy.ToPathURI(convention)
+	}
+	if err != nil {
+		return LegacyAppPathString{}, err
+	}
+	convention, ok := baseURI.InferConvention()
+	if !ok {
+		return LegacyAppPathString{}, &LegacyError{Reason: "base path convention is unknown", Path: base}
+	}
+	resolved, err := baseURI.Join(path)
+	if err != nil {
+		return LegacyAppPathString{}, err
+	}
+	return LegacyAppPathStringFromURI(resolved, convention)
+}
+
 func LegacyAppPathStringFromURI(uri *PathURI, convention PathConvention) (LegacyAppPathString, error) {
 	if uri == nil || uri.url == nil {
 		return LegacyAppPathString{}, &LegacyError{Reason: "path URI is nil"}

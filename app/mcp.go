@@ -304,6 +304,10 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	if server.Type != "streamable_http" {
 		return fmt.Errorf("OAuth login is only supported for streamable HTTP servers.")
 	}
+	runtimeConfig := mcpServerRuntimeConfig(opts.Name, server, store.codexHome)
+	if runtimeConfig.EffectiveAuth() == mcp.ServerAuthChatGPT && !runtimeConfig.IsLocalEnvironment() {
+		return fmt.Errorf("OAuth login is not supported for executor-owned ChatGPT MCP servers")
+	}
 	explicitScopes := append([]string(nil), opts.Scopes...)
 	explicitScopesSet := len(explicitScopes) > 0
 	configuredScopesSet := server.Scopes != nil
@@ -414,8 +418,9 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 	}
 	httpClient := mcpCLIHTTPClientWithTimeout(store.httpClient, mcpCLIOAuthDiscoveryTimeout)
 	startCtx, cancelStart := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
+	runtimeConfig := mcpServerRuntimeConfig(name, server, store.codexHome)
 	login, err := mcp.StartOAuthLoginServer(startCtx, &mcp.OAuthLoginServerOptions{
-		ServerName:            name,
+		ServerName:            runtimeConfig.OAuthCredentialName(name),
 		ServerURL:             server.URL,
 		ClientID:              strings.TrimSpace(server.OAuthClientID),
 		RegistrationEndpoint:  discovery.RegistrationEndpoint,
@@ -475,7 +480,9 @@ func runMCPLogout(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions,
 	if server.Type != "streamable_http" {
 		return fmt.Errorf("OAuth logout is only supported for streamable_http transports.")
 	}
-	removed, err := mcp.NewOAuthStore(store.codexHome).Delete(opts.Name, server.URL)
+	runtimeConfig := mcpServerRuntimeConfig(opts.Name, server, store.codexHome)
+	credentialName := runtimeConfig.OAuthCredentialName(opts.Name)
+	removed, err := mcp.NewOAuthStore(store.codexHome).Delete(credentialName, server.URL)
 	if err != nil {
 		return fmt.Errorf("failed to delete OAuth credentials: %w", err)
 	}
@@ -539,6 +546,8 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		Env:               cloneStringMap(server.Env),
 		URL:               server.URL,
 		BearerTokenEnvVar: server.BearerTokenEnvVar,
+		HTTPHeaders:       cloneStringMap(server.HTTPHeaders),
+		EnvHTTPHeaders:    cloneStringMap(server.EnvHTTPHeaders),
 		OAuthClientID:     server.OAuthClientID,
 		OAuthResource:     server.OAuthResource,
 		OAuthServerName:   name,
@@ -546,6 +555,7 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		Enabled:           server.Enabled,
 		Required:          server.Required,
 		EnvironmentID:     server.EnvironmentID,
+		Auth:              server.Auth,
 	}
 }
 

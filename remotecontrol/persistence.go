@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"codex_go/state"
 )
 
 const (
@@ -34,15 +32,15 @@ type EnrollmentStore struct {
 }
 
 func RemoteControlStateDBPath(codexHome string) string {
-	sqliteHome := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME"))
-	if sqliteHome != "" {
-		return filepath.Join(sqliteHome, RustStateDBFilename)
-	}
-	return filepath.Join(codexHome, RustStateDBFilename)
+	return filepath.Join(state.ResolveSQLiteHome(codexHome), RustStateDBFilename)
 }
 
 func OpenEnrollmentStore(dbPath string) (*EnrollmentStore, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	config, err := state.NewSqliteConfig(filepath.Dir(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	db, err := config.OpenReadWrite(context.Background(), dbPath)
 	if err != nil {
 		return nil, err
 	}

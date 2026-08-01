@@ -1,6 +1,10 @@
 package sandbox
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"path/filepath"
+	"strings"
+)
 
 type FileSystemAccessMode string
 
@@ -102,6 +106,14 @@ type AdditionalFileSystemPermissions struct {
 type RequestPermissionProfile struct {
 	Network    *AdditionalNetworkPermissions    `json:"network"`
 	FileSystem *AdditionalFileSystemPermissions `json:"fileSystem"`
+}
+
+func isSymbolicSlashTmpPath(path FileSystemPath) bool {
+	return path.Type == "special" && path.Value != nil && strings.EqualFold(path.Value.Kind, "slash_tmp")
+}
+
+func supportsSymbolicSlashTmp() bool {
+	return filepath.Separator == '/'
 }
 
 func ptrStringValue(value *string) string {

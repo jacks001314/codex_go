@@ -29,6 +29,30 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestIncludeEnvironmentContextDefaultsTrueAndHonorsFalseLikeRust(t *testing.T) {
+	if !(*Config)(nil).IncludeEnvironmentContext() || !(&Config{Values: map[string]any{}}).IncludeEnvironmentContext() {
+		t.Fatal("environment context should be enabled by default")
+	}
+	if (&Config{Values: map[string]any{"include_environment_context": false}}).IncludeEnvironmentContext() {
+		t.Fatal("include_environment_context=false was ignored")
+	}
+}
+
+func TestLoadConfigAcceptsUTF8BOM(t *testing.T) {
+	home := t.TempDir()
+	body := append([]byte{0xEF, 0xBB, 0xBF}, []byte("model = \"gpt-bom\"\n")...)
+	if err := os.WriteFile(ConfigPath(home), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadEffective(home, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadEffective() error = %v", err)
+	}
+	if loaded.Values["model"] != "gpt-bom" {
+		t.Fatalf("model = %#v", loaded.Values["model"])
+	}
+}
+
 func TestOmitLegacyMCPToolPrefixSupportsGlobalAndServerModes(t *testing.T) {
 	disabled := &Config{Values: map[string]any{}}
 	if disabled.OmitLegacyMCPToolPrefix("docs") {

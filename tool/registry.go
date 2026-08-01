@@ -107,6 +107,12 @@ type CodeModeNotifyFunc func(callID string, text string)
 type CodeModeNestedToolStartedFunc func(context.Context, *Invocation, time.Time)
 type CodeModeNestedToolCompletedFunc func(context.Context, *Invocation, *Output, error, time.Time, time.Time)
 
+const (
+	CodeModeCellIDContextKey       = "code_mode_cell_id"
+	CodeModeOutputCallIDContextKey = "code_mode_output_call_id"
+	CodeModeEnabledToolsContextKey = "code_mode_enabled_tools"
+)
+
 func (i *Invocation) DecodeArguments(target any) error {
 	if i == nil {
 		return fmt.Errorf("%w: invocation is nil", ErrToolInvalidCall)
@@ -134,6 +140,10 @@ type Output struct {
 type Executor interface {
 	Spec() Spec
 	Execute(ctx context.Context, invocation *Invocation) (*Output, error)
+}
+
+type TelemetryTagProvider interface {
+	TelemetryTags(invocation *Invocation) map[string]string
 }
 
 // ReadinessWaiter lets an exact tool runtime wait for external readiness before
@@ -182,6 +192,12 @@ func (r *Registry) Register(executor Executor) error {
 // tool sources are untrusted input and name collisions must not replace host
 // runtimes or abort construction of the turn.
 func (r *Registry) RegisterExternal(executor Executor) (bool, error) {
+	if executor != nil {
+		spec := executor.Spec()
+		if spec.Name.Namespace == "" && spec.Name.Name == DefaultShellCommandToolName {
+			return false, nil
+		}
+	}
 	return r.register(executor, true, false)
 }
 
@@ -355,6 +371,29 @@ func (r *Router) Executor(name ToolName) (Executor, bool) {
 	return r.registry.Lookup(name)
 }
 
+func (r *Router) TelemetryTags(invocation *Invocation) map[string]string {
+	if r == nil || r.registry == nil || invocation == nil {
+		return nil
+	}
+	executor, ok := r.registry.Lookup(invocation.ToolName)
+	if !ok {
+		return nil
+	}
+	provider, ok := executor.(TelemetryTagProvider)
+	if !ok {
+		return nil
+	}
+	tags := provider.TelemetryTags(invocation)
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(tags))
+	for key, value := range tags {
+		out[key] = value
+	}
+	return out
+}
+
 func (r *Router) DeclaresOutputSchema(name ToolName) bool {
 	if r == nil || r.registry == nil {
 		return false
@@ -402,6 +441,38 @@ func (r *Router) CodeModeToolSpecs() []Spec {
 		return nil
 	}
 	return provider.CodeModeToolSpecs()
+}
+
+func (r *Router) CodeModeAvailability() error {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	executor, ok := r.registry.Lookup(PlainName(CodeModeExecToolName))
+	if !ok {
+		return nil
+	}
+	provider, ok := executor.(interface{ CodeModeAvailability() error })
+	if !ok {
+		return nil
+	}
+	return provider.CodeModeAvailability()
+}
+
+func (r *Router) TakeCodeModeUnavailableWarning(effectiveToolMode string) string {
+	if r == nil || r.registry == nil {
+		return ""
+	}
+	executor, ok := r.registry.Lookup(PlainName(CodeModeExecToolName))
+	if !ok {
+		return ""
+	}
+	provider, ok := executor.(interface {
+		TakeCodeModeUnavailableWarning(string) string
+	})
+	if !ok {
+		return ""
+	}
+	return provider.TakeCodeModeUnavailableWarning(effectiveToolMode)
 }
 
 func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {

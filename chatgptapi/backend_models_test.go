@@ -45,6 +45,19 @@ func TestRateLimitPayloadPreservesEnt26Plan(t *testing.T) {
 	}
 }
 
+func TestRateLimitPayloadPreservesEnterpriseAutomationPlan(t *testing.T) {
+	var payload RateLimitStatusPayload
+	if err := json.Unmarshal([]byte(`{"plan_type":"enterprise_cbp_automation"}`), &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if payload.PlanType != PlanEnterpriseCbpAutomation {
+		t.Fatalf("plan = %q, want enterprise_cbp_automation", payload.PlanType)
+	}
+	if snapshots := RateLimitSnapshotsFromPayload(&payload); len(snapshots) != 1 || snapshots[0].PlanType != PlanEnterpriseCbpAutomation {
+		t.Fatalf("snapshots = %#v", snapshots)
+	}
+}
+
 func TestConstructorsInitializeRequiredFields(t *testing.T) {
 	title := true
 	item := NewTaskListItem("task", "Title", &title, true, false)

@@ -177,7 +177,7 @@ func (s *ConfigService) importExternalConfig(scope externalMigrationScope, resul
 	}
 	existing := map[string]any{}
 	if data, err := os.ReadFile(target); err == nil && strings.TrimSpace(string(data)) != "" {
-		if err := toml.Unmarshal(data, &existing); err != nil {
+		if err := toml.Unmarshal(stripUTF8BOM(data), &existing); err != nil {
 			return fmt.Errorf("invalid existing config.toml: %w", err)
 		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -299,7 +299,7 @@ func externalConfigHasMissing(target string, migrated map[string]any) bool {
 		return false
 	}
 	existing := map[string]any{}
-	if toml.Unmarshal(data, &existing) != nil {
+	if toml.Unmarshal(stripUTF8BOM(data), &existing) != nil {
 		return true
 	}
 	return mergeMissingExternalConfig(existing, migrated)

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,9 @@ import (
 
 const (
 	CodexAppsServerName                = "codex_apps"
+	DefaultMCPServerEnvironmentID      = "local"
+	ServerAuthOAuth                    = "oauth"
+	ServerAuthChatGPT                  = "chatgpt"
 	codexConnectorsTokenEnvVar         = "CODEX_CONNECTORS_TOKEN"
 	legacyCodexAppsRegistrationID      = "legacy_codex_apps"
 	consequentialTemplateSchemaVersion = 4
@@ -36,6 +40,7 @@ type ServerConfig struct {
 	Scopes                   []string                          `json:"scopes,omitempty"`
 	ScopesConfigured         bool                              `json:"-"`
 	OAuthServerName          string                            `json:"-"`
+	Auth                     string                            `json:"auth,omitempty"`
 	CodexHome                string                            `json:"-"`
 	Enabled                  bool                              `json:"enabled"`
 	DisabledReason           string                            `json:"disabled_reason,omitempty"`
@@ -49,6 +54,70 @@ type ServerConfig struct {
 	ToolTimeout              time.Duration                     `json:"-"`
 	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
 	ProtocolMode             MCPProtocolMode                   `json:"-"`
+}
+
+func (c *ServerConfig) EffectiveEnvironmentID() string {
+	if c == nil || strings.TrimSpace(c.EnvironmentID) == "" {
+		return DefaultMCPServerEnvironmentID
+	}
+	return strings.TrimSpace(c.EnvironmentID)
+}
+
+func (c *ServerConfig) IsLocalEnvironment() bool {
+	return c != nil && c.EffectiveEnvironmentID() == DefaultMCPServerEnvironmentID
+}
+
+func (c *ServerConfig) EffectiveAuth() string {
+	if c == nil || strings.TrimSpace(c.Auth) == "" {
+		return ServerAuthOAuth
+	}
+	return strings.ToLower(strings.TrimSpace(c.Auth))
+}
+
+// OAuthCredentialName keeps legacy local names stable while isolating
+// executor-owned credentials from both the host and other environments.
+func (c *ServerConfig) OAuthCredentialName(serverName string) string {
+	serverName = strings.TrimSpace(serverName)
+	if c == nil || c.IsLocalEnvironment() {
+		if strings.HasPrefix(serverName, "executor:") || strings.HasPrefix(serverName, "local:") {
+			return "local:" + serverName
+		}
+		return serverName
+	}
+	environment := base64.RawURLEncoding.EncodeToString([]byte(c.EffectiveEnvironmentID()))
+	server := base64.RawURLEncoding.EncodeToString([]byte(serverName))
+	return "executor:" + environment + ":" + server
+}
+
+func (c *ServerConfig) SafeRemoteChatGPTAuthorization() bool {
+	if c == nil || c.EffectiveAuth() != ServerAuthChatGPT || c.IsLocalEnvironment() || c.ApplyHTTPRequest != nil || strings.TrimSpace(c.BearerTokenEnvVar) != "" {
+		return false
+	}
+	if len(c.EnvHTTPHeaders) != 0 {
+		return false
+	}
+	for name, value := range c.HTTPHeaders {
+		if !strings.EqualFold(strings.TrimSpace(name), "Authorization") || strings.TrimSpace(value) == "" {
+			continue
+		}
+		for _, character := range []byte(value) {
+			if character != '\t' && (character < ' ' || character == 0x7f) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func ValidateServerAuth(serverName string, config *ServerConfig) error {
+	if config == nil || config.EffectiveAuth() != ServerAuthChatGPT || config.IsLocalEnvironment() {
+		return nil
+	}
+	if config.SafeRemoteChatGPTAuthorization() {
+		return nil
+	}
+	return fmt.Errorf("executor-owned MCP server `%s` cannot use hosted ChatGPT authentication; configure executor-owned credentials instead", strings.TrimSpace(serverName))
 }
 
 type ToolConfig struct {
@@ -294,6 +363,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.Required = value
 	}
 	server.DisabledReason = runtimeConfigStringAny(values, "disabled_reason", "disabledReason")
+	server.Auth = runtimeConfigString(values, "auth")
 	server.EnvironmentID = runtimeConfigStringAny(values, "environment_id", "environmentId")
 	server.StartupTimeout = runtimeConfigDurationAny(values, "startup_timeout_sec", "startupTimeoutSec", "startup_timeout_ms", "startupTimeoutMs")
 	server.ToolTimeout = runtimeConfigDurationAny(values, "tool_timeout_sec", "toolTimeoutSec", "tool_timeout_ms", "toolTimeoutMs")
@@ -641,6 +711,8 @@ func CodexAppsServerConfig(baseURL string, productSKU string, runtimeAuth *Runti
 	}
 	config := ServerConfig{
 		URL:              codexAppsMCPURL(baseURL),
+		Auth:             ServerAuthChatGPT,
+		EnvironmentID:    DefaultMCPServerEnvironmentID,
 		HTTPHeaders:      headers,
 		Enabled:          true,
 		StartupTimeout:   30 * time.Second,

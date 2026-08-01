@@ -33,7 +33,7 @@ func ParseRequirementsTOML(data []byte) (*ConfigRequirements, error) {
 
 func parseRequirementsTOMLValues(data []byte) (map[string]any, error) {
 	values := map[string]any{}
-	if err := toml.Unmarshal(data, &values); err != nil {
+	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
 		return nil, err
 	}
 	return values, nil

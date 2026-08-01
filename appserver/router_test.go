@@ -620,6 +620,57 @@ func TestRouterThreadStartPersistsPaginatedHistoryMode(t *testing.T) {
 	}
 }
 
+func TestRouterPaginatedRolloutAutomaticallyMaterializesThreadHistoryLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(filepath.Join(codexHome, "sessions"))
+	router := NewRouter(store)
+	t.Cleanup(func() { _ = router.Close() })
+	now := fixedTime()
+	record := &session.Record{
+		ID:        "thread-paginated-projection",
+		SessionID: "thread-paginated-projection",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			HistoryMode:  string(ThreadHistoryPaginated),
+			RolloutTurns: []session.TurnSnapshot{{ID: "turn-1", Status: string(TurnStatusCompleted)}},
+		},
+		Items: []session.Item{{
+			ID:        "user-1",
+			Type:      "user_message",
+			Role:      "user",
+			Text:      "hello",
+			CreatedAt: now,
+			Metadata:  map[string]any{"turnId": "turn-1"},
+		}},
+	}
+	if err := router.createThreadRollout(record, now); err != nil {
+		t.Fatal(err)
+	}
+	db := openRouterTestSQLite(t, filepath.Join(sqliteHome, "thread_history_1.sqlite"))
+	var turnOrdinal, nextOrdinal, nextOffset int64
+	if err := db.QueryRow(`SELECT rollout_ordinal FROM thread_turns WHERE thread_id = ? AND turn_id = ?`, string(record.ID), "turn-1").Scan(&turnOrdinal); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT next_rollout_byte_offset, next_rollout_ordinal FROM thread_history_projection_state WHERE thread_id = ?`, string(record.ID)).Scan(&nextOffset, &nextOrdinal); err != nil {
+		t.Fatal(err)
+	}
+	path, err := rollout.FindThreadPath(codexHome, string(record.ID), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turnOrdinal != 1 || nextOrdinal != 4 || nextOffset != info.Size() {
+		t.Fatalf("projection = turn:%d next:%d offset:%d, file size:%d", turnOrdinal, nextOrdinal, nextOffset, info.Size())
+	}
+}
+
 func TestRouterStartWithoutPromptReturnsUnmaterializedPath(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
@@ -735,6 +786,10 @@ func TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized(t *testing.T) {
 	if named.Error != nil {
 		t.Fatalf("thread/name/set error: %+v", named.Error)
 	}
+	indexedName, indexed, indexErr := rollout.FindThreadNameByID(codexHomeFromSessionStore(store), threadID)
+	if indexErr != nil || !indexed || indexedName != "SDK lifecycle example" {
+		t.Fatalf("thread name index = %q, %v, %v", indexedName, indexed, indexErr)
+	}
 	if _, err := rollout.FindThreadPath(store.Root(), threadID, false); err == nil {
 		t.Fatal("thread/name/set unexpectedly materialized a rollout")
 	}
@@ -759,6 +814,40 @@ func TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized(t *testing.T) {
 	fork := router.Handle(requestWithParams(t, IntID(5), MethodThreadFork, ThreadForkParams{ThreadID: threadID}))
 	if fork.Error == nil || fork.Error.Code != -32600 || !strings.Contains(fork.Error.Message, "no rollout found for thread id") {
 		t.Fatalf("thread/fork response = %+v", fork)
+	}
+}
+
+func TestRouterReadsAndDeletesRustSessionNameIndex(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: "indexed-thread", Source: "cli", CWD: home,
+		ModelProvider: "openai", Now: fixedTime(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollout.AppendThreadName(home, "indexed-thread", "Rust indexed name"); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(store)
+	read := router.Handle(requestWithParams(t, IntID(1), MethodThreadRead, ThreadReadParams{ThreadID: "indexed-thread"}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error: %+v", read.Error)
+	}
+	thread := read.Result.(*ThreadReadResponse).Thread
+	if thread.Name == nil || *thread.Name != "Rust indexed name" {
+		t.Fatalf("indexed thread name = %#v", thread.Name)
+	}
+	deleted := router.Handle(requestWithParams(t, IntID(2), MethodThreadDelete, ThreadDeleteParams{ThreadID: "indexed-thread"}))
+	if deleted.Error != nil {
+		t.Fatalf("thread/delete error: %+v", deleted.Error)
+	}
+	if _, found, err := rollout.FindThreadNameByID(home, "indexed-thread"); err != nil || found {
+		t.Fatalf("deleted name index found=%v err=%v", found, err)
 	}
 }
 
@@ -2463,7 +2552,7 @@ func TestRouterReadAndResumeFallbackToRollout(t *testing.T) {
 		t.Fatalf("items error = %+v", items.Error)
 	}
 	itemsResult := items.Result.(*ThreadItemsListResponse)
-	if len(itemsResult.Data) != 1 || itemsResult.Data[0].ID != "user-1" || itemsResult.Data[0].Text != "from rollout" {
+	if len(itemsResult.Data) != 1 || itemsResult.Data[0].Item.ID != "user-1" || itemsResult.Data[0].Item.Text != "from rollout" {
 		t.Fatalf("items result = %+v", itemsResult)
 	}
 
@@ -2560,8 +2649,15 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
-	if err := recorder.AppendItem(rollout.Item{ID: "user-1", Type: "message", Role: "user", Text: "from paginated rollout"}); err != nil {
+	t.Cleanup(func() { _ = recorder.Close() })
+	if err := recorder.AppendTurnStarted("turn-1", fixedTime()); err != nil {
+		t.Fatalf("AppendTurnStarted() error = %v", err)
+	}
+	if err := recorder.AppendItem(rollout.Item{ID: "user-1", Type: "message", Role: "user", Text: "from paginated rollout", Metadata: map[string]any{"turnId": "turn-1"}}); err != nil {
 		t.Fatalf("AppendItem() error = %v", err)
+	}
+	if err := recorder.AppendTurnComplete("turn-1", fixedTime().Add(time.Second), 1_000); err != nil {
+		t.Fatalf("AppendTurnComplete() error = %v", err)
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -3534,7 +3630,7 @@ func TestRouterSearchLoadedTurnsRollbackAndInjectItems(t *testing.T) {
 		t.Fatalf("items error: %+v", items.Error)
 	}
 	itemsPage := items.Result.(*ThreadItemsListResponse)
-	if len(itemsPage.Data) != 1 || itemsPage.Data[0].ID != "item-1" || itemsPage.NextCursor == nil || *itemsPage.NextCursor != "1" {
+	if len(itemsPage.Data) != 1 || itemsPage.Data[0].Item.ID != "item-1" || itemsPage.NextCursor == nil || *itemsPage.NextCursor != "1" {
 		t.Fatalf("items page = %+v", itemsPage)
 	}
 	oneLimit := 1
@@ -3547,7 +3643,7 @@ func TestRouterSearchLoadedTurnsRollbackAndInjectItems(t *testing.T) {
 		t.Fatalf("next items error: %+v", nextItems.Error)
 	}
 	nextItemsPage := nextItems.Result.(*ThreadItemsListResponse)
-	if len(nextItemsPage.Data) != 1 || nextItemsPage.Data[0].ID != "item-2" || nextItemsPage.NextCursor != nil {
+	if len(nextItemsPage.Data) != 1 || nextItemsPage.Data[0].Item.ID != "item-2" || nextItemsPage.NextCursor != nil {
 		t.Fatalf("next items page = %+v", nextItemsPage)
 	}
 

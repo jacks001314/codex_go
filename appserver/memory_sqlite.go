@@ -4,22 +4,18 @@ import (
 	"database/sql"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	"codex_go/state"
 )
 
 const (
-	rustStateSQLiteFilename    = "state_5.sqlite"
-	rustMemoriesSQLiteFilename = "memories_1.sqlite"
+	rustStateSQLiteFilename    = state.StateSQLiteFilename
+	rustMemoriesSQLiteFilename = state.MemoriesSQLiteFilename
 )
 
 func rustSQLiteHome(codexHome string) string {
-	if sqliteHome := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME")); sqliteHome != "" {
-		return sqliteHome
-	}
-	return strings.TrimSpace(codexHome)
+	return state.ResolveSQLiteHome(codexHome)
 }
 
 func updateRustStateThreadMemoryMode(codexHome string, threadID string, mode ThreadMemoryMode) error {
@@ -27,11 +23,15 @@ func updateRustStateThreadMemoryMode(codexHome string, threadID string, mode Thr
 	if threadID == "" || mode == "" {
 		return nil
 	}
-	dbPath := filepath.Join(rustSQLiteHome(codexHome), rustStateSQLiteFilename)
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	dbPath := config.StateDBPath()
 	if !regularFileExists(dbPath) {
 		return nil
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := config.OpenReadWrite(nil, dbPath)
 	if err != nil {
 		return err
 	}
@@ -43,16 +43,45 @@ func updateRustStateThreadMemoryMode(codexHome string, threadID string, mode Thr
 	return err
 }
 
+func updateRustStateThreadName(codexHome string, threadID string, name string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	dbPath := config.StateDBPath()
+	if !regularFileExists(dbPath) {
+		return nil
+	}
+	db, err := config.OpenReadWrite(nil, dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`UPDATE threads SET name = ? WHERE id = ?`, sqliteNullableString(name), threadID)
+	if isSQLiteMissingSchemaError(err) {
+		return nil
+	}
+	return err
+}
+
 func updateRustStateThreadGitInfo(codexHome string, threadID string, git map[string]string) error {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return nil
 	}
-	dbPath := filepath.Join(rustSQLiteHome(codexHome), rustStateSQLiteFilename)
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	dbPath := config.StateDBPath()
 	if !regularFileExists(dbPath) {
 		return nil
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := config.OpenReadWrite(nil, dbPath)
 	if err != nil {
 		return err
 	}
@@ -71,11 +100,15 @@ func updateRustStateThreadGitInfo(codexHome string, threadID string, git map[str
 }
 
 func clearRustMemoriesSQLiteData(codexHome string) error {
-	dbPath := filepath.Join(rustSQLiteHome(codexHome), rustMemoriesSQLiteFilename)
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	dbPath := config.MemoriesDBPath()
 	if !regularFileExists(dbPath) {
 		return nil
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := config.OpenReadWrite(nil, dbPath)
 	if err != nil {
 		return err
 	}

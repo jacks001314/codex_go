@@ -27,7 +27,14 @@ func TestGoTopLevelDirectoryInventory(t *testing.T) {
 
 func rustTopLevelDirectories(t *testing.T, root string) []string {
 	t.Helper()
-	return collectTopLevelDirectories(t, root)
+	dirs := collectTopLevelDirectories(t, root)
+	out := dirs[:0]
+	for _, dir := range dirs {
+		if dir != "target" {
+			out = append(out, dir)
+		}
+	}
+	return out
 }
 
 func goTopLevelDirectories(t *testing.T, root string) []string {
@@ -85,6 +92,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"app-server-client",
 		"app-server-daemon",
 		"app-server-protocol",
+		"app-server-protocol-noop-macros",
 		"app-server-test-client",
 		"app-server-transport",
 		"apply-patch",
@@ -102,6 +110,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"code-mode",
 		"code-mode-host",
 		"code-mode-protocol",
+		"code-mode-runtime",
 		"codex-api",
 		"codex-backend-openapi-models",
 		"codex-client",
