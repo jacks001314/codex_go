@@ -121,19 +121,18 @@ func TestStreamControllerHidesWebCitationsFromRenderedTable(t *testing.T) {
 	controller := NewStreamController(120)
 	controller.Push("| City | Temperature |\n")
 	controller.Push("| --- | --- |\n")
-	controller.Push("| Kunming | 21°C\uE000ci")
-	controller.Push("te\uE002turn7forecast0")
-	controller.Push("\uE001 |\n")
+	controller.Push("| Kunming | \uE200cite\uE202turn0forecast0")
+	controller.Push("\uE201 21°C |\n")
 
 	final, source := controller.Finalize()
 	if final == nil {
 		t.Fatal("expected final table cell")
 	}
 	rendered := strings.Join(final.DisplayLines(120), "\n")
-	if strings.Contains(rendered, "turn7forecast0") || strings.Contains(rendered, "cite") {
+	if strings.Contains(rendered, "turn0forecast0") || strings.Contains(rendered, "cite") {
 		t.Fatalf("rendered table leaked provider citation: %q", rendered)
 	}
-	if !strings.Contains(source, "turn7forecast0") {
+	if !strings.Contains(source, "turn0forecast0") {
 		t.Fatalf("Finalize() should preserve raw source, got %q", source)
 	}
 }

@@ -301,9 +301,12 @@ func sanitizePathPart(value string) string {
 
 func stripCitations(text string) string {
 	// Rust hides memory citations and Web search citation controls before
-	// rendering assistant text. An unterminated opening tag is hidden to EOF,
-	// matching the Rust stream parser's finish behavior.
+	// rendering assistant text. OpenAI has used both E200 and E000 private-use
+	// delimiters for Web citations; accept both wire forms. An unterminated
+	// opening tag is hidden to EOF, matching the Rust stream parser's finish
+	// behavior.
 	text = stripInlineHiddenTag(text, "<oai-mem-citation>", "</oai-mem-citation>")
+	text = stripInlineHiddenTag(text, "\uE200cite\uE202", "\uE201")
 	text = stripInlineHiddenTag(text, "\uE000cite\uE002", "\uE001")
 	for {
 		start := strings.Index(text, "【")

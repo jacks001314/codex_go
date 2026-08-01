@@ -124,14 +124,14 @@ func TestStripHiddenAssistantMarkup(t *testing.T) {
 }
 
 func TestStripHiddenAssistantMarkupRemovesRustMemoryAndWebCitations(t *testing.T) {
-	text := "21°C\uE000cite\uE002turn7forecast0\uE001 and <oai-mem-citation>memory</oai-mem-citation>done"
-	if got := StripHiddenAssistantMarkup(text, false); got != "21°C and done" {
+	text := "昆明\uE200cite\uE202turn0forecast0\uE201 21°C\uE000cite\uE002turn7forecast0\uE001 and <oai-mem-citation>memory</oai-mem-citation>done"
+	if got := StripHiddenAssistantMarkup(text, false); got != "昆明 21°C and done" {
 		t.Fatalf("StripHiddenAssistantMarkup() = %q", got)
 	}
 }
 
 func TestStripHiddenAssistantMarkupHidesUnterminatedCitations(t *testing.T) {
-	text := "visible\uE000cite\uE002turn7forecast0"
+	text := "visible\uE200cite\uE202turn0forecast0"
 	if got := StripHiddenAssistantMarkup(text, false); got != "visible" {
 		t.Fatalf("StripHiddenAssistantMarkup() = %q", got)
 	}
