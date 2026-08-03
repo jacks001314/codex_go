@@ -55,6 +55,13 @@ type AgentUsage struct {
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 	TotalTokens           int64
+
+	// CodexRolloutBudgetUnits is the provider-reported number of units
+	// consumed from the shared rollout budget. It is an internal-only value
+	// parsed from the completed Responses API usage and must not be serialized
+	// into protocol, JSON schema, or TypeScript representations (mirrors Rust
+	// TokenUsage.codex_rollout_budget_units with skip_serializing/skip).
+	CodexRolloutBudgetUnits json.Number `json:"-"`
 }
 
 type AgentItem struct {

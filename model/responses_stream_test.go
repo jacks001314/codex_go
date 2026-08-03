@@ -38,6 +38,29 @@ func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(
 	}
 }
 
+func TestUsageFromStreamEventDataCapturesRolloutBudgetUnits(t *testing.T) {
+	usage, ok := usageFromStreamEventData([]byte(`{"response":{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6,"codex_rollout_budget_units":2.5}}}`))
+	if !ok {
+		t.Fatal("usageFromStreamEventData() ok = false, want true")
+	}
+	if usage.InputTokens != 4 || usage.OutputTokens != 2 || usage.TotalTokens != 6 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if usage.CodexRolloutBudgetUnits != "2.5" {
+		t.Fatalf("codex rollout budget units = %q, want 2.5", usage.CodexRolloutBudgetUnits)
+	}
+}
+
+func TestUsageFromStreamEventDataMissingRolloutBudgetUnits(t *testing.T) {
+	usage, ok := usageFromStreamEventData([]byte(`{"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
+	if !ok {
+		t.Fatal("usageFromStreamEventData() ok = false, want true")
+	}
+	if usage.CodexRolloutBudgetUnits != "" {
+		t.Fatalf("codex rollout budget units = %q, want empty", usage.CodexRolloutBudgetUnits)
+	}
+}
+
 func TestParseResponsesStreamKeepsDeclaredFunctionToolAsFunctionCall(t *testing.T) {
 	response, err := parseResponsesStream(
 		context.Background(),

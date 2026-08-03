@@ -241,10 +241,14 @@ type responsesAgentContentBlock struct {
 }
 
 type responsesAgentAPIUsage struct {
-	InputTokens        int64 `json:"input_tokens"`
-	OutputTokens       int64 `json:"output_tokens"`
-	TotalTokens        int64 `json:"total_tokens"`
-	InputTokensDetails *struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+	TotalTokens  int64 `json:"total_tokens"`
+	// CodexRolloutBudgetUnits mirrors the Rust ResponseCompletedUsage field:
+	// provider-reported units consumed from the shared rollout budget. It can
+	// be a fractional number (e.g. 2.5), so json.Number preserves the literal.
+	CodexRolloutBudgetUnits json.Number `json:"codex_rollout_budget_units"`
+	InputTokensDetails      *struct {
 		CachedTokens     int64 `json:"cached_tokens"`
 		CacheWriteTokens int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details,omitempty"`
@@ -1851,6 +1855,7 @@ func usageFromResponses(usage *responsesAgentAPIUsage, fallbackText string) Agen
 		OutputTokens: usage.OutputTokens,
 		TotalTokens:  usage.TotalTokens,
 	}
+	out.CodexRolloutBudgetUnits = usage.CodexRolloutBudgetUnits
 	if usage.InputTokensDetails != nil {
 		out.CachedInputTokens = usage.InputTokensDetails.CachedTokens
 		out.CacheWriteInputTokens = usage.InputTokensDetails.CacheWriteTokens

@@ -52,7 +52,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 			"id":"resp-1",
 			"model":"gpt-test",
 			"output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from api"}]}],
-			"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":12,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":4},"output_tokens_details":{"reasoning_tokens":1}}
+			"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":12,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":4},"output_tokens_details":{"reasoning_tokens":1},"codex_rollout_budget_units":2.5}
 		}`))
 	}))
 	defer server.Close()
@@ -166,6 +166,9 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	}
 	if response.Usage.InputTokens != 7 || response.Usage.CachedInputTokens != 2 || response.Usage.CacheWriteInputTokens != 4 || response.Usage.OutputTokens != 3 || response.Usage.ReasoningOutputTokens != 1 || response.Usage.TotalTokens != 12 {
 		t.Fatalf("usage = %#v", response.Usage)
+	}
+	if response.Usage.CodexRolloutBudgetUnits != "2.5" {
+		t.Fatalf("codex rollout budget units = %q, want 2.5", response.Usage.CodexRolloutBudgetUnits)
 	}
 	if response.RequestID != "req-1" || response.ServerModel != "gpt-server" || response.TurnState != "turn-state-1" || response.ModelsETag != `"models-etag-1"` {
 		t.Fatalf("response metadata = %#v", response)
