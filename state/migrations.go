@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"path"
@@ -27,6 +28,26 @@ type sqliteMigration struct {
 }
 
 const legacyRemoteControlTable = "_codex_go_legacy_remote_control_enrollments"
+
+// Rust Codex and codex-go share the state database schema, but SQLx records a
+// checksum of the exact migration source text. The two implementations' SQL
+// files are semantically equivalent without being byte-identical. This frozen
+// first-migration fingerprint lets us recognize a Rust-owned state database
+// without weakening checksum validation for databases created by codex-go.
+var rustMigrationOneChecksums = map[RuntimeDBKind][]byte{
+	RuntimeDBState:    mustDecodeMigrationChecksum("54bbd6f47905a4e4c674034575963d82da7b534e66e9a37a81ec2afb6a4b56ce6de9b3ecf3032796a800f650239847d4"),
+	RuntimeDBLogs:     mustDecodeMigrationChecksum("f477e6056db490de009f392c16761f4719b17ba37d043ca92d907b5ff885846f6e8c821a357475d74b6d0d6f511eb279"),
+	RuntimeDBGoals:    mustDecodeMigrationChecksum("9d4af4ba7688052dd22a508b567b977e6d79ba20cd49c8989e7bc828ac947cd7344be7d2559d3e901cc81a3793ea66d2"),
+	RuntimeDBMemories: mustDecodeMigrationChecksum("7178a6d5072f7aa00e036aad06cc53143b834b68c84ba17285277a8ee68652a8ee1d6a9ff9965c7dafe8193293641769"),
+}
+
+func mustDecodeMigrationChecksum(value string) []byte {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		panic(err)
+	}
+	return decoded
+}
 
 type legacyRemoteControlAdoption struct {
 	pending    bool
@@ -139,19 +160,24 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 		return fmt.Errorf("read dirty migration: %w", err)
 	}
 
-	applied := map[int64][]byte{}
-	rows, err := conn.QueryContext(ctx, `SELECT version, checksum FROM _sqlx_migrations ORDER BY version`)
+	type appliedMigration struct {
+		description string
+		checksum    []byte
+	}
+	applied := map[int64]appliedMigration{}
+	rows, err := conn.QueryContext(ctx, `SELECT version, description, checksum FROM _sqlx_migrations ORDER BY version`)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
 	for rows.Next() {
 		var version int64
+		var description string
 		var checksum []byte
-		if err := rows.Scan(&version, &checksum); err != nil {
+		if err := rows.Scan(&version, &description, &checksum); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan applied migration: %w", err)
 		}
-		applied[version] = append([]byte(nil), checksum...)
+		applied[version] = appliedMigration{description: description, checksum: append([]byte(nil), checksum...)}
 	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close applied migration rows: %w", err)
@@ -160,9 +186,13 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
 
+	rustDatabase := bytes.Equal(applied[1].checksum, rustMigrationOneChecksums[kind])
 	for _, migration := range migrations {
-		if checksum, ok := applied[migration.version]; ok {
-			if !bytes.Equal(checksum, migration.checksum[:]) {
+		if recorded, ok := applied[migration.version]; ok {
+			if recorded.description != migration.description {
+				return fmt.Errorf("%s migration %d description mismatch", kind, migration.version)
+			}
+			if !rustDatabase && !bytes.Equal(recorded.checksum, migration.checksum[:]) {
 				return fmt.Errorf("%s migration %d checksum mismatch", kind, migration.version)
 			}
 			continue

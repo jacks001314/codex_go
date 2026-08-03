@@ -834,7 +834,7 @@ func TestInteractiveStartLocalTUIThreadReservesDisplayedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserved session read error = %v", err)
 	}
-	if record.Metadata.Model != state.Model || record.Metadata.CWD != state.CWD || state.ThreadID != threadID {
+	if record.Metadata.Model != state.Model || record.Metadata.CWD != state.CWD || record.Metadata.Source != string(appserver.SessionSourceCli) || state.ThreadID != threadID {
 		t.Fatalf("reserved session = record %#v state thread %q", record.Metadata, state.ThreadID)
 	}
 	if card := state.RenderStatusCardWidth(100); !strings.Contains(card, "Session:") || !strings.Contains(card, threadID) {

@@ -52,6 +52,17 @@ type execMultiAgentTools struct {
 	maxConcurrency            int
 }
 
+func execAgentSteerMailboxFromTools(req *Request, options *execMultiAgentTools) *turn.SteerMailbox {
+	if req == nil || options == nil {
+		return nil
+	}
+	controller, ok := options.controller.(*execAgentController)
+	if !ok || controller == nil {
+		return nil
+	}
+	return controller.shared().steerMailbox
+}
+
 func execAgentControllerFromTools(options *execMultiAgentTools) agent.ToolController {
 	if options == nil {
 		return nil
@@ -176,7 +187,7 @@ func execMultiAgentVersionForRequest(req *Request) string {
 	return ""
 }
 
-func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *config.Config, threadID string, agentRunner model.AgentRunner) (*execMultiAgentTools, error) {
+func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *config.Config, threadID string, turnID string, agentRunner model.AgentRunner) (*execMultiAgentTools, error) {
 	if r == nil || req == nil || cfg == nil {
 		return nil, nil
 	}
@@ -227,8 +238,12 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 	controller := agent.ToolController(nil)
 	if req.subagent != nil {
 		controller = req.subagent.Controller
+		if scoped, ok := controller.(*execAgentController); ok && scoped != nil {
+			scoped.setActiveTurn(turnID)
+		}
 	} else {
 		rootController := newExecAgentController(r, ctx, req, threadID, maxAgents).(*execAgentController)
+		rootController.setActiveTurn(turnID)
 		rootController.multiAgentVersion = version
 		rootController.modelsManager = modelsManager
 		rootController.parentModel = execMultiAgentModelForRun(req, cfg, modelsManager)
@@ -394,10 +409,12 @@ type execAgentController struct {
 	tasks        map[string]*execAgentTask
 	nextName     int
 	updates      chan struct{}
-	mailbox      chan string
+	mailboxes    map[string]chan string
 	waitDefault  time.Duration
 	waitMin      time.Duration
 	waitMax      time.Duration
+	activeTurnID string
+	steerMailbox *turn.SteerMailbox
 }
 
 type execAgentTask struct {
@@ -409,6 +426,7 @@ type execAgentTask struct {
 	status          agent.AgentMessageStatus
 	cancel          context.CancelFunc
 	generation      uint64
+	activeTurnID    string
 	pendingMessages []execAgentCommunication
 	pendingFollowup []execAgentCommunication
 }
@@ -432,7 +450,7 @@ func newExecAgentController(runner *Runner, ctx context.Context, req *Request, p
 	return &execAgentController{
 		runner: runner, ctx: ctx, base: base, parentID: strings.TrimSpace(parentID),
 		scopePath: "/root", maxAgents: maxAgents, multiAgentVersion: agent.VersionV2, tasks: map[string]*execAgentTask{},
-		updates: make(chan struct{}, 1), mailbox: make(chan string, 128),
+		updates: make(chan struct{}, 1), mailboxes: map[string]chan string{}, steerMailbox: turn.NewSteerMailbox(),
 	}
 }
 
@@ -446,6 +464,46 @@ func (c *execAgentController) shared() *execAgentController {
 func (c *execAgentController) scoped(path, parentID string) *execAgentController {
 	root := c.shared()
 	return &execAgentController{root: root, parentID: strings.TrimSpace(parentID), scopePath: cleanExecAgentPath(path)}
+}
+
+func (c *execAgentController) setActiveTurn(turnID string) {
+	s := c.shared()
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	c.activeTurnID = strings.TrimSpace(turnID)
+	var task *execAgentTask
+	pending := []execAgentCommunication{}
+	if c != s {
+		if task = s.taskLocked(c.parentID); task != nil {
+			task.activeTurnID = strings.TrimSpace(turnID)
+			pending = append(pending, task.pendingMessages...)
+			pending = append(pending, task.pendingFollowup...)
+			task.pendingMessages = nil
+			task.pendingFollowup = nil
+		}
+	}
+	if s.steerMailbox == nil {
+		s.steerMailbox = turn.NewSteerMailbox()
+	}
+	mailbox := s.steerMailbox
+	s.mu.Unlock()
+	if task == nil || mailbox == nil || strings.TrimSpace(turnID) == "" || len(pending) == 0 {
+		return
+	}
+	items := make([]any, 0, len(pending))
+	for _, communication := range pending {
+		if strings.TrimSpace(communication.message) != "" {
+			items = append(items, execAgentCommunicationInputItem(communication))
+		}
+	}
+	if len(items) == 0 {
+		return
+	}
+	if mailbox.Enqueue(&turn.SteerEnqueueParams{ThreadID: task.id, TurnID: strings.TrimSpace(turnID), InputItems: items}) == nil {
+		c.notifyMailboxFor(task.path, fmt.Sprintf("queued input delivered to %s", task.path))
+	}
 }
 
 func (c *execAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnAgentArgs) (*agent.SpawnAgentResult, error) {
@@ -724,6 +782,10 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 		childReq.Exec.StreamAssistantDeltas = false
 		childReq.Exec.Subcommand = ""
 		childReq.Exec.Resume = cli.ExecResumeOptions{}
+		// Child runs own their event stream. Reusing the root handler leaks child
+		// function-call lifecycle into the parent SDK stream, unlike Rust which
+		// exposes only the collaboration lifecycle on the parent thread.
+		childReq.InternalEventHandler = nil
 		if args.Model != nil && strings.TrimSpace(*args.Model) != "" {
 			childReq.Exec.Shared.Model = strings.TrimSpace(*args.Model)
 		}
@@ -768,11 +830,12 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 			task.status = status
 		}
 		task.cancel = nil
+		task.activeTurnID = ""
 		followups := append([]execAgentCommunication(nil), task.pendingFollowup...)
 		task.pendingFollowup = nil
 		s.mu.Unlock()
 		c.notify()
-		c.notifyMailbox(agent.FormatSubagentNotificationMessage(task.path, status))
+		c.deliverCompletion(task, status)
 		if len(followups) > 0 && status.Kind != agent.AgentMessageStatusShutdown {
 			c.startTask(task, &agent.SpawnAgentArgs{TaskName: task.taskName, ForkTurns: execStringPointer("none")}, followups, true)
 		}
@@ -914,12 +977,84 @@ func (c *execAgentController) notify() {
 }
 
 func (c *execAgentController) notifyMailbox(message string) {
+	c.notifyMailboxFor(c.scopePath, message)
+}
+
+func (c *execAgentController) notifyMailboxFor(scopePath string, message string) {
 	if strings.TrimSpace(message) == "" {
 		return
 	}
+	s := c.shared()
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	mailbox := s.activityMailboxLocked(scopePath)
+	s.mu.Unlock()
 	select {
-	case c.shared().mailbox <- message:
+	case mailbox <- message:
 	default:
+	}
+}
+
+func (c *execAgentController) activityMailboxLocked(scopePath string) chan string {
+	s := c.shared()
+	key := cleanExecAgentPath(firstNonEmpty(scopePath, "/root"))
+	if s.mailboxes == nil {
+		s.mailboxes = map[string]chan string{}
+	}
+	mailbox := s.mailboxes[key]
+	if mailbox == nil {
+		mailbox = make(chan string, 128)
+		s.mailboxes[key] = mailbox
+	}
+	return mailbox
+}
+
+func (c *execAgentController) deliverCompletion(task *execAgentTask, status agent.AgentMessageStatus) {
+	if c == nil || task == nil {
+		return
+	}
+	s := c.shared()
+	if s == nil {
+		return
+	}
+	if knownExecMultiAgentVersion(s.multiAgentVersion) != agent.VersionV2 {
+		c.notifyMailbox(agent.FormatSubagentNotificationMessage(task.path, status))
+		return
+	}
+	message, ok := agent.FormatInterAgentCompletionMessage(cleanExecAgentPath(c.scopePath), task.path, status)
+	if !ok {
+		c.notifyMailbox("Wait completed.")
+		return
+	}
+	s.mu.Lock()
+	threadID := strings.TrimSpace(c.parentID)
+	turnID := strings.TrimSpace(c.activeTurnID)
+	mailbox := s.steerMailbox
+	s.mu.Unlock()
+	if mailbox != nil && threadID != "" && turnID != "" {
+		_ = mailbox.Enqueue(&turn.SteerEnqueueParams{
+			ThreadID: threadID,
+			TurnID:   turnID,
+			InputItems: []any{execAgentCompletionInputItem(
+				cleanExecAgentPath(c.scopePath),
+				task.path,
+				message,
+			)},
+		})
+	}
+	c.notifyMailbox("Wait completed.")
+}
+
+func execAgentCompletionInputItem(recipient string, author string, message string) map[string]any {
+	return map[string]any{
+		"type":      "agent_message",
+		"author":    cleanExecAgentPath(author),
+		"recipient": cleanExecAgentPath(recipient),
+		"content": []any{
+			map[string]any{"type": "input_text", "text": message},
+		},
 	}
 }
 
@@ -929,6 +1064,9 @@ func (c *execAgentController) SendMessage(ctx context.Context, args *agent.SendM
 	}
 	if args == nil || strings.TrimSpace(args.Target) == "" || strings.TrimSpace(args.Message) == "" {
 		return fmt.Errorf("target and message are required")
+	}
+	if c.canonicalTarget(args.Target) == "/root" {
+		return c.sendMessageToRoot(args.Message, args.Plaintext)
 	}
 	s := c.shared()
 	s.mu.Lock()
@@ -941,8 +1079,54 @@ func (c *execAgentController) SendMessage(ctx context.Context, args *agent.SendM
 		s.mu.Unlock()
 		return fmt.Errorf("agent %s is shut down", args.Target)
 	}
-	task.pendingMessages = append(task.pendingMessages, c.communication(task.path, args.Message, false, args.Plaintext))
+	communication := c.communication(task.path, args.Message, false, args.Plaintext)
+	if (task.status.Kind == agent.AgentMessageStatusRunning || task.status.Kind == agent.AgentMessageStatusPendingInit) && strings.TrimSpace(task.activeTurnID) != "" {
+		threadID, turnID, mailbox := task.id, task.activeTurnID, s.steerMailbox
+		s.mu.Unlock()
+		if mailbox == nil {
+			return fmt.Errorf("agent %s is unavailable", args.Target)
+		}
+		if err := mailbox.Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: turnID, InputItems: []any{execAgentCommunicationInputItem(communication)}}); err != nil {
+			return err
+		}
+		c.notifyMailboxFor(task.path, fmt.Sprintf("message from %s queued for %s", communication.author, task.path))
+		return nil
+	}
+	task.pendingMessages = append(task.pendingMessages, communication)
 	s.mu.Unlock()
+	return nil
+}
+
+func (c *execAgentController) canonicalTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if strings.HasPrefix(target, "/") {
+		return cleanExecAgentPath(target)
+	}
+	return cleanExecAgentPath(strings.TrimSuffix(firstNonEmpty(c.scopePath, "/root"), "/") + "/" + target)
+}
+
+func (c *execAgentController) sendMessageToRoot(message string, plaintext bool) error {
+	s := c.shared()
+	if s == nil {
+		return fmt.Errorf("agent runtime is unavailable")
+	}
+	s.mu.Lock()
+	turnID := s.activeTurnID
+	mailbox := s.steerMailbox
+	threadID := s.parentID
+	s.mu.Unlock()
+	if mailbox == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return fmt.Errorf("root agent is unavailable")
+	}
+	communication := c.communication("/root", message, false, plaintext)
+	if err := mailbox.Enqueue(&turn.SteerEnqueueParams{
+		ThreadID:   threadID,
+		TurnID:     turnID,
+		InputItems: []any{execAgentCommunicationInputItem(communication)},
+	}); err != nil {
+		return err
+	}
+	c.notifyMailboxFor("/root", fmt.Sprintf("message from %s queued for /root", communication.author))
 	return nil
 }
 
@@ -962,7 +1146,20 @@ func (c *execAgentController) FollowupTask(ctx context.Context, args *agent.Foll
 	}
 	switch task.status.Kind {
 	case agent.AgentMessageStatusRunning, agent.AgentMessageStatusPendingInit:
-		task.pendingFollowup = append(task.pendingFollowup, c.communication(task.path, args.Message, true, args.Plaintext))
+		communication := c.communication(task.path, args.Message, true, args.Plaintext)
+		if strings.TrimSpace(task.activeTurnID) != "" {
+			threadID, turnID, mailbox := task.id, task.activeTurnID, s.steerMailbox
+			s.mu.Unlock()
+			if mailbox == nil {
+				return fmt.Errorf("agent %s is unavailable", args.Target)
+			}
+			if err := mailbox.Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: turnID, InputItems: []any{execAgentCommunicationInputItem(communication)}}); err != nil {
+				return err
+			}
+			c.notifyMailboxFor(task.path, fmt.Sprintf("follow-up from %s queued for %s", communication.author, task.path))
+			return nil
+		}
+		task.pendingFollowup = append(task.pendingFollowup, communication)
 		s.mu.Unlock()
 		return nil
 	case agent.AgentMessageStatusShutdown:
@@ -992,10 +1189,13 @@ func (c *execAgentController) WaitForActivity(ctx context.Context, args *agent.W
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	s.mu.Lock()
+	mailbox := s.activityMailboxLocked(c.scopePath)
+	s.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case message := <-c.shared().mailbox:
+	case message := <-mailbox:
 		return &agent.WaitForActivityResult{Message: message}, nil
 	case <-timer.C:
 		return &agent.WaitForActivityResult{TimedOut: true}, nil
@@ -1014,7 +1214,7 @@ func (c *execAgentController) InterruptAgent(ctx context.Context, args *agent.In
 	task := c.taskLocked(args.Target)
 	if task == nil {
 		s.mu.Unlock()
-		return &agent.InterruptAgentResult{PreviousStatus: string(agent.AgentMessageStatusNotFound)}, nil
+		return nil, fmt.Errorf("agent %s not found", strings.TrimSpace(args.Target))
 	}
 	previous := task.status
 	task.generation++
@@ -1022,10 +1222,11 @@ func (c *execAgentController) InterruptAgent(ctx context.Context, args *agent.In
 		task.cancel()
 	}
 	task.cancel = nil
+	task.activeTurnID = ""
 	task.status = agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted}
 	s.mu.Unlock()
 	c.notify()
-	c.notifyMailbox(agent.FormatSubagentNotificationMessage(task.path, task.status))
+	c.notifyMailbox("Wait completed.")
 	return &agent.InterruptAgentResult{PreviousStatus: agent.V2AgentStatusValue(previous)}, nil
 }
 

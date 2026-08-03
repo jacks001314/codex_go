@@ -100,7 +100,12 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 		EnableCore:        true,
 		EnableShell:       true,
 		EnableUnifiedExec: featureflags.Enabled(nil, "unified_exec"),
-		EnableCodeMode:    featureflags.Enabled(nil, "code_mode"),
+		// Rust registers the code-mode exec/wait executors from the effective
+		// tool mode, not the code_mode feature flag (finalize_tool_router in
+		// codex-rs/core/src/tools/spec_plan.rs). Register them unconditionally
+		// here; Runtime.Run filters the model-visible surface per turn based on
+		// the effective tool mode, so direct-mode turns still see shell tools.
+		EnableCodeMode:    true,
 		EnableApplyPatch:  true,
 		EnableMCP:         true,
 		EnableAgents:      true,

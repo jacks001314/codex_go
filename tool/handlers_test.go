@@ -204,6 +204,24 @@ func TestRustCoreToolSurfaceParity(t *testing.T) {
 	if planSpec.Name.Key() != "update_plan" || planSpec.Description == "" {
 		t.Fatalf("update_plan spec = %#v", planSpec)
 	}
+	if planSpec.InputSchema["type"] != "object" {
+		t.Fatalf("update_plan schema type = %#v, want object", planSpec.InputSchema["type"])
+	}
+	required, _ := planSpec.InputSchema["required"].([]string)
+	if len(required) != 1 || required[0] != "plan" {
+		t.Fatalf("update_plan required = %#v", planSpec.InputSchema["required"])
+	}
+	properties, _ := planSpec.InputSchema["properties"].(map[string]any)
+	plan, ok := properties["plan"].(map[string]any)
+	if !ok || plan["type"] != "array" {
+		t.Fatalf("update_plan plan property = %#v", plan)
+	}
+	items, _ := plan["items"].(map[string]any)
+	status, _ := items["properties"].(map[string]any)["status"].(map[string]any)
+	enum, _ := status["enum"].([]string)
+	if len(enum) != 3 || enum[1] != "in_progress" {
+		t.Fatalf("update_plan status enum = %#v", status)
+	}
 	userInputSpec := NewRequestUserInputHandler(nil).Spec()
 	if !strings.Contains(userInputSpec.Description, "This tool is only available in Plan mode.") || userInputSpec.Exposure != ExposureDirectModelOnly {
 		t.Fatalf("request_user_input spec = %#v", userInputSpec)

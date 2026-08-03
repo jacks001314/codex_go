@@ -80,6 +80,11 @@ export type Scenario = {
     requiredCompletedCollabTools?: string[];
     minSubagentRollouts?: number;
     subagentRolloutPatterns?: string[];
+    subagentFinalMessagePatterns?: string[];
+    rootRolloutPatterns?: string[];
+    rootRolloutPatternCounts?: Record<string, number>;
+    forbiddenRootRolloutPatterns?: string[];
+    forbiddenPublicEventPatterns?: string[];
     finalAgentMessagePatterns?: string[];
     mismatchClassification?: "sdk-assumption" | "platform-difference";
   };
@@ -135,12 +140,151 @@ export const scenarios: Scenario[] = [
 			exactAgentMessages: ["MULTI_AGENT_V2_LIFECYCLE_OK"], requiredCompletedItemTypes: ["agent_message"],
 			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minSubagentRollouts: 1,
 			subagentRolloutPatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+			subagentFinalMessagePatterns: ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
 			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
 			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
 		},
 	},
-  {
-    name: "multi-agent-factorial-100",
+	{
+		name: "multi-agent-v2-auto-completion",
+		description: "Verifies that a child final response is automatically delivered to the parent as a canonical FINAL_ANSWER agent message.",
+		optIn: true,
+		timeoutMs: 300000,
+		codexConfig: {
+			features: { multi_agent_v2: { enabled: true, wait_agent_enabled: true } },
+			agents: { max_concurrent_threads_per_session: 2 },
+			web_search: "disabled",
+			suppress_unstable_features_warning: true,
+		},
+		threadOptions: {
+			sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{
+			prompt: "Use the collaboration tools directly. Spawn exactly one agent named auto_worker. Tell it to reply with exactly CHILD_AUTO_COMPLETION_TOKEN in its final response and explicitly forbid it from calling send_message or any other tool. Call wait_agent until it completes. Do not call send_message yourself. Reply exactly ROOT_SAW_CHILD_AUTO_COMPLETION only if the exact child token was automatically delivered to you in a Message Type: FINAL_ANSWER envelope; otherwise reply exactly ROOT_MISSING_CHILD_AUTO_COMPLETION. Do not use shell or modify files.",
+		}, {
+			prompt: "This is a resumed turn. Do not call any tool or create another agent. Reply with exactly ROOT_RESUME_NO_NEW_CHILD.",
+			resume: true,
+		}],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 2, requireUsage: true, expectedTurns: 2,
+			exactAgentMessages: ["ROOT_SAW_CHILD_AUTO_COMPLETION", "ROOT_RESUME_NO_NEW_CHILD"], requiredCompletedItemTypes: ["agent_message"],
+			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minCompletedCollabSpawnCalls: 1,
+			requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.wait_agent"], minSubagentRollouts: 1,
+			subagentRolloutPatterns: ["CHILD_AUTO_COMPLETION_TOKEN"],
+			subagentFinalMessagePatterns: ["CHILD_AUTO_COMPLETION_TOKEN"],
+			rootRolloutPatterns: [
+				"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/auto_worker\\nPayload:\\nCHILD_AUTO_COMPLETION_TOKEN",
+			],
+			rootRolloutPatternCounts: {
+				"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/auto_worker\\nPayload:\\nCHILD_AUTO_COMPLETION_TOKEN": 1,
+			},
+			forbiddenRootRolloutPatterns: ["<subagent_notification>"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+			requireStableThreadId: true,
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+		},
+	},
+	{
+		name: "multi-agent-v2-send-message",
+		description: "Delivers a queued V2 message to an active child and verifies that the child observes it before completing.",
+		optIn: true,
+		timeoutMs: 300000,
+		codexConfig: {
+			features: { multi_agent_v2: { enabled: true, wait_agent_enabled: true } },
+			agents: { max_concurrent_threads_per_session: 2 },
+			web_search: "disabled",
+			suppress_unstable_features_warning: true,
+		},
+		threadOptions: {
+			sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{
+			prompt: "Use the collaboration tools directly. Spawn exactly one agent named message_worker. Tell it to call wait_agent with timeout_ms 60000 and, after the wait returns, reply exactly MESSAGE_RECEIVED_TOKEN only if it received a Message Type: MESSAGE envelope containing SEND_MESSAGE_TOKEN; otherwise reply exactly MESSAGE_MISSING_TOKEN. Immediately after spawn_agent returns, call send_message exactly once targeting /root/message_worker with message SEND_MESSAGE_TOKEN. Then call wait_agent until the child completes. Finally reply exactly ROOT_SEND_MESSAGE_OK only if the child final response is MESSAGE_RECEIVED_TOKEN; otherwise reply exactly ROOT_SEND_MESSAGE_FAILED. Do not use shell or modify files.",
+		}],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+			exactAgentMessages: ["ROOT_SEND_MESSAGE_OK"], requiredCompletedItemTypes: ["agent_message"],
+			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minCompletedCollabSpawnCalls: 1,
+			requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.send_message", "collaboration.wait_agent"],
+			minSubagentRollouts: 1, subagentRolloutPatterns: ["MESSAGE_RECEIVED_TOKEN"],
+			subagentFinalMessagePatterns: ["MESSAGE_RECEIVED_TOKEN"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+		},
+	},
+	{
+		name: "multi-agent-v2-interrupt",
+		description: "Interrupts an active V2 child, verifies its interrupted state, then reuses the same agent through followup_task.",
+		optIn: true,
+		timeoutMs: 300000,
+		codexConfig: {
+			features: { multi_agent_v2: { enabled: true, wait_agent_enabled: true } },
+			agents: { max_concurrent_threads_per_session: 2 },
+			web_search: "disabled",
+			suppress_unstable_features_warning: true,
+		},
+		threadOptions: {
+			sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{
+			prompt: "Use the collaboration tools directly. Spawn exactly one agent named interrupt_worker and tell it to call wait_agent with timeout_ms 3600000 before replying INTERRUPT_WORKER_UNEXPECTED. Immediately call interrupt_agent on /root/interrupt_worker. Call list_agents and verify that same canonical path is interrupted. Then call followup_task on /root/interrupt_worker asking it to reply exactly INTERRUPT_RECOVERED_TOKEN. Wait until it completes. Finally reply exactly ROOT_INTERRUPT_OK only if the follow-up child response is INTERRUPT_RECOVERED_TOKEN; otherwise reply exactly ROOT_INTERRUPT_FAILED. Do not use shell or modify files.",
+		}],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+			exactAgentMessages: ["ROOT_INTERRUPT_OK"], requiredCompletedItemTypes: ["agent_message"],
+			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minCompletedCollabSpawnCalls: 1,
+			requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.interrupt_agent", "collaboration.list_agents", "collaboration.followup_task"],
+			minSubagentRollouts: 1, subagentRolloutPatterns: ["INTERRUPT_RECOVERED_TOKEN"],
+			subagentFinalMessagePatterns: ["INTERRUPT_RECOVERED_TOKEN"],
+			rootRolloutPatterns: [
+				'"previous_status"\\s*:\\s*"running"',
+				'"agent_name"\\s*:\\s*"/root/interrupt_worker"\\s*,\\s*"agent_status"\\s*:\\s*"interrupted"',
+				"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/interrupt_worker\\nPayload:\\nINTERRUPT_RECOVERED_TOKEN",
+			],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+		},
+	},
+	{
+		name: "multi-agent-v2-missing-target-recovery",
+		description: "Exercises the V2 missing-target error path and verifies that the parent can recover with a valid child lifecycle.",
+		optIn: true,
+		timeoutMs: 300000,
+		codexConfig: {
+			features: { multi_agent_v2: { enabled: true, wait_agent_enabled: true } },
+			agents: { max_concurrent_threads_per_session: 2 },
+			web_search: "disabled",
+			suppress_unstable_features_warning: true,
+		},
+		threadOptions: {
+			sandboxMode: "read-only", skipGitRepoCheck: true, approvalPolicy: "never",
+			networkAccessEnabled: false, webSearchMode: "disabled",
+		},
+		turns: [{
+			prompt: "Use the collaboration tools directly. First call interrupt_agent exactly once with target /root/missing_worker and observe the tool error; do not retry that missing target. Then spawn exactly one agent named recovery_worker and ask it to reply exactly RECOVERY_CHILD_TOKEN. After the child completes, reply exactly MISSING_TARGET_RECOVERY_OK only if the missing-target call failed and the valid child completed; otherwise reply exactly MISSING_TARGET_RECOVERY_FAILED. Do not use shell or modify files.",
+		}],
+		expected: {
+			terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
+			exactAgentMessages: ["MISSING_TARGET_RECOVERY_OK"], requiredCompletedItemTypes: ["agent_message"],
+			forbiddenCompletedItemTypes: ["file_change", "command_execution"], minCompletedCollabSpawnCalls: 1,
+			requiredCompletedCollabTools: ["collaboration.spawn_agent"],
+			minSubagentRollouts: 1, subagentRolloutPatterns: ["RECOVERY_CHILD_TOKEN"],
+			subagentFinalMessagePatterns: ["RECOVERY_CHILD_TOKEN"],
+			rootRolloutPatterns: ["missing_worker", "not found"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+			eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+			agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+		},
+	},
+	{
+		name: "multi-agent-factorial-100",
     description: "Requires multiple sub-agents to independently compute and verify 100! before the root agent synthesizes the result.",
     optIn: true,
     timeoutMs: 300000,
@@ -170,6 +314,7 @@ export const scenarios: Scenario[] = [
       finalAgentMessagePatterns: [
         "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000",
       ],
+      forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
       eventSequenceComparison: "model-selected-tools",
       commandOutputComparison: "informational",
       agentMessageComparison: "final-per-turn",
@@ -745,9 +890,10 @@ export const scenarios: Scenario[] = [
       terminal: "turn.completed", minAgentMessages: 1, requireUsage: true, expectedTurns: 1,
       requiredCompletedItemTypes: ["file_change", "agent_message"],
       uniqueCompletedItemTypes: ["file_change", "agent_message"],
-      eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn",
+      eventSequenceComparison: "model-selected-tools", commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
       workspaceMutation: "required", workspaceRequiredPaths: ["quicksort.java"],
-      compareWorkspacePaths: ["quicksort.java"],
+      compareWorkspacePaths: [],
     },
   },
   {

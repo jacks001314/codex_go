@@ -109,7 +109,35 @@ func (h *PlanHandler) Spec() Spec {
 		Name:        PlainName("update_plan"),
 		Description: "Updates the current task plan.",
 		InputSchema: map[string]any{
-			"required": []string{"plan"},
+			"type": "object",
+			"properties": map[string]any{
+				"explanation": map[string]any{
+					"type":        "string",
+					"description": "Optional explanation for this plan update.",
+				},
+				"plan": map[string]any{
+					"type":        "array",
+					"description": "The list of steps",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"step": map[string]any{
+								"type":        "string",
+								"description": "Task step text.",
+							},
+							"status": map[string]any{
+								"type":        "string",
+								"enum":        []string{"pending", "in_progress", "completed"},
+								"description": "Step status.",
+							},
+						},
+						"required":             []string{"step", "status"},
+						"additionalProperties": false,
+					},
+				},
+			},
+			"required":             []string{"plan"},
+			"additionalProperties": false,
 		},
 	}
 }

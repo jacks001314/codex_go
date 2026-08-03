@@ -84,7 +84,12 @@ func (r *Runtime) StandaloneWebSearchRegistered() bool {
 func (r *Runtime) PrepareToolMode(requestedToolMode string, disableCodeModeFallback bool) (string, string) {
 	requestedToolMode = strings.ToLower(strings.TrimSpace(requestedToolMode))
 	if requestedToolMode == "" {
-		requestedToolMode = model.ToolModeCodeMode
+		// Mirrors Rust's requested_tool_mode default when no model tool_mode
+		// is declared and no code-mode feature is enabled. Callers resolve the
+		// model-level tool mode (model.ResolveToolMode) before reaching here;
+		// direct is the safe fallback so third-party providers never see the
+		// code-mode exec freeform tool unexpectedly.
+		requestedToolMode = model.ToolModeDirect
 	}
 	effectiveToolMode := requestedToolMode
 	if r == nil || r.router == nil {
@@ -185,7 +190,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			return nil, errors.New("agent requested tool calls but tool dispatcher is nil")
 		}
 		profile := timing.CompleteProfile(r.now())
-		return &AgentLoopResult{Response: response, Responses: []*model.AgentResponse{response}, InputItems: resultInputItems, Usage: response.Usage, Iterations: 1, TimingProfile: &profile}, nil
+		return &AgentLoopResult{Response: response, Responses: []*model.AgentResponse{response}, InputItems: resultInputItems, InitialInputCount: len(request.InputItems), Usage: response.Usage, Iterations: 1, TimingProfile: &profile}, nil
 	}
 	loopRequest := *request
 	if loopRequest.SteerMailbox == nil {

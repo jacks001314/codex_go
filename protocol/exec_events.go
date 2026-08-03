@@ -100,6 +100,9 @@ type ThreadItem struct {
 	ReceiverThreadIDs *[]string                    `json:"receiver_thread_ids,omitempty"`
 	Prompt            *string                      `json:"prompt,omitempty"`
 	AgentsStates      *map[string]CollabAgentState `json:"agents_states,omitempty"`
+	ActivityKind      string                       `json:"kind,omitempty"`
+	AgentThreadID     string                       `json:"agent_thread_id,omitempty"`
+	AgentPath         string                       `json:"agent_path,omitempty"`
 	Arguments         *any                         `json:"arguments,omitempty"`
 	Result            *MCPToolResult               `json:"result,omitempty"`
 	CallError         *MCPToolError                `json:"error,omitempty"`
@@ -288,6 +291,16 @@ func CollabToolCallItem(id string, collabTool string, senderThreadID string, rec
 		Prompt:            cloneStringPointer(prompt),
 		AgentsStates:      &states,
 		Status:            status,
+	}
+}
+
+func SubAgentActivityItem(id string, kind string, agentThreadID string, agentPath string) ThreadItem {
+	return ThreadItem{
+		ID:            id,
+		Type:          "sub_agent_activity",
+		ActivityKind:  kind,
+		AgentThreadID: agentThreadID,
+		AgentPath:     agentPath,
 	}
 }
 

@@ -750,7 +750,12 @@ func interactiveStartLocalTUIThread(state *codextui.State, store *session.Store)
 	if !ok || result == nil || result.Thread == nil || strings.TrimSpace(result.Thread.ID) == "" {
 		return "", errors.New("thread/start failed during TUI bootstrap: response did not include a thread")
 	}
-	return strings.TrimSpace(result.Thread.ID), nil
+	threadID := strings.TrimSpace(result.Thread.ID)
+	source := string(appserver.SessionSourceCli)
+	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Source: &source}, false); err != nil {
+		return "", fmt.Errorf("mark TUI bootstrap thread as CLI: %w", err)
+	}
+	return threadID, nil
 }
 
 func interactiveMCPRuntime(root *cli.RootOptions) (*mcp.MCPService, []historycell.McpServerStatus, []string) {

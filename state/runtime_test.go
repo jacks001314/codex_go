@@ -170,6 +170,51 @@ VALUES (999, 'future migration', TRUE, X'010203', 1)`); err != nil {
 	}
 }
 
+func TestRuntimeMigrationsAcceptRustStateChecksums(t *testing.T) {
+	ctx := context.Background()
+	config, err := NewSqliteConfig(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := config.OpenStateDB(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1`, rustMigrationOneChecksums[RuntimeDBState]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE _sqlx_migrations SET checksum = X'01' WHERE version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if db, err = config.OpenStateDB(ctx); err != nil {
+		t.Fatalf("Rust state checksums should be accepted: %v", err)
+	}
+	_ = db.Close()
+}
+
+func TestRuntimeMigrationsRejectRustFingerprintWithWrongDescription(t *testing.T) {
+	ctx := context.Background()
+	config, err := NewSqliteConfig(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := config.OpenStateDB(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE _sqlx_migrations SET checksum = ?, description = 'unexpected' WHERE version = 1`, rustMigrationOneChecksums[RuntimeDBState]); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	_, err = config.OpenStateDB(ctx)
+	if err == nil || !strings.Contains(err.Error(), "migration 1 description mismatch") {
+		t.Fatalf("Rust fingerprint with wrong description error = %v", err)
+	}
+}
+
 func TestRuntimeMigrationsRepairLegacyRecencyVersion(t *testing.T) {
 	ctx := context.Background()
 	config, err := NewSqliteConfig(t.TempDir())

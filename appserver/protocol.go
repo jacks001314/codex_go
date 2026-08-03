@@ -347,6 +347,7 @@ type Request struct {
 	Method       Method          `json:"method"`
 	Params       json.RawMessage `json:"params,omitempty"`
 	ConnectionID string          `json:"-"`
+	Internal     bool            `json:"-"`
 }
 
 const defaultRequestConnectionID = "default"

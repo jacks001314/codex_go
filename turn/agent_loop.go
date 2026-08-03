@@ -89,6 +89,7 @@ type AgentLoopResult struct {
 	Responses         []*model.AgentResponse
 	ToolExecutions    []ToolExecutionResult
 	InputItems        []any
+	InitialInputCount int
 	Usage             model.AgentUsage
 	Iterations        int
 	TimingProfile     *Profile
@@ -147,7 +148,8 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		ctx = context.Background()
 	}
 	result := &AgentLoopResult{
-		InputItems: append([]any(nil), request.InputItems...),
+		InputItems:        append([]any(nil), request.InputItems...),
+		InitialInputCount: len(request.InputItems),
 	}
 	timing := request.Timing
 	if timing == nil {

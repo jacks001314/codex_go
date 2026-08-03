@@ -185,6 +185,122 @@ test("compareArtifact enforces linked subagent rollouts and the final semantic r
   }
 });
 
+test("compareArtifact proves hidden collaboration calls from paired root rollout items", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+	try {
+		const events = [
+			event("thread.started"),
+			event("turn.started"),
+			event("item.completed", { id: "msg-1", type: "agent_message", text: "DONE" }),
+			event("turn.completed"),
+		];
+		const rustRollout = [
+			{ type: "response_item", payload: { type: "function_call", namespace: "collaboration", name: "send_message", call_id: "call-send" } },
+			{ type: "response_item", payload: { type: "function_call_output", call_id: "call-send", output: "" } },
+		].map(JSON.stringify).join("\n");
+		const goRollout = [
+			{ type: "item", item: { type: "function_call", namespace: "collaboration", name: "send_message", call_id: "call-send" } },
+			{ type: "item", item: { type: "tool_output", call_id: "call-send", data: { success: true } } },
+		].map(JSON.stringify).join("\n");
+		const rust = { ...recording(events), rolloutJsonl: rustRollout };
+		const go = { ...recording(events), rolloutJsonl: goRollout };
+		writeArtifact(root, rust, go, undefined, {
+			requireStartedCompletedPairs: [],
+			requiredCompletedCollabTools: ["collaboration.send_message"],
+		});
+		assert.equal(compareArtifact(root).status, "pass");
+
+		go.rolloutJsonl = JSON.stringify({ type: "item", item: { type: "function_call", namespace: "collaboration", name: "send_message", call_id: "call-send" } });
+		writeArtifact(root, rust, go, undefined, {
+			requireStartedCompletedPairs: [],
+			requiredCompletedCollabTools: ["collaboration.send_message"],
+		});
+		const missingOutput = compareArtifact(root);
+		assert.equal(missingOutput.status, "behavior_mismatch");
+		assert.equal(missingOutput.checks.find((check) => check.name === "go: collaboration contract")?.ok, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("compareArtifact requires a real subagent final and rejects public collaboration leaks", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+	try {
+		const events = validEvents();
+		const rust = {
+			...recording(events),
+			threadId: "thread-root",
+			rolloutRecords: [{
+				threadId: "thread-child",
+				threadSource: "subagent",
+				parentThreadId: "thread-root",
+				jsonl: JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "CHILD_OK" }] } }),
+			}],
+		};
+		const go = {
+			...recording(events),
+			threadId: "thread-root",
+			rolloutRecords: [{
+				threadId: "thread-child",
+				threadSource: "subagent",
+				parentThreadId: "thread-root",
+				jsonl: JSON.stringify({ type: "item", item: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "CHILD_OK" }] } }),
+			}],
+		};
+		writeArtifact(root, rust, go, undefined, {
+			requireStartedCompletedPairs: [],
+			subagentFinalMessagePatterns: ["CHILD_OK"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+		});
+		assert.equal(compareArtifact(root).status, "pass");
+
+		go.rolloutRecords[0].jsonl = JSON.stringify({ type: "message", text: "prompt mentions CHILD_OK only" });
+		writeArtifact(root, rust, go, undefined, {
+			requireStartedCompletedPairs: [],
+			subagentFinalMessagePatterns: ["CHILD_OK"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+		});
+		let result = compareArtifact(root);
+		assert.equal(result.status, "behavior_mismatch");
+		assert.equal(result.checks.find((check) => check.name === "go: subagent final message patterns")?.ok, false);
+
+		go.rolloutRecords = rust.rolloutRecords;
+		go.events = [
+			...events.slice(0, -1),
+			event("item.completed", { type: "function_call", name: "collaboration.send_message", arguments: "gAAAA-secret" }),
+			events.at(-1),
+		];
+		writeArtifact(root, rust, go, undefined, {
+			requireStartedCompletedPairs: [],
+			subagentFinalMessagePatterns: ["CHILD_OK"],
+			forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+		});
+		result = compareArtifact(root);
+		assert.equal(result.status, "behavior_mismatch");
+		assert.equal(result.checks.find((check) => check.name === "go: forbidden public event patterns")?.ok, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("compareArtifact classifies a child sampling 402 as infrastructure failure", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+	try {
+		const rust = recording(validEvents());
+		const go = {
+			...recording(validEvents()),
+			responsesDebug: JSON.stringify({ event: "sampling.failed", error: "responses API request failed with status 402: account balance exhausted" }),
+		};
+		writeArtifact(root, rust, go);
+		const result = compareArtifact(root);
+		assert.equal(result.status, "infra_failure");
+		assert.equal(result.classification, "infra-failure");
+		assert.equal(result.checks.find((check) => check.name === "go: backend infrastructure")?.ok, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("compareArtifact recognizes Rust and Go image-view rollout records", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {
@@ -203,7 +319,11 @@ test("compareArtifact recognizes Rust and Go image-view rollout records", () => 
       ...recording(validEvents()),
       rolloutJsonl: `${JSON.stringify({
         type: "item",
-        item: { type: "function_call", name: "view_image", arguments: '{"path":"screenshot.png"}' },
+        item: {
+          type: "custom_tool_call",
+          name: "exec",
+          input: 'const result = await tools.view_image({ path: "screenshot.png" }); image(result);',
+        },
       })}\n`,
     };
     writeArtifact(root, rust, go, undefined, { requiredRolloutItemTypes: ["image_view"] });
@@ -211,6 +331,23 @@ test("compareArtifact recognizes Rust and Go image-view rollout records", () => 
     assert.equal(result.status, "pass");
     assert.equal(result.checks.find((check) => check.name === "rust: required rollout item types")?.ok, true);
     assert.equal(result.checks.find((check) => check.name === "go: required rollout item types")?.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compareArtifact rejects a duplicated canonical child completion in the root rollout", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const envelope = "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/auto_worker\nPayload:\nCHILD_AUTO_COMPLETION_TOKEN";
+    const rust = { ...recording(validEvents()), rolloutJsonl: JSON.stringify({ payload: { text: envelope } }) };
+    const go = { ...recording(validEvents()), rolloutJsonl: `${JSON.stringify({ item: { text: envelope } })}\n${JSON.stringify({ item: { text: envelope } })}` };
+    writeArtifact(root, rust, go, undefined, { rootRolloutPatternCounts: { [envelope]: 1 } });
+    const result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.classification, "go-bug");
+    assert.equal(result.checks.find((check) => check.name === "rust: root rollout pattern counts")?.ok, true);
+    assert.equal(result.checks.find((check) => check.name === "go: root rollout pattern counts")?.ok, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

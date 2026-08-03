@@ -841,6 +841,28 @@ func TestThreadIDFromPath(t *testing.T) {
 	}
 }
 
+func TestThreadIDFromFilename(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+		ok   bool
+	}{
+		{name: "rollout-2026-06-29T01-02-03-thread-1.jsonl", want: "thread-1", ok: true},
+		{name: "rollout-2026-06-29T01-02-03-019f11d6-44c2-7101-bc29-4b31c5d1342b.jsonl", want: "019f11d6-44c2-7101-bc29-4b31c5d1342b", ok: true},
+		{name: "rollout-2026-06-29T01-02-03-thread-1.jsonl.zst", want: "thread-1", ok: true},
+		{name: "rollout-2026-06-29T01-02-03.jsonl", ok: false},
+		{name: "other-2026-06-29T01-02-03-thread-1.jsonl", ok: false},
+		{name: "rollout-not-a-timestamp-thread-1.jsonl", ok: false},
+		{name: "rollout-2026-06-29T01-02-03-.jsonl", ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := ThreadIDFromFilename(tt.name)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("ThreadIDFromFilename(%q) = %q/%v, want %q/%v", tt.name, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestListThreadsFiltersSortsAndPages(t *testing.T) {
 	home := t.TempDir()
 	writeRollout(t, home, "thread-1", fixedTime(), "alpha")

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"codex_go/features"
 )
 
 const (
@@ -606,6 +608,26 @@ func knownToolMode(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
+	}
+}
+
+// ResolveToolMode mirrors Rust's requested_tool_mode in
+// codex-rs/core/src/tools/mod.rs: an explicit model tool_mode wins; an unset
+// tool_mode falls back to the code_mode_only/code_mode feature flags, and
+// defaults to direct mode when neither is enabled. Custom providers (for
+// example DeepSeek) that reject the code-mode exec freeform tool therefore get
+// a direct tool surface unless code mode is explicitly requested.
+func ResolveToolMode(modelToolMode string, featureSettings map[string]bool) string {
+	if mode := knownToolMode(modelToolMode); mode != "" {
+		return mode
+	}
+	switch {
+	case features.Enabled(featureSettings, "code_mode_only"):
+		return ToolModeCodeModeOnly
+	case features.Enabled(featureSettings, "code_mode"):
+		return ToolModeCodeMode
+	default:
+		return ToolModeDirect
 	}
 }
 

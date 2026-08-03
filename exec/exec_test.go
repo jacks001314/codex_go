@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -290,6 +291,33 @@ func TestExecDefaultRouterUsesStandaloneCodeModePolicy(t *testing.T) {
 				t.Fatalf("warning events = %#v", events)
 			}
 		})
+	}
+}
+
+func TestExecEmptyToolModeResolvesToDirectLikeRust(t *testing.T) {
+	// Custom providers such as DeepSeek have no tool_mode in model metadata.
+	// The exec path must resolve that to direct mode instead of exposing the
+	// code-mode exec freeform tool, which those providers reject with a 400.
+	agent := &recordingAgent{message: "done"}
+	collector := &execStreamEventCollector{}
+	runner := NewRunner(t.TempDir())
+	_, err := runner.runAgentTurn(context.Background(), &Request{}, agent, &agentRunConfig{
+		Prompt:       "run",
+		Model:        "deepseek-v4-flash",
+		ToolMode:     "",
+		StreamEvents: collector,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := agentRequestToolsContainResponsesTool(agent.request, "custom", tool.CodeModeExecToolName); got {
+		t.Fatalf("code-mode exec visible for unset tool mode: %#v", agent.request.Tools)
+	}
+	if got := agentRequestToolsContainPlainFunction(agent.request, tool.DefaultShellCommandToolName); !got {
+		t.Fatalf("direct shell tool missing: %#v", agent.request.Tools)
+	}
+	if events := collector.Events(); len(events) != 0 {
+		t.Fatalf("unexpected warning events for direct mode: %#v", events)
 	}
 }
 
@@ -2328,7 +2356,7 @@ func TestToolRouterRegistersRealMultiAgentV2Tools(t *testing.T) {
 		"features": map[string]any{"multi_agent_v2": map[string]any{"enabled": true, "wait_agent_enabled": true}},
 		"agents":   map[string]any{"max_concurrent_threads_per_session": int64(4)},
 	}}
-	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", nil)
+	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", "turn-root", nil)
 	if err != nil {
 		t.Fatalf("multiAgentToolsForRun() error = %v", err)
 	}
@@ -2419,7 +2447,7 @@ func TestToolRouterUsesCatalogSelectedV2WithoutFeatureFlag(t *testing.T) {
 	}}})
 	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir(), Model: "catalog-v2"}}}
 	cfg := &config.Config{Values: map[string]any{}}
-	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", &model.ResponsesAgentRunner{ModelsManager: modelsManager})
+	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-root", "turn-root", &model.ResponsesAgentRunner{ModelsManager: modelsManager})
 	if err != nil {
 		t.Fatalf("multiAgentToolsForRun() error = %v", err)
 	}
@@ -2464,6 +2492,7 @@ func TestToolRouterUsesCatalogSelectedV1WithoutFeatureFlag(t *testing.T) {
 		req,
 		&config.Config{Values: map[string]any{}},
 		"thread-root",
+		"turn-root",
 		&model.ResponsesAgentRunner{ModelsManager: modelsManager},
 	)
 	if err != nil {
@@ -2583,7 +2612,7 @@ func TestExecAgentControllerV2LifecyclePathsAndSingleRollout(t *testing.T) {
 	firstRequest := awaitRecordedAgentRequest(t, recording.requests)
 	assertEncryptedAgentCommunication(t, &firstRequest, "/root", "/root/worker", "NEW_TASK", "first task")
 	activity, err := controller.WaitForActivity(context.Background(), nil)
-	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "/root/worker") || !strings.Contains(activity.Message, "completed") {
+	if err != nil || activity.TimedOut || activity.Message != "Wait completed." {
 		t.Fatalf("first activity = %#v, %v", activity, err)
 	}
 	if err := controller.SendMessage(context.Background(), &agent.SendMessageArgs{Target: "worker", Message: "queued context"}); err != nil {
@@ -2619,6 +2648,170 @@ func TestExecAgentControllerV2LifecyclePathsAndSingleRollout(t *testing.T) {
 	}
 	if got := countExecRolloutsForThread(t, home, spawned.AgentID); got != 1 {
 		t.Fatalf("rollout files for %s = %d, want 1", spawned.AgentID, got)
+	}
+}
+
+func TestExecAgentControllerRoutesChildMessageToActiveRootTurn(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	controller.setActiveTurn("turn-root")
+	child := controller.scoped("/root/worker", "thread-worker")
+
+	if err := child.SendMessage(context.Background(), &agent.SendMessageArgs{Target: "/root", Message: "verified result", Plaintext: true}); err != nil {
+		t.Fatal(err)
+	}
+	activity, err := controller.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "/root/worker") {
+		t.Fatalf("root activity = %#v, %v", activity, err)
+	}
+	drained := controller.steerMailbox.Drain(&turn.SteerDrainParams{ThreadID: "thread-root", TurnID: "turn-root"})
+	if len(drained) != 1 || !inputItemsContainText(drained, "Message Type: MESSAGE") || !inputItemsContainText(drained, "Sender: /root/worker") || !inputItemsContainText(drained, "verified result") {
+		t.Fatalf("root steer input = %#v", drained)
+	}
+}
+
+func TestExecAgentControllerRoutesRootMessageAndFollowupToActiveChildTurn(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	task := &execAgentTask{id: "thread-worker", taskName: "worker", path: "/root/worker", status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusRunning}}
+	controller.tasks[task.id] = task
+	child := controller.scoped(task.path, task.id)
+	child.setActiveTurn("turn-worker")
+
+	if err := controller.SendMessage(context.Background(), &agent.SendMessageArgs{Target: "/root/worker", Message: "queued context", Plaintext: true}); err != nil {
+		t.Fatal(err)
+	}
+	activity, err := child.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "message from /root") {
+		t.Fatalf("message activity = %#v, %v", activity, err)
+	}
+	drained := controller.steerMailbox.Drain(&turn.SteerDrainParams{ThreadID: task.id, TurnID: "turn-worker"})
+	if len(drained) != 1 || !inputItemsContainText(drained, "Message Type: MESSAGE") || !inputItemsContainText(drained, "queued context") {
+		t.Fatalf("message steer input = %#v", drained)
+	}
+
+	if err := controller.FollowupTask(context.Background(), &agent.FollowupTaskArgs{Target: "worker", Message: "new direction", Plaintext: true}); err != nil {
+		t.Fatal(err)
+	}
+	activity, err = child.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "follow-up from /root") {
+		t.Fatalf("followup activity = %#v, %v", activity, err)
+	}
+	drained = controller.steerMailbox.Drain(&turn.SteerDrainParams{ThreadID: task.id, TurnID: "turn-worker"})
+	if len(drained) != 1 || !inputItemsContainText(drained, "Message Type: NEW_TASK") || !inputItemsContainText(drained, "new direction") {
+		t.Fatalf("followup steer input = %#v", drained)
+	}
+}
+
+func TestExecAgentControllerFlushesMessagesQueuedBeforeChildTurnRegistration(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	task := &execAgentTask{id: "thread-worker", taskName: "worker", path: "/root/worker", status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusRunning}}
+	controller.tasks[task.id] = task
+
+	if err := controller.SendMessage(context.Background(), &agent.SendMessageArgs{Target: "worker", Message: "early message", Plaintext: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.FollowupTask(context.Background(), &agent.FollowupTaskArgs{Target: "worker", Message: "early followup", Plaintext: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(task.pendingMessages) != 1 || len(task.pendingFollowup) != 1 {
+		t.Fatalf("pending messages=%#v followups=%#v", task.pendingMessages, task.pendingFollowup)
+	}
+	child := controller.scoped(task.path, task.id)
+	child.setActiveTurn("turn-worker")
+	activity, err := child.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || !strings.Contains(activity.Message, "queued input delivered") {
+		t.Fatalf("queued activity = %#v, %v", activity, err)
+	}
+	drained := controller.steerMailbox.Drain(&turn.SteerDrainParams{ThreadID: task.id, TurnID: "turn-worker"})
+	if len(drained) != 2 || !inputItemsContainText(drained, "early message") || !inputItemsContainText(drained, "early followup") {
+		t.Fatalf("queued steer input = %#v", drained)
+	}
+	if len(task.pendingMessages) != 0 || len(task.pendingFollowup) != 0 {
+		t.Fatalf("pending queues not drained: %#v/%#v", task.pendingMessages, task.pendingFollowup)
+	}
+}
+
+func TestExecAgentControllerDoesNotLeakChildEventsToRootHandler(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	runner.Agent = &recordingStaticAgent{response: &model.AgentResponse{
+		Message: "done",
+		Items:   []model.AgentItem{{ID: "final", Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"}}},
+		Usage:   model.AgentUsage{InputTokens: 1, OutputTokens: 1},
+	}}
+	var childEvents atomic.Int64
+	controller := newExecAgentController(runner, context.Background(), &Request{
+		Exec:                 cli.ExecOptions{Shared: cli.SharedOptions{CWD: t.TempDir()}},
+		InternalEventHandler: func(protocol.ThreadEvent) { childEvents.Add(1) },
+	}, "thread-root", 1).(*execAgentController)
+	t.Cleanup(controller.shutdown)
+	message := "finish"
+	if _, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker", Message: &message, ForkTurns: execStringPointer("none")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.WaitForActivity(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := childEvents.Load(); got != 0 {
+		t.Fatalf("root handler received %d child events", got)
+	}
+}
+
+func TestExecAgentControllerDeliversV2CompletionToDirectParentTurn(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	controller.multiAgentVersion = agent.VersionV2
+	parent := controller.scoped("/root/parent", "thread-parent")
+	parent.setActiveTurn("turn-parent")
+	parent.deliverCompletion(&execAgentTask{path: "/root/parent/worker"}, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: "nested result"})
+
+	activity, err := parent.WaitForActivity(context.Background(), nil)
+	if err != nil || activity.TimedOut || activity.Message != "Wait completed." {
+		t.Fatalf("parent activity = %#v, %v", activity, err)
+	}
+	drained := controller.steerMailbox.Drain(&turn.SteerDrainParams{ThreadID: "thread-parent", TurnID: "turn-parent"})
+	if len(drained) != 1 || !inputItemsContainText(drained, "Message Type: FINAL_ANSWER") || !inputItemsContainText(drained, "Task name: /root/parent") || !inputItemsContainText(drained, "Sender: /root/parent/worker") || !inputItemsContainText(drained, "nested result") {
+		t.Fatalf("parent completion input = %#v", drained)
+	}
+	if inputItemsContainText(drained, "<subagent_notification>") {
+		t.Fatalf("legacy subagent notification leaked: %#v", drained)
+	}
+}
+
+func TestSessionItemsPersistInterAgentCompletionBeforeFinalAnswer(t *testing.T) {
+	createdAt := fixedExecTime()
+	completion := execAgentCompletionInputItem("/root", "/root/worker", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nchild result")
+	result := &turn.AgentLoopResult{
+		InputItems: []any{completion}, InitialInputCount: 0,
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID: "final", Type: "agent_message", Text: "root result", Data: map[string]any{"phase": "final_answer"},
+		}}},
+	}
+	items := sessionItemsForTurnWithMode("turn-root", "delegate", nil, result, createdAt, nil, nil, false)
+	completionIndex, finalIndex := -1, -1
+	for index := range items {
+		if items[index].Type == "agent_message" && strings.Contains(string(items[index].Raw), "Message Type: FINAL_ANSWER") {
+			completionIndex = index
+		}
+		if items[index].Type == "agent_message" && items[index].Text == "root result" {
+			finalIndex = index
+		}
+	}
+	if completionIndex < 0 || finalIndex < 0 || completionIndex >= finalIndex {
+		t.Fatalf("session items = %#v, completion=%d final=%d", items, completionIndex, finalIndex)
+	}
+}
+
+func TestSessionItemsDoNotRepersistHistoricalInterAgentCompletion(t *testing.T) {
+	createdAt := fixedExecTime()
+	historical := execAgentCompletionInputItem("/root", "/root/old_worker", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/old_worker\nPayload:\nold result")
+	current := execAgentCompletionInputItem("/root", "/root/new_worker", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/new_worker\nPayload:\nnew result")
+	result := &turn.AgentLoopResult{
+		InputItems: []any{historical, current}, InitialInputCount: 1,
+		Response: &model.AgentResponse{Items: []model.AgentItem{{ID: "final", Type: "agent_message", Text: "root result"}}},
+	}
+	items := sessionItemsForTurnWithMode("turn-root", "continue", nil, result, createdAt, nil, nil, false)
+	encoded, _ := json.Marshal(items)
+	text := string(encoded)
+	if strings.Contains(text, "old_worker") || !strings.Contains(text, "new_worker") {
+		t.Fatalf("session items repersisted history or lost current completion: %s", text)
 	}
 }
 
@@ -2783,6 +2976,16 @@ func TestExecAgentControllerInterruptGenerationAndConcurrencyLimit(t *testing.T)
 		}
 	}
 	t.Fatalf("spawned agent missing from %#v", list)
+}
+
+func TestExecAgentControllerV2InterruptMissingTargetReturnsError(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	controller := newExecAgentController(runner, context.Background(), &Request{Exec: cli.ExecOptions{Prompt: "root", Shared: cli.SharedOptions{CWD: t.TempDir()}}}, "thread-root", 1).(*execAgentController)
+	t.Cleanup(controller.shutdown)
+	result, err := controller.InterruptAgent(context.Background(), &agent.InterruptAgentArgs{Target: "/root/missing_worker"})
+	if err == nil || !strings.Contains(err.Error(), "agent /root/missing_worker not found") {
+		t.Fatalf("InterruptAgent() result=%#v error=%v", result, err)
+	}
 }
 
 func countExecRolloutsForThread(t *testing.T, home, threadID string) int {
@@ -3658,6 +3861,35 @@ func TestExecCommentaryCompletesBeforeToolLifecycleLikeRust(t *testing.T) {
 	if len(events) != 2 || events[0].Type != "item.completed" || events[0].Item == nil || events[0].Item.ID != "commentary-1" ||
 		events[1].Type != "item.started" || events[1].Item == nil || events[1].Item.ID != "call-1" {
 		t.Fatalf("event order = %#v, want commentary completed before command started", events)
+	}
+}
+
+func TestExecV2SubAgentActivityEmitsInternalStartedAndCompletedLifecycle(t *testing.T) {
+	internal := []protocol.ThreadEvent{}
+	sink := newExecEventSink(nil, false)
+	sink.internalHandler = func(event protocol.ThreadEvent) {
+		internal = append(internal, event)
+	}
+	collector := &execStreamEventCollector{sink: sink}
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID: "spawn-activity", ToolName: tool.NamespacedName(agent.MultiAgentV2Namespace, "spawn_agent"),
+		},
+		Output: &tool.Output{Success: true, Data: map[string]any{
+			"subAgentActivity": map[string]any{"kind": "started", "agent_thread_id": "child-thread", "agent_path": "/root/worker"},
+		}},
+	})
+	if len(internal) != 2 || internal[0].Type != "item.started" || internal[1].Type != "item.completed" {
+		t.Fatalf("internal activity lifecycle = %#v", internal)
+	}
+	for index, event := range internal {
+		if event.Item == nil || event.Item.ID != "spawn-activity" || event.Item.Type != "sub_agent_activity" ||
+			event.Item.ActivityKind != "started" || event.Item.AgentThreadID != "child-thread" || event.Item.AgentPath != "/root/worker" {
+			t.Fatalf("internal activity event %d = %#v", index, event)
+		}
+	}
+	if events := sink.Events(); len(events) != 0 {
+		t.Fatalf("v2 activity leaked into public SDK events: %#v", events)
 	}
 }
 

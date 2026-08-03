@@ -4381,6 +4381,29 @@ func TestModelContextCompactionCompletionAddsRustHistoryMarker(t *testing.T) {
 	}
 }
 
+func TestModelRendersCanonicalMultiAgentLifecycleWithoutCiphertext(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	receivers := []string{}
+	prompt := "gAAAA-hidden"
+	model.applyItemStarted(&protocol.ThreadItem{ID: "wait", Type: "collab_tool_call", Tool: "wait", ReceiverThreadIDs: &receivers, Prompt: &prompt})
+	model.applyItemCompleted(&protocol.ThreadItem{ID: "wait", Type: "collab_tool_call", Tool: "wait", ReceiverThreadIDs: &receivers})
+	activity := &protocol.ThreadItem{ID: "spawn", Type: "sub_agent_activity", ActivityKind: "started", AgentPath: "/root/worker"}
+	model.applyItemStarted(activity)
+	model.applyItemCompleted(activity)
+	view := utils.StripANSI(model.View())
+	for _, want := range []string{"Waiting for agents", "Finished waiting", "No agents completed yet"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("multi-agent view missing %q:\n%s", want, view)
+		}
+	}
+	if got := strings.Count(view, "Started `/root/worker`"); got != 2 {
+		t.Fatalf("started activity count = %d, want Rust item started + completed lifecycle:\n%s", got, view)
+	}
+	if strings.Contains(view, "gAAAA") || strings.Contains(view, "collaboration.spawn_agent") {
+		t.Fatalf("raw collaboration data leaked:\n%s", view)
+	}
+}
+
 func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
 	var requests []SubmitRequest
@@ -6433,7 +6456,10 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	model.now = func() time.Time { return now.Add(48 * time.Hour) }
 
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	_, openCmd := model.Update(key(bubbletea.KeyEnter))
+	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+		t.Fatal("opening resume picker did not enter the alternate screen")
+	}
 	view := model.View()
 	for _, want := range []string{
 		"Resume a previous session",
@@ -6456,8 +6482,17 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	if strings.Contains(view, "Other Workspace") {
 		t.Fatalf("resume picker should respect cwd filter:\n%s", view)
 	}
+	if strings.Contains(view, "Thread:") || strings.Contains(view, footerHelpText) {
+		t.Fatalf("resume picker should replace the chat surface instead of being appended below it:\n%s", view)
+	}
+	if first := strings.Split(view, "\n")[0]; !strings.Contains(first, "Resume a previous session") {
+		t.Fatalf("resume picker should start at the top of the full-screen surface; first line = %q", first)
+	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	_, closeCmd := model.Update(key(bubbletea.KeyEnter))
+	if !batchContainsMessageType(closeCmd, bubbletea.ExitAltScreen()) {
+		t.Fatal("selecting a resume target did not leave the alternate screen")
+	}
 	if state.ThreadID != "thread-resume" {
 		t.Fatalf("ThreadID = %q, want thread-resume", state.ThreadID)
 	}
@@ -6472,6 +6507,43 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	}
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionResume) || responses[0].Picker.Value != "thread-resume" {
 		t.Fatalf("responses = %#v", responses)
+	}
+}
+
+func TestModelResumePickerCancelRestoresInlineScreen(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-resume", Preview: "Resume Me"}},
+	})
+	typeText(t, model, "/resume")
+	_, openCmd := model.Update(key(bubbletea.KeyEnter))
+	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+		t.Fatal("opening resume picker did not enter the alternate screen")
+	}
+	_, closeCmd := model.Update(key(bubbletea.KeyEsc))
+	if !batchContainsMessageType(closeCmd, bubbletea.ExitAltScreen()) {
+		t.Fatal("cancelling resume picker did not leave the alternate screen")
+	}
+	if model.modal != nil || model.sessionPickerAltScreen {
+		t.Fatalf("cancel left picker state active: modal=%#v alt=%v", model.modal, model.sessionPickerAltScreen)
+	}
+}
+
+func TestModelResumePickerHonorsNoAltScreen(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		NoAltScreen:        true,
+		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-resume", Preview: "Resume Me"}},
+	})
+	typeText(t, model, "/resume")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd != nil {
+		t.Fatalf("no-alt-screen resume picker returned terminal mode command %T", cmd())
+	}
+	if !strings.HasPrefix(normalizeTerminalSnapshot(model.View()), "Resume a previous session") {
+		t.Fatalf("no-alt-screen picker should still replace the chat surface:\n%s", model.View())
+	}
+	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	if cmd != nil || model.sessionPickerAltScreen {
+		t.Fatalf("no-alt-screen cancel returned command/state: cmd=%v alt=%v", cmd != nil, model.sessionPickerAltScreen)
 	}
 }
 

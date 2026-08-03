@@ -1352,6 +1352,9 @@ func ThreadIDFromPath(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("rollout path is required")
 	}
+	if threadID, ok := ThreadIDFromFilename(filepath.Base(path)); ok {
+		return threadID, nil
+	}
 	lines, _, err := Load(path)
 	if err != nil {
 		return "", err
@@ -1367,14 +1370,40 @@ func ThreadIDFromPath(path string) (string, error) {
 	return "", fmt.Errorf("rollout thread id not found: %s", path)
 }
 
+const rolloutTimestampLayout = "2006-01-02T15-04-05"
+
+// ThreadIDFromFilename extracts the thread id embedded in a standard rollout
+// filename (rollout-<timestamp>-<threadID>.jsonl[.zst]) without opening the
+// file. Standard rollouts always encode the thread id in the filename, so
+// callers can locate a thread by scanning filenames instead of reading every
+// rollout, which is prohibitively slow for homes with thousands of sessions.
+func ThreadIDFromFilename(name string) (string, bool) {
+	base := strings.TrimSuffix(filepath.Base(name), ".zst")
+	base = strings.TrimSuffix(base, ".jsonl")
+	if !strings.HasPrefix(base, "rollout-") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(base, "rollout-")
+	if len(rest) <= len(rolloutTimestampLayout) {
+		return "", false
+	}
+	if _, err := time.Parse(rolloutTimestampLayout, rest[:len(rolloutTimestampLayout)]); err != nil {
+		return "", false
+	}
+	threadID := strings.TrimPrefix(rest[len(rolloutTimestampLayout):], "-")
+	if strings.TrimSpace(threadID) == "" {
+		return "", false
+	}
+	return threadID, true
+}
+
 func ParseTimestampFromFilename(name string) (time.Time, bool) {
 	name = strings.TrimPrefix(name, "rollout-")
-	const layout = "2006-01-02T15-04-05"
-	if len(name) < len(layout) {
+	if len(name) < len(rolloutTimestampLayout) {
 		return time.Time{}, false
 	}
-	stamp := name[:len(layout)]
-	created, err := time.Parse(layout, stamp)
+	stamp := name[:len(rolloutTimestampLayout)]
+	created, err := time.Parse(rolloutTimestampLayout, stamp)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -1429,7 +1458,17 @@ func FindThreadPath(codexHome string, threadID string, archived bool) (string, e
 	if err != nil {
 		return "", err
 	}
+	var unparsed []string
 	for _, path := range paths {
+		if id, ok := ThreadIDFromFilename(filepath.Base(path)); ok {
+			if id == threadID {
+				return path, nil
+			}
+			continue
+		}
+		unparsed = append(unparsed, path)
+	}
+	for _, path := range unparsed {
 		item, ok := BuildThreadItem(path, archived)
 		if ok && item.ThreadID == threadID {
 			return path, nil

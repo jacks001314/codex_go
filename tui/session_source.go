@@ -75,11 +75,15 @@ func AppServerThreadListParamsForSessionPicker(options SessionSourceOptions) app
 	if provider := strings.TrimSpace(options.ModelProvider); provider != "" {
 		params.ModelProviders = []string{provider}
 	}
-	if !options.IncludeNonInteractive {
-		params.SourceKinds = []appserver.ThreadSourceKind{
-			appserver.ThreadSourceKindCli,
-			appserver.ThreadSourceKindVsCode,
-		}
+	params.SourceKinds = []appserver.ThreadSourceKind{
+		appserver.ThreadSourceKindCli,
+		appserver.ThreadSourceKindVsCode,
+	}
+	if options.IncludeNonInteractive {
+		params.SourceKinds = append(params.SourceKinds,
+			appserver.ThreadSourceKindExec,
+			appserver.ThreadSourceKindAppServer,
+		)
 	}
 	return params
 }
@@ -122,7 +126,7 @@ func filterSessionRecordsForPicker(records []session.Record, options SessionSour
 		if ephemeral, _ := records[i].Metadata.Extra["ephemeral"].(bool); ephemeral {
 			continue
 		}
-		if options.IncludeNonInteractive || sessionRecordIsInteractive(&records[i]) {
+		if sessionRecordIsResumable(&records[i], options.IncludeNonInteractive) {
 			filtered = append(filtered, records[i])
 		}
 	}
@@ -184,19 +188,22 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 }
 
 func sessionRecordIsInteractive(record *session.Record) bool {
+	return sessionRecordIsResumable(record, false)
+}
+
+func sessionRecordIsResumable(record *session.Record, includeNonInteractive bool) bool {
 	if record == nil {
 		return false
 	}
 	source := strings.ToLower(strings.TrimSpace(record.Metadata.Source))
-	source = strings.ReplaceAll(source, "_", "")
-	source = strings.ReplaceAll(source, "-", "")
+	source = strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(source)
 	switch source {
 	case "", "cli", "vscode":
 		return true
-	case "exec", "appserver", "subagent", "subagentreview", "subagentcompact", "subagentthreadspawn", "subagentother", "unknown":
-		return false
+	case "exec", "appserver":
+		return includeNonInteractive
 	default:
-		return true
+		return false
 	}
 }
 

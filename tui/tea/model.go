@@ -667,13 +667,14 @@ type Model struct {
 	overlay        *chatwidget.TranscriptOverlay
 	slashPopup     slashCommandPopup
 
-	width             int
-	height            int
-	noAltScreen       bool
-	overlayAltScreen  bool
-	overlayTranscript bool
-	rateLimitWarnings chatwidget.RateLimitWarningState
-	warningDisplay    chatwidget.WarningDisplayState
+	width                  int
+	height                 int
+	noAltScreen            bool
+	overlayAltScreen       bool
+	sessionPickerAltScreen bool
+	overlayTranscript      bool
+	rateLimitWarnings      chatwidget.RateLimitWarningState
+	warningDisplay         chatwidget.WarningDisplayState
 
 	terminalFocused          bool
 	rawOutput                bool
@@ -1544,6 +1545,12 @@ func (m *Model) View() string {
 		}
 		return m.overlay.View()
 	}
+	// Rust renders the session picker as a temporary full-screen surface. It
+	// must not be appended below the transcript, where the transcript viewport
+	// would push the picker to the bottom of the terminal and clip its rows.
+	if m.modal != nil && m.modal.sessionPicker != nil {
+		return m.renderSessionPickerModal()
+	}
 	m.refreshTranscript()
 
 	chrome := m.regionChromeEnabled()
@@ -2343,6 +2350,10 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		// The completed event carries the saved path.
 	case "enteredReviewMode", "entered_review_mode":
 		m.enterReviewMode(firstNonEmpty(strings.TrimSpace(item.Text), strings.TrimSpace(item.Message)))
+	case "collab_tool_call", "collabAgentToolCall", "collab_agent_tool_call":
+		m.renderCollabAgentToolCall(item, false)
+	case "sub_agent_activity", "subAgentActivity":
+		m.renderSubAgentActivity(item)
 	}
 }
 
@@ -2385,8 +2396,36 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		// The started lifecycle event owns the live banner.
 	case "contextCompaction", "context_compaction":
 		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"Context compacted"}))
+	case "collab_tool_call", "collabAgentToolCall", "collab_agent_tool_call":
+		m.renderCollabAgentToolCall(item, true)
+	case "sub_agent_activity", "subAgentActivity":
+		m.renderSubAgentActivity(item)
 	}
 	return nil
+}
+
+func (m *Model) renderCollabAgentToolCall(item *protocol.ThreadItem, completed bool) {
+	if m == nil || item == nil {
+		return
+	}
+	cell, ok := historycell.NewCollabAgentToolCall(item, completed)
+	if !ok {
+		return
+	}
+	m.Transcript.finishAssistantPreambleBeforeTool()
+	m.applyHistoryCell(cell)
+}
+
+func (m *Model) renderSubAgentActivity(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	cell, ok := historycell.NewSubAgentActivity(item.ActivityKind, item.AgentPath)
+	if !ok {
+		return
+	}
+	m.Transcript.finishAssistantPreambleBeforeTool()
+	m.applyHistoryCell(cell)
 }
 
 func (m *Model) renderFileChangeItem(item *protocol.ThreadItem, completed bool) {
@@ -3781,7 +3820,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandArchive:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
 	case codextui.CommandUnarchive:
-		m.openSessionPicker(codextui.SessionPickerUnarchive)
+		return m.openSessionPicker(codextui.SessionPickerUnarchive)
 	case codextui.CommandDelete:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionDelete)
 	case codextui.CommandAttach:

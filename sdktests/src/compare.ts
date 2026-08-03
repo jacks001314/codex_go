@@ -34,6 +34,8 @@ export function compareArtifact(artifactDir: string): CompareResult {
   const checks = [
     checkOutcome("rust", rust, expectsFailure, expected.errorPattern),
     checkOutcome("go", go, expectsFailure, expected.errorPattern),
+    checkBackendInfrastructure("rust", rust, expectsFailure),
+    checkBackendInfrastructure("go", go, expectsFailure),
     checkLifecycle("rust", rust, expectedTurns, expectsFailure),
     checkLifecycle("go", go, expectedTurns, expectsFailure),
     checkEventTypeSequence(rust, go, expected.eventSequenceComparison),
@@ -70,6 +72,14 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkSubagentRollouts("go", go, expected.minSubagentRollouts),
     checkSubagentRolloutPatterns("rust", rust, expected.subagentRolloutPatterns),
     checkSubagentRolloutPatterns("go", go, expected.subagentRolloutPatterns),
+    checkSubagentFinalMessagePatterns("rust", rust, expected.subagentFinalMessagePatterns),
+    checkSubagentFinalMessagePatterns("go", go, expected.subagentFinalMessagePatterns),
+    checkRootRolloutPatterns("rust", rust, expected.rootRolloutPatterns, expected.forbiddenRootRolloutPatterns),
+    checkRootRolloutPatterns("go", go, expected.rootRolloutPatterns, expected.forbiddenRootRolloutPatterns),
+    checkRootRolloutPatternCounts("rust", rust, expected.rootRolloutPatternCounts),
+    checkRootRolloutPatternCounts("go", go, expected.rootRolloutPatternCounts),
+    checkForbiddenPublicEventPatterns("rust", rust, expected.forbiddenPublicEventPatterns),
+    checkForbiddenPublicEventPatterns("go", go, expected.forbiddenPublicEventPatterns),
     checkFinalAgentMessagePatterns("rust", rust, expected.finalAgentMessagePatterns),
     checkFinalAgentMessagePatterns("go", go, expected.finalAgentMessagePatterns),
     checkExpectedCommandExecutions("rust", rust, expected.commandExecutions, expected.commandOutputComparison),
@@ -97,12 +107,20 @@ export function compareArtifact(artifactDir: string): CompareResult {
   const baselineDrift = Boolean(
     manifest?.baseline?.rustBaselineDrift || manifest?.baseline?.parityRecordDrift,
   );
-  const infraFailure = !expectsFailure && checks.slice(0, 4).some((check) => !check.ok);
+  const infraFailure = !expectsFailure && checks.some(
+    (check) => !check.ok && (
+      check.name.endsWith(": process completed") ||
+      check.name.endsWith(": backend infrastructure") ||
+      check.name.endsWith(": lifecycle")
+    ),
+  );
   const parityFailure = checks.some(
     (check) =>
       !check.ok &&
       (check.name.startsWith("strict ") ||
         check.name === "semantic completed tool sequence" ||
+        check.name.endsWith(": root rollout patterns") ||
+        check.name.endsWith(": root rollout pattern counts") ||
         check.name === "agent message count" ||
         check.name === "final agent message count" ||
         check.name === "error item symmetry" ||
@@ -172,6 +190,35 @@ function checkOutcome(label: string, recording: any, expectsFailure: boolean, er
   const pattern = typeof errorPattern === "string" ? new RegExp(errorPattern, "i") : null;
   const ok = recording.status === "error" && message.length > 0 && (!pattern || pattern.test(message));
   return { name: `${label}: expected failure`, ok, detail: ok ? undefined : `${label} status=${recording.status} error=${message}` };
+}
+
+function checkBackendInfrastructure(label: string, recording: any, expectsFailure: boolean) {
+  if (expectsFailure) {
+    return { name: `${label}: backend infrastructure`, ok: true, detail: "expected-failure scenario permits backend errors" };
+  }
+  const failures: string[] = [];
+  for (const line of String(recording?.responsesDebug ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.event !== "sampling.failed") continue;
+    const error = String(entry?.error ?? entry?.message ?? "");
+    if (isBackendInfrastructureError(error)) failures.push(error);
+  }
+  return {
+    name: `${label}: backend infrastructure`,
+    ok: failures.length === 0,
+    detail: failures.length === 0 ? undefined : `${label}: ${failures.join("; ")}`,
+  };
+}
+
+function isBackendInfrastructureError(error: string): boolean {
+  return /\bstatus\s+(?:401|402|403|408|409|429|5\d\d)\b/i.test(error) ||
+    /server[_ -]?overloaded|rate[_ -]?limit|insufficient[_ -]?quota|billing|account balance|service unavailable|gateway timeout/i.test(error);
 }
 
 function checkLifecycle(label: string, recording: any, expectedTurns: number, expectsFailure: boolean) {
@@ -561,6 +608,9 @@ function checkCollaborationContract(label: string, recording: any, minimumSpawnC
     const callID = String(item.call_id ?? item.callId ?? item.id ?? completedCalls.size);
     completedCalls.add(`${tool}:${callID}`);
   }
+	for (const call of completedCollaborationCallsFromRootRollout(recording)) {
+		completedCalls.add(call);
+	}
   const tools = new Set([...completedCalls].map((call) => call.slice(0, call.lastIndexOf(":"))));
   const rootThreadID = String(recording?.threadId ?? "").trim();
   const linkedSubagentThreads = new Set(
@@ -580,6 +630,41 @@ function checkCollaborationContract(label: string, recording: any, minimumSpawnC
     ok,
     detail: ok ? undefined : `${label}: completed tools=${JSON.stringify([...tools])}, spawn evidence=${spawnCalls}/${minimum}, missing=${JSON.stringify(missing)}`,
   };
+}
+
+function completedCollaborationCallsFromRootRollout(recording: any): Set<string> {
+	const calls = new Map<string, string>();
+	const outputs = new Set<string>();
+	for (const line of String(recording?.rolloutJsonl ?? "").split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		let raw: any;
+		try {
+			raw = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		const item = raw?.type === "response_item" ? raw.payload : raw?.type === "item" ? raw.item : undefined;
+		if (!item || typeof item !== "object") continue;
+		const callID = String(item.call_id ?? item.callId ?? "").trim();
+		if (callID === "") continue;
+		if (item.type === "function_call" && String(item.namespace ?? "").trim() === "collaboration") {
+			const tool = canonicalCollaborationTool(String(item.name ?? ""));
+			if (tool !== "") calls.set(callID, tool);
+			continue;
+		}
+		if (item.type === "function_call_output") {
+			outputs.add(callID);
+			continue;
+		}
+		if (item.type === "tool_output" && item?.data?.success !== false && item?.metadata?.success !== false) {
+			outputs.add(callID);
+		}
+	}
+	const completed = new Set<string>();
+	for (const [callID, tool] of calls) {
+		if (outputs.has(callID)) completed.add(`${tool}:${callID}`);
+	}
+	return completed;
 }
 
 function canonicalCollaborationTool(value: string): string {
@@ -652,6 +737,133 @@ function checkSubagentRolloutPatterns(label: string, recording: any, expected: u
     ok: missing.length === 0,
     detail: missing.length === 0 ? undefined : `${label}: missing subagent rollout patterns=${JSON.stringify(missing)}`,
   };
+}
+
+function checkSubagentFinalMessagePatterns(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: subagent final message patterns`, ok: true, detail: "scenario has no subagent-final contract" };
+  }
+  const finalMessages = linkedSubagentRolloutRecords(recording).flatMap((record: any) => finalAssistantMessagesFromRollout(record?.jsonl));
+  const text = finalMessages.join("\n");
+  const missing = expected.map(String).filter((pattern) => !new RegExp(pattern, "s").test(text));
+  return {
+    name: `${label}: subagent final message patterns`,
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? undefined : `${label}: finals=${JSON.stringify(finalMessages)}, missing=${JSON.stringify(missing)}`,
+  };
+}
+
+function linkedSubagentRolloutRecords(recording: any): any[] {
+  const rootThreadID = String(recording?.threadId ?? "").trim();
+  return Array.isArray(recording?.rolloutRecords)
+    ? recording.rolloutRecords.filter((record: any) => {
+        const threadID = String(record?.threadId ?? "").trim();
+        const parentThreadID = String(record?.parentThreadId ?? "").trim();
+        const source = String(record?.threadSource ?? "").trim().toLowerCase();
+        return threadID !== "" && threadID !== rootThreadID && parentThreadID === rootThreadID && source === "subagent";
+      })
+    : [];
+}
+
+function finalAssistantMessagesFromRollout(jsonl: unknown): string[] {
+  const messages: string[] = [];
+  for (const line of String(jsonl ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let raw: any;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (raw?.type === "event_msg" && raw?.payload?.type === "agent_message" && raw?.payload?.phase === "final_answer") {
+      messages.push(String(raw.payload.message ?? ""));
+      continue;
+    }
+    const item = raw?.type === "response_item" ? raw.payload : raw?.type === "item" ? raw.item : undefined;
+    if (!item || item.type !== "message" || item.role !== "assistant" || item.phase !== "final_answer") continue;
+    const content = Array.isArray(item.content)
+      ? item.content.map((part: any) => String(part?.text ?? "")).join("")
+      : String(item.text ?? "");
+    messages.push(content);
+  }
+  return [...new Set(messages)];
+}
+
+function checkRootRolloutPatterns(label: string, recording: any, required: unknown, forbidden: unknown) {
+  const requiredPatterns = Array.isArray(required) ? required.map(String) : [];
+  const forbiddenPatterns = Array.isArray(forbidden) ? forbidden.map(String) : [];
+  if (requiredPatterns.length === 0 && forbiddenPatterns.length === 0) {
+    return { name: `${label}: root rollout patterns`, ok: true, detail: "scenario has no root-rollout pattern contract" };
+  }
+  const rolloutText = rootRolloutSearchText(recording);
+  const missing = requiredPatterns.filter((pattern) => !new RegExp(pattern, "s").test(rolloutText));
+  const present = forbiddenPatterns.filter((pattern) => new RegExp(pattern, "s").test(rolloutText));
+  const ok = missing.length === 0 && present.length === 0;
+  return {
+    name: `${label}: root rollout patterns`,
+    ok,
+    detail: ok ? undefined : `${label}: missing=${JSON.stringify(missing)}, forbidden present=${JSON.stringify(present)}`,
+  };
+}
+
+function checkRootRolloutPatternCounts(label: string, recording: any, expected: unknown) {
+  if (!expected || typeof expected !== "object" || Array.isArray(expected) || Object.keys(expected).length === 0) {
+    return { name: `${label}: root rollout pattern counts`, ok: true, detail: "scenario has no root-rollout count contract" };
+  }
+  const rolloutText = rootRolloutSearchText(recording);
+  const mismatches: string[] = [];
+  for (const [pattern, rawCount] of Object.entries(expected as Record<string, unknown>)) {
+    const expectedCount = Number(rawCount);
+    const actualCount = rolloutText.match(new RegExp(pattern, "gs"))?.length ?? 0;
+    if (!Number.isInteger(expectedCount) || expectedCount < 0 || actualCount !== expectedCount) {
+      mismatches.push(`${JSON.stringify(pattern)}=${actualCount}/${rawCount}`);
+    }
+  }
+  return {
+    name: `${label}: root rollout pattern counts`,
+    ok: mismatches.length === 0,
+    detail: mismatches.length === 0 ? undefined : `${label}: root rollout pattern counts ${mismatches.join(", ")}`,
+  };
+}
+
+function checkForbiddenPublicEventPatterns(label: string, recording: any, expected: unknown) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { name: `${label}: forbidden public event patterns`, ok: true, detail: "scenario has no public-event exclusion contract" };
+  }
+  const publicEvents = JSON.stringify(recording?.events ?? []);
+  const present = expected.map(String).filter((pattern) => new RegExp(pattern, "s").test(publicEvents));
+  return {
+    name: `${label}: forbidden public event patterns`,
+    ok: present.length === 0,
+    detail: present.length === 0 ? undefined : `${label}: forbidden public event patterns present=${JSON.stringify(present)}`,
+  };
+}
+
+function rootRolloutSearchText(recording: any): string {
+  const raw = String(recording?.rolloutJsonl ?? "");
+  const decoded: string[] = [];
+  const visit = (value: any) => {
+    if (typeof value === "string") {
+      decoded.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const item of Object.values(value)) visit(item);
+    }
+  };
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      visit(JSON.parse(line));
+    } catch {
+      // The raw text remains searchable even when an individual JSONL line is corrupt.
+    }
+  }
+  return `${raw}\n${decoded.join("\n")}`;
 }
 
 function checkFinalAgentMessagePatterns(label: string, recording: any, expected: unknown) {
@@ -795,6 +1007,12 @@ function rolloutItemTypes(recording: any): string[] {
     if (entry?.type === "item" && itemName === "view_image") found.add("image_view");
     if (["view_image_tool_call", "image_view"].includes(eventType)) found.add("image_view");
     if (entry?.type === "response_item" && responseToolName === "view_image") found.add("image_view");
+    if (
+      entry?.type === "item" &&
+      itemType === "custom_tool_call" &&
+      itemName === "exec" &&
+      /\btools\.view_image\s*\(/.test(String(entry?.item?.input ?? ""))
+    ) found.add("image_view");
     if (
       entry?.type === "response_item" &&
       eventType === "custom_tool_call" &&

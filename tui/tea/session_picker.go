@@ -18,18 +18,17 @@ func (m *Model) applyResumeCommand(args string) bubbletea.Cmd {
 	}
 	query := strings.TrimSpace(args)
 	if query == "" {
-		m.openSessionPicker(codextui.SessionPickerResume)
-		return nil
+		return m.openSessionPicker(codextui.SessionPickerResume)
 	}
 	item, ok, ambiguous := m.findSessionByIDOrName(query)
 	if ambiguous {
 		m.notice = "Multiple saved chats match '" + query + "'."
-		m.openSessionPicker(codextui.SessionPickerResume)
+		cmd := m.openSessionPicker(codextui.SessionPickerResume)
 		if m.modal != nil && m.modal.sessionPicker != nil {
 			m.modal.sessionPicker.Query = query
 			m.modal.sessionPicker.SelectFirst()
 		}
-		return nil
+		return cmd
 	}
 	if !ok {
 		message := "No saved chat found matching '" + query + "'."
@@ -124,17 +123,17 @@ func sessionLookupFields(item codextui.SessionSummary) []string {
 	return fields
 }
 
-func (m *Model) openSessionPicker(action codextui.SessionPickerAction) {
+func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea.Cmd {
 	picker := codextui.NewSessionPickerState(action, m.sessionItems, m.sessionCWD)
 	if picker == nil {
 		m.notice = "No sessions available."
-		return
+		return nil
 	}
 	picker.Density = m.sessionPickerDensity
 	visible := picker.VisibleItems()
 	if len(visible) == 0 {
 		m.notice = "No sessions available to " + action.Label() + "."
-		return
+		return nil
 	}
 	modalOptions := make([]ModalOption, 0, len(visible))
 	for i, item := range visible {
@@ -156,6 +155,11 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) {
 		m.modal.sessionPicker = picker
 		m.modal.selected = picker.Selected
 	}
+	if m.noAltScreen {
+		return nil
+	}
+	m.sessionPickerAltScreen = true
+	return bubbletea.EnterAltScreen
 }
 
 func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelection) {

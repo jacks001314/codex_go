@@ -718,6 +718,22 @@ func TestSessionResumePickerListsInteractiveCandidates(t *testing.T) {
 		Metadata:  session.Metadata{Source: "exec"},
 	})
 	saveAppSessionRecord(t, store, &session.Record{
+		ID:        "subagent-newest",
+		Title:     "Weather Worker",
+		CreatedAt: now,
+		UpdatedAt: now.Add(4 * time.Minute),
+		RecencyAt: now.Add(4 * time.Minute),
+		Metadata:  session.Metadata{Source: "subagent:thread_spawn"},
+	})
+	saveAppSessionRecord(t, store, &session.Record{
+		ID:        "unknown-newest",
+		Title:     "Unknown",
+		CreatedAt: now,
+		UpdatedAt: now.Add(5 * time.Minute),
+		RecencyAt: now.Add(5 * time.Minute),
+		Metadata:  session.Metadata{Source: "custom-runtime"},
+	})
+	saveAppSessionRecord(t, store, &session.Record{
 		ID:        "archived",
 		Title:     "Archived",
 		Archived:  true,
@@ -765,13 +781,34 @@ func TestSessionResumePickerIncludeNonInteractive(t *testing.T) {
 		RecencyAt: now.Add(time.Minute),
 		Metadata:  session.Metadata{Source: "exec"},
 	})
+	saveAppSessionRecord(t, store, &session.Record{
+		ID:        "app-server-newest",
+		CreatedAt: now,
+		UpdatedAt: now.Add(2 * time.Minute),
+		RecencyAt: now.Add(2 * time.Minute),
+		Metadata:  session.Metadata{Source: "appServer"},
+	})
+	saveAppSessionRecord(t, store, &session.Record{
+		ID:        "subagent-hidden",
+		CreatedAt: now,
+		UpdatedAt: now.Add(3 * time.Minute),
+		RecencyAt: now.Add(3 * time.Minute),
+		Metadata:  session.Metadata{Source: "subagent:thread_spawn"},
+	})
+	saveAppSessionRecord(t, store, &session.Record{
+		ID:        "unknown-hidden",
+		CreatedAt: now,
+		UpdatedAt: now.Add(4 * time.Minute),
+		RecencyAt: now.Add(4 * time.Minute),
+		Metadata:  session.Metadata{Source: "unknown"},
+	})
 
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), []string{"resume", "--include-non-interactive"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume picker returned error: %v", err)
 	}
 	payload := decodeSessionPickerResponse(t, &stdout)
-	if got := pickerIDs(payload.Sessions); strings.Join(got, ",") != "exec-newer,interactive" {
+	if got := pickerIDs(payload.Sessions); strings.Join(got, ",") != "app-server-newest,exec-newer,interactive" {
 		t.Fatalf("picker ids = %v", got)
 	}
 }

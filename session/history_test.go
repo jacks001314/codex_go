@@ -25,6 +25,65 @@ func TestInputItemsFromRecordUsesRawItem(t *testing.T) {
 	}
 }
 
+func TestInputItemsFromRecordNormalizesTextContentType(t *testing.T) {
+	record := &Record{Items: []Item{
+		{ID: "u1", Type: "user_message", Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Content: []ContentPart{{Type: "text", Text: "hi"}}},
+	}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
+	}
+	user := items[0].(map[string]any)
+	userContent := user["content"].([]map[string]any)
+	if userContent[0]["type"] != "input_text" || userContent[0]["text"] != "hello" {
+		t.Fatalf("user content = %#v, want input_text", userContent[0])
+	}
+	assistant := items[1].(map[string]any)
+	assistantContent := assistant["content"].([]map[string]any)
+	if assistantContent[0]["type"] != "output_text" || assistantContent[0]["text"] != "hi" {
+		t.Fatalf("assistant content = %#v, want output_text", assistantContent[0])
+	}
+}
+
+func TestInputItemsFromRecordSanitizesRawTextContent(t *testing.T) {
+	raw := json.RawMessage(`{"type":"message","role":"user","content":[{"type":"text","text":"hello","text_elements":[]}]}`)
+	items := InputItemsFromItems([]Item{{Raw: raw}}, &HistoryBuildOptions{})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("item = %#v", items[0])
+	}
+	content := item["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["type"] != "input_text" || block["text"] != "hello" {
+		t.Fatalf("content block = %#v, want input_text", block)
+	}
+	if _, ok := block["text_elements"]; ok {
+		t.Fatalf("text_elements leaked into API content: %#v", block)
+	}
+}
+
+func TestHistoryContentTypeNormalizesTextByRole(t *testing.T) {
+	if got := historyContentType("text", "user", ""); got != "input_text" {
+		t.Fatalf("historyContentType(text,user) = %q", got)
+	}
+	if got := historyContentType("text", "assistant", ""); got != "output_text" {
+		t.Fatalf("historyContentType(text,assistant) = %q", got)
+	}
+	if got := historyContentType("inputText", "user", ""); got != "input_text" {
+		t.Fatalf("historyContentType(inputText,user) = %q", got)
+	}
+	if got := historyContentType("outputText", "assistant", ""); got != "output_text" {
+		t.Fatalf("historyContentType(outputText,assistant) = %q", got)
+	}
+	if got := historyContentType("file", "user", ""); got != "input_file" {
+		t.Fatalf("historyContentType(file,user) = %q", got)
+	}
+}
+
 func TestInputItemsFromRecordRemovesOnlyTopLevelPassthroughMetadata(t *testing.T) {
 	raw := json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","internal_chat_message_metadata_passthrough":{"nested":true}}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-secret"}}`)
 	items := InputItemsFromItems([]Item{{Raw: raw}}, &HistoryBuildOptions{})

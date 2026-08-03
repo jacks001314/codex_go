@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/agent"
 	"codex_go/applypatch"
 	"codex_go/apps"
 	"codex_go/auth"
@@ -460,7 +461,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	case model.ResponsesStreamEventOutputAdded:
 		state.rememberOutputItem(event)
 		state.rememberTool(event)
-		if streamAgentItemLooksLikeMCP(event.Item) || streamAgentItemIsToolSearch(event.Item) {
+		if streamAgentItemLooksLikeMCP(event.Item) || streamAgentItemIsToolSearch(event.Item) || streamAgentItemLooksLikeCollaboration(event.Item) {
 			return
 		}
 		item := threadItemFromStreamAgentItem(event.Item, turnID, event.ResponseID, time.Now().UTC())
@@ -629,6 +630,18 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			Usage:      usage,
 		})
 	}
+}
+
+func streamAgentItemLooksLikeCollaboration(item *model.AgentItem) bool {
+	if item == nil || (item.Type != "function_call" && item.Type != "custom_tool_call") {
+		return false
+	}
+	namespace := strings.TrimSpace(item.Namespace)
+	if namespace == agent.MultiAgentV1Namespace || namespace == agent.MultiAgentV2Namespace {
+		return true
+	}
+	name := strings.TrimSpace(item.Name)
+	return strings.HasPrefix(name, agent.MultiAgentV1Namespace+".") || strings.HasPrefix(name, agent.MultiAgentV2Namespace+".")
 }
 
 func streamAgentMessagePhase(item *model.AgentItem) string {
@@ -1092,6 +1105,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
+	inputItems = append(inputItems, params.AdditionalInputItems...)
 	if turnStartUsesStructuredUserInput(params) {
 		if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
 			inputItems = append(inputItems, item)
@@ -1251,6 +1265,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
@@ -1347,7 +1362,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       promptFromTurnStart(params),
 		Instructions:                 runConfig.Instructions,
-		InputItems:                   append([]any(nil), runConfig.InputItems...),
+		InputItems:                   append(append([]any(nil), runConfig.InputItems...), params.AdditionalInputItems...),
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
@@ -1446,6 +1461,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -1584,6 +1600,9 @@ func shouldNotifyRuntimeItemCompleted(item ThreadItem) bool {
 	if evented, _ := item.Data["unified_exec_evented"].(bool); evented {
 		return false
 	}
+	if notified, _ := item.Data["lifecycleNotified"].(bool); notified {
+		return false
+	}
 	if item.Type == "tool_search_call" || item.Type == "tool_search_output" {
 		return false
 	}
@@ -1622,6 +1641,44 @@ func finalAgentMessageSummary(items []ThreadItem) []ThreadItem {
 	return nil
 }
 
+func lastAgentMessageFromThreadItems(items []ThreadItem) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		if normalizeThreadItemType(items[i].Type) == "agentMessage" && strings.TrimSpace(items[i].Text) != "" {
+			return strings.TrimSpace(items[i].Text)
+		}
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) deliverRuntimeAgentCompletion(threadID string, status agent.AgentMessageStatus) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || strings.TrimSpace(record.Metadata.AgentPath) == "" || record.ParentThreadID == "" {
+		return
+	}
+	rootID, _ := r.runtimeAgentIdentity(threadID)
+	parentPath := "/root"
+	if parent, parentErr := r.threadRecord(record.ParentThreadID, true, false); parentErr == nil && parent != nil && strings.TrimSpace(parent.Metadata.AgentPath) != "" {
+		parentPath = strings.TrimSpace(parent.Metadata.AgentPath)
+	}
+	message, ok := agent.FormatInterAgentCompletionMessage(parentPath, record.Metadata.AgentPath, status)
+	if ok {
+		input := map[string]any{
+			"type": "agent_message", "author": record.Metadata.AgentPath, "recipient": parentPath,
+			"content": []any{map[string]any{"type": "input_text", "text": message}},
+		}
+		parentID := string(record.ParentThreadID)
+		if active := r.activeRuntimeTurnSnapshot(parentID); active != nil {
+			_ = r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: parentID, TurnID: active.ID, InputItems: []any{input}})
+		} else {
+			r.enqueueRuntimeAgentMessage(parentID, input)
+		}
+	}
+	r.notifyRuntimeAgentActivity(rootID, "Wait completed.")
+}
+
 func (r *RuntimeRouter) notifyTurnPlanUpdates(threadID string, turnID string, result *turn.AgentLoopResult) {
 	if r == nil || result == nil {
 		return
@@ -1642,6 +1699,12 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 		}
 		if r.networkApproval != nil {
 			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
+		}
+		if item, ok := collaborationStartedThreadItem(invocation, threadID, turnID, startedAt); ok {
+			r.notify(NotificationItemStarted, &ItemStartedNotification{
+				Item: threadItemPayload(item), ThreadID: threadID, TurnID: turnID, StartedAtMS: startedAt.UTC().UnixMilli(),
+			})
+			return
 		}
 		if item, ok := commandExecutionStartedThreadItem(invocation, turnID, cwd, startedAt); ok {
 			// Unified exec owns the canonical command lifecycle for every command,
@@ -1726,7 +1789,26 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 
 func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID string, cwd string, unifiedExecEnabled bool) turn.ToolCompletedCallback {
 	return func(_ context.Context, execution *turn.ToolExecutionResult) {
-		if r == nil || unifiedExecEnabled || execution == nil || execution.Invocation == nil || execution.Invocation.Source != "code_mode" {
+		if r == nil || execution == nil || execution.Invocation == nil {
+			return
+		}
+		if item, ok := collaborationCompletedThreadItem(execution, threadID, turnID); ok {
+			completedAt := execution.FinishedAt
+			if completedAt.IsZero() {
+				completedAt = time.Now().UTC()
+			}
+			payload := threadItemPayload(item)
+			if threadItemWireType(&item) == "subAgentActivity" {
+				r.notify(NotificationItemStarted, &ItemStartedNotification{
+					Item: payload, ThreadID: threadID, TurnID: turnID, StartedAtMS: completedAt.UTC().UnixMilli(),
+				})
+			}
+			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+				Item: payload, ThreadID: threadID, TurnID: turnID, CompletedAtMS: completedAt.UTC().UnixMilli(),
+			})
+			return
+		}
+		if unifiedExecEnabled || execution.Invocation.Source != "code_mode" {
 			return
 		}
 		item, ok := commandExecutionStartedThreadItem(execution.Invocation, turnID, cwd, execution.StartedAt)
@@ -1773,6 +1855,199 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 			CompletedAtMS: completedAt.UTC().UnixMilli(),
 		})
 	}
+}
+
+func collaborationStartedThreadItem(invocation *tool.Invocation, senderThreadID string, turnID string, startedAt time.Time) (ThreadItem, bool) {
+	if invocation == nil || !appCollaborationToolName(invocation.ToolName) {
+		return ThreadItem{}, false
+	}
+	name := strings.TrimSpace(invocation.ToolName.Name)
+	versionV2 := strings.TrimSpace(invocation.ToolName.Namespace) == agent.MultiAgentV2Namespace
+	if versionV2 && name != "wait_agent" {
+		return ThreadItem{}, false
+	}
+	toolKind, ok := appCollabToolKind(name)
+	if !ok {
+		return ThreadItem{}, false
+	}
+	return appCollabAgentThreadItem(invocation, nil, senderThreadID, turnID, string(CollabAgentToolCallInProgress), toolKind, startedAt), true
+}
+
+func collaborationCompletedThreadItem(execution *turn.ToolExecutionResult, senderThreadID string, turnID string) (ThreadItem, bool) {
+	if execution == nil || execution.Invocation == nil || !appCollaborationToolName(execution.Invocation.ToolName) {
+		return ThreadItem{}, false
+	}
+	name := strings.TrimSpace(execution.Invocation.ToolName.Name)
+	versionV2 := strings.TrimSpace(execution.Invocation.ToolName.Namespace) == agent.MultiAgentV2Namespace
+	if versionV2 && name != "wait_agent" {
+		if activity, ok := appSubAgentActivityFromExecution(execution); ok {
+			return ThreadItem{
+				ID: firstNonEmpty(execution.Invocation.CallID, "sub-agent-activity-"+safeIdentifier(turnID)), Type: "subAgentActivity", TurnID: turnID,
+				CreatedAt: execution.FinishedAt.UTC().UnixMilli(), Data: activity,
+			}, true
+		}
+		return ThreadItem{}, false
+	}
+	toolKind, ok := appCollabToolKind(name)
+	if !ok {
+		return ThreadItem{}, false
+	}
+	status := string(CollabAgentToolCallCompleted)
+	if execution.Output == nil || !execution.Output.Success {
+		status = string(CollabAgentToolCallFailed)
+	}
+	return appCollabAgentThreadItem(execution.Invocation, execution.Output, senderThreadID, turnID, status, toolKind, execution.FinishedAt), true
+}
+
+func appCollaborationToolName(name tool.ToolName) bool {
+	namespace := strings.TrimSpace(name.Namespace)
+	return namespace == agent.MultiAgentV1Namespace || namespace == agent.MultiAgentV2Namespace
+}
+
+func appCollabToolKind(name string) (CollabAgentTool, bool) {
+	switch strings.TrimSpace(name) {
+	case "spawn_agent":
+		return CollabAgentToolSpawnAgent, true
+	case "send_input", "send_message", "followup_task":
+		return CollabAgentToolSendInput, true
+	case "resume_agent":
+		return CollabAgentToolResumeAgent, true
+	case "wait_agent":
+		return CollabAgentToolWait, true
+	case "close_agent", "interrupt_agent":
+		return CollabAgentToolCloseAgent, true
+	default:
+		return "", false
+	}
+}
+
+func appCollabAgentThreadItem(invocation *tool.Invocation, output *tool.Output, senderThreadID string, turnID string, status string, kind CollabAgentTool, at time.Time) ThreadItem {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	args := map[string]any{}
+	if invocation != nil && strings.TrimSpace(invocation.Payload.Arguments) != "" {
+		_ = json.Unmarshal([]byte(invocation.Payload.Arguments), &args)
+	}
+	receivers := appCollabReceiverThreadIDs(args, output)
+	prompt := firstNonEmpty(stringFromAny(args["prompt"]), stringFromAny(args["message"]))
+	if looksLikeEncryptedCollaborationText(prompt) {
+		prompt = ""
+	}
+	states := map[string]any{}
+	if result := appCollabResultMap(output); result != nil {
+		if raw, ok := result["status"].(map[string]any); ok {
+			for key, value := range raw {
+				states[key] = appCollabAgentStateFromAny(value)
+			}
+		}
+	}
+	data := map[string]any{
+		"tool": string(kind), "status": status, "senderThreadId": senderThreadID,
+		"receiverThreadIds": receivers, "agentsStates": states,
+	}
+	if prompt != "" {
+		data["prompt"] = prompt
+	}
+	return ThreadItem{ID: firstNonEmpty(invocation.CallID, "collab-"+safeIdentifier(turnID)), Type: "collabAgentToolCall", TurnID: turnID, CreatedAt: at.UTC().UnixMilli(), Data: data}
+}
+
+func appCollabReceiverThreadIDs(args map[string]any, output *tool.Output) []string {
+	values := []string{}
+	if targets, ok := args["targets"].([]any); ok {
+		for _, target := range targets {
+			if value := strings.TrimSpace(stringFromAny(target)); value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	for _, key := range []string{"target", "id"} {
+		if value := strings.TrimSpace(stringFromAny(args[key])); value != "" {
+			values = append(values, value)
+		}
+	}
+	if result := appCollabResultMap(output); result != nil {
+		if id := strings.TrimSpace(stringFromAny(result["agent_id"])); id != "" {
+			values = []string{id}
+		}
+	}
+	return values
+}
+
+func appCollabResultMap(output *tool.Output) map[string]any {
+	if output == nil || output.Data == nil || output.Data["result"] == nil {
+		return nil
+	}
+	if result, ok := output.Data["result"].(map[string]any); ok {
+		return result
+	}
+	data, err := json.Marshal(output.Data["result"])
+	if err != nil {
+		return nil
+	}
+	var result map[string]any
+	if json.Unmarshal(data, &result) != nil {
+		return nil
+	}
+	return result
+}
+
+func appCollabAgentStateFromAny(value any) map[string]any {
+	if status, ok := value.(agent.AgentMessageStatus); ok {
+		state := map[string]any{"status": appCollabStatus(status.Kind)}
+		if strings.TrimSpace(status.Message) != "" {
+			state["message"] = status.Message
+		}
+		return state
+	}
+	data, _ := json.Marshal(value)
+	var status agent.AgentMessageStatus
+	if json.Unmarshal(data, &status) == nil && status.Kind != "" {
+		return appCollabAgentStateFromAny(status)
+	}
+	return map[string]any{"status": string(CollabAgentStatusNotFound)}
+}
+
+func appCollabStatus(kind agent.AgentMessageStatusKind) string {
+	switch kind {
+	case agent.AgentMessageStatusPendingInit:
+		return string(CollabAgentStatusPendingInit)
+	case agent.AgentMessageStatusRunning:
+		return string(CollabAgentStatusRunning)
+	case agent.AgentMessageStatusInterrupted:
+		return string(CollabAgentStatusInterrupted)
+	case agent.AgentMessageStatusCompleted:
+		return string(CollabAgentStatusCompleted)
+	case agent.AgentMessageStatusErrored:
+		return string(CollabAgentStatusErrored)
+	case agent.AgentMessageStatusShutdown:
+		return string(CollabAgentStatusShutdown)
+	default:
+		return string(CollabAgentStatusNotFound)
+	}
+}
+
+func appSubAgentActivityFromExecution(execution *turn.ToolExecutionResult) (map[string]any, bool) {
+	if execution == nil || execution.Output == nil || execution.Output.Data == nil {
+		return nil, false
+	}
+	raw, ok := execution.Output.Data["subAgentActivity"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	kind := strings.TrimSpace(stringFromAny(raw["kind"]))
+	if kind == "" {
+		return nil, false
+	}
+	return map[string]any{
+		"kind":          kind,
+		"agentThreadId": firstNonEmpty(stringFromAny(raw["agent_thread_id"]), stringFromAny(raw["agentThreadId"])),
+		"agentPath":     firstNonEmpty(stringFromAny(raw["agent_path"]), stringFromAny(raw["agentPath"])),
+	}, true
+}
+
+func looksLikeEncryptedCollaborationText(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "gAAAA")
 }
 
 func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID string) tool.UnifiedExecEventSink {
@@ -2423,6 +2698,12 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 		TurnID:      turnID,
 		StartedAtMS: createdAt.UTC().UnixMilli(),
 	})
+	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+		Item:          threadItemPayload(threadItem),
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		CompletedAtMS: createdAt.UTC().UnixMilli(),
+	})
 	return true
 }
 
@@ -2682,6 +2963,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
+	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusErrored, Message: err.Error()})
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusFailed, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -2707,6 +2989,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
+	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted})
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -3275,6 +3558,9 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					continue
 				}
 				if item, ok := sessionItemForAppToolOutput(turnID, &toolExecutions[i], createdAt, metadata); ok {
+					items = append(items, item)
+				}
+				if item, ok := sessionItemForAppCollaborationPresentation(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
 			}
@@ -4460,7 +4746,30 @@ func sessionItemsForAppToolExecution(turnID string, execution *turn.ToolExecutio
 	if item, ok := sessionItemForAppToolOutput(turnID, execution, createdAt, nil); ok {
 		items = append(items, item)
 	}
+	if item, ok := sessionItemForAppCollaborationPresentation(turnID, execution, createdAt, nil); ok {
+		items = append(items, item)
+	}
 	return items
+}
+
+func sessionItemForAppCollaborationPresentation(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time, responseMetadata map[string]any) (session.Item, bool) {
+	if execution == nil || execution.Invocation == nil || !isAppCollaborationExecution(execution) {
+		return session.Item{}, false
+	}
+	threadID := ""
+	if execution.Invocation.Context != nil {
+		threadID = firstNonEmpty(stringFromAny(execution.Invocation.Context["thread_id"]), stringFromAny(execution.Invocation.Context["threadId"]))
+	}
+	item, ok := collaborationCompletedThreadItem(execution, threadID, turnID)
+	if !ok {
+		return session.Item{}, false
+	}
+	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
+	metadata["lifecycleNotified"] = true
+	return session.Item{
+		ID: item.ID, Type: item.Type, Status: item.Status, CreatedAt: time.UnixMilli(item.CreatedAt).UTC(),
+		Data: cloneAnyMap(item.Data), Metadata: metadata,
+	}, true
 }
 
 func sessionItemForClockSleepExecution(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time) (session.Item, bool) {
@@ -4748,6 +5057,9 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 	metadata["toolName"] = execution.Invocation.ToolName.Key()
 	metadata["payloadKind"] = string(execution.Invocation.Payload.Kind)
 	metadata["source"] = execution.Invocation.Source
+	if isAppCollaborationExecution(execution) {
+		metadata["hiddenFromThread"] = true
+	}
 	if unifiedExecExecutionEvented(execution) {
 		metadata["hiddenFromThread"] = true
 	}
@@ -4781,6 +5093,9 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	if strings.TrimSpace(execution.Output.Error) != "" {
 		outputMetadata["error"] = execution.Output.Error
 	}
+	if isAppCollaborationExecution(execution) {
+		outputMetadata["hiddenFromThread"] = true
+	}
 	if unifiedExecExecutionEvented(execution) {
 		outputMetadata["hiddenFromThread"] = true
 	}
@@ -4811,6 +5126,16 @@ func hiddenApplyPatchValidationExecution(execution *turn.ToolExecutionResult) bo
 	return execution != nil && execution.Invocation != nil &&
 		execution.Invocation.ToolName.Key() == tool.DefaultApplyPatchToolName &&
 		!appToolOutputIsFileChange(execution.Output)
+}
+
+func isAppCollaborationExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	if execution.Invocation != nil && appCollaborationToolName(execution.Invocation.ToolName) {
+		return true
+	}
+	return execution.Output != nil && appCollaborationToolName(execution.Output.ToolName)
 }
 
 func appToolExecutionCallID(execution *turn.ToolExecutionResult, createdAt time.Time) string {
@@ -5081,16 +5406,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		toolMode = modelInfo.ToolMode
 		autoReviewModelOverride = strings.TrimSpace(modelInfo.AutoReviewModelOverride)
 	}
-	if toolMode == "" {
-		switch {
-		case features.Enabled(cfg.FeatureSettings(), "code_mode_only"):
-			toolMode = model.ToolModeCodeModeOnly
-		case features.Enabled(cfg.FeatureSettings(), "code_mode"):
-			toolMode = model.ToolModeCodeMode
-		default:
-			toolMode = model.ToolModeDirect
-		}
-	}
+	toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
 	return &appTurnRunConfig{
 		Model:                           modelProviderConfig.Model,
 		AutoReviewModelOverride:         autoReviewModelOverride,
@@ -8219,6 +8535,7 @@ func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	clone.Config = cloneAnyMap(params.Config)
 	clone.AdditionalContext = cloneAdditionalContext(params.AdditionalContext)
 	clone.DynamicTools = append([]turn.DynamicToolSpec(nil), params.DynamicTools...)
+	clone.AdditionalInputItems = append([]any(nil), params.AdditionalInputItems...)
 	return &clone
 }
 

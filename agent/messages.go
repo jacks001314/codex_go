@@ -66,12 +66,11 @@ func FormatInterAgentCompletionMessage(taskName string, sender string, status Ag
 		return "", false
 	}
 	return strings.Join([]string{
-		"<inter_agent_completion>",
-		"task: " + taskName,
-		"sender: " + sender,
-		"payload:",
+		"Message Type: FINAL_ANSWER",
+		"Task name: " + taskName,
+		"Sender: " + sender,
+		"Payload:",
 		payload,
-		"</inter_agent_completion>",
 	}, "\n"), true
 }
 

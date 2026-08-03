@@ -263,6 +263,9 @@ func sanitizeHistoryInputItem(input any) any {
 			return nil
 		}
 		delete(typed, "internal_chat_message_metadata_passthrough")
+		if itemType == "message" {
+			normalizeHistoryMessageContentTypes(typed)
+		}
 		if itemType == "image_generation_call" {
 			result, _ := typed["result"].(string)
 			status, _ := typed["status"].(string)
@@ -284,9 +287,41 @@ func sanitizeHistoryInputItem(input any) any {
 	}
 }
 
+// normalizeHistoryMessageContentTypes rewrites message content block types to
+// the Responses API vocabulary in place. Session and rollout items store user
+// text as "text" (matching the app-server protocol), but the API only accepts
+// input_text/output_text/input_image/input_file.
+func normalizeHistoryMessageContentTypes(message map[string]any) {
+	role, _ := message["role"].(string)
+	switch content := message["content"].(type) {
+	case []any:
+		for _, entry := range content {
+			if block, ok := entry.(map[string]any); ok {
+				normalizeHistoryContentBlock(block, role)
+			}
+		}
+	case []map[string]any:
+		for _, block := range content {
+			normalizeHistoryContentBlock(block, role)
+		}
+	}
+}
+
+func normalizeHistoryContentBlock(block map[string]any, role string) {
+	value, _ := block["type"].(string)
+	if normalized, ok := normalizedHistoryContentType(value, role); ok {
+		block["type"] = normalized
+	}
+	// text_elements is an app-server protocol field, not part of the
+	// Responses API message content.
+	delete(block, "text_elements")
+	delete(block, "textElements")
+}
+
 func nonModelVisibleHistoryItemType(itemType string) bool {
 	switch strings.TrimSpace(itemType) {
-	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "todo_list", "error",
+	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "collab_agent_tool_call", "collabAgentToolCall",
+		"sub_agent_activity", "subAgentActivity", "todo_list", "error",
 		"enteredReviewMode", "entered_review_mode", "exitedReviewMode", "exited_review_mode",
 		"contextCompaction", "context_compaction", "external_session_import_marker":
 		return true
@@ -448,18 +483,34 @@ func roleForSessionItemType(itemType string) string {
 
 func historyContentType(value string, role string, imageURL string) string {
 	value = strings.TrimSpace(value)
-	switch value {
-	case "image", "inputImage", "input_image", "localImage", "local_image":
-		return "input_image"
-	case "audio", "inputAudio", "input_audio", "localAudio", "local_audio":
-		return "input_audio"
-	case "":
+	if normalized, ok := normalizedHistoryContentType(value, role); ok {
+		return normalized
+	}
+	if value == "" {
 		if strings.TrimSpace(imageURL) != "" {
 			return "input_image"
 		}
 		return defaultContentTypeForRole(role)
+	}
+	return value
+}
+
+// normalizedHistoryContentType maps a session content part type to the
+// Responses API content type for the given message role. The second return
+// value is false when the value should pass through unchanged.
+func normalizedHistoryContentType(value string, role string) (string, bool) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "image", "inputImage", "input_image", "localImage", "local_image":
+		return "input_image", true
+	case "audio", "inputAudio", "input_audio", "localAudio", "local_audio":
+		return "input_audio", true
+	case "text", "inputText", "outputText":
+		return defaultContentTypeForRole(role), true
+	case "file":
+		return "input_file", true
 	default:
-		return value
+		return value, false
 	}
 }
 

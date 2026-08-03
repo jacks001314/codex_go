@@ -13,7 +13,7 @@ var (
 	ErrAgentPathExists = errors.New("agent path already exists")
 )
 
-const rootAgentPath = "/"
+const rootAgentPath = "/root"
 
 type AgentPath string
 

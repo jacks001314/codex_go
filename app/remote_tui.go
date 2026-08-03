@@ -3456,6 +3456,30 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			remoteMCPToolError(payload["error"]),
 			status,
 		)
+	case "collabAgentToolCall":
+		status := remotePayloadString(payload, "status")
+		if !completed || status == "inProgress" {
+			status = "in_progress"
+		} else if status == "" {
+			status = "completed"
+		}
+		item := protocol.CollabToolCallItem(
+			id,
+			remotePayloadString(payload, "tool"),
+			remoteFirstPayloadString(payload, "senderThreadId", "sender_thread_id"),
+			remotePayloadStringSlice(payload, "receiverThreadIds", "receiver_thread_ids"),
+			remotePayloadOptionalString(payload, "prompt"),
+			remotePayloadCollabAgentStates(payload, "agentsStates", "agents_states"),
+			status,
+		)
+		return item
+	case "subAgentActivity":
+		return protocol.SubAgentActivityItem(
+			id,
+			remotePayloadString(payload, "kind"),
+			remoteFirstPayloadString(payload, "agentThreadId", "agent_thread_id"),
+			remoteFirstPayloadString(payload, "agentPath", "agent_path", "path"),
+		)
 	case "webSearch", "web_search":
 		action, _ := payload["action"].(map[string]any)
 		return protocol.WebSearchItem(
@@ -3542,6 +3566,63 @@ func remotePayloadInt(payload map[string]any, keys ...string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func remotePayloadOptionalString(payload map[string]any, keys ...string) *string {
+	for _, key := range keys {
+		if payload == nil || payload[key] == nil {
+			continue
+		}
+		value := remotePayloadString(payload, key)
+		if strings.HasPrefix(strings.TrimSpace(value), "gAAAA") || value == "" {
+			return nil
+		}
+		return &value
+	}
+	return nil
+}
+
+func remotePayloadStringSlice(payload map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case []string:
+			return append([]string(nil), typed...)
+		case []any:
+			out := make([]string, 0, len(typed))
+			for _, entry := range typed {
+				text := strings.TrimSpace(fmt.Sprint(entry))
+				if text != "" {
+					out = append(out, text)
+				}
+			}
+			return out
+		}
+	}
+	return []string{}
+}
+
+func remotePayloadCollabAgentStates(payload map[string]any, keys ...string) map[string]protocol.CollabAgentState {
+	result := map[string]protocol.CollabAgentState{}
+	for _, key := range keys {
+		values, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		for id, raw := range values {
+			state := protocol.CollabAgentState{}
+			if entry, ok := raw.(map[string]any); ok {
+				state.Status = remotePayloadString(entry, "status")
+				state.Message = remotePayloadOptionalString(entry, "message")
+			}
+			result[id] = state
+		}
+		break
+	}
+	return result
 }
 
 func remotePayloadJSON(value any) string {

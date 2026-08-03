@@ -1256,7 +1256,7 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterTurnStartEmitsUserMessageStartedWithTextElements(t *testing.T) {
+func TestRuntimeRouterTurnStartEmitsUserMessageLifecycleWithTextElements(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -1292,37 +1292,57 @@ func TestRuntimeRouterTurnStartEmitsUserMessageStartedWithTextElements(t *testin
 	_ = waitForRuntimeAgentRequest(t, agent)
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 
-	for _, notification := range sink.List() {
+	var startedIndex = -1
+	var completedIndex = -1
+	var startedItem map[string]any
+	var completedItem map[string]any
+	for index, notification := range sink.List() {
 		if notification.Method != NotificationItemStarted {
+			if notification.Method == NotificationItemCompleted {
+				completed, ok := notification.Params.(*ItemCompletedNotification)
+				if ok && completed.Item["type"] == "userMessage" {
+					completedIndex = index
+					completedItem = completed.Item
+				}
+			}
 			continue
 		}
 		started, ok := notification.Params.(*ItemStartedNotification)
 		if !ok || started.Item["type"] != "userMessage" {
 			continue
 		}
-		if started.Item["clientId"] != clientID {
-			t.Fatalf("clientId = %#v", started.Item["clientId"])
-		}
-		content, ok := started.Item["content"].([]any)
-		if !ok || len(content) != 1 {
-			t.Fatalf("content = %#v", started.Item["content"])
-		}
-		text, ok := content[0].(map[string]any)
-		if !ok || text["type"] != "text" || text["text"] != "Hello" {
-			t.Fatalf("text content = %#v", content[0])
-		}
-		elements, ok := text["text_elements"].([]any)
-		if !ok || len(elements) != 1 {
-			t.Fatalf("text_elements = %#v", text["text_elements"])
-		}
-		element, ok := elements[0].(map[string]any)
-		byteRange, rangeOK := element["byteRange"].(map[string]any)
-		if !ok || !rangeOK || byteRange["start"] != float64(0) || byteRange["end"] != float64(5) || element["placeholder"] != "<note>" {
-			t.Fatalf("text element = %#v", elements[0])
-		}
-		return
+		startedIndex = index
+		startedItem = started.Item
 	}
-	t.Fatalf("userMessage item/started missing: %+v", sink.List())
+	if startedIndex < 0 || completedIndex < 0 {
+		t.Fatalf("userMessage lifecycle missing: %+v", sink.List())
+	}
+	if completedIndex != startedIndex+1 {
+		t.Fatalf("userMessage lifecycle indexes = started %d completed %d", startedIndex, completedIndex)
+	}
+	if !reflect.DeepEqual(completedItem, startedItem) {
+		t.Fatalf("completed item = %#v, started item = %#v", completedItem, startedItem)
+	}
+	if startedItem["clientId"] != clientID {
+		t.Fatalf("clientId = %#v", startedItem["clientId"])
+	}
+	content, ok := startedItem["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content = %#v", startedItem["content"])
+	}
+	text, ok := content[0].(map[string]any)
+	if !ok || text["type"] != "text" || text["text"] != "Hello" {
+		t.Fatalf("text content = %#v", content[0])
+	}
+	elements, ok := text["text_elements"].([]any)
+	if !ok || len(elements) != 1 {
+		t.Fatalf("text_elements = %#v", text["text_elements"])
+	}
+	element, ok := elements[0].(map[string]any)
+	byteRange, rangeOK := element["byteRange"].(map[string]any)
+	if !ok || !rangeOK || byteRange["start"] != float64(0) || byteRange["end"] != float64(5) || element["placeholder"] != "<note>" {
+		t.Fatalf("text element = %#v", elements[0])
+	}
 }
 
 func TestRuntimeRouterTurnStartLocalImageReadFailureBecomesInputText(t *testing.T) {
@@ -13971,6 +13991,20 @@ func TestResponsesStreamPreservesCommentaryPhaseForTUIBoundary(t *testing.T) {
 	}
 	if commentaryAt < 0 || toolAt < 0 || commentaryAt >= toolAt {
 		t.Fatalf("notifications = %#v; commentaryAt=%d toolAt=%d", notifications, commentaryAt, toolAt)
+	}
+}
+
+func TestResponsesStreamHidesRawCollaborationFunctionCalls(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+	state := newResponsesStreamNotificationState(false, "turn-collab")
+	router.notifyResponsesStreamEvent("thread-collab", "turn-collab", &model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventOutputAdded,
+		Item: &model.AgentItem{ID: "call-collab", Type: "function_call", Namespace: "collaboration", Name: "spawn_agent", Arguments: `{"task_name":"worker","message":"gAAAA-secret"}`},
+	}, state)
+	if got := sink.List(); len(got) != 0 {
+		t.Fatalf("collaboration raw notification leaked: %#v", got)
 	}
 }
 

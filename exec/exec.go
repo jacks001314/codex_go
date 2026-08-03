@@ -276,7 +276,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	subagentHeader, subagentKind := execReviewSubagentMetadata(req)
-	multiAgentTools, err := r.multiAgentToolsForRun(ctx, req, cfg, threadID, agent)
+	multiAgentTools, err := r.multiAgentToolsForRun(ctx, req, cfg, threadID, turnID, agent)
 	if err != nil {
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
@@ -310,7 +310,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		Prompt:                         runPrompt,
 		InputItems:                     inputItems,
 		Model:                          modelID,
-		ToolMode:                       modelInfo.ToolMode,
+		ToolMode:                       model.ResolveToolMode(modelInfo.ToolMode, cfg.FeatureSettings()),
 		CodeModeHostEnabled:            features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
 		DisableCodeModeFallback:        cfg.DisableCodeModeInProcessFallback(),
 		ProviderID:                     providerID,
@@ -359,6 +359,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AgentRoles:                     execAgentRolesFromTools(multiAgentTools),
 		AgentDefaults:                  execAgentDefaultsFromTools(multiAgentTools),
 		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
+		SteerMailbox:                   execAgentSteerMailboxFromTools(req, multiAgentTools),
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -495,6 +496,7 @@ type agentRunConfig struct {
 	AgentRoles                     map[string]multiagent.RoleConfig
 	AgentDefaults                  multiagent.SpawnDefaults
 	DisableWaitAgent               bool
+	SteerMailbox                   *turn.SteerMailbox
 }
 
 type execStreamEventCollector struct {
@@ -548,6 +550,12 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 		// MCP calls get their canonical lifecycle item from ToolStarted, once
 		// routing has resolved the raw server and tool names.
 		if streamAgentItemLooksLikeMCP(event.Item) {
+			return
+		}
+		if streamAgentItemLooksLikeCollaboration(event.Item) {
+			// Collaboration calls have a dedicated lifecycle. Exposing the raw
+			// function call here duplicates that lifecycle and, for encrypted
+			// message arguments, can leak ciphertext into SDK/TUI output.
 			return
 		}
 		item := protocolItemFromStreamAgentItem(event.Item)
@@ -656,9 +664,20 @@ func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *t
 	if c == nil || execution == nil {
 		return
 	}
+	if item, ok := subAgentActivityProtocolItem(execution); ok {
+		c.emitInternal(protocol.ItemStarted(item))
+		c.emitInternal(protocol.ItemCompleted(item))
+	}
 	for _, event := range eventsFromToolExecution(execution) {
 		c.emit(event)
 	}
+}
+
+func (c *execStreamEventCollector) emitInternal(event protocol.ThreadEvent) {
+	if c == nil || c.sink == nil {
+		return
+	}
+	c.sink.EmitInternal(event)
 }
 
 func (c *execStreamEventCollector) CodeModeNotify(_ context.Context, callID string, text string) {
@@ -825,6 +844,15 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 	return nil
 }
 
+func (s *execEventSink) EmitInternal(event protocol.ThreadEvent) {
+	if s == nil || s.internalHandler == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.internalHandler(event)
+}
+
 func (s *execEventSink) Events() []protocol.ThreadEvent {
 	if s == nil {
 		return nil
@@ -881,11 +909,12 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		}
 	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
-		Agent:    agent,
-		Router:   router,
-		Hooks:    r.Hooks,
-		Now:      r.now,
-		MaxTurns: r.MaxToolTurns,
+		Agent:        agent,
+		Router:       router,
+		Hooks:        r.Hooks,
+		SteerMailbox: run.SteerMailbox,
+		Now:          r.now,
+		MaxTurns:     r.MaxToolTurns,
 	}).Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       run.Prompt,
 		Instructions:                 run.Instructions,
@@ -2108,6 +2137,19 @@ func streamAgentItemLooksLikeWebSearch(item *model.AgentItem) bool {
 		strings.TrimSpace(item.Name) == turn.WebSearchRunTool
 }
 
+func streamAgentItemLooksLikeCollaboration(item *model.AgentItem) bool {
+	if item == nil || (item.Type != "function_call" && item.Type != "custom_tool_call") {
+		return false
+	}
+	namespace := strings.TrimSpace(item.Namespace)
+	if namespace == multiagent.MultiAgentV1Namespace || namespace == multiagent.MultiAgentV2Namespace {
+		return true
+	}
+	name := strings.TrimSpace(item.Name)
+	return strings.HasPrefix(name, multiagent.MultiAgentV1Namespace+".") ||
+		strings.HasPrefix(name, multiagent.MultiAgentV2Namespace+".")
+}
+
 func invocationLooksLikeMCP(invocation *tool.Invocation) bool {
 	return invocation != nil && strings.HasPrefix(
 		strings.TrimSpace(invocation.ToolName.Namespace),
@@ -2380,6 +2422,12 @@ func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol
 		item := collabToolCallProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
 	}
+	if isCollaborationExecution(execution) {
+		// Rust's TypeScript SDK currently exposes v2 wait_agent as a
+		// collab_tool_call, but does not surface the other v2 collaboration
+		// functions as generic public SDK items.
+		return nil
+	}
 	if isMCPExecution(execution) {
 		item := mcpToolCallProtocolItem(execution, "in_progress")
 		return []protocol.ThreadEvent{protocol.ItemStarted(item)}
@@ -2469,6 +2517,9 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 	}
 	if isCollabExecution(execution) {
 		return protocol.ItemCompleted(collabToolCallProtocolItem(execution, collabToolCallStatusFromOutput(execution.Output))), true
+	}
+	if isCollaborationExecution(execution) {
+		return protocol.ThreadEvent{}, false
 	}
 	if isMCPExecution(execution) {
 		return protocol.ItemCompleted(mcpToolCallProtocolItem(execution, mcpToolCallStatusFromOutput(execution.Output))), true
@@ -2678,6 +2729,37 @@ func isCollabExecution(execution *turn.ToolExecutionResult) bool {
 	return false
 }
 
+func isCollaborationExecution(execution *turn.ToolExecutionResult) bool {
+	if execution == nil {
+		return false
+	}
+	for _, name := range []tool.ToolName{
+		func() tool.ToolName {
+			if execution.Invocation != nil {
+				return execution.Invocation.ToolName
+			}
+			return tool.ToolName{}
+		}(),
+		func() tool.ToolName {
+			if execution.Output != nil {
+				return execution.Output.ToolName
+			}
+			return tool.ToolName{}
+		}(),
+	} {
+		namespace := strings.TrimSpace(name.Namespace)
+		if namespace == multiagent.MultiAgentV1Namespace || namespace == multiagent.MultiAgentV2Namespace {
+			return true
+		}
+		key := strings.TrimSpace(name.Key())
+		if strings.HasPrefix(key, multiagent.MultiAgentV1Namespace+".") ||
+			strings.HasPrefix(key, multiagent.MultiAgentV2Namespace+".") {
+			return true
+		}
+	}
+	return false
+}
+
 func collabToolCallProtocolItem(execution *turn.ToolExecutionResult, status string) protocol.ThreadItem {
 	if execution == nil || execution.Invocation == nil {
 		return protocol.ThreadItem{}
@@ -2780,7 +2862,7 @@ func collabPromptFromExecution(execution *turn.ToolExecutionResult) *string {
 		if prompt := firstNonEmpty(
 			execStringFromAny(execution.Output.Data["prompt"]),
 			execStringFromAny(execution.Output.Data["message"]),
-		); prompt != "" {
+		); prompt != "" && !looksLikeEncryptedCollaborationText(prompt) {
 			return stringPointerIfNotEmpty(prompt)
 		}
 	}
@@ -2788,10 +2870,34 @@ func collabPromptFromExecution(execution *turn.ToolExecutionResult) *string {
 		return nil
 	}
 	args := toolInvocationArgumentsMap(execution.Invocation)
-	if prompt := firstNonEmpty(execStringFromAny(args["prompt"]), execStringFromAny(args["message"])); prompt != "" {
+	if prompt := firstNonEmpty(execStringFromAny(args["prompt"]), execStringFromAny(args["message"])); prompt != "" && !looksLikeEncryptedCollaborationText(prompt) {
 		return stringPointerIfNotEmpty(prompt)
 	}
 	return nil
+}
+
+func looksLikeEncryptedCollaborationText(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "gAAAA")
+}
+
+func subAgentActivityProtocolItem(execution *turn.ToolExecutionResult) (protocol.ThreadItem, bool) {
+	if execution == nil || execution.Invocation == nil || execution.Output == nil || execution.Output.Data == nil {
+		return protocol.ThreadItem{}, false
+	}
+	raw, ok := execution.Output.Data["subAgentActivity"].(map[string]any)
+	if !ok {
+		return protocol.ThreadItem{}, false
+	}
+	kind := strings.TrimSpace(execStringFromAny(raw["kind"]))
+	if kind == "" {
+		return protocol.ThreadItem{}, false
+	}
+	return protocol.SubAgentActivityItem(
+		firstNonEmpty(execution.Invocation.CallID, "sub-agent-activity"),
+		kind,
+		execStringFromAny(firstNonNil(raw["agent_thread_id"], raw["agentThreadId"])),
+		execStringFromAny(firstNonNil(raw["agent_path"], raw["agentPath"])),
+	), true
 }
 
 func collabReceiverThreadIDsFromExecution(execution *turn.ToolExecutionResult, status string) []string {
@@ -4337,7 +4443,51 @@ func sessionItemsForTurnWithMode(turnID string, userPrompt string, userInputs []
 		items = append(items, sessionItemsForToolExecution(turnID, suffix, &result.ToolExecutions[executionIndex], createdAt, extraMetadata)...)
 		executionIndex++
 	}
-	return items
+	return insertExecInterAgentCompletionItems(items, execInterAgentCompletionSessionItems(turnID, currentTurnInputItems(result), createdAt, extraMetadata))
+}
+
+func currentTurnInputItems(result *turn.AgentLoopResult) []any {
+	if result == nil || result.InitialInputCount < 0 || result.InitialInputCount >= len(result.InputItems) {
+		return nil
+	}
+	return result.InputItems[result.InitialInputCount:]
+}
+
+func execInterAgentCompletionSessionItems(turnID string, inputItems []any, createdAt time.Time, extraMetadata map[string]any) []session.Item {
+	out := make([]session.Item, 0)
+	for index, inputItem := range inputItems {
+		raw, ok := inputItem.(map[string]any)
+		if !ok || strings.TrimSpace(execStringFromAny(raw["type"])) != "agent_message" {
+			continue
+		}
+		text := strings.TrimSpace(execTextFromInputItemContent(raw["content"]))
+		if !strings.HasPrefix(text, "Message Type: FINAL_ANSWER\n") {
+			continue
+		}
+		item, ok := execAgentCommunicationSessionItem(turnID, index, inputItem, createdAt, extraMetadata)
+		if ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func insertExecInterAgentCompletionItems(items []session.Item, completions []session.Item) []session.Item {
+	if len(completions) == 0 {
+		return items
+	}
+	insertAt := len(items)
+	for index := len(items) - 1; index >= 0; index-- {
+		if items[index].Type == "agent_message" && items[index].Role == "assistant" {
+			insertAt = index
+			break
+		}
+	}
+	out := make([]session.Item, 0, len(items)+len(completions))
+	out = append(out, items[:insertAt]...)
+	out = append(out, completions...)
+	out = append(out, items[insertAt:]...)
+	return out
 }
 
 func execRequestPlanMode(req *Request) bool {

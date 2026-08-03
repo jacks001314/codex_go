@@ -62,6 +62,30 @@ func TestModelCatalogPreservesKnownToolMode(t *testing.T) {
 	}
 }
 
+func TestResolveToolModeMirrorsRustRequestedToolMode(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		modelToolMode  string
+		featureSettings map[string]bool
+		want           string
+	}{
+		{name: "explicit-direct-wins", modelToolMode: ToolModeDirect, featureSettings: map[string]bool{"code_mode": true}, want: ToolModeDirect},
+		{name: "explicit-code-mode-wins", modelToolMode: ToolModeCodeMode, featureSettings: map[string]bool{"code_mode_only": true}, want: ToolModeCodeMode},
+		{name: "explicit-code-mode-only-wins", modelToolMode: ToolModeCodeModeOnly, want: ToolModeCodeModeOnly},
+		{name: "unknown-treats-as-unset", modelToolMode: "future_mode", want: ToolModeDirect},
+		{name: "unset-defaults-to-direct", want: ToolModeDirect},
+		{name: "code-mode-feature", featureSettings: map[string]bool{"code_mode": true}, want: ToolModeCodeMode},
+		{name: "code-mode-only-feature", featureSettings: map[string]bool{"code_mode_only": true}, want: ToolModeCodeModeOnly},
+		{name: "code-mode-only-beats-code-mode", featureSettings: map[string]bool{"code_mode": true, "code_mode_only": true}, want: ToolModeCodeModeOnly},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ResolveToolMode(testCase.modelToolMode, testCase.featureSettings); got != testCase.want {
+				t.Fatalf("ResolveToolMode(%q, %#v) = %q, want %q", testCase.modelToolMode, testCase.featureSettings, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestBuildAvailableModelsMarksFirstPickerVisibleDefault(t *testing.T) {
 	models := BuildAvailableModels([]ModelInfo{
 		{Slug: "hidden", DisplayName: "Hidden", Visibility: VisibilityHide, SupportedInAPI: true, Priority: 0},

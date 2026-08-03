@@ -81,7 +81,7 @@ func TestRuntimeExecutesRecoveredCustomToolCallOnceAndReturnsSingleFinal(t *test
 		}}}),
 	})
 	runtime := NewRuntime(&RuntimeOptions{Agent: runner, Router: tool.NewRouter(registry), MaxTurns: 3})
-	result, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run exec", Model: "gpt-test"})
+	result, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run exec", Model: "gpt-test", ToolMode: model.ToolModeCodeMode})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -202,7 +202,11 @@ func TestRuntimeAugmentsWebRunDescriptionOnlyWithCodeMode(t *testing.T) {
 				}
 			}
 			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
-			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "weather"}); err != nil {
+			request := &AgentLoopRequest{Prompt: "weather"}
+			if testCase.codeMode {
+				request.ToolMode = model.ToolModeCodeMode
+			}
+			if _, err := runtime.Run(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
 			description := runtimeNamespacedToolDescription(agent.requests[0].Tools, WebSearchNamespace, WebSearchRunTool)
@@ -372,6 +376,51 @@ func unavailableCodeModeTestRegistry(t *testing.T) *tool.Registry {
 	return registry
 }
 
+func TestRuntimeEmptyToolModeResolvesToDirectLikeRust(t *testing.T) {
+	// A model with no declared tool_mode (for example a custom DeepSeek model)
+	// must resolve to direct mode even when code mode is available, so the
+	// code-mode exec freeform tool is never sent to providers that reject it.
+	agent := &singleTurnAgent{response: &model.AgentResponse{Message: "done"}}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:     tool.PlainName("apply_patch"),
+		Freeform: &tool.FreeformSpec{Syntax: "lark", Definition: "start: /[\\s\\S]+/"},
+	}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name:     tool.PlainName(tool.DefaultExecCommandToolName),
+		Exposure: tool.ExposureHidden,
+	}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	execTool, waitTool := tool.NewCodeModeExecutors(registry, tool.PlainName(tool.DefaultExecCommandToolName))
+	if err := registry.Register(execTool); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(waitTool); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
+	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "edit"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.requests) != 1 {
+		t.Fatalf("requests = %d", len(agent.requests))
+	}
+	visible := runtimeRequestToolNames(agent.requests[0].Tools)
+	if visible[tool.CodeModeExecToolName] || visible[codemode.WaitToolName] {
+		t.Fatalf("code-mode tools leaked into direct mode: %#v", visible)
+	}
+	if !visible[tool.DefaultExecCommandToolName] || !visible["apply_patch"] {
+		t.Fatalf("direct tools missing: %#v", visible)
+	}
+}
+
 func TestRuntimeUnavailableRequiredCodeModeFailsClosed(t *testing.T) {
 	for _, testCase := range []struct {
 		name            string
@@ -525,7 +574,7 @@ func TestRuntimeAddsCodeModeToolNamesOnlyForResponsesLite(t *testing.T) {
 				metadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
 			}
 			runtime := NewRuntime(&RuntimeOptions{Agent: agent, Router: tool.NewRouter(registry)})
-			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run", ClientMetadata: metadata}); err != nil {
+			if _, err := runtime.Run(context.Background(), &AgentLoopRequest{Prompt: "run", ToolMode: model.ToolModeCodeMode, ClientMetadata: metadata}); err != nil {
 				t.Fatal(err)
 			}
 			var turnMetadata map[string]any
@@ -577,7 +626,7 @@ func TestRuntimePreservesCodeModeToolNamesAfterSteerMetadataUpdate(t *testing.T)
 		"ws_request_header_x_openai_internal_codex_responses_lite": "true",
 	}
 	if _, err := runtime.Run(context.Background(), &AgentLoopRequest{
-		Prompt: "run", ThreadID: "thread-1", TurnID: "turn-1", SteerMailbox: mailbox, ClientMetadata: baseMetadata,
+		Prompt: "run", ToolMode: model.ToolModeCodeMode, ThreadID: "thread-1", TurnID: "turn-1", SteerMailbox: mailbox, ClientMetadata: baseMetadata,
 	}); err != nil {
 		t.Fatal(err)
 	}

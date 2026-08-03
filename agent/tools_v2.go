@@ -32,12 +32,18 @@ type SendMessageArgs struct {
 	Target    string `json:"target"`
 	Message   string `json:"message"`
 	Plaintext bool   `json:"-"`
+
+	ResolvedThreadID string `json:"-"`
+	ResolvedPath     string `json:"-"`
 }
 
 type FollowupTaskArgs struct {
 	Target    string `json:"target"`
 	Message   string `json:"message"`
 	Plaintext bool   `json:"-"`
+
+	ResolvedThreadID string `json:"-"`
+	ResolvedPath     string `json:"-"`
 }
 
 type WaitForActivityArgs struct {
@@ -51,6 +57,9 @@ type WaitForActivityResult struct {
 
 type InterruptAgentArgs struct {
 	Target string `json:"target"`
+
+	ResolvedThreadID string `json:"-"`
+	ResolvedPath     string `json:"-"`
 }
 
 type InterruptAgentResult struct {
@@ -212,6 +221,7 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		return nil, tool.RespondToModel("multi-agent v2 handler received unsupported payload")
 	}
 	var result any
+	var activity map[string]any
 	var err error
 	switch e.kind {
 	case multiAgentV2Spawn:
@@ -236,6 +246,11 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			result, err = e.controller.SpawnAgent(ctx, &args)
 			if spawned, ok := result.(*SpawnAgentResult); ok && spawned != nil && err == nil {
+				activity = map[string]any{
+					"kind":            "started",
+					"agent_thread_id": spawned.AgentID,
+					"agent_path":      firstNonEmptyAgentString(spawned.TaskName, args.TaskName),
+				}
 				output := map[string]any{"task_name": firstNonEmptyAgentString(spawned.TaskName, args.TaskName)}
 				if !e.hideSpawnMetadata {
 					output["nickname"] = spawned.Nickname
@@ -251,6 +266,11 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		if err == nil {
 			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			err = e.controller.SendMessage(ctx, &args)
+			activity = map[string]any{
+				"kind":            "interacted",
+				"agent_thread_id": firstNonEmptyAgentString(args.ResolvedThreadID, args.Target),
+				"agent_path":      firstNonEmptyAgentString(args.ResolvedPath, args.Target),
+			}
 			result = nil
 		}
 	case multiAgentV2Followup:
@@ -261,6 +281,11 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		if err == nil {
 			args.Plaintext = plaintextCollaborationInvocation(invocation)
 			err = e.controller.FollowupTask(ctx, &args)
+			activity = map[string]any{
+				"kind":            "interacted",
+				"agent_thread_id": firstNonEmptyAgentString(args.ResolvedThreadID, args.Target),
+				"agent_path":      firstNonEmptyAgentString(args.ResolvedPath, args.Target),
+			}
 			result = nil
 		}
 	case multiAgentV2Wait:
@@ -278,6 +303,11 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		}
 		if err == nil {
 			result, err = e.controller.InterruptAgent(ctx, &args)
+			activity = map[string]any{
+				"kind":            "interrupted",
+				"agent_thread_id": firstNonEmptyAgentString(args.ResolvedThreadID, args.Target),
+				"agent_path":      firstNonEmptyAgentString(args.ResolvedPath, args.Target),
+			}
 		}
 	case multiAgentV2List:
 		var args ListAgentsArgs
@@ -298,7 +328,11 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		}
 		body = string(data)
 	}
-	return &tool.Output{Success: true, Body: body, Data: map[string]any{"result": result}, LogPreview: body}, nil
+	data := map[string]any{"result": result}
+	if activity != nil {
+		data["subAgentActivity"] = activity
+	}
+	return &tool.Output{Success: true, Body: body, Data: data, LogPreview: body}, nil
 }
 
 func targetSchema(description string) map[string]any {

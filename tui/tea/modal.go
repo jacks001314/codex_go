@@ -584,6 +584,11 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	if modal.kind == ModalKindPicker && (modal.modelPicker != nil || modal.modelReasoning != nil || modal.planReasoningScope != nil || modal.sessionPicker != nil || modal.sessionAction != nil) {
 		decision, pickerNotice, complete := m.resolveModelPickerModal(modal, response.OptionID, cancelled)
 		if !complete {
+			// Archive/delete selections replace the full-screen picker with a
+			// normal confirmation modal. Restore the inline terminal first.
+			if modal.sessionPicker != nil && m.modal != modal {
+				return m.closeSessionPickerTerminalMode(nil)
+			}
 			return nil
 		}
 		response.Picker = decision
@@ -730,9 +735,20 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		callback = m.onModalResponse(response)
 	}
 	if modal.exitAfterSessionAction && !cancelled && response.Picker != nil {
-		return bubbletea.Batch(callback, bubbletea.Quit)
+		return m.closeSessionPickerTerminalMode(bubbletea.Sequence(callback, bubbletea.Quit))
+	}
+	if modal.sessionPicker != nil {
+		return m.closeSessionPickerTerminalMode(callback)
 	}
 	return callback
+}
+
+func (m *Model) closeSessionPickerTerminalMode(next bubbletea.Cmd) bubbletea.Cmd {
+	if m == nil || !m.sessionPickerAltScreen {
+		return next
+	}
+	m.sessionPickerAltScreen = false
+	return bubbletea.Sequence(bubbletea.ExitAltScreen, next)
 }
 
 func (m *Model) resolveRequestUserInputModal(modal *modalState, optionID string, cancelled bool) (*UserInputDecision, bool, bool) {
@@ -1195,11 +1211,10 @@ func (m *Model) renderSessionPickerModal() string {
 	if maxRows > 0 && len(rows) > maxRows {
 		rows = rows[:maxRows]
 	}
-	for _, row := range rows {
-		builder.WriteString(row)
-		builder.WriteString("\n")
-	}
-	if len(rows) > 0 {
+	for index := 0; index < maxRows; index++ {
+		if index < len(rows) {
+			builder.WriteString(rows[index])
+		}
 		builder.WriteString("\n")
 	}
 	for _, row := range picker.FooterLines(contentWidth+1, true) {
@@ -1213,7 +1228,8 @@ func sessionPickerListHeight(height int) int {
 	if height <= 0 {
 		return 10
 	}
-	value := height - 10
+	// Rust reserves four rows above the list and four for the footer.
+	value := height - 8
 	if value < 3 {
 		return 3
 	}

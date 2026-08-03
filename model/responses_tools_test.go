@@ -68,6 +68,34 @@ func TestResponsesToolsFromSpecsSerializesFunctionSearchAndFreeform(t *testing.T
 	}
 }
 
+func TestResponsesFunctionToolNormalizesMissingSchemaTypeToObject(t *testing.T) {
+	// Providers such as DeepSeek reject function tools whose parameters omit
+	// an explicit "type": "object". update_plan-style specs historically
+	// shipped only "required"; the serializer must normalize them.
+	got := ResponsesToolsFromSpecs([]tool.Spec{{
+		Name:        tool.PlainName("update_plan"),
+		Description: "Updates the current task plan.",
+		InputSchema: map[string]any{
+			"required": []string{"plan"},
+		},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	item, ok := got[0].(map[string]any)
+	if !ok || item["type"] != "function" {
+		t.Fatalf("tool = %#v", got[0])
+	}
+	parameters, ok := item["parameters"].(map[string]any)
+	if !ok || parameters["type"] != "object" {
+		t.Fatalf("parameters = %#v", item["parameters"])
+	}
+	required, _ := parameters["required"].([]string)
+	if len(required) != 1 || required[0] != "plan" {
+		t.Fatalf("parameters required = %#v", parameters["required"])
+	}
+}
+
 func TestResponsesMCPToolsUseNamespaceLikeRust(t *testing.T) {
 	got := ResponsesToolsFromSpecs([]tool.Spec{{
 		Name: tool.NamespacedName("mcp__memory", "create_entities"),

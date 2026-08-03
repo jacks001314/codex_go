@@ -30,12 +30,13 @@ test("interrupted command recovery remains opt-in while the Rust Windows baselin
 });
 
 test("multi-agent factorial scenario requires collaboration and the exact semantic result", () => {
-  const scenario = getScenario("multi-agent-factorial-100");
+	const scenario = getScenario("multi-agent-factorial-100");
   assert.equal(scenario.optIn, true);
   assert.equal(scenario.codexConfig?.features?.multi_agent_v2, undefined);
   assert.match(scenario.turns[0]?.prompt ?? "", /create multiple agents/);
   assert.equal(scenario.expected.minCompletedCollabSpawnCalls, 2);
-  assert.deepEqual(scenario.expected.requiredCompletedCollabTools, ["collaboration.spawn_agent", "collaboration.wait_agent"]);
+	assert.deepEqual(scenario.expected.requiredCompletedCollabTools, ["collaboration.spawn_agent", "collaboration.wait_agent"]);
+	assert.deepEqual(scenario.expected.forbiddenPublicEventPatterns, ["collaboration\\.", "gAAAA"]);
   assert.equal(scenario.expected.minSubagentRollouts, 2);
   assert.equal(scenario.expected.commandOutputComparison, "informational");
   assert.match("100! = 93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000", new RegExp(scenario.expected.finalAgentMessagePatterns?.[0] ?? "$^"));
@@ -50,6 +51,67 @@ test("multi-agent V2 lifecycle scenario covers named follow-up without workspace
 	assert.deepEqual(scenario.expected.subagentRolloutPatterns, ["LIFECYCLE_FIRST", "LIFECYCLE_SECOND"]);
 	assert.deepEqual(scenario.expected.exactAgentMessages, ["MULTI_AGENT_V2_LIFECYCLE_OK"]);
 	assert.equal(scenario.expected.workspaceMutation, "none");
+});
+
+test("multi-agent V2 auto completion requires the canonical parent FINAL_ANSWER envelope", () => {
+	const scenario = getScenario("multi-agent-v2-auto-completion");
+	assert.equal(scenario.optIn, true);
+	assert.match(scenario.turns[0]?.prompt ?? "", /forbid it from calling send_message/);
+	assert.equal(scenario.turns[1]?.resume, true);
+	assert.deepEqual(scenario.expected.exactAgentMessages, ["ROOT_SAW_CHILD_AUTO_COMPLETION", "ROOT_RESUME_NO_NEW_CHILD"]);
+	assert.deepEqual(scenario.expected.rootRolloutPatterns, [
+		"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/auto_worker\\nPayload:\\nCHILD_AUTO_COMPLETION_TOKEN",
+	]);
+	assert.deepEqual(scenario.expected.rootRolloutPatternCounts, {
+		"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/auto_worker\\nPayload:\\nCHILD_AUTO_COMPLETION_TOKEN": 1,
+	});
+	assert.equal(scenario.expected.requireStableThreadId, true);
+	assert.deepEqual(scenario.expected.forbiddenRootRolloutPatterns, ["<subagent_notification>"]);
+});
+
+test("multi-agent V2 send_message scenario requires queued delivery evidence", () => {
+	const scenario = getScenario("multi-agent-v2-send-message");
+	assert.equal(scenario.optIn, true);
+	assert.match(scenario.turns[0]?.prompt ?? "", /send_message exactly once/);
+	assert.deepEqual(scenario.expected.requiredCompletedCollabTools, [
+		"collaboration.spawn_agent", "collaboration.send_message", "collaboration.wait_agent",
+	]);
+	assert.deepEqual(scenario.expected.subagentRolloutPatterns, ["MESSAGE_RECEIVED_TOKEN"]);
+	assert.deepEqual(scenario.expected.subagentFinalMessagePatterns, ["MESSAGE_RECEIVED_TOKEN"]);
+	assert.deepEqual(scenario.expected.forbiddenPublicEventPatterns, ["collaboration\\.", "gAAAA"]);
+});
+
+test("multi-agent V2 interrupt scenario requires recovery on the same agent", () => {
+	const scenario = getScenario("multi-agent-v2-interrupt");
+	assert.equal(scenario.optIn, true);
+	assert.match(scenario.turns[0]?.prompt ?? "", /followup_task on \/root\/interrupt_worker/);
+	assert.deepEqual(scenario.expected.requiredCompletedCollabTools, [
+		"collaboration.spawn_agent", "collaboration.interrupt_agent", "collaboration.list_agents", "collaboration.followup_task",
+	]);
+	assert.deepEqual(scenario.expected.subagentRolloutPatterns, ["INTERRUPT_RECOVERED_TOKEN"]);
+	assert.deepEqual(scenario.expected.subagentFinalMessagePatterns, ["INTERRUPT_RECOVERED_TOKEN"]);
+	assert.deepEqual(scenario.expected.rootRolloutPatterns, [
+		'"previous_status"\\s*:\\s*"running"',
+		'"agent_name"\\s*:\\s*"/root/interrupt_worker"\\s*,\\s*"agent_status"\\s*:\\s*"interrupted"',
+		"Message Type: FINAL_ANSWER\\nTask name: /root\\nSender: /root/interrupt_worker\\nPayload:\\nINTERRUPT_RECOVERED_TOKEN",
+	]);
+});
+
+test("multi-agent V2 missing-target scenario requires tool-error recovery", () => {
+	const scenario = getScenario("multi-agent-v2-missing-target-recovery");
+	assert.equal(scenario.optIn, true);
+	assert.match(scenario.turns[0]?.prompt ?? "", /interrupt_agent exactly once/);
+	assert.deepEqual(scenario.expected.requiredCompletedCollabTools, ["collaboration.spawn_agent"]);
+	assert.deepEqual(scenario.expected.rootRolloutPatterns, ["missing_worker", "not found"]);
+	assert.deepEqual(scenario.expected.exactAgentMessages, ["MISSING_TARGET_RECOVERY_OK"]);
+});
+
+test("Java quicksort audit checks deterministic side effects without comparing model-authored source bytes", () => {
+	const scenario = getScenario("java-quicksort-file-order-audit");
+	assert.equal(scenario.expected.eventSequenceComparison, "model-selected-tools");
+	assert.equal(scenario.expected.commandOutputComparison, "informational");
+	assert.deepEqual(scenario.expected.workspaceRequiredPaths, ["quicksort.java"]);
+	assert.deepEqual(scenario.expected.compareWorkspacePaths, []);
 });
 
 test("multifile refactor compares deterministic paths and contracts the generated implementation", () => {

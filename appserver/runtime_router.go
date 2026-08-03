@@ -253,6 +253,12 @@ type RuntimeRouter struct {
 	sessionEndMu           sync.Mutex
 	sessionEnded           map[string]struct{}
 	agentRegistry          *agent.Registry
+	agentRegistryMu        sync.Mutex
+	agentRegistries        map[string]*agent.Registry
+	agentActivityMu        sync.Mutex
+	agentActivity          map[string]chan string
+	agentMessagesMu        sync.Mutex
+	agentMessages          map[string][]any
 	closeOnce              sync.Once
 	closeErr               error
 }
@@ -347,6 +353,9 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		realtimeOpsQueues:    map[string]chan func(context.Context){},
 		realtimeEventLocks:   map[string]*sync.Mutex{},
 		agentRegistry:        agent.NewRegistry(),
+		agentRegistries:      map[string]*agent.Registry{},
+		agentActivity:        map[string]chan string{},
+		agentMessages:        map[string][]any{},
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
@@ -4449,7 +4458,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	if record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false); err == nil && runtimeRecordIsThreadSpawn(record) && strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
+	if record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false); !request.Internal && err == nil && runtimeRecordIsThreadSpawn(record) && strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
 		return nil, jsonRPCInvalidRequest("direct app-server input is not allowed for multi-agent v2 sub-agents")
 	}
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {

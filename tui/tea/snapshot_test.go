@@ -137,30 +137,20 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 		}
 		model.openSessionPicker(codextui.SessionPickerResume)
 
-		assertTerminalSnapshot(t, model.View(), `
-Thread: new | Status: idle | Model: default | Approval: default | Sandbox: default
-No messages yet.
-
-
-
-
-
-
-
-
-
-
-
-Resume a previous session
-
-Type to search                         Filter: [Cwd] All    Sort: [Updated] Created
-
-› 3d ago      Newer Session
-
-──────────────────────────────────────────────────────────────────────── 1 / 1 · 100%
-enter resume   esc exit   ctrl+c exit   tab focus   ←/→ option
-ctrl+o comfy   ctrl+t preview   ctrl+e exp   ↑/↓ browse
-Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
+		view := normalizeTerminalSnapshot(model.View())
+		if !strings.HasPrefix(view, "Resume a previous session\n\nType to search") {
+			t.Fatalf("session picker should start at the top of its full-screen surface:\n%s", view)
+		}
+		for _, want := range []string{"Newer Session", "1 / 1", "enter resume", "ctrl+o comfy"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("session picker snapshot missing %q:\n%s", want, view)
+			}
+		}
+		for _, unwanted := range []string{"Thread: new", "No messages yet.", footerHelpText} {
+			if strings.Contains(view, unwanted) {
+				t.Fatalf("full-screen session picker contains chat surface %q:\n%s", unwanted, view)
+			}
+		}
 	})
 
 	t.Run("request user input", func(t *testing.T) {

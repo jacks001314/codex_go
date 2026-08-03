@@ -103,3 +103,19 @@ func TestRemoteProtocolWebSearchPreservesLifecycle(t *testing.T) {
 		t.Fatalf("completed web search item = %#v", completed)
 	}
 }
+
+func TestRemoteProtocolCollaborationItems(t *testing.T) {
+	started := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id": "wait-1", "type": "collabAgentToolCall", "tool": "wait", "status": "inProgress",
+		"senderThreadId": "root-thread", "receiverThreadIds": []any{}, "prompt": "gAAAA-hidden",
+	}, false)
+	if started.Type != "collab_tool_call" || started.Tool != "wait" || started.Status != "in_progress" || started.Prompt != nil {
+		t.Fatalf("started collab = %#v", started)
+	}
+	activity := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id": "spawn-1", "type": "subAgentActivity", "kind": "started", "agentThreadId": "child", "agentPath": "/root/worker",
+	}, true)
+	if activity.Type != "sub_agent_activity" || activity.AgentThreadID != "child" || activity.AgentPath != "/root/worker" {
+		t.Fatalf("activity = %#v", activity)
+	}
+}

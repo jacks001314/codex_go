@@ -271,7 +271,14 @@ func responsesInputSchema(schema map[string]any) map[string]any {
 	if len(schema) == 0 {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	return cloneMapAny(schema)
+	out := cloneMapAny(schema)
+	if schemaType, ok := out["type"]; !ok || schemaType == nil || schemaType == "" {
+		// Responses function tools require an object-typed JSON Schema.
+		// Providers such as DeepSeek reject schemas without an explicit type,
+		// so normalize here instead of failing the whole request.
+		out["type"] = "object"
+	}
+	return out
 }
 
 func cloneAnySlice(values []any) []any {

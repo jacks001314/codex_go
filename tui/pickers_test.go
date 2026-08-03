@@ -187,6 +187,30 @@ func TestLoadSessionSummariesFromStoreFiltersSortsAndLimits(t *testing.T) {
 			Metadata:  session.Metadata{CWD: cwd, Source: "exec", ModelProvider: "openai"},
 		},
 		{
+			ID:        "thread-app-server",
+			Title:     "App Server",
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now.Add(-3 * time.Minute),
+			RecencyAt: now.Add(-3 * time.Minute),
+			Metadata:  session.Metadata{CWD: cwd, Source: "appServer", ModelProvider: "openai"},
+		},
+		{
+			ID:        "thread-subagent",
+			Title:     "Weather Worker",
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now.Add(-time.Minute),
+			RecencyAt: now.Add(-time.Minute),
+			Metadata:  session.Metadata{CWD: cwd, Source: "subagent:thread_spawn", ModelProvider: "openai"},
+		},
+		{
+			ID:        "thread-unknown",
+			Title:     "Unknown",
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now.Add(-2 * time.Minute),
+			RecencyAt: now.Add(-2 * time.Minute),
+			Metadata:  session.Metadata{CWD: cwd, Source: "custom-runtime", ModelProvider: "openai"},
+		},
+		{
 			ID:        "thread-ephemeral",
 			Title:     "Side",
 			CreatedAt: now.Add(-time.Hour),
@@ -239,12 +263,12 @@ func TestLoadSessionSummariesFromStoreFiltersSortsAndLimits(t *testing.T) {
 	summaries, err = LoadSessionSummariesFromStore(store, SessionSourceOptions{
 		IncludeNonInteractive: true,
 		CWD:                   cwd,
-		Limit:                 1,
+		Limit:                 3,
 	})
 	if err != nil {
 		t.Fatalf("LoadSessionSummariesFromStore(non-interactive) error = %v", err)
 	}
-	if len(summaries) != 1 || summaries[0].ThreadID != "thread-exec" {
+	if len(summaries) != 3 || summaries[0].ThreadID != "thread-app-server" || summaries[1].ThreadID != "thread-exec" || summaries[2].ThreadID != "thread-active" {
 		t.Fatalf("non-interactive summaries = %#v", summaries)
 	}
 }
@@ -294,6 +318,10 @@ func TestSessionSummariesFromAppServerThreadsAndListParams(t *testing.T) {
 	}
 	if len(params.SourceKinds) != 2 || params.SourceKinds[0] != appserver.ThreadSourceKindCli || params.SourceKinds[1] != appserver.ThreadSourceKindVsCode {
 		t.Fatalf("params source kinds = %#v", params.SourceKinds)
+	}
+	params = AppServerThreadListParamsForSessionPicker(SessionSourceOptions{IncludeNonInteractive: true})
+	if got := params.SourceKinds; len(got) != 4 || got[0] != appserver.ThreadSourceKindCli || got[1] != appserver.ThreadSourceKindVsCode || got[2] != appserver.ThreadSourceKindExec || got[3] != appserver.ThreadSourceKindAppServer {
+		t.Fatalf("non-interactive params source kinds = %#v", got)
 	}
 }
 

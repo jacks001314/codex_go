@@ -13,6 +13,10 @@ func TestFormatCompletionMessages(t *testing.T) {
 	if !ok || !strings.Contains(message, "Agent errored: boom") || !strings.Contains(message, ErrorNextAction) {
 		t.Fatalf("message = %q/%v", message, ok)
 	}
+	completed, ok := FormatInterAgentCompletionMessage("/root", "/root/worker", AgentMessageStatus{Kind: AgentMessageStatusCompleted, Message: "done"})
+	if !ok || completed != "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\ndone" {
+		t.Fatalf("completed message = %q/%v", completed, ok)
+	}
 }
 
 func TestFormatSubagentHelpers(t *testing.T) {

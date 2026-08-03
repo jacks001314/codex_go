@@ -37,7 +37,11 @@ var Registry = []Spec{
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
 	{Key: "js_repl", Stage: StageRemoved},
 	{Key: "executed_tool_call_metadata", Stage: StageUnderDevelopment},
-	{Key: "code_mode", Stage: StageUnderDevelopment, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs) defines code_mode with
+	// default_enabled: false. An unset model tool_mode therefore resolves to
+	// direct mode unless code_mode is explicitly enabled; models that require
+	// code mode declare tool_mode in the catalog instead.
+	{Key: "code_mode", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_buffered_exec", Stage: StageUnderDevelopment},
 	{Key: "code_mode_host", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_only", Stage: StageUnderDevelopment},

@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,19 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 	}
 }
 
+func TestRuntimeAgentControllerV2InterruptMissingTargetReturnsError(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller, ok := newRuntimeAgentControllerWithVersion(router, "parent", t.TempDir(), 1, agent.VersionV2).(agent.V2ToolController)
+	if !ok {
+		t.Fatal("runtime agent controller does not implement V2ToolController")
+	}
+	result, err := controller.InterruptAgent(context.Background(), &agent.InterruptAgentArgs{Target: "missing"})
+	if err == nil || !strings.Contains(err.Error(), "agent missing not found") {
+		t.Fatalf("InterruptAgent() result=%#v error=%v", result, err)
+	}
+}
+
 func TestRuntimeAgentControllerAppliesV2SubagentDeveloperInstructions(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := time.Now().UTC()
@@ -159,5 +173,35 @@ func TestRuntimeAgentControllerAttributesChildTurnsToParentTurn(t *testing.T) {
 	}
 	if runtimeController.parentID != "parent-thread" || runtimeController.parentTurnID != "parent-turn" {
 		t.Fatalf("parent provenance = thread %q turn %q", runtimeController.parentID, runtimeController.parentTurnID)
+	}
+}
+
+func TestRuntimeAgentControllerV2RegistersCanonicalPathAndImplementsTools(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir()}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller, ok := newRuntimeAgentControllerWithVersion(router, "parent", parent.Metadata.CWD, 2, agent.VersionV2).(agent.V2ToolController)
+	if !ok {
+		t.Fatal("runtime controller does not implement V2ToolController")
+	}
+	message := "encrypted payload"
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker", Message: &message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spawned.TaskName != "/root/worker" {
+		t.Fatalf("task name = %q", spawned.TaskName)
+	}
+	metadata, ok := router.runtimeAgentRegistry("parent").MetadataForThread(spawned.AgentID)
+	if !ok || metadata.Path != "/root/worker" {
+		t.Fatalf("registry metadata = %#v/%t", metadata, ok)
+	}
+	listed, err := controller.ListAgents(context.Background(), &agent.ListAgentsArgs{})
+	if err != nil || len(listed.Agents) != 2 || listed.Agents[0].AgentName != "/root" || listed.Agents[1].AgentName != "/root/worker" {
+		t.Fatalf("listed = %#v, err=%v", listed, err)
 	}
 }

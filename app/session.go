@@ -860,7 +860,7 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 		if err != nil {
 			return "", err
 		}
-		if found && meta != nil && (opts != nil && opts.IncludeNonInteractive || interactiveSessionSource(meta.Source)) {
+		if found && meta != nil && resumableSessionSource(meta.Source, opts != nil && opts.IncludeNonInteractive) {
 			return session.ThreadID(meta.ID), nil
 		}
 	}
@@ -1101,8 +1101,7 @@ func sessionCodexHome(store *session.Store) string {
 }
 
 func interactiveSessionSource(source string) bool {
-	normalized := normalizeSessionSource(source)
-	return normalized == "" || normalized == "cli" || normalized == "vscode"
+	return resumableSessionSource(source, false)
 }
 
 func filterSessionPickerRecords(records []session.Record, opts *cli.SessionOptions) []session.Record {
@@ -1113,7 +1112,7 @@ func filterSessionPickerRecords(records []session.Record, opts *cli.SessionOptio
 	filtered := make([]session.Record, 0, len(records))
 	for i := range records {
 		record := &records[i]
-		if !includeNonInteractive && !isInteractiveSession(record) {
+		if !resumableSessionSource(record.Metadata.Source, includeNonInteractive) {
 			continue
 		}
 		filtered = append(filtered, *record)
@@ -1125,22 +1124,24 @@ func isInteractiveSession(record *session.Record) bool {
 	if record == nil {
 		return false
 	}
-	source := normalizeSessionSource(record.Metadata.Source)
+	return interactiveSessionSource(record.Metadata.Source)
+}
+
+func resumableSessionSource(source string, includeNonInteractive bool) bool {
+	source = normalizeSessionSource(source)
 	switch source {
 	case "", "cli", "vscode":
 		return true
-	case "exec", "appserver", "subagent", "subagentreview", "subagentcompact", "subagentthreadspawn", "subagentother", "unknown":
-		return false
+	case "exec", "appserver":
+		return includeNonInteractive
 	default:
-		return true
+		return false
 	}
 }
 
 func normalizeSessionSource(source string) string {
 	source = strings.ToLower(strings.TrimSpace(source))
-	source = strings.ReplaceAll(source, "_", "")
-	source = strings.ReplaceAll(source, "-", "")
-	return source
+	return strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(source)
 }
 
 func sortSessionRecordsByRecency(records []session.Record) {
