@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,7 +85,7 @@ func (p *WebSocketProvider) connect(ctx context.Context) (*remoteConnection, err
 	if err != nil {
 		return nil, err
 	}
-	connection, err := connectRemoteTransport(ctx, transport)
+	connection, err := connectWebSocketRemoteTransport(ctx, transport, p.url, p.httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +94,34 @@ func (p *WebSocketProvider) connect(ctx context.Context) (*remoteConnection, err
 }
 
 func connectRemoteTransport(ctx context.Context, transport remoteTransport) (*remoteConnection, error) {
+	return connectRemoteTransportWithHandshake(ctx, transport, nil)
+}
+
+// connectWebSocketRemoteTransport negotiates a dual-WebSocket connection:
+// after the handshake, a host advertising the dual-websocket-v1 capability
+// must return a bulk pairing token, and the client opens a second WebSocket at
+// `{url}/bulk/{token}` carrying delegate callbacks and their responses
+// (Rust 60c722e075).
+func connectWebSocketRemoteTransport(ctx context.Context, transport remoteTransport, websocketURL string, httpClient *http.Client) (*remoteConnection, error) {
+	return connectRemoteTransportWithHandshake(ctx, transport, &remoteConnectOptions{
+		websocketURL: websocketURL,
+		httpClient:   httpClient,
+	})
+}
+
+type remoteConnectOptions struct {
+	websocketURL string
+	httpClient   *http.Client
+}
+
+func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTransport, options *remoteConnectOptions) (*remoteConnection, error) {
 	versions, _ := NewSupportedProtocolVersions(ProtocolV1)
-	hello, _ := NewClientHello(versions, CapabilitySet{}, CapabilitySet{})
+	dual, _ := NewCapability(DualWebSocketCapability)
+	optional := CapabilitySet{}
+	if options != nil && strings.TrimSpace(options.websocketURL) != "" {
+		optional, _ = NewCapabilitySet(dual)
+	}
+	hello, _ := NewClientHello(versions, CapabilitySet{}, optional)
 	if err := transport.Write(ctx, ClientHelloMessage(hello)); err != nil {
 		_ = transport.Close()
 		return nil, err
@@ -116,9 +144,47 @@ func connectRemoteTransport(ctx context.Context, transport remoteTransport) (*re
 		_ = transport.Close()
 		return nil, fmt.Errorf("code-mode host returned an invalid handshake response")
 	}
-	connection := newRemoteConnection(transport)
+	var bulk remoteTransport
+	if response.Hello.Capabilities.Contains(dual) {
+		if options == nil || strings.TrimSpace(options.websocketURL) == "" {
+			_ = transport.Close()
+			return nil, fmt.Errorf("code-mode host negotiated an unsupported bulk websocket")
+		}
+		token := response.Hello.BulkConnectionToken
+		if token == nil || strings.TrimSpace(*token) == "" {
+			_ = transport.Close()
+			return nil, fmt.Errorf("code-mode host advertised dual websockets without a pairing token")
+		}
+		bulkURL, err := bulkWebSocketURL(options.websocketURL, *token)
+		if err != nil {
+			_ = transport.Close()
+			return nil, err
+		}
+		bulkTransport, _, err := DialWebSocket(ctx, bulkURL, options.httpClient)
+		if err != nil {
+			_ = transport.Close()
+			return nil, fmt.Errorf("code-mode host bulk websocket unavailable: %w", err)
+		}
+		bulk = bulkTransport
+	} else if response.Hello.BulkConnectionToken != nil {
+		_ = transport.Close()
+		return nil, fmt.Errorf("code-mode host returned an unexpected bulk pairing token")
+	}
+	connection := newRemoteConnection(transport, bulk)
 	go connection.readLoop()
+	if bulk != nil {
+		go connection.readBulkLoop()
+	}
 	return connection, nil
+}
+
+func bulkWebSocketURL(base string, token string) (string, error) {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("failed to build code-mode host bulk websocket URL: %w", err)
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/bulk/" + token
+	return parsed.String(), nil
 }
 
 func handshakeRejectMessage(reason *HandshakeRejectReason) string {
@@ -349,7 +415,9 @@ type remoteInitialResult struct {
 
 type remoteConnection struct {
 	transport remoteTransport
+	bulk      remoteTransport
 	writeMu   sync.Mutex
+	bulkMu    sync.Mutex
 	mu        sync.Mutex
 	alive     bool
 	nextID    RequestID
@@ -358,8 +426,12 @@ type remoteConnection struct {
 	cancels   map[DelegateRequestID]context.CancelFunc
 }
 
-func newRemoteConnection(transport remoteTransport) *remoteConnection {
-	return &remoteConnection{transport: transport, alive: true, nextID: 1, pending: map[RequestID]*remotePending{}, delegates: map[SessionID]tool.CodeModeRemoteDelegate{}, cancels: map[DelegateRequestID]context.CancelFunc{}}
+func newRemoteConnection(transport remoteTransport, bulk ...remoteTransport) *remoteConnection {
+	connection := &remoteConnection{transport: transport, alive: true, nextID: 1, pending: map[RequestID]*remotePending{}, delegates: map[SessionID]tool.CodeModeRemoteDelegate{}, cancels: map[DelegateRequestID]context.CancelFunc{}}
+	if len(bulk) > 0 {
+		connection.bulk = bulk[0]
+	}
+	return connection
 }
 
 func (c *remoteConnection) Alive() bool {
@@ -507,6 +579,15 @@ func (c *remoteConnection) cancelRequest(id RequestID) {
 }
 
 func (c *remoteConnection) write(ctx context.Context, message any) error {
+	lane := TransportLaneControl
+	if m, ok := message.(ClientToHost); ok {
+		lane = m.transportLane()
+	}
+	if lane == TransportLaneBulk && c.bulk != nil {
+		c.bulkMu.Lock()
+		defer c.bulkMu.Unlock()
+		return c.bulk.Write(ctx, message)
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return c.transport.Write(ctx, message)
@@ -521,6 +602,29 @@ func (c *remoteConnection) readLoop() {
 				err = fmt.Errorf("code-mode host connection closed")
 			}
 			c.fail(err)
+			return
+		}
+		if c.bulk != nil && message.transportLane() != TransportLaneControl {
+			c.fail(fmt.Errorf("code-mode host sent a bulk message on the control websocket"))
+			return
+		}
+		c.handle(message)
+	}
+}
+
+func (c *remoteConnection) readBulkLoop() {
+	for {
+		var message HostToClient
+		ok, err := c.bulk.Read(context.Background(), &message)
+		if err != nil || !ok {
+			if err == nil {
+				err = fmt.Errorf("code-mode host bulk websocket closed")
+			}
+			c.fail(err)
+			return
+		}
+		if message.transportLane() != TransportLaneBulk {
+			c.fail(fmt.Errorf("code-mode host sent a control message on the bulk websocket"))
 			return
 		}
 		c.handle(message)
@@ -671,5 +775,11 @@ func (c *remoteConnection) Close() error {
 		return nil
 	}
 	c.fail(fmt.Errorf("code-mode host connection closed"))
-	return c.transport.Close()
+	firstErr := c.transport.Close()
+	if c.bulk != nil {
+		if bulkErr := c.bulk.Close(); bulkErr != nil && firstErr == nil {
+			firstErr = bulkErr
+		}
+	}
+	return firstErr
 }

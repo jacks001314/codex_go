@@ -889,6 +889,11 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 	if store == nil {
 		return "", errors.New("session store is nil")
 	}
+	// Rust 9c8f9ce897: local workspaces trust SQLite names first, then scan
+	// and repair only after a miss or an unusable rollout path.
+	if id, found := sessionIDBySQLiteName(store, name, archived); found {
+		return id, nil
+	}
 	for _, archivedValue := range []bool{false, true} {
 		if archived != nil && *archived != archivedValue {
 			continue
@@ -934,6 +939,71 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 	}
 	sortSessionRecordsByRecency(matches)
 	return matches[0].ID, nil
+}
+
+func sessionIDBySQLiteName(store *session.Store, name string, archived *bool) (session.ThreadID, bool) {
+	if store == nil {
+		return "", false
+	}
+	codexHome := sessionCodexHome(store)
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return "", false
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		return "", false
+	}
+	defer runtime.Close()
+	var candidates []state.ThreadListRow
+	for _, archivedValue := range []bool{false, true} {
+		if archived != nil && *archived != archivedValue {
+			continue
+		}
+		rows, err := runtime.ListThreadRowsByName(context.Background(), name, archivedValue)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			if sqliteSessionRolloutValid(codexHome, row, archivedValue) {
+				candidates = append(candidates, row)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return "", false
+	}
+	return session.ThreadID(candidates[0].ID), true
+}
+
+func sqliteSessionRolloutValid(codexHome string, row state.ThreadListRow, archived bool) bool {
+	path := strings.TrimSpace(row.RolloutPath)
+	if path == "" || strings.TrimSpace(row.ID) == "" {
+		return false
+	}
+	root := filepath.Join(codexHome, rollout.SessionsSubdir)
+	if archived {
+		root = filepath.Join(codexHome, rollout.ArchivedSessionsSubdir)
+	}
+	if !pathWithinSessionRoot(root, path) {
+		return false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	meta, err := rollout.FirstSessionMeta(path)
+	if err != nil || meta == nil || strings.TrimSpace(meta.ID) != row.ID {
+		return false
+	}
+	return true
+}
+
+func pathWithinSessionRoot(root string, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
 }
 
 func sessionMutationSearchScope(archived *bool) string {

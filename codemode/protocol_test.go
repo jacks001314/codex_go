@@ -125,6 +125,40 @@ func TestNormalizeIdentifierAndMetadata(t *testing.T) {
 	}
 }
 
+func TestDualWebSocketHelloAndLanes(t *testing.T) {
+	dual, err := NewCapability(DualWebSocketCapability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "tok-1"
+	data, err := json.Marshal(HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: CapabilitySet{dual}, BulkConnectionToken: &token}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"bulkConnectionToken":"tok-1"`) {
+		t.Fatalf("host hello with bulk token = %s", data)
+	}
+	var decoded HostToClient
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Hello == nil || decoded.Hello.BulkConnectionToken == nil || *decoded.Hello.BulkConnectionToken != "tok-1" {
+		t.Fatalf("decoded hello = %#v", decoded.Hello)
+	}
+
+	notify := DelegateResponseMessage(1, ResultOK(NotificationDeliveredResponse()))
+	toolResult := DelegateResponseMessage(2, ResultOK(ToolResultResponse(json.RawMessage(`{"ok":true}`))))
+	if notify.transportLane() != TransportLaneControl || toolResult.transportLane() != TransportLaneBulk || OperationRequest(1, WaitSessionRequest("s", WaitRequest{CellID: "c"})).transportLane() != TransportLaneControl {
+		t.Fatalf("client lanes: notify=%s result=%s request=%s", notify.transportLane(), toolResult.transportLane(), OperationRequest(1, WaitSessionRequest("s", WaitRequest{CellID: "c"})).transportLane())
+	}
+	invoke := HostToClient{Type: "delegate/request", DelegateID: 3, Request: &DelegateRequest{Type: "tool/invoke"}}
+	cancel := HostToClient{Type: "delegate/cancel", DelegateID: 4}
+	hostNotify := HostToClient{Type: "delegate/request", DelegateID: 5, Request: &DelegateRequest{Type: "notification/send"}}
+	if invoke.transportLane() != TransportLaneBulk || cancel.transportLane() != TransportLaneBulk || hostNotify.transportLane() != TransportLaneControl {
+		t.Fatalf("host lanes: invoke=%s cancel=%s notify=%s", invoke.transportLane(), cancel.transportLane(), hostNotify.transportLane())
+	}
+}
+
 func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 	runtime := NewSessionRuntime()
 	ctx := context.Background()

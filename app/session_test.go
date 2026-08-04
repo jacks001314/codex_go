@@ -108,6 +108,87 @@ func TestLocalSessionCommandsOperateOnRustRolloutWithoutGoSnapshot(t *testing.T)
 	}
 }
 
+func TestSessionIDBySQLiteNamePrefersValidStateRowsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedAppSessionTime()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: "state-thread", Source: "cli", CWD: home,
+		ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rolloutPath := recorder.Path()
+
+	sqliteConfig, err := state.SqliteConfigForCodexHome(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert := func(id string, rolloutPath string, archived bool) {
+		t.Helper()
+		archivedInt := 0
+		if archived {
+			archivedInt = 1
+		}
+		if _, err := runtime.StateDB().ExecContext(context.Background(), `INSERT INTO threads
+			(id, rollout_path, created_at, updated_at, created_at_ms, updated_at_ms, recency_at_ms, source, model_provider, cwd, title, name, sandbox_policy, approval_mode, archived)
+			VALUES (?, ?, 1, 1, 1, 1, 1, 'cli', 'openai', '/workspace', 'Work title', 'Work', '', '', ?)`,
+			id, rolloutPath, archivedInt); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	insert("state-thread", rolloutPath, false)
+	insert("missing-file-thread", filepath.Join("sessions", "missing.jsonl"), false)
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found := sessionIDBySQLiteName(store, "Work", nil)
+	if !found || got != "state-thread" {
+		t.Fatalf("sessionIDBySQLiteName() = %q, %t; want state-thread, true", got, found)
+	}
+	// A row whose rollout path is unusable must not win.
+	if _, found := sessionIDBySQLiteName(store, "Work", sessionArchivedFilter(true)); found {
+		t.Fatal("archived filter matched an active-only row")
+	}
+}
+
+func TestSQLiteSessionRolloutValidRejectsMismatchedMeta(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedAppSessionTime()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: "meta-thread", Source: "cli", CWD: home,
+		ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	row := state.ThreadListRow{
+		ID:          "other-id",
+		RolloutPath: recorder.Path(),
+	}
+	if sqliteSessionRolloutValid(home, row, false) {
+		t.Fatal("rollout with mismatched session id passed validation")
+	}
+	row.ID = "meta-thread"
+	if !sqliteSessionRolloutValid(home, row, false) {
+		t.Fatal("rollout with matching session id failed validation")
+	}
+	_ = store
+}
+
 func TestLocalSessionForksRustRolloutWithoutGoSnapshot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

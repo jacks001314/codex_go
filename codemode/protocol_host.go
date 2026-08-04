@@ -9,6 +9,11 @@ import (
 
 const MaxPendingDelegateCalls = 1024
 
+// DualWebSocketCapability is the optional host capability that pairs the
+// control WebSocket with a second bulk WebSocket carrying delegate callbacks
+// and their responses (Rust 60c722e075).
+const DualWebSocketCapability = "dual-websocket-v1"
+
 type RequestID int64
 
 type DelegateRequestID int64
@@ -118,8 +123,9 @@ func NewClientHello(versions SupportedProtocolVersions, required CapabilitySet, 
 }
 
 type HostHello struct {
-	SelectedVersion ProtocolVersion `json:"selectedVersion"`
-	Capabilities    CapabilitySet   `json:"capabilities"`
+	SelectedVersion     ProtocolVersion `json:"selectedVersion"`
+	Capabilities        CapabilitySet   `json:"capabilities"`
+	BulkConnectionToken *string         `json:"bulkConnectionToken,omitempty"`
 }
 
 type HandshakeRejectReason struct {
@@ -176,6 +182,47 @@ type ClientToHost struct {
 	Request          *HostRequest                  `json:"request,omitempty"`
 	DelegateID       DelegateRequestID             `json:"-"`
 	DelegateResponse *WireResult[DelegateResponse] `json:"result,omitempty"`
+}
+
+// TransportLane selects one socket of a negotiated dual-WebSocket connection.
+type TransportLane string
+
+const (
+	TransportLaneControl TransportLane = "control"
+	TransportLaneBulk    TransportLane = "bulk"
+)
+
+// transportLane mirrors Rust ClientToHost::transport_lane: delegate tool
+// results travel on the bulk socket while notification acknowledgments and
+// control traffic stay on the control socket.
+func (m ClientToHost) transportLane() TransportLane {
+	if m.Type == "delegate/response" && m.DelegateResponse != nil {
+		if result, err := m.DelegateResponse.IntoResult(); err == nil && result.Type == "notification/delivered" {
+			return TransportLaneControl
+		}
+		return TransportLaneBulk
+	}
+	return TransportLaneControl
+}
+
+// transportLane mirrors Rust HostToClient::transport_lane: nested tool
+// invocations and delegate cancellations arrive on the bulk socket; everything
+// else stays on the control socket.
+func (m *HostToClient) transportLane() TransportLane {
+	if m == nil {
+		return TransportLaneControl
+	}
+	switch m.Type {
+	case "delegate/cancel":
+		return TransportLaneBulk
+	case "delegate/request":
+		if m.Request != nil && m.Request.Type == "tool/invoke" {
+			return TransportLaneBulk
+		}
+		return TransportLaneControl
+	default:
+		return TransportLaneControl
+	}
 }
 
 func ClientHelloMessage(hello ClientHello) ClientToHost {
@@ -308,14 +355,15 @@ func (m *HostToClient) UnmarshalJSON(data []byte) error {
 	switch envelope.Type {
 	case "connection/ready":
 		var value struct {
-			Type            string          `json:"type"`
-			SelectedVersion ProtocolVersion `json:"selectedVersion"`
-			Capabilities    CapabilitySet   `json:"capabilities"`
+			Type                string          `json:"type"`
+			SelectedVersion     ProtocolVersion `json:"selectedVersion"`
+			Capabilities        CapabilitySet   `json:"capabilities"`
+			BulkConnectionToken *string         `json:"bulkConnectionToken,omitempty"`
 		}
 		if err := json.Unmarshal(data, &value); err != nil {
 			return err
 		}
-		m.Hello = &HostHello{SelectedVersion: value.SelectedVersion, Capabilities: value.Capabilities}
+		m.Hello = &HostHello{SelectedVersion: value.SelectedVersion, Capabilities: value.Capabilities, BulkConnectionToken: value.BulkConnectionToken}
 	case "connection/rejected":
 		var value struct {
 			Reason HandshakeRejectReason `json:"reason"`

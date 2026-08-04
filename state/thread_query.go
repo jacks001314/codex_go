@@ -55,7 +55,25 @@ func (r *StateRuntime) ListThreadRows(ctx context.Context) ([]ThreadListRow, err
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	rows, err := r.stateDB.QueryContext(ctx, `
+	return r.queryThreadRows(ctx, "", "")
+}
+
+// ListThreadRowsByName returns threads whose stored name or title exactly
+// matches name within one archive collection, ordered by recency. It is the
+// state-DB-only lookup used by local session archive commands before falling
+// back to scanning rollouts (Rust 9c8f9ce897).
+func (r *StateRuntime) ListThreadRowsByName(ctx context.Context, name string, archived bool) ([]ThreadListRow, error) {
+	if r == nil || r.stateDB == nil {
+		return nil, errors.New("state runtime is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.queryThreadRows(ctx, "WHERE threads.archived = ? AND (threads.name = ? OR threads.title = ?)", "ORDER BY COALESCE(NULLIF(threads.recency_at_ms, 0), threads.updated_at_ms, threads.updated_at * 1000) DESC", archived, strings.TrimSpace(name), strings.TrimSpace(name))
+}
+
+func (r *StateRuntime) queryThreadRows(ctx context.Context, where string, order string, args ...any) ([]ThreadListRow, error) {
+	query := `
 SELECT
     threads.id,
     threads.rollout_path,
@@ -93,7 +111,9 @@ SELECT
     thread_spawn_edges.parent_thread_id
 FROM threads
 LEFT JOIN thread_sections ON thread_sections.id = threads.thread_section_id
-LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id`)
+LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
+` + where + "\n" + order
+	rows, err := r.stateDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list thread rows: %w", err)
 	}

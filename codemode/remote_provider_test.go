@@ -189,6 +189,194 @@ func TestWebSocketProviderExecutesAndHandlesDelegates(t *testing.T) {
 	_ = provider.Close()
 }
 
+func TestWebSocketProviderNegotiatesDualWebSocketLanes(t *testing.T) {
+	invokeSent := make(chan struct{})
+	invokeDone := make(chan struct{})
+	var sessionID SessionID
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		if strings.HasSuffix(request.URL.Path, "/bulk/tok-1") {
+			// Bulk socket: waits for the control lane to signal the execute
+			// request, then carries the nested tool invocation and its result.
+			<-invokeSent
+			cellID := CellID("cell-dual")
+			writeHostFrame(t, ctx, conn, DelegateRequestMessage(50, sessionID, InvokeToolRequest(NestedToolCall{
+				CellID: cellID, RuntimeToolCallID: "nested-dual", ToolName: PlainToolName("exec_command"), ProtocolToolKind: ProtocolToolKindFunction, Input: json.RawMessage(`{"cmd":"echo dual"}`),
+			})))
+			var delegateResponse ClientToHost
+			if !readClientFrame(t, ctx, conn, &delegateResponse) || delegateResponse.Type != "delegate/response" || delegateResponse.DelegateResponse == nil || delegateResponse.DelegateResponse.Status != "ok" {
+				close(invokeDone)
+				return
+			}
+			close(invokeDone)
+			// Keep the bulk socket open for the connection lifetime (closing it
+			// early would invalidate the whole connection) and acknowledge the
+			// client's close handshake when the test tears down.
+			for {
+				var message ClientToHost
+				if !readClientFrame(t, ctx, conn, &message) {
+					return
+				}
+			}
+		}
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) || hello.Hello == nil || !hello.Hello.OptionalCapabilities.Contains(Capability(DualWebSocketCapability)) {
+			return
+		}
+		token := "tok-1"
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: CapabilitySet{Capability(DualWebSocketCapability)}, BulkConnectionToken: &token}))
+		for {
+			var message ClientToHost
+			if !readClientFrame(t, ctx, conn, &message) || message.Request == nil {
+				return
+			}
+			switch message.Request.Method {
+			case "session/open":
+				sessionID = message.Request.SessionID
+				writeHostFrame(t, ctx, conn, HostOperationResponse(message.ID, ResultOK(SessionReady(sessionID))))
+			case "session/execute":
+				cellID := CellID("cell-dual")
+				writeHostFrame(t, ctx, conn, HostOperationResponse(message.ID, ResultOK(ExecutionStarted(cellID))))
+				// Notifications stay on the control lane.
+				writeHostFrame(t, ctx, conn, DelegateRequestMessage(51, sessionID, NotifyRequest("exec-dual", cellID, "DUAL_NOTIFY")))
+				var notifyResponse ClientToHost
+				if !readClientFrame(t, ctx, conn, &notifyResponse) || notifyResponse.DelegateResponse == nil || notifyResponse.DelegateResponse.Status != "ok" {
+					return
+				}
+				close(invokeSent)
+				<-invokeDone
+				writeHostFrame(t, ctx, conn, InitialResponse(message.ID, ResultOK(Result(cellID, []ContentItem{InputText("DUAL_OK")}, nil))))
+			case "session/shutdown":
+				writeHostFrame(t, ctx, conn, HostOperationResponse(message.ID, ResultOK(SessionClosed(message.Request.SessionID))))
+				return
+			default:
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	delegate := &recordingRemoteDelegate{}
+	session := provider.NewSession(delegate)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{
+		ToolCallID: "exec-dual",
+		Source:     `text("DUAL_OK")`,
+		EnabledTools: []tool.CodeModeRemoteToolDefinition{{
+			Name: "exec_command", ToolName: tool.PlainName("exec_command"), Kind: tool.PayloadFunction,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.State != "completed" || response.CellID != "cell-dual" || len(response.ContentItems) != 1 || response.ContentItems[0]["text"] != "DUAL_OK" {
+		t.Fatalf("response = %#v", response)
+	}
+	delegate.mu.Lock()
+	if len(delegate.calls) != 1 || delegate.calls[0].ToolName.Key() != "exec_command" || len(delegate.notifies) != 1 || delegate.notifies[0] != "DUAL_NOTIFY" {
+		t.Fatalf("delegate calls=%#v notifies=%#v", delegate.calls, delegate.notifies)
+	}
+	delegate.mu.Unlock()
+	_ = session.Close()
+	_ = provider.Close()
+}
+
+func TestWebSocketProviderRejectsDualAdvertisementWithoutToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) {
+			return
+		}
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: CapabilitySet{Capability(DualWebSocketCapability)}}))
+	}))
+	defer server.Close()
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := provider.connect(ctx); err == nil || !strings.Contains(err.Error(), "without a pairing token") {
+		t.Fatalf("connect() error = %v, want missing pairing token", err)
+	}
+}
+
+func TestWebSocketProviderRejectsUnexpectedBulkToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) {
+			return
+		}
+		token := "unexpected"
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, BulkConnectionToken: &token}))
+	}))
+	defer server.Close()
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := provider.connect(ctx); err == nil || !strings.Contains(err.Error(), "unexpected bulk pairing token") {
+		t.Fatalf("connect() error = %v, want unexpected bulk token", err)
+	}
+}
+
+func TestDualWebSocketRejectsBulkMessageOnControlLane(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := request.Context()
+		if strings.HasSuffix(request.URL.Path, "/bulk/tok-lane") {
+			<-ctx.Done()
+			return
+		}
+		var hello ClientToHost
+		if !readClientFrame(t, ctx, conn, &hello) {
+			return
+		}
+		token := "tok-lane"
+		writeHostFrame(t, ctx, conn, HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: CapabilitySet{Capability(DualWebSocketCapability)}, BulkConnectionToken: &token}))
+		// Send a bulk-family message (tool invocation) on the control socket:
+		// the client must invalidate the connection.
+		writeHostFrame(t, ctx, conn, DelegateRequestMessage(60, SessionID("s-lane"), InvokeToolRequest(NestedToolCall{
+			CellID: CellID("c"), RuntimeToolCallID: "n", ToolName: PlainToolName("exec_command"), ProtocolToolKind: ProtocolToolKindFunction, Input: json.RawMessage(`{}`),
+		})))
+		// Keep the socket open so the client observes the mis-laned frame
+		// instead of racing the connection close.
+		<-ctx.Done()
+	}))
+	defer server.Close()
+	provider := NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
+	session := provider.NewSession(&recordingRemoteDelegate{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("x")`})
+	if err == nil || !strings.Contains(err.Error(), "bulk message on the control websocket") {
+		t.Fatalf("Execute() error = %v, want lane enforcement failure", err)
+	}
+}
+
 func TestRemoteSessionConcurrentFirstExecuteOpensOnce(t *testing.T) {
 	var openCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
