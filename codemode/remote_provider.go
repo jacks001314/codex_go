@@ -3,13 +3,26 @@ package codemode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"codex_go/tool"
 )
+
+// defaultHostWaitTransportTimeout mirrors Rust's DEFAULT_HOST_WAIT_TRANSPORT_TIMEOUT:
+// a stalled code-mode host must answer wait/terminate requests within this
+// transport allowance or the connection is invalidated so the next execution
+// reconnects (Rust 8e3b5d3e87).
+var defaultHostWaitTransportTimeout = 60 * time.Second
+
+// errCodeModeHostRequestTimeout is returned when a code-mode wait/terminate
+// request exceeds its transport deadline; the connection is invalidated so the
+// next execution reconnects to the host.
+var errCodeModeHostRequestTimeout = errors.New("code-mode host timed out waiting for response")
 
 type WebSocketProvider struct {
 	url        string
@@ -166,8 +179,16 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
-	outcome, err := connection.Request(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: CellID(cellID), YieldTimeMS: yieldTimeMS}))
+	// Account for the runtime's one-second yield grace separately from transport
+	// (mirrors Rust wait()).
+	runtimeTimeout := time.Duration(yieldTimeMS)*time.Millisecond + time.Second
+	outcome, err := connection.withTransportDeadline(runtimeTimeout, "wait", func(ctx context.Context) (HostResponse, error) {
+		return connection.Request(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: CellID(cellID), YieldTimeMS: yieldTimeMS}))
+	})
 	if err != nil {
+		if errors.Is(err, errCodeModeHostRequestTimeout) {
+			s.invalidateConnection(connection)
+		}
 		return tool.CodeModeRemoteResponse{}, err
 	}
 	if outcome.Outcome == nil {
@@ -181,14 +202,34 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
-	outcome, err := connection.Request(ctx, TerminateSessionRequest(s.id, CellID(cellID)))
+	outcome, err := connection.withTransportDeadline(0, "terminate", func(ctx context.Context) (HostResponse, error) {
+		return connection.Request(ctx, TerminateSessionRequest(s.id, CellID(cellID)))
+	})
 	if err != nil {
+		if errors.Is(err, errCodeModeHostRequestTimeout) {
+			s.invalidateConnection(connection)
+		}
 		return tool.CodeModeRemoteResponse{}, err
 	}
 	if outcome.Outcome == nil {
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid terminate response")
 	}
 	return publicRemoteResponse(outcome.Outcome.Response), nil
+}
+
+// invalidateConnection drops the session's association with a dead connection so
+// the next execution opens a fresh host connection.
+func (s *remoteSession) invalidateConnection(connection *remoteConnection) {
+	if s == nil || connection == nil {
+		return
+	}
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openedOn == connection {
+		s.openedOn = nil
+	}
 }
 
 func (s *remoteSession) Close() error {
@@ -328,6 +369,50 @@ func (c *remoteConnection) Alive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.alive
+}
+
+// MarkDead invalidates the connection and fails every pending request with
+// reason, so waiters unblock and the next execution reconnects to the host.
+func (c *remoteConnection) MarkDead(reason string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.alive = false
+	pending := c.pending
+	c.pending = make(map[RequestID]*remotePending)
+	c.mu.Unlock()
+	for _, p := range pending {
+		select {
+		case p.response <- remoteResult{err: errors.New(reason)}:
+		default:
+		}
+		if p.initial != nil {
+			select {
+			case p.initial <- remoteInitialResult{err: errors.New(reason)}:
+			default:
+			}
+		}
+	}
+}
+
+// withTransportDeadline runs request under a combined runtime + transport
+// deadline and invalidates the connection when the host stalls (mirrors Rust's
+// Connection::with_transport_deadline).
+func (c *remoteConnection) withTransportDeadline(runtimeTimeout time.Duration, requestType string, request func(context.Context) (HostResponse, error)) (HostResponse, error) {
+	deadline := runtimeTimeout + defaultHostWaitTransportTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	response, err := request(ctx)
+	if err == nil {
+		return response, nil
+	}
+	if ctx.Err() == nil {
+		return HostResponse{}, err
+	}
+	reason := fmt.Sprintf("code-mode host timed out waiting for %s response", requestType)
+	c.MarkDead(reason)
+	return HostResponse{}, errCodeModeHostRequestTimeout
 }
 
 func (c *remoteConnection) SetDelegate(sessionID SessionID, delegate tool.CodeModeRemoteDelegate) {

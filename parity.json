@@ -15,6 +15,10 @@
   },
   "generatedAt": "2026-08-04",
   "items": [
+    {"id":"codemode-host-request-timeout","status":"done","area":"codemode","reason":"wait/terminate host requests get a 60s transport allowance; on stall the connection is invalidated so the next execution reconnects (Rust 8e3b5d3e87).","test":"go test ./codemode/... -count=1"},
+    {"id":"agent-plugin-mcp-config","status":"done","area":"plugin","reason":"ParseAgentPluginMCPConfig translates Agent Plugins v1 mcp.json into Codex MCP config: stdio/streamable-http normalization, PLUGIN_ROOT/PLUGIN_DATA expansion, contained paths, secure endpoints, client-owned header filtering, per-server errors (Rust bd12b3a9ec).","test":"go test ./plugin/... -count=1"},
+    {"id":"model-messages-consolidation","status":"done","area":"model","reason":"WithConfigOverrides stores base_instructions override into instructions_template and preserves other message fields; personality-disabled renders default personality into the template (Rust df72fdb415).","test":"go test ./model/... -count=1"},
+    {"id":"plugin-usage-instructions-gate","status":"done","area":"model","reason":"Generic plugin usage guidance is emitted only when the selected model has include_plugin_usage_instructions (Rust e4e0c7070e).","test":"go test ./appserver/... -run PluginContext -count=1"},
     {"id":"rollout-budget-provider-units","status":"done","area":"rollout_budget","reason":"runtimeutil.Budget.RecordUsage now charges provider-reported codex_rollout_budget_units directly (finite, non-negative or fatal error), falling back to weighted token accounting; mirrors Rust 8b8fa7276f (#36715).","test":"go test ./runtimeutil/... -count=1"},
     {"id":"mcp-catalog-limits","status":"done","area":"mcp","reason":"Standard MCP catalog limit raised 1024->2048 and host-owned codex_apps (CodexAppsServerConfig) uses 8192 via per-server CatalogItemLimit; mirrors Rust e4e040881a (#36772).","test":"go test ./mcp/... -count=1"},
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},

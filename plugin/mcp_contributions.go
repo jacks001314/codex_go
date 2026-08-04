@@ -30,7 +30,7 @@ func (s *PluginService) EnabledMCPServerContributions() []MCPServerContribution 
 		if root == "" || detail.Summary.ID == "" {
 			continue
 		}
-		configs := readPluginMCPServerConfigs(root)
+		configs := readPluginMCPServerConfigs(root, s.agentPluginDataRoot(detail.Summary.ID, root))
 		names := make([]string, 0, len(configs))
 		for name := range configs {
 			names = append(names, name)
@@ -51,7 +51,27 @@ func (s *PluginService) EnabledMCPServerContributions() []MCPServerContribution 
 	return out
 }
 
-func readPluginMCPServerConfigs(pluginRoot string) map[string]map[string]any {
+// agentPluginDataRoot returns the plugin runtime data directory used for
+// `${PLUGIN_DATA}` expansion, falling back to the plugin root when the service
+// has no Codex home or the plugin id cannot be parsed.
+func (s *PluginService) agentPluginDataRoot(pluginID string, fallbackRoot string) string {
+	if s == nil {
+		return fallbackRoot
+	}
+	s.mu.Lock()
+	codexHome := s.codexHome
+	s.mu.Unlock()
+	if strings.TrimSpace(codexHome) == "" {
+		return fallbackRoot
+	}
+	id, err := ParsePluginId(pluginID)
+	if err != nil {
+		return fallbackRoot
+	}
+	return filepath.Join(codexHome, PluginsDataDir, id.PluginName+"-"+id.MarketplaceName)
+}
+
+func readPluginMCPServerConfigs(pluginRoot string, pluginDataRoot string) map[string]map[string]any {
 	pluginRoot = strings.TrimSpace(pluginRoot)
 	if pluginRoot == "" {
 		return nil
@@ -60,6 +80,13 @@ func readPluginMCPServerConfigs(pluginRoot string) map[string]map[string]any {
 		data, err := os.ReadFile(filepath.Join(pluginRoot, name))
 		if err != nil {
 			continue
+		}
+		if name == "mcp.json" {
+			if outcome, parseErr := ParseAgentPluginMCPConfig(string(data), pluginRoot, pluginDataRoot); parseErr == nil && outcome != nil {
+				// Agent Plugins v1 mcp.json: keep valid sibling servers and drop
+				// per-server parse errors (best-effort contribution loading).
+				return outcome.Servers
+			}
 		}
 		var payload struct {
 			MCPServers map[string]map[string]any `json:"mcpServers"`

@@ -166,6 +166,7 @@ type ModelInfo struct {
 	BaseInstructions               string           `json:"base_instructions"`
 	ModelMessages                  *ModelMessages   `json:"model_messages"`
 	IncludeSkillsUsageInstructions bool             `json:"include_skills_usage_instructions"`
+	IncludePluginUsageInstructions bool             `json:"include_plugin_usage_instructions"`
 	SupportsReasoningSummaries     bool             `json:"supports_reasoning_summaries"`
 	DefaultReasoningSummary        string           `json:"default_reasoning_summary"`
 	SupportVerbosity               bool             `json:"support_verbosity"`
@@ -207,6 +208,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		BaseInstructions               string              `json:"base_instructions"`
 		ModelMessages                  *ModelMessages      `json:"model_messages"`
 		IncludeSkillsUsageInstructions bool                `json:"include_skills_usage_instructions"`
+		IncludePluginUsageInstructions bool                `json:"include_plugin_usage_instructions"`
 		SupportsReasoningSummaries     bool                `json:"supports_reasoning_summaries"`
 		DefaultReasoningSummary        string              `json:"default_reasoning_summary"`
 		SupportVerbosity               bool                `json:"support_verbosity"`
@@ -244,6 +246,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		BaseInstructions:               raw.BaseInstructions,
 		ModelMessages:                  raw.ModelMessages,
 		IncludeSkillsUsageInstructions: raw.IncludeSkillsUsageInstructions,
+		IncludePluginUsageInstructions: raw.IncludePluginUsageInstructions,
 		SupportsReasoningSummaries:     raw.SupportsReasoningSummaries,
 		DefaultReasoningSummary:        raw.DefaultReasoningSummary,
 		SupportVerbosity:               raw.SupportVerbosity,
@@ -783,14 +786,44 @@ func WithConfigOverrides(model ModelInfo, config *ModelsManagerConfig) ModelInfo
 	}
 	if config.BaseInstructions != "" {
 		model.BaseInstructions = config.BaseInstructions
-		clearInstructionMessages(&model)
+		setInstructionsTemplate(&model, config.BaseInstructions)
 	} else if !config.PersonalityEnabled {
-		clearInstructionMessages(&model)
+		usesLocalPersonalityTemplate := model.UsedFallbackModelMetadata &&
+			(model.Slug == "gpt-5.2-codex" || model.Slug == "exp-codex-personality")
+		if usesLocalPersonalityTemplate {
+			setInstructionsTemplate(&model, BaseInstructions)
+		} else if messages := model.ModelMessages; messages != nil && strings.TrimSpace(messages.InstructionsTemplate) != "" {
+			personalityDefault, _ := messages.PersonalityMessage("")
+			setInstructionsTemplate(&model, strings.ReplaceAll(messages.InstructionsTemplate, personalityPlaceholder, personalityDefault))
+		} else {
+			clearInstructionVariables(&model)
+		}
 	}
 	return model
 }
 
-func clearInstructionMessages(model *ModelInfo) {
+// setInstructionsTemplate mirrors Rust's model_messages.instructions_template
+// override: the template becomes the sole instruction source and any
+// personality variables are cleared while the remaining message fields
+// (approvals, collaboration modes, token budget, ...) are preserved
+// (Rust df72fdb415).
+func setInstructionsTemplate(model *ModelInfo, template string) {
+	if model == nil || model.ModelMessages == nil {
+		if model == nil {
+			return
+		}
+		model.ModelMessages = &ModelMessages{}
+	}
+	messages := model.ModelMessages
+	messages.InstructionsTemplate = template
+	messages.PersonalityDefault = ""
+	messages.PersonalityFriendly = ""
+	messages.PersonalityPragmatic = ""
+}
+
+// clearInstructionVariables removes the personality instruction source while
+// preserving non-instruction message fields.
+func clearInstructionVariables(model *ModelInfo) {
 	if model == nil || model.ModelMessages == nil {
 		return
 	}

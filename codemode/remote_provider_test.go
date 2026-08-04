@@ -25,6 +25,78 @@ type recordingRemoteDelegate struct {
 	notifies []string
 }
 
+func TestRemoteConnectionStalledRequestTimesOutAndInvalidatesConnection(t *testing.T) {
+	withShortHostWaitTimeout(t, func() {
+		connection := newRemoteConnection(&stalledRemoteTransport{})
+		_, err := connection.withTransportDeadline(0, "wait", func(ctx context.Context) (HostResponse, error) {
+			return connection.Request(ctx, WaitSessionRequest("s", WaitRequest{CellID: "c"}))
+		})
+		if !errors.Is(err, errCodeModeHostRequestTimeout) {
+			t.Fatalf("error = %v, want errCodeModeHostRequestTimeout", err)
+		}
+		if connection.Alive() {
+			t.Fatal("connection still alive after a stalled request timed out")
+		}
+	})
+}
+
+func TestRemoteSessionTerminateStalledTimesOutAndInvalidatesSession(t *testing.T) {
+	withShortHostWaitTimeout(t, func() {
+		connection := newRemoteConnection(&stalledRemoteTransport{})
+		session := &remoteSession{
+			provider: &fakeRemoteSessionProvider{connection: connection},
+			delegate: &recordingRemoteDelegate{},
+			id:       "session-timeout",
+		}
+		session.mu.Lock()
+		session.openedOn = connection
+		session.mu.Unlock()
+
+		_, err := session.Terminate(context.Background(), "cell-timeout")
+		if !errors.Is(err, errCodeModeHostRequestTimeout) {
+			t.Fatalf("Terminate() error = %v, want errCodeModeHostRequestTimeout", err)
+		}
+		session.mu.Lock()
+		openedOn := session.openedOn
+		session.mu.Unlock()
+		if openedOn != nil {
+			t.Fatalf("session still bound to the dead connection: %#v", openedOn)
+		}
+		if connection.Alive() {
+			t.Fatal("connection still alive after terminate stalled")
+		}
+	})
+}
+
+// stalledRemoteTransport never delivers host frames; reads block until the
+// context is cancelled. Write/Close are no-ops.
+type stalledRemoteTransport struct{}
+
+func (t *stalledRemoteTransport) Read(ctx context.Context, target any) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+func (t *stalledRemoteTransport) Write(_ context.Context, _ any) error { return nil }
+
+func (t *stalledRemoteTransport) Close() error { return nil }
+
+type fakeRemoteSessionProvider struct {
+	connection *remoteConnection
+}
+
+func (p *fakeRemoteSessionProvider) connect(context.Context) (*remoteConnection, error) {
+	return p.connection, nil
+}
+
+func withShortHostWaitTimeout(t *testing.T, fn func()) {
+	t.Helper()
+	previous := defaultHostWaitTransportTimeout
+	defaultHostWaitTransportTimeout = 60 * time.Millisecond
+	defer func() { defaultHostWaitTransportTimeout = previous }()
+	fn()
+}
+
 func (d *recordingRemoteDelegate) Invoke(_ context.Context, call tool.CodeModeRemoteNestedCall) (json.RawMessage, error) {
 	d.mu.Lock()
 	d.calls = append(d.calls, call)

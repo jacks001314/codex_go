@@ -6550,9 +6550,15 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 		return strings.TrimSpace(instructions)
 	}
 	sections := []string{}
-	available := contextfrag.Render(contextfrag.NewAvailablePluginsInstructions(contextPluginSummaries(capabilities)))
-	if available != nil && strings.TrimSpace(available.Content) != "" {
-		sections = append(sections, available.Content)
+	// Generic plugin usage guidance is gated by the selected model's capability
+	// (Rust e4e0c7070e): codex-auto-review and other opted-out models still get
+	// explicit-mention injections below, but not the blanket guidance.
+	modelInfo := r.modelInfoForRuntimeWithConfig(params.Model, cfg)
+	if modelInfo == nil || modelInfo.IncludePluginUsageInstructions {
+		available := contextfrag.Render(contextfrag.NewAvailablePluginsInstructions(contextPluginSummaries(capabilities)))
+		if available != nil && strings.TrimSpace(available.Content) != "" {
+			sections = append(sections, available.Content)
+		}
 	}
 	mentioned := plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities)
 	if len(mentioned) > 0 {

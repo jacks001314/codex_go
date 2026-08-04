@@ -610,19 +610,44 @@ func TestWithConfigOverrides(t *testing.T) {
 	if updated.BaseInstructions != "custom instructions" {
 		t.Fatalf("BaseInstructions = %q", updated.BaseInstructions)
 	}
-	if updated.ModelMessages != nil {
-		t.Fatal("ModelMessages should be cleared when base instructions override is present")
+	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "custom instructions" {
+		t.Fatalf("ModelMessages = %#v, want instructions_template = custom instructions", updated.ModelMessages)
+	}
+	if updated.ModelMessages.PersonalityDefault != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
+		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
 	}
 }
 
-func TestPersonalityDisabledClearsModelMessages(t *testing.T) {
+func TestPersonalityDisabledFallsBackToBaseInstructionsForLocalPersonalityModels(t *testing.T) {
 	model := ModelInfoFromSlug("gpt-5.2-codex")
 	if model.ModelMessages == nil {
 		t.Fatal("ModelMessages is nil before override")
 	}
 	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
-	if updated.ModelMessages != nil {
-		t.Fatal("ModelMessages should be cleared")
+	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != BaseInstructions {
+		t.Fatalf("ModelMessages = %#v, want instructions_template = BaseInstructions", updated.ModelMessages)
+	}
+	if updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
+		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
+	}
+}
+
+func TestPersonalityDisabledRendersDefaultPersonalityIntoTemplate(t *testing.T) {
+	model := ModelInfo{
+		BaseInstructions: "base",
+		ModelMessages: &ModelMessages{
+			InstructionsTemplate: "Hello {{ personality }}",
+			PersonalityDefault:   "default",
+			PersonalityFriendly:  "friendly",
+			PersonalityPragmatic: "pragmatic",
+		},
+	}
+	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
+	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "Hello default" {
+		t.Fatalf("ModelMessages = %#v, want instructions_template = %q", updated.ModelMessages, "Hello default")
+	}
+	if updated.ModelMessages.PersonalityDefault != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
+		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
 	}
 }
 
@@ -630,11 +655,12 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 	defaultInstructions := "catalog default"
 	planInstructions := "catalog plan"
 	for _, test := range []struct {
-		name   string
-		config *ModelsManagerConfig
+		name                 string
+		config               *ModelsManagerConfig
+		wantInstructionsTmpl string
 	}{
-		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: "override", PersonalityEnabled: true}},
-		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}},
+		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: "override", PersonalityEnabled: true}, wantInstructionsTmpl: "override"},
+		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}, wantInstructionsTmpl: "Hello "},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			info := ModelInfo{
@@ -653,8 +679,11 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 			if updated.ModelMessages == nil || updated.ModelMessages.CollaborationModes == nil || updated.ModelMessages.CollaborationModes.Default == nil || *updated.ModelMessages.CollaborationModes.Default != defaultInstructions || updated.ModelMessages.CollaborationModes.Plan == nil || *updated.ModelMessages.CollaborationModes.Plan != planInstructions {
 				t.Fatalf("collaboration messages were not preserved: %#v", updated.ModelMessages)
 			}
-			if updated.ModelMessages.InstructionsTemplate != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
-				t.Fatalf("instruction messages were not cleared: %#v", updated.ModelMessages)
+			if updated.ModelMessages.InstructionsTemplate != test.wantInstructionsTmpl {
+				t.Fatalf("instructions_template = %q, want %q", updated.ModelMessages.InstructionsTemplate, test.wantInstructionsTmpl)
+			}
+			if updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
+				t.Fatalf("personality variables were not cleared: %#v", updated.ModelMessages)
 			}
 		})
 	}
