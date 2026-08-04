@@ -47,6 +47,7 @@ type ServerConfig struct {
 	Required                 bool                              `json:"required,omitempty"`
 	EnabledTools             []string                          `json:"enabled_tools,omitempty"`
 	DisabledTools            []string                          `json:"disabled_tools,omitempty"`
+	OmitToolsFrom            []string                          `json:"omit_tools_from,omitempty"`
 	DefaultToolsApprovalMode *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
 	Tools                    map[string]ToolConfig             `json:"tools,omitempty"`
 	EnvironmentID            string                            `json:"environment_id,omitempty"`
@@ -370,6 +371,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	server.ToolTimeout = runtimeConfigDurationAny(values, "tool_timeout_sec", "toolTimeoutSec", "tool_timeout_ms", "toolTimeoutMs")
 	server.EnabledTools = runtimeConfigStringSliceAny(values, "enabled_tools", "enabledTools")
 	server.DisabledTools = runtimeConfigStringSliceAny(values, "disabled_tools", "disabledTools")
+	server.OmitToolsFrom = runtimeConfigStringSliceAny(values, "omit_tools_from", "omitToolsFrom")
 	server.DefaultToolsApprovalMode = runtimeConfigAppToolApproval(values, "default_tools_approval_mode", "defaultToolsApprovalMode")
 	server.Tools = runtimeConfigToolsMap(values, "tools")
 	if url := runtimeConfigString(values, "url"); url != "" {
@@ -1007,6 +1009,7 @@ func cloneServerConfig(config *ServerConfig) ServerConfig {
 	cloned.Args = append([]string(nil), config.Args...)
 	cloned.EnvVars = append([]EnvVar(nil), config.EnvVars...)
 	cloned.Scopes = append([]string(nil), config.Scopes...)
+	cloned.OmitToolsFrom = append([]string(nil), config.OmitToolsFrom...)
 	if config.Env != nil {
 		cloned.Env = make(map[string]string, len(config.Env))
 		for key, value := range config.Env {

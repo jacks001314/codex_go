@@ -87,6 +87,42 @@ func TestRegistryDirectModelOnlySpecsAreVisibleButNotDiscoverable(t *testing.T) 
 	}
 }
 
+func TestRegistryPerSurfaceExposureValues(t *testing.T) {
+	registry := NewRegistry()
+	register := func(name string, exposure Exposure) {
+		t.Helper()
+		if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName(name), Exposure: exposure, Search: &SearchInfo{Text: name}}, noopExecutor)); err != nil {
+			t.Fatalf("register %s: %v", name, err)
+		}
+	}
+	register("deferred_only", ExposureDeferredModelOnly)
+	register("code_only", ExposureCodeModeOnly)
+	register("normal", ExposureModelVisible)
+
+	visible := registry.ModelVisibleSpecs()
+	if len(visible) != 1 || visible[0].Name.Key() != "normal" {
+		t.Fatalf("model-visible = %#v, want only normal", specKeys(visible))
+	}
+	discoverable := registry.DiscoverableSpecs()
+	if len(discoverable) != 1 || discoverable[0].Name.Key() != "deferred_only" {
+		t.Fatalf("discoverable = %#v, want only deferred_only", specKeys(discoverable))
+	}
+	if !IsDeferred(ExposureDeferredModelOnly) || IsDeferred(ExposureCodeModeOnly) {
+		t.Fatalf("IsDeferred(deferred_model_only)=%t IsDeferred(code_mode_only)=%t", IsDeferred(ExposureDeferredModelOnly), IsDeferred(ExposureCodeModeOnly))
+	}
+	if !IsCodeModeAvailable(ExposureCodeModeOnly) || IsCodeModeAvailable(ExposureDeferredModelOnly) || IsCodeModeAvailable(ExposureDirectModelOnly) {
+		t.Fatalf("IsCodeModeAvailable(code_mode_only)=%t (deferred_model_only)=%t (direct_model_only)=%t", IsCodeModeAvailable(ExposureCodeModeOnly), IsCodeModeAvailable(ExposureDeferredModelOnly), IsCodeModeAvailable(ExposureDirectModelOnly))
+	}
+}
+
+func specKeys(specs []Spec) []string {
+	out := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, spec.Name.Key())
+	}
+	return out
+}
+
 func TestRegistryRegisterExternalReservesPlainShellCommandLikeRust(t *testing.T) {
 	registry := NewRegistry()
 	plain, err := registry.RegisterExternal(NewExecutorFunc(Spec{Name: PlainName(DefaultShellCommandToolName)}, noopExecutor))

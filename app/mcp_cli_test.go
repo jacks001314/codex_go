@@ -441,6 +441,7 @@ startup_timeout_sec = 1.5
 tool_timeout_sec = 2
 enabled_tools = ["read"]
 disabled_tools = ["write"]
+omit_tools_from = ["code_mode", "deferred"]
 default_tools_approval_mode = "approve"
 required = true
 supports_parallel_tool_calls = true
@@ -508,6 +509,7 @@ approval_mode = "prompt"
 	for _, want := range []string{
 		"enabled_tools: read",
 		"disabled_tools: write",
+		"omit_tools_from: code_mode, deferred",
 		"transport: stdio",
 		"cwd: /workspace",
 		"env: HOME=*****, TOKEN=*****, APP_TOKEN=*****, REMOTE_TOKEN=*****",

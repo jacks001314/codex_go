@@ -2,6 +2,7 @@ package history
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,25 @@ func TestAppendSkipsPersistenceNone(t *testing.T) {
 	}
 	if _, err := os.Stat(config.HistoryPath()); !os.IsNotExist(err) {
 		t.Fatalf("history file exists or unexpected err: %v", err)
+	}
+}
+
+func TestAppendMessageHistoryLongEntryBeyondScannerDefaultLimit(t *testing.T) {
+	// A single history entry can exceed bufio.Scanner's default 64KB token
+	// limit. Trimming and lookup must keep working.
+	maxBytes := 100
+	config := NewMessageHistoryConfig(t.TempDir(), MessageHistoryPersistenceSaveAll, &maxBytes)
+	longText := strings.Repeat("x", 256*1024)
+	if err := AppendMessageHistoryEntry(longText, "session-1", config); err != nil {
+		t.Fatalf("AppendMessageHistoryEntry() error = %v", err)
+	}
+	logID, count := MessageHistoryMetadata(config)
+	if count != 1 {
+		t.Fatalf("MessageHistoryMetadata() count = %d, want 1", count)
+	}
+	entry, ok := LookupMessageHistoryEntry(logID, 0, config)
+	if !ok || entry.Text != longText {
+		t.Fatalf("LookupMessageHistoryEntry() ok=%v textLen=%d, want %d", ok, len(entry.Text), len(longText))
 	}
 }
 

@@ -149,7 +149,7 @@ func toolSpecsFromJSONValue(value any) ([]tool.Spec, bool) {
 }
 
 func responsesToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
-	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Exposure == tool.ExposureDiscoverable {
+	if spec == nil || !tool.IsModelVisible(spec.Exposure) {
 		return nil, false
 	}
 	name := tool.ResponsesAPIName(spec.Name)
@@ -201,7 +201,7 @@ func responsesLoadableToolFromSpec(spec *tool.Spec) (map[string]any, bool) {
 }
 
 func isResponsesNamespaceTool(spec *tool.Spec) bool {
-	if spec == nil || spec.Exposure == tool.ExposureHidden || spec.Exposure == tool.ExposureDiscoverable {
+	if spec == nil || !tool.IsModelVisible(spec.Exposure) {
 		return false
 	}
 	if strings.TrimSpace(spec.Name.Namespace) == "" {

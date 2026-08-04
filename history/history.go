@@ -123,6 +123,7 @@ func Lookup(logID uint64, offset int, config *Config) (*Entry, bool) {
 		return nil, false
 	}
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	index := 0
 	for scanner.Scan() {
 		if index == offset {

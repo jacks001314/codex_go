@@ -1614,6 +1614,13 @@ func (s *MCPService) serverConfig(name string) (ServerConfig, bool) {
 	return cloneServerConfig(&config), true
 }
 
+// ServerConfigForServer returns the effective runtime configuration for an
+// enabled server. It mirrors Rust's mcp_server_catalog.server() lookup used to
+// apply per-server tool exposure policies (Rust 51c9ed6d4f).
+func (s *MCPService) ServerConfigForServer(name string) (ServerConfig, bool) {
+	return s.serverConfig(name)
+}
+
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string) (*stdioInventory, error) {
 	roots := s.rootsForThread(threadID)
 	if config != nil && strings.TrimSpace(config.URL) != "" {
@@ -1691,6 +1698,7 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	cloned.Required = false
 	cloned.EnabledTools = nil
 	cloned.DisabledTools = nil
+	cloned.OmitToolsFrom = nil
 	cloned.DefaultToolsApprovalMode = nil
 	cloned.Tools = nil
 	cloned.StartupTimeout = 0

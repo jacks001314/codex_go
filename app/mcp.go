@@ -55,6 +55,7 @@ type mcpCLIServer struct {
 	ToolTimeoutSec            *float64                  `json:"tool_timeout_sec,omitempty"`
 	EnabledTools              []string                  `json:"enabled_tools,omitempty"`
 	DisabledTools             []string                  `json:"disabled_tools,omitempty"`
+	OmitToolsFrom             []string                  `json:"omit_tools_from,omitempty"`
 	Scopes                    []string                  `json:"scopes,omitempty"`
 	DefaultToolsApprovalMode  string                    `json:"default_tools_approval_mode,omitempty"`
 	Tools                     map[string]map[string]any `json:"tools,omitempty"`
@@ -82,6 +83,7 @@ type mcpGetJSONEntry struct {
 	Transport         map[string]any `json:"transport"`
 	EnabledTools      any            `json:"enabled_tools"`
 	DisabledTools     any            `json:"disabled_tools"`
+	OmitToolsFrom     any            `json:"omit_tools_from"`
 	StartupTimeoutSec *float64       `json:"startup_timeout_sec"`
 	ToolTimeoutSec    *float64       `json:"tool_timeout_sec"`
 }
@@ -189,6 +191,7 @@ func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 			Transport:         mcpServerTransportJSON(server),
 			EnabledTools:      stringSliceJSONValue(server.EnabledTools),
 			DisabledTools:     stringSliceJSONValue(server.DisabledTools),
+			OmitToolsFrom:     stringSliceJSONValue(server.OmitToolsFrom),
 			StartupTimeoutSec: cloneFloat64Ptr(server.StartupTimeoutSec),
 			ToolTimeoutSec:    cloneFloat64Ptr(server.ToolTimeoutSec),
 		}
@@ -211,6 +214,9 @@ func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 	}
 	if server.DisabledTools != nil {
 		fmt.Fprintf(stdout, "  disabled_tools: %s\n", mcpServerToolListDisplay(server.DisabledTools))
+	}
+	if len(server.OmitToolsFrom) > 0 {
+		fmt.Fprintf(stdout, "  omit_tools_from: %s\n", mcpServerToolListDisplay(server.OmitToolsFrom))
 	}
 	fmt.Fprintf(stdout, "  transport: %s\n", mcpServerTransportLabel(server))
 	if server.Type == "streamable_http" {
@@ -929,6 +935,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 	server.DefaultToolsApprovalMode = stringFromAny(table["default_tools_approval_mode"])
 	server.EnabledTools = stringSliceFromAny(table["enabled_tools"])
 	server.DisabledTools = stringSliceFromAny(table["disabled_tools"])
+	server.OmitToolsFrom = stringSliceFromAny(table["omit_tools_from"])
 	server.Scopes = stringSliceFromAny(table["scopes"])
 	server.Tools = nestedAnyMapFromAny(table["tools"])
 	if url := stringFromAny(table["url"]); url != "" {
@@ -1019,6 +1026,9 @@ func mcpServerAddSharedConfigValue(value map[string]any, server *mcpCLIServer) {
 	}
 	if len(server.DisabledTools) > 0 {
 		value["disabled_tools"] = stringSliceToAnySlice(server.DisabledTools)
+	}
+	if len(server.OmitToolsFrom) > 0 {
+		value["omit_tools_from"] = stringSliceToAnySlice(server.OmitToolsFrom)
 	}
 	if len(server.Scopes) > 0 {
 		value["scopes"] = stringSliceToAnySlice(server.Scopes)

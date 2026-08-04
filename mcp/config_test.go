@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
 	"strings"
@@ -296,6 +297,37 @@ func TestRuntimeConfigFromValuesAcceptsCamelCaseAliases(t *testing.T) {
 	stdio := runtime.Servers["stdio"].Config
 	if stdio.Command != "mcp-stdio" || stdio.Env["DOCS_TOKEN"] != "secret" {
 		t.Fatalf("stdio env aliases = %#v", stdio)
+	}
+}
+
+func TestRuntimeConfigFromValuesParsesOmitToolsFrom(t *testing.T) {
+	runtime := RuntimeConfigFromValues(map[string]any{
+		"mcp_servers": map[string]any{
+			"snake": map[string]any{
+				"command":         "mcp-snake",
+				"omit_tools_from": []any{"code_mode", "deferred"},
+			},
+			"camel": map[string]any{
+				"url":            "https://mcp-camel.example.test",
+				"omitToolsFrom":  []any{"direct"},
+				"enabled":        true,
+			},
+		},
+	}, "/codex/home")
+	snake := runtime.Servers["snake"].Config
+	if !reflect.DeepEqual(snake.OmitToolsFrom, []string{"code_mode", "deferred"}) {
+		t.Fatalf("snake omit_tools_from = %#v", snake.OmitToolsFrom)
+	}
+	camel := runtime.Servers["camel"].Config
+	if !reflect.DeepEqual(camel.OmitToolsFrom, []string{"direct"}) {
+		t.Fatalf("camel omitToolsFrom = %#v", camel.OmitToolsFrom)
+	}
+	encoded, err := json.Marshal(snake)
+	if err != nil {
+		t.Fatalf("marshal server config: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"omit_tools_from":["code_mode","deferred"]`) {
+		t.Fatalf("serialized config missing omit_tools_from: %s", encoded)
 	}
 }
 

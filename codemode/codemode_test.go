@@ -141,6 +141,24 @@ func TestBuildToolSurfaceFromRegistry(t *testing.T) {
 	}
 }
 
+func TestBuildToolSurfacePerSurfaceExposureValues(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("code_only"), Description: "Code mode only tool", Exposure: tool.ExposureCodeModeOnly}, nil)); err != nil {
+		t.Fatalf("register code_only: %v", err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("deferred_only"), Description: "Deferred model only tool", Exposure: tool.ExposureDeferredModelOnly, Search: &tool.SearchInfo{Text: "deferred only"}}, nil)); err != nil {
+		t.Fatalf("register deferred_only: %v", err)
+	}
+
+	surface := BuildToolSurface(registry, nil, true)
+	if !surface.DeferredToolsAvailable {
+		t.Fatal("deferred tools should be announced")
+	}
+	if len(surface.Definitions) != 1 || surface.Definitions[0].Name != "code_only" {
+		t.Fatalf("definitions = %#v, want only code_only", surface.Definitions)
+	}
+}
+
 func TestWaitParams(t *testing.T) {
 	params, err := ParseWaitParams(`{"cell_id":"cell-a","yield_time_ms":10,"max_tokens":20}`)
 	if err != nil {

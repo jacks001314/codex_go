@@ -500,7 +500,7 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 			continue
 		}
 		spec, ok := registry.Spec(name)
-		if !ok || spec.Exposure == ExposureDirectModelOnly || (spec.Exposure == ExposureHidden && name.Key() != nestedCommandTool.Key()) {
+		if !ok || spec.Exposure == ExposureDirectModelOnly || spec.Exposure == ExposureDeferredModelOnly || (spec.Exposure == ExposureHidden && name.Key() != nestedCommandTool.Key()) {
 			continue
 		}
 		globalName := codeModeIdentifier(ResponsesAPIName(name))
@@ -1262,6 +1262,11 @@ func codeModeToolResult(output *Output) map[string]any {
 	result["body"] = output.Body
 	result["error"] = output.Error
 	for key, value := range output.Data {
+		// MCP result metadata is private to clients and must not reach Code
+		// Mode (Rust 51c9ed6d4f).
+		if key == "_meta" {
+			continue
+		}
 		result[key] = value
 	}
 	result["output"] = normalizeNestedExecOutput(output.Body)

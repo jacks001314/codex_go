@@ -804,6 +804,93 @@ func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryAppliesPerServerOmitToolsFrom(t *testing.T) {
+	newOptions := func(searchEnabled bool) *ToolRegistryOptions {
+		options := DefaultToolRegistryOptions(t.TempDir())
+		options.EnableCore = false
+		options.EnableShell = false
+		options.EnableApplyPatch = false
+		options.EnableAgents = false
+		options.EnableToolSearch = searchEnabled
+		service := mcp.NewMCPService(nil)
+		service.SetServerConfig("calendar", &mcp.ServerConfig{Enabled: true, OmitToolsFrom: []string{"code_mode"}})
+		service.SetServerConfig("drive", &mcp.ServerConfig{Enabled: true, OmitToolsFrom: []string{"deferred", "code_mode"}})
+		service.SetServerConfig("notes", &mcp.ServerConfig{Enabled: true, OmitToolsFrom: []string{"direct"}})
+		options.MCPService = service
+		options.MCPTools = []mcp.RuntimeToolInfo{
+			{ServerName: "calendar", Tool: mcp.RuntimeTool{Name: "create_event", Description: "Calendar events"}},
+			{ServerName: "drive", Tool: mcp.RuntimeTool{Name: "create_doc", Description: "Drive docs"}},
+			{ServerName: "notes", Tool: mcp.RuntimeTool{Name: "list", Description: "Notes list"}},
+		}
+		return options
+	}
+	specByName := func(registry *tool.Registry, name string) (tool.Spec, bool) {
+		return registry.Spec(tool.NamespacedName("mcp__"+name, "create_event"))
+	}
+
+	t.Run("tool search enabled", func(t *testing.T) {
+		registry, err := BuildToolRegistry(newOptions(true))
+		if err != nil {
+			t.Fatalf("BuildToolRegistry() error = %v", err)
+		}
+		calendar, _ := specByName(registry, "calendar")
+		drive, ok := registry.Spec(tool.NamespacedName("mcp__drive", "create_doc"))
+		if !ok {
+			t.Fatal("drive tool missing")
+		}
+		notes, ok := registry.Spec(tool.NamespacedName("mcp__notes", "list"))
+		if !ok {
+			t.Fatal("notes tool missing")
+		}
+		// calendar omits code_mode: deferred + code_mode -> discoverable but not
+		// nested-callable nor model-visible.
+		if calendar.Exposure != tool.ExposureDeferredModelOnly {
+			t.Fatalf("calendar exposure = %q, want deferred_model_only", calendar.Exposure)
+		}
+		// drive omits deferred + code_mode: direct only.
+		if drive.Exposure != tool.ExposureDirectModelOnly {
+			t.Fatalf("drive exposure = %q, want direct_model_only", drive.Exposure)
+		}
+		// notes omits direct: discoverable + code_mode.
+		if notes.Exposure != tool.ExposureDiscoverable {
+			t.Fatalf("notes exposure = %q, want discoverable", notes.Exposure)
+		}
+		visible := specKeySet(registry.ModelVisibleSpecs())
+		if !visible["mcp__drive.create_doc"] || visible["mcp__calendar.create_event"] || visible["mcp__notes.list"] {
+			t.Fatalf("model-visible = %#v, want drive but not calendar/notes", visible)
+		}
+		if discoverable := registry.DiscoverableSpecs(); len(discoverable) != 2 {
+			t.Fatalf("discoverable = %#v, want calendar and notes", specKeySet(discoverable))
+		}
+	})
+
+	t.Run("tool search disabled", func(t *testing.T) {
+		registry, err := BuildToolRegistry(newOptions(false))
+		if err != nil {
+			t.Fatalf("BuildToolRegistry() error = %v", err)
+		}
+		calendar, _ := specByName(registry, "calendar")
+		drive, _ := registry.Spec(tool.NamespacedName("mcp__drive", "create_doc"))
+		notes, _ := registry.Spec(tool.NamespacedName("mcp__notes", "list"))
+		if calendar.Exposure != tool.ExposureDirectModelOnly {
+			t.Fatalf("calendar exposure = %q, want direct_model_only", calendar.Exposure)
+		}
+		if drive.Exposure != tool.ExposureDirectModelOnly {
+			t.Fatalf("drive exposure = %q, want direct_model_only", drive.Exposure)
+		}
+		if notes.Exposure != tool.ExposureCodeModeOnly {
+			t.Fatalf("notes exposure = %q, want code_mode_only", notes.Exposure)
+		}
+		visible := specKeySet(registry.ModelVisibleSpecs())
+		if !visible["mcp__calendar.create_event"] || !visible["mcp__drive.create_doc"] || visible["mcp__notes.list"] {
+			t.Fatalf("model-visible = %#v, want calendar and drive but not notes", visible)
+		}
+		if discoverable := registry.DiscoverableSpecs(); len(discoverable) != 0 {
+			t.Fatalf("discoverable = %#v, want none", specKeySet(discoverable))
+		}
+	})
+}
+
 func TestBuildToolRegistryOmitsDeferredSourcesFromSearchDescription(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false

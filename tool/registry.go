@@ -23,9 +23,44 @@ type Exposure string
 const (
 	ExposureModelVisible    Exposure = "model_visible"
 	ExposureDirectModelOnly Exposure = "direct_model_only"
+	ExposureDeferredModelOnly Exposure = "deferred_model_only"
+	ExposureCodeModeOnly    Exposure = "code_mode_only"
 	ExposureHidden          Exposure = "hidden"
 	ExposureDiscoverable    Exposure = "discoverable"
 )
+
+// IsCodeModeAvailable reports whether a tool with the given exposure may be
+// called from nested Code Mode scripts (Rust ToolExposure::is_available_in_code_mode).
+func IsCodeModeAvailable(exposure Exposure) bool {
+	switch exposure {
+	case "", ExposureModelVisible, ExposureDiscoverable, ExposureCodeModeOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsDeferred reports whether a tool with the given exposure is discoverable
+// through tool search (Rust ToolExposure::is_deferred).
+func IsDeferred(exposure Exposure) bool {
+	switch exposure {
+	case ExposureDiscoverable, ExposureDeferredModelOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsModelVisible reports whether a tool with the given exposure appears in the
+// model's initial tool list.
+func IsModelVisible(exposure Exposure) bool {
+	switch exposure {
+	case "", ExposureModelVisible, ExposureDirectModelOnly:
+		return true
+	default:
+		return false
+	}
+}
 
 type ToolName struct {
 	Namespace string `json:"namespace,omitempty"`
@@ -276,7 +311,7 @@ func (r *Registry) ModelVisibleSpecs() []Spec {
 	out := make([]Spec, 0, len(r.specs))
 	for _, key := range r.order {
 		spec := r.specs[key]
-		if spec.Exposure == "" || spec.Exposure == ExposureModelVisible || spec.Exposure == ExposureDirectModelOnly {
+		if IsModelVisible(spec.Exposure) {
 			out = append(out, spec)
 		}
 	}
@@ -289,7 +324,7 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	out := make([]Spec, 0, len(r.specs))
 	for _, key := range r.order {
 		spec := r.specs[key]
-		if spec.Exposure == ExposureDiscoverable {
+		if IsDeferred(spec.Exposure) {
 			out = append(out, spec)
 		}
 	}

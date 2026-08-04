@@ -170,7 +170,7 @@ func BuildToolSurface(registry *tool.Registry, namespaces map[string]NamespaceDe
 			if spec.Exposure == tool.ExposureHidden {
 				continue
 			}
-			if spec.Exposure == tool.ExposureDiscoverable {
+			if tool.IsDeferred(spec.Exposure) {
 				deferred = true
 				continue
 			}

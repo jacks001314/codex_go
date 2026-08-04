@@ -38,7 +38,7 @@ func NewToolSearchHandler(specs []Spec) *ToolSearchHandler {
 func NewToolSearchHandlerWithOptions(specs []Spec, omitSources bool) *ToolSearchHandler {
 	searchable := make([]Spec, 0, len(specs))
 	for _, spec := range specs {
-		if spec.Exposure != ExposureDiscoverable {
+		if !IsDeferred(spec.Exposure) {
 			continue
 		}
 		searchable = append(searchable, cloneSpec(spec))

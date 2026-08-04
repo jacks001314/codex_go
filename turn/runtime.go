@@ -290,7 +290,7 @@ func augmentCodeModeWinnerSpecs(specs []tool.Spec, nestedSpecs []tool.Spec) []to
 func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {
 	out := make([]tool.Spec, 0, len(specs))
 	for _, spec := range specs {
-		if spec.Exposure == tool.ExposureDirectModelOnly || !codemode.IsNestedTool(codemode.NameForToolName(spec.Name)) {
+		if (spec.Exposure == tool.ExposureDirectModelOnly || spec.Exposure == tool.ExposureDeferredModelOnly) || !codemode.IsNestedTool(codemode.NameForToolName(spec.Name)) {
 			out = append(out, spec)
 		}
 	}
@@ -302,7 +302,7 @@ func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Sp
 	deferredSpecs := make([]tool.Spec, 0)
 	namespaces := map[string]codemode.NamespaceDescription{}
 	for _, spec := range nestedSpecs {
-		if spec.Exposure == tool.ExposureDiscoverable {
+		if tool.IsDeferred(spec.Exposure) {
 			deferredSpecs = append(deferredSpecs, spec)
 			continue
 		}

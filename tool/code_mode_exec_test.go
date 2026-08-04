@@ -679,6 +679,52 @@ func TestCodeModeToolNamesMatchActualNestedTools(t *testing.T) {
 	}
 }
 
+func TestCodeModeNestedToolsPerSurfaceExposure(t *testing.T) {
+	registry := NewRegistry()
+	register := func(name string, exposure Exposure) {
+		t.Helper()
+		if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName(name), Exposure: exposure}, func(context.Context, *Invocation) (*Output, error) {
+			return &Output{Success: true}, nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register("code_only", ExposureCodeModeOnly)
+	register("deferred_only", ExposureDeferredModelOnly)
+	exec, wait := NewCodeModeExecutors(registry, PlainName(DefaultExecCommandToolName))
+	if err := registry.Register(exec); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(wait); err != nil {
+		t.Fatal(err)
+	}
+	names := NewRouter(registry).CodeModeToolNames()
+	if _, ok := names["code_only"]; !ok {
+		t.Fatalf("code_mode_only tool missing from nested tools: %#v", names)
+	}
+	if _, ok := names["deferred_only"]; ok {
+		t.Fatalf("deferred_model_only tool should not be nested-callable: %#v", names)
+	}
+}
+
+func TestCodeModeToolResultStripsMeta(t *testing.T) {
+	result := codeModeToolResult(&Output{
+		Success: true,
+		Body:    "hello",
+		Data: map[string]any{
+			"_meta":       map[string]any{"trace": "x"},
+			"mcpToolCall": true,
+			"content":     []any{},
+		},
+	})
+	if _, ok := result["_meta"]; ok {
+		t.Fatalf("result leaks _meta: %#v", result)
+	}
+	if result["mcpToolCall"] != true {
+		t.Fatalf("non-meta data lost: %#v", result)
+	}
+}
+
 func TestCodeModeNormalizedToolNameCollisionKeepsFirstRegisteredTool(t *testing.T) {
 	registry := NewRegistry()
 	for _, spec := range []Spec{

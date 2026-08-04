@@ -330,10 +330,79 @@ func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) err
 		return registerMCPToolSet(registry, options, options.MCPTools, options.MCPExposure)
 	}
 	exposure := mcp.BuildRuntimeExposure(options.MCPTools, options.MCPConnectors, options.EnableToolSearch)
-	if err := registerMCPToolSet(registry, options, exposure.DirectTools, tool.ExposureModelVisible); err != nil {
-		return err
+	// BuildRuntimeExposure returns either the direct or the deferred tool set
+	// depending on tool search, never both. Union them and apply Rust's
+	// per-server omit_tools_from policy (51c9ed6d4f) to each tool individually
+	// so a server can opt out of any model-facing surface without disabling its
+	// tools everywhere.
+	allTools := append([]mcp.RuntimeToolInfo(nil), exposure.DirectTools...)
+	allTools = append(allTools, exposure.DeferredTools...)
+	omitByServer := mcpOmitToolsFromByServer(options.MCPService, allTools)
+	for i := range allTools {
+		info := allTools[i]
+		exposure := mcpToolExposureForSurfaces(omitByServer[info.ServerName], options.EnableToolSearch)
+		if err := registerMCPToolSet(registry, options, []mcp.RuntimeToolInfo{info}, exposure); err != nil {
+			return err
+		}
 	}
-	return registerMCPToolSet(registry, options, exposure.DeferredTools, tool.ExposureDiscoverable)
+	return nil
+}
+
+// mcpToolExposureForSurfaces maps a server's omit_tools_from surfaces to the
+// final tool exposure using Rust's apply_mcp_tool_exposure_policy table:
+// (direct, deferred, code_mode) -> ToolExposure. Go has no
+// direct_only_tool_namespaces configuration, so that restriction is skipped.
+func mcpToolExposureForSurfaces(omit []string, searchToolEnabled bool) tool.Exposure {
+	allowed := map[string]bool{"direct": true, "deferred": true, "code_mode": true}
+	for _, surface := range omit {
+		switch strings.ToLower(strings.TrimSpace(surface)) {
+		case "direct", "deferred", "code_mode":
+			allowed[strings.ToLower(strings.TrimSpace(surface))] = false
+		}
+	}
+	if searchToolEnabled && allowed["deferred"] {
+		allowed["direct"] = false
+	} else {
+		allowed["deferred"] = false
+	}
+	direct, deferred, codeMode := allowed["direct"], allowed["deferred"], allowed["code_mode"]
+	switch {
+	case !direct && !deferred && !codeMode:
+		return tool.ExposureHidden
+	case !direct && !deferred && codeMode:
+		return tool.ExposureCodeModeOnly
+	case direct && !deferred && !codeMode:
+		return tool.ExposureDirectModelOnly
+	case direct && !deferred && codeMode:
+		return tool.ExposureModelVisible
+	case !direct && deferred && !codeMode:
+		return tool.ExposureDeferredModelOnly
+	default:
+		return tool.ExposureDiscoverable
+	}
+}
+
+func mcpOmitToolsFromByServer(service *mcp.MCPService, tools []mcp.RuntimeToolInfo) map[string][]string {
+	omitByServer := map[string][]string{}
+	if service == nil {
+		return omitByServer
+	}
+	for i := range tools {
+		serverName := strings.TrimSpace(tools[i].ServerName)
+		if serverName == "" {
+			continue
+		}
+		if _, seen := omitByServer[serverName]; seen {
+			continue
+		}
+		config, ok := service.ServerConfigForServer(serverName)
+		if !ok {
+			omitByServer[serverName] = nil
+			continue
+		}
+		omitByServer[serverName] = append([]string(nil), config.OmitToolsFrom...)
+	}
+	return omitByServer
 }
 
 func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, tools []mcp.RuntimeToolInfo, exposure tool.Exposure) error {

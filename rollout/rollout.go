@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -724,17 +725,28 @@ func Load(path string) ([]Line, int, error) {
 	}
 	var lines []Line
 	parseErrors := 0
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		var line Line
-		if err := unmarshalLine(scanner.Bytes(), &line); err != nil {
-			parseErrors++
-			continue
+	lineReader := bufio.NewReader(reader)
+	for {
+		raw, readErr := lineReader.ReadBytes('\n')
+		if readErr != nil && len(raw) == 0 {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return lines, parseErrors, readErr
 		}
-		lines = append(lines, line)
-	}
-	if err := scanner.Err(); err != nil {
-		return lines, parseErrors, err
+		raw = bytes.TrimRight(raw, "\r\n")
+		var line Line
+		if err := unmarshalLine(raw, &line); err != nil {
+			parseErrors++
+		} else {
+			lines = append(lines, line)
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return lines, parseErrors, readErr
+		}
 	}
 	return lines, parseErrors, nil
 }

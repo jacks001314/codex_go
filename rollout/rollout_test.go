@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,65 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 	if record.Metadata.AgentPath != "/worker" || len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 || record.Metadata.MultiAgentVersion != "v2" || len(record.Metadata.ContextWindow) == 0 {
 		t.Fatalf("record metadata high fidelity fields = %#v", record.Metadata)
+	}
+}
+
+func TestLoadAcceptsJSONLLinesBeyondScannerDefaultLimit(t *testing.T) {
+	// A single rollout JSONL record can exceed bufio.Scanner's default 64KB
+	// token limit (e.g. a large tool output embedded in a response item).
+	// Loading such a rollout must not fail with "bufio.Scanner: token too
+	// long", otherwise resuming the thread through the app-server fails.
+	home := t.TempDir()
+	path := filepath.Join(home, "rollout-long-line.jsonl")
+	now := fixedTime()
+	metaLine, err := json.Marshal(Line{
+		Type: "session_meta",
+		Meta: &SessionMeta{
+			ID:        "thread-1",
+			SessionID: "session-1",
+			Timestamp: now.UTC().Format(time.RFC3339Nano),
+			CWD:       "/repo",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal meta line error = %v", err)
+	}
+	bigText := strings.Repeat("x", 256*1024)
+	itemLine, err := json.Marshal(Line{
+		Type:    "response_item",
+		Payload: json.RawMessage(`{"text":` + strconv.Quote(bigText) + `}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal item line error = %v", err)
+	}
+	if len(itemLine) <= 64*1024 {
+		t.Fatalf("test line is %d bytes, want > 64KB", len(itemLine))
+	}
+	data := append(metaLine, '\n')
+	data = append(data, itemLine...)
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write rollout error = %v", err)
+	}
+
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 || len(lines) != 2 {
+		t.Fatalf("Load() len/errors = %d/%d", len(lines), parseErrors)
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(lines[1].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload error = %v", err)
+	}
+	if payload.Text != bigText {
+		t.Fatalf("payload text length = %d, want %d", len(payload.Text), len(bigText))
+	}
+	if _, err := RecordFromPath(path, false); err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
 	}
 }
 

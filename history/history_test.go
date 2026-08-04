@@ -3,6 +3,7 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,27 @@ func TestAppendSkipsWhenPersistenceNone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(config.CodexHome, Filename)); !os.IsNotExist(err) {
 		t.Fatalf("history file should not exist, err=%v", err)
+	}
+}
+
+func TestAppendAndLookupLongEntryBeyondScannerDefaultLimit(t *testing.T) {
+	// A single history entry can exceed bufio.Scanner's default 64KB token
+	// limit (e.g. a long pasted prompt). Trimming and lookup must keep working.
+	config := &Config{CodexHome: t.TempDir(), Persistence: PersistenceSaveAll, MaxBytes: 100}
+	longText := strings.Repeat("x", 256*1024)
+	if err := AppendEntry(longText, "session-1", config, time.Unix(10, 0)); err != nil {
+		t.Fatalf("AppendEntry() error = %v", err)
+	}
+	logID, count, err := Metadata(config)
+	if err != nil {
+		t.Fatalf("Metadata() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Metadata() count = %d, want 1", count)
+	}
+	entry, ok := Lookup(logID, 0, config)
+	if !ok || entry.Text != longText {
+		t.Fatalf("Lookup() ok=%v textLen=%d, want %d", ok, len(entry.Text), len(longText))
 	}
 }
 

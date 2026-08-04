@@ -92,6 +92,7 @@ func EnforceMessageHistoryLimit(file *os.File, limit *int) error {
 		return err
 	}
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	var lines [][]byte
 	var newestLen int
 	for scanner.Scan() {
@@ -160,6 +161,7 @@ func MessageHistoryMetadata(config *MessageHistoryConfig) (uint64, int) {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	count := 0
 	for scanner.Scan() {
 		count++
@@ -198,6 +200,7 @@ func LookupMessageHistoryEntries(logID uint64, offsets []int, config *MessageHis
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	index := 0
 	for scanner.Scan() {
 		if wanted[index] {
