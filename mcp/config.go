@@ -52,6 +52,7 @@ type ServerConfig struct {
 	EnvironmentID            string                            `json:"environment_id,omitempty"`
 	StartupTimeout           time.Duration                     `json:"-"`
 	ToolTimeout              time.Duration                     `json:"-"`
+	CatalogItemLimit         int                               `json:"-"`
 	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
 	ProtocolMode             MCPProtocolMode                   `json:"-"`
 }
@@ -716,6 +717,7 @@ func CodexAppsServerConfig(baseURL string, productSKU string, runtimeAuth *Runti
 		HTTPHeaders:      headers,
 		Enabled:          true,
 		StartupTimeout:   30 * time.Second,
+		CatalogItemLimit: maxCodexAppsCatalogItems,
 		ApplyHTTPRequest: runtimeAuthRequestApplier(runtimeAuth),
 	}
 	if strings.TrimSpace(os.Getenv(codexConnectorsTokenEnvVar)) != "" {

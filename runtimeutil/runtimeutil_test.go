@@ -1,6 +1,7 @@
 package runtimeutil
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -50,7 +51,11 @@ func TestBudgetUsageReminderAndRearm(t *testing.T) {
 		SamplingTokenWeight:       2,
 		ReminderAtRemainingTokens: []int64{50, 10},
 	})
-	if exhausted := budget.RecordUsage(TokenUsage{InputTokens: 30, CachedInputTokens: 10, OutputTokens: 20}); exhausted {
+	exhausted, err := budget.RecordUsage(TokenUsage{InputTokens: 30, CachedInputTokens: 10, OutputTokens: 20})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if exhausted {
 		t.Fatalf("exhausted = true, want false")
 	}
 	reminder := budget.PendingReminder("thread", "window")
@@ -65,8 +70,59 @@ func TestBudgetUsageReminderAndRearm(t *testing.T) {
 	if again := budget.PendingReminder("thread", "window"); again == nil {
 		t.Fatalf("reminder after rearm = nil, want reminder")
 	}
-	if exhausted := budget.RecordUsage(TokenUsage{OutputTokens: 100}); !exhausted {
+	exhausted, err = budget.RecordUsage(TokenUsage{OutputTokens: 100})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if !exhausted {
 		t.Fatalf("exhausted = false, want true")
+	}
+}
+
+func TestBudgetRecordUsagePrefersProviderRolloutBudgetUnits(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{
+		LimitTokens:         100,
+		PrefillTokenWeight:  1,
+		SamplingTokenWeight: 2,
+	})
+	// 2.5 provider units must be charged directly instead of the weighted
+	// token accounting (output 100 * 2 would otherwise exhaust immediately).
+	exhausted, err := budget.RecordUsage(TokenUsage{
+		InputTokens:             30,
+		CachedInputTokens:       10,
+		OutputTokens:            100,
+		CodexRolloutBudgetUnits: json.Number("2.5"),
+	})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if exhausted {
+		t.Fatal("exhausted = true with 2.5 units against a 100 limit, want false")
+	}
+	// Reaching the limit through provider units must report exhaustion.
+	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("97.5")})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("exhausted = false after 100 total units, want true")
+	}
+}
+
+func TestBudgetRecordUsageRejectsInvalidProviderUnits(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitTokens: 100, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	for _, value := range []string{"-1", "NaN", "Inf", "-Inf", "not-a-number"} {
+		_, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number(value)})
+		if !errors.Is(err, ErrInvalidRolloutBudgetUnits) {
+			t.Fatalf("units %q error = %v, want ErrInvalidRolloutBudgetUnits", value, err)
+		}
+	}
+	// Invalid units must not mutate the running total.
+	exhausted, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("10")})
+	if err != nil || exhausted {
+		t.Fatalf("valid units: exhausted=%v err=%v", exhausted, err)
 	}
 }
 

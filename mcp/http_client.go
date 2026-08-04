@@ -161,7 +161,7 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 }
 
 func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, error) {
-	return collectMCPPaginated(context.Background(), "tools/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
+	return collectMCPPaginatedWithLimit(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
 		var response struct {
 			Tools      []MCPToolInfo `json:"tools"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
@@ -174,7 +174,7 @@ func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCP
 }
 
 func listMCPHTTPResources(client *httpClient, options *httpClientCallOptions) ([]MCPResource, error) {
-	return collectMCPPaginated(context.Background(), "resources/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResource, *string, error) {
+	return collectMCPPaginatedWithLimit(context.Background(), "resources/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPResource, *string, error) {
 		var response struct {
 			Resources  []MCPResource `json:"resources"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
@@ -187,7 +187,7 @@ func listMCPHTTPResources(client *httpClient, options *httpClientCallOptions) ([
 }
 
 func listMCPHTTPResourceTemplates(client *httpClient, options *httpClientCallOptions) ([]MCPResourceTemplate, error) {
-	return collectMCPPaginated(context.Background(), "resources/templates/list", mcpPaginationTimeout(client.config), func(ctx context.Context, cursor *string) ([]MCPResourceTemplate, *string, error) {
+	return collectMCPPaginatedWithLimit(context.Background(), "resources/templates/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPResourceTemplate, *string, error) {
 		var response struct {
 			ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates"`
 			NextCursor        *string               `json:"nextCursor,omitempty"`

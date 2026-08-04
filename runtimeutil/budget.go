@@ -1,12 +1,28 @@
 package runtimeutil
 
-import "sync"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"sync"
+)
 
 type TokenUsage struct {
 	InputTokens       int64
 	CachedInputTokens int64
 	OutputTokens      int64
+	// CodexRolloutBudgetUnits mirrors the provider-reported
+	// `response.completed.usage.codex_rollout_budget_units` value. When present,
+	// it is charged directly against the shared rollout budget instead of the
+	// weighted token accounting below (Rust `TokenUsage.codex_rollout_budget_units`).
+	CodexRolloutBudgetUnits json.Number
 }
+
+// ErrInvalidRolloutBudgetUnits is returned when provider-reported rollout
+// budget units are non-finite or negative. Mirrors Rust's fatal response
+// error for `codex_rollout_budget_units`.
+var ErrInvalidRolloutBudgetUnits = errors.New("response.completed usage.codex_rollout_budget_units must be finite and non-negative")
 
 func (u *TokenUsage) NonCachedInput() int64 {
 	if u == nil {
@@ -61,14 +77,30 @@ func (b *Budget) Configure(config BudgetConfig) {
 	b.configured = true
 }
 
-func (b *Budget) RecordUsage(usage TokenUsage) bool {
+// RecordUsage charges usage against the shared rollout budget and reports
+// whether the configured budget is exhausted (also on later calls). When the
+// provider includes `codex_rollout_budget_units`, those units are charged
+// directly; otherwise weighted input/output token accounting is used. Invalid
+// provider units are rejected as a fatal error, mirroring Rust's
+// `RolloutBudget::record_usage`.
+func (b *Budget) RecordUsage(usage TokenUsage) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.configured {
-		return false
+		return false, nil
 	}
-	b.used += float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64((&usage).NonCachedInput())*b.config.PrefillTokenWeight
-	return b.used >= float64(b.config.LimitTokens)
+	var units float64
+	if usage.CodexRolloutBudgetUnits != "" {
+		value, err := usage.CodexRolloutBudgetUnits.Float64()
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return false, fmt.Errorf("%w: got %q", ErrInvalidRolloutBudgetUnits, usage.CodexRolloutBudgetUnits)
+		}
+		units = value
+	} else {
+		units = float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64((&usage).NonCachedInput())*b.config.PrefillTokenWeight
+	}
+	b.used += units
+	return b.used >= float64(b.config.LimitTokens), nil
 }
 
 func (b *Budget) PendingReminder(threadID string, windowID string) *BudgetReminder {

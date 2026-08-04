@@ -42,7 +42,7 @@ func TestCollectMCPPaginatedRejectsCatalogBounds(t *testing.T) {
 		_, err := collectMCPPaginated(context.Background(), "tools/list", time.Second, func(_ context.Context, _ *string) ([]struct{}, *string, error) {
 			return make([]struct{}, maxMCPCatalogItems+1), nil, nil
 		})
-		if err == nil || err.Error() != "tools/list exceeded the catalog limit of 1024 items" {
+		if err == nil || err.Error() != "tools/list exceeded the catalog limit of 2048 items" {
 			t.Fatalf("error=%v", err)
 		}
 	})
@@ -55,7 +55,7 @@ func TestCollectMCPPaginatedRejectsCatalogBounds(t *testing.T) {
 			}
 			return []struct{}{{}}, nil, nil
 		})
-		if err == nil || err.Error() != "resources/list exceeded the catalog limit of 1024 items" {
+		if err == nil || err.Error() != "resources/list exceeded the catalog limit of 2048 items" {
 			t.Fatalf("error=%v", err)
 		}
 	})
@@ -94,5 +94,39 @@ func TestCollectMCPPaginatedAppliesOneOverallTimeout(t *testing.T) {
 	})
 	if err == nil || err.Error() != "resources/list pagination timed out after 20ms" {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestCollectMCPPaginatedWithLimitAllowsLargerCodexAppsCatalogs(t *testing.T) {
+	// Host-owned codex_apps may return up to maxCodexAppsCatalogItems total.
+	items, err := collectMCPPaginatedWithLimit(context.Background(), "tools/list", time.Second, maxCodexAppsCatalogItems, func(_ context.Context, cursor *string) ([]struct{}, *string, error) {
+		if cursor == nil {
+			next := "last"
+			return make([]struct{}, maxCodexAppsCatalogItems-1), &next, nil
+		}
+		return []struct{}{{}}, nil, nil
+	})
+	if err != nil || len(items) != maxCodexAppsCatalogItems {
+		t.Fatalf("items=%d error=%v", len(items), err)
+	}
+	// A single oversized page must still be rejected above the codex_apps limit.
+	_, err = collectMCPPaginatedWithLimit(context.Background(), "tools/list", time.Second, maxCodexAppsCatalogItems, func(_ context.Context, _ *string) ([]struct{}, *string, error) {
+		return make([]struct{}, maxCodexAppsCatalogItems+1), nil, nil
+	})
+	if err == nil || err.Error() != "tools/list exceeded the catalog limit of 8192 items" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestMCPServerConfigCatalogItemLimit(t *testing.T) {
+	if got := mcpCatalogItemLimit(nil); got != maxMCPCatalogItems {
+		t.Fatalf("default limit = %d, want %d", got, maxMCPCatalogItems)
+	}
+	if got := mcpCatalogItemLimit(&ServerConfig{}); got != maxMCPCatalogItems {
+		t.Fatalf("zero-value limit = %d, want %d", got, maxMCPCatalogItems)
+	}
+	config := ServerConfig{CatalogItemLimit: maxCodexAppsCatalogItems}
+	if got := mcpCatalogItemLimit(&config); got != maxCodexAppsCatalogItems {
+		t.Fatalf("codex_apps limit = %d, want %d", got, maxCodexAppsCatalogItems)
 	}
 }

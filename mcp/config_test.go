@@ -96,6 +96,9 @@ func TestExecutorOwnedChatGPTMCPAcceptsOnlySafeStaticAuthorization(t *testing.T)
 	if apps.Auth != ServerAuthChatGPT || !apps.IsLocalEnvironment() {
 		t.Fatalf("CodexAppsServerConfig() = %#v", apps)
 	}
+	if apps.CatalogItemLimit != maxCodexAppsCatalogItems {
+		t.Fatalf("CodexAppsServerConfig catalog item limit = %d, want %d", apps.CatalogItemLimit, maxCodexAppsCatalogItems)
+	}
 }
 
 func TestRuntimeConfigAppliesManagedMCPRequirementsLikeRust(t *testing.T) {

@@ -1,8 +1,8 @@
 {
-  "rustBaseline": "bb5054fe47",
-  "rustTag": "main@bb5054fe47",
-  "rustUpstreamHead": "bb5054fe47abe73ecbbd454751066a28c89f4bb9",
-  "rustUpstreamTag": "main@bb5054fe47",
+  "rustBaseline": "5af85998c2",
+  "rustTag": "main@5af85998c2",
+  "rustUpstreamHead": "5af85998c2",
+  "rustUpstreamTag": "main@5af85998c2",
   "rustE2EBinary": {
     "version": "codex-cli 0.0.0",
     "tag": "main@bbbf396839",
@@ -13,8 +13,10 @@
     "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
     "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
   },
-  "generatedAt": "2026-08-01",
+  "generatedAt": "2026-08-04",
   "items": [
+    {"id":"rollout-budget-provider-units","status":"done","area":"rollout_budget","reason":"runtimeutil.Budget.RecordUsage now charges provider-reported codex_rollout_budget_units directly (finite, non-negative or fatal error), falling back to weighted token accounting; mirrors Rust 8b8fa7276f (#36715).","test":"go test ./runtimeutil/... -count=1"},
+    {"id":"mcp-catalog-limits","status":"done","area":"mcp","reason":"Standard MCP catalog limit raised 1024->2048 and host-owned codex_apps (CodexAppsServerConfig) uses 8192 via per-server CatalogItemLimit; mirrors Rust e4e040881a (#36772).","test":"go test ./mcp/... -count=1"},
     {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},
     {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./config ./agent ./appserver"},
     {"id":"auto-compact-fallback","status":"done","area":"compaction","test":"go test ./config ./compact ./turn ./appserver"},
