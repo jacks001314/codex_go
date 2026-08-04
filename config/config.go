@@ -243,6 +243,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 var knownTopLevelConfigFields = map[string]struct{}{
 	"analytics":                         {},
 	"agents":                            {},
+	"allow_login_shell":                 {},
 	"apps":                              {},
 	"apps_mcp_product_sku":              {},
 	"approval_policy":                   {},
@@ -554,6 +555,17 @@ func (c *Config) UpdatePlanEnabled() bool {
 	}
 	enabled, ok := updatePlan["enabled"].(bool)
 	return !ok || enabled
+}
+
+// AllowLoginShell reports whether shell tools may expose the `login`
+// parameter. Rust defaults to allowing login shells
+// (`allow_login_shell.unwrap_or(true)`, per-environment since b258c028fe).
+func (c *Config) AllowLoginShell() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	value, ok := c.Values["allow_login_shell"].(bool)
+	return !ok || value
 }
 
 func (c *Config) WaitAgentEnabled() bool {

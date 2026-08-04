@@ -3,11 +3,11 @@ package appserver
 import (
 	"context"
 	"net/url"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
+	"codex_go/gitutil"
 	"codex_go/telemetry"
 )
 
@@ -89,11 +89,9 @@ func acceptedLineGitRemoteURLForCWD(ctx context.Context, cwd string) string {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-	defer cancel()
-	cmd := exec.CommandContext(timeoutCtx, "git", "remote", "-v")
-	cmd.Dir = cwd
-	output, err := runCommandOutput(cmd)
+	// Rust 3149fa4b99: git metadata commands terminate the whole process tree
+	// on timeout.
+	output, err := gitutil.RunWithTimeout(ctx, 750*time.Millisecond, cwd, "remote", "-v")
 	if err != nil {
 		return ""
 	}

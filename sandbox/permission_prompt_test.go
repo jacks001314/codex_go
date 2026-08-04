@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -41,5 +42,49 @@ func TestBuildGranular(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in %s", want, text)
 		}
+	}
+}
+
+func TestFormatAllowPrefixesRendersRustPrefixList(t *testing.T) {
+	got := FormatAllowPrefixes([][]string{{"echo", "amendment-ok"}, {"git", "pull"}})
+	// Rust sorts by combined token byte length: "git pull" (7) before
+	// "echo amendment-ok" (19).
+	want := "- [\"git\", \"pull\"]\n- [\"echo\", \"amendment-ok\"]"
+	if got != want {
+		t.Fatalf("FormatAllowPrefixes() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatAllowPrefixesSortsLikeRust(t *testing.T) {
+	// Rust sorts by token count, then combined token byte length, then
+	// lexicographically.
+	got := FormatAllowPrefixes([][]string{
+		{"git", "pull"},
+		{"go", "test"},
+		{"git", "pull", "origin"},
+		{"go"},
+	})
+	want := "- [\"go\"]\n- [\"go\", \"test\"]\n- [\"git\", \"pull\"]\n- [\"git\", \"pull\", \"origin\"]"
+	if got != want {
+		t.Fatalf("FormatAllowPrefixes() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatAllowPrefixesTruncatesLikeRust(t *testing.T) {
+	many := make([][]string, 0, maxRenderedPrefixes+1)
+	for index := 0; index < maxRenderedPrefixes+1; index++ {
+		many = append(many, []string{"tool", fmt.Sprintf("token-%03d", index)})
+	}
+	got := FormatAllowPrefixes(many)
+	if !strings.Contains(got, truncatedPrefixesMarker) {
+		t.Fatalf("truncation marker missing from %d-prefix output", len(many))
+	}
+	if strings.Count(got, "- [") != maxRenderedPrefixes {
+		t.Fatalf("rendered %d prefixes, want %d", strings.Count(got, "- ["), maxRenderedPrefixes)
+	}
+
+	long := FormatAllowPrefixes([][]string{{strings.Repeat("x", maxAllowPrefixTextChars)}})
+	if !strings.Contains(long, truncatedPrefixesMarker) {
+		t.Fatalf("long prefix did not truncate")
 	}
 }

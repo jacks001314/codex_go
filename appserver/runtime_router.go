@@ -227,6 +227,7 @@ type RuntimeRouter struct {
 	unifiedExecAnalyticsMu sync.Mutex
 	unifiedExecAnalytics   map[string]unifiedExecAnalyticsContext
 	networkApproval        *networkApprovalService
+	execPolicySaved        *execPolicySavedState
 	managedNetworkReloadMu sync.Mutex
 	startupErr             error
 	managedNetworkReload   *managedNetworkReloadWatcher
@@ -361,6 +362,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		router.services.ServerRequests = NewServerRequestBroker()
 	}
 	router.networkApproval = newNetworkApprovalService(router)
+	router.execPolicySaved = newExecPolicySavedState()
 	if router.services.UnifiedExec == nil {
 		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
@@ -9681,6 +9683,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 		if cfg != nil {
 			options.Shell.MaxOutputTokens = cfg.ToolOutputTokenLimit()
+			options.Shell.Validation.AllowLoginShell = cfg.AllowLoginShell()
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelFromConfigValues(cfg.Values)
 			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopFromConfigValues(cfg.Values)
 		}
@@ -10140,6 +10143,12 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string) too
 			r.rememberCommandApprovalForSession(threadID)
 			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
 		case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+			// Rust 1bbfb5cfad: report the newly saved command prefix to the
+			// model once after the tool completes instead of re-injecting the
+			// full permissions instructions.
+			if amendment := commandExecutionApprovalDecisionExecpolicyAmendment(response.Decision); len(amendment) > 0 {
+				r.rememberExecPolicyAmendmentSaved(threadID, turnID, amendment)
+			}
 			return tool.ShellApprovalDecision{Approved: true}, nil
 		case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
 			if commandExecutionApprovalDecisionNetworkAction(response.Decision) == string(NetworkPolicyRuleAllow) {
@@ -10270,6 +10279,38 @@ func commandExecutionApprovalDecisionNetworkAction(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(stringFromAny(amendmentMap["action"]))
+}
+
+func commandExecutionApprovalDecisionExecpolicyAmendment(value any) []string {
+	object, ok := commandExecutionApprovalDecisionObject(value)
+	if !ok {
+		return nil
+	}
+	payload, ok := object[string(CommandExecutionApprovalAcceptWithExecpolicyAmendment)]
+	if !ok || payload == nil {
+		return nil
+	}
+	payloadMap, ok := commandExecutionApprovalDecisionObject(payload)
+	if !ok {
+		return nil
+	}
+	amendment := firstNonNil(payloadMap["execpolicy_amendment"], payloadMap["execpolicyAmendment"])
+	if amendment == nil {
+		return nil
+	}
+	if values, ok := amendment.([]string); ok {
+		return append([]string(nil), values...)
+	}
+	if values, ok := amendment.([]any); ok {
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if token := strings.TrimSpace(stringFromAny(value)); token != "" {
+				out = append(out, token)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func commandExecutionApprovalDecisionObject(value any) (map[string]any, bool) {

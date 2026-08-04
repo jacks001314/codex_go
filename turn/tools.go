@@ -90,6 +90,10 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 				// exec_permission_approvals feature is enabled for this turn.
 				AdditionalPermissionsAllowed: false,
 				ApprovalPolicy:               sandbox.ApprovalOnRequest,
+				// Rust defaults allow_login_shell to true (per-environment
+				// since b258c028fe); the turn runtime overrides this from the
+				// effective config when available.
+				AllowLoginShell: true,
 				CWD:                          cwd,
 			},
 		},

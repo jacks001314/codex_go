@@ -100,6 +100,17 @@ func TestOmitLegacyMCPToolPrefixSupportsGlobalAndServerModes(t *testing.T) {
 	}
 }
 
+func TestAllowLoginShellDefaultsTrueLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{}}
+	if !cfg.AllowLoginShell() {
+		t.Fatal("AllowLoginShell() = false, want Rust default true")
+	}
+	cfg = &Config{Values: map[string]any{"allow_login_shell": false}}
+	if cfg.AllowLoginShell() {
+		t.Fatal("AllowLoginShell() = true, want false from config")
+	}
+}
+
 func TestCodeModeHostConfigSupportsFallbackPolicy(t *testing.T) {
 	cfg := &Config{Values: map[string]any{
 		"features": map[string]any{"code_mode_host": map[string]any{

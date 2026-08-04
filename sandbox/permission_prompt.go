@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 type PermissionPromptSandboxMode string
@@ -199,6 +201,94 @@ func approvedPrefixesText(prefixes [][]string) string {
 	}
 	sort.Strings(formatted)
 	return "## Approved command prefixes\nThe following prefix rules have already been approved: " + strings.Join(formatted, ", ")
+}
+
+const (
+	maxRenderedPrefixes     = 100
+	maxAllowPrefixTextChars = 5000
+	truncatedPrefixesMarker = "...\n[Some commands were truncated]"
+)
+
+// FormatAllowPrefixes mirrors Rust protocol::models::format_allow_prefixes:
+// approved command prefixes are sorted by token count, then total token bytes,
+// then lexicographically, and rendered as a line-delimited list of
+// "- [\"git\", \"pull\"]" entries capped at 100 prefixes and 5000 characters.
+func FormatAllowPrefixes(prefixes [][]string) string {
+	truncated := false
+	if len(prefixes) > maxRenderedPrefixes {
+		truncated = true
+	}
+	sort.SliceStable(prefixes, func(i int, j int) bool {
+		left := prefixes[i]
+		right := prefixes[j]
+		if len(left) != len(right) {
+			return len(left) < len(right)
+		}
+		leftLen := combinedPrefixTokenBytes(left)
+		rightLen := combinedPrefixTokenBytes(right)
+		if leftLen != rightLen {
+			return leftLen < rightLen
+		}
+		return prefixTokensLess(left, right)
+	})
+	lines := make([]string, 0, len(prefixes))
+	for index := 0; index < len(prefixes) && index < maxRenderedPrefixes; index++ {
+		lines = append(lines, "- "+renderCommandPrefix(prefixes[index]))
+	}
+	output := strings.Join(lines, "\n")
+	if byteIndex := nthRuneByteIndex(output, maxAllowPrefixTextChars); byteIndex >= 0 {
+		truncated = true
+		output = output[:byteIndex]
+	}
+	if truncated {
+		return output + truncatedPrefixesMarker
+	}
+	return output
+}
+
+func combinedPrefixTokenBytes(prefix []string) int {
+	total := 0
+	for _, token := range prefix {
+		total += len(token)
+	}
+	return total
+}
+
+func prefixTokensLess(left []string, right []string) bool {
+	for index := 0; index < len(left) && index < len(right); index++ {
+		if left[index] != right[index] {
+			return left[index] < right[index]
+		}
+	}
+	return false
+}
+
+func renderCommandPrefix(prefix []string) string {
+	quoted := make([]string, 0, len(prefix))
+	for _, token := range prefix {
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			quoted = append(quoted, fmt.Sprintf("%q", token))
+			continue
+		}
+		quoted = append(quoted, string(encoded))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func nthRuneByteIndex(value string, nth int) int {
+	if nth <= 0 || utf8.RuneCountInString(value) <= nth {
+		return -1
+	}
+	index := 0
+	for range value {
+		if index == nth {
+			return index
+		}
+		_, size := utf8.DecodeRuneInString(value[index:])
+		index += size
+	}
+	return -1
 }
 
 func bulletList(values []string) string {

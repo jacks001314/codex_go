@@ -5373,6 +5373,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, currentTimeState, postToolInputItems, appendExtraSessionItems)
 	postToolInputItems = r.networkApprovalPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
+	postToolInputItems = r.execPolicyPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)

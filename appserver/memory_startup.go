@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/features"
+	"codex_go/gitutil"
 	"codex_go/install"
 	"codex_go/memories"
 	"codex_go/model"
@@ -511,9 +511,10 @@ func detachedMemoryWorkspace(ctx context.Context, cwd string) (string, codexapi.
 		return "", codexapi.ClientWorkspaceMetadata{}, false
 	}
 	run := func(args ...string) (string, error) {
-		command := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
-		output, err := command.Output()
-		return strings.TrimSpace(string(output)), err
+		// Rust 3149fa4b99: git metadata commands must terminate the whole
+		// process tree on timeout, not just the direct process.
+		output, err := gitutil.RunWithTimeout(ctx, 2*time.Second, cwd, args...)
+		return strings.TrimSpace(output), err
 	}
 	root, err := run("rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
