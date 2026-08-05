@@ -56,7 +56,7 @@ export type Scenario = {
       stderrPattern?: string;
     }[];
     commandOutputComparison?: "exact" | "status-exit-code" | "parallel-prefix-unordered" | "unordered" | "informational";
-    eventSequenceComparison?: "strict" | "semantic-tools" | "model-selected-tools";
+    eventSequenceComparison?: "strict" | "semantic-tools" | "model-selected-tools" | "compaction-tolerant";
     agentMessageComparison?: "strict" | "final-per-turn";
     compareWorkspacePaths?: string[];
     forbiddenCompletedItemTypes?: string[];
@@ -69,6 +69,7 @@ export type Scenario = {
     }[];
     workspaceRequiredPaths?: string[];
     requiredRolloutItemTypes?: string[];
+    requireRolloutCompaction?: boolean;
     uniqueCompletedItemTypes?: string[];
     exactCompletedItemTypeCounts?: Record<string, number>;
     uniqueCommandExecutions?: boolean;
@@ -1906,6 +1907,8 @@ export const scenarios: Scenario[] = [
       },
     ],
     expected: {
+      eventSequenceComparison: "model-selected-tools",
+      agentMessageComparison: "final-per-turn",
       terminal: "turn.completed",
       minAgentMessages: 1,
       requireUsage: true,
@@ -2095,6 +2098,44 @@ export const scenarios: Scenario[] = [
           output: "SDK_EXIT_7",
         },
       ],
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "session-compaction",
+    description: "Forces pre-turn context compaction on resume with a low auto-compact token limit and verifies the session rollout compaction marker and resumed turn.",
+    timeoutMs: 300000,
+    codexConfig: {
+      model_auto_compact_token_limit: 4096,
+      compact_prompt: "Summarize the conversation.",
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt:
+          `${"The quick brown fox jumps over the lazy dog while the codex agent carefully measures every token in this deliberately long session payload. ".repeat(200)}\n\n` +
+          "Reply with exactly COMPACTION_TURN1_OK and nothing else.",
+      },
+      {
+        prompt: "Reply with exactly COMPACTION_TURN2_OK and nothing else.",
+        resume: true,
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 2,
+      requireUsage: true,
+      expectedTurns: 2,
+      exactAgentMessages: ["COMPACTION_TURN1_OK", "COMPACTION_TURN2_OK"],
+      requireStableThreadId: true,
+      requireRolloutCompaction: true,
+      eventSequenceComparison: "compaction-tolerant",
       workspaceMutation: "none",
     },
   },

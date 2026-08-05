@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -438,6 +439,29 @@ func TestAgentLoopKeepsPromptWhenSteerExistsBeforeFirstSampling(t *testing.T) {
 	}
 }
 
+func TestAgentLoopConsumesSteerArrivingDuringFinalSampling(t *testing.T) {
+	mailbox := NewSteerMailbox()
+	agent := &finalSamplingSteerAgent{mailbox: mailbox}
+	committed := 0
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, SteerMailbox: mailbox})
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:           "original",
+		ThreadID:         "thread-final-steer",
+		TurnID:           "turn-final-steer",
+		SteerMailbox:     mailbox,
+		OnSteerCommitted: func(count int) { committed += count },
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 2 || !resultInputItemsHaveText(agent.requests[1].InputItems, "late steer") {
+		t.Fatalf("agent requests = %#v", agent.requests)
+	}
+	if result.Iterations != 2 || committed != 1 || !resultInputItemsHaveText(result.SteerInputItems, "late steer") {
+		t.Fatalf("result = %#v, committed = %d", result, committed)
+	}
+}
+
 type fakeLoopAgent struct {
 	requests                   []model.AgentRequest
 	alwaysTool                 bool
@@ -463,6 +487,11 @@ type emptyInputLoopAgent struct {
 }
 
 type followUpLoopAgent struct{ requests []model.AgentRequest }
+
+type finalSamplingSteerAgent struct {
+	mailbox  *SteerMailbox
+	requests []model.AgentRequest
+}
 
 type failAfterToolLoopAgent struct {
 	requests []model.AgentRequest
@@ -491,6 +520,25 @@ func (a *followUpLoopAgent) Run(_ context.Context, request *model.AgentRequest) 
 		message = "done"
 	}
 	return &model.AgentResponse{ResponseID: "resp-" + strconv.Itoa(len(a.requests)), Message: message, Usage: usage, Items: []model.AgentItem{{Type: "agent_message", Text: message}}}, nil
+}
+
+func (a *finalSamplingSteerAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		_ = a.mailbox.Enqueue(&SteerEnqueueParams{
+			ThreadID: request.ThreadID,
+			TurnID:   request.TurnID,
+			InputItems: []any{map[string]any{
+				"type": "message", "role": "user",
+				"content": []map[string]any{{"type": "input_text", "text": "late steer"}},
+			}},
+		})
+	}
+	message := "first final"
+	if len(a.requests) > 1 {
+		message = "updated final"
+	}
+	return &model.AgentResponse{ResponseID: fmt.Sprintf("resp-%d", len(a.requests)), Message: message, Items: []model.AgentItem{{Type: "agent_message", Text: message}}}, nil
 }
 
 func (a *emptyInputLoopAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

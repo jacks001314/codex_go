@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -136,21 +137,27 @@ func execThreadSource(req *Request) string {
 	if req != nil && req.subagent != nil {
 		return "subagent"
 	}
-	return string(taskKind(req))
+	// Rust's exec crate starts every user-facing session with
+	// ThreadSource::User regardless of the exec subcommand (including review).
+	return "user"
 }
 
 func execSessionSource(req *Request) string {
 	if req != nil && req.subagent != nil {
 		return "subagent:thread_spawn"
 	}
-	return "cli"
+	// Rust's exec crate uses SessionSource::Exec for all codex exec sessions.
+	return "exec"
 }
 
 func execAgentOriginator(req *Request) string {
 	if req != nil && req.subagent != nil {
 		return "subagent"
 	}
-	return ""
+	if originator := strings.TrimSpace(os.Getenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")); originator != "" {
+		return originator
+	}
+	return "codex_cli_rs"
 }
 
 func execAgentNicknameForRequest(req *Request) string {

@@ -2937,7 +2937,8 @@ func defaultThreadListSourceFilters() []string {
 	return []string{
 		string(SessionSourceCli),
 		string(SessionSourceVsCode),
-		string(SessionSourceAppServer),
+		"atlas",
+		"chatgpt",
 	}
 }
 

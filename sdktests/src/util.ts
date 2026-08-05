@@ -118,12 +118,23 @@ export function snapshotFiles(root: string): Record<string, string> {
       if (entry.isDirectory()) {
         visit(full);
       } else if (entry.isFile() && !entry.name.endsWith(".pyc") && !entry.name.endsWith(".pyo")) {
-        out[rel] = sha256File(full) ?? "";
+        try {
+          out[rel] = sha256File(full) ?? "";
+        } catch (error) {
+          // Windows may briefly hold SQLite auxiliary files while a CLI child
+          // is shutting down. Only those non-semantic files may be skipped;
+          // all other read failures must still fail the snapshot.
+          if (process.platform !== "win32" || !isSQLiteAuxiliaryFile(entry.name)) throw error;
+        }
       }
     }
   };
   visit(root);
   return out;
+}
+
+function isSQLiteAuxiliaryFile(name: string): boolean {
+  return /(?:-wal|-shm|-journal)$/i.test(name);
 }
 
 export function selectRolloutJsonl(contents: string[], threadId?: string | null): string {

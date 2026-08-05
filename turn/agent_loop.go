@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -82,6 +83,7 @@ type AgentLoopRequest struct {
 	OnAssistantMessage              AssistantMessageCallback
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
+	OnSteerCommitted                func(count int)
 }
 
 type AgentLoopResult struct {
@@ -89,6 +91,7 @@ type AgentLoopResult struct {
 	Responses         []*model.AgentResponse
 	ToolExecutions    []ToolExecutionResult
 	InputItems        []any
+	SteerInputItems   []any
 	InitialInputCount int
 	Usage             model.AgentUsage
 	Iterations        int
@@ -164,6 +167,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if steer := drainSteer(l.steerMailbox, request); steer != nil {
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
+				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
+					request.OnSteerCommitted(count)
+				}
 			}
 			if len(steer.ClientMetadata) > 0 {
 				clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
@@ -251,6 +258,19 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 		if len(toolItems) == 0 {
+			if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
+				result.InputItems = append(result.InputItems, steer.InputItems...)
+				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+				if len(steer.ClientMetadata) > 0 {
+					clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
+				}
+				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
+					request.OnSteerCommitted(count)
+				}
+				continue
+			}
+		}
+		if len(toolItems) == 0 {
 			profile := timing.CompleteProfile(l.now())
 			result.TimingProfile = &profile
 			return result, nil
@@ -285,6 +305,17 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 	}
+}
+
+func userMessageInputItemCount(items []any) int {
+	count := 0
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["type"])), "message") && strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["role"])), "user") {
+			count++
+		}
+	}
+	return count
 }
 
 func transformClientMetadata(metadata map[string]string, transform ClientMetadataTransform) map[string]string {

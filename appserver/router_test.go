@@ -220,7 +220,7 @@ func TestRouterThreadListEmptySourceKindsDefaultsToInteractiveSources(t *testing
 	}
 	create("thread-cli", string(SessionSourceCli), now)
 	create("thread-exec", string(SessionSourceExec), now.Add(time.Minute))
-	create("thread-app", string(SessionSourceAppServer), now.Add(2*time.Minute))
+	create("thread-atlas", "atlas", now.Add(2*time.Minute))
 
 	limit := 10
 	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{
@@ -231,10 +231,10 @@ func TestRouterThreadListEmptySourceKindsDefaultsToInteractiveSources(t *testing
 		t.Fatalf("thread/list error: %+v", response.Error)
 	}
 	list := response.Result.(*ThreadListResponse)
-	if len(list.Data) != 2 || list.Data[0].ID != "thread-app" || list.Data[1].ID != "thread-cli" {
+	if len(list.Data) != 2 || list.Data[0].ID != "thread-atlas" || list.Data[1].ID != "thread-cli" {
 		t.Fatalf("thread/list data = %+v", list.Data)
 	}
-	if list.Data[0].Source != SessionSourceAppServer || list.Data[1].Source != SessionSourceCli {
+	if list.Data[0].Source != "atlas" || list.Data[1].Source != SessionSourceCli {
 		t.Fatalf("thread/list sources = %+v", list.Data)
 	}
 }
@@ -2672,8 +2672,12 @@ func TestRouterPaginatedRolloutSupportsPagedHistoryReads(t *testing.T) {
 	}
 
 	readTurns := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: "thread-paginated", IncludeTurns: true}))
-	if readTurns.Error == nil || readTurns.Error.Code != -32600 || readTurns.Error.Message != "paginated threads do not support thread/read(includeTurns=true)" {
+	if readTurns.Error != nil {
 		t.Fatalf("read turns response = %+v", readTurns)
+	}
+	readTurnsPayload := readTurns.Result.(*ThreadReadResponse).Thread
+	if readTurnsPayload.HistoryMode != ThreadHistoryPaginated || len(readTurnsPayload.Turns) != 1 || len(readTurnsPayload.Turns[0].Items) != 1 || readTurnsPayload.Turns[0].Items[0].Text != "from paginated rollout" {
+		t.Fatalf("read turns thread = %+v", readTurnsPayload)
 	}
 	itemsList := router.Handle(requestWithParams(t, IntID(21), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-paginated"}))
 	if itemsList.Error != nil || len(itemsList.Result.(*ThreadItemsListResponse).Data) != 1 {
@@ -3308,8 +3312,8 @@ func TestRouterForkFallsBackToRolloutSource(t *testing.T) {
 	if forked.ForkedFromID == nil || *forked.ForkedFromID != "thread-rollout" {
 		t.Fatalf("fork lineage = %+v", forked)
 	}
-	if forked.Source != SessionSourceCli {
-		t.Fatalf("fork source = %q", forked.Source)
+	if forked.Source != SessionSourceVsCode {
+		t.Fatalf("fork source = %q, want vscode app-server default like Rust", forked.Source)
 	}
 	if len(forked.Turns) != 1 || forked.Turns[0].Items[0].Text != "from rollout" || forked.Turns[0].Status != TurnStatusInterrupted {
 		t.Fatalf("fork turns = %+v", forked.Turns)

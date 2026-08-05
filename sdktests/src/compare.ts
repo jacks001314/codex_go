@@ -101,6 +101,10 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkWorkspaceRequiredPaths("go", go, expected.workspaceRequiredPaths),
     checkRequiredRolloutItemTypes("rust", rust, expected.requiredRolloutItemTypes),
     checkRequiredRolloutItemTypes("go", go, expected.requiredRolloutItemTypes),
+    checkRequireRolloutCompaction("rust", rust, expected.requireRolloutCompaction),
+    checkRequireRolloutCompaction("go", go, expected.requireRolloutCompaction),
+    checkCompactionWarning("rust", rust, expected.requireRolloutCompaction),
+    checkCompactionWarning("go", go, expected.requireRolloutCompaction),
     checkWorkspaceSideEffects(rust, go, expected.compareWorkspacePaths),
   ];
   const firstFailure = checks.find((check) => !check.ok);
@@ -459,6 +463,18 @@ function checkEventTypeSequence(rust: any, go: any, comparison: unknown) {
   if (comparison === "semantic-tools") {
     return { name: "semantic event lifecycle", ok: true, detail: "scenario compares completed tool semantics and terminal lifecycle; commentary and started-event interleaving are non-contractual" };
   }
+  if (comparison === "compaction-tolerant") {
+    const left = withoutCompactionWarning(rust).map((event: any) => String(event.type));
+    const right = withoutCompactionWarning(go).map((event: any) => String(event.type));
+    const ok = JSON.stringify(left) === JSON.stringify(right);
+    return {
+      name: "strict event type sequence",
+      ok,
+      detail: ok
+        ? "compaction warning error item is an independent event whose position Rust varies across runs; removed from strict ordering"
+        : `rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}`,
+    };
+  }
   const left = eventTypes(rust);
   const right = eventTypes(go);
   const strictOk = JSON.stringify(left) === JSON.stringify(right);
@@ -490,6 +506,20 @@ function comparableEventTypes(recording: any): string[] {
 function checkItemTypeSequence(rust: any, go: any, comparison: unknown) {
   if (comparison === "model-selected-tools") {
     return { name: "model-selected completed tool sequence", ok: true, detail: "scenario does not require identical model-selected tool counts" };
+  }
+  if (comparison === "compaction-tolerant") {
+    const left = withoutCompactionWarning(rust)
+      .filter((event: any) => event.type === "item.completed")
+      .map((event: any) => String(event.item?.type));
+    const right = withoutCompactionWarning(go)
+      .filter((event: any) => event.type === "item.completed")
+      .map((event: any) => String(event.item?.type));
+    const ok = JSON.stringify(left) === JSON.stringify(right);
+    return {
+      name: "strict completed item type sequence",
+      ok,
+      detail: ok ? undefined : `rust: ${left.join(" -> ")}; go: ${right.join(" -> ")}`,
+    };
   }
   if (comparison === "semantic-tools") {
     const comparable = (recording: any) => (recording.events ?? [])
@@ -1021,6 +1051,51 @@ function rolloutItemTypes(recording: any): string[] {
     ) found.add("image_view");
   }
   return [...found].sort();
+}
+
+function checkRequireRolloutCompaction(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: rollout compaction marker`, ok: true, detail: "scenario has no rollout-compaction contract" };
+  }
+  const found = String(recording?.rolloutJsonl ?? "")
+    .split(/\r?\n/)
+    .some((line) => {
+      if (!line.trim()) return false;
+      try {
+        return JSON.parse(line)?.type === "compacted";
+      } catch {
+        return false;
+      }
+    });
+  return {
+    name: `${label}: rollout compaction marker`,
+    ok: found,
+    detail: found ? undefined : `${label} rollout has no compacted record`,
+  };
+}
+
+function checkCompactionWarning(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: compaction warning item`, ok: true, detail: "scenario has no compaction-warning contract" };
+  }
+  const count = (recording.events ?? []).filter((event: any) =>
+    event?.type === "item.completed" &&
+    event?.item?.type === "error" &&
+    String(event?.item?.message ?? "").includes("Heads up: Long threads"),
+  ).length;
+  return {
+    name: `${label}: compaction warning item`,
+    ok: count >= 1,
+    detail: count >= 1 ? undefined : `${label} emitted ${count} compaction warning error items`,
+  };
+}
+
+function withoutCompactionWarning(recording: any): any[] {
+  return (recording.events ?? []).filter((event: any) =>
+    !(event?.type === "item.completed" &&
+      event?.item?.type === "error" &&
+      String(event?.item?.message ?? "").includes("Heads up: Long threads")),
+  );
 }
 
 function checkWorkspaceSideEffects(rust: any, go: any, selectedPaths?: unknown) {

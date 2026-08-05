@@ -68,6 +68,64 @@ test("compareArtifact accepts paired command and one final message", () => {
   }
 });
 
+test("compareArtifact enforces both rollout compaction and warning contracts", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
+  try {
+    const events = [
+      event("thread.started"),
+      event("turn.started"),
+      event("item.completed", { id: "warn-1", type: "error", message: "Heads up: Long threads may be compacted." }),
+      event("item.completed", { id: "msg-1", type: "agent_message", text: "COMPACTION_OK" }),
+      event("turn.completed"),
+    ];
+    const recordingWithCompaction = {
+      ...recording(events),
+      rolloutJsonl: JSON.stringify({ type: "compacted" }),
+    };
+    writeArtifact(root, recordingWithCompaction, recordingWithCompaction, undefined, {
+      exactAgentMessages: ["COMPACTION_OK"],
+      requireRolloutCompaction: true,
+      requireStartedCompletedPairs: [],
+      requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: false,
+    });
+    let result = compareArtifact(root);
+    assert.equal(result.status, "pass");
+    assert.equal(result.checks.find((check) => check.name === "rust: rollout compaction marker")?.ok, true);
+    assert.equal(result.checks.find((check) => check.name === "rust: compaction warning item")?.ok, true);
+
+    const missingMarker = { ...recordingWithCompaction, rolloutJsonl: "" };
+    writeArtifact(root, missingMarker, missingMarker, undefined, {
+      exactAgentMessages: ["COMPACTION_OK"],
+      requireRolloutCompaction: true,
+      requireStartedCompletedPairs: [],
+      requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: false,
+    });
+    result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.checks.find((check) => check.name === "rust: rollout compaction marker")?.ok, false);
+
+    const missingWarning = {
+      ...recordingWithCompaction,
+      events: events.filter((entry) => !String(entry.item?.message ?? "").includes("Heads up: Long threads")),
+      turns: [{ index: 0, events: events.filter((entry) => !String(entry.item?.message ?? "").includes("Heads up: Long threads")) }],
+    };
+    writeArtifact(root, missingWarning, missingWarning, undefined, {
+      exactAgentMessages: ["COMPACTION_OK"],
+      requireRolloutCompaction: true,
+      requireStartedCompletedPairs: [],
+      requireSingleFinalAgentMessagePerTurn: true,
+      forbidEmptyCommandExecutions: false,
+    });
+    result = compareArtifact(root);
+    assert.equal(result.status, "behavior_mismatch");
+    assert.equal(result.checks.find((check) => check.name === "rust: compaction warning item")?.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compareArtifact treats structured JSON object key order as insignificant", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sdktests-compare-"));
   try {

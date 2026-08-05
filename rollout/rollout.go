@@ -100,6 +100,55 @@ type SessionMeta struct {
 	Extra                       map[string]any    `json:"extra,omitempty"`
 }
 
+// UnmarshalJSON accepts both the legacy Go string representation and the
+// object representation emitted by current Rust rollouts:
+// {"base_instructions":"..."} and {"base_instructions":{"text":"..."}}.
+func (m *SessionMeta) UnmarshalJSON(data []byte) error {
+	type sessionMetaAlias SessionMeta
+	var wire struct {
+		*sessionMetaAlias
+		BaseInstructions json.RawMessage `json:"base_instructions"`
+	}
+	wire.sessionMetaAlias = (*sessionMetaAlias)(m)
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if len(wire.BaseInstructions) == 0 || string(wire.BaseInstructions) == "null" {
+		m.BaseInstructions = ""
+		return nil
+	}
+	var legacy string
+	if err := json.Unmarshal(wire.BaseInstructions, &legacy); err == nil {
+		m.BaseInstructions = legacy
+		return nil
+	}
+	var object struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(wire.BaseInstructions, &object); err != nil {
+		return fmt.Errorf("base_instructions: expected string or object: %w", err)
+	}
+	m.BaseInstructions = object.Text
+	return nil
+}
+
+// MarshalJSON emits the Rust-compatible object representation while retaining
+// the Go string field internally for callers and legacy metadata.
+func (m SessionMeta) MarshalJSON() ([]byte, error) {
+	type sessionMetaAlias SessionMeta
+	var wire struct {
+		*sessionMetaAlias
+		BaseInstructions any `json:"base_instructions,omitempty"`
+	}
+	wire.sessionMetaAlias = (*sessionMetaAlias)(&m)
+	if m.BaseInstructions != "" {
+		wire.BaseInstructions = struct {
+			Text string `json:"text"`
+		}{Text: m.BaseInstructions}
+	}
+	return json.Marshal(&wire)
+}
+
 type HistoryPosition struct {
 	ThreadID            string `json:"thread_id"`
 	EndOrdinalExclusive uint64 `json:"end_ordinal_exclusive"`
@@ -301,6 +350,14 @@ func (line Line) MarshalJSON() ([]byte, error) {
 			Type      string       `json:"type"`
 			Payload   *SessionMeta `json:"payload"`
 		}{Timestamp: line.Timestamp, Ordinal: line.Ordinal, Type: line.Type, Payload: line.Meta})
+	}
+	if line.Type == "response_item" && len(line.Item) > 0 {
+		return json.Marshal(struct {
+			Timestamp string          `json:"timestamp"`
+			Ordinal   *uint64         `json:"ordinal,omitempty"`
+			Type      string          `json:"type"`
+			Payload   json.RawMessage `json:"payload"`
+		}{Timestamp: line.Timestamp, Ordinal: line.Ordinal, Type: line.Type, Payload: line.Item})
 	}
 	type lineAlias Line
 	return json.Marshal(lineAlias(line))
@@ -600,8 +657,21 @@ func LineFromItem(item *Item, now time.Time) (*Line, error) {
 		return nil, errors.New("rollout item is nil")
 	}
 	raw := item.Raw
-	if len(raw) == 0 {
-		data, err := json.Marshal(item)
+	if len(raw) > 0 {
+		var object map[string]any
+		if json.Unmarshal(raw, &object) == nil && !legacyRolloutItemWrapper(object) {
+			stampResponseItemTurnID(object, item)
+			if encoded, marshalErr := json.Marshal(object); marshalErr == nil {
+				raw = encoded
+			}
+		}
+	}
+	if len(raw) == 0 || legacyRolloutRawItem(raw) {
+		payload, ok := canonicalResponseItemPayload(item)
+		if !ok {
+			payload = item
+		}
+		data, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +681,7 @@ func LineFromItem(item *Item, now time.Time) (*Line, error) {
 		now = time.Now().UTC()
 	}
 	line := &Line{
-		Type:       "item",
+		Type:       "response_item",
 		Timestamp:  now.UTC().Format(time.RFC3339Nano),
 		Item:       append(json.RawMessage(nil), raw...),
 		ItemID:     item.ID,
@@ -1172,6 +1242,9 @@ func ItemFromLine(line *Line) (*Item, bool) {
 	if line.TurnID != "" {
 		item.Metadata["turnId"] = line.TurnID
 	}
+	if turnID := responseItemTurnID(item.Raw); turnID != "" {
+		item.Metadata["turnId"] = turnID
+	}
 	return &item, item.Type != ""
 }
 
@@ -1197,11 +1270,18 @@ func inputItemFromItem(item *Item, includeToolOutputs bool) any {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
 			if object, ok := raw.(map[string]any); ok {
+				if legacyRolloutItemWrapper(object) {
+					return inputItemFromStructuredItem(item, includeToolOutputs)
+				}
 				delete(object, "internal_chat_message_metadata_passthrough")
 			}
 			return raw
 		}
 	}
+	return inputItemFromStructuredItem(item, includeToolOutputs)
+}
+
+func inputItemFromStructuredItem(item *Item, includeToolOutputs bool) any {
 	switch item.Type {
 	case "message", "user_message", "agent_message", "assistant_message":
 		return messageInputItem(item)
@@ -1218,6 +1298,83 @@ func inputItemFromItem(item *Item, includeToolOutputs bool) any {
 		}
 		return messageInputItem(item)
 	}
+}
+
+func canonicalResponseItemPayload(item *Item) (any, bool) {
+	if item == nil {
+		return nil, false
+	}
+	var payload any
+	switch item.Type {
+	case "message", "user_message", "agent_message", "assistant_message":
+		payload = messageInputItem(item)
+	case "function_call", "custom_tool_call", "tool_search_call":
+		payload = toolCallInputItem(item)
+	case "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_output":
+		payload = toolOutputInputItem(item)
+	default:
+		return nil, false
+	}
+	object, ok := payload.(map[string]any)
+	if !ok || object == nil {
+		return nil, false
+	}
+	if strings.TrimSpace(item.ID) != "" {
+		object["id"] = item.ID
+	}
+	if object["type"] == "message" {
+		if phase := firstNonEmpty(stringValue(item.Data, "phase"), stringValue(item.Metadata, "phase")); phase != "" {
+			object["phase"] = phase
+		}
+	}
+	stampResponseItemTurnID(object, item)
+	return object, true
+}
+
+func stampResponseItemTurnID(object map[string]any, item *Item) {
+	if object == nil || item == nil {
+		return
+	}
+	turnID := firstNonEmpty(stringValue(item.Metadata, "turnId"), stringValue(item.Metadata, "turn_id"), stringValue(item.Data, "turnId"), stringValue(item.Data, "turn_id"))
+	if turnID == "" {
+		return
+	}
+	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if strings.TrimSpace(stringValue(metadata, "turn_id")) == "" {
+		metadata["turn_id"] = turnID
+	}
+	object["internal_chat_message_metadata_passthrough"] = metadata
+}
+
+func responseItemTurnID(raw json.RawMessage) string {
+	var object map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
+		return ""
+	}
+	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	return firstNonEmpty(stringValue(metadata, "turn_id"), stringValue(metadata, "turnId"))
+}
+
+func legacyRolloutRawItem(raw json.RawMessage) bool {
+	var object map[string]any
+	return len(raw) > 0 && json.Unmarshal(raw, &object) == nil && legacyRolloutItemWrapper(object)
+}
+
+func legacyRolloutItemWrapper(object map[string]any) bool {
+	if object == nil {
+		return false
+	}
+	for _, key := range []string{"metadata", "data", "raw", "response_id"} {
+		if _, ok := object[key]; ok {
+			return true
+		}
+	}
+	itemType := strings.TrimSpace(stringValue(object, "type"))
+	_, hasText := object["text"]
+	return hasText && (itemType == "message" || itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message")
 }
 
 type ThreadItem struct {

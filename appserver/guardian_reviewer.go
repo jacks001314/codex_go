@@ -408,6 +408,27 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateResponseItemImageURLs(params.Items); err != nil {
+		return nil, err
+	}
+	// Ephemeral forks (used by TUI side conversations) live only in the
+	// runtime thread manager. They have no persisted store entry, so injected
+	// boundary items must be appended through the ephemeral runtime path.
+	now := runtimeRouterNow(r)
+	items := make([]session.Item, 0, len(params.Items))
+	for i, raw := range params.Items {
+		item, err := sessionItemFromRaw(raw, now, i)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if _, ok := r.appendEphemeralThreadItems(session.ThreadID(params.ThreadID), items); ok {
+		return &ThreadInjectItemsResponse{}, nil
+	}
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
 		return nil, err

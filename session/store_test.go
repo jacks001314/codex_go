@@ -514,7 +514,7 @@ func TestStoreForkCopiesRequestedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fork() error = %v", err)
 	}
-	if forked.ForkedFromID != "source" || forked.ParentThreadID != "source" || forked.SessionID != "fork" {
+	if forked.ForkedFromID != "source" || forked.ParentThreadID != "" || forked.SessionID != "fork" {
 		t.Fatalf("Fork() lineage = %#v", forked)
 	}
 	if forked.Title != "Source" {
@@ -563,7 +563,7 @@ func TestStoreForkRecordDoesNotRequirePersistedSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForkRecord() error = %v", err)
 	}
-	if forked.ForkedFromID != "source" || forked.ParentThreadID != "source" {
+	if forked.ForkedFromID != "source" || forked.ParentThreadID != "" {
 		t.Fatalf("ForkRecord() lineage = %#v", forked)
 	}
 	if _, err := store.Load("source"); !errors.Is(err, ErrThreadNotFound) {

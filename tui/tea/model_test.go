@@ -681,17 +681,21 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 			requests = append(requests, request)
 			return nil
 		},
+		OnSteerRequest: func(SubmitRequest, string) error {
+			t.Fatal("explicit queue invoked steer")
+			return nil
+		},
 	})
 
 	typeText(t, model, "queued while busy")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyTab))
 	if len(requests) != 0 {
 		t.Fatalf("requests before completion = %#v", requests)
 	}
 	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "queued while busy" {
 		t.Fatalf("queued requests = %#v", got)
 	}
-	if !strings.Contains(model.View(), "Queued inputs: 1") {
+	if !strings.Contains(model.View(), "Queued follow-up inputs") || !strings.Contains(model.View(), "queued while busy") {
 		t.Fatalf("queue line missing:\n%s", model.View())
 	}
 	if got := model.ComposerValue(); got != "" {
@@ -705,8 +709,93 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 	if got := model.QueuedRequests(); len(got) != 0 {
 		t.Fatalf("queued after completion = %#v", got)
 	}
+	if strings.Contains(model.View(), "Queued follow-up inputs") || strings.Contains(model.View(), "Queued: queued while busy") {
+		t.Fatalf("queued preview remained after completion:\n%s", model.View())
+	}
 	if state.Status != "running" {
 		t.Fatalf("status after queued submit = %q, want running", state.Status)
+	}
+}
+
+func TestModelSteersPromptWhileRunningAndCommitsWithoutFutureQueue(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	var steered SubmitRequest
+	var clientID string
+	model := NewModel(state, Options{
+		OnSubmitRequest: func(SubmitRequest) bubbletea.Cmd {
+			t.Fatal("running submission started a future turn")
+			return nil
+		},
+		OnSteerRequest: func(request SubmitRequest, id string) error {
+			steered = request
+			clientID = id
+			return nil
+		},
+	})
+	model.composer.SetValue("change direction")
+	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("steer command is nil")
+	}
+	message := cmd()
+	if result, ok := message.(SteerResultMsg); !ok || result.Err != nil {
+		t.Fatalf("steer result = %#v", message)
+	}
+	if steered.Prompt != "change direction" || clientID == "" {
+		t.Fatalf("steer request = %#v, clientID = %q", steered, clientID)
+	}
+	if got := model.QueuedRequests(); len(got) != 0 {
+		t.Fatalf("future queue = %#v", got)
+	}
+	if view := model.View(); !strings.Contains(view, "Messages to be submitted after next tool call") || !strings.Contains(view, "change direction") {
+		t.Fatalf("pending steer preview missing:\n%s", view)
+	}
+	model.Update(SteerCommittedMsg{Count: 1})
+	if view := model.View(); strings.Contains(view, "Messages to be submitted after next tool call") {
+		t.Fatalf("pending steer preview remained:\n%s", view)
+	}
+	if countRole(model.State.Messages, codextui.RoleUser) != 1 || model.State.Messages[len(model.State.Messages)-1].Text != "change direction" {
+		t.Fatalf("committed steer history = %#v", model.State.Messages)
+	}
+}
+
+func TestModelRejectedSteerFallsBackAtTurnCompletion(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	var submitted []SubmitRequest
+	model := NewModel(state, Options{
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+		OnSteerRequest: func(SubmitRequest, string) error {
+			return errors.New("no active turn to steer")
+		},
+	})
+	model.composer.SetValue("late steer")
+	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	result := cmd().(SteerResultMsg)
+	model.Update(result)
+	if view := model.View(); !strings.Contains(view, "Messages to be submitted at end of turn") || !strings.Contains(view, "late steer") {
+		t.Fatalf("rejected steer preview missing:\n%s", view)
+	}
+	_, completion := model.Update(TurnCompletedMsg{})
+	if completion != nil {
+		message := completion()
+		if batch, ok := message.(bubbletea.BatchMsg); ok {
+			for _, command := range batch {
+				if command != nil {
+					command()
+				}
+			}
+		}
+	}
+	if len(submitted) != 1 || submitted[0].Prompt != "late steer" {
+		t.Fatalf("fallback submissions = %#v", submitted)
+	}
+	if strings.Contains(model.View(), "Messages to be submitted at end of turn") {
+		t.Fatalf("rejected steer preview remained:\n%s", model.View())
 	}
 }
 

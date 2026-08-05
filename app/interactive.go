@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -35,6 +36,7 @@ import (
 	"codex_go/protocol"
 	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/tool"
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
@@ -82,9 +84,12 @@ type interactiveUserInputBroker struct {
 }
 
 type interactiveInterruptController struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	seq    int64
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	seq          int64
+	threadID     string
+	turnID       string
+	steerMailbox *turn.SteerMailbox
 }
 
 func newInteractiveApprovalBroker() *interactiveApprovalBroker {
@@ -100,7 +105,7 @@ func newInteractiveUserInputBroker() *interactiveUserInputBroker {
 }
 
 func newInteractiveInterruptController() *interactiveInterruptController {
-	return &interactiveInterruptController{}
+	return &interactiveInterruptController{steerMailbox: turn.NewSteerMailbox()}
 }
 
 func (c *interactiveInterruptController) begin(parent context.Context) (context.Context, func()) {
@@ -117,14 +122,66 @@ func (c *interactiveInterruptController) begin(parent context.Context) (context.
 	c.cancel = cancel
 	c.mu.Unlock()
 	done := func() {
+		threadID := ""
+		turnID := ""
+		mailbox := (*turn.SteerMailbox)(nil)
 		c.mu.Lock()
 		if c.seq == token {
+			threadID = c.threadID
+			turnID = c.turnID
+			mailbox = c.steerMailbox
 			c.cancel = nil
+			c.threadID = ""
+			c.turnID = ""
 		}
 		c.mu.Unlock()
+		if mailbox != nil && threadID != "" && turnID != "" {
+			mailbox.Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
+		}
 		cancel()
 	}
 	return ctx, done
+}
+
+func (c *interactiveInterruptController) setActive(threadID string, turnID string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.threadID = strings.TrimSpace(threadID)
+	c.turnID = strings.TrimSpace(turnID)
+	c.mu.Unlock()
+}
+
+func (c *interactiveInterruptController) steer(request codextea.SubmitRequest, cwd string) error {
+	if c == nil {
+		return errors.New("no active turn to steer")
+	}
+	c.mu.Lock()
+	threadID := c.threadID
+	turnID := c.turnID
+	mailbox := c.steerMailbox
+	c.mu.Unlock()
+	if threadID == "" || turnID == "" || mailbox == nil {
+		return errors.New("no active turn to steer")
+	}
+	inputs := interactiveSubmitInputs(request)
+	prompt := strings.TrimSpace(request.Prompt)
+	if request.IDEContext != nil {
+		if prompt != "" {
+			inputs = append([]turn.TurnUserInput{{Type: "text", Text: prompt}}, inputs...)
+			prompt = ""
+		}
+		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
+	} else if prompt != "" {
+		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
+		prompt = ""
+	}
+	item := codexexec.UserMessageInputItemFromTurnInputs(prompt, inputs, cwd)
+	if item == nil {
+		return errors.New("steer input must not be empty")
+	}
+	return mailbox.Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: turnID, InputItems: []any{item}})
 }
 
 func (c *interactiveInterruptController) interruptCommand() bubbletea.Cmd {
@@ -696,6 +753,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 				turnRunner = sideRunner
 			}
 			return interactiveTurnCommandWithRequest(ctx, root, turnRunner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+		},
+		OnSteerRequest: func(request codextea.SubmitRequest, _ string) error {
+			cwd := ""
+			if root != nil {
+				cwd = root.Shared.CWD
+			}
+			return interrupts.steer(request, cwd)
 		},
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
@@ -1867,7 +1931,16 @@ func interactiveLogoutHandler(ctx context.Context, root *cli.RootOptions) codext
 }
 
 func interactiveOpenDesktopThread(threadID string) error {
-	url := tuiapp.DesktopThreadURL(strings.TrimSpace(threadID))
+	threadID = strings.TrimSpace(threadID)
+	// The Desktop app resolves codex://threads/<id> against the shared SQLite
+	// state DB (the same projection Rust's app-server maintains at
+	// thread/start). CLI-created threads only exist as rollout JSONL until they
+	// are reconciled, so make the current session visible before handing it
+	// off; otherwise the app launches but cannot open the session.
+	if err := interactiveReconcileDesktopThread(threadID); err != nil {
+		return err
+	}
+	url := tuiapp.DesktopThreadURL(threadID)
 	command := exec.Command("powershell.exe", "-NoProfile", "-Command", tuiapp.WindowsDesktopAppLaunchScript(url))
 	_, err := command.Output()
 	if err == nil {
@@ -1881,6 +1954,108 @@ func interactiveOpenDesktopThread(threadID string) error {
 		return fmt.Errorf("failed to launch the Desktop app through PowerShell with %s", exitErr.ProcessState)
 	}
 	return fmt.Errorf("failed to launch the Desktop app through PowerShell: %w", err)
+}
+
+// interactiveReconcileDesktopThread projects the current thread's authoritative
+// rollout into the SQLite state DB so the Desktop app can find and open it.
+// Sessions owned by a remote app-server have no local rollout; for those we
+// fall through to the launch and let the owning server's state projection
+// serve the deep link.
+func interactiveReconcileDesktopThread(threadID string) error {
+	if strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	codexHome := auth.DefaultCodexHome()
+	path, err := rollout.FindThreadPath(codexHome, threadID, false)
+	if err == nil {
+		return reconcileStateForDesktopHandoff(codexHome, path)
+	}
+	// A session that has not produced its first turn yet has no rollout file
+	// (Rust's app-server materializes one at thread/start). Without it the
+	// Desktop app cannot resolve the deep link and silently fails to open the
+	// session, so materialize a session_meta-only rollout before handing off.
+	record, readErr := newSessionStore().Read(session.ThreadID(threadID), true, false)
+	if readErr != nil || record == nil {
+		return nil
+	}
+	path, err = materializeDesktopHandoffRollout(codexHome, record)
+	if err != nil {
+		return err
+	}
+	return reconcileStateForDesktopHandoff(codexHome, path)
+}
+
+func materializeDesktopHandoffRollout(codexHome string, record *session.Record) (string, error) {
+	if record == nil {
+		return "", errors.New("session record is nil")
+	}
+	now := record.CreatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:               codexHome,
+		SessionID:               record.SessionID,
+		SessionPrefix:           record.Metadata.SessionPrefix,
+		ThreadID:                string(record.ID),
+		ForkedFromID:            string(record.ForkedFromID),
+		Source:                  record.Metadata.Source,
+		ThreadSource:            record.Metadata.ThreadSource,
+		Originator:              record.Metadata.Originator,
+		CWD:                     record.Metadata.CWD,
+		Model:                   record.Metadata.Model,
+		ModelProvider:           record.Metadata.ModelProvider,
+		HistoryMode:             record.Metadata.HistoryMode,
+		HistoryBase:             desktopHistoryPositionFromRecord(record.HistoryBase),
+		MemoryMode:              record.Metadata.MemoryMode,
+		ParentThreadID:          string(record.ParentThreadID),
+		BaseInstructions:        record.Metadata.BaseInstructions,
+		AgentNickname:           record.Metadata.AgentNickname,
+		AgentRole:               record.Metadata.AgentRole,
+		AgentPath:               record.Metadata.AgentPath,
+		DynamicTools:            record.Metadata.DynamicTools,
+		SelectedCapabilityRoots: record.Metadata.SelectedCapabilityRoots,
+		MultiAgentVersion:       record.Metadata.MultiAgentVersion,
+		ContextWindow:           record.Metadata.ContextWindow,
+		CLIVersion:              record.Metadata.CLIVersion,
+		Git:                     record.Metadata.Git,
+		Extra:                   record.Metadata.Extra,
+		Now:                     now,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to materialize session rollout for Desktop handoff: %w", err)
+	}
+	if err := recorder.Close(); err != nil {
+		return "", fmt.Errorf("failed to finalize session rollout for Desktop handoff: %w", err)
+	}
+	return recorder.Path(), nil
+}
+
+func desktopHistoryPositionFromRecord(value *session.HistoryPosition) *rollout.HistoryPosition {
+	if value == nil || value.EndOrdinalExclusive == 0 || value.EndByteOffset == 0 {
+		return nil
+	}
+	return &rollout.HistoryPosition{
+		ThreadID:            string(value.ThreadID),
+		EndOrdinalExclusive: value.EndOrdinalExclusive,
+		EndByteOffset:       value.EndByteOffset,
+	}
+}
+
+func reconcileStateForDesktopHandoff(codexHome string, rolloutPath string) error {
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return fmt.Errorf("failed to prepare the local state database for Desktop handoff: %w", err)
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		return fmt.Errorf("failed to open the local state database for Desktop handoff: %w", err)
+	}
+	defer runtime.Close()
+	if err := runtime.ReconcileRollout(context.Background(), rolloutPath, false); err != nil {
+		return fmt.Errorf("failed to register this session with the local state database for Desktop handoff: %w", err)
+	}
+	return nil
 }
 
 func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {
@@ -2257,13 +2432,17 @@ func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOption
 			if done != nil {
 				defer done()
 			}
-			runInteractiveTurn(turnCtx, root, runner, turnState, request, threadID, messages, approvalBroker, elicitationBroker, userInputBroker)
+			var controller *interactiveInterruptController
+			if len(interrupts) > 0 {
+				controller = interrupts[0]
+			}
+			runInteractiveTurn(turnCtx, root, runner, turnState, request, threadID, messages, approvalBroker, elicitationBroker, userInputBroker, controller)
 		}()
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
 }
 
-func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, requestedThreadID string, messages chan<- bubbletea.Msg, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) {
+func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, requestedThreadID string, messages chan<- bubbletea.Msg, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts ...*interactiveInterruptController) {
 	defer close(messages)
 	send := func(message bubbletea.Msg) {
 		select {
@@ -2371,7 +2550,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		streamOutput = io.Discard
 		internalEventHandler = streamWriter.HandleEvent
 	}
-	result, err := runner.RunContext(ctx, &codexexec.Request{
+	execRequest := &codexexec.Request{
 		Root:                   turnRoot,
 		Exec:                   execOpts,
 		Input:                  inputs,
@@ -2379,7 +2558,18 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		AdditionalInstructions: additionalInstructions,
 		AdditionalInputItems:   additionalInputItems,
 		InternalEventHandler:   internalEventHandler,
-	}, strings.NewReader(""), streamOutput, io.Discard)
+	}
+	if len(interrupts) > 0 && interrupts[0] != nil {
+		controller := interrupts[0]
+		execRequest.SteerMailbox = controller.steerMailbox
+		execRequest.OnTurnStarted = controller.setActive
+		execRequest.OnSteerCommitted = func(count int) {
+			if count > 0 {
+				send(codextea.SteerCommittedMsg{Count: count})
+			}
+		}
+	}
+	result, err := runner.RunContext(ctx, execRequest, strings.NewReader(""), streamOutput, io.Discard)
 	streamWriter.Flush()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {

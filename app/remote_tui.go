@@ -159,6 +159,32 @@ func (c *remoteTUIInterruptController) interrupt() error {
 	}, &response)
 }
 
+func (c *remoteTUIInterruptController) steer(request codextea.SubmitRequest, clientID string) error {
+	if c == nil {
+		return errors.New("no active remote turn to steer")
+	}
+	c.mu.Lock()
+	threadID := strings.TrimSpace(c.threadID)
+	turnID := strings.TrimSpace(c.turnID)
+	endpoint := c.endpoint
+	ctx := c.ctx
+	c.mu.Unlock()
+	if threadID == "" || turnID == "" {
+		return errors.New("no active remote turn to steer")
+	}
+	params, err := remoteTurnSteerParams(threadID, turnID, clientID, request)
+	if err != nil {
+		return err
+	}
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	var response turn.TurnSteerResponse
+	return remoteSessionRequest(ctx, client, appserver.MethodTurnSteer, params, &response)
+}
+
 func (b remoteTUIBrokers) respond(response codextea.ModalResponse) {
 	if b.approval != nil {
 		b.approval.respond(response)
@@ -331,6 +357,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommand(ctx, root, endpoint, state, request, brokers, interrupts)
 		},
+		OnSteerRequest: interrupts.steer,
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
 		},
@@ -3381,6 +3408,36 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	return params, nil
 }
 
+func remoteTurnSteerParams(threadID string, turnID string, clientID string, request codextea.SubmitRequest) (turn.TurnSteerParams, error) {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return turn.TurnSteerParams{}, errors.New("remote turn/steer requires active thread and turn ids")
+	}
+	inputs := interactiveSubmitInputs(request)
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt != "" {
+		textInput := turn.TurnUserInput{Type: "text", Text: prompt}
+		if request.IDEContext != nil {
+			inputs = append([]turn.TurnUserInput{textInput}, inputs...)
+		} else {
+			inputs = append(inputs, textInput)
+		}
+	}
+	if request.IDEContext != nil {
+		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
+	}
+	if len(inputs) == 0 {
+		return turn.TurnSteerParams{}, errors.New("remote turn/steer requires user input")
+	}
+	return turn.TurnSteerParams{
+		ThreadID:            threadID,
+		ExpectedTurnID:      turnID,
+		Input:               inputs,
+		ClientUserMessageID: strings.TrimSpace(clientID),
+	}, nil
+}
+
 func remoteSharedOptions(root *cli.RootOptions, state *codextui.State) cli.SharedOptions {
 	if root == nil {
 		return interactiveSharedOptionsFromState(cli.SharedOptions{}, state)
@@ -3417,6 +3474,8 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 	id := remotePayloadString(payload, "id")
 	wireType := remotePayloadString(payload, "type")
 	switch wireType {
+	case "userMessage":
+		return protocol.ThreadItem{ID: id, Type: "user_message", Text: remoteUserMessageText(payload)}
 	case "agentMessage":
 		return protocol.AgentMessageItemWithPhase(id, remotePayloadString(payload, "text"), remotePayloadString(payload, "phase"))
 	case "commandExecution":
@@ -3498,6 +3557,24 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			Text: remoteFirstPayloadString(payload, "text", "message", "review"),
 		}
 	}
+}
+
+func remoteUserMessageText(payload appserver.ThreadItemPayload) string {
+	content, ok := payload["content"].([]any)
+	if !ok {
+		return remotePayloadString(payload, "text")
+	}
+	parts := make([]string, 0, len(content))
+	for _, value := range content {
+		block, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text := remotePayloadString(block, "text"); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func remotePayloadString(payload map[string]any, key string) string {

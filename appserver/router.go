@@ -906,11 +906,14 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		UpdatedAt: now,
 		RecencyAt: now,
 		Metadata: session.Metadata{
-			CWD:                     cwd,
-			Model:                   params.Model,
-			ModelProvider:           params.ModelProvider,
-			ServiceTier:             serviceTier,
-			Source:                  string(SessionSourceAppServer),
+			CWD:           cwd,
+			Model:         params.Model,
+			ModelProvider: params.ModelProvider,
+			ServiceTier:   serviceTier,
+			// Rust's stdio app-server transport defaults every new thread's
+			// session source to VSCode, and Go's raw app-server mirrors that
+			// client-agnostic default so thread/list and session metadata agree.
+			Source:                  string(SessionSourceVsCode),
 			ThreadSource:            threadSource,
 			HistoryMode:             historyMode,
 			SessionPrefix:           session.PrefixForSessionID(string(threadID)),
@@ -1226,7 +1229,7 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 			Model:         modelID,
 			ModelProvider: stringPtrValue(params.ModelProvider),
 			ServiceTier:   serviceTier,
-			Source:        string(SessionSourceAppServer),
+			Source:        string(SessionSourceVsCode),
 			HistoryMode:   string(ThreadHistoryLegacy),
 			SessionPrefix: session.PrefixForSessionID(string(threadID)),
 			Extra:         extra,
@@ -1567,10 +1570,7 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 		}
 	}
 	if params.IncludeTurns {
-		if threadUsesPaginatedHistory(record) {
-			return nil, jsonRPCInvalidRequest("paginated threads do not support thread/read(includeTurns=true)")
-		}
-		if unmaterializedThread(record) {
+		if unmaterializedThread(record) && !threadUsesPaginatedHistory(record) {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; includeTurns is unavailable before first user message", record.ID))
 		}
 		r.attachRolloutTurnSnapshots(record)
@@ -1653,6 +1653,10 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
+	// Rust's app-server fork does not inherit the source thread's session
+	// source; the new thread is created under the app-server transport's
+	// default source (VSCode for the stdio transport).
+	record.Metadata.Source = string(SessionSourceVsCode)
 	if !params.Ephemeral {
 		if err := r.retainLiveThread(record); err != nil {
 			_ = r.store.Delete(record.ID)

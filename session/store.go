@@ -1,8 +1,6 @@
 package session
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -1288,10 +1288,6 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	if sessionID == "" {
 		sessionID = string(newID)
 	}
-	parentID := options.ParentThreadID
-	if parentID == "" {
-		parentID = source.ID
-	}
 	metadata := forkMetadata(source, options, now, len(items))
 	metadata.RolloutTurns = cloneTurnSnapshots(prepared.RolloutTurns)
 	if prepared.HistoryBase != nil {
@@ -1301,7 +1297,7 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 		ID:             newID,
 		SessionID:      sessionID,
 		ForkedFromID:   source.ID,
-		ParentThreadID: parentID,
+		ParentThreadID: options.ParentThreadID,
 		Title:          title,
 		Preview:        source.Preview,
 		Archived:       false,
@@ -2017,11 +2013,13 @@ func validateThreadID(threadID ThreadID) error {
 }
 
 func newThreadID() (ThreadID, error) {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
+	// Match Rust ThreadId::new(): fresh threads receive a UUIDv7. The previous
+	// random 32-hex encoding made fork-created threads distinguishable from
+	// CLI/app-server threads and is not a valid UUIDv7.
+	if id, err := uuid.NewV7(); err == nil {
+		return ThreadID(id.String()), nil
 	}
-	return ThreadID(hex.EncodeToString(bytes[:])), nil
+	return ThreadID(uuid.NewString()), nil
 }
 
 func cloneItems(items []Item) []Item {

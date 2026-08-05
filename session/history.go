@@ -150,7 +150,9 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 	if len(item.Raw) > 0 {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
-			return sanitizeHistoryInputItem(raw)
+			if object, ok := raw.(map[string]any); !ok || !legacyRolloutItemWrapper(object) {
+				return sanitizeHistoryInputItem(raw)
+			}
 		}
 	}
 	if nonModelVisibleHistoryItemType(item.Type) || item.Type == "reasoning" {
@@ -174,6 +176,20 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		}
 		return messageInputItem(item, options)
 	}
+}
+
+func legacyRolloutItemWrapper(object map[string]any) bool {
+	if object == nil {
+		return false
+	}
+	for _, key := range []string{"metadata", "data", "raw", "response_id"} {
+		if _, ok := object[key]; ok {
+			return true
+		}
+	}
+	itemType := historyString(object["type"])
+	_, hasText := object["text"]
+	return hasText && (itemType == "message" || itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message")
 }
 
 func imageGenerationInputItem(item *Item) map[string]any {

@@ -12,7 +12,9 @@ import (
 )
 
 const (
-	SummaryPrefix = "We need continue from a compacted conversation summary:"
+	// Mirrors Rust codex_prompts::templates::compact::summary_prefix.md so the
+	// persisted compaction summary message matches the Rust rollout contract.
+	SummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
 
 	TriggerAuto   Trigger = "auto"
 	TriggerManual Trigger = "manual"

@@ -293,6 +293,12 @@ func (m *Model) keyMatches(context string, action string, keySpec string) bool {
 
 func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
 	key := bubbletea.Key(message)
+	// Ctrl+/ is commonly encoded as the C0 unit-separator byte (0x1f).
+	// Bubble Tea exposes that byte as Ctrl+_, while Rust/crossterm normalizes
+	// the same byte to Ctrl+7 for Ctrl+/ compatibility.
+	if key.Type == bubbletea.KeyCtrlUnderscore && !key.Alt {
+		return "ctrl-7"
+	}
 	if key.Type == bubbletea.KeyRunes {
 		if len(key.Runes) != 1 || key.Paste {
 			return ""

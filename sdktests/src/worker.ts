@@ -92,10 +92,6 @@ try {
         events.push(event); turnEvents.push(event); currentThreadId = activeThread.id;
         checkpoint({ workerPid: process.pid, activeTurn: index });
         if (turnSpec.abortAfterEventType && event.type === turnSpec.abortAfterEventType) controller.abort();
-        // A terminal SDK event is the observable end of the turn. Stop
-        // consuming immediately so the SDK generator's finally block closes
-        // the CLI process even if a descendant keeps stdout handles alive.
-        if (event.type === "turn.completed" || event.type === "turn.failed") break;
       }
     } catch (err: any) {
       status = turnSpec.continueAfterError ? status : "error";

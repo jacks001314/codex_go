@@ -4,6 +4,16 @@ This project drives Rust Codex and codex_go through the same local TypeScript SD
 It records raw SDK event streams, normalizes volatile fields, and compares the
 observable contract rather than exact model prose.
 
+Build the Go CLI with its adjacent Code Mode host before live tool or lifecycle
+scenarios. The release build script emits both binaries into the same directory:
+
+```powershell
+.\scripts\build.ps1 -Output sdktests\.tmp\bin\codex-go.exe -CGO off
+```
+
+Passing a standalone `codex-go.exe` without `codex-code-mode-host.exe` beside it
+causes Code Mode to fail closed and invalidates tool/resume results.
+
 Run a minimal live smoke:
 
 ```powershell
@@ -34,6 +44,14 @@ expose `thread/fork`:
 
 ```powershell
 npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex.exe>
+```
+
+Run the full rolled-fork/ephemeral-side lifecycle audit and the bidirectional
+Rust/Go persisted-session compatibility audit:
+
+```powershell
+npm --prefix sdktests run test:raw:rolled-fork -- --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+npm --prefix sdktests run test:raw:session-compat -- --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
 ```
 
 Audit managed feature requirements directly through the raw app-server

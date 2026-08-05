@@ -1273,6 +1273,32 @@ func TestRemoteTurnStartParamsCarriesPlanCollaborationMode(t *testing.T) {
 	}
 }
 
+func TestRemoteTurnSteerParamsCarriesActiveIDsAndClientMessage(t *testing.T) {
+	params, err := remoteTurnSteerParams("thread-steer", "turn-steer", "client-steer", codextea.SubmitRequest{Prompt: "change direction"})
+	if err != nil {
+		t.Fatalf("remoteTurnSteerParams() error = %v", err)
+	}
+	if params.ThreadID != "thread-steer" || params.ExpectedTurnID != "turn-steer" || params.ClientUserMessageID != "client-steer" {
+		t.Fatalf("steer params = %#v", params)
+	}
+	if len(params.Input) != 1 || params.Input[0].Type != "text" || params.Input[0].Text != "change direction" {
+		t.Fatalf("steer input = %#v", params.Input)
+	}
+}
+
+func TestRemoteProtocolUserMessageMapsCommittedSteer(t *testing.T) {
+	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"type": "userMessage",
+		"id":   "client-steer",
+		"content": []any{
+			map[string]any{"type": "text", "text": "change direction"},
+		},
+	}, true)
+	if item.Type != "user_message" || item.ID != "client-steer" || item.Text != "change direction" {
+		t.Fatalf("user message item = %#v", item)
+	}
+}
+
 func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
 	inputs := interactiveSubmitInputs(codextea.SubmitRequest{
 		Prompt:          "$imagegen",

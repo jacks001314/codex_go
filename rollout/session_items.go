@@ -51,7 +51,7 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		if recorder.IsPaginated() {
 			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&items[i])
 			if err != nil {
-				return err
+				return fmt.Errorf("encode paginated session item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
 			}
 			if len(raw) == 0 {
 				continue
@@ -66,12 +66,12 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 			}
 			if coreTurnItemIsInProgress(raw) {
 				if err := recorder.AppendItemStarted(raw, turnID, startedAt); err != nil {
-					return err
+					return fmt.Errorf("append paginated started item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
 				}
 				continue
 			}
 			if err := recorder.AppendItemCompleted(raw, turnID, startedAt, completedAt); err != nil {
-				return err
+				return fmt.Errorf("append paginated completed item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
 			}
 			continue
 		}
@@ -688,6 +688,9 @@ func (b *rolloutReplayBuilder) handleUserMessage(payload rolloutEventPayload, li
 	if len(payload.TextElementsCamel) > 0 {
 		item.Data["textElements"] = jsonRawToAny(payload.TextElementsCamel)
 	}
+	if b.hasCanonicalEventMirror(item, "user_message") {
+		return
+	}
 	b.appendGeneratedItem(item)
 }
 
@@ -696,14 +699,18 @@ func (b *rolloutReplayBuilder) handleAgentMessage(payload rolloutEventPayload, l
 		return
 	}
 	turn := b.ensureTurn(lineIndex)
-	b.appendGeneratedItem(session.Item{
+	item := session.Item{
 		ID:        b.nextItemID(),
 		Type:      "agent_message",
 		Role:      "assistant",
 		Text:      payload.Message,
 		CreatedAt: lineItemCreatedAt(line, b.fallback),
-		Metadata:  map[string]any{"turnId": turn.snapshot.ID},
-	})
+		Metadata:  map[string]any{"turnId": turn.snapshot.ID, "kind": "agent_message"},
+	}
+	if b.hasCanonicalEventMirror(item, "agent_message") {
+		return
+	}
+	b.appendGeneratedItem(item)
 }
 
 func (b *rolloutReplayBuilder) ensureTurn(lineIndex int) *rolloutReplayTurn {
@@ -763,6 +770,12 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 		b.items[i] = item
 		return
 	}
+	if index := b.generatedEventMirrorIndex(item, turnID); index >= 0 {
+		item.CreatedAt = b.items[index].CreatedAt
+		item.CreatedAtOrdinal = b.items[index].CreatedAtOrdinal
+		b.items[index] = item
+		return
+	}
 	item.CreatedAtOrdinal = item.UpdatedAtOrdinal
 	b.items = append(b.items, item)
 	if b.current == nil {
@@ -771,6 +784,50 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 	if sessionItemTurnID(&item, len(b.items)-1) == b.current.snapshot.ID {
 		b.current.itemCount++
 	}
+}
+
+func (b *rolloutReplayBuilder) hasCanonicalEventMirror(item session.Item, kind string) bool {
+	turnID := sessionItemTurnID(&item, len(b.items))
+	for i := len(b.items) - 1; i >= 0; i-- {
+		candidate := &b.items[i]
+		if len(candidate.Raw) == 0 || sessionItemTurnID(candidate, i) != turnID {
+			continue
+		}
+		if rolloutItemsMirror(candidate, &item, kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *rolloutReplayBuilder) generatedEventMirrorIndex(item session.Item, turnID string) int {
+	kind := ""
+	switch item.Role {
+	case "user":
+		kind = "user_message"
+	case "assistant":
+		kind = "agent_message"
+	default:
+		return -1
+	}
+	for i := len(b.items) - 1; i >= 0; i-- {
+		candidate := &b.items[i]
+		if len(candidate.Raw) != 0 || sessionItemTurnID(candidate, i) != turnID {
+			continue
+		}
+		if rolloutItemsMirror(candidate, &item, kind) {
+			return i
+		}
+	}
+	return -1
+}
+
+func rolloutItemsMirror(left *session.Item, right *session.Item, kind string) bool {
+	if left == nil || right == nil || stringFromMap(left.Metadata, "kind") != kind {
+		return false
+	}
+	return strings.TrimSpace(left.Role) == strings.TrimSpace(right.Role) &&
+		strings.TrimSpace(left.Text) == strings.TrimSpace(right.Text)
 }
 
 func (b *rolloutReplayBuilder) nextItemID() string {
@@ -955,6 +1012,9 @@ func SessionItemFromRolloutItem(item *Item, createdAt time.Time, index int) sess
 		CreatedAt:  createdAt,
 		ResponseID: item.ResponseID,
 		Metadata:   metadata,
+	}
+	if sessionItem.Role == "user" && strings.HasPrefix(strings.TrimSpace(sessionItem.Text), "<turn_aborted>") {
+		sessionItem.Metadata["kind"] = "turn_aborted"
 	}
 	normalizeComplexSessionItemFromRollout(&sessionItem, item)
 	return sessionItem

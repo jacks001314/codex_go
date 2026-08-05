@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"codex_go/session"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,6 +70,42 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 	if record.Metadata.AgentPath != "/worker" || len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 || record.Metadata.MultiAgentVersion != "v2" || len(record.Metadata.ContextWindow) == 0 {
 		t.Fatalf("record metadata high fidelity fields = %#v", record.Metadata)
+	}
+}
+
+func TestSessionMetaBaseInstructionsAcceptsRustObjectAndLegacyString(t *testing.T) {
+	for name, raw := range map[string]string{
+		"rust object":   `{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","base_instructions":{"text":"rust base"}}`,
+		"legacy string": `{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","base_instructions":"legacy base"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var meta SessionMeta
+			if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			want := "rust base"
+			if name == "legacy string" {
+				want = "legacy base"
+			}
+			if meta.BaseInstructions != want {
+				t.Fatalf("BaseInstructions = %q, want %q", meta.BaseInstructions, want)
+			}
+		})
+	}
+}
+
+func TestSessionMetaBaseInstructionsMarshalUsesRustObject(t *testing.T) {
+	raw, err := json.Marshal(SessionMeta{ID: "thread-1", Timestamp: "2026-06-29T01:02:03Z", BaseInstructions: "base"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	base, ok := decoded["base_instructions"].(map[string]any)
+	if !ok || base["text"] != "base" {
+		t.Fatalf("base_instructions = %#v, want object with text", decoded["base_instructions"])
 	}
 }
 
@@ -765,11 +802,163 @@ func TestLineFromItemCarriesRustStyleFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LineFromItem() error = %v", err)
 	}
-	if line.Type != "item" || line.ItemID != "item-1" || line.Role != "user" || line.TurnID != "turn-1" || line.ResponseID != "resp-1" {
+	if line.Type != "response_item" || line.ItemID != "item-1" || line.Role != "user" || line.TurnID != "turn-1" || line.ResponseID != "resp-1" {
 		t.Fatalf("line = %#v", line)
 	}
 	if line.Timestamp == "" || len(line.Item) == 0 {
 		t.Fatalf("line missing timestamp/raw: %#v", line)
+	}
+}
+
+func TestLegacySessionItemMarshalUsesRustResponseItemWireShape(t *testing.T) {
+	line, err := LineFromItem(&Item{
+		ID:      "item-1",
+		Type:    "message",
+		Role:    "user",
+		Content: []ContentPart{{Type: "input_text", Text: "hello"}},
+	}, fixedTime())
+	if err != nil {
+		t.Fatalf("LineFromItem() error = %v", err)
+	}
+	raw, err := json.Marshal(line)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if wire["type"] != "response_item" || wire["payload"] == nil || wire["item"] != nil {
+		t.Fatalf("wire line = %#v", wire)
+	}
+}
+
+func TestAppendSessionItemsWritesCanonicalRustResponsePayload(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-canonical", Now: now})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := AppendSessionItems(recorder, []session.Item{{
+		ID: "user-1", Type: "message", Role: "user", Text: "hello",
+		Content:  []session.ContentPart{{Type: "input_text", Text: "hello"}},
+		Metadata: map[string]any{"turnId": "turn-1", "resumed": true},
+	}}, now); err != nil {
+		t.Fatalf("AppendSessionItems() error = %v", err)
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	lines, parseErrors, err := Load(path)
+	if err != nil || parseErrors != 0 || len(lines) != 2 {
+		t.Fatalf("Load() lines/errors/err = %d/%d/%v", len(lines), parseErrors, err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(lines[1].Item, &payload); err != nil {
+		t.Fatalf("payload decode error = %v", err)
+	}
+	if payload["type"] != "message" || payload["role"] != "user" || payload["id"] != "user-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if _, ok := payload["text"]; ok {
+		t.Fatalf("Go-only text field leaked into Rust response item: %#v", payload)
+	}
+	if _, ok := payload["metadata"]; ok {
+		t.Fatalf("Go-only metadata field leaked into Rust response item: %#v", payload)
+	}
+	passthrough, _ := payload["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if passthrough["turn_id"] != "turn-1" {
+		t.Fatalf("turn passthrough = %#v", passthrough)
+	}
+}
+
+func TestRecordFromPathNormalizesLegacyGoResponseWrapperForResume(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-legacy-wrapper.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-legacy-wrapper","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"response_item","payload":{"id":"user-1","type":"message","role":"user","text":"hello","content":[{"type":"input_text","text":"hello"}],"metadata":{"resumed":true,"turnId":"turn-1"}}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	inputs := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(inputs) != 1 {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	message := inputs[0].(map[string]any)
+	if message["type"] != "message" || message["role"] != "user" {
+		t.Fatalf("message = %#v", message)
+	}
+	if _, ok := message["text"]; ok {
+		t.Fatalf("legacy wrapper text leaked into model input: %#v", message)
+	}
+	if _, ok := message["metadata"]; ok {
+		t.Fatalf("legacy wrapper metadata leaked into model input: %#v", message)
+	}
+}
+
+func TestRecordFromPathDeduplicatesRustEventAndResponseMessageMirrors(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-mirrors.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-mirrors","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}`,
+		`{"timestamp":"2026-06-29T01:02:05Z","type":"event_msg","payload":{"type":"user_message","message":"hello"}}`,
+		`{"timestamp":"2026-06-29T01:02:06Z","type":"response_item","payload":{"id":"user-1","type":"message","role":"user","content":[{"type":"input_text","text":"hello"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}}}`,
+		`{"timestamp":"2026-06-29T01:02:07Z","type":"event_msg","payload":{"type":"agent_message","message":"answer"}}`,
+		`{"timestamp":"2026-06-29T01:02:08Z","type":"response_item","payload":{"id":"assistant-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}}}`,
+		`{"timestamp":"2026-06-29T01:02:09Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 2 || record.Items[0].Text != "hello" || record.Items[1].Text != "answer" {
+		t.Fatalf("deduplicated items = %#v", record.Items)
+	}
+	if record.Items[0].ID != "user-1" || record.Items[1].ID != "assistant-1" {
+		t.Fatalf("canonical response items did not replace event mirrors: %#v", record.Items)
+	}
+}
+
+func TestRecordFromPathRestoresTurnAbortedMarkerKindFromCanonicalMessage(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-06-29T01-02-03-thread-aborted-marker.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-06-29T01:02:03Z","type":"session_meta","payload":{"id":"thread-aborted-marker","timestamp":"2026-06-29T01:02:03Z"}}`,
+		`{"timestamp":"2026-06-29T01:02:04Z","type":"response_item","payload":{"id":"abort-1","type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nInterrupted.\n</turn_aborted>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if len(record.Items) != 1 || record.Items[0].Metadata["kind"] != "turn_aborted" || record.Items[0].Metadata["turnId"] != "turn-1" {
+		t.Fatalf("turn-aborted marker = %#v", record.Items)
 	}
 }
 

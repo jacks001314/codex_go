@@ -42,7 +42,7 @@ const manifest = {
   assertions: [
     "paginated thread/start is accepted",
     "thread/name/set does not materialize a fresh thread",
-    "paginated thread/read(includeTurns=true) is rejected",
+    "paginated thread/read(includeTurns=true) is accepted and returns the current empty turn list",
     "ephemeral paginated fork without excludeTurns is rejected",
     "ephemeral paginated fork with excludeTurns stays pathless and returns no turns",
     "ephemeral thread/read(includeTurns=true) is rejected",
@@ -184,7 +184,7 @@ async function runImplementation(impl: Implementation, binary: string, root: str
 function summarize(results: Record<string, any>): Record<string, any> {
   const source = results.start?.result?.thread;
   const read = results.read?.result?.thread;
-  const paginatedReadError = results.paginatedReadWithTurns?.error;
+  const paginatedRead = results.paginatedReadWithTurns?.result?.thread;
   const invalid = results.invalidFork?.error;
   const fork = results.validFork?.result?.thread;
   const listed = Array.isArray(results.list?.result?.data) ? results.list.result.data : [];
@@ -200,8 +200,9 @@ function summarize(results: Record<string, any>): Record<string, any> {
       name: read?.name ?? null,
     },
     paginatedReadWithTurns: {
-      code: paginatedReadError?.code ?? null,
-      message: paginatedReadError?.message ?? null,
+      accepted: Boolean(paginatedRead?.id),
+      historyMode: paginatedRead?.historyMode ?? null,
+      turnCount: Array.isArray(paginatedRead?.turns) ? paginatedRead.turns.length : null,
     },
     invalidFork: {
       code: invalid?.code ?? null,
@@ -211,6 +212,8 @@ function summarize(results: Record<string, any>): Record<string, any> {
       accepted: Boolean(fork?.id),
       ephemeral: fork?.ephemeral ?? null,
       pathIsNull: fork?.path == null,
+      forkedFromIdSet: Boolean(fork?.forkedFromId),
+      parentThreadIdIsNull: fork?.parentThreadId == null,
       historyMode: fork?.historyMode ?? null,
       turnCount: Array.isArray(fork?.turns) ? fork.turns.length : null,
     },
@@ -231,13 +234,16 @@ function semanticChecksPass(value: Record<string, any>): boolean {
     value.sourceSummary?.readable === true &&
     value.sourceSummary?.historyMode === "paginated" &&
     value.sourceSummary?.name === "raw fork source" &&
-    value.paginatedReadWithTurns?.code === -32600 &&
-    value.paginatedReadWithTurns?.message === "paginated threads do not support thread/read(includeTurns=true)" &&
+    value.paginatedReadWithTurns?.accepted === true &&
+    value.paginatedReadWithTurns?.historyMode === "paginated" &&
+    value.paginatedReadWithTurns?.turnCount === 0 &&
     value.invalidFork?.code === -32600 &&
     value.invalidFork?.message === "ephemeral paginated thread/fork requires `excludeTurns: true`" &&
     value.validFork?.accepted === true &&
     value.validFork?.ephemeral === true &&
     value.validFork?.pathIsNull === true &&
+    value.validFork?.forkedFromIdSet === true &&
+    value.validFork?.parentThreadIdIsNull === true &&
     value.validFork?.historyMode === "paginated" &&
     value.validFork?.turnCount === 0 &&
     value.ephemeralReadWithTurns?.code === -32600 &&

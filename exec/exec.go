@@ -27,6 +27,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
+	"codex_go/doctor"
 	"codex_go/eventmap"
 	"codex_go/features"
 	"codex_go/install"
@@ -57,9 +58,17 @@ type Request struct {
 	// retain non-wire details such as file-change diffs while the SDK JSON shape
 	// remains Rust-compatible.
 	InternalEventHandler func(protocol.ThreadEvent)
+	SteerMailbox         *turn.SteerMailbox
+	OnTurnStarted        func(threadID string, turnID string)
+	OnSteerCommitted     func(count int)
 	subagent             *execSubagentContext
 	multiAgentVersion    multiagent.MultiAgentVersion
 }
+
+// execCompactionWarningMessage mirrors the Rust core compaction warning event
+// text so the SDK/exec JSON stream emits the same error item after a
+// compaction turn.
+const execCompactionWarningMessage = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
 
 type Result struct {
 	ThreadID    string
@@ -216,16 +225,22 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			return nil, err
 		}
 	}
+	if req.OnTurnStarted != nil {
+		req.OnTurnStarted(threadID, turnID)
+	}
 	if err := eventSink.Emit(protocol.TurnStarted()); err != nil {
 		return nil, err
 	}
+	compactedThisTurn := false
 	if resumeContext == nil {
 		if err := r.persistSessionStart(req, threadID, turnID, prompt, requestInputs, modelID, providerID); err != nil {
 			return nil, err
 		}
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
-		if _, err := r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cfg, agent, eventSink); err != nil {
+		var err error
+		compactedThisTurn, err = r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cfg, agent, eventSink)
+		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 			return nil, err
@@ -359,7 +374,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AgentRoles:                     execAgentRolesFromTools(multiAgentTools),
 		AgentDefaults:                  execAgentDefaultsFromTools(multiAgentTools),
 		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
-		SteerMailbox:                   execAgentSteerMailboxFromTools(req, multiAgentTools),
+		SteerMailbox:                   firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
+		OnSteerCommitted:               req.OnSteerCommitted,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -391,7 +407,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 
-	if err := emitFinalEventsFromAgentResult(eventSink, turnResult); err != nil {
+	if err := emitFinalEventsFromAgentResult(eventSink, turnResult, compactedThisTurn); err != nil {
 		return nil, err
 	}
 	events := eventSink.Events()
@@ -497,6 +513,16 @@ type agentRunConfig struct {
 	AgentDefaults                  multiagent.SpawnDefaults
 	DisableWaitAgent               bool
 	SteerMailbox                   *turn.SteerMailbox
+	OnSteerCommitted               func(count int)
+}
+
+func firstSteerMailbox(values ...*turn.SteerMailbox) *turn.SteerMailbox {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 type execStreamEventCollector struct {
@@ -948,6 +974,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OnCodeModeNotify:             run.StreamEvents.CodeModeNotify,
 		OnWarning:                    run.StreamEvents.Warning,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
+		OnSteerCommitted:             run.OnSteerCommitted,
 	})
 }
 
@@ -1440,6 +1467,10 @@ func userMessageInputItemFromTurnInputs(prompt string, inputs []turn.TurnUserInp
 	}
 }
 
+func UserMessageInputItemFromTurnInputs(prompt string, inputs []turn.TurnUserInput, cwd string) any {
+	return userMessageInputItemFromTurnInputs(prompt, inputs, cwd)
+}
+
 func inputContentBlocksFromTurnInputs(prompt string, inputs []turn.TurnUserInput, cwd string) []map[string]any {
 	content := []map[string]any{}
 	if text := strings.TrimSpace(prompt); text != "" {
@@ -1746,7 +1777,7 @@ func mergedOverrides(root, exec []string) []string {
 	return out
 }
 
-func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopResult) error {
+func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopResult, compactedThisTurn bool) error {
 	if sink == nil {
 		return errors.New("event sink is nil")
 	}
@@ -1825,6 +1856,14 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 	}
 	if event, ok := todoLists.completionEvent(); ok {
 		if err := sink.Emit(event); err != nil {
+			return err
+		}
+	}
+	if compactedThisTurn {
+		// Rust emits the compaction warning as an error item after the resumed
+		// turn's final message and before turn.completed. Emit it in the same
+		// position so the SDK event sequence matches.
+		if err := sink.Emit(protocol.ItemCompleted(protocol.ErrorItem("compaction-warning", execCompactionWarningMessage))); err != nil {
 			return err
 		}
 	}
@@ -3431,7 +3470,9 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		if err != nil {
 			return "", err
 		}
-		_ = r.appendExecRollout(resumeRecord.ID, items, updated, now)
+		if err := r.appendExecRollout(resumeRecord.ID, items, updated, now); err != nil {
+			return "", err
+		}
 		extra := execTokenUsageMetadata(updated.Metadata.Extra, tokenUsage)
 		if updated.Metadata.Model == "" || updated.Metadata.ModelProvider == "" {
 			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{
@@ -3467,7 +3508,8 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 			Source:            execSessionSource(req),
 			ThreadSource:      execThreadSource(req),
 			Originator:        execAgentOriginator(req),
-			HistoryMode:       string(session.ForkAll),
+			CLIVersion:        doctor.Version(),
+			HistoryMode:       execPersistedHistoryMode(existing),
 			LastResponseID:    response.ResponseID,
 			SessionPrefix:     session.PrefixForSessionID(threadID),
 			AgentNickname:     execAgentNicknameForRequest(req),
@@ -3491,9 +3533,13 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		return "", err
 	}
 	if existing == nil {
-		_ = r.createExecRollout(record, now)
+		if err := r.createExecRollout(record, now); err != nil {
+			return "", fmt.Errorf("create exec rollout: %w", err)
+		}
 	} else {
-		_ = r.appendExecRollout(record.ID, delta, record, now)
+		if err := r.appendExecRollout(record.ID, delta, record, now); err != nil {
+			return "", fmt.Errorf("append exec rollout: %w", err)
+		}
 	}
 	path, err := store.Path(record.ID)
 	if err != nil {
@@ -3540,6 +3586,8 @@ func (r *Runner) persistSessionStart(req *Request, threadID string, turnID strin
 		return nil
 	}
 	now := r.now().UTC()
+	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	existing, _ := store.Read(session.ThreadID(threadID), true, true)
 	record := &session.Record{
 		ID:             session.ThreadID(threadID),
 		SessionID:      execSessionID(req, threadID),
@@ -3555,7 +3603,8 @@ func (r *Runner) persistSessionStart(req *Request, threadID string, turnID strin
 			Source:            execSessionSource(req),
 			ThreadSource:      execThreadSource(req),
 			Originator:        execAgentOriginator(req),
-			HistoryMode:       string(session.ForkAll),
+			CLIVersion:        doctor.Version(),
+			HistoryMode:       execPersistedHistoryMode(existing),
 			SessionPrefix:     session.PrefixForSessionID(threadID),
 			AgentNickname:     execAgentNicknameForRequest(req),
 			AgentRole:         execAgentRoleForRequest(req),
@@ -3565,11 +3614,37 @@ func (r *Runner) persistSessionStart(req *Request, threadID string, turnID strin
 		},
 		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, nil, now, nil, nil)...),
 	}
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
 	if err := store.Create(record); err != nil && !errors.Is(err, session.ErrConflict) {
 		return err
 	}
+	if path, findErr := rollout.FindThreadPath(r.CodexHome, threadID, false); findErr == nil {
+		// A rollout already exists for this fresh thread (e.g., materialized by
+		// /app handoff before the first turn). Append the opening items to it
+		// rather than creating a second rollout for the same thread.
+		recorder, resumeErr := rollout.Resume(path)
+		if resumeErr != nil {
+			return resumeErr
+		}
+		defer recorder.Close()
+		return rollout.AppendSessionItems(recorder, record.Items, now)
+	}
 	return r.createExecRollout(record, now)
+}
+
+// execPersistedHistoryMode returns the rollout history mode to persist for an
+// exec session. Fresh sessions use Rust's default "legacy"; an existing
+// session keeps its persisted mode. The previous code reused the fork-mode
+// value "all" (session.ForkAll), which is not a valid history mode: Rust's
+// app-server only accepts "legacy"/"paginated" and rejects the session, which
+// makes Desktop app handoff (/app) silently fail to open the thread.
+func execPersistedHistoryMode(existing *session.Record) string {
+	if existing != nil {
+		switch strings.TrimSpace(existing.Metadata.HistoryMode) {
+		case "legacy", "paginated":
+			return existing.Metadata.HistoryMode
+		}
+	}
+	return "legacy"
 }
 
 func (r *Runner) persistInterruptedSession(threadID string, turnID string, cause error) error {
@@ -3839,10 +3914,12 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	if !status.ShouldCompact {
 		return false, nil
 	}
-	if err := sink.Emit(protocol.Compacting()); err != nil {
-		return false, err
-	}
-	defer func() { _ = sink.Emit(protocol.Compacted()) }()
+	// Rust does not surface compaction lifecycle events in the exec JSON/SDK
+	// stream; it emits a single warning error item after the resumed turn. Keep
+	// the compacting/compacted status events internal for the TUI only so the
+	// public event stream matches Rust.
+	sink.EmitInternal(protocol.Compacting())
+	defer func() { sink.EmitInternal(protocol.Compacted()) }()
 	request := &compact.Request{
 		ThreadID:  threadID,
 		TurnID:    turnID,
@@ -3913,6 +3990,9 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
 	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
 	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
+		return false, err
+	}
+	if err := r.appendExecCompacted(threadID, record, compacted.Summary, now); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -4099,15 +4179,31 @@ func execLastUserCompactItems(items []compact.Item, count int) []compact.Item {
 }
 
 func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) {
+	if r == nil {
+		return nil, errors.New("exec runner is nil")
+	}
 	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
 	resume := &req.Exec.Resume
 	var threadID session.ThreadID
 	if resume.Last {
 		record, err := latestExecResumeRecord(store, resume, requestCWD(req))
-		if err != nil {
+		if err == nil {
+			threadID = record.ID
+		} else if !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
+		} else {
+			imported, importErr := latestExecResumeRolloutRecord(r.CodexHome, resume, requestCWD(req))
+			if importErr != nil {
+				if errors.Is(importErr, session.ErrThreadNotFound) {
+					return nil, err
+				}
+				return nil, importErr
+			}
+			if saveErr := store.Save(imported); saveErr != nil {
+				return nil, saveErr
+			}
+			return imported, nil
 		}
-		threadID = record.ID
 	} else {
 		target := strings.TrimSpace(resume.SessionID)
 		if target == "" {
@@ -4115,11 +4211,114 @@ func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) 
 		}
 		resolved, err := execResumeThreadIDForTarget(store, resume, target, requestCWD(req))
 		if err != nil {
-			return nil, err
+			imported, importErr := namedExecResumeRolloutRecord(r.CodexHome, resume, target, requestCWD(req))
+			if importErr != nil {
+				if errors.Is(importErr, session.ErrThreadNotFound) {
+					return nil, err
+				}
+				return nil, importErr
+			}
+			if saveErr := store.Save(imported); saveErr != nil {
+				return nil, saveErr
+			}
+			return imported, nil
 		}
 		threadID = resolved
 	}
-	return store.Read(threadID, true, true)
+	record, err := store.Read(threadID, true, true)
+	if err == nil {
+		return record, nil
+	}
+	if !errors.Is(err, session.ErrThreadNotFound) {
+		return nil, err
+	}
+	// Rust persists canonical session metadata in rollout JSONL. Import it
+	// when the Go-specific physical session record is absent, then continue
+	// through the normal Go resume path.
+	path, pathErr := rollout.FindThreadPath(r.CodexHome, string(threadID), false)
+	if pathErr != nil {
+		path, pathErr = rollout.FindThreadPath(r.CodexHome, string(threadID), true)
+	}
+	if pathErr != nil {
+		return nil, err
+	}
+	imported, importErr := rollout.RecordFromPathResolved(r.CodexHome, path, strings.Contains(filepath.ToSlash(path), "/archived_sessions/"))
+	if importErr != nil {
+		return nil, importErr
+	}
+	if imported == nil {
+		return nil, err
+	}
+	if saveErr := store.Save(imported); saveErr != nil {
+		return nil, saveErr
+	}
+	return imported, nil
+}
+
+func latestExecResumeRolloutRecord(codexHome string, resume *cli.ExecResumeOptions, cwd string) (*session.Record, error) {
+	page, err := rollout.ListThreads(codexHome, rollout.ListOptions{
+		SortKey:       rollout.SortUpdatedAt,
+		SortDirection: rollout.SortDesc,
+		Archived:      false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range page.Items {
+		record, recordErr := rollout.RecordFromPathResolved(codexHome, page.Items[i].Path, false)
+		if recordErr != nil || record == nil {
+			continue
+		}
+		if (resume != nil && resume.All) || execResumeCWDMatches(cwd, record.Metadata.CWD) {
+			return record, nil
+		}
+	}
+	return nil, session.ErrThreadNotFound
+}
+
+func namedExecResumeRolloutRecord(codexHome string, resume *cli.ExecResumeOptions, target string, cwd string) (*session.Record, error) {
+	page, err := rollout.ListThreads(codexHome, rollout.ListOptions{
+		SortKey:       rollout.SortUpdatedAt,
+		SortDirection: rollout.SortDesc,
+		Archived:      false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	threadIDs := make(map[string]struct{}, len(page.Items))
+	for i := range page.Items {
+		threadIDs[page.Items[i].ThreadID] = struct{}{}
+	}
+	names, err := rollout.FindThreadNamesByIDs(codexHome, threadIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range page.Items {
+		item := &page.Items[i]
+		if names[item.ThreadID] != target && item.ThreadID != target {
+			continue
+		}
+		record, recordErr := rollout.RecordFromPathResolved(codexHome, item.Path, false)
+		if recordErr != nil || record == nil {
+			continue
+		}
+		if (resume != nil && resume.All) || execResumeCWDMatches(cwd, record.Metadata.CWD) {
+			return record, nil
+		}
+	}
+	return nil, session.ErrThreadNotFound
+}
+
+func execResumeCWDMatches(expected string, actual string) bool {
+	expected = filepath.Clean(strings.TrimSpace(expected))
+	actual = filepath.Clean(strings.TrimSpace(actual))
+	if expected == "." || actual == "." {
+		return expected == actual
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(expected, actual)
+	}
+	return expected == actual
 }
 
 func (r *Runner) createExecRollout(record *session.Record, now time.Time) error {
@@ -4153,7 +4352,28 @@ func (r *Runner) createExecRollout(record *session.Record, now time.Time) error 
 		return err
 	}
 	defer recorder.Close()
-	return rollout.AppendSessionItems(recorder, record.Items, now)
+	return rollout.AppendSessionItems(recorder, execRolloutItems(record), now)
+}
+
+func execRolloutItems(record *session.Record) []session.Item {
+	if record == nil {
+		return nil
+	}
+	items := append([]session.Item(nil), record.Items...)
+	if strings.TrimSpace(record.Metadata.HistoryMode) != "paginated" {
+		return items
+	}
+	fallbackTurnID := "turn-imported-" + safeSessionItemID(string(record.ID))
+	for i := range items {
+		items[i].Metadata = cloneExecAnyMap(items[i].Metadata)
+		if items[i].Metadata == nil {
+			items[i].Metadata = map[string]any{}
+		}
+		if firstNonEmpty(execStringFromAny(items[i].Metadata["turnId"]), execStringFromAny(items[i].Metadata["turn_id"]), execStringFromAny(items[i].Data["turnId"]), execStringFromAny(items[i].Data["turn_id"])) == "" {
+			items[i].Metadata["turnId"] = fallbackTurnID
+		}
+	}
+	return items
 }
 
 func (r *Runner) appendExecRollout(threadID session.ThreadID, items []session.Item, record *session.Record, now time.Time) error {
@@ -4173,6 +4393,36 @@ func (r *Runner) appendExecRollout(threadID session.ThreadID, items []session.It
 	}
 	defer recorder.Close()
 	return rollout.AppendSessionItems(recorder, items, now)
+}
+
+// appendExecCompacted persists the compacted rollout marker with the same shape
+// as Rust's RolloutItem::Compacted so resume and cross-implementation replay
+// see the compaction boundary. The replacement history is the post-compaction
+// session items, and the message mirrors Rust's compaction summary message.
+func (r *Runner) appendExecCompacted(threadID string, record *session.Record, summary string, now time.Time) error {
+	if r == nil || record == nil {
+		return nil
+	}
+	path, err := rollout.FindThreadPath(r.CodexHome, threadID, false)
+	if err != nil {
+		path, err = rollout.FindThreadPath(r.CodexHome, threadID, true)
+	}
+	if err != nil {
+		return err
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	message := strings.TrimSpace(compact.SummaryPrefix + "\n" + summary)
+	replacement := make([]rollout.Item, 0, len(record.Items))
+	for i := range record.Items {
+		if item := rollout.ItemFromSessionItem(&record.Items[i]); item != nil {
+			replacement = append(replacement, *item)
+		}
+	}
+	return recorder.AppendCompacted(message, replacement, now)
 }
 
 func latestExecResumeRecord(store *session.Store, resume *cli.ExecResumeOptions, cwd string) (*session.Record, error) {
@@ -4443,7 +4693,85 @@ func sessionItemsForTurnWithMode(turnID string, userPrompt string, userInputs []
 		items = append(items, sessionItemsForToolExecution(turnID, suffix, &result.ToolExecutions[executionIndex], createdAt, extraMetadata)...)
 		executionIndex++
 	}
+	items = insertExecSteerSessionItems(items, execSteerSessionItems(turnID, result.SteerInputItems, createdAt, extraMetadata))
 	return insertExecInterAgentCompletionItems(items, execInterAgentCompletionSessionItems(turnID, currentTurnInputItems(result), createdAt, extraMetadata))
+}
+
+func execSteerSessionItems(turnID string, inputItems []any, createdAt time.Time, extraMetadata map[string]any) []session.Item {
+	out := make([]session.Item, 0)
+	for index, inputItem := range inputItems {
+		raw, ok := inputItem.(map[string]any)
+		if !ok || !strings.EqualFold(strings.TrimSpace(execStringFromAny(raw["type"])), "message") || !strings.EqualFold(strings.TrimSpace(execStringFromAny(raw["role"])), "user") {
+			continue
+		}
+		text := strings.TrimSpace(execTextFromInputItemContent(raw["content"]))
+		content := execSessionContentFromInputItem(raw["content"])
+		if text == "" && len(content) == 0 {
+			continue
+		}
+		metadata := sessionMetadata(turnID, extraMetadata)
+		metadata["steered"] = true
+		out = append(out, session.Item{
+			ID:        fmt.Sprintf("steer-%s-%d", safeSessionItemID(turnID), index+1),
+			Type:      "message",
+			Role:      "user",
+			Text:      text,
+			Content:   content,
+			CreatedAt: createdAt,
+			Metadata:  metadata,
+		})
+	}
+	return out
+}
+
+func execSessionContentFromInputItem(value any) []session.ContentPart {
+	blocks := make([]map[string]any, 0)
+	switch typed := value.(type) {
+	case []map[string]any:
+		blocks = append(blocks, typed...)
+	case []any:
+		for _, value := range typed {
+			if block, ok := value.(map[string]any); ok {
+				blocks = append(blocks, block)
+			}
+		}
+	}
+	content := make([]session.ContentPart, 0, len(blocks))
+	for _, block := range blocks {
+		switch strings.TrimSpace(execStringFromAny(block["type"])) {
+		case "input_text", "text":
+			if text := strings.TrimSpace(execStringFromAny(block["text"])); text != "" {
+				content = append(content, session.ContentPart{Type: "input_text", Text: text})
+			}
+		case "input_image", "image":
+			if imageURL := strings.TrimSpace(execStringFromAny(block["image_url"])); imageURL != "" {
+				content = append(content, session.ContentPart{Type: "image", ImageURL: imageURL})
+			}
+		case "input_audio", "audio":
+			if audioURL := strings.TrimSpace(execStringFromAny(block["audio_url"])); audioURL != "" {
+				content = append(content, session.ContentPart{Type: "audio", AudioURL: audioURL})
+			}
+		}
+	}
+	return content
+}
+
+func insertExecSteerSessionItems(items []session.Item, steers []session.Item) []session.Item {
+	if len(steers) == 0 {
+		return items
+	}
+	insertAt := len(items)
+	for index := len(items) - 1; index >= 0; index-- {
+		if items[index].Type == "agent_message" && items[index].Role == "assistant" {
+			insertAt = index
+			break
+		}
+	}
+	out := make([]session.Item, 0, len(items)+len(steers))
+	out = append(out, items[:insertAt]...)
+	out = append(out, steers...)
+	out = append(out, items[insertAt:]...)
+	return out
 }
 
 func currentTurnInputItems(result *turn.AgentLoopResult) []any {

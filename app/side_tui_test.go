@@ -60,7 +60,7 @@ func TestInteractiveLocalSideCoordinatorForksInjectsAndDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(side) error = %v", err)
 	}
-	if side.ForkedFromID != "thread-parent" || side.ParentThreadID != "thread-parent" {
+	if side.ForkedFromID != "thread-parent" || side.ParentThreadID != "" {
 		t.Fatalf("side ancestry = forked:%q parent:%q", side.ForkedFromID, side.ParentThreadID)
 	}
 	if side.Metadata.CWD != `D:\side` || side.Metadata.Model != "gpt-side" || side.Metadata.ServiceTier != "priority" {

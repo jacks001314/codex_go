@@ -8,6 +8,8 @@
     "test:parity": "node --experimental-strip-types src/cli.ts parity",
     "test:unit": "node --experimental-strip-types --test src/*_test.ts",
     "test:raw:fork": "node --experimental-strip-types src/raw_fork_audit.ts",
+    "test:raw:rolled-fork": "node --experimental-strip-types src/raw_rolled_fork_audit.ts",
+    "test:raw:session-compat": "node --experimental-strip-types src/raw_session_cross_compat.ts",
     "test:raw:requirements": "node --experimental-strip-types src/raw_config_requirements_audit.ts",
     "test:go": "node --experimental-strip-types src/go_only.ts",
     "report": "node --experimental-strip-types src/cli.ts report"

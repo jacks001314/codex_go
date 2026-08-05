@@ -22,6 +22,16 @@ test("long-context structured output uses a strict service-compatible schema", (
   assert.equal(schema?.additionalProperties, false);
 });
 
+test("session compaction requires a stable resumed lifecycle and rollout marker", () => {
+  const scenario = getScenario("session-compaction");
+  assert.equal(scenario.turns.length, 2);
+  assert.equal(scenario.turns[1]?.resume, true);
+  assert.equal(scenario.expected.requireRolloutCompaction, true);
+  assert.equal(scenario.expected.requireStableThreadId, true);
+  assert.deepEqual(scenario.expected.exactAgentMessages, ["COMPACTION_TURN1_OK", "COMPACTION_TURN2_OK"]);
+  assert.equal(scenario.codexConfig?.model_auto_compact_token_limit, 4096);
+});
+
 test("interrupted command recovery remains opt-in while the Rust Windows baseline cannot complete it", () => {
   const scenario = getScenario("resume-tool-interrupted-command");
   assert.equal(scenario.optIn, true);

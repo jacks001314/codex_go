@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
@@ -64,6 +65,8 @@ type SubmitRequest struct {
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
 
+type SteerRequestFunc func(request SubmitRequest, clientID string) error
+
 type InterruptFunc func() bubbletea.Cmd
 
 type ExternalEditorFunc func(seed string) bubbletea.Cmd
@@ -78,6 +81,11 @@ type ExternalEditorFinishedMsg struct {
 type queuedSubmission struct {
 	Request      SubmitRequest
 	ParseCommand bool
+}
+
+type pendingSteerSubmission struct {
+	ID      string
+	Request SubmitRequest
 }
 
 type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.SessionSummary, error)
@@ -536,6 +544,15 @@ type StreamStartedMsg struct {
 	Messages <-chan bubbletea.Msg
 }
 
+type SteerResultMsg struct {
+	ClientID string
+	Err      error
+}
+
+type SteerCommittedMsg struct {
+	Count int
+}
+
 type streamEnvelopeMsg struct {
 	Message  bubbletea.Msg
 	Messages <-chan bubbletea.Msg
@@ -556,6 +573,7 @@ type Options struct {
 	SessionHeaderVersion          string
 	OnSubmit                      SubmitFunc
 	OnSubmitRequest               SubmitRequestFunc
+	OnSteerRequest                SteerRequestFunc
 	OnInterrupt                   InterruptFunc
 	OnInterruptMCPStartup         InterruptFunc
 	OnExternalEditor              ExternalEditorFunc
@@ -740,6 +758,7 @@ type Model struct {
 	vimMode                          bool
 	onSubmit                         SubmitFunc
 	onSubmitRequest                  SubmitRequestFunc
+	onSteerRequest                   SteerRequestFunc
 	onInterrupt                      InterruptFunc
 	onInterruptMCPStartup            InterruptFunc
 	onExternalEditor                 ExternalEditorFunc
@@ -866,6 +885,8 @@ type Model struct {
 	inputHistoryActive               bool
 	submitRequests                   []SubmitRequest
 	queued                           []queuedSubmission
+	pendingSteers                    []pendingSteerSubmission
+	rejectedSteers                   []queuedSubmission
 	editorActive                     bool
 	toolCalls                        map[string]*toolCallDisplayState
 	mcpToolCalls                     map[string]*mcpToolCallDisplayState
@@ -960,6 +981,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		tuiPet:                          normalizePetIDTea(options.TUIPet),
 		onSubmit:                        options.OnSubmit,
 		onSubmitRequest:                 options.OnSubmitRequest,
+		onSteerRequest:                  options.OnSteerRequest,
 		onInterrupt:                     options.OnInterrupt,
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		onExternalEditor:                options.OnExternalEditor,
@@ -1195,6 +1217,12 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		m.applyTurnInterrupted(msg)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued())
+	case SteerResultMsg:
+		m.applySteerResult(msg)
+		return m, nil
+	case SteerCommittedMsg:
+		m.commitPendingSteers(msg.Count)
+		return m, nil
 	case MCPStartupUpdateMsg:
 		return m, m.applyMCPStartupUpdate(msg)
 	case MCPStartupInventoryMsg:
@@ -1490,7 +1518,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
 				}
-				return m, m.queueComposer(true)
+				return m, m.steerComposer()
 			}
 			return m, m.submitComposer()
 		}
@@ -1894,14 +1922,97 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		Request:      cloneSubmitRequest(request),
 		ParseCommand: parseCommand,
 	})
-	m.notice = "Queued input."
-	m.addBottomLine("Queued: " + queuedSubmissionSummary(request))
+	m.notice = ""
 	m.refreshTranscript()
 	return nil
 }
 
+func (m *Model) steerComposer() bubbletea.Cmd {
+	if m == nil || m.onSteerRequest == nil {
+		return m.queueComposer(true)
+	}
+	input := strings.TrimSpace(m.composer.Value())
+	m.composer.Reset()
+	m.slashPopup = slashCommandPopup{}
+	m.skillPopup = skillPopupState{}
+	if input == "" && len(m.attachments) == 0 {
+		return nil
+	}
+	request := SubmitRequest{
+		Prompt:          input,
+		Attachments:     cloneComposerAttachments(m.attachments),
+		MentionBindings: m.activeComposerMentionBindings(input),
+		MentionCatalog:  m.submissionMentionCatalog(),
+	}
+	m.attachments = nil
+	m.composerMentionBindings = nil
+	m.captureIDEContext(&request)
+	clientID := "tui-steer-" + uuid.NewString()
+	m.pendingSteers = append(m.pendingSteers, pendingSteerSubmission{ID: clientID, Request: cloneSubmitRequest(request)})
+	if strings.TrimSpace(request.Prompt) != "" {
+		m.inputHistory = append(m.inputHistory, request.Prompt)
+	}
+	m.resetInputHistoryNavigation()
+	m.notice = ""
+	m.refreshTranscript()
+	return func() bubbletea.Msg {
+		return SteerResultMsg{ClientID: clientID, Err: m.onSteerRequest(request, clientID)}
+	}
+}
+
+func (m *Model) applySteerResult(message SteerResultMsg) {
+	if m == nil || message.Err == nil {
+		return
+	}
+	for index := range m.pendingSteers {
+		if m.pendingSteers[index].ID != message.ClientID {
+			continue
+		}
+		pending := m.pendingSteers[index]
+		m.pendingSteers = append(m.pendingSteers[:index], m.pendingSteers[index+1:]...)
+		m.rejectedSteers = append(m.rejectedSteers, queuedSubmission{Request: cloneSubmitRequest(pending.Request), ParseCommand: true})
+		m.notice = ""
+		m.refreshTranscript()
+		return
+	}
+}
+
+func (m *Model) commitPendingSteers(count int) {
+	if m == nil || len(m.pendingSteers) == 0 {
+		return
+	}
+	if count <= 0 || count > len(m.pendingSteers) {
+		count = min(max(count, 1), len(m.pendingSteers))
+	}
+	for _, pending := range m.pendingSteers[:count] {
+		m.State.AddMessage(codextui.RoleUser, m.promptWithRequestAttachments(pending.Request))
+	}
+	m.pendingSteers = append([]pendingSteerSubmission(nil), m.pendingSteers[count:]...)
+	m.refreshTranscript()
+}
+
+func (m *Model) deferPendingSteers() {
+	if m == nil || len(m.pendingSteers) == 0 {
+		return
+	}
+	deferred := make([]queuedSubmission, 0, len(m.pendingSteers))
+	for _, pending := range m.pendingSteers {
+		deferred = append(deferred, queuedSubmission{Request: cloneSubmitRequest(pending.Request), ParseCommand: true})
+	}
+	m.pendingSteers = nil
+	m.rejectedSteers = append(m.rejectedSteers, deferred...)
+}
+
 func (m *Model) submitNextQueued() bubbletea.Cmd {
-	if m == nil || len(m.queued) == 0 || !m.isIdle() {
+	if m == nil || !m.isIdle() {
+		return nil
+	}
+	if len(m.rejectedSteers) > 0 {
+		next := m.rejectedSteers[0]
+		m.rejectedSteers = append([]queuedSubmission(nil), m.rejectedSteers[1:]...)
+		return m.submitRequest(next.Request, next.ParseCommand)
+	}
+	if len(m.queued) == 0 {
 		return nil
 	}
 	next := m.queued[0]
@@ -2157,6 +2268,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 }
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
+	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
 		errorMessage := message.Err.Error()
@@ -2194,6 +2306,7 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	if m == nil || !m.isTaskRunning() {
 		return
 	}
+	m.deferPendingSteers()
 	m.setStatus("idle")
 	text := "Interrupted current turn."
 	if message.Err != nil {
@@ -2362,6 +2475,10 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		return nil
 	}
 	switch item.Type {
+	case "user_message", "userMessage":
+		if len(m.pendingSteers) > 0 && m.pendingSteers[0].ID == strings.TrimSpace(item.ID) {
+			m.commitPendingSteers(1)
+		}
 	case "agent_message":
 		if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
@@ -4400,8 +4517,21 @@ func (m *Model) renderBottomPane() string {
 	if len(m.attachments) > 0 {
 		lines = append(lines, m.renderAttachmentLine())
 	}
-	if len(m.queued) > 0 {
-		lines = append(lines, fmt.Sprintf("Queued inputs: %d", len(m.queued)))
+	if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 {
+		preview := bottompane.NewPendingInputPreview()
+		preview.PendingSteers = make([]string, 0, len(m.pendingSteers))
+		for _, pending := range m.pendingSteers {
+			preview.PendingSteers = append(preview.PendingSteers, queuedSubmissionSummary(pending.Request))
+		}
+		preview.RejectedSteers = make([]string, 0, len(m.rejectedSteers))
+		for _, rejected := range m.rejectedSteers {
+			preview.RejectedSteers = append(preview.RejectedSteers, queuedSubmissionSummary(rejected.Request))
+		}
+		preview.QueuedMessages = make([]string, 0, len(m.queued))
+		for _, queued := range m.queued {
+			preview.QueuedMessages = append(preview.QueuedMessages, queuedSubmissionSummary(queued.Request))
+		}
+		lines = append(lines, preview.RenderLines(max(m.width-2, 4))...)
 	}
 	lines = append(lines, m.bottom...)
 	return strings.Join(lines, "\n")

@@ -97,7 +97,7 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 	if record.Items[1].Metadata["timingProfile"] == nil || record.Items[1].Metadata["timing_profile"] == nil {
 		t.Fatalf("assistant timing profile metadata = %#v", record.Items[1].Metadata)
 	}
-	if record.Metadata.Source != "cli" || record.Metadata.ThreadSource != string(model.AgentTaskRegular) {
+	if record.Metadata.Source != "exec" || record.Metadata.ThreadSource != "user" {
 		t.Fatalf("session metadata = %#v", record.Metadata)
 	}
 	if result.TokenUsage == nil || result.TokenUsage.Total.TotalTokens <= 0 || result.TokenUsage.Last.TotalTokens <= 0 || result.TokenUsage.ModelContextWindow == nil || *result.TokenUsage.ModelContextWindow <= 0 {
@@ -132,6 +132,23 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 	if err := session.NewStore(filepath.Join(home, "sessions")).Save(record); err != nil {
 		t.Fatalf("Save session returned error: %v", err)
 	}
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:     home,
+		SessionID:     "thread-long",
+		ThreadID:      "thread-long",
+		Source:        "cli",
+		ThreadSource:  string(model.AgentTaskRegular),
+		Model:         "gpt-5.4",
+		ModelProvider: model.OpenAIProviderID,
+		HistoryMode:   "legacy",
+		Now:           fixedExecTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close recorder error = %v", err)
+	}
 	agent := &preTurnCompactAgent{}
 	runner := NewRunner(home)
 	runner.Agent = agent
@@ -147,11 +164,22 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 	}
 	events := decodeExecJSONLines(t, stdout.String())
 	types := execEventTypes(events)
-	compacting := slices.Index(types, "turn.compacting")
-	compacted := slices.Index(types, "turn.compacted")
-	completed := slices.Index(types, "turn.completed")
-	if compacting < 0 || compacted <= compacting || completed <= compacted {
-		t.Fatalf("event order = %#v", types)
+	if slices.Contains(types, "turn.compacting") || slices.Contains(types, "turn.compacted") {
+		t.Fatalf("Rust exec JSON does not emit compaction lifecycle events: %#v", types)
+	}
+	agentIndex, warningIndex, completedIndex := -1, -1, -1
+	for i := range events {
+		switch {
+		case events[i].Type == "item.completed" && events[i].Item != nil && events[i].Item.Type == "agent_message":
+			agentIndex = i
+		case events[i].Type == "item.completed" && events[i].Item != nil && events[i].Item.Type == "error" && strings.Contains(events[i].Item.Message, "Heads up: Long threads"):
+			warningIndex = i
+		case events[i].Type == "turn.completed":
+			completedIndex = i
+		}
+	}
+	if agentIndex < 0 || warningIndex <= agentIndex || completedIndex <= warningIndex {
+		t.Fatalf("expected agent message before compaction warning before turn.completed: %#v", types)
 	}
 	if len(agent.requests) != 2 || !agentRequestInputItemsContainText(&agent.requests[1], compact.SummaryPrefix) {
 		t.Fatalf("agent requests after compaction = %#v", agent.requests)
@@ -162,6 +190,142 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 	reloaded := loadSessionRecord(t, home, "thread-long")
 	if reloaded.Metadata.Extra["compaction_phase"] != string(compact.PhasePreTurn) {
 		t.Fatalf("compaction metadata = %#v", reloaded.Metadata.Extra)
+	}
+	path, err := rollout.FindThreadPath(home, "thread-long", false)
+	if err != nil {
+		t.Fatalf("FindThreadPath error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile rollout error = %v", err)
+	}
+	sawCompacted := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry rollout.Line
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("Unmarshal rollout line error = %v", err)
+		}
+		if entry.Type == "compacted" {
+			sawCompacted = true
+		}
+	}
+	if !sawCompacted {
+		t.Fatalf("rollout has no compacted marker: %s", data)
+	}
+}
+
+func TestRunPersistedHistoryModeUsesLegacyDefault(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &staticResponseAgent{response: &model.AgentResponse{
+		Message: "ok",
+		Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "ok"}},
+		Usage:   model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}}
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{Exec: cli.ExecOptions{Prompt: "hello", JSON: true}}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
+	}
+	record := loadSessionRecord(t, home, result.ThreadID)
+	if record.Metadata.HistoryMode != "legacy" {
+		t.Fatalf("history mode = %q, want legacy", record.Metadata.HistoryMode)
+	}
+	path, err := rollout.FindThreadPath(home, result.ThreadID, false)
+	if err != nil {
+		t.Fatalf("FindThreadPath error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile rollout error = %v", err)
+	}
+	foundMeta := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry rollout.Line
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Type == "session_meta" && entry.Meta != nil {
+			if entry.Meta.HistoryMode != "legacy" {
+				t.Fatalf("rollout session_meta history mode = %q, want legacy", entry.Meta.HistoryMode)
+			}
+			foundMeta = true
+			break
+		}
+		if entry.Type == "session_meta" && len(entry.Payload) > 0 {
+			var meta rollout.SessionMeta
+			if err := json.Unmarshal(entry.Payload, &meta); err == nil {
+				if meta.HistoryMode != "legacy" {
+					t.Fatalf("rollout session_meta history mode = %q, want legacy", meta.HistoryMode)
+				}
+				foundMeta = true
+				break
+			}
+		}
+	}
+	if !foundMeta {
+		t.Fatalf("rollout has no session_meta line: %s", data)
+	}
+}
+
+func TestRunResumePersistsExistingHistoryMode(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	base := &session.Record{
+		ID:        "thread-mode",
+		SessionID: "thread-mode",
+		CreatedAt: fixedExecTime(),
+		UpdatedAt: fixedExecTime(),
+		RecencyAt: fixedExecTime(),
+		Metadata:  session.Metadata{Model: "gpt-5.4", ModelProvider: model.OpenAIProviderID, HistoryMode: "paginated"},
+		Items:     []session.Item{{ID: "u", Type: "message", Role: "user", Text: "history", CreatedAt: fixedExecTime()}},
+	}
+	if err := session.NewStore(filepath.Join(home, "sessions")).Save(base); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &staticResponseAgent{response: &model.AgentResponse{
+		Message: "ok",
+		Items:   []model.AgentItem{{ID: "msg-1", Type: "agent_message", Text: "ok"}},
+		Usage:   model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}}
+	var stdout, stderr bytes.Buffer
+	_, err := runner.Run(Request{Exec: cli.ExecOptions{
+		Subcommand: "resume",
+		Resume:     cli.ExecResumeOptions{SessionID: "thread-mode", Prompt: "continue"},
+		JSON:       true,
+	}}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
+	}
+	reloaded := loadSessionRecord(t, home, "thread-mode")
+	if reloaded.Metadata.HistoryMode != "paginated" {
+		t.Fatalf("history mode = %q, want paginated preserved", reloaded.Metadata.HistoryMode)
+	}
+}
+
+func TestExecPersistedHistoryModeMatchesRust(t *testing.T) {
+	if got := execPersistedHistoryMode(nil); got != "legacy" {
+		t.Fatalf("fresh session history mode = %q, want legacy", got)
+	}
+	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "paginated"}}); got != "paginated" {
+		t.Fatalf("existing paginated history mode = %q, want paginated preserved", got)
+	}
+	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "all"}}); got != "legacy" {
+		t.Fatalf("invalid history mode = %q, want legacy fallback", got)
 	}
 }
 
@@ -1592,8 +1756,8 @@ func TestRunExecReview(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	record := loadSessionRecord(t, home, result.ThreadID)
-	if record.Metadata.ThreadSource != string(model.AgentTaskReview) {
-		t.Fatalf("ThreadSource = %q, want review", record.Metadata.ThreadSource)
+	if record.Metadata.ThreadSource != "user" {
+		t.Fatalf("ThreadSource = %q, want user like Rust exec", record.Metadata.ThreadSource)
 	}
 }
 
@@ -1956,6 +2120,79 @@ func TestRunExecResumeLastFiltersCWDUnlessAllLikeRust(t *testing.T) {
 	}
 	if result.ThreadID != "cwd-b-newer" {
 		t.Fatalf("--all ThreadID = %q", result.ThreadID)
+	}
+}
+
+func TestResolveExecResumeLastImportsRolloutOnlyThread(t *testing.T) {
+	home := t.TempDir()
+	cwdA := t.TempDir()
+	cwdB := t.TempDir()
+	now := fixedExecTime()
+	older := createExecResumeRolloutOnly(t, home, "rollout-cwd-a", cwdA, now, "old a")
+	newer := createExecResumeRolloutOnly(t, home, "rollout-cwd-b", cwdB, now.Add(time.Minute), "old b")
+	if err := os.Chtimes(older, now, now); err != nil {
+		t.Fatalf("Chtimes older rollout returned error: %v", err)
+	}
+	if err := os.Chtimes(newer, now.Add(time.Minute), now.Add(time.Minute)); err != nil {
+		t.Fatalf("Chtimes newer rollout returned error: %v", err)
+	}
+	allRecord, err := latestExecResumeRolloutRecord(home, &cli.ExecResumeOptions{Last: true, All: true}, cwdA)
+	if err != nil {
+		t.Fatalf("rollout-only --all resolve returned error: %v", err)
+	}
+	if allRecord.ID != "rollout-cwd-b" {
+		t.Fatalf("rollout-only --all selected = %q, want newest rollout", allRecord.ID)
+	}
+
+	runner := NewRunner(home)
+	record, err := runner.resolveExecResumeRecord(&Request{Exec: cli.ExecOptions{
+		Shared: cli.SharedOptions{CWD: cwdA},
+		Resume: cli.ExecResumeOptions{Last: true},
+	}})
+	if err != nil {
+		t.Fatalf("cwd-filtered resolve returned error: %v", err)
+	}
+	if record.ID != "rollout-cwd-a" || len(record.Items) == 0 || record.Items[0].Text != "old a" {
+		t.Fatalf("cwd-filtered record = %#v", record)
+	}
+
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if _, err := store.Read("rollout-cwd-a", true, true); err != nil {
+		t.Fatalf("imported store record returned error: %v", err)
+	}
+	record, err = runner.resolveExecResumeRecord(&Request{Exec: cli.ExecOptions{
+		Shared: cli.SharedOptions{CWD: cwdA},
+		Resume: cli.ExecResumeOptions{Last: true, All: true},
+	}})
+	if err != nil {
+		t.Fatalf("--all resolve returned error: %v", err)
+	}
+	if record.ID != "rollout-cwd-a" {
+		t.Fatalf("existing indexed record must stay authoritative, got %q", record.ID)
+	}
+}
+
+func TestResolveExecResumeByNameImportsRolloutOnlyThread(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	createExecResumeRolloutOnly(t, home, "rollout-named", cwd, fixedExecTime(), "named history")
+	if err := rollout.AppendThreadName(home, "rollout-named", "Design Review"); err != nil {
+		t.Fatalf("AppendThreadName returned error: %v", err)
+	}
+
+	runner := NewRunner(home)
+	record, err := runner.resolveExecResumeRecord(&Request{Exec: cli.ExecOptions{
+		Shared: cli.SharedOptions{CWD: cwd},
+		Resume: cli.ExecResumeOptions{SessionID: "Design Review"},
+	}})
+	if err != nil {
+		t.Fatalf("named resolve returned error: %v", err)
+	}
+	if record.ID != "rollout-named" || record.Items[0].Text != "named history" {
+		t.Fatalf("named record = %#v", record)
+	}
+	if _, err := session.NewStore(filepath.Join(home, "sessions")).Read("rollout-named", true, true); err != nil {
+		t.Fatalf("named import store record returned error: %v", err)
 	}
 }
 
@@ -3615,7 +3852,7 @@ func TestExecSessionItemsPersistHostedImageGeneration(t *testing.T) {
 	}
 
 	sink := newExecEventSink(nil, false)
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	var eventItem *protocol.ThreadItem
@@ -3707,7 +3944,7 @@ func TestEmitFinalEventsFromAgentResultPreservesLoopOrder(t *testing.T) {
 	result.Response = result.Responses[1]
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -3745,7 +3982,7 @@ func TestEmitFinalEventsMapsToolSearchCallToWebSearchLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -3808,7 +4045,7 @@ func TestEmitFinalEventsMapsApplyPatchToFileChangeLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4006,7 +4243,7 @@ func TestEmitFinalEventsSuppressesApplyPatchValidationFailureLikeRust(t *testing
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	for _, event := range sink.Events() {
@@ -4061,7 +4298,7 @@ func TestEmitFinalEventsPreservesDeclinedFileChangeLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4116,7 +4353,7 @@ func TestEmitFinalEventsMapsMCPToolCallLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4168,7 +4405,7 @@ func TestEmitFinalEventsMapsFailedMCPToolCallLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4213,7 +4450,7 @@ func TestEmitFinalEventsMapsCollabToolCallLikeRust(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4272,7 +4509,7 @@ func TestEmitFinalEventsMapsCollabWaitAgentToRustWait(t *testing.T) {
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4335,7 +4572,7 @@ func TestEmitFinalEventsMapsExecCommandToCommandExecutionLikeRust(t *testing.T) 
 	}
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4544,7 +4781,7 @@ func TestEmitFinalEventsIncludesAgentMessagesAfterStreaming(t *testing.T) {
 	result.Response = result.Responses[1]
 	sink := newExecEventSink(nil, false)
 
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 
@@ -4581,7 +4818,7 @@ func TestEmitFinalEventsDropsReasoningWithoutSummary(t *testing.T) {
 		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
 	}
 	sink := newExecEventSink(nil, false)
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4624,7 +4861,7 @@ func TestEmitFinalEventsMapsUpdatePlanToTodoList(t *testing.T) {
 		Usage: model.AgentUsage{InputTokens: 1, OutputTokens: 2},
 	}
 	sink := newExecEventSink(nil, false)
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -4689,7 +4926,7 @@ func TestEmitFinalEventsMapsMultipleUpdatePlansToTodoListLifecycleLikeRust(t *te
 		}},
 	}
 	sink := newExecEventSink(nil, false)
-	if err := emitFinalEventsFromAgentResult(sink, result); err != nil {
+	if err := emitFinalEventsFromAgentResult(sink, result, false); err != nil {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
@@ -5801,4 +6038,47 @@ func writeExecResponseSSE(w http.ResponseWriter, payload string) {
 
 func fixedExecTime() time.Time {
 	return time.Date(2026, 6, 29, 1, 2, 3, 0, time.UTC)
+}
+
+func createExecResumeRolloutOnly(t *testing.T, home string, threadID string, cwd string, now time.Time, text string) string {
+	t.Helper()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome:     home,
+		SessionID:     threadID,
+		ThreadID:      threadID,
+		Source:        "exec",
+		ThreadSource:  "user",
+		Originator:    "codex_cli_rs",
+		CWD:           cwd,
+		ModelProvider: model.OpenAIProviderID,
+		HistoryMode:   "legacy",
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder returned error: %v", err)
+	}
+	if err := rollout.AppendSessionItems(recorder, []session.Item{{
+		ID: "user-" + threadID, Type: "message", Role: "user", Text: text, CreatedAt: now,
+	}}, now); err != nil {
+		_ = recorder.Close()
+		t.Fatalf("AppendSessionItems returned error: %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close recorder returned error: %v", err)
+	}
+	return recorder.Path()
+}
+
+func TestExecAgentOriginatorUsesSDKOverride(t *testing.T) {
+	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex_sdk_ts")
+	if got := execAgentOriginator(&Request{}); got != "codex_sdk_ts" {
+		t.Fatalf("execAgentOriginator() = %q, want codex_sdk_ts", got)
+	}
+}
+
+func TestExecAgentOriginatorDefaultsToRustCLI(t *testing.T) {
+	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
+	if got := execAgentOriginator(&Request{}); got != "codex_cli_rs" {
+		t.Fatalf("execAgentOriginator() = %q, want codex_cli_rs", got)
+	}
 }
