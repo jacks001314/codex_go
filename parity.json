@@ -1,8 +1,8 @@
 {
-  "rustBaseline": "5af85998c2",
-  "rustTag": "main@5af85998c2",
-  "rustUpstreamHead": "5af85998c2",
-  "rustUpstreamTag": "main@5af85998c2",
+  "rustBaseline": "30d99232f4",
+  "rustTag": "main@30d99232f4",
+  "rustUpstreamHead": "30d99232f4",
+  "rustUpstreamTag": "main@30d99232f4",
   "rustE2EBinary": {
     "version": "codex-cli 0.0.0",
     "tag": "main@bbbf396839",
@@ -13,8 +13,10 @@
     "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
     "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
   },
-  "generatedAt": "2026-08-04",
+  "generatedAt": "2026-08-05",
   "items": [
+    {"id":"permission-profile-updates-to-future-environments","status":"done","area":"appserver","reason":"thread/settings.update now persists the active permission profile and runtimeWorkspaceRoots, and prepareTurnStartParams applies them to future turns (explicit turn-start values win) while the active turn keeps its immutable snapshot. Go resolves the effective permission profile and workspace roots fresh per turn, so a profile update lands in the next turn's tool-router sandbox context without reconnecting environments; mirrors Rust 30d99232f4 (#37031).","test":"go test ./appserver/... -run PermissionProfileUpdate -count=1"},
+    {"id":"view-image-feature-gate","status":"done","area":"appserver","reason":"view_image is a stable default-enabled feature; features.view_image=false removes the native image viewer from the turn tool surface (fresh subagents and guardian reviewers inherit the disabled viewer) while configured MCP tools stay available, and the Rust app-server v2 suite manifest now covers the module (Rust 78f00743f9, #36966).","test":"go test ./appserver/... -run ViewImage -count=1"},
     {"id":"codemode-host-request-timeout","status":"done","area":"codemode","reason":"wait/terminate host requests get a 60s transport allowance; on stall the connection is invalidated so the next execution reconnects (Rust 8e3b5d3e87).","test":"go test ./codemode/... -count=1"},
     {"id":"agent-plugin-mcp-config","status":"done","area":"plugin","reason":"ParseAgentPluginMCPConfig translates Agent Plugins v1 mcp.json into Codex MCP config: stdio/streamable-http normalization, PLUGIN_ROOT/PLUGIN_DATA expansion, contained paths, secure endpoints, client-owned header filtering, per-server errors (Rust bd12b3a9ec).","test":"go test ./plugin/... -count=1"},
     {"id":"model-messages-consolidation","status":"done","area":"model","reason":"WithConfigOverrides stores base_instructions override into instructions_template and preserves other message fields; personality-disabled renders default personality into the template (Rust df72fdb415).","test":"go test ./model/... -count=1"},

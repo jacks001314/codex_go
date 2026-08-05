@@ -314,6 +314,11 @@ func (p *SettingsUpdateParams) Validate() error {
 	if p.Permissions != nil && p.SandboxPolicy != nil {
 		return fmt.Errorf("%w: permissions and sandboxPolicy are mutually exclusive", ErrInvalidThreadExtraRequest)
 	}
+	for _, root := range p.RuntimeWorkspaceRoots {
+		if !isAbsoluteAppPath(root) {
+			return fmt.Errorf("%w: runtimeWorkspaceRoots must contain absolute paths: %s", ErrInvalidThreadExtraRequest, strings.TrimSpace(root))
+		}
+	}
 	return nil
 }
 
@@ -361,6 +366,7 @@ type Settings struct {
 	MultiAgentMode          string         `json:"multiAgentMode"`
 	Personality             *string        `json:"personality,omitempty"`
 	PersonalitySet          bool           `json:"-"`
+	RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots,omitempty"`
 }
 
 func (s *Settings) MarshalJSON() ([]byte, error) {
@@ -380,6 +386,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Summary                 *string        `json:"summary"`
 		CollaborationMode       map[string]any `json:"collaborationMode"`
 		Personality             *string        `json:"personality"`
+		RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots"`
 	}{
 		CWD:                     s.CWD,
 		ApprovalPolicy:          threadSettingsApprovalPolicy(s.ApprovalPolicy),
@@ -393,6 +400,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Summary:                 cloneString(s.Summary),
 		CollaborationMode:       threadSettingsCollaborationMode(s),
 		Personality:             cloneString(s.Personality),
+		RuntimeWorkspaceRoots:   append([]string(nil), s.RuntimeWorkspaceRoots...),
 	})
 }
 
@@ -734,6 +742,9 @@ func (s *ThreadExtraService) UpdateSettings(params *SettingsUpdateParams) (*Sett
 		settings.Personality = cloneString(params.Personality)
 		settings.PersonalitySet = params.PersonalitySet
 	}
+	if params.RuntimeWorkspaceRoots != nil {
+		settings.RuntimeWorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
+	}
 	s.settings[params.ThreadID] = settings
 	return &SettingsUpdateResponse{}, nil
 }
@@ -756,6 +767,7 @@ func cloneSettings(settings Settings) Settings {
 	settings.Summary = cloneString(settings.Summary)
 	settings.CollaborationMode = cloneAnyMap(settings.CollaborationMode)
 	settings.Personality = cloneString(settings.Personality)
+	settings.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	return settings
 }
 

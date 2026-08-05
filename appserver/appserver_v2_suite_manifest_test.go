@@ -111,6 +111,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "turn_start", Owner: "turn, appserver", Focus: "turn/start runtime and notifications"},
 		{Module: "turn_start_zsh_fork", Owner: "turn, shell", Focus: "zsh fork shell tool behavior"},
 		{Module: "turn_steer", Owner: "turn, appserver", Focus: "turn/steer RPC"},
+		{Module: "view_image", Owner: "tool, appserver", Focus: "view_image feature gate and model image capability"},
 		{Module: "web_search", Owner: "tool, codexapi", Focus: "web search tool round trip"},
 		{Module: "windows_sandbox_setup", Owner: "sandbox, appserver", Focus: "windows sandbox setup RPC"},
 	}

@@ -53,6 +53,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Platform: "all; individual Rust tests skip or gate host/target Windows, Unix, macOS, network, sandbox, and ARM cases",
 			Tests: []string{
 				"exec_command_clamps_model_requested_max_output_tokens_to_policy",
+				"exec_command_hides_and_rejects_login_when_disabled",
 				"exec_command_reports_chunk_and_exit_metadata",
 				"unified_exec_can_enable_tty",
 				"unified_exec_defaults_to_pipe",
@@ -163,6 +164,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_commands",
 				"exec_command_pre_tool_use_payload_skips_write_stdin",
 				"exec_command_pre_tool_use_payload_uses_raw_command",
+				"exec_command_rejects_login_when_selected_environment_disallows_it",
 				"shell_mode_for_environment_uses_direct_mode_for_remote_environments",
 				"test_get_command_rejects_explicit_login_when_disallowed",
 				"test_get_command_rejects_explicit_shell_in_zsh_fork_mode",

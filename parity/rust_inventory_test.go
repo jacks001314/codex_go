@@ -209,6 +209,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"execserver",
 		"features",
 		"filesearch",
+		"gitutil",
 		"history",
 		"install",
 		"mcp",

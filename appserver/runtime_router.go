@@ -4996,6 +4996,7 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Model = firstNonEmpty(threadSettingsModel(settings), strings.TrimSpace(record.Metadata.Model))
 	}
 	applyThreadSettingsToTurnStartParams(params, settings)
+	applyThreadSettingsEnvironmentConfigToTurnStartParams(params, settings)
 	applyCollaborationModeToTurnStartParams(params)
 	if strings.TrimSpace(params.Originator) == "" {
 		params.Originator = strings.TrimSpace(record.Metadata.Originator)
@@ -5018,6 +5019,25 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Config["model_provider"] = strings.TrimSpace(record.Metadata.ModelProvider)
 	}
 	return nil
+}
+
+// applyThreadSettingsEnvironmentConfigToTurnStartParams applies permission-profile and
+// workspace-root settings persisted by thread/settings.update to future turns, mirroring
+// Rust's permission profile updates flowing into the next turn's environment config.
+// Explicit turn-start values always win; the currently active turn keeps its own snapshot.
+func applyThreadSettingsEnvironmentConfigToTurnStartParams(params *turn.TurnStartParams, settings *Settings) {
+	if params == nil || settings == nil {
+		return
+	}
+	if params.Permissions == nil && settings.ActivePermissionProfile != nil {
+		params.Permissions = cloneString(settings.ActivePermissionProfile)
+	}
+	if !turnStartSandboxPolicyPresent(params.SandboxPolicy) && strings.TrimSpace(settings.SandboxPolicy) != "" {
+		params.SandboxPolicy = settings.SandboxPolicy
+	}
+	if len(params.RuntimeWorkspaceRoots) == 0 && len(settings.RuntimeWorkspaceRoots) > 0 {
+		params.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
+	}
 }
 
 func (r *RuntimeRouter) threadSettingsForTurn(threadID string) *Settings {
@@ -9857,6 +9877,9 @@ func runtimeToolsUseOpenAIFileUpload(tools []mcp.RuntimeToolInfo) bool {
 }
 
 func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string) *tool.ViewImageOptions {
+	if cfg != nil && !features.Enabled(cfg.FeatureSettings(), "view_image") {
+		return nil
+	}
 	modelID := ""
 	if params != nil {
 		modelID = strings.TrimSpace(params.Model)

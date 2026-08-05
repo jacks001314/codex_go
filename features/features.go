@@ -112,6 +112,7 @@ var Registry = []Spec{
 	{Key: "plugin_sharing", Stage: StageStable, DefaultEnabled: true},
 	{Key: "external_migration", Stage: StageRemoved},
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},
+	{Key: "view_image", Stage: StageStable, DefaultEnabled: true},
 	{Key: "resize_all_images", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "item_ids", Stage: StageUnderDevelopment},
 	{Key: "concurrent_reasoning_summaries", Stage: StageUnderDevelopment},

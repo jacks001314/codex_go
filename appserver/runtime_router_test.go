@@ -50,6 +50,7 @@ import (
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
+	"codex_go/utils"
 
 	"github.com/google/uuid"
 )
@@ -8446,6 +8447,35 @@ func TestRuntimeRouterRegistersViewImageForImageCapableModel(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterViewImageDisabledFeatureRemovesToolLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nview_image = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	cwd := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	defer router.Close()
+	params := &turn.TurnStartParams{
+		ThreadID: "thread-view-image-disabled",
+		Model:    defaultModelForAppTurn(),
+	}
+	cfg, err := router.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		t.Fatalf("effectiveConfigForTurn() = %v, err %v", cfg, err)
+	}
+	if options := router.viewImageOptionsForTurn(cfg, params, cwd); options != nil {
+		t.Fatalf("viewImageOptionsForTurn() = %#v, want nil with features.view_image=false", options)
+	}
+	toolRouter, err := router.toolRouterForTurn(cwd, params, "turn-view-image-disabled")
+	if err != nil {
+		t.Fatalf("toolRouterForTurn() error = %v", err)
+	}
+	visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+	if visible[tool.ViewImageToolName] {
+		t.Fatalf("model-visible specs = %#v, view_image must be gated off", visible)
+	}
+}
+
 func TestRuntimeRouterUnifiedExecEventsMapToRustV2Notifications(t *testing.T) {
 	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
 	if err := store.Save(&session.Record{ID: "thread-unified", CreatedAt: time.Now().UTC()}); err != nil {
@@ -12092,6 +12122,105 @@ func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterPermissionProfileUpdateAppliesToNextTurnLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	extraRoot := t.TempDir()
+	restrictedProfile := "restricted"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[permissions.restricted.filesystem]
+":minimal" = "read"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+	})
+	defer router.Close()
+	router.SetNotificationSink(sink)
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: cwd}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	// The active turn starts with the original read-only permission profile.
+	activeParams := &turn.TurnStartParams{
+		ThreadID:    threadID,
+		CWD:         cwd,
+		Permissions: stringPtr(sandbox.BuiltInPermissionProfileReadOnly),
+	}
+	if err := router.registerActiveRuntimeTurn(threadID, "turn-active", nil, 1, activeParams); err != nil {
+		t.Fatalf("register active turn: %v", err)
+	}
+
+	// thread/settings.update applies a new permission profile plus workspace roots,
+	// mirroring Rust's SessionSettingsUpdate.profile_workspace_roots.
+	update := router.Handle(requestWithParams(t, IntID(2), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:              threadID,
+		Permissions:           &restrictedProfile,
+		RuntimeWorkspaceRoots: []string{extraRoot},
+	}))
+	if update.Error != nil {
+		t.Fatalf("settings update error: %+v", update.Error)
+	}
+
+	// The active turn keeps its original environment config.
+	active := router.activeTurnParams(threadID)
+	if active == nil || active.Permissions == nil || *active.Permissions != sandbox.BuiltInPermissionProfileReadOnly {
+		t.Fatalf("active turn snapshot changed = %#v", active)
+	}
+
+	// The next turn, started without explicit permissions/roots, inherits the updated settings.
+	params := &turn.TurnStartParams{ThreadID: threadID, CWD: cwd}
+	if err := router.prepareTurnStartParams(params); err != nil {
+		t.Fatalf("prepareTurnStartParams error: %v", err)
+	}
+	if params.Permissions == nil || *params.Permissions != restrictedProfile {
+		t.Fatalf("next turn permissions = %#v, want %q", params.Permissions, restrictedProfile)
+	}
+	if len(params.RuntimeWorkspaceRoots) != 1 || !sameAppPath(params.RuntimeWorkspaceRoots[0], extraRoot) {
+		t.Fatalf("next turn runtimeWorkspaceRoots = %#v, want %q", params.RuntimeWorkspaceRoots, extraRoot)
+	}
+
+	// The next turn's environment config resolves the updated permission profile and roots.
+	cfg, err := router.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		t.Fatalf("effectiveConfigForTurn() = %v, err %v", cfg, err)
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil {
+		t.Fatalf("turnSandboxPermissionProfile() error = %v", err)
+	}
+	if resolution == nil || resolution.ID != restrictedProfile || resolution.Profile == nil {
+		t.Fatalf("permission resolution = %#v, want %q profile", resolution, restrictedProfile)
+	}
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, params)
+	if err != nil {
+		t.Fatalf("executorSkillSandboxContextsForTurn() error = %v", err)
+	}
+	local := contexts["local"]
+	if local == nil {
+		t.Fatalf("executor sandbox contexts = %#v, missing local", contexts)
+	}
+	wantRoot, err := utils.FromHostNativePath(extraRoot)
+	if err != nil {
+		t.Fatalf("FromHostNativePath() error = %v", err)
+	}
+	if len(local.WorkspaceRoots) != 1 || local.WorkspaceRoots[0] != wantRoot.String() {
+		t.Fatalf("local workspace roots = %#v, want %q", local.WorkspaceRoots, wantRoot.String())
+	}
+	if permissionText := string(local.Permissions); !strings.Contains(permissionText, `"kind":"minimal"`) {
+		t.Fatalf("restricted permissions were not preserved: %s", permissionText)
+	}
 }
 
 func TestActiveTurnEnvironmentSnapshotRemainsStableAcrossLaterUpdatesLikeRust(t *testing.T) {

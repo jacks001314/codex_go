@@ -212,6 +212,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"v8-poc",
 		"websocket-client",
 		"utils/absolute-path",
+		"utils/audio",
 		"utils/path-uri",
 		"utils/cargo-bin",
 		"git-utils",
@@ -256,15 +257,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "ca75d0f70dc20ea4af7e55e17c691309b21414dfdac94a1477bef78da2483476"},
+		{Path: "Cargo.toml", SHA256: "f6a8c9fb84dc3688563c939acd2fd8cff3e82711545182b8e57b90b28367d172"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "ff90d8f906d07573e83b79ae40369fc5b49984fa9230bd3d13b05e1635a3c4c4"},
+		{Path: "exec/src/lib.rs", SHA256: "d678105b4319504f95e4920d8c5336bce69bbcca2e21284042029ca0b3c4557f"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "3d6a5ffadd4a942d1ac40a85c5651854ebea2c538f389314c367ddcd995a2881"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "17a7dc8de4e41220664777d23a05e57198bf0cd67e5c1021a3b3a822dacc5170"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "058ce7b2232c415e3fc53458518487e4982040e906b8aa731b9c18ac79ac5cba"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "f2b8f51fe52f0e7cc2526dae577af5d146374a2d64f141f8d6045f4331bfd1ae"},
+		{Path: "core/src/client.rs", SHA256: "ec3f0f09416288382479518bab602d27eb696c7d4f29dee29e5583d57346b9d9"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "86c26f0d9a927e4c2a02f99772ed7fed621b7e1e1c2fa9cca700a96c4ec89274"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "5d2596ee492ca720bb4001820239cb1f8fac41c38501874f6b3dbed5ea21b85a"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "32a347ac58dc2a9d364d386c27253908f5ea751c51056d8ecb1f789211e6e0f7"},
 	}
 }
 
