@@ -131,20 +131,67 @@ func TestTextAreaStateWrapHeightCursorAndHandleKeys(t *testing.T) {
 
 func TestTextAreaWrapAndCursorUseGraphemeCellWidths(t *testing.T) {
 	state := NewTextAreaState("ab\uff76\uff9ec")
-	if got, want := state.WrappedLines(3), []string{"ab", "\uff76\uff9ec"}; !reflect.DeepEqual(got, want) {
+	// Rust ad6e48ddd3: a logical line that exactly fills the width reserves a
+	// continuation row so the insertion point stays visible.
+	if got, want := state.WrappedLines(3), []string{"ab", "\uff76\uff9ec", ""}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("halfwidth WrappedLines = %#v, want %#v", got, want)
 	}
 	col, row := state.CursorPosition(3, 0)
-	if col != 3 || row != 1 {
-		t.Fatalf("halfwidth cursor col=%d row=%d, want 3,1", col, row)
+	if col != 0 || row != 2 {
+		t.Fatalf("halfwidth cursor col=%d row=%d, want 0,2", col, row)
 	}
 
 	state = NewTextAreaState("a\U0001f44d\U0001f3fbb")
+	// U+1F44D + U+1F3FB form one grapheme; the trailing "b" does not fill the
+	// width, so no continuation row is reserved.
 	if got, want := state.WrappedLines(2), []string{"a", "\U0001f44d\U0001f3fb", "b"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("emoji WrappedLines = %#v, want %#v", got, want)
 	}
 	col, row = state.CursorPosition(2, 0)
 	if col != 1 || row != 2 {
 		t.Fatalf("emoji cursor col=%d row=%d, want 1,2", col, row)
+	}
+}
+
+func TestTextAreaFullLinesReserveVisibleCursorRowsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		text   string
+		width  int
+		lines  []string
+		cursor int
+		col    int
+		row    int
+	}{
+		{text: "abad", width: 4, lines: []string{"abad", ""}, cursor: 4, col: 0, row: 1},
+		{text: "界界", width: 4, lines: []string{"界界", ""}, cursor: 6, col: 0, row: 1},
+		{text: "ab\uff76\uff9e", width: 4, lines: []string{"ab\uff76\uff9e", ""}, cursor: 8, col: 0, row: 1},
+		{text: "abad\nef", width: 4, lines: []string{"abad", "", "ef"}, cursor: 4, col: 0, row: 1},
+		{text: "abad\nef", width: 4, lines: []string{"abad", "", "ef"}, cursor: 5, col: 0, row: 2},
+	} {
+		state := NewTextAreaState(tc.text)
+		state.SetCursor(min(tc.cursor, len(state.Text)))
+		if got := state.WrappedLines(tc.width); !reflect.DeepEqual(got, tc.lines) {
+			t.Fatalf("%q WrappedLines(%d) = %#v, want %#v", tc.text, tc.width, got, tc.lines)
+		}
+		if got := state.DesiredHeight(tc.width); got != len(tc.lines) {
+			t.Fatalf("%q DesiredHeight(%d) = %d, want %d", tc.text, tc.width, got, len(tc.lines))
+		}
+		col, row := state.CursorPosition(tc.width, 0)
+		if col != tc.col || row != tc.row {
+			t.Fatalf("%q cursor(%d) = %d,%d, want %d,%d", tc.text, tc.cursor, col, row, tc.col, tc.row)
+		}
+	}
+}
+
+func TestTextAreaTrailingSpacesWrapWithoutCursorEscapeLikeRust(t *testing.T) {
+	state := NewTextAreaState("abad        ")
+	state.SetCursor(len(state.Text))
+	lines := state.WrappedLines(5)
+	if len(lines) != 3 {
+		t.Fatalf("trailing-space WrappedLines = %#v, want 3 rows (Rust ad6e48ddd3)", lines)
+	}
+	col, row := state.CursorPosition(5, 0)
+	if col >= 5 || row < 0 {
+		t.Fatalf("trailing-space cursor = %d,%d, want inside viewport", col, row)
 	}
 }

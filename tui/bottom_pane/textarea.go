@@ -304,11 +304,18 @@ func (t *TextAreaState) WrappedLines(width int) []string {
 	if t == nil {
 		return []string{""}
 	}
+	return wrappedTextAreaLines(t.Text, width)
+}
+
+// wrappedTextAreaLines mirrors Rust textarea wrapped_lines (ad6e48ddd3,
+// #37166): overflowing spaces wrap onto their own rows and full logical lines
+// reserve a continuation row so the insertion point stays visible.
+func wrappedTextAreaLines(text string, width int) []string {
 	if width <= 0 {
 		width = 1
 	}
 	lines := []string{}
-	for _, logical := range strings.Split(t.Text, "\n") {
+	for _, logical := range strings.Split(text, "\n") {
 		if logical == "" {
 			lines = append(lines, "")
 			continue
@@ -328,6 +335,9 @@ func (t *TextAreaState) WrappedLines(width int) []string {
 			used += graphemeWidth
 		}
 		lines = append(lines, line.String())
+		if used >= width {
+			lines = append(lines, "")
+		}
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "")
@@ -343,23 +353,13 @@ func (t *TextAreaState) CursorPosition(width int, height int) (int, int) {
 		width = 1
 	}
 	cursor := t.clampToBoundary(t.Cursor)
-	prefix := t.Text[:cursor]
-	row := 0
-	col := 0
-	for lineIndex, logical := range strings.Split(prefix, "\n") {
-		if lineIndex > 0 {
-			row++
-			col = 0
-		}
-		graphemes := uniseg.NewGraphemes(logical)
-		for graphemes.Next() {
-			graphemeWidth := codextui.DisplayWidth(graphemes.Str())
-			if col > 0 && col+graphemeWidth > width {
-				row++
-				col = 0
-			}
-			col += graphemeWidth
-		}
+	lines := wrappedTextAreaLines(t.Text[:cursor], width)
+	row := len(lines) - 1
+	col := codextui.DisplayWidth(lines[row])
+	// Rust clamps the on-screen column to the last visible cell so a cursor
+	// at a full-width boundary never escapes the textarea.
+	if col > width-1 {
+		col = width - 1
 	}
 	if height > 0 {
 		if row < t.Scroll {
