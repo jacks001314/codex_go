@@ -19,7 +19,132 @@ import (
 
 var ErrInvalidEnvironmentRequest = errors.New("invalid environment request")
 
+// ErrEnvironmentProvisioningModeConflict reports that an environment is already
+// registered with the opposite provisioning mode (ordinary vs. provisioned).
+// Mirrors Rust exec-server ProvisioningModeConflict.
+var ErrEnvironmentProvisioningModeConflict = errors.New("environment provisioning mode conflict")
+
 const defaultEnvironmentConnectTimeout = 10 * time.Second
+
+// maxSelectedCapabilityRoots bounds the capability roots accepted from
+// environment ready information. Mirrors Rust MAX_SELECTED_CAPABILITY_ROOTS.
+const maxSelectedCapabilityRoots = 256
+
+// ProvisioningStatusKind tracks a provisioned (deferred) Noise environment's
+// provisioning state. Mirrors Rust exec-server provisioning states.
+type ProvisioningStatusKind string
+
+const (
+	ProvisioningPending ProvisioningStatusKind = "pending"
+	ProvisioningReady   ProvisioningStatusKind = "ready"
+	ProvisioningFailed  ProvisioningStatusKind = "failed"
+)
+
+// EnvironmentReadyInfo is the capability information supplied when a
+// provisioned environment becomes ready. Mirrors Rust EnvironmentReadyInfo.
+type EnvironmentReadyInfo struct {
+	SelectedCapabilityRoots []SelectedCapabilityRoot `json:"selectedCapabilityRoots"`
+}
+
+// ProvisioningState tracks a provisioned Noise environment from Pending through
+// Ready or Failed. The same instance is preserved across materialization and
+// status reports; terminal transitions are idempotent and contradictory
+// transitions are rejected. A nil ProvisioningState on a record means the
+// environment is ordinary and connects eagerly.
+type ProvisioningState struct {
+	mu        sync.Mutex
+	status    ProvisioningStatusKind
+	readyInfo *EnvironmentReadyInfo
+	failure   string
+}
+
+func newProvisioningState() *ProvisioningState {
+	return &ProvisioningState{status: ProvisioningPending}
+}
+
+// Current returns the provisioning status, the most recently reported ready
+// info (nil unless Ready), and the first failure message (empty unless Failed).
+func (s *ProvisioningState) Current() (ProvisioningStatusKind, *EnvironmentReadyInfo, string) {
+	if s == nil {
+		return ProvisioningPending, nil, ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status, cloneEnvironmentReadyInfo(s.readyInfo), s.failure
+}
+
+// applyReady transitions Pending->Ready (validating ready info) or refreshes
+// ready info on an already Ready environment. A Ready report after Failed is a
+// contradictory transition; invalid ready info fails a Pending environment.
+func (s *ProvisioningState) applyReady(environmentID string, readyInfo *EnvironmentReadyInfo) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.status {
+	case ProvisioningFailed:
+		return fmt.Errorf("environment `%s` provisioning already failed: %s", environmentID, s.failure)
+	case ProvisioningReady:
+		if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
+			return err
+		}
+		s.readyInfo = cloneEnvironmentReadyInfo(readyInfo)
+		return nil
+	default: // Pending
+		if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
+			s.status = ProvisioningFailed
+			s.failure = err.Error()
+			return err
+		}
+		s.readyInfo = cloneEnvironmentReadyInfo(readyInfo)
+		s.status = ProvisioningReady
+		return nil
+	}
+}
+
+// applyFailure transitions Pending->Failed, keeping the first error. Repeating
+// a failure on an already Failed environment is idempotent; a failure after
+// Ready is a contradictory transition.
+func (s *ProvisioningState) applyFailure(environmentID, failure string) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.status {
+	case ProvisioningReady:
+		return fmt.Errorf("environment `%s` is already ready, but a later provisioning report failed: %s", environmentID, failure)
+	case ProvisioningFailed:
+		return nil
+	default: // Pending
+		s.status = ProvisioningFailed
+		s.failure = failure
+		return nil
+	}
+}
+
+// validateEnvironmentReadyInfo enforces the ready-info contract shared by
+// readiness publication, deferred completion, and provisioning reports.
+func validateEnvironmentReadyInfo(environmentID string, readyInfo *EnvironmentReadyInfo) error {
+	if readyInfo == nil {
+		return fmt.Errorf("environment ready info is nil")
+	}
+	if len(readyInfo.SelectedCapabilityRoots) > maxSelectedCapabilityRoots {
+		return fmt.Errorf("environment ready info contains more than %d selected capability roots", maxSelectedCapabilityRoots)
+	}
+	seen := make(map[string]struct{}, len(readyInfo.SelectedCapabilityRoots))
+	for _, root := range readyInfo.SelectedCapabilityRoots {
+		if strings.TrimSpace(root.ID) == "" || root.Location.EnvironmentID != environmentID {
+			return fmt.Errorf("selected capability roots must have unique non-empty IDs and belong to environment `%s`", environmentID)
+		}
+		if _, dup := seen[root.ID]; dup {
+			return fmt.Errorf("selected capability roots must have unique non-empty IDs and belong to environment `%s`", environmentID)
+		}
+		seen[root.ID] = struct{}{}
+	}
+	return nil
+}
 
 type EnvironmentAddParams struct {
 	EnvironmentID    string  `json:"environmentId"`
@@ -128,6 +253,9 @@ type EnvironmentRecord struct {
 	CWD              *string
 	InfoOverride     bool
 	HTTPClient       *http.Client
+	// Provisioning is non-nil for provisioned (deferred) Noise environments and
+	// nil for ordinary environments, which connect eagerly.
+	Provisioning *ProvisioningState
 }
 
 type EnvironmentManager struct {
@@ -189,6 +317,194 @@ func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverc
 	return nil
 }
 
+// DeferredEnvironmentRegistration completes a pending provisioned environment
+// registration. Completing is terminal; abandoning records a failure without
+// connecting, mirroring Rust's Drop behavior for the registration handle.
+type DeferredEnvironmentRegistration struct {
+	environmentID string
+	state         *ProvisioningState
+	completed     bool
+}
+
+// EnvironmentID returns the environment this registration completes.
+func (r *DeferredEnvironmentRegistration) EnvironmentID() string {
+	if r == nil {
+		return ""
+	}
+	return r.environmentID
+}
+
+// CompleteReady publishes the ready information and transitions the pending
+// environment to Ready. Invalid ready information fails the environment and
+// returns an error; completing twice is rejected as inactive.
+func (r *DeferredEnvironmentRegistration) CompleteReady(readyInfo EnvironmentReadyInfo) error {
+	if r == nil || r.state == nil || r.completed {
+		return errors.New("deferred environment registration is inactive")
+	}
+	r.completed = true
+	return r.state.applyReady(r.environmentID, &readyInfo)
+}
+
+// CompleteFailed transitions the pending environment to Failed with a terminal
+// error message, keeping the first error on repeated reports.
+func (r *DeferredEnvironmentRegistration) CompleteFailed(message string) error {
+	if r == nil || r.state == nil || r.completed {
+		return errors.New("deferred environment registration is inactive")
+	}
+	r.completed = true
+	return r.state.applyFailure(r.environmentID, message)
+}
+
+// Abandon records the registration as ended before completion, failing the
+// pending environment without ever connecting. Safe to call after completion.
+func (r *DeferredEnvironmentRegistration) Abandon() {
+	if r == nil || r.state == nil || r.completed {
+		return
+	}
+	r.completed = true
+	_ = r.state.applyFailure(r.environmentID, "environment registration ended before completion")
+}
+
+// RegisterDeferredNoiseEnvironment adds or replaces a Noise environment that
+// becomes ready later. The returned registration completes provisioning:
+// Ready publishes capability roots, and failure (or abandonment) marks the
+// environment Failed before any connection is attempted.
+func (m *EnvironmentManager) RegisterDeferredNoiseEnvironment(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) (*DeferredEnvironmentRegistration, error) {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return nil, fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("%w: Noise rendezvous provider is required", ErrInvalidEnvironmentRequest)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := newProvisioningState()
+	m.records[environmentID] = EnvironmentRecord{
+		EnvironmentID: environmentID,
+		NoiseProvider: provider,
+		Shell:         m.defaultShell,
+		CWD:           cloneString(m.defaultCWD),
+		HTTPClient:    m.httpClient,
+		Provisioning:  state,
+	}
+	return &DeferredEnvironmentRegistration{environmentID: environmentID, state: state}, nil
+}
+
+// MaterializePendingNoiseEnvironment returns the stable environment for an ID,
+// creating it as Pending when absent. A provisioned environment keeps the same
+// record from Pending through Ready or Failed, so the passed provider is only
+// used when the environment does not exist yet. Conflicts with ordinary
+// environments are rejected.
+func (m *EnvironmentManager) MaterializePendingNoiseEnvironment(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) (*EnvironmentRecord, error) {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return nil, fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("%w: Noise rendezvous provider is required", ErrInvalidEnvironmentRequest)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if record, ok := m.records[environmentID]; ok {
+		if record.Provisioning == nil {
+			return nil, fmt.Errorf("%w: environment `%s` is already registered with a different provisioning mode", ErrEnvironmentProvisioningModeConflict, environmentID)
+		}
+		cloned := cloneEnvironmentRecord(record)
+		return &cloned, nil
+	}
+	record := EnvironmentRecord{
+		EnvironmentID: environmentID,
+		NoiseProvider: provider,
+		Shell:         m.defaultShell,
+		CWD:           cloneString(m.defaultCWD),
+		HTTPClient:    m.httpClient,
+		Provisioning:  newProvisioningState(),
+	}
+	m.records[environmentID] = record
+	cloned := cloneEnvironmentRecord(record)
+	return &cloned, nil
+}
+
+// ReportProvisioningStatus records a Ready or Failed provisioning result for an
+// environment. Ordinary environments are ignored. A provisioned environment
+// keeps the same record from Pending through Ready or Failed, and is created if
+// the report arrives first. Ready updates capability roots; Failed keeps the
+// first error. Repeating the same result is allowed, but changing between Ready
+// and Failed is rejected. Invalid Ready information fails an existing Pending
+// environment but does not create a missing environment.
+func (m *EnvironmentManager) ReportProvisioningStatus(environmentID string, readyInfo *EnvironmentReadyInfo, failure *string, providerIfMissing execserverclient.NoiseRendezvousConnectProvider) (*EnvironmentRecord, error) {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return nil, fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
+	}
+	if providerIfMissing == nil {
+		return nil, fmt.Errorf("%w: Noise rendezvous provider is required", ErrInvalidEnvironmentRequest)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if record, ok := m.records[environmentID]; ok {
+		if record.Provisioning == nil {
+			// Ordinary environments have no provisioning state and are ignored.
+			return nil, nil
+		}
+		if failure != nil {
+			cloned := cloneEnvironmentRecord(record)
+			return &cloned, record.Provisioning.applyFailure(environmentID, *failure)
+		}
+		cloned := cloneEnvironmentRecord(record)
+		return &cloned, record.Provisioning.applyReady(environmentID, readyInfo)
+	}
+	state := newProvisioningState()
+	if failure != nil {
+		if err := state.applyFailure(environmentID, *failure); err != nil {
+			return nil, err
+		}
+	} else {
+		// Invalid ready information must not create a missing environment.
+		if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
+			return nil, err
+		}
+		if err := state.applyReady(environmentID, readyInfo); err != nil {
+			return nil, err
+		}
+	}
+	record := EnvironmentRecord{
+		EnvironmentID: environmentID,
+		NoiseProvider: providerIfMissing,
+		Shell:         m.defaultShell,
+		CWD:           cloneString(m.defaultCWD),
+		HTTPClient:    m.httpClient,
+		Provisioning:  state,
+	}
+	m.records[environmentID] = record
+	cloned := cloneEnvironmentRecord(record)
+	return &cloned, nil
+}
+
+// SelectedCapabilityRoots returns the capability roots most recently reported
+// for a provisioned environment, or nil for ordinary or unknown environments.
+func (m *EnvironmentManager) SelectedCapabilityRoots(environmentID string) []SelectedCapabilityRoot {
+	if m == nil {
+		return nil
+	}
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	record, ok := m.records[environmentID]
+	m.mu.Unlock()
+	if !ok || record.Provisioning == nil {
+		return nil
+	}
+	_, readyInfo, _ := record.Provisioning.Current()
+	if readyInfo == nil {
+		return nil
+	}
+	return cloneSelectedCapabilityRoots(readyInfo.SelectedCapabilityRoots)
+}
+
 func (m *EnvironmentManager) SetInfo(environmentID string, shell EnvironmentShellInfo, cwd string) error {
 	if strings.TrimSpace(environmentID) == "" {
 		return fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)
@@ -225,6 +541,17 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown environment id `%s`", ErrInvalidEnvironmentRequest, params.EnvironmentID)
 	}
+	if record.Provisioning != nil {
+		status, _, failure := record.Provisioning.Current()
+		switch status {
+		case ProvisioningPending:
+			return nil, fmt.Errorf("failed to get info for environment `%s`: environment is still provisioning", params.EnvironmentID)
+		case ProvisioningFailed:
+			return nil, fmt.Errorf("failed to get info for environment `%s`: environment provisioning failed: %s", params.EnvironmentID, failure)
+		case ProvisioningReady:
+			// Provisioning succeeded; fall through to the normal connection path.
+		}
+	}
 	if !record.InfoOverride {
 		info, err := fetchRemoteEnvironmentInfo(ctx, &record)
 		if err != nil {
@@ -260,6 +587,21 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 			Error:  environmentStringPtr(fmt.Sprintf("unknown environment id `%s`", params.EnvironmentID)),
 		}, nil
 	}
+	if record.Provisioning != nil {
+		status, _, failure := record.Provisioning.Current()
+		switch status {
+		case ProvisioningPending:
+			// Delay connection attempts until provisioning completes.
+			return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+		case ProvisioningFailed:
+			return &EnvironmentStatusResponse{
+				Status: EnvironmentStatusDisconnected,
+				Error:  environmentStringPtr(failure),
+			}, nil
+		case ProvisioningReady:
+			// Provisioning succeeded; attempt the connection below.
+		}
+	}
 	if record.InfoOverride {
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusReady}, nil
 	}
@@ -294,9 +636,7 @@ func (m *EnvironmentManager) List() []EnvironmentRecord {
 	defer m.mu.Unlock()
 	out := make([]EnvironmentRecord, 0, len(m.records))
 	for _, record := range m.records {
-		record.ConnectTimeoutMS = cloneUint64Ptr(record.ConnectTimeoutMS)
-		record.CWD = cloneString(record.CWD)
-		out = append(out, record)
+		out = append(out, cloneEnvironmentRecord(record))
 	}
 	for i := 1; i < len(out); i++ {
 		current := out[i]
@@ -324,9 +664,8 @@ func (m *EnvironmentManager) Record(environmentID string) (*EnvironmentRecord, b
 	if !ok {
 		return nil, false
 	}
-	record.ConnectTimeoutMS = cloneUint64Ptr(record.ConnectTimeoutMS)
-	record.CWD = cloneString(record.CWD)
-	return &record, true
+	cloned := cloneEnvironmentRecord(record)
+	return &cloned, true
 }
 
 func pathURI(path string) *string {
@@ -355,6 +694,30 @@ func cloneUint64Ptr(value *uint64) *uint64 {
 	}
 	clone := *value
 	return &clone
+}
+
+func cloneEnvironmentRecord(record EnvironmentRecord) EnvironmentRecord {
+	record.ConnectTimeoutMS = cloneUint64Ptr(record.ConnectTimeoutMS)
+	record.CWD = cloneString(record.CWD)
+	return record
+}
+
+func cloneEnvironmentReadyInfo(info *EnvironmentReadyInfo) *EnvironmentReadyInfo {
+	if info == nil {
+		return nil
+	}
+	clone := *info
+	clone.SelectedCapabilityRoots = cloneSelectedCapabilityRoots(info.SelectedCapabilityRoots)
+	return &clone
+}
+
+func cloneSelectedCapabilityRoots(roots []SelectedCapabilityRoot) []SelectedCapabilityRoot {
+	if roots == nil {
+		return nil
+	}
+	out := make([]SelectedCapabilityRoot, len(roots))
+	copy(out, roots)
+	return out
 }
 
 func environmentStringPtr(value string) *string {

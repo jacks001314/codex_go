@@ -65,6 +65,13 @@
                       "area":  "mcp"
                   },
                   {
+                      "status":  "done",
+                      "test":  "go test ./appserver -run 'Provisioning|Deferred|Materialize|ReadyInfo|ModeConflict|Eager' -count=1; go test -race ./appserver -run 'Provisioning|Deferred|Materialize|RepeatedFailure|LateCompletion' -count=1",
+                      "id":  "provisioned-environment-state-tracking",
+                      "reason":  "Go EnvironmentManager tracks provisioned Noise environments across registration with pending/ready/failed states (Rust f5345f1ee8, #37147): RegisterDeferredNoiseEnvironment returns a registration handle whose Ready completion publishes capability roots and whose failure or abandonment is terminal; MaterializePendingNoiseEnvironment and ReportProvisioningStatus keep the same record from Pending through Ready or Failed (report-before-materialization creates it), reports are idempotent while Ready<->Failed transitions are rejected, ordinary environments ignore reports and conflict with materialization (ProvisioningModeConflict), and Status/Info defer connection until provisioning succeeds (Status returns pending without dialing; ready then dials; failed surfaces the first error).",
+                      "area":  "appserver"
+                  },
+                  {
                       "id":  "permission-profile-updates-to-future-environments",
                       "status":  "done",
                       "area":  "appserver",
