@@ -273,6 +273,71 @@ func TestLoadSessionSummariesFromStoreFiltersSortsAndLimits(t *testing.T) {
 	}
 }
 
+func TestLoadSessionSummariesFromStoreSkipsEmptyStartupThreads(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	cwd := `D:\repo\a`
+	rolloutPath := filepath.Join(t.TempDir(), "rollout-2026-07-07T12-00-00-thread-with-rollout.jsonl")
+	if err := os.WriteFile(rolloutPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(rollout) error = %v", err)
+	}
+	records := []*session.Record{
+		{
+			ID:        "thread-empty-startup",
+			CreatedAt: now,
+			UpdatedAt: now,
+			RecencyAt: now,
+			Metadata:  session.Metadata{CWD: cwd, Source: "cli"},
+		},
+		{
+			ID:        "thread-with-items",
+			CreatedAt: now.Add(-time.Minute),
+			UpdatedAt: now.Add(-time.Minute),
+			RecencyAt: now.Add(-time.Minute),
+			Metadata:  session.Metadata{CWD: cwd, Source: "cli"},
+			Items: []session.Item{{
+				ID: "item-1", Type: "message", Role: "user", Text: "hello", CreatedAt: now.Add(-time.Minute),
+			}},
+		},
+		{
+			ID:        "thread-empty-with-rollout",
+			CreatedAt: now.Add(-2 * time.Minute),
+			UpdatedAt: now.Add(-2 * time.Minute),
+			RecencyAt: now.Add(-2 * time.Minute),
+			Metadata: session.Metadata{
+				CWD: cwd, Source: "cli",
+				Extra: map[string]any{"rollout_path": rolloutPath},
+			},
+		},
+		{
+			ID:        "thread-titled-empty",
+			Title:     "Named",
+			CreatedAt: now.Add(-3 * time.Minute),
+			UpdatedAt: now.Add(-3 * time.Minute),
+			RecencyAt: now.Add(-3 * time.Minute),
+			Metadata:  session.Metadata{CWD: cwd, Source: "vscode"},
+		},
+	}
+	for _, record := range records {
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save(%s) error = %v", record.ID, err)
+		}
+	}
+
+	summaries, err := LoadSessionSummariesFromStore(store, SessionSourceOptions{CWD: cwd, IncludeArchived: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("LoadSessionSummariesFromStore() error = %v", err)
+	}
+	ids := make([]string, 0, len(summaries))
+	for i := range summaries {
+		ids = append(ids, summaries[i].ThreadID)
+	}
+	want := []string{"thread-with-items", "thread-empty-with-rollout", "thread-titled-empty"}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("summaries = %v, want %v", ids, want)
+	}
+}
+
 func TestSessionSummariesFromAppServerThreadsAndListParams(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	branch := "picker"

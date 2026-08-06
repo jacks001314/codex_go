@@ -269,6 +269,7 @@ type Record struct {
 	HistoryBase      *HistoryPosition `json:"history_base,omitempty"`
 	Items            []Item           `json:"items,omitempty"`
 	FromRollout      bool             `json:"-"`
+	ItemCount        int              `json:"-"`
 	InheritedItems   int              `json:"-"`
 	InheritedTurns   int              `json:"-"`
 }
@@ -1195,6 +1196,7 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 			continue
 		}
 		if !options.IncludeHistory {
+			record.ItemCount = len(record.Items)
 			record.Items = nil
 		}
 		filtered = append(filtered, record)

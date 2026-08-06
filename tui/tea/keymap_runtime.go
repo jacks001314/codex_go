@@ -299,6 +299,16 @@ func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
 	if key.Type == bubbletea.KeyCtrlUnderscore && !key.Alt {
 		return "ctrl-7"
 	}
+	// Windows conhost cannot encode Ctrl+/ as a C0 byte, so it delivers the
+	// physical key as a KEY_EVENT_RECORD whose Char is NUL; bubbletea's
+	// coninput reader drops the virtual-key code and surfaces that record as
+	// KeyRunes with a single NUL rune. The ANSI byte path never produces this
+	// shape (a NUL byte becomes keyNUL there), so it only occurs on the
+	// Windows console path. Treat it as the Ctrl+/ alias that crossterm
+	// resolves for the same physical key.
+	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 && !key.Alt && !key.Paste {
+		return "ctrl-7"
+	}
 	if key.Type == bubbletea.KeyRunes {
 		if len(key.Runes) != 1 || key.Paste {
 			return ""

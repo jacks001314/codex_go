@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/appserver"
+	"codex_go/rollout"
 	"codex_go/session"
 )
 
@@ -126,6 +127,9 @@ func filterSessionRecordsForPicker(records []session.Record, options SessionSour
 		if ephemeral, _ := records[i].Metadata.Extra["ephemeral"].(bool); ephemeral {
 			continue
 		}
+		if sessionRecordIsEmptyForPicker(&records[i]) {
+			continue
+		}
 		if sessionRecordIsResumable(&records[i], options.IncludeNonInteractive) {
 			filtered = append(filtered, records[i])
 		}
@@ -189,6 +193,27 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 
 func sessionRecordIsInteractive(record *session.Record) bool {
 	return sessionRecordIsResumable(record, false)
+}
+
+// sessionRecordIsEmptyForPicker reports whether a thread record has no
+// conversation content and no persisted rollout: it was started (for example
+// by opening the interactive TUI or an editor panel) but never received a
+// message. Rust's resume picker lists threads by scanning rollout files on
+// disk, so never-used threads never appear there; the Go JSON store creates a
+// record eagerly at thread/start, so we skip them explicitly for parity.
+func sessionRecordIsEmptyForPicker(record *session.Record) bool {
+	if record == nil {
+		return true
+	}
+	if record.ItemCount > 0 {
+		return false
+	}
+	if strings.TrimSpace(record.Title) != "" || strings.TrimSpace(record.Preview) != "" {
+		return false
+	}
+	rolloutPath, _ := record.Metadata.Extra["rollout_path"].(string)
+	_, exists := rollout.ExistingRolloutPath(rolloutPath)
+	return !exists
 }
 
 func sessionRecordIsResumable(record *session.Record, includeNonInteractive bool) bool {
