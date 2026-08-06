@@ -74,11 +74,6 @@ No messages yet.
 
 
 
-
-
-
-
-
 Run command?
   Reason: needs tests
   Working directory: D:\repo
@@ -108,6 +103,9 @@ type testVirtualTerminal struct {
 	x      int
 	y      int
 	wrap   bool
+	savedX int
+	savedY int
+	saved  bool
 	rows   [][]rune
 }
 
@@ -218,19 +216,35 @@ func (t *testVirtualTerminal) consumeEscape(value string, index *int) {
 			*index += 1
 		}
 	case ']':
+		t.consumeStringEscape(value, index, true)
+	case 'P', '_', '^':
+		t.consumeStringEscape(value, index, false)
+	case '7':
+		t.savedX = t.x
+		t.savedY = t.y
+		t.saved = true
 		*index += 1
-		for *index < len(value) {
-			if value[*index] == '\a' {
-				*index += 1
-				return
-			}
-			if value[*index] == '\x1b' && *index+1 < len(value) && value[*index+1] == '\\' {
-				*index += 2
-				return
-			}
-			*index += 1
+	case '8':
+		if t.saved {
+			t.moveTo(t.savedX, t.savedY)
 		}
+		*index += 1
 	default:
+		*index += 1
+	}
+}
+
+func (t *testVirtualTerminal) consumeStringEscape(value string, index *int, allowBell bool) {
+	*index += 1
+	for *index < len(value) {
+		if allowBell && value[*index] == '\a' {
+			*index += 1
+			return
+		}
+		if value[*index] == '\x1b' && *index+1 < len(value) && value[*index+1] == '\\' {
+			*index += 2
+			return
+		}
 		*index += 1
 	}
 }
@@ -361,6 +375,7 @@ func (t *testVirtualTerminal) clearAll() {
 	t.x = 0
 	t.y = 0
 	t.wrap = false
+	t.saved = false
 }
 
 func (t *testVirtualTerminal) advanceLine() {

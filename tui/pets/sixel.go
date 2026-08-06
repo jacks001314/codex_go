@@ -3,8 +3,13 @@ package pets
 import (
 	"errors"
 	"fmt"
+	"image"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+
+	"golang.org/x/image/draw"
 )
 
 const (
@@ -13,6 +18,7 @@ const (
 	sixelPaletteColorCount         = 256
 	sixelTransparentAlphaThreshold = byte(128)
 	sixelTransparentBackgroundDCS  = "\x1bP9;1;0q"
+	SixelCacheVersion              = "v2"
 )
 
 var sixelMaxInt = uint64(^uint(0) >> 1)
@@ -53,6 +59,49 @@ func EncodeRGBA(rgba []byte, width uint32, height uint32) ([]byte, error) {
 	return output, nil
 }
 
+// PrepareSixelFrame encodes a PNG frame into a cached sixel file sized to
+// heightPX (aspect preserved) and returns its path. Existing cache entries are
+// reused, mirroring the Rust sixel frame cache.
+func PrepareSixelFrame(framePath string, sixelDir string, heightPX uint16) (string, error) {
+	if err := os.MkdirAll(sixelDir, 0o755); err != nil {
+		return "", err
+	}
+	stem := strings.TrimSuffix(filepath.Base(framePath), filepath.Ext(framePath))
+	cachePath := filepath.Join(sixelDir, fmt.Sprintf("%s_h%d_%s.six", stem, heightPX, SixelCacheVersion))
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+	file, err := os.Open(framePath)
+	if err != nil {
+		return "", err
+	}
+	source, _, err := image.Decode(file)
+	file.Close()
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", framePath, err)
+	}
+	sourceBounds := source.Bounds()
+	sourceWidth := uint32(sourceBounds.Dx())
+	sourceHeight := uint32(sourceBounds.Dy())
+	height := uint32(heightPX)
+	if height < 1 {
+		height = 1
+	}
+	width := uint32((uint64(sourceWidth) * uint64(height)) / uint64(max(sourceHeight, 1)))
+	if width < 1 {
+		width = 1
+	}
+	scaled := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+	draw.CatmullRom.Scale(scaled, scaled.Bounds(), source, sourceBounds, draw.Over, nil)
+	payload, err := EncodeRGBA(scaled.Pix, width, height)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(cachePath, payload, 0o644); err != nil {
+		return "", err
+	}
+	return cachePath, nil
+}
 func sixelWritePixels(output *[]byte, rgba []byte, width uint32, height uint32, palette sixelPalette) error {
 	bandCount := (height + sixelBandHeight - 1) / sixelBandHeight
 	for bandIndex := uint32(0); bandIndex < bandCount; bandIndex++ {

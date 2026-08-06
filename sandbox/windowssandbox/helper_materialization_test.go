@@ -27,6 +27,26 @@ func TestBundledExecutablePathForExeChecksResourceDir(t *testing.T) {
 	}
 }
 
+func TestBundledExecutablePathForExeFindsWindowsSandboxSetup(t *testing.T) {
+	tmp := t.TempDir()
+	releaseDir := filepath.Join(tmp, "release")
+	resourcesDir := filepath.Join(releaseDir, ResourcesDirname)
+	if err := os.MkdirAll(resourcesDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	exe := filepath.Join(releaseDir, "codex.exe")
+	helper := filepath.Join(resourcesDir, HelperWindowsSandboxSetup.FileName())
+	if err := os.WriteFile(exe, []byte("codex"), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	if err := os.WriteFile(helper, []byte("setup"), 0o600); err != nil {
+		t.Fatalf("WriteFile(helper) error = %v", err)
+	}
+	if got := BundledExecutablePathForExe(exe, HelperWindowsSandboxSetup.FileName()); got != helper {
+		t.Fatalf("BundledExecutablePathForExe() = %q, want %q", got, helper)
+	}
+}
+
 func TestBundledExecutablePathForExePrefersPackageResourcesForBinExe(t *testing.T) {
 	tmp := t.TempDir()
 	packageDir := filepath.Join(tmp, "package")

@@ -72,14 +72,14 @@ type ContentPart struct {
 
 type SessionMeta struct {
 	ID                          string            `json:"id"`
-	SessionID                   string            `json:"session_id,omitempty"`
+	SessionID                   string            `json:"session_id"`
 	SessionPrefix               string            `json:"session_prefix,omitempty"`
 	ForkedFromID                string            `json:"forked_from_id,omitempty"`
 	Timestamp                   string            `json:"timestamp"`
-	CWD                         string            `json:"cwd,omitempty"`
+	CWD                         string            `json:"cwd"`
 	Source                      string            `json:"source,omitempty"`
 	ThreadSource                string            `json:"thread_source,omitempty"`
-	Originator                  string            `json:"originator,omitempty"`
+	Originator                  string            `json:"originator"`
 	Model                       string            `json:"model,omitempty"`
 	ModelProvider               string            `json:"model_provider,omitempty"`
 	HistoryMode                 string            `json:"history_mode,omitempty"`
@@ -95,7 +95,7 @@ type SessionMeta struct {
 	SelectedCapabilityRoots     []json.RawMessage `json:"selected_capability_roots,omitempty"`
 	MultiAgentVersion           string            `json:"multi_agent_version,omitempty"`
 	ContextWindow               json.RawMessage   `json:"context_window,omitempty"`
-	CLIVersion                  string            `json:"cli_version,omitempty"`
+	CLIVersion                  string            `json:"cli_version"`
 	Git                         map[string]string `json:"git,omitempty"`
 	Extra                       map[string]any    `json:"extra,omitempty"`
 }
@@ -244,6 +244,10 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 	if params.ThreadID == "" {
 		return nil, errors.New("thread id is required")
 	}
+	sessionID := strings.TrimSpace(params.SessionID)
+	if sessionID == "" {
+		sessionID = params.ThreadID
+	}
 	now := params.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -268,7 +272,7 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 	}
 	meta := &SessionMeta{
 		ID:                          params.ThreadID,
-		SessionID:                   params.SessionID,
+		SessionID:                   sessionID,
 		SessionPrefix:               params.SessionPrefix,
 		ForkedFromID:                params.ForkedFromID,
 		Timestamp:                   now.UTC().Format(time.RFC3339),
@@ -819,6 +823,122 @@ func Load(path string) ([]Line, int, error) {
 		}
 	}
 	return lines, parseErrors, nil
+}
+
+// EnsureRustCompatibleSessionMeta makes legacy Go rollouts readable by the
+// Rust ThreadStore used by the Desktop app. Older Go rollouts omitted required
+// string fields when they were empty, so Rust discarded their session_meta
+// record. Appending a complete metadata record is safe for an active rollout
+// and avoids rewriting a file that another recorder may still have open.
+func EnsureRustCompatibleSessionMeta(path string) (string, error) {
+	existing, ok := ExistingRolloutPath(path)
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	if strings.HasSuffix(strings.ToLower(existing), ".zst") {
+		var err error
+		existing, err = MaterializeRolloutForReference(existing)
+		if err != nil {
+			return "", err
+		}
+	}
+	compatible, err := hasRustCompatibleSessionMeta(existing)
+	if err != nil {
+		return "", err
+	}
+	if compatible {
+		return existing, nil
+	}
+	meta, err := FirstSessionMeta(existing)
+	if err != nil {
+		return "", err
+	}
+	if meta == nil || strings.TrimSpace(meta.ID) == "" {
+		return "", errors.New("rollout session metadata is missing a thread id")
+	}
+	compatibilityMeta := *meta
+	if strings.TrimSpace(compatibilityMeta.SessionID) == "" {
+		compatibilityMeta.SessionID = compatibilityMeta.ID
+	}
+	now := time.Now().UTC()
+	if strings.TrimSpace(compatibilityMeta.Timestamp) == "" {
+		compatibilityMeta.Timestamp = now.Format(time.RFC3339)
+	}
+	encoded, err := json.Marshal(Line{
+		Type:      "session_meta",
+		Timestamp: now.Format(time.RFC3339Nano),
+		Meta:      &compatibilityMeta,
+	})
+	if err != nil {
+		return "", err
+	}
+	file, err := os.OpenFile(existing, os.O_APPEND|os.O_RDWR, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if info, statErr := file.Stat(); statErr != nil {
+		return "", statErr
+	} else if info.Size() > 0 {
+		last := make([]byte, 1)
+		if _, readErr := file.ReadAt(last, info.Size()-1); readErr != nil {
+			return "", readErr
+		}
+		if last[0] != '\n' {
+			encoded = append([]byte{'\n'}, encoded...)
+		}
+	}
+	encoded = append(encoded, '\n')
+	if _, err := file.Write(encoded); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	return existing, nil
+}
+
+func hasRustCompatibleSessionMeta(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	for {
+		raw, readErr := reader.ReadBytes('\n')
+		if len(raw) > 0 {
+			var envelope struct {
+				Type    string                     `json:"type"`
+				Payload map[string]json.RawMessage `json:"payload"`
+			}
+			if json.Unmarshal(bytes.TrimSpace(raw), &envelope) == nil && envelope.Type == "session_meta" {
+				if rustRequiredSessionMetaStrings(envelope.Payload) {
+					return true, nil
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return false, nil
+			}
+			return false, readErr
+		}
+	}
+}
+
+func rustRequiredSessionMetaStrings(payload map[string]json.RawMessage) bool {
+	for _, key := range []string{"session_id", "id", "timestamp", "cwd", "originator", "cli_version"} {
+		raw, ok := payload[key]
+		if !ok {
+			return false
+		}
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // PlainRolloutPath returns the canonical state-DB path for either a plain or compressed rollout.

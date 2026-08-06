@@ -29,10 +29,27 @@ type AuthOption struct {
 
 func DefaultAuthOptions(apiKeyDisabled bool) []AuthOption {
 	return []AuthOption{
-		{Choice: AuthChoiceChatGPT, Label: "Sign in with ChatGPT", Description: "Use your ChatGPT plan with Codex."},
-		{Choice: AuthChoiceDeviceCode, Label: "Sign in with a code", Description: "Use a one-time browser device code."},
-		{Choice: AuthChoiceAPIKey, Label: "Use an API key", Description: "Configure an OpenAI API key.", Disabled: apiKeyDisabled},
+		{Choice: AuthChoiceChatGPT, Label: "Sign in with ChatGPT", Description: "Usage included with Plus, Pro, Business, and Enterprise plans"},
+		{Choice: AuthChoiceDeviceCode, Label: "Sign in with Device Code", Description: "Sign in from another device with a one-time code"},
+		{Choice: AuthChoiceAPIKey, Label: "Provide your own API key", Description: "Pay for what you use", Disabled: apiKeyDisabled},
 	}
+}
+
+func AuthOptionsForPolicy(chatGPTAllowed bool, apiKeyAllowed bool) []AuthOption {
+	defaults := DefaultAuthOptions(!apiKeyAllowed)
+	options := []AuthOption{{
+		Choice:      defaults[0].Choice,
+		Label:       defaults[0].Label,
+		Description: defaults[0].Description,
+		Disabled:    !chatGPTAllowed,
+	}}
+	if chatGPTAllowed {
+		options = append(options, defaults[1])
+	}
+	if apiKeyAllowed {
+		options = append(options, defaults[2])
+	}
+	return options
 }
 
 func AuthStepState(state SignInState) StepState {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -46,6 +47,21 @@ type setupElevationPayload struct {
 	RealUser          string   `json:"real_user"`
 	Mode              string   `json:"mode"`
 	RefreshOnly       bool     `json:"refresh_only,omitempty"`
+}
+
+func setupExecutableArgs(payloadB64 string, useDispatchFlag bool) []string {
+	if useDispatchFlag {
+		return []string{windowsSandboxSetupFlag, payloadB64}
+	}
+	return []string{payloadB64}
+}
+
+func quoteWindowsArgs(args []string) []string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, QuoteWindowsArg(arg))
+	}
+	return quoted
 }
 
 type shellExecuteInfoW struct {
@@ -217,8 +233,13 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 	if err != nil {
 		return setupFailuref(SetupErrorOrchestratorHelperLaunchFailed, "failed to locate setup helper: %v", err)
 	}
+	useDispatchFlag := true
+	if bundledSetupExe := BundledExecutablePathForExe(exe, HelperWindowsSandboxSetup.FileName()); bundledSetupExe != "" {
+		exe = bundledSetupExe
+		useDispatchFlag = false
+	}
 	if !needsElevation {
-		status, err := runSetupExeNonElevated(exe, payloadB64)
+		status, err := runSetupExeNonElevated(exe, payloadB64, useDispatchFlag)
 		if err != nil {
 			return setupFailuref(SetupErrorOrchestratorHelperLaunchFailed, "failed to launch setup helper (non-elevated): %v", err)
 		}
@@ -235,7 +256,7 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 		}
 		return nil
 	}
-	exitCode, err := runSetupExeElevated(exe, payloadB64)
+	exitCode, err := runSetupExeElevated(exe, payloadB64, useDispatchFlag)
 	if err != nil {
 		return err
 	}
@@ -253,8 +274,8 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 	return nil
 }
 
-func runSetupExeNonElevated(exe string, payloadB64 string) (*os.ProcessState, error) {
-	cmd := exec.Command(exe, windowsSandboxSetupFlag, payloadB64)
+func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool) (*os.ProcessState, error) {
+	cmd := exec.Command(exe, setupExecutableArgs(payloadB64, useDispatchFlag)...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -270,12 +291,12 @@ func nilIfNoState(cmd *exec.Cmd) (*os.ProcessState, error) {
 	return nil, err
 }
 
-func runSetupExeElevated(exe string, payloadB64 string) (int, error) {
+func runSetupExeElevated(exe string, payloadB64 string, useDispatchFlag bool) (int, error) {
 	exeW, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
 		return 1, err
 	}
-	params := QuoteWindowsArg(windowsSandboxSetupFlag) + " " + QuoteWindowsArg(payloadB64)
+	params := strings.Join(quoteWindowsArgs(setupExecutableArgs(payloadB64, useDispatchFlag)), " ")
 	paramsW, err := windows.UTF16PtrFromString(params)
 	if err != nil {
 		return 1, err

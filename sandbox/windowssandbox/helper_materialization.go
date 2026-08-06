@@ -18,7 +18,10 @@ const (
 
 type HelperExecutable string
 
-const HelperCommandRunner HelperExecutable = "command-runner"
+const (
+	HelperCommandRunner       HelperExecutable = "command-runner"
+	HelperWindowsSandboxSetup HelperExecutable = "windows-sandbox-setup"
+)
 
 type CopyOutcome string
 
@@ -33,6 +36,8 @@ func (h HelperExecutable) FileName() string {
 	switch h {
 	case HelperCommandRunner:
 		return "codex-command-runner.exe"
+	case HelperWindowsSandboxSetup:
+		return "codex-windows-sandbox-setup.exe"
 	default:
 		return string(h)
 	}

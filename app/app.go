@@ -93,7 +93,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandPlugin:
 		return runPlugin(&parsed.Plugin, stdout)
 	case cli.CommandInteractive:
-		return runInteractive(ctx, &parsed.Root, stdin, stdout, stderr)
+		return runInteractiveEntry(ctx, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandExec:
 		_, err := newCodexExecRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
 			Root: parsed.Root,

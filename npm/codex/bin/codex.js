@@ -14,10 +14,19 @@ const platformPackages = {
   "win32-x64": "@jacks001314/codex-go-win32-x64",
   "win32-arm64": "@jacks001314/codex-go-win32-arm64",
 };
+const targetTriples = {
+  "linux-x64": "x86_64-unknown-linux-musl",
+  "linux-arm64": "aarch64-unknown-linux-musl",
+  "darwin-x64": "x86_64-apple-darwin",
+  "darwin-arm64": "aarch64-apple-darwin",
+  "win32-x64": "x86_64-pc-windows-msvc",
+  "win32-arm64": "aarch64-pc-windows-msvc",
+};
 
 const target = `${process.platform}-${process.arch}`;
 const platformPackage = platformPackages[target];
-if (!platformPackage) {
+const targetTriple = targetTriples[target];
+if (!platformPackage || !targetTriple) {
   console.error(`Unsupported platform: ${process.platform} (${process.arch})`);
   process.exit(1);
 }
@@ -36,6 +45,8 @@ try {
 const executable = path.join(
   path.dirname(packageJsonPath),
   "vendor",
+  targetTriple,
+  "bin",
   process.platform === "win32" ? "codex.exe" : "codex",
 );
 if (!existsSync(executable)) {

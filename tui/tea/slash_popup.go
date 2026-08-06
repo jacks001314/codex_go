@@ -66,6 +66,17 @@ func (m *Model) selectedSlashPopupName() string {
 	return m.slashPopup.Items[m.slashPopup.Selected].Name
 }
 
+// slashPopupRows returns the number of rows the slash popup currently renders.
+func (m *Model) slashPopupRows() int {
+	if m == nil || !m.slashPopup.Active {
+		return 0
+	}
+	if len(m.slashPopup.Items) == 0 {
+		return 1 // "no matches"
+	}
+	return min(len(m.slashPopup.Items), slashPopupMaxRows)
+}
+
 func slashPopupQuery(text string) (string, bool) {
 	if !strings.HasPrefix(text, "/") {
 		return "", false

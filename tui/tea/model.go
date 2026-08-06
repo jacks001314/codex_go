@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/google/uuid"
 
 	appsapi "codex_go/apps"
@@ -34,6 +36,7 @@ import (
 	idecontext "codex_go/tui/ide_context"
 	"codex_go/tui/markdown"
 	"codex_go/tui/overlay"
+	pets "codex_go/tui/pets"
 	"codex_go/tui/styles"
 )
 
@@ -607,6 +610,7 @@ type Options struct {
 	OnReadIDEContext              IDEContextReaderFunc
 	OnApproveAutoReviewDenial     AutoReviewDenialApproveFunc
 	OnStartWindowsSandboxSetup    WindowsSandboxSetupFunc
+	WindowsSandboxStartupPrompt   *WindowsSandboxStartupPrompt
 	OnOpenDesktopThread           DesktopThreadOpenFunc
 	OnSandboxReadDir              SandboxReadDirFunc
 	OnDetectExternalAgent         ExternalAgentDetectFunc
@@ -659,6 +663,9 @@ type Options struct {
 	HideRateLimitModelNudge        *bool
 	TUITheme                       string
 	TUIPet                         string
+	CodexHome                      string
+	PetEnv                         map[string]string
+	PetFetch                       pets.AssetFetchFunc
 	TUIThemeStyles                 *styles.Styles
 }
 
@@ -705,198 +712,204 @@ type Model struct {
 	footerStyle lipgloss.Style
 	bottomStyle lipgloss.Style
 
-	lastTurnError                    string
-	needsFinalMessageSeparator       bool
-	activeAssistantDeltaItemID       string
-	mcpStartup                       chatwidget.McpStartupRoundState
-	mcpStartupHeader                 string
-	mcpStartupActive                 bool
-	mcpStartupGeneration             uint64
-	mcpStartupFinishPending          bool
-	initialMessages                  <-chan bubbletea.Msg
-	notice                           string
-	retryMessageIndex                int
-	retryActivityMessage             string
-	retryActivityActive              bool
-	bottom                           []string
-	attachments                      []bottompane.ComposerAttachment
-	composerMentionBindings          []string
-	modal                            *modalState
-	skillPopup                       skillPopupState
-	mentionPopup                     *mentionsv2.Popup
-	mentionDismissedToken            string
-	mentionFileSearchGeneration      uint64
-	mentionPluginInventory           []plugin.PluginSummary
-	mentionPluginInventoryReady      bool
-	mentionPluginInventoryLoading    bool
-	mentionPluginInventoryErr        string
-	modelPickerOpts                  []codextui.ModelPickerOption
-	serviceTierCommands              []bottompane.ServiceTierCommand
-	sessionItems                     []codextui.SessionSummary
-	sessionCWD                       string
-	sessionPickerDensity             codextui.SessionListDensity
-	skillsInventory                  *appserver.SkillsListResponse
-	skillsInventoryCWD               string
-	skillsInventoryErr               string
-	skillsInventoryLoading           bool
-	agentItems                       []codextui.AgentThreadEntry
-	activeAgentLabel                 string
-	nextAgentRefreshRequestID        uint64
-	pendingAgentRefreshRequestID     uint64
-	pendingAgentRefreshThreadID      string
-	backgroundProcesses              []historycell.UnifiedExecProcessDetails
-	mcpServers                       []historycell.McpServerStatus
-	onReadMCPInventory               func(detail bool) ([]historycell.McpServerStatus, error)
-	nextMCPInventoryRequestID        uint64
-	pendingMCPInventoryRequestID     uint64
-	pendingMCPInventoryMessageIndex  int
-	pendingMCPInventoryDetail        bool
-	featureSettings                  map[string]bool
-	personality                      chatwidget.Personality
-	tuiTheme                         string
-	tuiPet                           string
-	vimMode                          bool
-	onSubmit                         SubmitFunc
-	onSubmitRequest                  SubmitRequestFunc
-	onSteerRequest                   SteerRequestFunc
-	onInterrupt                      InterruptFunc
-	onInterruptMCPStartup            InterruptFunc
-	onExternalEditor                 ExternalEditorFunc
-	keymapConfig                     *codextui.KeymapConfig
-	keymapSelectedContext            string
-	keymapSelectedAction             string
-	onKeymapEdit                     KeymapEditFunc
-	onModalResponse                  ModalResponseFunc
-	onSessionAction                  SessionActionFunc
-	onResumeSession                  SessionResumeFunc
-	onRenameThread                   ThreadRenameFunc
-	onLogout                         LogoutFunc
-	onReadAgents                     AgentThreadReaderFunc
-	onSwitchAgent                    AgentThreadSwitchFunc
-	clipboardWrite                   func(text string) error
-	onReadTokenActivity              TokenActivityReaderFunc
-	onReadRateLimitResetCredits      RateLimitResetCreditsReaderFunc
-	onConsumeRateLimitResetCredit    RateLimitResetCreditConsumerFunc
-	onReadRateLimits                 RateLimitsReaderFunc
-	nextStatusRateLimitRequestID     uint64
-	pendingStatusRateLimitRequests   map[uint64]pendingStatusRateLimitRequest
-	terminalTitleWriter              TerminalTitleWriterFunc
-	notificationPost                 NotificationPostFunc
-	notifications                    chatwidget.NotificationState
-	notificationSettings             chatwidget.NotificationsSetting
-	notificationMethod               codextui.NotificationMethod
-	notificationCondition            codextui.NotificationCondition
-	onReadGitDiff                    GitDiffReaderFunc
-	onStopBackgroundTerminals        StopBackgroundTerminalsFunc
-	onReadDebugConfig                DebugConfigReaderFunc
-	onReadGoal                       GoalReaderFunc
-	onSetGoal                        GoalSetterFunc
-	onClearGoal                      GoalClearerFunc
-	onWriteSettings                  SettingsWriteFunc
-	onUpdateCollaborationMode        CollaborationModeUpdateFunc
-	onWriteMemorySettings            MemorySettingsWriteFunc
-	onResetMemories                  MemoryResetFunc
-	onSubmitFeedback                 FeedbackSubmitFunc
-	onReadIDEContext                 IDEContextReaderFunc
-	ideContext                       chatwidget.IdeContextState
-	onApproveAutoReviewDenial        AutoReviewDenialApproveFunc
-	toolRequestRuntime               chatwidget.ToolRequestRuntimeState
-	useMemories                      bool
-	generateMemories                 bool
-	feedbackEnabled                  bool
-	windowsSandboxSetup              WindowsSandboxSetupFunc
-	onOpenDesktopThread              DesktopThreadOpenFunc
-	onSandboxReadDir                 SandboxReadDirFunc
-	onDetectExternalAgent            ExternalAgentDetectFunc
-	onImportExternalAgent            ExternalAgentImportFunc
-	pendingExternalAgentImports      map[string]bool
-	onReadRolloutPath                RolloutPathReaderFunc
-	windowsSandboxSetupActive        bool
-	windowsSandboxSetupStatus        chatwidget.WindowsSandboxSetupStatus
-	onReadHooks                      HooksListReaderFunc
-	onWriteHookConfig                HookConfigWriteFunc
-	hookWriteQueue                   []hookConfigWriteOperation
-	hookWriteActive                  bool
-	nextHookWriteRequestID           uint64
-	hookLifecycle                    chatwidget.HookLifecycleState
-	onReadPlugins                    PluginListReaderFunc
-	onReadPlugin                     PluginReadFunc
-	onInstallPlugin                  PluginInstallFunc
-	onUninstallPlugin                PluginUninstallFunc
-	onWritePluginEnabled             PluginEnabledWriteFunc
-	onAddMarketplace                 MarketplaceAddFunc
-	onRemoveMarketplace              MarketplaceRemoveFunc
-	onUpgradeMarketplace             MarketplaceUpgradeFunc
-	onOpenPluginURL                  PluginOpenURLFunc
-	pluginUserMarketplaces           map[string]bool
-	pluginGitMarketplaces            map[string]bool
-	pluginRuntime                    chatwidget.PluginsRuntimeState
-	pluginToggleDesired              map[string]bool
-	pluginToggleActive               map[string]bool
-	onReadSkills                     SkillsListReaderFunc
-	onWriteSkillEnabled              SkillEnabledWriteFunc
-	nextSkillWriteRequestID          uint64
-	onFuzzyFileSearch                FuzzyFileSearchReaderFunc
-	onReadApps                       AppListReaderFunc
-	onStartReview                    ReviewStartFunc
-	onStartReviewCommand             ReviewStartCommandFunc
-	onStartCompactCommand            CompactStartCommandFunc
-	reviewState                      chatwidget.ReviewState
-	reviewTurnID                     string
-	reviewTokenSnapshot              *reviewTokenSnapshot
-	onStartSide                      SideStartFunc
-	onCloseSide                      SideCloseFunc
-	onReadReviewBranches             ReviewBranchesReaderFunc
-	onReadReviewCommits              ReviewCommitsReaderFunc
-	activeSide                       *activeSideConversation
-	abandonedSideThreads             map[string]struct{}
-	sideStartPending                 bool
-	statusControls                   *chatwidget.StatusControlsState
-	statusLineConfiguredByUser       bool
-	lastTerminalTitleSequence        string
-	rateLimitSnapshots               map[string]chatwidget.RateLimitSnapshot
-	approvalsReviewer                chatwidget.ApprovalsReviewer
-	permissionRequirements           chatwidget.PermissionRequirements
-	permissionItems                  []chatwidget.PermissionMenuItem
-	pendingPermissionItem            *chatwidget.PermissionMenuItem
-	hideFullAccessWarning            bool
-	experimentalItems                []chatwidget.ExperimentalFeatureOption
-	currentGoal                      *appserver.Goal
-	goalObservedAt                   time.Time
-	pendingGoalObjective             string
-	hasChatGPTAccount                bool
-	chatGPTPlanType                  string
-	availableRateLimitResetCredits   *int64
-	nextUsageRequestID               uint64
-	pendingTokenActivityRequestID    uint64
-	pendingRateLimitResetRequestID   uint64
-	pendingRateLimitResetForPopup    bool
-	pendingRateLimitResetPostConsume bool
-	nextDiffRequestID                uint64
-	pendingDiffRequestID             uint64
-	nextGoalRequestID                uint64
-	pendingGoalRequestID             uint64
-	nextSettingsRequestID            uint64
-	pendingSettingsRequestID         uint64
-	submitted                        []string
-	inputHistory                     []string
-	inputHistoryIndex                int
-	inputHistoryDraft                string
-	inputHistoryActive               bool
-	submitRequests                   []SubmitRequest
-	queued                           []queuedSubmission
-	pendingSteers                    []pendingSteerSubmission
-	rejectedSteers                   []queuedSubmission
-	editorActive                     bool
-	toolCalls                        map[string]*toolCallDisplayState
-	mcpToolCalls                     map[string]*mcpToolCallDisplayState
-	webSearches                      map[string]*webSearchDisplayState
-	renderedFileChanges              map[string]bool
-	activeProposedPlans              map[string]*proposedPlanDisplayState
-	startedThreadIDs                 map[string]bool
-	completedThreadIDs               map[string]bool
-	pendingThreadName                bool
-	taskStartedAt                    time.Time
+	lastTurnError                     string
+	needsFinalMessageSeparator        bool
+	activeAssistantDeltaItemID        string
+	mcpStartup                        chatwidget.McpStartupRoundState
+	mcpStartupHeader                  string
+	mcpStartupActive                  bool
+	mcpStartupGeneration              uint64
+	mcpStartupFinishPending           bool
+	initialMessages                   <-chan bubbletea.Msg
+	notice                            string
+	retryMessageIndex                 int
+	retryActivityMessage              string
+	retryActivityActive               bool
+	bottom                            []string
+	attachments                       []bottompane.ComposerAttachment
+	composerMentionBindings           []string
+	modal                             *modalState
+	skillPopup                        skillPopupState
+	mentionPopup                      *mentionsv2.Popup
+	mentionDismissedToken             string
+	mentionFileSearchGeneration       uint64
+	mentionPluginInventory            []plugin.PluginSummary
+	mentionPluginInventoryReady       bool
+	mentionPluginInventoryLoading     bool
+	mentionPluginInventoryErr         string
+	modelPickerOpts                   []codextui.ModelPickerOption
+	serviceTierCommands               []bottompane.ServiceTierCommand
+	sessionItems                      []codextui.SessionSummary
+	sessionCWD                        string
+	sessionPickerDensity              codextui.SessionListDensity
+	skillsInventory                   *appserver.SkillsListResponse
+	skillsInventoryCWD                string
+	skillsInventoryErr                string
+	skillsInventoryLoading            bool
+	agentItems                        []codextui.AgentThreadEntry
+	activeAgentLabel                  string
+	nextAgentRefreshRequestID         uint64
+	pendingAgentRefreshRequestID      uint64
+	pendingAgentRefreshThreadID       string
+	backgroundProcesses               []historycell.UnifiedExecProcessDetails
+	mcpServers                        []historycell.McpServerStatus
+	onReadMCPInventory                func(detail bool) ([]historycell.McpServerStatus, error)
+	nextMCPInventoryRequestID         uint64
+	pendingMCPInventoryRequestID      uint64
+	pendingMCPInventoryMessageIndex   int
+	pendingMCPInventoryDetail         bool
+	featureSettings                   map[string]bool
+	personality                       chatwidget.Personality
+	tuiTheme                          string
+	tuiPet                            string
+	vimMode                           bool
+	petRuntime                        *petRuntime
+	petCodexHome                      string
+	petEnv                            map[string]string
+	petFetch                          pets.AssetFetchFunc
+	petLoadPending                    string
+	onSubmit                          SubmitFunc
+	onSubmitRequest                   SubmitRequestFunc
+	onSteerRequest                    SteerRequestFunc
+	onInterrupt                       InterruptFunc
+	onInterruptMCPStartup             InterruptFunc
+	onExternalEditor                  ExternalEditorFunc
+	keymapConfig                      *codextui.KeymapConfig
+	keymapSelectedContext             string
+	keymapSelectedAction              string
+	onKeymapEdit                      KeymapEditFunc
+	onModalResponse                   ModalResponseFunc
+	onSessionAction                   SessionActionFunc
+	onResumeSession                   SessionResumeFunc
+	onRenameThread                    ThreadRenameFunc
+	onLogout                          LogoutFunc
+	onReadAgents                      AgentThreadReaderFunc
+	onSwitchAgent                     AgentThreadSwitchFunc
+	clipboardWrite                    func(text string) error
+	onReadTokenActivity               TokenActivityReaderFunc
+	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
+	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
+	onReadRateLimits                  RateLimitsReaderFunc
+	nextStatusRateLimitRequestID      uint64
+	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
+	terminalTitleWriter               TerminalTitleWriterFunc
+	notificationPost                  NotificationPostFunc
+	notifications                     chatwidget.NotificationState
+	notificationSettings              chatwidget.NotificationsSetting
+	notificationMethod                codextui.NotificationMethod
+	notificationCondition             codextui.NotificationCondition
+	onReadGitDiff                     GitDiffReaderFunc
+	onStopBackgroundTerminals         StopBackgroundTerminalsFunc
+	onReadDebugConfig                 DebugConfigReaderFunc
+	onReadGoal                        GoalReaderFunc
+	onSetGoal                         GoalSetterFunc
+	onClearGoal                       GoalClearerFunc
+	onWriteSettings                   SettingsWriteFunc
+	onUpdateCollaborationMode         CollaborationModeUpdateFunc
+	onWriteMemorySettings             MemorySettingsWriteFunc
+	onResetMemories                   MemoryResetFunc
+	onSubmitFeedback                  FeedbackSubmitFunc
+	onReadIDEContext                  IDEContextReaderFunc
+	ideContext                        chatwidget.IdeContextState
+	onApproveAutoReviewDenial         AutoReviewDenialApproveFunc
+	toolRequestRuntime                chatwidget.ToolRequestRuntimeState
+	useMemories                       bool
+	generateMemories                  bool
+	feedbackEnabled                   bool
+	windowsSandboxSetup               WindowsSandboxSetupFunc
+	windowsSandboxSetupChoiceRequired bool
+	onOpenDesktopThread               DesktopThreadOpenFunc
+	onSandboxReadDir                  SandboxReadDirFunc
+	onDetectExternalAgent             ExternalAgentDetectFunc
+	onImportExternalAgent             ExternalAgentImportFunc
+	pendingExternalAgentImports       map[string]bool
+	onReadRolloutPath                 RolloutPathReaderFunc
+	windowsSandboxSetupActive         bool
+	windowsSandboxSetupStatus         chatwidget.WindowsSandboxSetupStatus
+	onReadHooks                       HooksListReaderFunc
+	onWriteHookConfig                 HookConfigWriteFunc
+	hookWriteQueue                    []hookConfigWriteOperation
+	hookWriteActive                   bool
+	nextHookWriteRequestID            uint64
+	hookLifecycle                     chatwidget.HookLifecycleState
+	onReadPlugins                     PluginListReaderFunc
+	onReadPlugin                      PluginReadFunc
+	onInstallPlugin                   PluginInstallFunc
+	onUninstallPlugin                 PluginUninstallFunc
+	onWritePluginEnabled              PluginEnabledWriteFunc
+	onAddMarketplace                  MarketplaceAddFunc
+	onRemoveMarketplace               MarketplaceRemoveFunc
+	onUpgradeMarketplace              MarketplaceUpgradeFunc
+	onOpenPluginURL                   PluginOpenURLFunc
+	pluginUserMarketplaces            map[string]bool
+	pluginGitMarketplaces             map[string]bool
+	pluginRuntime                     chatwidget.PluginsRuntimeState
+	pluginToggleDesired               map[string]bool
+	pluginToggleActive                map[string]bool
+	onReadSkills                      SkillsListReaderFunc
+	onWriteSkillEnabled               SkillEnabledWriteFunc
+	nextSkillWriteRequestID           uint64
+	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
+	onReadApps                        AppListReaderFunc
+	onStartReview                     ReviewStartFunc
+	onStartReviewCommand              ReviewStartCommandFunc
+	onStartCompactCommand             CompactStartCommandFunc
+	reviewState                       chatwidget.ReviewState
+	reviewTurnID                      string
+	reviewTokenSnapshot               *reviewTokenSnapshot
+	onStartSide                       SideStartFunc
+	onCloseSide                       SideCloseFunc
+	onReadReviewBranches              ReviewBranchesReaderFunc
+	onReadReviewCommits               ReviewCommitsReaderFunc
+	activeSide                        *activeSideConversation
+	abandonedSideThreads              map[string]struct{}
+	sideStartPending                  bool
+	statusControls                    *chatwidget.StatusControlsState
+	statusLineConfiguredByUser        bool
+	lastTerminalTitleSequence         string
+	rateLimitSnapshots                map[string]chatwidget.RateLimitSnapshot
+	approvalsReviewer                 chatwidget.ApprovalsReviewer
+	permissionRequirements            chatwidget.PermissionRequirements
+	permissionItems                   []chatwidget.PermissionMenuItem
+	pendingPermissionItem             *chatwidget.PermissionMenuItem
+	hideFullAccessWarning             bool
+	experimentalItems                 []chatwidget.ExperimentalFeatureOption
+	currentGoal                       *appserver.Goal
+	goalObservedAt                    time.Time
+	pendingGoalObjective              string
+	hasChatGPTAccount                 bool
+	chatGPTPlanType                   string
+	availableRateLimitResetCredits    *int64
+	nextUsageRequestID                uint64
+	pendingTokenActivityRequestID     uint64
+	pendingRateLimitResetRequestID    uint64
+	pendingRateLimitResetForPopup     bool
+	pendingRateLimitResetPostConsume  bool
+	nextDiffRequestID                 uint64
+	pendingDiffRequestID              uint64
+	nextGoalRequestID                 uint64
+	pendingGoalRequestID              uint64
+	nextSettingsRequestID             uint64
+	pendingSettingsRequestID          uint64
+	submitted                         []string
+	inputHistory                      []string
+	inputHistoryIndex                 int
+	inputHistoryDraft                 string
+	inputHistoryActive                bool
+	submitRequests                    []SubmitRequest
+	queued                            []queuedSubmission
+	pendingSteers                     []pendingSteerSubmission
+	rejectedSteers                    []queuedSubmission
+	editorActive                      bool
+	toolCalls                         map[string]*toolCallDisplayState
+	mcpToolCalls                      map[string]*mcpToolCallDisplayState
+	webSearches                       map[string]*webSearchDisplayState
+	renderedFileChanges               map[string]bool
+	activeProposedPlans               map[string]*proposedPlanDisplayState
+	startedThreadIDs                  map[string]bool
+	completedThreadIDs                map[string]bool
+	pendingThreadName                 bool
+	taskStartedAt                     time.Time
 
 	composerPasteEnterUntil *time.Time
 	now                     func() time.Time
@@ -1096,11 +1109,25 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if options.ShowSessionHeader {
 		model.addStartupSessionHeader(options.SessionHeaderVersion)
 	}
+	if options.WindowsSandboxStartupPrompt != nil {
+		model.openWindowsSandboxEnablePrompt(*options.WindowsSandboxStartupPrompt)
+	}
 	model.refreshTranscript()
+	model.petCodexHome = strings.TrimSpace(options.CodexHome)
+	model.petEnv = options.PetEnv
+	model.petFetch = options.PetFetch
+	if model.petFetch == nil {
+		model.petFetch = pets.HTTPAssetFetch(nil)
+	}
+	model.petRuntime = newPetRuntime(nil, model.petEnv)
+	if petID := normalizePetIDTea(options.TUIPet); petID != "" && petID != chatwidget.DisabledPetID && model.petImageSupport().Supported() && model.petCodexHome != "" {
+		model.petLoadPending = petID
+	}
 	return model
 }
 
 func NewProgram(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) *bubbletea.Program {
+	options = resolveProgramSize(options, input, output)
 	model := NewModel(state, options)
 	programOptions := []bubbletea.ProgramOption{}
 	if ctx != nil {
@@ -1110,7 +1137,8 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 		programOptions = append(programOptions, bubbletea.WithInput(input))
 	}
 	if output != nil {
-		programOptions = append(programOptions, bubbletea.WithOutput(output))
+		model.petRuntime.setOutput(output)
+		programOptions = append(programOptions, bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime}))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
 	// Rust parity: normal chat runs in the terminal's inline buffer so finalized
@@ -1118,6 +1146,54 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	// for temporary overlays; starting the whole chat there makes terminals map
 	// the mouse wheel to Up/Down keys, which incorrectly navigates composer history.
 	return bubbletea.NewProgram(model, programOptions...)
+}
+
+// resolveProgramSize fills in the terminal size when the caller did not
+// provide explicit dimensions.
+func resolveProgramSize(options Options, input io.Reader, output io.Writer) Options {
+	// Bubble Tea only queries the terminal size when it can detect the output
+	// as a real terminal. The ambient pet wraps the output writer, so that
+	// detection never fires and the Model would otherwise render at the
+	// default 80x24 size. Query the terminal up front so the initial layout
+	// matches the actual pane, preventing composer/status row wrapping in
+	// narrow terminals.
+	if options.Width <= 0 || options.Height <= 0 {
+		if width, height, ok := detectTerminalSize(input, output); ok {
+			options.Width = width
+			options.Height = height
+		}
+	}
+	return options
+}
+
+// detectTerminalSize reports the terminal dimensions for the given input and
+// output handles. It prefers the output handle (mirroring Bubble Tea's own
+// resize check), then the input handle, then stderr. On Windows the console
+// size can only be queried through an output handle: GetConsoleScreenBufferInfo
+// fails for console input handles, so stderr is the fallback when stdout is
+// not a terminal (for example when it is redirected).
+func detectTerminalSize(input io.Reader, output io.Writer) (int, int, bool) {
+	probe := func(fd uintptr) (int, int, bool) {
+		width, height, err := term.GetSize(fd)
+		if err != nil || width <= 0 || height <= 0 {
+			return 0, 0, false
+		}
+		return width, height, true
+	}
+	if file, ok := output.(*os.File); ok {
+		if width, height, ok := probe(file.Fd()); ok {
+			return width, height, true
+		}
+	}
+	if file, ok := input.(*os.File); ok {
+		if width, height, ok := probe(file.Fd()); ok {
+			return width, height, true
+		}
+	}
+	if width, height, ok := probe(os.Stderr.Fd()); ok {
+		return width, height, true
+	}
+	return 0, 0, false
 }
 
 func Run(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) (*Model, error) {
@@ -1128,6 +1204,9 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	model, ok := final.(*Model)
 	if !ok {
 		return nil, nil
+	}
+	if model.petRuntime != nil {
+		model.petRuntime.clearImmediately()
 	}
 	return model, nil
 }
@@ -1142,6 +1221,10 @@ func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}
 	if m.animEngine != nil {
 		commands = append(commands, m.animEngine.TickCmd())
+	}
+	if m.petLoadPending != "" {
+		commands = append(commands, m.loadPetCmd(m.petLoadPending))
+		m.petLoadPending = ""
 	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
@@ -1169,6 +1252,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case petLoadMsg:
+		return m, m.applyPetLoad(msg)
+	case petTickMsg:
+		return m, bubbletea.Batch(m.petDrawCmd(), m.petTickCmd())
 	case bubbletea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -1567,6 +1654,8 @@ func (m *Model) View() string {
 		return ""
 	}
 	m.ensureSize()
+	m.syncTranscriptHeight()
+	m.storePetDrawRequest()
 	if m.overlay != nil {
 		if m.overlayTranscript {
 			m.syncTranscriptOverlay()
@@ -4110,24 +4199,61 @@ func (m *Model) ensureSize() {
 func (m *Model) resize(width int, height int) {
 	m.width = firstPositive(width, defaultWidth)
 	m.height = firstPositive(height, defaultHeight)
-	composerHeight := defaultComposerHeight
-	transcriptHeight := m.height - composerHeight - 3
-	if m.regionChromeEnabled() {
-		// The activity heading and composer border use three additional rows.
-		transcriptHeight -= 3
-	}
-	if transcriptHeight < minTranscriptHeight {
-		transcriptHeight = minTranscriptHeight
-	}
 	m.transcript.Width = m.width
-	m.transcript.Height = transcriptHeight
+	m.transcript.Height = m.transcriptHeightForLayout()
 	composerWidth := m.width
 	if m.regionChromeEnabled() {
 		composerWidth = max(m.width-6, 1)
 	}
 	m.composer.SetWidth(composerWidth)
-	m.composer.SetHeight(composerHeight)
+	m.composer.SetHeight(defaultComposerHeight)
 	m.refreshTranscript()
+}
+
+// transcriptHeightForLayout returns the transcript viewport height for the
+// current terminal size, modal, and popup state. Rows used by the modal or by
+// the composer plus slash/skill popups are reserved so the full view never
+// exceeds the terminal height; otherwise the renderer overflows the screen and
+// the terminal auto-scrolls the frame.
+func (m *Model) transcriptHeightForLayout() int {
+	transcriptHeight := m.height - 3 - m.bottomReservedRows()
+	if m.regionChromeEnabled() {
+		// The activity heading and composer border use three additional rows.
+		transcriptHeight -= 3
+	}
+	return max(transcriptHeight, minTranscriptHeight)
+}
+
+// bottomReservedRows returns the rows the bottom sections occupy below the
+// transcript. A modal replaces the composer, popups, and working indicator;
+// otherwise those sections are reserved together.
+func (m *Model) bottomReservedRows() int {
+	if m == nil {
+		return defaultComposerHeight
+	}
+	if modal := m.renderModal(); modal != "" {
+		return len(strings.Split(strings.TrimRight(modal, "\n"), "\n"))
+	}
+	rows := defaultComposerHeight
+	if working := m.renderWorkingIndicator(); working != "" {
+		rows += len(strings.Split(strings.TrimRight(working, "\n"), "\n"))
+	}
+	return rows + m.popupRowCount()
+}
+
+// popupRowCount returns the number of rows the slash and skill popups
+// currently occupy in the rendered view.
+func (m *Model) popupRowCount() int {
+	return m.slashPopupRows() + m.skillPopupRows()
+}
+
+// syncTranscriptHeight recomputes the transcript height for the current popup
+// state, which can change between window resizes.
+func (m *Model) syncTranscriptHeight() {
+	if m == nil {
+		return
+	}
+	m.transcript.Height = m.transcriptHeightForLayout()
 }
 
 func (m *Model) refreshTranscript() {
@@ -4150,7 +4276,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.ensureSize()
 	if m.overlay == nil {
-		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscript(m.State, m.rawOutput, m.width, m.activeTUITheme()))
+		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscriptOverlayContent(m.State, m.rawOutput, m.width, m.activeTUITheme()))
 		m.overlayTranscript = true
 	} else {
 		m.overlayTranscript = true
@@ -4193,7 +4319,7 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.overlayTranscript {
 		return
 	}
-	m.overlay.SetContent(renderTranscript(m.State, m.rawOutput, m.width, m.activeTUITheme()))
+	m.overlay.SetContent(renderTranscriptOverlayContent(m.State, m.rawOutput, m.width, m.activeTUITheme()))
 }
 
 func (m *Model) activeTUITheme() string {
@@ -4548,6 +4674,14 @@ func waitForStream(messages <-chan bubbletea.Msg) bubbletea.Cmd {
 }
 
 func renderTranscript(state *codextui.State, raw bool, width int, themeID string) string {
+	return renderTranscriptWithHistoryMode(state, raw, width, themeID, false)
+}
+
+func renderTranscriptOverlayContent(state *codextui.State, raw bool, width int, themeID string) string {
+	return renderTranscriptWithHistoryMode(state, raw, width, themeID, true)
+}
+
+func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet."
 	}
@@ -4560,7 +4694,16 @@ func renderTranscript(state *codextui.State, raw bool, width int, themeID string
 	var builder strings.Builder
 	first := true
 	for _, message := range state.Messages {
-		lines := richMessageDisplayLines(message, width, themeID)
+		var lines []string
+		if expandedHistory && message.Role == codextui.RoleHistory {
+			text := strings.TrimRight(message.RawText, "\r\n")
+			if strings.TrimSpace(text) == "" {
+				text = strings.TrimRight(message.Text, "\r\n")
+			}
+			lines = codextui.ReflowTranscriptLines(rawLinesTrimmed(text), width)
+		} else {
+			lines = richMessageDisplayLines(message, width, themeID)
+		}
 		if len(lines) == 0 {
 			continue
 		}

@@ -140,6 +140,11 @@ node .\npm\scripts\publish-packages.mjs --directory .\dist\v0.1.0\npm --otp 1234
 .\scripts\build.ps1
 ```
 
+Windows builds also write `codex-command-runner.exe` and
+`codex-windows-sandbox-setup.exe` under `bin\codex-resources`. NPM platform
+packages use the official `vendor/<target-triple>/bin` layout with a sibling
+`codex-resources` directory.
+
 编译指定版本和目标平台：
 
 ```powershell

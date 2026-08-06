@@ -76,15 +76,15 @@ func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
 		(keySpec == "ctrl-7" && m.keyMatches("global", "toggle_side_conversation", "ctrl-/")) {
 		return m.toggleSideConversation()
 	}
-	if m.keyMatches("root", "open_transcript", msg.String()) {
+	if m.keyMatches("global", "open_transcript", keySpec) {
 		m.openTranscriptOverlay()
 		return nil
 	}
-	if m.keyMatches("root", "copy", msg.String()) {
+	if m.keyMatches("global", "copy", keySpec) {
 		m.copyLastAgentResponse()
 		return nil
 	}
-	if m.keyMatches("root", "toggle_raw_output", msg.String()) {
+	if m.keyMatches("global", "toggle_raw_output", keySpec) {
 		m.toggleRawOutputMode()
 		return nil
 	}

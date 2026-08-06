@@ -484,6 +484,27 @@ func (m *Model) selectedSkillPopupKey() string {
 	return skillPopupItemKey(m.skillPopup.Items[m.skillPopup.Selected])
 }
 
+// skillPopupRows returns the number of rows the skill/mention popup
+// currently renders.
+func (m *Model) skillPopupRows() int {
+	if m == nil {
+		return 0
+	}
+	if m.mentionPopup != nil {
+		return m.mentionPopup.CalculateRequiredHeight(firstPositive(m.width, defaultWidth))
+	}
+	if !m.skillPopup.Active {
+		return 0
+	}
+	if m.skillPopup.Loading || strings.TrimSpace(m.skillPopup.Err) != "" {
+		return 1
+	}
+	if len(m.skillPopup.Items) == 0 {
+		return 1
+	}
+	return min(len(m.skillPopup.Items), skillPopupMaxRows)
+}
+
 func (m *Model) renderSkillPopup() string {
 	if m == nil {
 		return ""

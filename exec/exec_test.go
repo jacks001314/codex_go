@@ -1991,6 +1991,87 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 	}
 }
 
+func TestRunExecResumePersistsUserBeforeAgentCompletes(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	now := fixedExecTime()
+	threadID := "thread-active-desktop"
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			Model:         "gpt-5.4",
+			ModelProvider: model.OpenAIProviderID,
+			Source:        "cli",
+			HistoryMode:   "legacy",
+		},
+	}); err != nil {
+		t.Fatalf("Save session returned error: %v", err)
+	}
+	blocking := &firstTurnBlockingAgent{started: make(chan struct{})}
+	runner := NewRunner(home)
+	runner.Agent = blocking
+	runner.Now = func() time.Time { return now.Add(time.Minute) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunContext(ctx, &Request{Exec: cli.ExecOptions{
+			Subcommand: "resume",
+			Resume:     cli.ExecResumeOptions{SessionID: threadID, Prompt: "show this while running"},
+		}}, strings.NewReader(""), io.Discard, io.Discard)
+		done <- err
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("agent did not start")
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		cancel()
+		t.Fatalf("Read active session error = %v", err)
+	}
+	if len(record.Items) != 1 || record.Items[0].Role != "user" || record.Items[0].Text != "show this while running" {
+		cancel()
+		t.Fatalf("active session items = %#v", record.Items)
+	}
+	if len(record.Metadata.RolloutTurns) != 1 || record.Metadata.RolloutTurns[0].Status != "running" {
+		cancel()
+		t.Fatalf("active turn state = %#v", record.Metadata.RolloutTurns)
+	}
+	rolloutPath, err := rollout.FindThreadPath(home, threadID, false)
+	if err != nil {
+		cancel()
+		t.Fatalf("FindThreadPath() error = %v", err)
+	}
+	data, err := os.ReadFile(rolloutPath)
+	if err != nil {
+		cancel()
+		t.Fatalf("ReadFile rollout error = %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"type":"task_started"`)) || !bytes.Contains(data, []byte(`"type":"user_message"`)) || !bytes.Contains(data, []byte(`"message":"show this while running"`)) {
+		cancel()
+		t.Fatalf("active rollout is not Desktop-readable: %s", data)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled run did not finish")
+	}
+}
+
 func TestResumeInputItemsKeepsLocalHistoryWithResponseID(t *testing.T) {
 	ctx := &execResumeContext{Record: &session.Record{
 		Metadata: session.Metadata{CWD: t.TempDir(), LastResponseID: "resp-last"},

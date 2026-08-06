@@ -80,6 +80,24 @@ Write-Host "==> Building Codex Go $ResolvedVersion for $GOOS/$GOARCH"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> Built $Output"
+if ($GOOS -eq "windows") {
+    $ResourcesDir = Join-Path (Split-Path -Parent $Output) "codex-resources"
+    New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
+    $WindowsHelpers = @(
+        @{ Name = "codex-command-runner.exe"; Package = "./cmd/codex-command-runner" },
+        @{ Name = "codex-windows-sandbox-setup.exe"; Package = "./cmd/codex-windows-sandbox-setup" }
+    )
+    foreach ($Helper in $WindowsHelpers) {
+        $HelperOutput = Join-Path $ResourcesDir $Helper.Name
+        $HelperArguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $HelperOutput)
+        if ($Race) { $HelperArguments += "-race" }
+        if ($Rebuild) { $HelperArguments += "-a" }
+        $HelperArguments += $Helper.Package
+        & go @HelperArguments
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Write-Host "==> Built $HelperOutput"
+    }
+}
 $HostOutput = Join-Path (Split-Path -Parent $Output) "codex-code-mode-host$Extension"
 $hostArguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $HostOutput)
 if ($Race) { $hostArguments += "-race" }

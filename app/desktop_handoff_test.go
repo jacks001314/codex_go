@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,87 @@ func TestReconcileStateForDesktopHandoffProjectsThread(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("reconciled thread %s missing from state DB rows", threadID)
+	}
+}
+
+func TestReconcileStateForDesktopHandoffRepairsLegacyGoSessionMeta(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", "")
+	threadID := "019fd130-0000-7000-8000-000000000098"
+	path := filepath.Join(home, "sessions", "2026", "08", "06", "rollout-2026-08-06T15-00-00-"+threadID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create rollout dir error = %v", err)
+	}
+	legacy := `{"timestamp":"2026-08-06T15:00:00Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-08-06T15:00:00Z","cwd":"D:\\repo","source":"cli","model_provider":"deepseek"}}` + "\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy rollout error = %v", err)
+	}
+
+	if err := reconcileStateForDesktopHandoff(home, path); err != nil {
+		t.Fatalf("reconcileStateForDesktopHandoff() error = %v", err)
+	}
+	afterReconcile, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat repaired rollout error = %v", err)
+	}
+	if _, err := rollout.EnsureRustCompatibleSessionMeta(path); err != nil {
+		t.Fatalf("EnsureRustCompatibleSessionMeta() error = %v", err)
+	}
+	afterEnsure, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat ensured rollout error = %v", err)
+	}
+	if afterEnsure.Size() != afterReconcile.Size() {
+		t.Fatalf("reconcile did not repair rollout before ensure: %d -> %d", afterReconcile.Size(), afterEnsure.Size())
+	}
+}
+
+func TestReconcileStateForDesktopHandoffBackfillsLegacyHistoryEvents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", "")
+	threadID := "019fd130-0000-7000-8000-000000000097"
+	now := fixedAppSessionTime()
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: threadID, SessionID: threadID, CWD: `D:\repo`, Source: "cli", Originator: "codex_cli_rs", ModelProvider: "deepseek", HistoryMode: "legacy", CLIVersion: "test", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	item := session.Item{ID: "user-1", Type: "message", Role: "user", Text: "legacy visible", Content: []session.ContentPart{{Type: "input_text", Text: "legacy visible"}}, CreatedAt: now, Metadata: map[string]any{"turnId": "turn-1"}}
+	if err := recorder.AppendItem(*rollout.ItemFromSessionItem(&item)); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: threadID, Preview: item.Text, CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: `D:\repo`, Source: "cli", ModelProvider: "deepseek", HistoryMode: "legacy", RolloutTurns: []session.TurnSnapshot{{ID: "turn-1", Status: "completed"}}},
+		Items:    []session.Item{item},
+	}); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+	if err := reconcileStateForDesktopHandoff(home, path); err != nil {
+		t.Fatalf("reconcileStateForDesktopHandoff() error = %v", err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(first), `"type":"user_message"`) || !strings.Contains(string(first), `"message":"legacy visible"`) {
+		t.Fatalf("reconciled rollout is not Desktop-readable: %s", first)
+	}
+	if err := reconcileStateForDesktopHandoff(home, path); err != nil {
+		t.Fatalf("second reconcileStateForDesktopHandoff() error = %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("second ReadFile() error = %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("second Desktop handoff changed the rollout")
 	}
 }
 

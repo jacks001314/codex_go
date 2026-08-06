@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -312,18 +313,19 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	options := codextea.Options{
-		NoAltScreen:          root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems:   interactiveRemoteSessionPickerItems(ctx, root, endpoint),
-		SessionPickerCWD:     interactiveSessionPickerCWD(root),
-		SessionPickerView:    settings.SessionPickerView,
-		ShowSessionHeader:    true,
-		SessionHeaderVersion: doctor.Version(),
-		OnSessionAction:      interactiveRemoteSessionActionHandler(ctx, endpoint),
-		OnResumeSession:      interactiveRemoteResumeSessionHandler(ctx, endpoint),
-		OnRenameThread:       interactiveRemoteRenameThreadHandler(ctx, endpoint),
-		OnLogout:             interactiveRemoteLogoutHandler(ctx, endpoint),
-		KeymapConfig:         keymapConfig,
-		OnKeymapEdit:         interactiveRemoteKeymapEditHandler(ctx, endpoint),
+		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
+		SessionPickerCWD:            interactiveSessionPickerCWD(root),
+		SessionPickerView:           settings.SessionPickerView,
+		ShowSessionHeader:           true,
+		SessionHeaderVersion:        doctor.Version(),
+		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(root, endpoint, settings.PermissionRequirements),
+		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
+		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
+		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
+		KeymapConfig:                keymapConfig,
+		OnKeymapEdit:                interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID
@@ -353,6 +355,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
 		TUITheme:                  settings.TUITheme,
 		TUIPet:                    settings.TUIPet,
+		CodexHome:                 auth.DefaultCodexHome(),
+		PetEnv:                    environmentMapFromEnviron(os.Environ()),
 		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommand(ctx, root, endpoint, state, request, brokers, interrupts)

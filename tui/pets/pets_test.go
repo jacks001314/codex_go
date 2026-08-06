@@ -3,6 +3,8 @@ package pets
 import (
 	"bytes"
 	"encoding/base64"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -102,6 +104,9 @@ func TestImageSupportDetectionMatchesRustBranches(t *testing.T) {
 	}
 	if got := DetectImageSupport(map[string]string{"TERM_PROGRAM": "iTerm.app", "TERM_PROGRAM_VERSION": "3.5.9"}); got.Reason != PetImageUnsupportedIterm2Old {
 		t.Fatalf("old iterm support = %#v", got)
+	}
+	if got := DetectImageSupport(map[string]string{"WT_SESSION": "abc"}); got.Protocol != ImageProtocolSixel {
+		t.Fatalf("windows terminal support = %#v", got)
 	}
 	if got := ResolveProtocolSelection(ProtocolSelectionSixel, nil); got.Protocol != ImageProtocolSixel {
 		t.Fatalf("forced sixel support = %#v", got)
@@ -247,13 +252,13 @@ func TestRenderPetImageWritesKittyPayloadAndDeletesOnClear(t *testing.T) {
 
 func TestRenderPetImageClearsSixelArea(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "frame.six")
-	if err := os.WriteFile(path, []byte("SIXEL"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	frame := filepath.Join(dir, "frame.png")
+	writeTinyPNG(t, frame, 2, 2)
 	request := AmbientPetDraw{
-		Frame:     path,
+		Frame:     frame,
 		Protocol:  ImageProtocolSixel,
+		SixelDir:  filepath.Join(dir, "sixel"),
+		HeightPX:  1,
 		X:         1,
 		Y:         2,
 		ClearTopY: 0,
@@ -268,8 +273,9 @@ func TestRenderPetImageClearsSixelArea(t *testing.T) {
 	if state.LastSixelClearArea == nil || *state.LastSixelClearArea != (SixelClearArea{X: 1, ClearTopY: 0, ClearBottomY: 4, Columns: 3}) {
 		t.Fatalf("sixel clear area = %#v", state.LastSixelClearArea)
 	}
-	if got := output.String(); !strings.Contains(got, "\x1b[1;2H   ") || !strings.Contains(got, "\x1b[3;2HSIXEL") {
-		t.Fatalf("sixel render output = %q", got)
+	rendered := output.String()
+	if !strings.Contains(rendered, "\x1b[1;2H   ") || !strings.Contains(rendered, "\x1b[3;2H") || !strings.Contains(rendered, "\x1bP") {
+		t.Fatalf("sixel render output = %q", rendered)
 	}
 	output.Reset()
 	if err := RenderPetImage(&output, &state, 7, nil, nil); err != nil {
@@ -280,6 +286,21 @@ func TestRenderPetImageClearsSixelArea(t *testing.T) {
 	}
 	if got := output.String(); !strings.Contains(got, "\x1b[1;2H   ") || !strings.HasPrefix(got, "\x1b7") || !strings.HasSuffix(got, "\x1b8") {
 		t.Fatalf("sixel clear output = %q", got)
+	}
+}
+
+func writeTinyPNG(t *testing.T, path string, width int, height int) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

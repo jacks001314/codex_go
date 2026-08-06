@@ -86,6 +86,18 @@ set -- "$@" ./cmd/codex
 echo "==> Building Codex Go $VERSION for $TARGET_GOOS/$TARGET_GOARCH"
 (cd "$ROOT" && go "$@")
 echo "==> Built $OUTPUT"
+if [ "$TARGET_GOOS" = windows ]; then
+  RESOURCES_DIR=$(dirname -- "$OUTPUT")/codex-resources
+  mkdir -p "$RESOURCES_DIR"
+  for HELPER in codex-command-runner codex-windows-sandbox-setup; do
+    set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$RESOURCES_DIR/$HELPER.exe"
+    [ "$RACE" -eq 1 ] && set -- "$@" -race
+    [ "$REBUILD" -eq 1 ] && set -- "$@" -a
+    set -- "$@" "./cmd/$HELPER"
+    (cd "$ROOT" && go "$@")
+    echo "==> Built $RESOURCES_DIR/$HELPER.exe"
+  done
+fi
 HOST_OUTPUT=$(dirname -- "$OUTPUT")/codex-code-mode-host$EXT
 set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$HOST_OUTPUT"
 [ "$RACE" -eq 1 ] && set -- "$@" -race

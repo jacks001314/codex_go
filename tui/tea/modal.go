@@ -40,6 +40,7 @@ const (
 	ModalKindFeedback        ModalKind = "feedback"
 	ModalKindAutoReview      ModalKind = "auto_review_denials"
 	ModalKindGoal            ModalKind = "goal"
+	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
 	ModalKindGeneric         ModalKind = "generic"
 )
 
@@ -62,6 +63,7 @@ type ModalRequestMsg struct {
 	Options           []ModalOption
 	FooterNote        string
 	FooterHint        string
+	ReopenOnCancel    bool
 	ColumnWidth       bottompane.ColumnWidthConfig
 	DescriptionLayout bottompane.SelectionDescriptionLayout
 }
@@ -115,6 +117,7 @@ type modalState struct {
 	selected          int
 	footerNote        string
 	footerHint        string
+	reopenOnCancel    bool
 	columnWidth       bottompane.ColumnWidthConfig
 	descriptionLayout bottompane.SelectionDescriptionLayout
 	keymapCapture     *keymapCaptureState
@@ -186,6 +189,7 @@ func (m *Model) openModal(message ModalRequestMsg) {
 		options:           options,
 		footerNote:        strings.TrimSpace(message.FooterNote),
 		footerHint:        strings.TrimSpace(message.FooterHint),
+		reopenOnCancel:    message.ReopenOnCancel,
 		columnWidth:       message.ColumnWidth,
 		descriptionLayout: message.DescriptionLayout,
 	}
@@ -554,6 +558,10 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		return nil
 	}
 	modal := m.modal
+	if cancelled && modal.kind == ModalKindWindowsSandbox && modal.reopenOnCancel {
+		m.notice = ""
+		return nil
+	}
 	response := ModalResponse{
 		ID:        modal.id,
 		Kind:      modal.kind,
@@ -611,6 +619,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyUsageModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindWindowsSandbox {
+		m.modal = nil
+		if cancelled {
+			m.notice = ""
+			return nil
+		}
+		return m.applyWindowsSandboxModalOption(response.OptionID)
 	}
 	if modal.kind == ModalKindPermissions {
 		m.modal = nil
@@ -1045,6 +1061,9 @@ func themePickerSelectionVisible(modal *modalState) bool {
 func (m *Model) renderModal() string {
 	if m == nil || m.modal == nil {
 		return ""
+	}
+	if m.modal.kind == ModalKindWindowsSandbox {
+		return m.renderWindowsSandboxModal()
 	}
 	if m.modal.themePicker != nil {
 		return m.renderThemePickerModal()

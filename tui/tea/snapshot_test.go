@@ -94,11 +94,6 @@ No messages yet.
 
 
 
-
-
-
-
-
 Run command?
   Reason: needs tests
   Working directory: D:\repo
@@ -175,10 +170,6 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 		assertTerminalSnapshot(t, model.View(), `
 Thread: new | Status: idle | Model: default | Approval: default | Sandbox: ...
 No messages yet.
-
-
-
-
 
 
 

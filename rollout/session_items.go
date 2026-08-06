@@ -79,7 +79,11 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		if item == nil {
 			continue
 		}
-		line, err := LineFromItem(item, itemTime(items[i].CreatedAt, now))
+		createdAt := itemTime(items[i].CreatedAt, now)
+		if err := AppendSessionItemEvent(recorder, items[i], createdAt); err != nil {
+			return fmt.Errorf("append legacy session item event %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
+		}
+		line, err := LineFromItem(item, createdAt)
 		if err != nil {
 			return err
 		}
@@ -88,6 +92,228 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		}
 	}
 	return nil
+}
+
+// AppendSessionItemEvent persists the legacy event mirror consumed by Rust's
+// thread-history builder. Rust rollouts contain both response_item entries for
+// model history and event_msg entries for Desktop/TUI history; response items
+// alone are intentionally ignored for ordinary user and agent messages.
+func AppendSessionItemEvent(recorder *Recorder, item session.Item, now time.Time) error {
+	if recorder == nil || recorder.IsPaginated() {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	role := strings.ToLower(strings.TrimSpace(item.Role))
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	switch {
+	case itemType == "user_message" || (role == "user" && (itemType == "" || itemType == "message")):
+		payload := map[string]any{
+			"type":    "user_message",
+			"message": sessionItemEventText(item, "input_text"),
+		}
+		if clientID := firstNonEmptyString(
+			stringFromMap(item.Data, "client_id"),
+			stringFromMap(item.Data, "clientId"),
+			stringFromMap(item.Metadata, "client_id"),
+			stringFromMap(item.Metadata, "clientId"),
+		); clientID != "" {
+			payload["client_id"] = clientID
+		}
+		images, imageDetails, localImages, localImageDetails := sessionItemEventImages(item.Content)
+		if len(images) > 0 {
+			payload["images"] = images
+		}
+		if len(imageDetails) > 0 {
+			payload["image_details"] = imageDetails
+		}
+		if len(localImages) > 0 {
+			payload["local_images"] = localImages
+		}
+		if len(localImageDetails) > 0 {
+			payload["local_image_details"] = localImageDetails
+		}
+		if textElements := firstPresentAny(item.Data, item.Metadata, "text_elements", "textElements"); textElements != nil {
+			payload["text_elements"] = textElements
+		}
+		return appendSessionEventPayload(recorder, payload, now)
+	case itemType == "agent_message" || itemType == "assistant_message" || (role == "assistant" && (itemType == "" || itemType == "message")):
+		message := sessionItemEventText(item, "output_text")
+		if strings.TrimSpace(message) == "" {
+			return nil
+		}
+		payload := map[string]any{
+			"type":    "agent_message",
+			"message": message,
+		}
+		if phase := firstNonEmptyString(stringFromMap(item.Metadata, "phase"), stringFromMap(item.Data, "phase")); phase != "" {
+			payload["phase"] = phase
+		}
+		if citation := firstPresentAny(item.Metadata, item.Data, "memory_citation", "memoryCitation"); citation != nil {
+			payload["memory_citation"] = citation
+		}
+		return appendSessionEventPayload(recorder, payload, now)
+	default:
+		return nil
+	}
+}
+
+func appendSessionEventPayload(recorder *Recorder, payload map[string]any, now time.Time) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return recorder.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: raw})
+}
+
+func sessionItemEventText(item session.Item, contentType string) string {
+	if strings.TrimSpace(item.Text) != "" {
+		return item.Text
+	}
+	parts := make([]string, 0, len(item.Content))
+	for i := range item.Content {
+		if strings.EqualFold(strings.TrimSpace(item.Content[i].Type), contentType) && strings.TrimSpace(item.Content[i].Text) != "" {
+			parts = append(parts, item.Content[i].Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func sessionItemEventImages(content []session.ContentPart) (images []string, imageDetails []any, localImages []string, localImageDetails []any) {
+	for i := range content {
+		imageURL := strings.TrimSpace(content[i].ImageURL)
+		if imageURL == "" {
+			continue
+		}
+		detail := any(nil)
+		if content[i].Detail != nil && strings.TrimSpace(*content[i].Detail) != "" {
+			detail = strings.TrimSpace(*content[i].Detail)
+		}
+		switch strings.ToLower(strings.TrimSpace(content[i].Type)) {
+		case "image", "input_image":
+			images = append(images, imageURL)
+			imageDetails = append(imageDetails, detail)
+		case "localimage", "local_image":
+			localImages = append(localImages, imageURL)
+			localImageDetails = append(localImageDetails, detail)
+		}
+	}
+	return images, imageDetails, localImages, localImageDetails
+}
+
+// EnsureRustCompatibleSessionHistory adds the legacy event stream required by
+// Rust's Desktop thread-history builder when an older Go rollout contains only
+// response_item entries. It is intentionally append-only and conservative:
+// once any canonical message/item event exists, the rollout is left unchanged.
+func EnsureRustCompatibleSessionHistory(path string, record *session.Record) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || record == nil || len(record.Items) == 0 {
+		return false, nil
+	}
+	lines, _, err := Load(path)
+	if err != nil {
+		return false, err
+	}
+	for i := range lines {
+		if lines[i].Type != "event_msg" || len(lines[i].Payload) == 0 {
+			continue
+		}
+		var payload rolloutEventPayload
+		if json.Unmarshal(lines[i].Payload, &payload) != nil {
+			continue
+		}
+		switch normalizeRolloutEventType(payload.Type) {
+		case "user_message", "agent_message", "item_completed":
+			return false, nil
+		}
+	}
+	recorder, err := Resume(path)
+	if err != nil {
+		return false, err
+	}
+	defer recorder.Close()
+	snapshots := make(map[string]session.TurnSnapshot, len(record.Metadata.RolloutTurns))
+	for i := range record.Metadata.RolloutTurns {
+		snapshots[record.Metadata.RolloutTurns[i].ID] = record.Metadata.RolloutTurns[i]
+	}
+	currentTurnID := ""
+	currentCompletedAt := time.Time{}
+	replayed := false
+	for i := range record.Items {
+		item := record.Items[i]
+		if !sessionItemSupportsLegacyEvent(item) {
+			continue
+		}
+		turnID := sessionItemTurnID(&item, i)
+		createdAt := itemTime(item.CreatedAt, record.UpdatedAt)
+		if turnID != currentTurnID {
+			if currentTurnID != "" {
+				if err := appendReplayedTurnTerminal(recorder, currentTurnID, snapshots[currentTurnID], currentCompletedAt); err != nil {
+					return false, err
+				}
+			}
+			currentTurnID = turnID
+			if currentTurnID != "" {
+				startedAt := createdAt
+				if snapshot, ok := snapshots[currentTurnID]; ok && snapshot.StartedAt != nil {
+					startedAt = time.Unix(*snapshot.StartedAt, 0).UTC()
+				}
+				if err := recorder.AppendTurnStarted(currentTurnID, startedAt); err != nil {
+					return false, err
+				}
+			}
+		}
+		if err := AppendSessionItemEvent(recorder, item, createdAt); err != nil {
+			return false, err
+		}
+		currentCompletedAt = createdAt
+		replayed = true
+	}
+	if currentTurnID != "" {
+		if err := appendReplayedTurnTerminal(recorder, currentTurnID, snapshots[currentTurnID], currentCompletedAt); err != nil {
+			return false, err
+		}
+	}
+	return replayed, nil
+}
+
+func sessionItemSupportsLegacyEvent(item session.Item) bool {
+	role := strings.ToLower(strings.TrimSpace(item.Role))
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	return itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message" || ((itemType == "" || itemType == "message") && (role == "user" || role == "assistant"))
+}
+
+func appendReplayedTurnTerminal(recorder *Recorder, turnID string, snapshot session.TurnSnapshot, fallback time.Time) error {
+	status := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(snapshot.Status)))
+	if status == "running" || status == "inprogress" {
+		return nil
+	}
+	completedAt := fallback
+	if snapshot.CompletedAt != nil {
+		completedAt = time.Unix(*snapshot.CompletedAt, 0).UTC()
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	durationMS := int64(0)
+	if snapshot.DurationMS != nil {
+		durationMS = *snapshot.DurationMS
+	} else if snapshot.StartedAt != nil {
+		durationMS = completedAt.Sub(time.Unix(*snapshot.StartedAt, 0).UTC()).Milliseconds()
+		if durationMS < 0 {
+			durationMS = 0
+		}
+	}
+	switch status {
+	case "interrupted", "aborted", "cancelled", "canceled":
+		return recorder.AppendTurnAborted(turnID, firstNonEmptyString(snapshot.ErrorMessage, "interrupted"), completedAt, durationMS)
+	case "failed", "error":
+		if err := recorder.AppendTurnError(snapshot.ErrorMessage, completedAt); err != nil {
+			return err
+		}
+	}
+	return recorder.AppendTurnComplete(turnID, completedAt, durationMS)
 }
 
 func coreTurnItemIsInProgress(raw json.RawMessage) bool {

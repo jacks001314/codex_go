@@ -5,10 +5,20 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 )
 
-const windowsSandboxDisallowedNotice = "That Windows sandbox option is disallowed by requirements."
+const (
+	windowsSandboxDisallowedNotice      = "That Windows sandbox option is disallowed by requirements."
+	windowsSandboxEnablePromptModalID   = "windows-sandbox-enable"
+	windowsSandboxFallbackPromptModalID = "windows-sandbox-fallback"
+)
+
+type WindowsSandboxStartupPrompt struct {
+	AllowUnelevated     bool
+	SetupChoiceRequired bool
+}
 
 type WindowsSandboxSetupOutcome struct {
 	Started    bool
@@ -19,6 +29,73 @@ type WindowsSandboxSetupCompletion struct {
 	Mode    chatwidget.WindowsSandboxMode
 	Success bool
 	Error   string
+}
+
+func (m *Model) openWindowsSandboxEnablePrompt(prompt WindowsSandboxStartupPrompt) {
+	if m == nil {
+		return
+	}
+	m.windowsSandboxSetupChoiceRequired = prompt.SetupChoiceRequired
+	view := chatwidget.NewWindowsSandboxEnablePromptView(prompt.AllowUnelevated, prompt.SetupChoiceRequired)
+	view.ViewID = windowsSandboxEnablePromptModalID
+	m.openSelectionViewModal(ModalKindWindowsSandbox, view)
+}
+
+func (m *Model) openWindowsSandboxFallbackPrompt() {
+	if m == nil {
+		return
+	}
+	allowUnelevated := chatwidget.WindowsSandboxModeAllowed(m.permissionRequirements, chatwidget.WindowsSandboxModeUnelevated)
+	setupChoiceRequired := m.windowsSandboxSetupChoiceRequired || !allowUnelevated
+	view := chatwidget.NewWindowsSandboxFallbackPromptView(allowUnelevated, setupChoiceRequired)
+	view.ViewID = windowsSandboxFallbackPromptModalID
+	m.openSelectionViewModal(ModalKindWindowsSandbox, view)
+}
+
+func (m *Model) applyWindowsSandboxModalOption(optionID string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	switch chatwidget.UsageMenuAction(strings.TrimSpace(optionID)) {
+	case chatwidget.WindowsSandboxActionSetupElevated:
+		return m.applyWindowsSandboxSetupCommand(chatwidget.WindowsSandboxModeElevated)
+	case chatwidget.WindowsSandboxActionUseLegacy:
+		return m.applyWindowsSandboxSetupCommand(chatwidget.WindowsSandboxModeUnelevated)
+	case chatwidget.WindowsSandboxActionQuit:
+		return bubbletea.Quit
+	default:
+		m.notice = "Unknown Windows sandbox option."
+		m.refreshTranscript()
+		return nil
+	}
+}
+
+func (m *Model) renderWindowsSandboxModal() string {
+	if m == nil || m.modal == nil {
+		return ""
+	}
+	width := max(m.width-4, 1)
+	var builder strings.Builder
+	if body := strings.TrimSpace(m.modal.body); body != "" {
+		wrapped := codextui.WrapLines(strings.Split(body, "\n"), codextui.WrapOptions{
+			Width:        width,
+			BreakWords:   true,
+			PreserveURLs: true,
+		})
+		builder.WriteString(strings.Join(wrapped, "\n"))
+		builder.WriteString("\n\n")
+	}
+	for index, option := range m.modal.options {
+		line := codextui.NumberedSelectionPrefix(index, index == m.modal.selected) + option.Label
+		if index == m.modal.selected {
+			line = codextui.RenderSelectedRow(line)
+		}
+		builder.WriteString(line)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\n")
+	builder.WriteString(firstNonEmpty(m.modal.footerHint, "Press enter to confirm or esc to go back"))
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func (m *Model) applyWindowsSandboxSetupCommand(mode chatwidget.WindowsSandboxMode) bubbletea.Cmd {
@@ -83,6 +160,10 @@ func (m *Model) applyWindowsSandboxSetupResult(msg WindowsSandboxSetupResultMsg)
 	}
 	if msg.Err != nil {
 		m.clearWindowsSandboxSetupStatus()
+		if msg.Mode == chatwidget.WindowsSandboxModeElevated {
+			m.openWindowsSandboxFallbackPrompt()
+			return
+		}
 		m.notice = "Windows sandbox setup failed: " + strings.TrimSpace(msg.Err.Error())
 		m.refreshTranscript()
 		return
@@ -107,6 +188,9 @@ func (m *Model) applyWindowsSandboxSetupCompleted(completion WindowsSandboxSetup
 	m.clearWindowsSandboxSetupStatus()
 	if completion.Success {
 		m.notice = "Windows sandbox setup completed."
+	} else if completion.Mode == chatwidget.WindowsSandboxModeElevated {
+		m.openWindowsSandboxFallbackPrompt()
+		return
 	} else if strings.TrimSpace(completion.Error) != "" {
 		m.notice = "Windows sandbox setup failed: " + strings.TrimSpace(completion.Error)
 	} else {

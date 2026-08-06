@@ -113,7 +113,11 @@ func requestPayload(request AmbientPetDraw, imageID uint32, env map[string]strin
 		payload, err := KittyTransmitPNGFileWithID(request.Frame, request.Columns, request.Rows, &imageID, env)
 		return []byte(payload), err
 	case ImageProtocolSixel:
-		return os.ReadFile(request.Frame)
+		path, err := PrepareSixelFrame(request.Frame, request.SixelDir, request.HeightPX)
+		if err != nil {
+			return nil, err
+		}
+		return os.ReadFile(path)
 	default:
 		return nil, errors.New("unsupported pet image protocol " + string(request.Protocol))
 	}

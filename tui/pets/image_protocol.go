@@ -100,7 +100,7 @@ func DetectImageSupport(env map[string]string) PetImageSupport {
 		return PetImageSupport{Protocol: ImageProtocolKitty}
 	}
 	if strings.Contains(term, "sixel") || strings.Contains(term, "mlterm") || strings.Contains(term, "foot") ||
-		strings.Contains(termProgram, "windows terminal") {
+		strings.Contains(termProgram, "windows terminal") || hasEnv(env, "WT_SESSION") {
 		return PetImageSupport{Protocol: ImageProtocolSixel}
 	}
 	return PetImageSupport{Reason: PetImageUnsupportedTerminal}

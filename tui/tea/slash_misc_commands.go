@@ -11,6 +11,7 @@ import (
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	pets "codex_go/tui/pets"
 )
 
 type pendingStatusRateLimitRequest struct {
@@ -476,9 +477,24 @@ func (m *Model) applyPetsCommand(args string) bubbletea.Cmd {
 	}
 	petID := normalizePetIDTea(args)
 	if petID != "" {
+		if petID != chatwidget.DisabledPetID && !m.petImageSupport().Supported() {
+			m.notice = m.petImageSupport().UnsupportedMessage()
+			m.refreshTranscript()
+			return nil
+		}
 		return m.setTUIPet(petID)
 	}
-	result := chatwidget.NewPetsPickerView(m.tuiPet, chatwidget.PetImageSupport{Kind: chatwidget.PetImageSupported}, chatwidget.BuiltinPetOptions())
+	support := m.petImageSupport()
+	pickerSupport := chatwidget.PetImageSupport{}
+	switch {
+	case support.Supported():
+		pickerSupport = chatwidget.PetImageSupport{Kind: chatwidget.PetImageSupported}
+	case support.Reason == pets.PetImageUnsupportedDisabled:
+		pickerSupport = chatwidget.PetImageSupport{Kind: chatwidget.PetImageDisabled, Message: support.UnsupportedMessage()}
+	default:
+		pickerSupport = chatwidget.PetImageSupport{Kind: chatwidget.PetImageTerminal, Message: support.UnsupportedMessage()}
+	}
+	result := chatwidget.NewPetsPickerView(m.tuiPet, pickerSupport, chatwidget.BuiltinPetOptions())
 	if strings.TrimSpace(result.InfoMessage) != "" {
 		m.notice = result.InfoMessage
 		m.refreshTranscript()
@@ -516,13 +532,20 @@ func (m *Model) setTUIPet(petID string) bubbletea.Cmd {
 		m.notice = "Pet set to " + petLabelTea(petID) + "."
 	}
 	m.refreshTranscript()
+	if petID == chatwidget.DisabledPetID && m.petRuntime != nil {
+		m.petRuntime.disable()
+	}
+	var commands []bubbletea.Cmd
 	if m.onWriteSettings != nil {
-		return m.writeSettings(settingsWriteKindPet, []SettingsEdit{{
+		commands = append(commands, m.writeSettings(settingsWriteKindPet, []SettingsEdit{{
 			KeyPath: "tui.pet",
 			Value:   petID,
-		}})
+		}}))
 	}
-	return nil
+	if petID != chatwidget.DisabledPetID {
+		commands = append(commands, m.loadPetCmd(petID))
+	}
+	return bubbletea.Batch(commands...)
 }
 
 func effectiveThemeIDTea(themeID string) string {
@@ -650,6 +673,7 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		Options:           options,
 		FooterNote:        view.FooterNote,
 		FooterHint:        view.FooterHint,
+		ReopenOnCancel:    view.ReopenOnCancel,
 		ColumnWidth:       view.ColumnWidth,
 		DescriptionLayout: view.DescriptionLayout,
 	})

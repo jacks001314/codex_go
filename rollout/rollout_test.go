@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"bytes"
 	"codex_go/session"
 	"encoding/json"
 	"os"
@@ -70,6 +71,73 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 	if record.Metadata.AgentPath != "/worker" || len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 || record.Metadata.MultiAgentVersion != "v2" || len(record.Metadata.ContextWindow) == 0 {
 		t.Fatalf("record metadata high fidelity fields = %#v", record.Metadata)
+	}
+}
+
+func TestRecorderWritesRustRequiredSessionMetaFields(t *testing.T) {
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: t.TempDir(),
+		ThreadID:  "thread-rust-meta",
+		Now:       fixedTime(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	raw, err := os.ReadFile(recorder.Path())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var line struct {
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &line); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !rustRequiredSessionMetaStrings(line.Payload) {
+		t.Fatalf("session_meta missing Rust-required strings: %s", raw)
+	}
+	var sessionID string
+	if err := json.Unmarshal(line.Payload["session_id"], &sessionID); err != nil || sessionID != "thread-rust-meta" {
+		t.Fatalf("session_id = %q, %v", sessionID, err)
+	}
+}
+
+func TestEnsureRustCompatibleSessionMetaAppendsOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-2026-08-06T15-00-00-thread-legacy.jsonl")
+	legacy := `{"timestamp":"2026-08-06T15:00:00Z","type":"session_meta","payload":{"id":"thread-legacy","timestamp":"2026-08-06T15:00:00Z","cwd":"D:\\repo","source":"cli"}}` + "\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	compatiblePath, err := EnsureRustCompatibleSessionMeta(path)
+	if err != nil {
+		t.Fatalf("EnsureRustCompatibleSessionMeta() error = %v", err)
+	}
+	if compatiblePath != path {
+		t.Fatalf("compatible path = %q, want %q", compatiblePath, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := len(bytes.Split(bytes.TrimSpace(data), []byte{'\n'})); got != 2 {
+		t.Fatalf("line count = %d, want 2: %s", got, data)
+	}
+	if ok, err := hasRustCompatibleSessionMeta(path); err != nil || !ok {
+		t.Fatalf("hasRustCompatibleSessionMeta() = %v, %v", ok, err)
+	}
+	before := len(data)
+	if _, err := EnsureRustCompatibleSessionMeta(path); err != nil {
+		t.Fatalf("second EnsureRustCompatibleSessionMeta() error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("second ReadFile() error = %v", err)
+	}
+	if len(after) != before {
+		t.Fatalf("second ensure changed rollout size from %d to %d", before, len(after))
 	}
 }
 
@@ -852,11 +920,14 @@ func TestAppendSessionItemsWritesCanonicalRustResponsePayload(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	lines, parseErrors, err := Load(path)
-	if err != nil || parseErrors != 0 || len(lines) != 2 {
+	if err != nil || parseErrors != 0 || len(lines) != 3 {
 		t.Fatalf("Load() lines/errors/err = %d/%d/%v", len(lines), parseErrors, err)
 	}
+	if lines[1].Type != "event_msg" || !strings.Contains(string(lines[1].Payload), `"type":"user_message"`) || !strings.Contains(string(lines[1].Payload), `"message":"hello"`) {
+		t.Fatalf("event mirror = %#v", lines[1])
+	}
 	var payload map[string]any
-	if err := json.Unmarshal(lines[1].Item, &payload); err != nil {
+	if err := json.Unmarshal(lines[2].Item, &payload); err != nil {
 		t.Fatalf("payload decode error = %v", err)
 	}
 	if payload["type"] != "message" || payload["role"] != "user" || payload["id"] != "user-1" {
@@ -871,6 +942,61 @@ func TestAppendSessionItemsWritesCanonicalRustResponsePayload(t *testing.T) {
 	passthrough, _ := payload["internal_chat_message_metadata_passthrough"].(map[string]any)
 	if passthrough["turn_id"] != "turn-1" {
 		t.Fatalf("turn passthrough = %#v", passthrough)
+	}
+}
+
+func TestEnsureRustCompatibleSessionHistoryBackfillsLegacyEventsOnce(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-desktop-history", SessionID: "thread-desktop-history", CWD: t.TempDir(), Originator: "codex_cli_rs", CLIVersion: "test", Now: now})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	legacyItems := []session.Item{
+		{ID: "user-1", Type: "message", Role: "user", Text: "hello Desktop", Content: []session.ContentPart{{Type: "input_text", Text: "hello Desktop"}}, CreatedAt: now, Metadata: map[string]any{"turnId": "turn-1"}},
+		{ID: "assistant-1", Type: "agent_message", Role: "assistant", Text: "visible answer", Content: []session.ContentPart{{Type: "output_text", Text: "visible answer"}}, CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-1", "phase": "final_answer"}},
+	}
+	for i := range legacyItems {
+		if err := recorder.AppendItem(*ItemFromSessionItem(&legacyItems[i])); err != nil {
+			t.Fatalf("AppendItem(%d) error = %v", i, err)
+		}
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	record := &session.Record{
+		ID:        "thread-desktop-history",
+		SessionID: "thread-desktop-history",
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Second),
+		RecencyAt: now.Add(time.Second),
+		Metadata:  session.Metadata{RolloutTurns: []session.TurnSnapshot{{ID: "turn-1", Status: "completed"}}},
+		Items:     legacyItems,
+	}
+	changed, err := EnsureRustCompatibleSessionHistory(path, record)
+	if err != nil || !changed {
+		t.Fatalf("EnsureRustCompatibleSessionHistory() changed/err = %v/%v", changed, err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, expected := range []string{`"type":"task_started"`, `"type":"user_message"`, `"type":"agent_message"`, `"type":"task_complete"`} {
+		if !bytes.Contains(first, []byte(expected)) {
+			t.Fatalf("backfilled rollout missing %s: %s", expected, first)
+		}
+	}
+	changed, err = EnsureRustCompatibleSessionHistory(path, record)
+	if err != nil || changed {
+		t.Fatalf("second EnsureRustCompatibleSessionHistory() changed/err = %v/%v", changed, err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("second ReadFile() error = %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("second compatibility pass changed the rollout")
 	}
 }
 

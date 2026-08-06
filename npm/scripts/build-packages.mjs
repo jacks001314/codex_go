@@ -23,12 +23,12 @@ rmSync(stageRoot, { recursive: true, force: true });
 mkdirSync(stageRoot, { recursive: true });
 
 const targets = [
-  { goos: "linux", goarch: "amd64", npmOS: "linux", npmCPU: "x64" },
-  { goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64" },
-  { goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64" },
-  { goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64" },
-  { goos: "windows", goarch: "amd64", npmOS: "win32", npmCPU: "x64" },
-  { goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64" },
+  { goos: "linux", goarch: "amd64", npmOS: "linux", npmCPU: "x64", targetTriple: "x86_64-unknown-linux-musl" },
+  { goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64", targetTriple: "aarch64-unknown-linux-musl" },
+  { goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64", targetTriple: "x86_64-apple-darwin" },
+  { goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64", targetTriple: "aarch64-apple-darwin" },
+  { goos: "windows", goarch: "amd64", npmOS: "win32", npmCPU: "x64", targetTriple: "x86_64-pc-windows-msvc" },
+  { goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64", targetTriple: "aarch64-pc-windows-msvc" },
 ];
 
 function run(command, commandArgs, options = {}) {
@@ -42,11 +42,29 @@ for (const target of targets) {
   const suffix = `${target.npmOS}-${target.npmCPU}`;
   const packageDir = path.join(stageRoot, `codex-go-${suffix}`);
   const vendorDir = path.join(packageDir, "vendor");
-  mkdirSync(vendorDir, { recursive: true });
+  const targetDir = path.join(vendorDir, target.targetTriple);
+  const binDir = path.join(targetDir, "bin");
+  mkdirSync(binDir, { recursive: true });
   const executableName = target.goos === "windows" ? "codex.exe" : "codex";
-  const executable = path.join(vendorDir, executableName);
+  const executable = path.join(binDir, executableName);
   const env = { ...process.env, GOOS: target.goos, GOARCH: target.goarch, CGO_ENABLED: "0" };
-  run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version}`, "-o", executable, "./cmd/codex"], { env });
+  const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}`;
+  run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", executable, "./cmd/codex"], { env });
+  if (target.goos === "windows") {
+    const resourcesDir = path.join(targetDir, "codex-resources");
+    mkdirSync(resourcesDir, { recursive: true });
+    for (const helper of ["codex-command-runner", "codex-windows-sandbox-setup"]) {
+      run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(resourcesDir, `${helper}.exe`), `./cmd/${helper}`], { env });
+    }
+  }
+  writeFileSync(path.join(targetDir, "codex-package.json"), `${JSON.stringify({
+    layoutVersion: 1,
+    version,
+    target: target.targetTriple,
+    variant: "codex",
+    entrypoint: `bin/${executableName}`,
+    resourcesDir: "codex-resources",
+  }, null, 2)}\n`);
   writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify({
     name: `@jacks001314/codex-go-${suffix}`,
     version,

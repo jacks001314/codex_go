@@ -18,9 +18,78 @@ import (
 	"codex_go/config"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
+	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	codextea "codex_go/tui/tea"
 )
+
+func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements *chatwidget.PermissionRequirements) *codextea.WindowsSandboxStartupPrompt {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	codexHome := auth.DefaultCodexHome()
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	level := interactiveWindowsSandboxLevel(loaded.Values)
+	setupComplete, _ := windowssandbox.SandboxSetupIsComplete(codexHome)
+	requirementsSourcePresent := loaded.Requirements != nil && loaded.Requirements.AllowedWindowsSandboxImplementations != nil
+	elevatedSetupRequired := chatwidget.ElevatedWindowsSandboxSetupRequired(level, requirementsSourcePresent, setupComplete)
+	// The Go startup path does not currently expose Rust's directory_trust_persisted bit.
+	// Prompt while the backend is disabled; either setup choice persists windows.sandbox.
+	decision := chatwidget.MaybePromptWindowsSandboxEnable(true, level, elevatedSetupRequired, true)
+	if !decision.OpenEnablePrompt {
+		return nil
+	}
+	allowUnelevated := true
+	if requirements != nil {
+		allowUnelevated = chatwidget.WindowsSandboxModeAllowed(*requirements, chatwidget.WindowsSandboxModeUnelevated)
+	}
+	return &codextea.WindowsSandboxStartupPrompt{
+		AllowUnelevated:     allowUnelevated,
+		SetupChoiceRequired: !allowUnelevated || elevatedSetupRequired,
+	}
+}
+
+func interactiveRemoteWindowsSandboxStartupPrompt(root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, requirements *chatwidget.PermissionRequirements) *codextea.WindowsSandboxStartupPrompt {
+	if !interactiveRemoteEndpointIsLocal(endpoint) {
+		return nil
+	}
+	return interactiveWindowsSandboxStartupPrompt(root, requirements)
+}
+
+func interactiveWindowsSandboxLevel(values map[string]any) chatwidget.WindowsSandboxLevel {
+	var mode *codextui.WindowsSandboxModeConfig
+	if windows, ok := values["windows"].(map[string]any); ok {
+		if parsed, valid := codextui.ParseWindowsSandboxModeConfig(stringValue(windows["sandbox"])); valid {
+			mode = parsed
+		}
+	}
+	if mode == nil {
+		if parsed, valid := codextui.ParseWindowsSandboxModeConfig(stringValue(values["windows_sandbox"])); valid {
+			mode = parsed
+		}
+	}
+	features := (&config.Config{Values: values}).FeatureSettings()
+	level := codextui.WindowsSandboxLevelFromConfig(mode, codextui.WindowsSandboxFeatureFlags{
+		WindowsSandbox:         features["experimental_windows_sandbox"],
+		WindowsSandboxElevated: features["elevated_windows_sandbox"],
+	})
+	switch level {
+	case codextui.WindowsSandboxLevelElevated:
+		return chatwidget.WindowsSandboxLevelElevated
+	case codextui.WindowsSandboxLevelRestrictedToken:
+		return chatwidget.WindowsSandboxLevelUnelevated
+	default:
+		return chatwidget.WindowsSandboxLevelDisabled
+	}
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
+}
 
 func interactiveWindowsSandboxSetupHandler(root *cli.RootOptions) codextea.WindowsSandboxSetupFunc {
 	if runtime.GOOS != "windows" {

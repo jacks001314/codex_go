@@ -2,6 +2,8 @@ package chatwidget
 
 import "strings"
 
+const windowsSandboxPromptFooter = "Press enter to confirm or esc to go back"
+
 const (
 	WindowsSandboxActionSetupElevated UsageMenuAction = "windows_sandbox_setup_elevated"
 	WindowsSandboxActionUseLegacy     UsageMenuAction = "windows_sandbox_use_legacy"
@@ -69,7 +71,7 @@ func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired
 	})
 	return SelectionView{
 		HeaderLines:    header,
-		FooterHint:     standardPopupHintLine,
+		FooterHint:     windowsSandboxPromptFooter,
 		Items:          items,
 		AllowCancel:    true,
 		ReopenOnCancel: setupChoiceRequired,
@@ -103,7 +105,7 @@ func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequir
 	})
 	return SelectionView{
 		HeaderLines:    header,
-		FooterHint:     standardPopupHintLine,
+		FooterHint:     windowsSandboxPromptFooter,
 		Items:          items,
 		AllowCancel:    true,
 		ReopenOnCancel: setupChoiceRequired,

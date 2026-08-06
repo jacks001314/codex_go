@@ -660,38 +660,39 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	readGoal, setGoal, clearGoal := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	options := codextea.Options{
-		NoAltScreen:                root != nil && root.Shared.NoAltScreen,
-		SessionPickerItems:         interactiveSessionPickerItems(root),
-		SessionPickerCWD:           interactiveSessionPickerCWD(root),
-		SessionPickerView:          settings.SessionPickerView,
-		ShowSessionHeader:          true,
-		SessionHeaderVersion:       doctor.Version(),
-		OnSessionAction:            interactiveSessionActionHandler(root),
-		OnResumeSession:            interactiveResumeSessionHandler(root),
-		OnRenameThread:             interactiveRenameThreadHandler(),
-		OnLogout:                   interactiveLogoutHandler(ctx, root),
-		OnOpenDesktopThread:        interactiveOpenDesktopThread,
-		KeymapConfig:               interactiveKeymapConfig(root),
-		OnKeymapEdit:               interactiveKeymapEditHandler(root),
-		OnWriteSettings:            interactiveSettingsWriteHandler(root),
-		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
-		OnResetMemories:            interactiveMemoryResetHandler(),
-		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),
-		OnReadIDEContext:           interactiveIDEContextReader,
-		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
-		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
-		OnSandboxReadDir:           interactiveSandboxReadDirHandler(root),
-		FeatureSettings:            settings.FeatureSettings,
-		UseMemories:                settings.UseMemories,
-		GenerateMemories:           settings.GenerateMemories,
-		FeedbackEnabled:            settings.FeedbackEnabled,
-		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
-		Personality:                settings.Personality,
-		Notifications:              settings.Notifications,
-		NotificationMethod:         settings.NotificationMethod,
-		NotificationCondition:      settings.NotificationCondition,
-		PermissionRequirements:     settings.PermissionRequirements,
-		MCPServers:                 mcpStatuses,
+		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
+		SessionPickerItems:          interactiveSessionPickerItems(root),
+		SessionPickerCWD:            interactiveSessionPickerCWD(root),
+		SessionPickerView:           settings.SessionPickerView,
+		ShowSessionHeader:           true,
+		SessionHeaderVersion:        doctor.Version(),
+		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
+		OnSessionAction:             interactiveSessionActionHandler(root),
+		OnResumeSession:             interactiveResumeSessionHandler(root),
+		OnRenameThread:              interactiveRenameThreadHandler(),
+		OnLogout:                    interactiveLogoutHandler(ctx, root),
+		OnOpenDesktopThread:         interactiveOpenDesktopThread,
+		KeymapConfig:                interactiveKeymapConfig(root),
+		OnKeymapEdit:                interactiveKeymapEditHandler(root),
+		OnWriteSettings:             interactiveSettingsWriteHandler(root),
+		OnWriteMemorySettings:       interactiveMemorySettingsWriteHandler(root),
+		OnResetMemories:             interactiveMemoryResetHandler(),
+		OnSubmitFeedback:            interactiveFeedbackSubmitHandler(),
+		OnReadIDEContext:            interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:   interactiveApproveAutoReviewDenialHandler(),
+		OnStartWindowsSandboxSetup:  interactiveWindowsSandboxSetupHandler(root),
+		OnSandboxReadDir:            interactiveSandboxReadDirHandler(root),
+		FeatureSettings:             settings.FeatureSettings,
+		UseMemories:                 settings.UseMemories,
+		GenerateMemories:            settings.GenerateMemories,
+		FeedbackEnabled:             settings.FeedbackEnabled,
+		ServiceTierCommands:         interactiveServiceTierCommands(state.Model),
+		Personality:                 settings.Personality,
+		Notifications:               settings.Notifications,
+		NotificationMethod:          settings.NotificationMethod,
+		NotificationCondition:       settings.NotificationCondition,
+		PermissionRequirements:      settings.PermissionRequirements,
+		MCPServers:                  mcpStatuses,
 		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
 			if mcpService == nil {
 				return nil, nil
@@ -717,6 +718,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
 		TUITheme:                  settings.TUITheme,
 		TUIPet:                    settings.TUIPet,
+		CodexHome:                 auth.DefaultCodexHome(),
+		PetEnv:                    environmentMapFromEnviron(os.Environ()),
 		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnReadDebugConfig:         interactiveDebugConfigReader(root),
 		OnReadGoal:                readGoal,
@@ -2043,6 +2046,23 @@ func desktopHistoryPositionFromRecord(value *session.HistoryPosition) *rollout.H
 }
 
 func reconcileStateForDesktopHandoff(codexHome string, rolloutPath string) error {
+	compatiblePath, err := rollout.EnsureRustCompatibleSessionMeta(rolloutPath)
+	if err != nil {
+		return fmt.Errorf("failed to prepare this session for Desktop handoff: %w", err)
+	}
+	rolloutPath = compatiblePath
+	meta, metaErr := rollout.FirstSessionMeta(rolloutPath)
+	if metaErr == nil && meta != nil && strings.TrimSpace(meta.ID) != "" {
+		record, readErr := session.NewStore(filepath.Join(codexHome, "sessions")).Read(session.ThreadID(meta.ID), true, true)
+		if readErr != nil || record == nil {
+			record, _ = rollout.RecordFromPath(rolloutPath, false)
+		}
+		if record != nil {
+			if _, err := rollout.EnsureRustCompatibleSessionHistory(rolloutPath, record); err != nil {
+				return fmt.Errorf("failed to prepare this session history for Desktop handoff: %w", err)
+			}
+		}
+	}
 	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
 	if err != nil {
 		return fmt.Errorf("failed to prepare the local state database for Desktop handoff: %w", err)

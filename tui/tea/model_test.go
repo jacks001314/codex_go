@@ -45,6 +45,7 @@ func TestModelViewRendersState(t *testing.T) {
 		if !strings.Contains(cleanView, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
+
 	}
 }
 
@@ -1200,6 +1201,49 @@ func TestModelTranscriptOverlayPreservesScrollAndFollowsTail(t *testing.T) {
 	}
 	if !strings.Contains(model.overlay.Content(), "tail follows in overlay") {
 		t.Fatalf("overlay content missing appended tail")
+	}
+}
+
+func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.AddHistoryLines(
+		[]string{
+			"Ran command",
+			"  first line",
+			"  +2 lines (ctrl + t to view transcript)",
+			"  last line",
+		},
+		[]string{
+			"$ command",
+			"first line",
+			"hidden detail one",
+			"hidden detail two",
+			"last line",
+		},
+	)
+	model := NewModel(state, Options{Width: 60, Height: 10})
+
+	regular := renderTranscript(state, false, 60, model.activeTUITheme())
+	if !strings.Contains(regular, "ctrl + t to view transcript") || strings.Contains(regular, "hidden detail one") {
+		t.Fatalf("regular transcript did not stay collapsed:\n%s", regular)
+	}
+
+	updated, _ := model.Update(key(bubbletea.KeyCtrlT))
+	model = updated.(*Model)
+	content := model.overlay.Content()
+	for _, want := range []string{"$ command", "hidden detail one", "hidden detail two", "last line"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expanded transcript missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "ctrl + t to view transcript") {
+		t.Fatalf("expanded transcript retained collapsed-output hint:\n%s", content)
+	}
+
+	state.Messages[0].RawText += "\nlate running detail"
+	_ = model.View()
+	if content := model.overlay.Content(); !strings.Contains(content, "late running detail") {
+		t.Fatalf("expanded transcript did not follow updated raw history:\n%s", content)
 	}
 }
 
@@ -4868,6 +4912,107 @@ func TestModelWindowsSandboxSetupUsesCallbackAndCompletion(t *testing.T) {
 	}
 }
 
+func TestModelWindowsSandboxStartupPromptMatchesRustFlow(t *testing.T) {
+	var calls []chatwidget.WindowsSandboxMode
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:  100,
+		Height: 30,
+		WindowsSandboxStartupPrompt: &WindowsSandboxStartupPrompt{
+			AllowUnelevated: true,
+		},
+		OnStartWindowsSandboxSetup: func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error) {
+			calls = append(calls, mode)
+			return WindowsSandboxSetupOutcome{
+				Started: true,
+				Completion: &WindowsSandboxSetupCompletion{
+					Mode:    mode,
+					Success: true,
+				},
+			}, nil
+		},
+	})
+
+	view := model.View()
+	for _, want := range []string{
+		"Set up the Codex agent sandbox to protect your files and control network access.",
+		"Set up default sandbox (requires Administrator permissions)",
+		"Use non-admin sandbox (higher risk if prompt injected)",
+		"Quit",
+		"Press enter to confirm or esc to go back",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("startup prompt missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Select an option") {
+		t.Fatalf("startup prompt contains generic title:\n%s", view)
+	}
+
+	model.Update(key(bubbletea.KeyDown))
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if len(calls) != 1 || calls[0] != chatwidget.WindowsSandboxModeUnelevated {
+		t.Fatalf("setup calls = %#v", calls)
+	}
+	if !strings.Contains(model.View(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion notice missing:\n%s", model.View())
+	}
+}
+
+func TestModelRequiredWindowsSandboxPromptCannotBeDismissed(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:  100,
+		Height: 30,
+		WindowsSandboxStartupPrompt: &WindowsSandboxStartupPrompt{
+			AllowUnelevated:     false,
+			SetupChoiceRequired: true,
+		},
+	})
+
+	model.Update(key(bubbletea.KeyEsc))
+	view := model.View()
+	if model.modal == nil || !strings.Contains(view, "Your organization requires the default Codex agent sandbox") {
+		t.Fatalf("required prompt was dismissed:\n%s", view)
+	}
+	if strings.Contains(view, "Use non-admin sandbox") {
+		t.Fatalf("required prompt offered disallowed non-admin mode:\n%s", view)
+	}
+}
+
+func TestModelElevatedWindowsSandboxFailureOpensFallback(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:  100,
+		Height: 30,
+		WindowsSandboxStartupPrompt: &WindowsSandboxStartupPrompt{
+			AllowUnelevated: true,
+		},
+		OnStartWindowsSandboxSetup: func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error) {
+			return WindowsSandboxSetupOutcome{
+				Started: true,
+				Completion: &WindowsSandboxSetupCompletion{
+					Mode:    mode,
+					Success: false,
+					Error:   "elevation denied",
+				},
+			}, nil
+		},
+	})
+
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	view := model.View()
+	for _, want := range []string{
+		"Couldn't set up your sandbox with Administrator permissions",
+		"Try setting up admin sandbox again",
+		"Use Codex with non-admin sandbox",
+		"Quit",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("fallback prompt missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestModelWindowsSandboxSetupCompletionNotificationClearsStatus(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:            90,
@@ -5120,6 +5265,7 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 		Height:   24,
 		TUITheme: "dracula",
 		TUIPet:   "dewey",
+		PetEnv:   map[string]string{"KITTY_WINDOW_ID": "1"},
 	})
 
 	typeText(t, model, "/theme")

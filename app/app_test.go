@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -2000,6 +2001,41 @@ func TestInteractiveRunWindowsSandboxSetupWaitsForCompletionAndPersistsMode(t *t
 	windowsConfig, _ := read.Config["windows"].(map[string]any)
 	if windowsConfig["sandbox"] != "elevated" {
 		t.Fatalf("windows config = %#v", windowsConfig)
+	}
+}
+
+func TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows sandbox prompt is Windows-only")
+	}
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: t.TempDir()}}
+
+	prompt := interactiveWindowsSandboxStartupPrompt(root, nil)
+	if prompt == nil || !prompt.AllowUnelevated || prompt.SetupChoiceRequired {
+		t.Fatalf("disabled sandbox prompt = %#v", prompt)
+	}
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[windows]\nsandbox = \"unelevated\"\n"), 0o600); err != nil {
+		t.Fatalf("write unelevated config: %v", err)
+	}
+	if prompt := interactiveWindowsSandboxStartupPrompt(root, nil); prompt != nil {
+		t.Fatalf("configured unelevated sandbox prompted: %#v", prompt)
+	}
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[windows]\nsandbox = \"elevated\"\n"), 0o600); err != nil {
+		t.Fatalf("write elevated config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_windows_sandbox_implementations = [\"elevated\"]\n"), 0o600); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	requirements := &chatwidget.PermissionRequirements{
+		AllowedWindowsSandboxModes: []chatwidget.WindowsSandboxMode{chatwidget.WindowsSandboxModeElevated},
+	}
+	prompt = interactiveWindowsSandboxStartupPrompt(root, requirements)
+	if prompt == nil || prompt.AllowUnelevated || !prompt.SetupChoiceRequired {
+		t.Fatalf("required elevated sandbox prompt = %#v", prompt)
 	}
 }
 

@@ -232,10 +232,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	compactedThisTurn := false
-	if resumeContext == nil {
-		if err := r.persistSessionStart(req, threadID, turnID, prompt, requestInputs, modelID, providerID); err != nil {
-			return nil, err
-		}
+	if err := r.persistSessionTurnStart(req, threadID, turnID, prompt, requestInputs, resumeContext, modelID, providerID); err != nil {
+		return nil, err
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		var err error
@@ -380,6 +378,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			_ = r.persistInterruptedSession(threadID, turnID, err)
+		} else {
+			_ = r.persistFailedSession(threadID, turnID, err)
 		}
 		if execIsContextWindowExceeded(err) && resumeContext != nil && resumeContext.Record != nil {
 			_ = r.persistExecContextWindowExceeded(resumeContext.Record)
@@ -3468,88 +3468,54 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 	response := result.Response
 	now := r.now().UTC()
 	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
-	if resumeContext != nil && resumeContext.Record != nil {
-		resumeRecord := resumeContext.Record
-		newUserPrompt := firstNonEmpty(resumeContext.UserPrompt, userPrompt)
-		items := execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, map[string]any{"resumed": true})
-		items = append(items, sessionItemsForTurnWithMode(turnID, newUserPrompt, userInputs, result, now, map[string]any{"resumed": true}, &execImageGenerationContext{
-			CodexHome: r.CodexHome,
-			ThreadID:  string(resumeRecord.ID),
-		}, execRequestPlanMode(req))...)
-		updated, err := store.AppendItems(resumeRecord.ID, items)
-		if err != nil {
-			return "", err
-		}
-		if err := r.appendExecRollout(resumeRecord.ID, items, updated, now); err != nil {
-			return "", err
-		}
-		extra := execTokenUsageMetadata(updated.Metadata.Extra, tokenUsage)
-		if updated.Metadata.Model == "" || updated.Metadata.ModelProvider == "" {
-			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{
-				Model:          stringPointerIfEmpty(updated.Metadata.Model, response.Model),
-				ModelProvider:  stringPointerIfEmpty(updated.Metadata.ModelProvider, response.ProviderID),
-				LastResponseID: stringPointerIfNotEmpty(response.ResponseID),
-				SessionPrefix:  stringPointerIfNotEmpty(session.PrefixForSessionID(updated.SessionID)),
-				Extra:          extra,
-			}, true)
-		} else if strings.TrimSpace(response.ResponseID) != "" {
-			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{
-				LastResponseID: stringPointerIfNotEmpty(response.ResponseID),
-				Extra:          extra,
-			}, true)
-		} else if extra != nil {
-			_, _ = store.UpdateMetadata(updated.ID, &session.MetadataPatch{Extra: extra}, true)
-		}
-		return store.Path(resumeRecord.ID)
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return "", err
 	}
-	existing, _ := store.Read(session.ThreadID(threadID), true, true)
-	record := &session.Record{
-		ID:             session.ThreadID(threadID),
-		SessionID:      execSessionID(req, threadID),
-		ParentThreadID: session.ThreadID(execParentThreadID(req)),
-		Preview:        firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		RecencyAt:      now,
-		Metadata: session.Metadata{
-			CWD:               requestCWD(req),
-			Model:             response.Model,
-			ModelProvider:     response.ProviderID,
-			Source:            execSessionSource(req),
-			ThreadSource:      execThreadSource(req),
-			Originator:        execAgentOriginator(req),
-			CLIVersion:        doctor.Version(),
-			HistoryMode:       execPersistedHistoryMode(existing),
-			LastResponseID:    response.ResponseID,
-			SessionPrefix:     session.PrefixForSessionID(threadID),
-			AgentNickname:     execAgentNicknameForRequest(req),
-			AgentRole:         execAgentRoleForRequest(req),
-			AgentPath:         execAgentPathForRequest(req),
-			MultiAgentVersion: execMultiAgentVersionForRequest(req),
-			Extra:             execTokenUsageMetadata(nil, tokenUsage),
-		},
-		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurnWithMode(turnID, userPrompt, userInputs, result, now, nil, &execImageGenerationContext{
-			CodexHome: r.CodexHome,
-			ThreadID:  threadID,
-		}, execRequestPlanMode(req))...),
+	resumed := resumeContext != nil && resumeContext.Record != nil
+	newUserPrompt := userPrompt
+	var itemMetadata map[string]any
+	if resumed {
+		newUserPrompt = firstNonEmpty(resumeContext.UserPrompt, userPrompt)
+		itemMetadata = map[string]any{"resumed": true}
 	}
-	if existing != nil {
-		record.CreatedAt = existing.CreatedAt
-		record.Metadata.RolloutTurns = append([]session.TurnSnapshot(nil), existing.Metadata.RolloutTurns...)
+	items := execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, itemMetadata)
+	items = append(items, sessionItemsForTurnWithMode(turnID, newUserPrompt, userInputs, result, now, itemMetadata, &execImageGenerationContext{
+		CodexHome: r.CodexHome,
+		ThreadID:  threadID,
+	}, execRequestPlanMode(req))...)
+	delta := execMissingSessionItems(record.Items, items)
+	record.Items = append(record.Items, delta...)
+	if strings.TrimSpace(record.SessionID) == "" {
+		record.SessionID = execSessionID(req, threadID)
 	}
+	if strings.TrimSpace(record.Preview) == "" {
+		record.Preview = firstLine(firstNonEmpty(newUserPrompt, turnUserInputsSummary(userInputs)))
+	}
+	if strings.TrimSpace(response.Model) != "" {
+		record.Metadata.Model = response.Model
+	}
+	if strings.TrimSpace(response.ProviderID) != "" {
+		record.Metadata.ModelProvider = response.ProviderID
+	}
+	if strings.TrimSpace(response.ResponseID) != "" {
+		record.Metadata.LastResponseID = response.ResponseID
+	}
+	if strings.TrimSpace(record.Metadata.SessionPrefix) == "" {
+		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
+	}
+	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
 	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
-	delta := execSessionItemDelta(existing, record.Items)
+	record.UpdatedAt = now
+	record.RecencyAt = now
 	if err := store.Save(record); err != nil {
 		return "", err
 	}
-	if existing == nil {
-		if err := r.createExecRollout(record, now); err != nil {
-			return "", fmt.Errorf("create exec rollout: %w", err)
-		}
-	} else {
-		if err := r.appendExecRollout(record.ID, delta, record, now); err != nil {
-			return "", fmt.Errorf("append exec rollout: %w", err)
-		}
+	if err := r.appendExecRollout(record.ID, delta, record, now); err != nil {
+		return "", fmt.Errorf("append exec rollout: %w", err)
+	}
+	if err := r.appendExecTurnComplete(record, turnID, now); err != nil {
+		return "", fmt.Errorf("complete exec rollout turn: %w", err)
 	}
 	path, err := store.Path(record.ID)
 	if err != nil {
@@ -3573,72 +3539,149 @@ func execCompleteTurnSnapshot(metadata *session.Metadata, turnID string, now tim
 	metadata.RolloutTurns = append(metadata.RolloutTurns, session.TurnSnapshot{ID: turnID, Status: "completed", CompletedAt: &completedAt})
 }
 
-func execSessionItemDelta(existing *session.Record, final []session.Item) []session.Item {
-	if existing == nil || len(existing.Items) == 0 {
-		return append([]session.Item(nil), final...)
+func execMissingSessionItems(existing []session.Item, candidates []session.Item) []session.Item {
+	seen := make(map[string]int, len(existing))
+	for i := range existing {
+		seen[execSessionItemIdentity(&existing[i])]++
 	}
-	prefix := len(existing.Items)
-	if prefix > len(final) {
-		prefix = 0
-	} else {
-		for i := 0; i < prefix; i++ {
-			if existing.Items[i].ID != final[i].ID || existing.Items[i].Type != final[i].Type {
-				prefix = 0
-				break
-			}
+	missing := make([]session.Item, 0, len(candidates))
+	for i := range candidates {
+		key := execSessionItemIdentity(&candidates[i])
+		if seen[key] > 0 {
+			seen[key]--
+			continue
 		}
+		missing = append(missing, candidates[i])
 	}
-	return append([]session.Item(nil), final[prefix:]...)
+	return missing
 }
 
-func (r *Runner) persistSessionStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, modelID string, providerID string) error {
+func execSessionItemIdentity(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	turnID := firstNonEmpty(execStringFromAny(item.Metadata["turnId"]), execStringFromAny(item.Metadata["turn_id"]), execStringFromAny(item.Data["turnId"]), execStringFromAny(item.Data["turn_id"]))
+	return strings.Join([]string{strings.TrimSpace(item.ID), strings.TrimSpace(item.Type), strings.TrimSpace(item.Role), turnID, strings.TrimSpace(item.Text)}, "\x00")
+}
+
+func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, modelID string, providerID string) error {
 	if r == nil || req == nil || req.Exec.Ephemeral {
 		return nil
 	}
 	now := r.now().UTC()
 	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
-	existing, _ := store.Read(session.ThreadID(threadID), true, true)
-	record := &session.Record{
-		ID:             session.ThreadID(threadID),
-		SessionID:      execSessionID(req, threadID),
-		ParentThreadID: session.ThreadID(execParentThreadID(req)),
-		Preview:        firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs))),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		RecencyAt:      now,
-		Metadata: session.Metadata{
-			CWD:               requestCWD(req),
-			Model:             modelID,
-			ModelProvider:     providerID,
-			Source:            execSessionSource(req),
-			ThreadSource:      execThreadSource(req),
-			Originator:        execAgentOriginator(req),
-			CLIVersion:        doctor.Version(),
-			HistoryMode:       execPersistedHistoryMode(existing),
-			SessionPrefix:     session.PrefixForSessionID(threadID),
-			AgentNickname:     execAgentNicknameForRequest(req),
-			AgentRole:         execAgentRoleForRequest(req),
-			AgentPath:         execAgentPathForRequest(req),
-			MultiAgentVersion: execMultiAgentVersionForRequest(req),
-			RolloutTurns:      []session.TurnSnapshot{{ID: turnID, Status: "running"}},
-		},
-		Items: append(execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, nil), sessionItemsForTurn(turnID, userPrompt, userInputs, nil, now, nil, nil)...),
-	}
-	if err := store.Create(record); err != nil && !errors.Is(err, session.ErrConflict) {
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil && !errors.Is(err, session.ErrThreadNotFound) {
 		return err
 	}
-	if path, findErr := rollout.FindThreadPath(r.CodexHome, threadID, false); findErr == nil {
-		// A rollout already exists for this fresh thread (e.g., materialized by
-		// /app handoff before the first turn). Append the opening items to it
-		// rather than creating a second rollout for the same thread.
-		recorder, resumeErr := rollout.Resume(path)
-		if resumeErr != nil {
-			return resumeErr
-		}
-		defer recorder.Close()
-		return rollout.AppendSessionItems(recorder, record.Items, now)
+	if record == nil {
+		record = &session.Record{ID: session.ThreadID(threadID), CreatedAt: now}
 	}
-	return r.createExecRollout(record, now)
+	priorItems := append([]session.Item(nil), record.Items...)
+	resumed := resumeContext != nil && resumeContext.Record != nil
+	var itemMetadata map[string]any
+	if resumed {
+		itemMetadata = map[string]any{"resumed": true}
+	}
+	items := execAdditionalInputSessionItems(turnID, req.AdditionalInputItems, now, itemMetadata)
+	items = append(items, sessionItemsForTurn(turnID, userPrompt, userInputs, nil, now, itemMetadata, nil)...)
+	delta := execMissingSessionItems(record.Items, items)
+	record.Items = append(record.Items, delta...)
+	if strings.TrimSpace(record.SessionID) == "" {
+		record.SessionID = execSessionID(req, threadID)
+	}
+	if record.ParentThreadID == "" {
+		record.ParentThreadID = session.ThreadID(execParentThreadID(req))
+	}
+	if strings.TrimSpace(record.Preview) == "" {
+		record.Preview = firstLine(firstNonEmpty(userPrompt, turnUserInputsSummary(userInputs)))
+	}
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	}
+	record.UpdatedAt = now
+	record.RecencyAt = now
+	record.Metadata.CWD = firstNonEmpty(record.Metadata.CWD, requestCWD(req))
+	record.Metadata.Model = firstNonEmpty(modelID, record.Metadata.Model)
+	record.Metadata.ModelProvider = firstNonEmpty(providerID, record.Metadata.ModelProvider)
+	if strings.TrimSpace(record.Metadata.Source) == "" {
+		record.Metadata.Source = execSessionSource(req)
+	}
+	if strings.TrimSpace(record.Metadata.ThreadSource) == "" {
+		record.Metadata.ThreadSource = execThreadSource(req)
+	}
+	if strings.TrimSpace(record.Metadata.Originator) == "" {
+		record.Metadata.Originator = execAgentOriginator(req)
+	}
+	if strings.TrimSpace(record.Metadata.CLIVersion) == "" {
+		record.Metadata.CLIVersion = doctor.Version()
+	}
+	record.Metadata.HistoryMode = execPersistedHistoryMode(record)
+	if strings.TrimSpace(record.Metadata.SessionPrefix) == "" {
+		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
+	}
+	if strings.TrimSpace(record.Metadata.AgentNickname) == "" {
+		record.Metadata.AgentNickname = execAgentNicknameForRequest(req)
+	}
+	if strings.TrimSpace(record.Metadata.AgentRole) == "" {
+		record.Metadata.AgentRole = execAgentRoleForRequest(req)
+	}
+	if strings.TrimSpace(record.Metadata.AgentPath) == "" {
+		record.Metadata.AgentPath = execAgentPathForRequest(req)
+	}
+	if record.Metadata.MultiAgentVersion == "" {
+		record.Metadata.MultiAgentVersion = execMultiAgentVersionForRequest(req)
+	}
+	execStartTurnSnapshot(&record.Metadata, turnID, now)
+	if err := store.Save(record); err != nil {
+		return err
+	}
+	path, findErr := rollout.FindThreadPath(r.CodexHome, threadID, false)
+	var recorder *rollout.Recorder
+	created := false
+	if findErr == nil {
+		recorder, err = rollout.Resume(path)
+	} else {
+		recorder, err = r.newExecRolloutRecorder(record, now)
+		created = true
+	}
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	if created && len(priorItems) > 0 {
+		priorRecord := *record
+		priorRecord.Items = priorItems
+		if err := rollout.AppendSessionItems(recorder, execRolloutItems(&priorRecord), now); err != nil {
+			return err
+		}
+	}
+	if err := recorder.AppendTurnStarted(turnID, now); err != nil {
+		return err
+	}
+	return rollout.AppendSessionItems(recorder, delta, now)
+}
+
+func execStartTurnSnapshot(metadata *session.Metadata, turnID string, now time.Time) {
+	if metadata == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	startedAt := now.Unix()
+	for i := range metadata.RolloutTurns {
+		if metadata.RolloutTurns[i].ID != turnID {
+			continue
+		}
+		metadata.RolloutTurns[i].Status = "running"
+		if metadata.RolloutTurns[i].StartedAt == nil {
+			metadata.RolloutTurns[i].StartedAt = &startedAt
+		}
+		metadata.RolloutTurns[i].CompletedAt = nil
+		metadata.RolloutTurns[i].DurationMS = nil
+		metadata.RolloutTurns[i].ErrorMessage = ""
+		metadata.RolloutTurns[i].CodexErrorInfo = nil
+		return
+	}
+	metadata.RolloutTurns = append(metadata.RolloutTurns, session.TurnSnapshot{ID: turnID, Status: "running", StartedAt: &startedAt})
 }
 
 // execPersistedHistoryMode returns the rollout history mode to persist for an
@@ -3696,6 +3739,51 @@ func (r *Runner) persistInterruptedSession(threadID string, turnID string, cause
 	}
 	defer recorder.Close()
 	return recorder.AppendTurnAborted(turnID, "interrupted", now, 0)
+}
+
+func (r *Runner) persistFailedSession(threadID string, turnID string, cause error) error {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" || cause == nil {
+		return nil
+	}
+	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return err
+	}
+	now := r.now().UTC()
+	completedAt := now.Unix()
+	found := false
+	for i := range record.Metadata.RolloutTurns {
+		if record.Metadata.RolloutTurns[i].ID != turnID {
+			continue
+		}
+		record.Metadata.RolloutTurns[i].Status = "failed"
+		record.Metadata.RolloutTurns[i].CompletedAt = &completedAt
+		record.Metadata.RolloutTurns[i].ErrorMessage = cause.Error()
+		found = true
+		break
+	}
+	if !found {
+		record.Metadata.RolloutTurns = append(record.Metadata.RolloutTurns, session.TurnSnapshot{ID: turnID, Status: "failed", CompletedAt: &completedAt, ErrorMessage: cause.Error()})
+	}
+	record.UpdatedAt = now
+	record.RecencyAt = now
+	if err := store.Save(record); err != nil {
+		return err
+	}
+	path, err := rollout.FindThreadPath(r.CodexHome, threadID, false)
+	if err != nil {
+		return nil
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	if err := recorder.AppendTurnError(cause.Error(), now); err != nil {
+		return err
+	}
+	return recorder.AppendTurnComplete(turnID, now, execTurnDurationMS(record, turnID, now))
 }
 
 func execTokenUsageForResult(resumeContext *execResumeContext, result *turn.AgentLoopResult, modelID string, cfg *config.Config) *protocol.ThreadTokenUsage {
@@ -4335,7 +4423,19 @@ func (r *Runner) createExecRollout(record *session.Record, now time.Time) error 
 	if r == nil || record == nil {
 		return nil
 	}
-	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+	recorder, err := r.newExecRolloutRecorder(record, now)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	return rollout.AppendSessionItems(recorder, execRolloutItems(record), now)
+}
+
+func (r *Runner) newExecRolloutRecorder(record *session.Record, now time.Time) (*rollout.Recorder, error) {
+	if r == nil || record == nil {
+		return nil, errors.New("exec rollout record is nil")
+	}
+	return rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:         r.CodexHome,
 		SessionID:         record.SessionID,
 		SessionPrefix:     record.Metadata.SessionPrefix,
@@ -4358,11 +4458,6 @@ func (r *Runner) createExecRollout(record *session.Record, now time.Time) error 
 		CLIVersion:        record.Metadata.CLIVersion,
 		Now:               now,
 	})
-	if err != nil {
-		return err
-	}
-	defer recorder.Close()
-	return rollout.AppendSessionItems(recorder, execRolloutItems(record), now)
 }
 
 func execRolloutItems(record *session.Record) []session.Item {
@@ -4403,6 +4498,40 @@ func (r *Runner) appendExecRollout(threadID session.ThreadID, items []session.It
 	}
 	defer recorder.Close()
 	return rollout.AppendSessionItems(recorder, items, now)
+}
+
+func (r *Runner) appendExecTurnComplete(record *session.Record, turnID string, now time.Time) error {
+	if r == nil || record == nil || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	path, err := rollout.FindThreadPath(r.CodexHome, string(record.ID), false)
+	if err != nil {
+		return err
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	return recorder.AppendTurnComplete(turnID, now, execTurnDurationMS(record, turnID, now))
+}
+
+func execTurnDurationMS(record *session.Record, turnID string, completedAt time.Time) int64 {
+	if record == nil || strings.TrimSpace(turnID) == "" {
+		return 0
+	}
+	for i := range record.Metadata.RolloutTurns {
+		turn := &record.Metadata.RolloutTurns[i]
+		if turn.ID != turnID || turn.StartedAt == nil {
+			continue
+		}
+		duration := completedAt.UTC().Sub(time.Unix(*turn.StartedAt, 0).UTC()).Milliseconds()
+		if duration > 0 {
+			return duration
+		}
+		return 0
+	}
+	return 0
 }
 
 // appendExecCompacted persists the compacted rollout marker with the same shape
