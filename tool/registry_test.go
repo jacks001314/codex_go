@@ -384,3 +384,47 @@ func noopExecutor(context.Context, *Invocation) (*Output, error) {
 func fixedTime() time.Time {
 	return time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC)
 }
+
+func TestToolSearchRegistrationReservesNamespace(t *testing.T) {
+	registry := NewRegistry()
+	// A namespace tool named tool_search must not share the built-in search
+	// tool's model-visible surface (Rust 98da2c4499, #37188).
+	if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("tool_search", "external"), Exposure: ExposureModelVisible}, noopExecutor)); err != nil {
+		t.Fatalf("register namespace tool: %v", err)
+	}
+	if err := registry.Register(NewExecutorFunc(Spec{Name: NamespacedName("other_namespace", "search"), Exposure: ExposureModelVisible}, noopExecutor)); err != nil {
+		t.Fatalf("register other namespace tool: %v", err)
+	}
+	if err := RegisterToolSearchFromRegistry(registry); err != nil {
+		t.Fatalf("RegisterToolSearchFromRegistry() error = %v", err)
+	}
+	if _, ok := registry.Lookup(PlainName(ToolSearchName)); !ok {
+		t.Fatalf("built-in search tool missing")
+	}
+	if _, ok := registry.Lookup(NamespacedName("tool_search", "external")); ok {
+		t.Fatalf("tool_search namespace tool should have been removed")
+	}
+	if _, ok := registry.Lookup(NamespacedName("other_namespace", "search")); !ok {
+		t.Fatalf("other namespace tool should be preserved")
+	}
+}
+
+func TestRemoveNamespaceReturnsRemovedQualifiedNames(t *testing.T) {
+	registry := NewRegistry()
+	for _, name := range []ToolName{
+		NamespacedName("tool_search", "one"),
+		NamespacedName("tool_search", "two"),
+		NamespacedName("other", "keep"),
+	} {
+		if err := registry.Register(NewExecutorFunc(Spec{Name: name}, noopExecutor)); err != nil {
+			t.Fatalf("register %s: %v", name.Key(), err)
+		}
+	}
+	removed := registry.RemoveNamespace("tool_search")
+	if len(removed) != 2 {
+		t.Fatalf("removed = %#v", removed)
+	}
+	if _, ok := registry.Lookup(NamespacedName("other", "keep")); !ok {
+		t.Fatalf("other namespace tool should be preserved")
+	}
+}

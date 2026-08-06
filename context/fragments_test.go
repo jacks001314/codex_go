@@ -160,3 +160,27 @@ func TestModelSwitchAndTokenBudget(t *testing.T) {
 		t.Fatalf("context window guidance = %#v", guidance)
 	}
 }
+
+func TestImageResizeNoticeRendersRustShape(t *testing.T) {
+	notice := NewImageResizeNotice(ImageResizeNoticeSourceUserMessage, []ResizedImage{
+		{ImageNumber: 1, ImageCount: 2, SourceWidth: 1024, SourceHeight: 768, PreparedWidth: 512, PreparedHeight: 384},
+		{ImageNumber: 2, ImageCount: 2, SourceWidth: 800, SourceHeight: 600, PreparedWidth: 400, PreparedHeight: 300},
+	})
+	rendered := RenderStandalone(notice)
+	if rendered == nil || rendered.Role != RoleDeveloper {
+		t.Fatalf("rendered = %#v", rendered)
+	}
+	want := "<image_resize_notice>\n" +
+		"Image 1 of 2 in the preceding user message was resized from 1024x768 to 512x384 pixels.\n" +
+		"Image 2 of 2 in the preceding user message was resized from 800x600 to 400x300 pixels.\n" +
+		"</image_resize_notice>"
+	if rendered.Content != want {
+		t.Fatalf("content = %q, want %q", rendered.Content, want)
+	}
+	toolOutput := RenderStandalone(NewImageResizeNotice(ImageResizeNoticeSourceToolOutput, []ResizedImage{
+		{ImageNumber: 1, ImageCount: 1, SourceWidth: 100, SourceHeight: 50, PreparedWidth: 50, PreparedHeight: 25},
+	}))
+	if !strings.Contains(toolOutput.Content, "in the preceding tool output was resized from 100x50 to 50x25 pixels.") {
+		t.Fatalf("tool output notice = %q", toolOutput.Content)
+	}
+}

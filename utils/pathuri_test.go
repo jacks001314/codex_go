@@ -237,3 +237,52 @@ func TestHostNativePathRejectsForeignConvention(t *testing.T) {
 		t.Fatalf("HostNativePath(%q) error = nil", raw)
 	}
 }
+
+func TestWindowsPathURICaseInsensitiveEqualityAndContainment(t *testing.T) {
+	// Windows drive-path URIs compare and contain ASCII-case-insensitively
+	// (Rust 4cb8676d3a, #37129).
+	a, err := Parse("file:///C:/Workspace/Src/lib.rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Parse("file:///c:/workspace/src/lib.rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.Equal(b) {
+		t.Fatalf("%s should equal %s case-insensitively", a, b)
+	}
+	baseLower, _ := Parse("file:///c:/workspace")
+	if !a.StartsWith(baseLower) {
+		t.Fatalf("%s should start with %s case-insensitively", a, baseLower)
+	}
+	baseUpper, _ := Parse("file:///C:/WORKSPACE")
+	if !a.StartsWith(baseUpper) {
+		t.Fatalf("%s should start with %s case-insensitively", a, baseUpper)
+	}
+	// Host is still compared exactly.
+	hostedA, _ := Parse("file://SERVER/share/File.txt")
+	hostedB, _ := Parse("file://server/share/file.txt")
+	if hostedA.Equal(hostedB) {
+		t.Fatalf("host case must remain significant: %s vs %s", hostedA, hostedB)
+	}
+
+	// POSIX paths stay case-sensitive.
+	posixA, _ := Parse("file:///Workspace/Src/lib.rs")
+	posixB, _ := Parse("file:///workspace/src/lib.rs")
+	if posixA.Equal(posixB) {
+		t.Fatalf("POSIX equality must remain case-sensitive: %s vs %s", posixA, posixB)
+	}
+	if posixA.StartsWith(posixB) {
+		t.Fatalf("POSIX containment must remain case-sensitive: %s vs %s", posixA, posixB)
+	}
+
+	// Percent-encoded native separators fail closed even for Windows.
+	encoded, err := Parse("file:///C:/Workspace/%5C%5Cevil")
+	if err == nil {
+		plain, _ := Parse("file:///c:/workspace/\\\\evil")
+		if encoded.Equal(plain) {
+			t.Fatalf("percent-encoded separators must fail closed: %s vs %s", encoded, plain)
+		}
+	}
+}

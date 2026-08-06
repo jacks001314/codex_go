@@ -75,6 +75,8 @@ type httpClient struct {
 	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
 	supportsSandboxStateMetaCapability bool
+	initializeDeadline                 time.Time
+	initializeDeadlineOn               bool
 }
 
 type httpClientCallOptions struct {
@@ -517,6 +519,8 @@ func (c *httpClient) notifyInitialized(ctx context.Context, sessionID string) er
 func (c *httpClient) reinitialize(ctx context.Context) error {
 	c.initialized = false
 	c.sessionID = ""
+	c.beginHandshake(ctx)
+	defer c.endHandshake()
 	for attempt := 0; ; attempt++ {
 		c.protocolMode = MCPProtocolLegacy
 		c.negotiatedProtocolVersion = ""
@@ -555,6 +559,47 @@ func (c *httpClient) reinitialize(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// beginHandshake records the remaining initialization deadline so handshake
+// HTTP requests (initialize, notifications/initialized, server/discover) stay
+// bounded even when the endpoint stalls (Rust e244a9d94e, #37168).
+func (c *httpClient) beginHandshake(ctx context.Context) {
+	c.initializeDeadlineOn = false
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			c.initializeDeadline = deadline
+			c.initializeDeadlineOn = true
+			return
+		}
+	}
+	if c.config != nil && c.config.StartupTimeout > 0 {
+		c.initializeDeadline = time.Now().Add(c.config.StartupTimeout)
+		c.initializeDeadlineOn = true
+		return
+	}
+	c.initializeDeadline = time.Now().Add(15 * time.Second)
+	c.initializeDeadlineOn = true
+}
+
+func (c *httpClient) endHandshake() {
+	c.initializeDeadlineOn = false
+}
+
+func (c *httpClient) handshakeRequestTimeout(method string) time.Duration {
+	if c == nil || !c.initializeDeadlineOn {
+		return 0
+	}
+	switch method {
+	case "initialize", "notifications/initialized", "server/discover":
+	default:
+		return 0
+	}
+	remaining := time.Until(c.initializeDeadline)
+	if remaining <= 0 {
+		return time.Millisecond
+	}
+	return remaining
 }
 
 func (c *httpClient) callWithTransientRetries(ctx context.Context, method string, params any, out any) error {
@@ -650,6 +695,11 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, 0, err
+	}
+	if timeout := c.handshakeRequestTimeout(method); timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	token, oauthToken := c.authorizationBearerToken(false)
 	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)

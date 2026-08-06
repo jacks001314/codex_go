@@ -1,64 +1,368 @@
 {
-  "rustBaseline": "30d99232f4",
-  "rustTag": "main@30d99232f4",
-  "rustUpstreamHead": "30d99232f4",
-  "rustUpstreamTag": "main@30d99232f4",
-  "rustE2EBinary": {
-    "version": "codex-cli 0.0.0",
-    "tag": "main@bbbf396839",
-    "sha256": "3c5ba9285bdc4b1a1ffab196e0af157b95437c33ac0a06cb3646ffb56c3ab503"
-  },
-  "goE2EBinary": {
-    "version": "codex-cli 0.0.0-dev+70d8f0bfbd29",
-    "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
-    "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
-  },
-  "generatedAt": "2026-08-05",
-  "items": [
-    {"id":"permission-profile-updates-to-future-environments","status":"done","area":"appserver","reason":"thread/settings.update now persists the active permission profile and runtimeWorkspaceRoots, and prepareTurnStartParams applies them to future turns (explicit turn-start values win) while the active turn keeps its immutable snapshot. Go resolves the effective permission profile and workspace roots fresh per turn, so a profile update lands in the next turn's tool-router sandbox context without reconnecting environments; mirrors Rust 30d99232f4 (#37031).","test":"go test ./appserver/... -run PermissionProfileUpdate -count=1"},
-    {"id":"view-image-feature-gate","status":"done","area":"appserver","reason":"view_image is a stable default-enabled feature; features.view_image=false removes the native image viewer from the turn tool surface (fresh subagents and guardian reviewers inherit the disabled viewer) while configured MCP tools stay available, and the Rust app-server v2 suite manifest now covers the module (Rust 78f00743f9, #36966).","test":"go test ./appserver/... -run ViewImage -count=1"},
-    {"id":"codemode-host-request-timeout","status":"done","area":"codemode","reason":"wait/terminate host requests get a 60s transport allowance; on stall the connection is invalidated so the next execution reconnects (Rust 8e3b5d3e87).","test":"go test ./codemode/... -count=1"},
-    {"id":"agent-plugin-mcp-config","status":"done","area":"plugin","reason":"ParseAgentPluginMCPConfig translates Agent Plugins v1 mcp.json into Codex MCP config: stdio/streamable-http normalization, PLUGIN_ROOT/PLUGIN_DATA expansion, contained paths, secure endpoints, client-owned header filtering, per-server errors (Rust bd12b3a9ec).","test":"go test ./plugin/... -count=1"},
-    {"id":"model-messages-consolidation","status":"done","area":"model","reason":"WithConfigOverrides stores base_instructions override into instructions_template and preserves other message fields; personality-disabled renders default personality into the template (Rust df72fdb415).","test":"go test ./model/... -count=1"},
-    {"id":"plugin-usage-instructions-gate","status":"done","area":"model","reason":"Generic plugin usage guidance is emitted only when the selected model has include_plugin_usage_instructions (Rust e4e0c7070e).","test":"go test ./appserver/... -run PluginContext -count=1"},
-    {"id":"mcp-tool-per-surface-exposure","status":"done","area":"mcp","reason":"MCP servers can opt out of direct/deferred/code_mode surfaces via omit_tools_from; the per-server policy is applied when building the turn tool registry, tool exposures gained code_mode_only and deferred_model_only, deferred-model-only tools stay searchable but not nested-callable, and client-private _meta is stripped from MCP results surfaced to Code Mode (Rust 51c9ed6d4f).","test":"go test ./mcp/... ./turn/... ./tool/... ./codemode/... ./model/... ./app/... -count=1"},
-    {"id":"rollout-history-long-line-reads","status":"done","area":"parity","reason":"rollout.Load and history/message-history lookup no longer fail on records beyond bufio.Scanner's default 64KB token limit (ReadBytes-based JSONL parsing and 16MB scanner buffers), so large embedded tool outputs and pasted prompts survive resume and thread lookup.","test":"go test ./rollout/... ./history/... -count=1"},
-    {"id":"exec-policy-saved-prefix","status":"done","area":"context","reason":"Approving an exec-policy amendment reports the newly saved command prefix to the model exactly once as 'Approved command prefix saved:' (sandbox.FormatAllowPrefixes mirrors Rust format_allow_prefixes) instead of re-injecting the full permissions text; drained per thread+turn post-tool (Rust 1bbfb5cfad).","test":"go test ./appserver/... -run ExecPolicy -count=1; go test ./sandbox/... -run FormatAllowPrefixes -count=1"},
-    {"id":"login-shell-default-policy","status":"done","area":"shell","reason":"Go now honors the Rust default allow_login_shell=true: shell tools expose the login parameter by default and a new config key allow_login_shell can disable it; the app-server turn runtime wires the effective config into ShellValidationOptions (Rust b258c028fe, per-environment policy remains future work).","test":"go test ./config/... -run AllowLoginShell -count=1; go test ./turn/... ./tool/... -run Login -count=1"},
-    {"id":"git-process-tree-termination","status":"done","area":"git","reason":"New gitutil package runs git metadata commands with whole-process-tree termination on timeout/cancellation (Windows Job Object + CREATE_SUSPENDED, Unix process group), wired into the app-server memory workspace and accepted-lines git remote calls; Go thread git metadata itself parses .git files and spawns no git process (Rust 3149fa4b99).","test":"go test ./gitutil/... -count=1; go test ./appserver/... -run AcceptedLine -count=1"},
-    {"id":"code-mode-dual-websocket","status":"done","area":"codemode","reason":"The Go remote client negotiates the dual-websocket-v1 capability, opens the paired /bulk/{token} WebSocket when the host advertises it, routes delegate tool calls/results on the bulk lane while notifications and control traffic stay on the control lane, enforces per-socket message families, and rejects missing/unexpected pairing tokens (Rust 60c722e075).","test":"go test ./codemode/... -run DualWebSocket -count=1"},
-    {"id":"session-archive-sqlite-names","status":"done","area":"session","reason":"Local session archive/delete/unarchive name resolution now trusts SQLite names first (state.ListThreadRowsByName with archive collection + recency order), validating the rollout path stays in the expected sessions/archived_sessions root and its session meta id matches before falling back to scan-and-repair (Rust 9c8f9ce897).","test":"go test ./state/... -run ListThreadRowsByName -count=1; go test ./app/... -run SQLiteName -count=1"},
-    {"id":"upstream-2026-08-04-batch-classification","status":"done","area":"parity","reason":"62839fec5d (extension registry builder), 79479cdf09 (turn skills in extension data), dae2122214 (Arc ownership), 7dd2f689e9 (fragment registration), cc03518c36 (audio utils), 136f75e7b7 (network test), b2dc8b3e4b/64bb8094ba (approval telemetry) are Rust-internal refactors with no Go protocol surface; 7750465934 apply_patch and d6407d7359/1b594980f3 MCP resource handling are already unified in Go; 82ccbc757a is Linux-only; 155f1ca9e5 (code-mode analytics facts) and 61dc1d97f6 (MCP conformance gate) remain pending.","test":"documented in update/plan_2026_08_04.md"},
-    {"id":"rollout-budget-provider-units","status":"done","area":"rollout_budget","reason":"runtimeutil.Budget.RecordUsage now charges provider-reported codex_rollout_budget_units directly (finite, non-negative or fatal error), falling back to weighted token accounting; mirrors Rust 8b8fa7276f (#36715).","test":"go test ./runtimeutil/... -count=1"},
-    {"id":"mcp-catalog-limits","status":"done","area":"mcp","reason":"Standard MCP catalog limit raised 1024->2048 and host-owned codex_apps (CodexAppsServerConfig) uses 8192 via per-server CatalogItemLimit; mirrors Rust e4e040881a (#36772).","test":"go test ./mcp/... -count=1"},
-    {"id":"apps-read","status":"done","area":"appserver","test":"go test ./appserver ./apps ./chatgptapi"},
-    {"id":"agents-config-runtime","status":"done","area":"agents","test":"go test ./config ./agent ./appserver"},
-    {"id":"auto-compact-fallback","status":"done","area":"compaction","test":"go test ./config ./compact ./turn ./appserver"},
-    {"id":"unified-exec-race","status":"done","area":"unified_exec","test":"go test -race ./tool ./execserver ./mcp ./appserver -count=1"},
-    {"id":"skill-selection","status":"done","area":"skills","test":"go test ./prompt ./appserver -run \"SkillSelection|SkillShadow|SkillsContext|ExplicitSkill|selection\" -count=1"},
-    {"id":"environment-status","status":"done","area":"appserver","test":"go test ./appserver ./execserver -run \"EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads\" -count=1"},
-    {"id":"apps-installed","status":"done","area":"appserver","test":"go test ./appserver ./apps -run \"AppsInstalled|InstalledApp\" -count=1"},
-    {"id":"thread-search-occurrences","status":"done","area":"appserver","test":"go test ./appserver ./session -run \"SearchOccurrences|OccurrenceSearch\" -count=1"},
-    {"id":"audio-content-items","status":"done","area":"protocol","test":"go test ./appserver ./model ./codemode ./turn ./session -run Audio -count=1"},
-    {"id":"session-end-hooks","status":"done","area":"hooks","test":"go test ./appserver ./config ./tui/... -run SessionEnd -count=1"},
-    {"id":"resume-cwd","status":"done","area":"session","test":"go test ./config ./session ./appserver ./tui/... -run ResumeCWD -count=1"},
-    {"id":"executor-capability-discovery","status":"done","area":"execserver","test":"go test ./execserver ./plugin ./skillprovider -run Capability -count=1"},
-    {"id":"paginated-history-v2","status":"done","area":"history","test":"go test ./appserver ./session ./rollout ./state ./history -run \"Paginated|Occurrence|ThreadName|HistoryMode|MessageHistory\" -count=1"},
-    {"id":"tui-2026-07-20","status":"done","area":"tui","test":"go test ./tui/... -count=1"},
-    {"id":"tui-session-history","status":"done","area":"tui","test":"go test ./tui/... ./session ./appserver"},
-    {"id":"tui-service-tier-fast-slash","status":"done","area":"tui","reason":"Go exposes /fast only when fast_mode is enabled and the current model catalog contains a tier named fast. It toggles using that tier's actual ID versus default, persists the config alias fast, propagates the effective ID to local and remote turns, and reports persistence success/failure like Rust. Canonical /btw, /multi-agents, and /quit popup entries remain separate from aliases.","test":"go test ./tui/... ./app -run 'Slash|Fast|ServiceTier' -count=1"},
-    {"id":"tui-clear-ui-slash","status":"done","area":"tui","reason":"Rust /clear dispatches ClearUi, which starts a fresh session while keeping the previous rollout resumable. Go TUI and interactive command paths now reset thread identity, transcript, and idle status instead of only clearing visible messages.","test":"go test ./tui/tea ./app -run 'SlashCommands|InteractiveSlashCommands' -count=1"},
-    {"id":"tui-slash-runtime-backed","status":"done","area":"tui","reason":"Runtime-backed slash commands now execute real actions: /app launches the Codex Desktop thread deep link, /rollout reads the active thread rollout path, /sandbox-add-read-dir validates and adds a readable root, /import invokes external-agent detect/import RPCs, and /memories opens a dedicated settings modal with persisted memory edits.","test":"go test ./tui/tea ./app -run 'RuntimeBackedSlash|Slash|Remote' -count=1"},
-    {"id":"realtime-v3-handoff-initial-items","status":"done","area":"realtime","reason":"Go validates and emits ordered initialItems notifications, stores codexResponseHandoffMode, and routes streamed assistant output from appserver turns into bounded realtime handoff_append itemAdded notifications. Commentary/final channels, final-message prefix, UTF-8-safe head/tail truncation, and client-managed/codexResponsesAsItems skips are covered.","test":"go test ./realtime ./appserver -run 'Realtime|Handoff|ResponsesStreaming' -count=1"},
-    {"id":"doctor-compressed-rollout-inventory","status":"done","area":"doctor","reason":"Go rollout loading and doctor inventory now accept .jsonl.zst, map compressed siblings to canonical .jsonl state-DB keys, prefer plain rollouts, and report corrupt compressed files without false stale rows.","test":"go test ./rollout ./doctor -run 'Compressed|Rollout|ThreadInventory' -count=1"},
-    {"id":"exec-completion-backfill-active-turn","status":"done","area":"exec","reason":"Go emits completion items directly from the active AgentLoopResult, which provides the same externally observable active-turn filtering without Rust's app-server notification backfill stage.","test":"go test ./exec -run 'RunJSONSuppressesResponsesDeltasUntilFinalEvents|WriteStdinCompletionMapsToOriginalCommandExecution' -count=1"},
-    {"id":"tui-bootstrap-parallel-requests","status":"done","area":"tui","reason":"Go prepares model metadata and permission requirements locally before TUI startup, so the Rust parallel remote requests have no Go-side latency or scheduling counterpart; startup behavior is already equivalent.","test":"go test ./tui/tea ./app -run Bootstrap -count=1"},
-    {"id":"external-agent-memory-import","status":"done","area":"memory","reason":"Go detects external project Markdown memory, verifies SHA-256 content, imports under extension-scoped resources with scope.json and source/project/cwd/hash metadata, rejects path/hash failures, and removes resources for disappeared projects without inventing rollout provenance.","test":"go test ./config -run ExternalAgentMemory -count=1"},
-    {"id":"realtime-webrtc-crate-removal","status":"done","area":"realtime","reason":"The Rust change removes an internal crate only; Go's realtime wire behavior remains covered and unchanged.","test":"go test ./realtime ./appserver -count=1"},
-    {"id":"cross-platform-release-gates","status":"partial","area":"release","reason":"Linux Landlock/bwrap is verified on a native Kali runner. Native Windows platform and production ConPTY gates pass. Forty-seven relevant packages compile for Darwin/arm64, and Darwin network/sandbox vet plus actionlint pass. The macOS workflow now directly tests Keychain roots, a Unix-socket HTTP round trip, native seatbelt enforcement, and desktop/platform behavior; a native macOS workflow artifact is still required.","test":"go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"},
-    {"id":"sdk-windows-interrupted-command","status":"partial","area":"sdk","reason":"The opt-in Windows cancellation diagnostic still fails on Rust bbbf396839: Rust leaves the PowerShell descendant alive and the resumed turn aborts, while Go terminates the tree and resumes safely. Closing this requires an upstream Rust fix; Go must not regress process-tree safety to imitate the defect.","test":"npm --prefix sdktests run test:parity -- --scenario resume-tool-interrupted-command --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"},
-    {"id":"upstream-2026-07-30","status":"done","area":"parity","reason":"All 82 Rust commits from fa1d4c40d0 through 25eecb071e were classified. Applicable protocol, MCP, executor sandbox, tool registry, remote compaction, telemetry, TUI width, OAuth redirect, serialization, fork boundary, and lifecycle changes are implemented with focused and race coverage; Rust-only dependency, release, allocation, and source-layout changes are explicitly classified.","test":"go test ./... -count=1; go vet ./...; go test -race ./mcp ./tool ./session ./appserver ./execserver -count=1"},
-    {"id":"sdk-streaming-smoke","status":"done","area":"sdk","reason":"The official TypeScript SDK drove Rust bbbf396839 and the frozen Go candidate through two complete clean 42-scenario matrices with isolated homes/workspaces, strict event and workspace comparison, identical binary/SDK hashes, zero mismatch, zero baseline drift and zero infra retry: sdktests/artifacts/suites/2026-08-01T024647417Z-parity and 2026-08-01T033419130Z-parity. Final-binary raw audits also passed at 2026-08-01T065723289Z-raw_paginated_fork and 2026-08-01T065723280Z-raw_config_requirements. The required third clean matrix remains an alignment-control gate because the Rust 5.6 provider route is currently returning server_overloaded; this does not reopen the implemented SDK contract.","test":"npm --prefix sdktests run test:parity -- --all --infra-retries 3 --fail-fast-infra --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>; npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex>; npm --prefix sdktests run test:raw:requirements -- --rust <rust-codex> --rust-app-server <rust-app-server> --go <go-codex>"},
-    {"id":"upstream-2026-08-01","status":"done","area":"parity","reason":"All 39 Rust commits from 25eecb071e through bbbf396839 are machine-accounted. The final 16-commit intake covers bundled code-mode host resolution, persisted feedback hashes, MCP credential isolation, host skills, shell environment restrictions, external connector/session sync, collaboration messages and per-thread MCP binding.","test":"go test ./... -count=1; go vet ./...; go test -race ./... -count=1; go test ./parity ./features -count=1"}
-  ]
+    "rustBaseline":  "aac9f84247",
+    "rustTag":  "main@aac9f84247",
+    "rustUpstreamHead":  "aac9f84247",
+    "rustUpstreamTag":  "main@aac9f84247",
+    "rustE2EBinary":  {
+                          "version":  "codex-cli 0.0.0",
+                          "tag":  "main@bbbf396839",
+                          "sha256":  "3c5ba9285bdc4b1a1ffab196e0af157b95437c33ac0a06cb3646ffb56c3ab503"
+                      },
+    "goE2EBinary":  {
+                        "version":  "codex-cli 0.0.0-dev+70d8f0bfbd29",
+                        "commit":  "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
+                        "sha256":  "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
+                    },
+    "generatedAt":  "2026-08-06",
+    "items":  [
+                  {
+                      "status":  "done",
+                      "test":  "go test ./turn ./appserver ./rollout ./exec ./protocol -run \u0027ImageGeneration|Transparent\u0027 -count=1",
+                      "id":  "image-generation-transparency",
+                      "reason":  "ImageGenerationItem gains transparentBackground (bool|null): the namespace imagegen tool maps Images API backgrounds transparent-\u003etrue, opaque-\u003efalse, auto/absent-\u003enull; the app-server item marshal, exec protocol item, and rollout history normalization carry the field while older items without it deserialize cleanly (Rust 928bda82cf, #37178).",
+                      "area":  "appserver"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./model -run \u0027ModelSpecialty|AppsUsage|ModelInfo\u0027 -count=1",
+                      "id":  "model-specialty-and-apps-usage-gate",
+                      "reason":  "v2 Model gains modelSpecialty (null when absent) carried from ModelInfo.model_specialty; ModelInfo gains include_apps_usage_instructions defaulting to true for missing metadata and false for local fallback models, matching Rust serde default_true (Rust 2b915a2eed, #37145).",
+                      "area":  "model"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./state -run CircuitBreaker -count=1; go test ./appserver -run Guardian -count=1",
+                      "id":  "cyber-guardian-circuit-breaker",
+                      "reason":  "Guardian circuit breaker selects the cyber policy (consecutive=1, recent=1) when the turn model\u0027s catalog specialty is cyber, interrupting the turn after one denial; standard thresholds are unchanged (Rust f141dc77f0, #37190).",
+                      "area":  "guardian"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./utils -run WindowsPathURI -count=1",
+                      "id":  "windows-path-uri-case-insensitive",
+                      "reason":  "PathURI equality and containment are ASCII-case-insensitive for Windows-convention paths (decoded identity bytes), while hosts stay exact and POSIX paths remain case-sensitive; percent-encoded native separators fail closed (Rust 4cb8676d3a, #37129).",
+                      "area":  "utils"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./tool -run \u0027ToolSearch|RemoveNamespace\u0027 -count=1",
+                      "id":  "tool-search-namespace-reservation",
+                      "reason":  "Registering the built-in tool_search first removes namespace tools whose namespace is tool_search, preventing them from sharing the search tool\u0027s model-visible surface; other namespaces are preserved and a plain-name duplicate still errors (Rust 98da2c4499, #37188).",
+                      "area":  "tool"
+                  },
+                  {
+                      "status":  "partial",
+                      "test":  "go test ./features ./context -run \u0027ImageResizeNotice\u0027 -count=1",
+                      "id":  "image-resize-notice-feature",
+                      "reason":  "The image_resize_notice feature flag (disabled by default) and the ImageResizeNotice developer fragment with Rust\u0027s exact message format are implemented; Go\u0027s image prep validates and re-encodes data URLs without actual dimension-changing resizes, so no notices are emitted in practice until Go performs real resizing (Rust fa5d5ae047, #37134).",
+                      "area":  "features"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./mcp -run HandshakeDeadline -count=1",
+                      "id":  "mcp-handshake-deadline",
+                      "reason":  "Streamable HTTP MCP handshakes track a remaining initialization deadline (context deadline or StartupTimeout) and apply it to initialize, notifications/initialized, and server/discover requests, clearing it once the handshake finishes so later executor calls are unaffected (Rust e244a9d94e, #37168).",
+                      "area":  "mcp"
+                  },
+                  {
+                      "id":  "permission-profile-updates-to-future-environments",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "reason":  "thread/settings.update now persists the active permission profile and runtimeWorkspaceRoots, and prepareTurnStartParams applies them to future turns (explicit turn-start values win) while the active turn keeps its immutable snapshot. Go resolves the effective permission profile and workspace roots fresh per turn, so a profile update lands in the next turn\u0027s tool-router sandbox context without reconnecting environments; mirrors Rust 30d99232f4 (#37031).",
+                      "test":  "go test ./appserver/... -run PermissionProfileUpdate -count=1"
+                  },
+                  {
+                      "id":  "view-image-feature-gate",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "reason":  "view_image is a stable default-enabled feature; features.view_image=false removes the native image viewer from the turn tool surface (fresh subagents and guardian reviewers inherit the disabled viewer) while configured MCP tools stay available, and the Rust app-server v2 suite manifest now covers the module (Rust 78f00743f9, #36966).",
+                      "test":  "go test ./appserver/... -run ViewImage -count=1"
+                  },
+                  {
+                      "id":  "codemode-host-request-timeout",
+                      "status":  "done",
+                      "area":  "codemode",
+                      "reason":  "wait/terminate host requests get a 60s transport allowance; on stall the connection is invalidated so the next execution reconnects (Rust 8e3b5d3e87).",
+                      "test":  "go test ./codemode/... -count=1"
+                  },
+                  {
+                      "id":  "agent-plugin-mcp-config",
+                      "status":  "done",
+                      "area":  "plugin",
+                      "reason":  "ParseAgentPluginMCPConfig translates Agent Plugins v1 mcp.json into Codex MCP config: stdio/streamable-http normalization, PLUGIN_ROOT/PLUGIN_DATA expansion, contained paths, secure endpoints, client-owned header filtering, per-server errors (Rust bd12b3a9ec).",
+                      "test":  "go test ./plugin/... -count=1"
+                  },
+                  {
+                      "id":  "model-messages-consolidation",
+                      "status":  "done",
+                      "area":  "model",
+                      "reason":  "WithConfigOverrides stores base_instructions override into instructions_template and preserves other message fields; personality-disabled renders default personality into the template (Rust df72fdb415).",
+                      "test":  "go test ./model/... -count=1"
+                  },
+                  {
+                      "id":  "plugin-usage-instructions-gate",
+                      "status":  "done",
+                      "area":  "model",
+                      "reason":  "Generic plugin usage guidance is emitted only when the selected model has include_plugin_usage_instructions (Rust e4e0c7070e).",
+                      "test":  "go test ./appserver/... -run PluginContext -count=1"
+                  },
+                  {
+                      "id":  "mcp-tool-per-surface-exposure",
+                      "status":  "done",
+                      "area":  "mcp",
+                      "reason":  "MCP servers can opt out of direct/deferred/code_mode surfaces via omit_tools_from; the per-server policy is applied when building the turn tool registry, tool exposures gained code_mode_only and deferred_model_only, deferred-model-only tools stay searchable but not nested-callable, and client-private _meta is stripped from MCP results surfaced to Code Mode (Rust 51c9ed6d4f).",
+                      "test":  "go test ./mcp/... ./turn/... ./tool/... ./codemode/... ./model/... ./app/... -count=1"
+                  },
+                  {
+                      "id":  "rollout-history-long-line-reads",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "rollout.Load and history/message-history lookup no longer fail on records beyond bufio.Scanner\u0027s default 64KB token limit (ReadBytes-based JSONL parsing and 16MB scanner buffers), so large embedded tool outputs and pasted prompts survive resume and thread lookup.",
+                      "test":  "go test ./rollout/... ./history/... -count=1"
+                  },
+                  {
+                      "id":  "exec-policy-saved-prefix",
+                      "status":  "done",
+                      "area":  "context",
+                      "reason":  "Approving an exec-policy amendment reports the newly saved command prefix to the model exactly once as \u0027Approved command prefix saved:\u0027 (sandbox.FormatAllowPrefixes mirrors Rust format_allow_prefixes) instead of re-injecting the full permissions text; drained per thread+turn post-tool (Rust 1bbfb5cfad).",
+                      "test":  "go test ./appserver/... -run ExecPolicy -count=1; go test ./sandbox/... -run FormatAllowPrefixes -count=1"
+                  },
+                  {
+                      "id":  "login-shell-default-policy",
+                      "status":  "done",
+                      "area":  "shell",
+                      "reason":  "Go now honors the Rust default allow_login_shell=true: shell tools expose the login parameter by default and a new config key allow_login_shell can disable it; the app-server turn runtime wires the effective config into ShellValidationOptions (Rust b258c028fe, per-environment policy remains future work).",
+                      "test":  "go test ./config/... -run AllowLoginShell -count=1; go test ./turn/... ./tool/... -run Login -count=1"
+                  },
+                  {
+                      "id":  "git-process-tree-termination",
+                      "status":  "done",
+                      "area":  "git",
+                      "reason":  "New gitutil package runs git metadata commands with whole-process-tree termination on timeout/cancellation (Windows Job Object + CREATE_SUSPENDED, Unix process group), wired into the app-server memory workspace and accepted-lines git remote calls; Go thread git metadata itself parses .git files and spawns no git process (Rust 3149fa4b99).",
+                      "test":  "go test ./gitutil/... -count=1; go test ./appserver/... -run AcceptedLine -count=1"
+                  },
+                  {
+                      "id":  "code-mode-dual-websocket",
+                      "status":  "done",
+                      "area":  "codemode",
+                      "reason":  "The Go remote client negotiates the dual-websocket-v1 capability, opens the paired /bulk/{token} WebSocket when the host advertises it, routes delegate tool calls/results on the bulk lane while notifications and control traffic stay on the control lane, enforces per-socket message families, and rejects missing/unexpected pairing tokens (Rust 60c722e075).",
+                      "test":  "go test ./codemode/... -run DualWebSocket -count=1"
+                  },
+                  {
+                      "id":  "session-archive-sqlite-names",
+                      "status":  "done",
+                      "area":  "session",
+                      "reason":  "Local session archive/delete/unarchive name resolution now trusts SQLite names first (state.ListThreadRowsByName with archive collection + recency order), validating the rollout path stays in the expected sessions/archived_sessions root and its session meta id matches before falling back to scan-and-repair (Rust 9c8f9ce897).",
+                      "test":  "go test ./state/... -run ListThreadRowsByName -count=1; go test ./app/... -run SQLiteName -count=1"
+                  },
+                  {
+                      "id":  "upstream-2026-08-04-batch-classification",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "62839fec5d (extension registry builder), 79479cdf09 (turn skills in extension data), dae2122214 (Arc ownership), 7dd2f689e9 (fragment registration), cc03518c36 (audio utils), 136f75e7b7 (network test), b2dc8b3e4b/64bb8094ba (approval telemetry) are Rust-internal refactors with no Go protocol surface; 7750465934 apply_patch and d6407d7359/1b594980f3 MCP resource handling are already unified in Go; 82ccbc757a is Linux-only; 155f1ca9e5 (code-mode analytics facts) and 61dc1d97f6 (MCP conformance gate) remain pending.",
+                      "test":  "documented in update/plan_2026_08_04.md"
+                  },
+                  {
+                      "id":  "rollout-budget-provider-units",
+                      "status":  "done",
+                      "area":  "rollout_budget",
+                      "reason":  "runtimeutil.Budget.RecordUsage now charges provider-reported codex_rollout_budget_units directly (finite, non-negative or fatal error), falling back to weighted token accounting; mirrors Rust 8b8fa7276f (#36715).",
+                      "test":  "go test ./runtimeutil/... -count=1"
+                  },
+                  {
+                      "id":  "mcp-catalog-limits",
+                      "status":  "done",
+                      "area":  "mcp",
+                      "reason":  "Standard MCP catalog limit raised 1024-\u003e2048 and host-owned codex_apps (CodexAppsServerConfig) uses 8192 via per-server CatalogItemLimit; mirrors Rust e4e040881a (#36772).",
+                      "test":  "go test ./mcp/... -count=1"
+                  },
+                  {
+                      "id":  "apps-read",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "test":  "go test ./appserver ./apps ./chatgptapi"
+                  },
+                  {
+                      "id":  "agents-config-runtime",
+                      "status":  "done",
+                      "area":  "agents",
+                      "test":  "go test ./config ./agent ./appserver"
+                  },
+                  {
+                      "id":  "auto-compact-fallback",
+                      "status":  "done",
+                      "area":  "compaction",
+                      "test":  "go test ./config ./compact ./turn ./appserver"
+                  },
+                  {
+                      "id":  "unified-exec-race",
+                      "status":  "done",
+                      "area":  "unified_exec",
+                      "test":  "go test -race ./tool ./execserver ./mcp ./appserver -count=1"
+                  },
+                  {
+                      "id":  "skill-selection",
+                      "status":  "done",
+                      "area":  "skills",
+                      "test":  "go test ./prompt ./appserver -run \"SkillSelection|SkillShadow|SkillsContext|ExplicitSkill|selection\" -count=1"
+                  },
+                  {
+                      "id":  "environment-status",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "test":  "go test ./appserver ./execserver -run \"EnvironmentStatus|EnvironmentInfo|RustProtocolMethodSurface|ProtocolPayloads\" -count=1"
+                  },
+                  {
+                      "id":  "apps-installed",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "test":  "go test ./appserver ./apps -run \"AppsInstalled|InstalledApp\" -count=1"
+                  },
+                  {
+                      "id":  "thread-search-occurrences",
+                      "status":  "done",
+                      "area":  "appserver",
+                      "test":  "go test ./appserver ./session -run \"SearchOccurrences|OccurrenceSearch\" -count=1"
+                  },
+                  {
+                      "id":  "audio-content-items",
+                      "status":  "done",
+                      "area":  "protocol",
+                      "test":  "go test ./appserver ./model ./codemode ./turn ./session -run Audio -count=1"
+                  },
+                  {
+                      "id":  "session-end-hooks",
+                      "status":  "done",
+                      "area":  "hooks",
+                      "test":  "go test ./appserver ./config ./tui/... -run SessionEnd -count=1"
+                  },
+                  {
+                      "id":  "resume-cwd",
+                      "status":  "done",
+                      "area":  "session",
+                      "test":  "go test ./config ./session ./appserver ./tui/... -run ResumeCWD -count=1"
+                  },
+                  {
+                      "id":  "executor-capability-discovery",
+                      "status":  "done",
+                      "area":  "execserver",
+                      "test":  "go test ./execserver ./plugin ./skillprovider -run Capability -count=1"
+                  },
+                  {
+                      "id":  "paginated-history-v2",
+                      "status":  "done",
+                      "area":  "history",
+                      "test":  "go test ./appserver ./session ./rollout ./state ./history -run \"Paginated|Occurrence|ThreadName|HistoryMode|MessageHistory\" -count=1"
+                  },
+                  {
+                      "id":  "tui-2026-07-20",
+                      "status":  "done",
+                      "area":  "tui",
+                      "test":  "go test ./tui/... -count=1"
+                  },
+                  {
+                      "id":  "tui-session-history",
+                      "status":  "done",
+                      "area":  "tui",
+                      "test":  "go test ./tui/... ./session ./appserver"
+                  },
+                  {
+                      "id":  "tui-service-tier-fast-slash",
+                      "status":  "done",
+                      "area":  "tui",
+                      "reason":  "Go exposes /fast only when fast_mode is enabled and the current model catalog contains a tier named fast. It toggles using that tier\u0027s actual ID versus default, persists the config alias fast, propagates the effective ID to local and remote turns, and reports persistence success/failure like Rust. Canonical /btw, /multi-agents, and /quit popup entries remain separate from aliases.",
+                      "test":  "go test ./tui/... ./app -run \u0027Slash|Fast|ServiceTier\u0027 -count=1"
+                  },
+                  {
+                      "id":  "tui-clear-ui-slash",
+                      "status":  "done",
+                      "area":  "tui",
+                      "reason":  "Rust /clear dispatches ClearUi, which starts a fresh session while keeping the previous rollout resumable. Go TUI and interactive command paths now reset thread identity, transcript, and idle status instead of only clearing visible messages.",
+                      "test":  "go test ./tui/tea ./app -run \u0027SlashCommands|InteractiveSlashCommands\u0027 -count=1"
+                  },
+                  {
+                      "id":  "tui-slash-runtime-backed",
+                      "status":  "done",
+                      "area":  "tui",
+                      "reason":  "Runtime-backed slash commands now execute real actions: /app launches the Codex Desktop thread deep link, /rollout reads the active thread rollout path, /sandbox-add-read-dir validates and adds a readable root, /import invokes external-agent detect/import RPCs, and /memories opens a dedicated settings modal with persisted memory edits.",
+                      "test":  "go test ./tui/tea ./app -run \u0027RuntimeBackedSlash|Slash|Remote\u0027 -count=1"
+                  },
+                  {
+                      "id":  "realtime-v3-handoff-initial-items",
+                      "status":  "done",
+                      "area":  "realtime",
+                      "reason":  "Go validates and emits ordered initialItems notifications, stores codexResponseHandoffMode, and routes streamed assistant output from appserver turns into bounded realtime handoff_append itemAdded notifications. Commentary/final channels, final-message prefix, UTF-8-safe head/tail truncation, and client-managed/codexResponsesAsItems skips are covered.",
+                      "test":  "go test ./realtime ./appserver -run \u0027Realtime|Handoff|ResponsesStreaming\u0027 -count=1"
+                  },
+                  {
+                      "id":  "doctor-compressed-rollout-inventory",
+                      "status":  "done",
+                      "area":  "doctor",
+                      "reason":  "Go rollout loading and doctor inventory now accept .jsonl.zst, map compressed siblings to canonical .jsonl state-DB keys, prefer plain rollouts, and report corrupt compressed files without false stale rows.",
+                      "test":  "go test ./rollout ./doctor -run \u0027Compressed|Rollout|ThreadInventory\u0027 -count=1"
+                  },
+                  {
+                      "id":  "exec-completion-backfill-active-turn",
+                      "status":  "done",
+                      "area":  "exec",
+                      "reason":  "Go emits completion items directly from the active AgentLoopResult, which provides the same externally observable active-turn filtering without Rust\u0027s app-server notification backfill stage.",
+                      "test":  "go test ./exec -run \u0027RunJSONSuppressesResponsesDeltasUntilFinalEvents|WriteStdinCompletionMapsToOriginalCommandExecution\u0027 -count=1"
+                  },
+                  {
+                      "id":  "tui-bootstrap-parallel-requests",
+                      "status":  "done",
+                      "area":  "tui",
+                      "reason":  "Go prepares model metadata and permission requirements locally before TUI startup, so the Rust parallel remote requests have no Go-side latency or scheduling counterpart; startup behavior is already equivalent.",
+                      "test":  "go test ./tui/tea ./app -run Bootstrap -count=1"
+                  },
+                  {
+                      "id":  "external-agent-memory-import",
+                      "status":  "done",
+                      "area":  "memory",
+                      "reason":  "Go detects external project Markdown memory, verifies SHA-256 content, imports under extension-scoped resources with scope.json and source/project/cwd/hash metadata, rejects path/hash failures, and removes resources for disappeared projects without inventing rollout provenance.",
+                      "test":  "go test ./config -run ExternalAgentMemory -count=1"
+                  },
+                  {
+                      "id":  "realtime-webrtc-crate-removal",
+                      "status":  "done",
+                      "area":  "realtime",
+                      "reason":  "The Rust change removes an internal crate only; Go\u0027s realtime wire behavior remains covered and unchanged.",
+                      "test":  "go test ./realtime ./appserver -count=1"
+                  },
+                  {
+                      "id":  "cross-platform-release-gates",
+                      "status":  "partial",
+                      "area":  "release",
+                      "reason":  "Linux Landlock/bwrap is verified on a native Kali runner. Native Windows platform and production ConPTY gates pass. Forty-seven relevant packages compile for Darwin/arm64, and Darwin network/sandbox vet plus actionlint pass. The macOS workflow now directly tests Keychain roots, a Unix-socket HTTP round trip, native seatbelt enforcement, and desktop/platform behavior; a native macOS workflow artifact is still required.",
+                      "test":  "go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"
+                  },
+                  {
+                      "id":  "sdk-windows-interrupted-command",
+                      "status":  "partial",
+                      "area":  "sdk",
+                      "reason":  "The opt-in Windows cancellation diagnostic still fails on Rust bbbf396839: Rust leaves the PowerShell descendant alive and the resumed turn aborts, while Go terminates the tree and resumes safely. Closing this requires an upstream Rust fix; Go must not regress process-tree safety to imitate the defect.",
+                      "test":  "npm --prefix sdktests run test:parity -- --scenario resume-tool-interrupted-command --rust \u003crust-codex\u003e --go \u003cgo-codex\u003e --sdk \u003crust-sdk-typescript\u003e"
+                  },
+                  {
+                      "id":  "upstream-2026-07-30",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "All 82 Rust commits from fa1d4c40d0 through 25eecb071e were classified. Applicable protocol, MCP, executor sandbox, tool registry, remote compaction, telemetry, TUI width, OAuth redirect, serialization, fork boundary, and lifecycle changes are implemented with focused and race coverage; Rust-only dependency, release, allocation, and source-layout changes are explicitly classified.",
+                      "test":  "go test ./... -count=1; go vet ./...; go test -race ./mcp ./tool ./session ./appserver ./execserver -count=1"
+                  },
+                  {
+                      "id":  "sdk-streaming-smoke",
+                      "status":  "done",
+                      "area":  "sdk",
+                      "reason":  "The official TypeScript SDK drove Rust bbbf396839 and the frozen Go candidate through two complete clean 42-scenario matrices with isolated homes/workspaces, strict event and workspace comparison, identical binary/SDK hashes, zero mismatch, zero baseline drift and zero infra retry: sdktests/artifacts/suites/2026-08-01T024647417Z-parity and 2026-08-01T033419130Z-parity. Final-binary raw audits also passed at 2026-08-01T065723289Z-raw_paginated_fork and 2026-08-01T065723280Z-raw_config_requirements. The required third clean matrix remains an alignment-control gate because the Rust 5.6 provider route is currently returning server_overloaded; this does not reopen the implemented SDK contract.",
+                      "test":  "npm --prefix sdktests run test:parity -- --all --infra-retries 3 --fail-fast-infra --rust \u003crust-codex\u003e --go \u003cgo-codex\u003e --sdk \u003crust-sdk-typescript\u003e; npm --prefix sdktests run test:raw:fork -- --rust \u003crust-codex\u003e --go \u003cgo-codex\u003e; npm --prefix sdktests run test:raw:requirements -- --rust \u003crust-codex\u003e --rust-app-server \u003crust-app-server\u003e --go \u003cgo-codex\u003e"
+                  },
+                  {
+                      "id":  "upstream-2026-08-01",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "All 39 Rust commits from 25eecb071e through bbbf396839 are machine-accounted. The final 16-commit intake covers bundled code-mode host resolution, persisted feedback hashes, MCP credential isolation, host skills, shell environment restrictions, external connector/session sync, collaboration messages and per-thread MCP binding.",
+                      "test":  "go test ./... -count=1; go vet ./...; go test -race ./... -count=1; go test ./parity ./features -count=1"
+                  }
+              ]
 }

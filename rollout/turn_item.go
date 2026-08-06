@@ -464,6 +464,7 @@ func populateCoreImageGeneration(core map[string]any, item *session.Item, values
 	core["status"] = firstNonEmptyString(item.Status, anyString(values, "status"))
 	copyOptional(core, "revised_prompt", firstAny(values, "revisedPrompt", "revised_prompt"))
 	core["result"] = firstNonEmptyString(anyString(values, "result"), item.Text)
+	copyOptional(core, "transparent_background", firstAny(values, "transparentBackground", "transparent_background"))
 	copyOptional(core, "saved_path", firstAny(values, "savedPath", "saved_path"))
 }
 
@@ -471,6 +472,7 @@ func populatePublicImageGeneration(out, core map[string]any) {
 	out["status"] = anyString(core, "status")
 	out["revisedPrompt"] = nullableAny(core, "revised_prompt", "revisedPrompt")
 	out["result"] = anyString(core, "result")
+	out["transparentBackground"] = nullableAny(core, "transparent_background", "transparentBackground")
 	copyOptional(out, "savedPath", firstAny(core, "saved_path", "savedPath"))
 }
 

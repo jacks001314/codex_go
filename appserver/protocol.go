@@ -1049,19 +1049,21 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 		})
 	case "imageGeneration":
 		return json.Marshal(struct {
-			Type          string  `json:"type"`
-			ID            string  `json:"id"`
-			Status        string  `json:"status"`
-			RevisedPrompt *string `json:"revisedPrompt"`
-			Result        string  `json:"result"`
-			SavedPath     *string `json:"savedPath,omitempty"`
+			Type                  string  `json:"type"`
+			ID                    string  `json:"id"`
+			Status                string  `json:"status"`
+			RevisedPrompt         *string `json:"revisedPrompt"`
+			Result                string  `json:"result"`
+			TransparentBackground *bool   `json:"transparentBackground"`
+			SavedPath             *string `json:"savedPath,omitempty"`
 		}{
-			Type:          "imageGeneration",
-			ID:            i.ID,
-			Status:        firstNonEmpty(threadItemStringFromData(i.Data, "status"), i.Status),
-			RevisedPrompt: threadItemStringPtrFromData(i.Data, "revisedPrompt", "revised_prompt"),
-			Result:        firstNonEmpty(threadItemStringFromData(i.Data, "result"), i.Text),
-			SavedPath:     threadItemStringPtrFromData(i.Data, "savedPath", "saved_path"),
+			Type:                  "imageGeneration",
+			ID:                    i.ID,
+			Status:                firstNonEmpty(threadItemStringFromData(i.Data, "status"), i.Status),
+			RevisedPrompt:         threadItemStringPtrFromData(i.Data, "revisedPrompt", "revised_prompt"),
+			Result:                firstNonEmpty(threadItemStringFromData(i.Data, "result"), i.Text),
+			TransparentBackground: threadItemBoolPtrFromData(i.Data, "transparentBackground", "transparent_background"),
+			SavedPath:             threadItemStringPtrFromData(i.Data, "savedPath", "saved_path"),
 		})
 	case "enteredReviewMode":
 		return json.Marshal(struct {
@@ -5355,6 +5357,7 @@ func normalizeHistoryUnionData(payload map[string]any, marker string) map[string
 	copyHistoryAlias(data, "webSearchAction", "web_search_action")
 	copyHistoryAlias(data, "revisedPrompt", "revised_prompt")
 	copyHistoryAlias(data, "savedPath", "saved_path")
+	copyHistoryAlias(data, "transparentBackground", "transparent_background")
 	copyHistoryAlias(data, "arguments", "input", "rawArguments", "raw_arguments")
 	return data
 }

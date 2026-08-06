@@ -82,6 +82,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "request_user_input", Owner: "tool, appserver", Focus: "request_user_input server request"},
 		{Module: "request_validation", Owner: "appserver", Focus: "JSON-RPC request validation"},
 		{Module: "review", Owner: "review, appserver", Focus: "review/start RPC"},
+		{Module: "rollout_migration", Owner: "rollout, state, appserver", Focus: "legacy rollout to paginated history migration (dry-run/apply, canonicalization, journaling, subagent replay bounds)"},
 		{Module: "safety_check_downgrade", Owner: "safety, appserver", Focus: "safety downgrade warnings"},
 		{Module: "selected_capability_stack", Owner: "appserver, turn", Focus: "selected capability stack"},
 		{Module: "selected_environment", Owner: "appserver, execserver", Focus: "selected environment propagation"},

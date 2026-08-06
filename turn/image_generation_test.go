@@ -120,6 +120,9 @@ func TestImageGenerationHandlerPostsGenerationAndReturnsRustOutputShape(t *testi
 	if savedPath != eventmap.ImageGenerationArtifactPath(codexHome, "thread-1", "call-image") {
 		t.Fatalf("saved path = %q", savedPath)
 	}
+	if _, ok := output.Data["transparentBackground"]; ok {
+		t.Fatalf("transparentBackground = %#v, want absent when background is auto", output.Data["transparentBackground"])
+	}
 	data, err := os.ReadFile(savedPath)
 	if err != nil {
 		t.Fatalf("ReadFile(savedPath) error = %v", err)
@@ -176,4 +179,64 @@ func TestImageGenerationHandlerPostsEditForReferencedImages(t *testing.T) {
 	if !strings.HasPrefix(image["image_url"].(string), "data:image/png;base64,") {
 		t.Fatalf("image url = %#v", image["image_url"])
 	}
+}
+
+func TestImageGenerationHandlerPreservesTransparencyMetadata(t *testing.T) {
+	cases := []struct {
+		name       string
+		background *codexapi.ImageBackground
+		want       any // nil means the field must be absent
+	}{
+		{name: "transparent", background: ptrTo(codexapi.ImageBackgroundTransparent), want: true},
+		{name: "opaque", background: ptrTo(codexapi.ImageBackgroundOpaque), want: false},
+		{name: "auto", background: ptrTo(codexapi.ImageBackgroundAuto), want: nil},
+		{name: "absent", background: nil, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := codexapi.ImageResponse{Data: []codexapi.ImageData{{B64JSON: base64.StdEncoding.EncodeToString([]byte("png"))}}}
+				if tc.background != nil {
+					response.Background = tc.background
+				}
+				_ = json.NewEncoder(w).Encode(response)
+			}))
+			defer server.Close()
+			handler := NewImageGenerationHandler(&ImageGenerationOptions{
+				Provider:   model.APIProvider{BaseURL: server.URL + "/v1"},
+				HTTPClient: server.Client(),
+			})
+			output, err := handler.Execute(context.Background(), &tool.Invocation{
+				CallID:   "call-transparency",
+				ToolName: tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName),
+				Payload: tool.Payload{
+					Kind:      tool.PayloadFunction,
+					Arguments: `{"prompt":"a logo"}`,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if output == nil || !output.Success {
+				t.Fatalf("output = %#v", output)
+			}
+			got, present := output.Data["transparentBackground"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("transparentBackground = %#v, want absent", got)
+				}
+				return
+			}
+			if !present || got != tc.want {
+				t.Fatalf("transparentBackground = %#v (present=%v), want %#v", got, present, tc.want)
+			}
+			if gotBacking, ok := output.Data["transparent_background"]; !ok || gotBacking != tc.want {
+				t.Fatalf("transparent_background = %#v, want %#v", gotBacking, tc.want)
+			}
+		})
+	}
+}
+
+func ptrTo[T any](value T) *T {
+	return &value
 }

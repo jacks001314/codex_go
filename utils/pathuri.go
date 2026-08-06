@@ -168,6 +168,74 @@ func (u *PathURI) Host() string {
 	return u.url.Host
 }
 
+// windowsIdentityPathBytes returns the decoded path bytes used for Windows
+// identity comparisons, or false when the URI does not use the Windows
+// convention, is an opaque fallback, or contains percent-encoded native path
+// separators (which fail closed). Mirrors Rust PathUri::windows_identity_path_bytes.
+func (u *PathURI) windowsIdentityPathBytes() ([]byte, bool) {
+	if u == nil || u.url == nil {
+		return nil, false
+	}
+	convention, ok := u.InferConvention()
+	if !ok || convention != ConventionWindows {
+		return nil, false
+	}
+	if opaqueFallbackBytes(u.url) != nil {
+		return nil, false
+	}
+	for _, segment := range u.segments() {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return nil, false
+		}
+		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
+			return nil, false
+		}
+	}
+	decoded, err := url.PathUnescape(u.url.Path)
+	if err != nil {
+		return nil, false
+	}
+	return []byte(decoded), true
+}
+
+// Equal reports URI equality. Windows paths compare ASCII-case-insensitively
+// on their decoded identity bytes; POSIX paths remain case-sensitive. Mirrors
+// Rust PathUri PartialEq (4cb8676d3a, #37129).
+func (u *PathURI) Equal(other *PathURI) bool {
+	if u == nil || other == nil {
+		return false
+	}
+	if u.String() == other.String() {
+		return true
+	}
+	path, ok := u.windowsIdentityPathBytes()
+	otherPath, otherOK := other.windowsIdentityPathBytes()
+	if !ok || !otherOK {
+		return false
+	}
+	return u.Host() == other.Host() && bytesEqualFoldASCII(path, otherPath)
+}
+
+func bytesEqualFoldASCII(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if toASCIILower(a[i]) != toASCIILower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func toASCIILower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
 func (u *PathURI) Basename() (string, bool) {
 	segments := u.segments()
 	for i := len(segments) - 1; i >= 0; i-- {
@@ -293,7 +361,7 @@ func (u *PathURI) StartsWith(base *PathURI) bool {
 	if u == nil || base == nil {
 		return false
 	}
-	if u.String() == base.String() {
+	if u.Equal(base) {
 		return true
 	}
 	if opaqueFallbackBytes(u.url) != nil || opaqueFallbackBytes(base.url) != nil {
@@ -302,12 +370,20 @@ func (u *PathURI) StartsWith(base *PathURI) bool {
 	if u.Host() != base.Host() {
 		return false
 	}
+	uConvention, uOK := u.InferConvention()
+	baseConvention, baseOK := base.InferConvention()
+	if uOK && baseOK && uConvention != baseConvention {
+		return false
+	}
 	segments := nonEmptySegments(u.segments())
 	baseSegments := nonEmptySegments(base.segments())
 	if len(baseSegments) > len(segments) {
 		return false
 	}
-	convention, _ := u.InferConvention()
+	convention := uConvention
+	if !uOK {
+		convention = ConventionPosix
+	}
 	for i := range baseSegments {
 		decoded, err := url.PathUnescape(segments[i])
 		if err != nil {
@@ -316,7 +392,14 @@ func (u *PathURI) StartsWith(base *PathURI) bool {
 		if strings.Contains(decoded, "/") || (convention == ConventionWindows && strings.Contains(decoded, `\`)) {
 			return false
 		}
-		if segments[i] != baseSegments[i] {
+		baseDecoded, err := url.PathUnescape(baseSegments[i])
+		if err != nil {
+			return false
+		}
+		if strings.Contains(baseDecoded, "/") || (convention == ConventionWindows && strings.Contains(baseDecoded, `\`)) {
+			return false
+		}
+		if decoded != baseDecoded && (convention != ConventionWindows || !strings.EqualFold(decoded, baseDecoded)) {
 			return false
 		}
 	}

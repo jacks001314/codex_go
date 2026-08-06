@@ -14,11 +14,13 @@ const (
 	ReviewerAutoReview Reviewer = "auto_review"
 	ReviewerLegacy     Reviewer = "guardian_subagent"
 
-	ReviewTimeout                = 90 * time.Second
-	MaxConsecutiveDenialsPerTurn = 3
-	MaxRecentDenialsPerTurn      = 10
-	AutoReviewDenialWindowSize   = 50
-	DeniedActionApprovalPrefix   = "The user has manually approved a specific action that was previously `Rejected`."
+	ReviewTimeout                     = 90 * time.Second
+	MaxConsecutiveDenialsPerTurn      = 3
+	MaxConsecutiveCyberDenialsPerTurn = 1
+	MaxRecentDenialsPerTurn           = 10
+	MaxRecentCyberDenialsPerTurn      = 1
+	AutoReviewDenialWindowSize        = 50
+	DeniedActionApprovalPrefix        = "The user has manually approved a specific action that was previously `Rejected`."
 )
 
 var ErrInvalidGuardianRequest = errors.New("invalid guardian request")
@@ -290,6 +292,15 @@ type CircuitBreakerAction struct {
 	RecentDenials      uint32
 }
 
+// CircuitBreakerPolicy selects denial thresholds, mirroring Rust's
+// GuardianRejectionCircuitBreakerPolicy (f141dc77f0, #37190).
+type CircuitBreakerPolicy string
+
+const (
+	CircuitBreakerPolicyStandard CircuitBreakerPolicy = "standard"
+	CircuitBreakerPolicyCyber    CircuitBreakerPolicy = "cyber"
+)
+
 type CircuitBreaker struct {
 	mu    sync.Mutex
 	turns map[string]*turnState
@@ -312,14 +323,24 @@ func (b *CircuitBreaker) ClearTurn(turnID string) {
 }
 
 func (b *CircuitBreaker) RecordDenial(turnID string) CircuitBreakerAction {
+	return b.RecordDenialWithPolicy(turnID, CircuitBreakerPolicyStandard)
+}
+
+func (b *CircuitBreaker) RecordDenialWithPolicy(turnID string, policy CircuitBreakerPolicy) CircuitBreakerAction {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	state := b.state(turnID)
 	state.consecutiveDenials++
 	recordRecent(state, true)
 	recent := countRecentDenials(state)
+	maxConsecutive := uint32(MaxConsecutiveDenialsPerTurn)
+	maxRecent := uint32(MaxRecentDenialsPerTurn)
+	if policy == CircuitBreakerPolicyCyber {
+		maxConsecutive = MaxConsecutiveCyberDenialsPerTurn
+		maxRecent = MaxRecentCyberDenialsPerTurn
+	}
 	action := CircuitBreakerAction{ConsecutiveDenials: state.consecutiveDenials, RecentDenials: recent}
-	if !state.interruptTriggered && (state.consecutiveDenials >= MaxConsecutiveDenialsPerTurn || recent >= MaxRecentDenialsPerTurn) {
+	if !state.interruptTriggered && (state.consecutiveDenials >= maxConsecutive || recent >= maxRecent) {
 		state.interruptTriggered = true
 		action.InterruptTurn = true
 	}

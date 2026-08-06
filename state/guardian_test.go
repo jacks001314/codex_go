@@ -107,6 +107,25 @@ func TestCircuitBreaker(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerCyberPolicyInterruptsAfterOneDenial(t *testing.T) {
+	breaker := NewCircuitBreaker()
+	action := breaker.RecordDenialWithPolicy("turn-cyber", CircuitBreakerPolicyCyber)
+	if !action.InterruptTurn || action.ConsecutiveDenials != MaxConsecutiveCyberDenialsPerTurn {
+		t.Fatalf("first cyber denial should interrupt: %+v", action)
+	}
+	// A subsequent denial in the same turn stays interrupted (no duplicate).
+	again := breaker.RecordDenialWithPolicy("turn-cyber", CircuitBreakerPolicyCyber)
+	if again.InterruptTurn || again.ConsecutiveDenials != 2 {
+		t.Fatalf("interrupt should trigger once: %+v", again)
+	}
+
+	// Standard policy still uses its own thresholds on a separate turn.
+	breaker2 := NewCircuitBreaker()
+	if action := breaker2.RecordDenialWithPolicy("turn-standard", CircuitBreakerPolicyStandard); action.InterruptTurn {
+		t.Fatalf("standard first denial should continue: %+v", action)
+	}
+}
+
 func TestReviewStore(t *testing.T) {
 	store := NewReviewStore()
 	now := fixedGuardianTime()

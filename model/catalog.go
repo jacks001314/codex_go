@@ -35,6 +35,10 @@ During longer work, send short progress updates at meaningful points. Do not wai
 	TruncationModeBytes  = "bytes"
 	TruncationModeTokens = "tokens"
 
+	// ModelSpecialtyCyber identifies backend model-catalog specialties for
+	// cybersecurity-focused models (Rust MODEL_SPECIALTY_CYBER, f141dc77f0).
+	ModelSpecialtyCyber = "cyber"
+
 	ServiceTierDefaultRequestValue = "default"
 
 	ToolModeDirect       = "direct"
@@ -167,6 +171,8 @@ type ModelInfo struct {
 	ModelMessages                  *ModelMessages   `json:"model_messages"`
 	IncludeSkillsUsageInstructions bool             `json:"include_skills_usage_instructions"`
 	IncludePluginUsageInstructions bool             `json:"include_plugin_usage_instructions"`
+	IncludeAppsUsageInstructions   bool             `json:"include_apps_usage_instructions"`
+	ModelSpecialty                 string           `json:"model_specialty"`
 	SupportsReasoningSummaries     bool             `json:"supports_reasoning_summaries"`
 	DefaultReasoningSummary        string           `json:"default_reasoning_summary"`
 	SupportVerbosity               bool             `json:"support_verbosity"`
@@ -209,6 +215,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		ModelMessages                  *ModelMessages      `json:"model_messages"`
 		IncludeSkillsUsageInstructions bool                `json:"include_skills_usage_instructions"`
 		IncludePluginUsageInstructions bool                `json:"include_plugin_usage_instructions"`
+		IncludeAppsUsageInstructions   *bool               `json:"include_apps_usage_instructions"`
+		ModelSpecialty                 any                 `json:"model_specialty"`
 		SupportsReasoningSummaries     bool                `json:"supports_reasoning_summaries"`
 		DefaultReasoningSummary        string              `json:"default_reasoning_summary"`
 		SupportVerbosity               bool                `json:"support_verbosity"`
@@ -247,6 +255,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		ModelMessages:                  raw.ModelMessages,
 		IncludeSkillsUsageInstructions: raw.IncludeSkillsUsageInstructions,
 		IncludePluginUsageInstructions: raw.IncludePluginUsageInstructions,
+		IncludeAppsUsageInstructions:   defaultTrueBool(raw.IncludeAppsUsageInstructions),
+		ModelSpecialty:                 stringFromJSONValue(raw.ModelSpecialty),
 		SupportsReasoningSummaries:     raw.SupportsReasoningSummaries,
 		DefaultReasoningSummary:        raw.DefaultReasoningSummary,
 		SupportVerbosity:               raw.SupportVerbosity,
@@ -596,6 +606,15 @@ func stringFromJSONValue(value any) string {
 	return strings.TrimSpace(text)
 }
 
+// defaultTrueBool returns the explicit value or true when absent, mirroring
+// Rust's `#[serde(default = "default_true")]` for include_apps_usage_instructions.
+func defaultTrueBool(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
 func knownMultiAgentVersion(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "disabled", "v1", "v2":
@@ -713,6 +732,7 @@ func ModelInfoFromSlug(slug string) ModelInfo {
 		BaseInstructions:               BaseInstructions,
 		ModelMessages:                  localPersonalityMessagesForSlug(slug),
 		IncludeSkillsUsageInstructions: true,
+		IncludeAppsUsageInstructions:   false,
 		DefaultReasoningSummary:        "auto",
 		WebSearchToolType:              "text",
 		TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},

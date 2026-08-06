@@ -55,6 +55,7 @@ type ModelSummary struct {
 	Name                      string                  `json:"name,omitempty"`
 	DisplayName               string                  `json:"displayName"`
 	Description               string                  `json:"description"`
+	ModelSpecialty            *string                 `json:"modelSpecialty,omitempty"`
 	Hidden                    bool                    `json:"hidden"`
 	IsDefault                 bool                    `json:"isDefault"`
 	DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
@@ -93,6 +94,7 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		Model                     string                  `json:"model"`
 		DisplayName               string                  `json:"displayName"`
 		Description               string                  `json:"description"`
+		ModelSpecialty            *string                 `json:"modelSpecialty"`
 		Hidden                    bool                    `json:"hidden"`
 		IsDefault                 bool                    `json:"isDefault"`
 		DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
@@ -110,6 +112,7 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		Model:                     m.Model,
 		DisplayName:               m.DisplayName,
 		Description:               m.Description,
+		ModelSpecialty:            m.ModelSpecialty,
 		Hidden:                    m.Hidden,
 		IsDefault:                 m.IsDefault,
 		DefaultReasoningEffort:    m.DefaultReasoningEffort,
@@ -296,6 +299,10 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 	if info.DefaultServiceTier != "" {
 		value := info.DefaultServiceTier
 		summary.DefaultServiceTier = &value
+	}
+	if strings.TrimSpace(info.ModelSpecialty) != "" {
+		value := info.ModelSpecialty
+		summary.ModelSpecialty = &value
 	}
 	return summary
 }

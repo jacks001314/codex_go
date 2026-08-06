@@ -84,42 +84,43 @@ type ThreadItem struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 
-	Message           string                       `json:"message,omitempty"`
-	Text              string                       `json:"text,omitempty"`
-	Phase             string                       `json:"phase,omitempty"`
-	ToolName          string                       `json:"tool_name,omitempty"`
-	CallID            string                       `json:"call_id,omitempty"`
-	Input             string                       `json:"input,omitempty"`
-	Output            string                       `json:"output,omitempty"`
-	Query             string                       `json:"query,omitempty"`
-	Action            map[string]any               `json:"action,omitempty"`
-	Changes           []FileChange                 `json:"changes,omitempty"`
-	Server            string                       `json:"server,omitempty"`
-	Tool              string                       `json:"tool,omitempty"`
-	SenderThreadID    string                       `json:"sender_thread_id,omitempty"`
-	ReceiverThreadIDs *[]string                    `json:"receiver_thread_ids,omitempty"`
-	Prompt            *string                      `json:"prompt,omitempty"`
-	AgentsStates      *map[string]CollabAgentState `json:"agents_states,omitempty"`
-	ActivityKind      string                       `json:"kind,omitempty"`
-	AgentThreadID     string                       `json:"agent_thread_id,omitempty"`
-	AgentPath         string                       `json:"agent_path,omitempty"`
-	Arguments         *any                         `json:"arguments,omitempty"`
-	Result            *MCPToolResult               `json:"result,omitempty"`
-	CallError         *MCPToolError                `json:"error,omitempty"`
-	Command           string                       `json:"command,omitempty"`
-	PluginID          string                       `json:"plugin_id,omitempty"`
-	ScriptPath        string                       `json:"script_path,omitempty"`
-	AggregatedOutput  *string                      `json:"aggregated_output,omitempty"`
-	ExitCode          *int                         `json:"exit_code,omitempty"`
-	Status            string                       `json:"status,omitempty"`
-	Stdout            string                       `json:"stdout,omitempty"`
-	Stderr            string                       `json:"stderr,omitempty"`
-	AutoApproved      *bool                        `json:"auto_approved,omitempty"`
-	RevisedPrompt     string                       `json:"revised_prompt,omitempty"`
-	SavedPath         string                       `json:"saved_path,omitempty"`
-	Success           *bool                        `json:"success,omitempty"`
-	Items             []TodoItem                   `json:"items,omitempty"`
-	Metadata          map[string]any               `json:"metadata,omitempty"`
+	Message               string                       `json:"message,omitempty"`
+	Text                  string                       `json:"text,omitempty"`
+	Phase                 string                       `json:"phase,omitempty"`
+	ToolName              string                       `json:"tool_name,omitempty"`
+	CallID                string                       `json:"call_id,omitempty"`
+	Input                 string                       `json:"input,omitempty"`
+	Output                string                       `json:"output,omitempty"`
+	Query                 string                       `json:"query,omitempty"`
+	Action                map[string]any               `json:"action,omitempty"`
+	Changes               []FileChange                 `json:"changes,omitempty"`
+	Server                string                       `json:"server,omitempty"`
+	Tool                  string                       `json:"tool,omitempty"`
+	SenderThreadID        string                       `json:"sender_thread_id,omitempty"`
+	ReceiverThreadIDs     *[]string                    `json:"receiver_thread_ids,omitempty"`
+	Prompt                *string                      `json:"prompt,omitempty"`
+	AgentsStates          *map[string]CollabAgentState `json:"agents_states,omitempty"`
+	ActivityKind          string                       `json:"kind,omitempty"`
+	AgentThreadID         string                       `json:"agent_thread_id,omitempty"`
+	AgentPath             string                       `json:"agent_path,omitempty"`
+	Arguments             *any                         `json:"arguments,omitempty"`
+	Result                *MCPToolResult               `json:"result,omitempty"`
+	CallError             *MCPToolError                `json:"error,omitempty"`
+	Command               string                       `json:"command,omitempty"`
+	PluginID              string                       `json:"plugin_id,omitempty"`
+	ScriptPath            string                       `json:"script_path,omitempty"`
+	AggregatedOutput      *string                      `json:"aggregated_output,omitempty"`
+	ExitCode              *int                         `json:"exit_code,omitempty"`
+	Status                string                       `json:"status,omitempty"`
+	Stdout                string                       `json:"stdout,omitempty"`
+	Stderr                string                       `json:"stderr,omitempty"`
+	AutoApproved          *bool                        `json:"auto_approved,omitempty"`
+	RevisedPrompt         string                       `json:"revised_prompt,omitempty"`
+	SavedPath             string                       `json:"saved_path,omitempty"`
+	TransparentBackground *bool                        `json:"transparent_background,omitempty"`
+	Success               *bool                        `json:"success,omitempty"`
+	Items                 []TodoItem                   `json:"items,omitempty"`
+	Metadata              map[string]any               `json:"metadata,omitempty"`
 }
 
 type TodoItem struct {
@@ -198,13 +199,18 @@ func PlanDelta(itemID, text string) ThreadEvent {
 	return ThreadEvent{Type: "item.plan.delta", Delta: &Delta{ItemID: itemID, Text: text}}
 }
 
-func ImageGenerationItem(id string, status string, revisedPrompt string, savedPath string) ThreadItem {
+func ImageGenerationItem(id string, status string, revisedPrompt string, savedPath string, transparentBackground ...*bool) ThreadItem {
+	var transparent *bool
+	if len(transparentBackground) > 0 {
+		transparent = transparentBackground[0]
+	}
 	return ThreadItem{
-		ID:            id,
-		Type:          "imageGeneration",
-		Status:        status,
-		RevisedPrompt: revisedPrompt,
-		SavedPath:     savedPath,
+		ID:                    id,
+		Type:                  "imageGeneration",
+		Status:                status,
+		RevisedPrompt:         revisedPrompt,
+		SavedPath:             savedPath,
+		TransparentBackground: transparent,
 		Metadata: map[string]any{
 			"status":         status,
 			"revisedPrompt":  revisedPrompt,

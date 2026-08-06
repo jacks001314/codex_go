@@ -27,6 +27,7 @@ type modelGuardianReviewer struct {
 	interrupt   func(threadID, turnID string)
 	transcript  func(threadID string) []string
 	model       func(threadID, turnID string) string
+	specialty   func(threadID, turnID string) string
 	environment func(context.Context, string, string) ([]any, error)
 	timeout     time.Duration
 }
@@ -227,7 +228,11 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 		r.breaker.RecordNonDenial(turnID)
 		return
 	}
-	if action := r.breaker.RecordDenial(turnID); action.InterruptTurn && r.interrupt != nil {
+	policy := state.CircuitBreakerPolicyStandard
+	if r.specialty != nil && strings.TrimSpace(r.specialty(threadID, turnID)) == model.ModelSpecialtyCyber {
+		policy = state.CircuitBreakerPolicyCyber
+	}
+	if action := r.breaker.RecordDenialWithPolicy(turnID, policy); action.InterruptTurn && r.interrupt != nil {
 		r.interrupt(threadID, turnID)
 	}
 }

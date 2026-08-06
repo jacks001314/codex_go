@@ -21,12 +21,12 @@ var (
 type Exposure string
 
 const (
-	ExposureModelVisible    Exposure = "model_visible"
-	ExposureDirectModelOnly Exposure = "direct_model_only"
+	ExposureModelVisible      Exposure = "model_visible"
+	ExposureDirectModelOnly   Exposure = "direct_model_only"
 	ExposureDeferredModelOnly Exposure = "deferred_model_only"
-	ExposureCodeModeOnly    Exposure = "code_mode_only"
-	ExposureHidden          Exposure = "hidden"
-	ExposureDiscoverable    Exposure = "discoverable"
+	ExposureCodeModeOnly      Exposure = "code_mode_only"
+	ExposureHidden            Exposure = "hidden"
+	ExposureDiscoverable      Exposure = "discoverable"
 )
 
 // IsCodeModeAvailable reports whether a tool with the given exposure may be
@@ -289,6 +289,43 @@ func (r *Registry) Remove(name ToolName) (Executor, bool) {
 		}
 	}
 	return executor, true
+}
+
+// RemoveNamespace removes every registered tool whose namespace equals the
+// given value and returns the removed qualified tool names. Special model
+// tools own the namespace matching their wire identity, so regular namespace
+// tools cannot advertise that same model-visible surface (Rust 98da2c4499,
+// #37188).
+func (r *Registry) RemoveNamespace(namespace string) []ToolName {
+	if r == nil {
+		return nil
+	}
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var removed []ToolName
+	for _, key := range r.order {
+		spec := r.specs[key]
+		if spec.Name.Namespace != namespace {
+			continue
+		}
+		delete(r.executors, key)
+		delete(r.specs, key)
+		removed = append(removed, spec.Name)
+	}
+	if len(removed) > 0 {
+		kept := r.order[:0]
+		for _, key := range r.order {
+			if _, exists := r.executors[key]; exists {
+				kept = append(kept, key)
+			}
+		}
+		r.order = kept
+	}
+	return removed
 }
 
 func (r *Registry) Lookup(name ToolName) (Executor, bool) {

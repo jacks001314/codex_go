@@ -275,6 +275,64 @@ func (a *AppInstructions) Body() string {
 	return "\n" + strings.Join(lines, "\n") + "\n"
 }
 
+// ImageResizeNoticeSource mirrors Rust's ImageResizeNoticeSource (fa5d5ae047,
+// #37134).
+type ImageResizeNoticeSource string
+
+const (
+	ImageResizeNoticeSourceUserMessage ImageResizeNoticeSource = "user message"
+	ImageResizeNoticeSourceToolOutput  ImageResizeNoticeSource = "tool output"
+)
+
+// ResizedImage mirrors Rust's ResizedImage: image numbering plus original and
+// prepared dimensions.
+type ResizedImage struct {
+	ImageNumber    int
+	ImageCount     int
+	SourceWidth    int
+	SourceHeight   int
+	PreparedWidth  int
+	PreparedHeight int
+}
+
+// ImageResizeNotice reports to the model when prompt images were resized,
+// mirroring Rust's image_resize_notice feature fragment.
+type ImageResizeNotice struct {
+	Source        ImageResizeNoticeSource
+	ResizedImages []ResizedImage
+}
+
+func NewImageResizeNotice(source ImageResizeNoticeSource, resized []ResizedImage) *ImageResizeNotice {
+	return &ImageResizeNotice{Source: source, ResizedImages: append([]ResizedImage(nil), resized...)}
+}
+
+func (n *ImageResizeNotice) Role() string {
+	return RoleDeveloper
+}
+
+func (n *ImageResizeNotice) Markers() (string, string) {
+	return "<image_resize_notice>", "</image_resize_notice>"
+}
+
+func (n *ImageResizeNotice) Body() string {
+	if n == nil {
+		return ""
+	}
+	source := string(n.Source)
+	if source == "" {
+		source = string(ImageResizeNoticeSourceUserMessage)
+	}
+	lines := make([]string, 0, len(n.ResizedImages))
+	for _, image := range n.ResizedImages {
+		lines = append(lines, fmt.Sprintf(
+			"Image %d of %d in the preceding %s was resized from %dx%d to %dx%d pixels.",
+			image.ImageNumber, image.ImageCount, source,
+			image.SourceWidth, image.SourceHeight, image.PreparedWidth, image.PreparedHeight,
+		))
+	}
+	return "\n" + strings.Join(lines, "\n") + "\n"
+}
+
 const maxRecommendedPlugins = 50
 
 type RecommendedPlugin struct {

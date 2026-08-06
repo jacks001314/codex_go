@@ -1985,3 +1985,72 @@ func writeHTTPMCPError(t *testing.T, w http.ResponseWriter, id int64, code int64
 		t.Fatalf("Encode() error = %v", err)
 	}
 }
+
+func TestHTTPMCPHandshakeDeadlineBoundsInitializeAndClearsAfterwards(t *testing.T) {
+	// A stalled handshake must not block beyond the remaining initialization
+	// deadline (Rust e244a9d94e, #37168).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		// Never respond: the handshake must be bounded by the deadline instead
+		// of hanging on the stalled endpoint. Block until the request context is
+		// cancelled by the bounded handshake.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true, StartupTimeout: 80 * time.Millisecond})
+	started := time.Now()
+	err := client.Call("tools/list", map[string]any{}, nil)
+	if err == nil {
+		t.Fatalf("stalled handshake should fail, err = nil")
+	}
+	quick := time.Since(started)
+	if quick < 20*time.Millisecond {
+		t.Fatalf("stalled handshake returned too quickly (%v) without a real request attempt; err = %v", quick, err)
+	}
+	elapsed := time.Since(started)
+	if elapsed > 3*time.Second {
+		t.Fatalf("stalled handshake took %v, want bounded by the deadline and retries", elapsed)
+	}
+
+	// The deadline is cleared after the handshake finishes, so a subsequent
+	// client with a responsive endpoint is not affected by a stale deadline.
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "session-ok")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "ok", "version": "test"},
+			})
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer okServer.Close()
+	okClient := newMCPHTTPClient(&ServerConfig{URL: okServer.URL, Enabled: true, StartupTimeout: 80 * time.Millisecond})
+	if err := okClient.Call("tools/list", map[string]any{}, nil); err != nil {
+		t.Fatalf("responsive handshake Call() error = %v", err)
+	}
+	if timeout := okClient.handshakeRequestTimeout("initialize"); timeout != 0 {
+		t.Fatalf("handshake deadline should be cleared after success, timeout = %v", timeout)
+	}
+}

@@ -57,6 +57,12 @@ func RegisterToolSearchHandlerWithOptions(registry *Registry, specs []Spec, omit
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", ErrToolInvalidCall)
 	}
+	// Special model tools own the namespace matching their wire identity, so
+	// regular namespace tools cannot advertise that same model-visible surface
+	// (Rust 98da2c4499, #37188). Remove them before registering the built-in
+	// search tool; a direct plain-name conflict still surfaces as a strict
+	// duplicate-tool error.
+	registry.RemoveNamespace(ToolSearchName)
 	return registry.Register(NewToolSearchHandlerWithOptions(specs, omitSources))
 }
 

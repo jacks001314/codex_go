@@ -2290,7 +2290,17 @@ func protocolImageGenerationItemFromAgentItem(item *model.AgentItem) protocol.Th
 	status := model.NormalizeImageGenerationStatus(firstNonEmpty(strings.TrimSpace(item.Status), execStringFromAny(data["status"])), result)
 	revisedPrompt := firstNonEmpty(execStringFromAny(data["revisedPrompt"]), execStringFromAny(data["revised_prompt"]))
 	savedPath := firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"]))
-	return protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath)
+	transparentBackground := execBoolPtrFromAny(firstExecAny(data, "transparentBackground", "transparent_background"))
+	return protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground)
+}
+
+func firstExecAny(data map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := data[key]; ok {
+			return value
+		}
+	}
+	return nil
 }
 
 func reasoningSummaryText(data map[string]any) string {
@@ -4617,6 +4627,17 @@ func execStringFromAny(value any) string {
 		return ""
 	default:
 		return fmt.Sprint(typed)
+	}
+}
+
+func execBoolPtrFromAny(value any) *bool {
+	switch typed := value.(type) {
+	case bool:
+		return &typed
+	case *bool:
+		return typed
+	default:
+		return nil
 	}
 }
 

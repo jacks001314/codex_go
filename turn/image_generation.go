@@ -101,7 +101,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
-	result, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
+	result, transparentBackground, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation failed: "+err.Error()), nil
 	}
@@ -133,6 +133,10 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 		"revisedPrompt":    args.Prompt,
 		"revised_prompt":   args.Prompt,
 		"image_url":        imageGenerationOutputPrefix + result,
+	}
+	if transparentBackground != nil {
+		data["transparentBackground"] = *transparentBackground
+		data["transparent_background"] = *transparentBackground
 	}
 	if savedPath != "" {
 		data["savedPath"] = savedPath
@@ -218,9 +222,9 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	}, nil
 }
 
-func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, error) {
+func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, error) {
 	if request == nil {
-		return "", fmt.Errorf("image request is nil")
+		return "", nil, fmt.Errorf("image request is nil")
 	}
 	var response *codexapi.ImageResponse
 	var err error
@@ -230,15 +234,33 @@ func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, reques
 	case imageGenerationRequestEdit:
 		response, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
 	default:
-		return "", fmt.Errorf("unknown image request kind %q", request.kind)
+		return "", nil, fmt.Errorf("unknown image request kind %q", request.kind)
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if response == nil || len(response.Data) == 0 {
-		return "", fmt.Errorf("image generation returned no image data")
+		return "", nil, fmt.Errorf("image generation returned no image data")
 	}
-	return response.Data[0].B64JSON, nil
+	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), nil
+}
+
+// transparentBackgroundValue mirrors Rust's Images API background mapping:
+// transparent -> true, opaque -> false, auto/absent -> nil (null).
+func transparentBackgroundValue(background *codexapi.ImageBackground) *bool {
+	if background == nil {
+		return nil
+	}
+	switch *background {
+	case codexapi.ImageBackgroundTransparent:
+		value := true
+		return &value
+	case codexapi.ImageBackgroundOpaque:
+		value := false
+		return &value
+	default: // auto or unrecognized
+		return nil
+	}
 }
 
 func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path string, payload any, turnID string) (*codexapi.ImageResponse, error) {

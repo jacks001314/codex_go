@@ -603,7 +603,7 @@ func sampleRustSchemaThreadItems() []ThreadItem {
 		{ID: "item-web", Type: "webSearch", Text: "schema", Data: map[string]any{"action": map[string]any{"type": "search", "query": "schema", "queries": []any{"schema", "protocol"}}}},
 		{ID: "item-image-view", Type: "imageView", Data: map[string]any{"path": "D:/workspace/image.png"}},
 		{ID: "item-sleep", Type: "sleep", Data: map[string]any{"durationMs": durationMS}},
-		{ID: "item-image-generation", Type: "imageGeneration", Data: map[string]any{"status": "completed", "revisedPrompt": "a sharper prompt", "result": "image-result", "savedPath": "D:/workspace/generated.png"}},
+		{ID: "item-image-generation", Type: "imageGeneration", Data: map[string]any{"status": "completed", "revisedPrompt": "a sharper prompt", "result": "image-result", "transparentBackground": true, "savedPath": "D:/workspace/generated.png"}},
 		{ID: "item-enter-review", Type: "enteredReviewMode", Text: "review started"},
 		{ID: "item-exit-review", Type: "exitedReviewMode", Text: "review ended"},
 		{ID: "item-compact", Type: "contextCompaction"},

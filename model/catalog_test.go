@@ -64,10 +64,10 @@ func TestModelCatalogPreservesKnownToolMode(t *testing.T) {
 
 func TestResolveToolModeMirrorsRustRequestedToolMode(t *testing.T) {
 	for _, testCase := range []struct {
-		name           string
-		modelToolMode  string
+		name            string
+		modelToolMode   string
 		featureSettings map[string]bool
-		want           string
+		want            string
 	}{
 		{name: "explicit-direct-wins", modelToolMode: ToolModeDirect, featureSettings: map[string]bool{"code_mode": true}, want: ToolModeDirect},
 		{name: "explicit-code-mode-wins", modelToolMode: ToolModeCodeMode, featureSettings: map[string]bool{"code_mode_only": true}, want: ToolModeCodeMode},
@@ -767,4 +767,56 @@ func (e *recordingModelsEndpoint) ListModels(_ context.Context, etag string) (*M
 	response := e.responses[0]
 	e.responses = e.responses[1:]
 	return response, nil
+}
+
+func TestModelInfoAppsUsageDefaultsTrueAndPreservesSpecialty(t *testing.T) {
+	var catalog ModelsResponse
+	if err := json.Unmarshal([]byte(`{
+		"models": [
+			{"slug": "defaulted", "display_name": "Defaulted", "base_instructions": "base"},
+			{"slug": "opted-out", "display_name": "Opted Out", "base_instructions": "base", "include_apps_usage_instructions": false, "model_specialty": "cyber"}
+		]
+	}`), &catalog); err != nil {
+		t.Fatalf("Unmarshal catalog returned error: %v", err)
+	}
+	if len(catalog.Models) != 2 {
+		t.Fatalf("models = %#v", catalog.Models)
+	}
+	if !catalog.Models[0].IncludeAppsUsageInstructions {
+		t.Fatalf("missing include_apps_usage_instructions should default to true: %#v", catalog.Models[0])
+	}
+	if catalog.Models[1].IncludeAppsUsageInstructions {
+		t.Fatalf("explicit opt-out should survive: %#v", catalog.Models[1])
+	}
+	if catalog.Models[1].ModelSpecialty != ModelSpecialtyCyber {
+		t.Fatalf("model_specialty = %q, want %q", catalog.Models[1].ModelSpecialty, ModelSpecialtyCyber)
+	}
+	if catalog.Models[0].ModelSpecialty != "" {
+		t.Fatalf("missing model_specialty should be empty: %#v", catalog.Models[0])
+	}
+
+	// Local fallback models mirror Rust's model_info_from_slug opt-out.
+	if local := ModelInfoFromSlug("some-local-model"); local.IncludeAppsUsageInstructions {
+		t.Fatalf("local fallback should opt out of apps usage instructions: %#v", local)
+	}
+}
+
+func TestModelSummaryCarriesModelSpecialty(t *testing.T) {
+	info := ModelInfo{Slug: "gpt-test", DisplayName: "GPT Test", BaseInstructions: "base", ModelSpecialty: ModelSpecialtyCyber}
+	summary := summaryFromModel(info, false)
+	if summary.ModelSpecialty == nil || *summary.ModelSpecialty != ModelSpecialtyCyber {
+		t.Fatalf("modelSpecialty = %#v, want %q", summary.ModelSpecialty, ModelSpecialtyCyber)
+	}
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"modelSpecialty":"cyber"`) {
+		t.Fatalf("marshaled summary missing modelSpecialty: %s", encoded)
+	}
+
+	plain := summaryFromModel(ModelInfo{Slug: "gpt-plain", DisplayName: "GPT Plain", BaseInstructions: "base"}, false)
+	if plain.ModelSpecialty != nil {
+		t.Fatalf("empty specialty should stay nil: %#v", plain.ModelSpecialty)
+	}
 }
