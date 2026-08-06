@@ -353,8 +353,13 @@ func execMultiAgentV2UsageHint(req *Request, options *execMultiAgentTools) strin
 	parts := []string{
 		identity,
 		execMultiAgentV2SharedUsageHint,
-		fmt.Sprintf("There are %d available concurrency slots, meaning that up to %d agents can be active at once, including you.", options.maxConcurrency, options.maxConcurrency),
 	}
+	// Rust 92b83e226d (#37189): present wait_agent polling guidance in the
+	// developer instructions only when the tool is enabled.
+	if !options.disableWait {
+		parts = append(parts, execMultiAgentV2WaitAgentUsageHint)
+	}
+	parts = append(parts, fmt.Sprintf("There are %d available concurrency slots, meaning that up to %d agents can be active at once, including you.", options.maxConcurrency, options.maxConcurrency))
 	if options.exposeSpawnModelOverrides {
 		parts = append(parts, execMultiAgentV2ModelOverrideUsageHint)
 	}
@@ -386,6 +391,8 @@ const execMultiAgentV2SharedUsageHint = "Note that collaboration tools cannot be
 	"- All agents have access to the same container and filesystem as you.\n" +
 	"- All agents use the same current working directory.\n" +
 	"- As a result, edits made by one agent are immediately visible to all other agents."
+
+const execMultiAgentV2WaitAgentUsageHint = "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling."
 
 const execMultiAgentV2ModelOverrideUsageHint = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string."
 

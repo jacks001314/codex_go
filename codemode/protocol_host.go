@@ -14,6 +14,11 @@ const MaxPendingDelegateCalls = 1024
 // and their responses (Rust 60c722e075).
 const DualWebSocketCapability = "dual-websocket-v1"
 
+// SessionCellExecutionResourceLimitsCapability is the optional host
+// capability advertising per-session cell execution limits (Rust 9d00bb01c0,
+// #37114).
+const SessionCellExecutionResourceLimitsCapability = "session-cell-execution-resource-limits"
+
 type RequestID int64
 
 type DelegateRequestID int64
@@ -506,11 +511,12 @@ func (m HostToClient) MarshalJSON() ([]byte, error) {
 }
 
 type HostRequest struct {
-	Method    string          `json:"method"`
-	SessionID SessionID       `json:"sessionId,omitempty"`
-	Request   *ExecuteRequest `json:"request,omitempty"`
-	Wait      *WaitRequest    `json:"-"`
-	CellID    CellID          `json:"cellId,omitempty"`
+	Method              string              `json:"method"`
+	SessionID           SessionID           `json:"sessionId,omitempty"`
+	Request             *ExecuteRequest     `json:"request,omitempty"`
+	Wait                *WaitRequest        `json:"-"`
+	CellID              CellID              `json:"cellId,omitempty"`
+	CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits,omitempty"`
 }
 
 func (r *HostRequest) UnmarshalJSON(data []byte) error {
@@ -518,15 +524,16 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("host request is nil")
 	}
 	var envelope struct {
-		Method    string          `json:"method"`
-		SessionID SessionID       `json:"sessionId"`
-		Request   json.RawMessage `json:"request"`
-		CellID    CellID          `json:"cellId"`
+		Method              string              `json:"method"`
+		SessionID           SessionID           `json:"sessionId"`
+		Request             json.RawMessage     `json:"request"`
+		CellID              CellID              `json:"cellId"`
+		CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID}
+	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits}
 	if len(envelope.Request) == 0 || string(envelope.Request) == "null" {
 		return nil
 	}
@@ -548,6 +555,18 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 
 func OpenSessionRequest(sessionID SessionID) HostRequest {
 	return HostRequest{Method: "session/open", SessionID: sessionID}
+}
+
+// OpenSessionRequestWithLimits mirrors Rust HostRequest::OpenSession: non
+// default cell execution limits are only included when the session carries
+// them, keeping unlimited sessions wire-compatible with hosts that do not
+// advertise the resource-limits capability.
+func OpenSessionRequestWithLimits(sessionID SessionID, limits *CellExecutionLimits) HostRequest {
+	request := HostRequest{Method: "session/open", SessionID: sessionID}
+	if limits != nil && !limits.IsZero() {
+		request.CellExecutionLimits = limits
+	}
+	return request
 }
 
 func ExecuteSessionRequest(sessionID SessionID, request ExecuteRequest) HostRequest {

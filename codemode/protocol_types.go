@@ -14,6 +14,12 @@ const (
 	ProtocolDefaultWaitYieldTimeMS            = uint64(10000)
 	ProtocolDefaultMaxOutputTokensPerExecCall = 10000
 	ProtocolMaxFrameBytes                     = 64 * 1024 * 1024
+	// ProtocolMinYieldTimeForGrace mirrors Rust MIN_YIELD_TIME_FOR_GRACE:
+	// yield times at or above this get a one-second grace period before the
+	// cell is observed as yielded.
+	ProtocolMinYieldTimeForGrace = uint64(10000)
+	// ProtocolYieldGracePeriodMS mirrors Rust YIELD_GRACE_PERIOD.
+	ProtocolYieldGracePeriodMS = uint64(1000)
 )
 
 type CellID string
@@ -113,6 +119,31 @@ func (r *ExecuteRequest) Validate() error {
 type WaitRequest struct {
 	CellID      CellID `json:"cell_id"`
 	YieldTimeMS uint64 `json:"yield_time_ms"`
+}
+
+// CellExecutionLimits carries the optional per-cell resource limits shared by
+// every cell in one code-mode session (Rust 9d00bb01c0, #37114).
+type CellExecutionLimits struct {
+	MaxYieldTimeMS   *uint64 `json:"max_yield_time_ms,omitempty"`
+	MaxHeapSizeBytes *uint64 `json:"max_heap_size_bytes,omitempty"`
+}
+
+func (l *CellExecutionLimits) IsZero() bool {
+	return l == nil || (l.MaxYieldTimeMS == nil && l.MaxHeapSizeBytes == nil)
+}
+
+// ClampYieldTimeMS applies the session's max_yield_time_ms to an execute or
+// wait yield time without terminating the running cell. A zero yield time
+// keeps its zero-timeout (fire-and-forget) semantics and is never raised by
+// the limit, mirroring Rust resolve_yield_timeout.
+func (l *CellExecutionLimits) ClampYieldTimeMS(yieldMS uint64) uint64 {
+	if l == nil || l.MaxYieldTimeMS == nil || yieldMS == 0 {
+		return yieldMS
+	}
+	if yieldMS > *l.MaxYieldTimeMS {
+		return *l.MaxYieldTimeMS
+	}
+	return yieldMS
 }
 
 type WaitToPendingRequest struct {

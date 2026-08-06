@@ -192,7 +192,11 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 	case multiAgentV2Wait:
 		spec.Description = "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. The wait also ends early when new user input is steered into the active turn. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, or a timeout summary if no activity arrives before the deadline."
 		spec.InputSchema = multiAgentObjectSchema(map[string]any{
-			"timeout_ms": map[string]any{"type": "number", "description": fmt.Sprintf("Timeout in milliseconds. Defaults to %d, min %d, max %d. Prefer longer waits (minutes) to avoid busy polling.", e.waitDefault.Milliseconds(), e.waitMin.Milliseconds(), e.waitMax.Milliseconds())},
+			// Rust 92b83e226d (#37189): wait_agent polling guidance moved from
+			// the tool schema into the overridable developer instructions, so
+			// it stays in sync with config changes and is only present when
+			// the tool is enabled.
+			"timeout_ms": map[string]any{"type": "number", "description": fmt.Sprintf("Timeout in milliseconds. Defaults to %d, min %d, max %d.", e.waitDefault.Milliseconds(), e.waitMin.Milliseconds(), e.waitMax.Milliseconds())},
 		}, nil)
 		spec.OutputSchema = multiAgentObjectSchema(map[string]any{
 			"message":   map[string]any{"type": "string", "description": "Brief wait summary without the agent's final content."},

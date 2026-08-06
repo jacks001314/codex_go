@@ -50,6 +50,7 @@ type SkillsListEntry struct {
 	Name             string             `json:"name,omitempty"`
 	Path             string             `json:"path,omitempty"`
 	DisplayPath      string             `json:"-"`
+	DiscoveryPath    string             `json:"-"`
 	Scope            string             `json:"scope,omitempty"`
 	Description      string             `json:"description,omitempty"`
 	ShortDescription string             `json:"shortDescription,omitempty"`
@@ -900,6 +901,11 @@ func entryFromPath(path string, scope string, pluginID string, remotePluginID st
 	description := parsed.Description
 	shortDescription := parsed.ShortDescription
 	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID, RemotePluginID: remotePluginID}
+	// Rust 72d937ed4d (#37144): keep the discovery path (which may differ
+	// from the canonical identity for symlinked skills) so catalog entries
+	// can advertise the path under the configured skill root while still
+	// selecting the canonical skill by identity.
+	entry.DiscoveryPath = filepath.ToSlash(filepath.Clean(path))
 	loadSkillMetadata(&entry, skillDir, pluginRoot)
 	return entry, nil, true
 }

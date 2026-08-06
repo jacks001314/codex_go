@@ -14,6 +14,7 @@ import (
 
 const (
 	DefaultApprovalReviewPreferredModel      = "codex-auto-review"
+	APIKeyApprovalReviewPreferredModel       = "gpt-5.6-luna"
 	DefaultMemoryExtractionPreferredModel    = "gpt-5.4-mini"
 	DefaultMemoryConsolidationPreferredModel = "gpt-5.4"
 )
@@ -84,6 +85,11 @@ func (p *ConfiguredProvider) Capabilities() ProviderCapabilities {
 }
 
 func (p *ConfiguredProvider) ApprovalReviewPreferredModel() string {
+	// Rust c4f42d161a (#37103): API-key authenticated Guardian reviews use
+	// Luna, while ChatGPT-authenticated reviews keep codex-auto-review.
+	if p.auth != nil && p.auth.Mode() == "api-key" {
+		return APIKeyApprovalReviewPreferredModel
+	}
 	return DefaultApprovalReviewPreferredModel
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -115,27 +116,47 @@ func FindThreadNamesByIDs(codexHome string, threadIDs map[string]struct{}) (map[
 	return names, nil
 }
 
-// FindThreadMetaByName returns the newest current name whose active rollout
-// has a readable session header. Older names for a renamed thread are ignored.
+// SessionMetaCandidate pairs a readable rollout path with its session header.
+type SessionMetaCandidate struct {
+	Path string
+	Meta *SessionMeta
+}
+
+// FindThreadMetaByName returns the most recently modified readable active
+// rollout whose session index records the exact name (Rust c38a60ded2).
 func FindThreadMetaByName(codexHome string, name string) (string, *SessionMeta, bool, error) {
 	return FindThreadMetaByNameInCollection(codexHome, name, false)
 }
 
 func FindThreadMetaByNameInCollection(codexHome string, name string, archived bool) (string, *SessionMeta, bool, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", nil, false, nil
-	}
-	entries, err := readSessionIndex(codexHome)
+	candidates, err := FindThreadMetaCandidatesByNameInCollection(codexHome, name, archived, nil, nil)
 	if err != nil {
 		return "", nil, false, err
 	}
-	seen := make(map[string]struct{}, len(entries))
+	if len(candidates) == 0 {
+		return "", nil, false, nil
+	}
+	return candidates[0].Path, candidates[0].Meta, true, nil
+}
+
+// FindThreadMetaCandidatesByNameInCollection returns every readable rollout
+// recorded under the exact name, newest modification time first, applying the
+// optional source and model-provider filters before ranking so an ineligible
+// newer duplicate cannot hide an older usable session (Rust c38a60ded2,
+// #37157). Empty filter slices disable their respective filters; provider
+// filtering rejects only explicit mismatches because older rollouts omitted
+// provider metadata.
+func FindThreadMetaCandidatesByNameInCollection(codexHome string, name string, archived bool, allowedSources []string, allowedProviders []string) ([]SessionMetaCandidate, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, nil
+	}
+	entries, err := readSessionIndex(codexHome)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []SessionMetaCandidate
 	for i := len(entries) - 1; i >= 0; i-- {
 		entry := entries[i]
-		if _, ok := seen[entry.ID]; ok {
-			continue
-		}
-		seen[entry.ID] = struct{}{}
 		if entry.ThreadName != name {
 			continue
 		}
@@ -149,11 +170,48 @@ func FindThreadMetaByNameInCollection(codexHome string, name string, archived bo
 		}
 		for lineIndex := range lines {
 			if lines[lineIndex].Meta != nil {
-				return path, lines[lineIndex].Meta, true, nil
+				meta := lines[lineIndex].Meta
+				if !sessionMetaAllowedByFilters(meta, allowedSources, allowedProviders) {
+					break
+				}
+				candidates = append(candidates, SessionMetaCandidate{Path: path, Meta: meta})
+				break
 			}
 		}
 	}
-	return "", nil, false, nil
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return sessionMetaCandidateMtime(candidates[i]).After(sessionMetaCandidateMtime(candidates[j]))
+	})
+	return candidates, nil
+}
+
+func sessionMetaAllowedByFilters(meta *SessionMeta, allowedSources []string, allowedProviders []string) bool {
+	if meta == nil {
+		return false
+	}
+	if len(allowedSources) > 0 && !stringInSlice(meta.Source, allowedSources) {
+		return false
+	}
+	if len(allowedProviders) > 0 && meta.ModelProvider != "" && !stringInSlice(meta.ModelProvider, allowedProviders) {
+		return false
+	}
+	return true
+}
+
+func stringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionMetaCandidateMtime(candidate SessionMetaCandidate) time.Time {
+	if info, err := os.Stat(candidate.Path); err == nil {
+		return info.ModTime()
+	}
+	return time.Time{}
 }
 
 func readSessionIndex(codexHome string) ([]SessionIndexEntry, error) {

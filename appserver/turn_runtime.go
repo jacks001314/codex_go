@@ -7070,6 +7070,12 @@ func promptSkillMetadataFromEntriesWithPolicy(entries []SkillsListEntry, preferS
 				allowImplicit = &value
 			}
 			displayPath := entry.DisplayPath
+			// Rust 72d937ed4d (#37144): a symlinked skill's discovery path is
+			// advertised in the catalog so structured selections and linked
+			// mentions that use the configured-root path still resolve.
+			if strings.TrimSpace(displayPath) == "" {
+				displayPath = entry.DiscoveryPath
+			}
 			if strings.TrimSpace(displayPath) == "" && !strings.EqualFold(strings.TrimSpace(entry.Scope), "environment") {
 				displayPath = strings.ReplaceAll(entry.Path, "\\", "/")
 			}

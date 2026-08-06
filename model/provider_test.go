@@ -19,11 +19,36 @@ func TestCreateRuntimeProviderConfiguredProvider(t *testing.T) {
 	if provider.Info().Name != OpenAIProviderName {
 		t.Fatalf("Info = %#v", provider.Info())
 	}
-	if provider.ApprovalReviewPreferredModel() != DefaultApprovalReviewPreferredModel {
+	if provider.ApprovalReviewPreferredModel() != APIKeyApprovalReviewPreferredModel {
 		t.Fatalf("approval model = %q", provider.ApprovalReviewPreferredModel())
 	}
 	if !provider.Capabilities().ImageGeneration || !provider.Capabilities().WebSearch {
 		t.Fatalf("capabilities = %#v", provider.Capabilities())
+	}
+}
+
+func TestConfiguredProviderApprovalReviewModelUsesLunaForAPIKeyLikeRust(t *testing.T) {
+	provider := CreateRuntimeProvider(CreateOpenAIProvider(""), &auth.AuthDotJSON{
+		AuthMode:     "api-key",
+		OpenAIAPIKey: "sk-test",
+	})
+	if got := provider.ApprovalReviewPreferredModel(); got != APIKeyApprovalReviewPreferredModel {
+		t.Fatalf("ApprovalReviewPreferredModel = %q, want %q (Rust c4f42d161a)", got, APIKeyApprovalReviewPreferredModel)
+	}
+}
+
+func TestConfiguredProviderApprovalReviewModelKeepsDefaultForChatGPTLikeRust(t *testing.T) {
+	provider := CreateRuntimeProvider(CreateOpenAIProvider(""), &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens:   map[string]any{"access_token": "token"},
+	})
+	if got := provider.ApprovalReviewPreferredModel(); got != DefaultApprovalReviewPreferredModel {
+		t.Fatalf("ApprovalReviewPreferredModel = %q, want %q (Rust c4f42d161a)", got, DefaultApprovalReviewPreferredModel)
+	}
+
+	nilAuth := CreateRuntimeProvider(CreateOpenAIProvider(""), nil)
+	if got := nilAuth.ApprovalReviewPreferredModel(); got != DefaultApprovalReviewPreferredModel {
+		t.Fatalf("ApprovalReviewPreferredModel with nil auth = %q, want %q", got, DefaultApprovalReviewPreferredModel)
 	}
 }
 

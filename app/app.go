@@ -1457,7 +1457,9 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	case opts.APIKey != nil:
 		return exitMessagef(apiKeyFlagUnsupportedMessage)
 	case opts.WithAPIKey:
-		if loadedConfig.ForcedLoginMethod() == config.ForcedLoginMethodChatGPT {
+		// Rust 2994f545a7 (#37132): requirements.toml allowlists plus the
+		// forced login method jointly decide whether a login method is usable.
+		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodAPI) {
 			return exitMessagef(apiKeyLoginDisabledMessage)
 		}
 		secret, err := readLoginSecret(stdin, stderr, apiKeyStdinTerminalMessage, apiKeyStdinReadingMessage, apiKeyStdinEmptyMessage)
@@ -1470,7 +1472,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
 		return nil
 	case opts.WithAccessToken:
-		if loadedConfig.ForcedLoginMethod() == config.ForcedLoginMethodAPI {
+		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
 			return exitMessagef(accessTokenLoginDisabledMessage)
 		}
 		secret, err := readLoginSecret(stdin, stderr, accessTokenStdinTerminalMessage, accessTokenStdinReadingMessage, accessTokenStdinEmptyMessage)
@@ -1487,7 +1489,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
 		return nil
 	case opts.DeviceAuth:
-		if loadedConfig.ForcedLoginMethod() == config.ForcedLoginMethodAPI {
+		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
 			return exitMessagef(chatGPTLoginDisabledMessage)
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
@@ -1496,7 +1498,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			Issuer:           opts.IssuerBaseURL,
 			ClientID:         opts.ClientID,
 			DevicePrompt:     stdout,
-			ForcedWorkspaces: loadedConfig.ForcedChatGPTWorkspaceIDs(),
+			ForcedWorkspaces: loadedConfig.EffectiveChatGPTWorkspaces(),
 			StoreOptions:     authStoreOptions,
 		}); err != nil {
 			return exitMessagef("Error logging in with device code: %v", err)
@@ -1504,7 +1506,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
 		return nil
 	default:
-		if loadedConfig.ForcedLoginMethod() == config.ForcedLoginMethodAPI {
+		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
 			return exitMessagef(chatGPTLoginDisabledMessage)
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
@@ -1513,7 +1515,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			Issuer:           opts.IssuerBaseURL,
 			ClientID:         opts.ClientID,
 			OpenBrowser:      true,
-			ForcedWorkspaces: loadedConfig.ForcedChatGPTWorkspaceIDs(),
+			ForcedWorkspaces: loadedConfig.EffectiveChatGPTWorkspaces(),
 			StoreOptions:     authStoreOptions,
 		})
 		if err != nil {

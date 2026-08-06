@@ -6,7 +6,8 @@ import (
 )
 
 type SessionHost struct {
-	runtime *SessionRuntime
+	runtime             *SessionRuntime
+	cellExecutionLimits *CellExecutionLimits
 }
 
 func NewSessionHost(runtime *SessionRuntime) *SessionHost {
@@ -25,12 +26,21 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest) (*HostRe
 	}
 	switch request.Method {
 	case "session/open":
+		// Rust 9d00bb01c0 (#37114): the session's cell execution limits are
+		// captured at open and applied to every later execute/wait yield time
+		// without terminating the running cell.
+		h.cellExecutionLimits = request.CellExecutionLimits
 		return &HostResponse{Type: "session/ready", SessionID: request.SessionID}, nil, nil
 	case "session/execute":
 		if request.Request == nil {
 			return nil, nil, fmt.Errorf("session/execute request is required")
 		}
-		started, err := h.runtime.Execute(ctx, request.Request)
+		clamped := *request.Request
+		if request.Request.YieldTimeMS != nil {
+			value := h.cellExecutionLimits.ClampYieldTimeMS(*request.Request.YieldTimeMS)
+			clamped.YieldTimeMS = &value
+		}
+		started, err := h.runtime.Execute(ctx, &clamped)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -40,7 +50,9 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest) (*HostRe
 		if request.Wait == nil {
 			return nil, nil, fmt.Errorf("session/wait request is required")
 		}
-		outcome, err := h.runtime.Wait(ctx, request.Wait)
+		clamped := *request.Wait
+		clamped.YieldTimeMS = h.cellExecutionLimits.ClampYieldTimeMS(request.Wait.YieldTimeMS)
+		outcome, err := h.runtime.Wait(ctx, &clamped)
 		if err != nil {
 			return nil, nil, err
 		}

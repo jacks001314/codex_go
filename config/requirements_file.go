@@ -118,6 +118,21 @@ func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, erro
 	if nested, ok := mapAnyKey(values, "computer_use", "computerUse"); ok {
 		out.ComputerUse = computerUseRequirementsFromMap(nested)
 	}
+	// Rust 2994f545a7 (#37132): local requirements.toml allowlists for login
+	// methods and ChatGPT workspaces; these fields are ignored when they
+	// appear in cloud-provided requirements.
+	if values, ok := stringListAnyKey(values, "allowed_login_methods", "allowedLoginMethods"); ok {
+		out.AllowedLoginMethods = make([]ForcedLoginMethod, 0, len(values))
+		for _, value := range values {
+			method := ForcedLoginMethod(strings.ToLower(strings.TrimSpace(value)))
+			if method == ForcedLoginMethodAPI || method == ForcedLoginMethodChatGPT {
+				out.AllowedLoginMethods = append(out.AllowedLoginMethods, method)
+			}
+		}
+	}
+	if values, ok := stringListAnyKey(values, "allowed_chatgpt_workspaces", "allowedChatGPTWorkspaces"); ok {
+		out.AllowedChatGPTWorkspaces = append([]string(nil), values...)
+	}
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
 		out.BrowserUse = browserUseRequirementsFromMap(nested)
 	}
@@ -571,6 +586,8 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.EnforceResidency == nil &&
 			value.Network == nil &&
 			value.Models == nil &&
+			value.AllowedLoginMethods == nil &&
+			value.AllowedChatGPTWorkspaces == nil &&
 			value.MCPServers == nil &&
 			value.Plugins == nil)
 }

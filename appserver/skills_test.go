@@ -14,6 +14,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/install"
+	promptctx "codex_go/prompt"
 	"codex_go/systemskills"
 )
 
@@ -1430,5 +1431,65 @@ func TestSkillsListEntryMarshalOmitsInternalPluginIDLikeRust(t *testing.T) {
 	}
 	if _, ok := values["remotePluginId"]; ok {
 		t.Fatalf("remotePluginId is internal skill metadata: %s", payload)
+	}
+}
+
+func TestSkillsListSymlinkedSkillPreservesDiscoveryPathLikeRust(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real-skills")
+	realSkill := filepath.Join(realRoot, "demo")
+	if err := os.MkdirAll(realSkill, 0o755); err != nil {
+		t.Fatalf("MkdirAll(real skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realSkill, SkillFilename), []byte("---\nname: demo\ndescription: demo skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(real skill) error = %v", err)
+	}
+	aliasRoot := filepath.Join(base, "linked-skills")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		RootSpecs: []SkillsRoot{{Path: aliasRoot, Scope: "user"}},
+	}).List(&SkillsListParams{ForceReload: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Skills) != 1 {
+		t.Fatalf("skills = %#v, want exactly one discovered through the alias", response.Skills)
+	}
+	entry := response.Skills[0]
+	wantCanonical := filepath.ToSlash(filepath.Clean(filepath.Join(realSkill, SkillFilename)))
+	if entry.Path != wantCanonical {
+		t.Fatalf("Path = %q, want canonical identity %q (Rust 72d937ed4d)", entry.Path, wantCanonical)
+	}
+	wantDiscovery := filepath.ToSlash(filepath.Clean(filepath.Join(aliasRoot, "demo", SkillFilename)))
+	if entry.DiscoveryPath != wantDiscovery {
+		t.Fatalf("DiscoveryPath = %q, want %q (Rust 72d937ed4d)", entry.DiscoveryPath, wantDiscovery)
+	}
+}
+
+func TestPromptSkillMetadataAcceptsCanonicalAndDiscoveryPathsLikeRust(t *testing.T) {
+	metadata := promptSkillMetadataFromEntries([]SkillsListEntry{{
+		Name: "demo", Path: "/real/demo/SKILL.md", DiscoveryPath: "/linked/demo/SKILL.md",
+		Enabled: true, Scope: "user",
+	}})
+	if len(metadata) != 1 {
+		t.Fatalf("metadata = %#v, want 1", metadata)
+	}
+	if metadata[0].LocatorPath != "/linked/demo/SKILL.md" {
+		t.Fatalf("LocatorPath = %q, want discovery path (Rust 72d937ed4d)", metadata[0].LocatorPath)
+	}
+	collect := func(path string) []promptctx.InstructionsSkillMetadata {
+		return promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
+			Inputs: []promptctx.SkillMentionInput{{Type: "skill", Path: path}},
+			Skills: metadata,
+		})
+	}
+	if selected := collect("/linked/demo/SKILL.md"); len(selected) != 1 {
+		t.Fatalf("mention via discovery path selected %d skills, want 1", len(selected))
+	}
+	if selected := collect("/real/demo/SKILL.md"); len(selected) != 1 {
+		t.Fatalf("mention via canonical path selected %d skills, want 1", len(selected))
 	}
 }

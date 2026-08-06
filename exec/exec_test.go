@@ -2769,6 +2769,7 @@ func TestExecMultiAgentV2UsageHintMatchesRootAndSubagentContract(t *testing.T) {
 	for _, fragment := range []string{
 		"You are `/root`", "Message Type: MESSAGE | FINAL_ANSWER", "functions.collaboration.spawn_agent",
 		"There are 4 available concurrency slots", "Only set `model` or `reasoning_effort` when explicitly requested",
+		"When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.",
 	} {
 		if !strings.Contains(root, fragment) {
 			t.Fatalf("root usage hint missing %q:\n%s", fragment, root)
@@ -2779,6 +2780,19 @@ func TestExecMultiAgentV2UsageHintMatchesRootAndSubagentContract(t *testing.T) {
 		if !strings.Contains(subagent, fragment) {
 			t.Fatalf("subagent usage hint missing %q:\n%s", fragment, subagent)
 		}
+	}
+}
+
+func TestExecMultiAgentV2UsageHintOmitsWaitAgentGuidanceWhenDisabledLikeRust(t *testing.T) {
+	options := &execMultiAgentTools{
+		version: agent.VersionV2, maxConcurrency: 4, exposeSpawnModelOverrides: true, disableWait: true,
+	}
+	hint := execMultiAgentV2UsageHint(&Request{}, options)
+	if strings.Contains(hint, "prefer longer waits") {
+		t.Fatalf("usage hint includes wait_agent guidance while disabled (Rust 92b83e226d):\n%s", hint)
+	}
+	if !strings.Contains(hint, "There are 4 available concurrency slots") {
+		t.Fatalf("usage hint missing concurrency slots while wait_agent disabled:\n%s", hint)
 	}
 }
 

@@ -84,3 +84,67 @@ func writeNamedIndexRollout(t *testing.T, home, threadID string, now time.Time) 
 	}
 	return recorder.Path()
 }
+
+func TestFindThreadMetaCandidatesSortsByMtimeAndFiltersLikeRust(t *testing.T) {
+	home := t.TempDir()
+	olderPath := writeNamedIndexRollout(t, home, "thread-older", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	newerPath := writeNamedIndexRollout(t, home, "thread-newer", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	base := time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(olderPath, base, base.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerPath, base, base); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []SessionIndexEntry{
+		{ID: "thread-older", ThreadName: "same", UpdatedAt: "2024-01-01T00:00:00Z"},
+		{ID: "thread-newer", ThreadName: "same", UpdatedAt: "2024-01-02T00:00:00Z"},
+	} {
+		if err := AppendSessionIndexEntry(home, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The most recently modified eligible legacy duplicate wins (Rust c38a60ded2).
+	path, meta, found, err := FindThreadMetaByName(home, "same")
+	if err != nil || !found || path != newerPath || meta == nil || meta.ID != "thread-newer" {
+		t.Fatalf("FindThreadMetaByName() = path:%q meta:%#v found:%v err:%v; want newest mtime", path, meta, found, err)
+	}
+
+	// Source filtering rejects every cli rollout when only chatgpt is allowed.
+	filtered, err := FindThreadMetaCandidatesByNameInCollection(home, "same", false, []string{"chatgpt"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("source-filtered candidates = %#v, want none", filtered)
+	}
+
+	// Provider filtering rejects only explicit mismatches; empty providers pass.
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: home, ThreadID: "thread-provider", Source: "cli", ModelProvider: "bedrock", Now: base,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendSessionIndexEntry(home, SessionIndexEntry{ID: "thread-provider", ThreadName: "provider-named", UpdatedAt: "2024-02-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	onlyOpenAI, err := FindThreadMetaCandidatesByNameInCollection(home, "provider-named", false, nil, []string{"openai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onlyOpenAI) != 0 {
+		t.Fatalf("provider-filtered candidates = %#v, want none for openai-only", onlyOpenAI)
+	}
+	withBedrock, err := FindThreadMetaCandidatesByNameInCollection(home, "provider-named", false, nil, []string{"bedrock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withBedrock) != 1 || withBedrock[0].Meta == nil || withBedrock[0].Meta.ID != "thread-provider" {
+		t.Fatalf("provider-filtered candidates = %#v, want the bedrock rollout", withBedrock)
+	}
+}

@@ -856,12 +856,19 @@ func latestSessionID(store *session.Store, opts *cli.SessionOptions) (session.Th
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {
 	if store != nil {
-		_, meta, found, err := rollout.FindThreadMetaByName(sessionCodexHome(store), name)
+		// Rust c38a60ded2 (#37157): candidates are filtered before ranking
+		// (source eligibility) and the most recently modified eligible legacy
+		// duplicate wins, so an ineligible newer entry cannot shadow an older
+		// usable session.
+		includeNonInteractive := opts != nil && opts.IncludeNonInteractive
+		candidates, err := rollout.FindThreadMetaCandidatesByNameInCollection(sessionCodexHome(store), name, false, nil, nil)
 		if err != nil {
 			return "", err
 		}
-		if found && meta != nil && resumableSessionSource(meta.Source, opts != nil && opts.IncludeNonInteractive) {
-			return session.ThreadID(meta.ID), nil
+		for _, candidate := range candidates {
+			if candidate.Meta != nil && resumableSessionSource(candidate.Meta.Source, includeNonInteractive) {
+				return session.ThreadID(candidate.Meta.ID), nil
+			}
 		}
 	}
 	records, err := listSessionPickerRecords(store, opts, sessionPickerPageSize*10)
@@ -898,12 +905,14 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 		if archived != nil && *archived != archivedValue {
 			continue
 		}
-		_, meta, found, err := rollout.FindThreadMetaByNameInCollection(sessionCodexHome(store), name, archivedValue)
+		candidates, err := rollout.FindThreadMetaCandidatesByNameInCollection(sessionCodexHome(store), name, archivedValue, nil, nil)
 		if err != nil {
 			return "", err
 		}
-		if found && meta != nil && interactiveSessionSource(meta.Source) {
-			return session.ThreadID(meta.ID), nil
+		for _, candidate := range candidates {
+			if candidate.Meta != nil && interactiveSessionSource(candidate.Meta.Source) {
+				return session.ThreadID(candidate.Meta.ID), nil
+			}
 		}
 	}
 	var records []session.Record

@@ -212,6 +212,87 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 	}
 }
 
+func TestCellExecutionLimitsClampAndWireLikeRust(t *testing.T) {
+	maxYield := uint64(2500)
+	limits := &CellExecutionLimits{MaxYieldTimeMS: &maxYield}
+	if limits.IsZero() {
+		t.Fatal("limits with max_yield_time_ms reported zero")
+	}
+	if (&CellExecutionLimits{}).IsZero() == false {
+		t.Fatal("empty limits must be zero")
+	}
+	for _, tc := range []struct {
+		name   string
+		yield  uint64
+		want   uint64
+		limits *CellExecutionLimits
+	}{
+		{name: "nil limits pass through", yield: 10000, want: 10000, limits: nil},
+		{name: "above limit clamps", yield: 30000, want: 2500, limits: limits},
+		{name: "below limit passes", yield: 1000, want: 1000, limits: limits},
+		{name: "equal limit passes", yield: 2500, want: 2500, limits: limits},
+		{name: "zero stays zero", yield: 0, want: 0, limits: limits},
+		{name: "empty limits pass through", yield: 5000, want: 5000, limits: &CellExecutionLimits{}},
+	} {
+		if got := tc.limits.ClampYieldTimeMS(tc.yield); got != tc.want {
+			t.Fatalf("%s: ClampYieldTimeMS(%d) = %d, want %d", tc.name, tc.yield, got, tc.want)
+		}
+	}
+
+	// session/open carries limits only when non-default.
+	sessionID, _ := NewSessionID("session-limits")
+	withLimits := OpenSessionRequestWithLimits(sessionID, limits)
+	payload, err := json.Marshal(withLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"cellExecutionLimits":{"max_yield_time_ms":2500}`) {
+		t.Fatalf("open-with-limits payload = %s", payload)
+	}
+	var decoded HostRequest
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.CellExecutionLimits == nil || decoded.CellExecutionLimits.MaxYieldTimeMS == nil || *decoded.CellExecutionLimits.MaxYieldTimeMS != 2500 {
+		t.Fatalf("decoded limits = %#v", decoded.CellExecutionLimits)
+	}
+
+	unlimited := OpenSessionRequestWithLimits(sessionID, &CellExecutionLimits{})
+	payload, err = json.Marshal(unlimited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "cellExecutionLimits") {
+		t.Fatalf("unlimited open payload must omit limits: %s", payload)
+	}
+}
+
+func TestSessionHostClampsYieldTimeToSessionLimitsLikeRust(t *testing.T) {
+	runtime := NewSessionRuntime()
+	host := NewSessionHost(runtime)
+	ctx := context.Background()
+	sessionID, _ := NewSessionID("session-limited")
+	maxYield := uint64(10)
+	open := OpenSessionRequestWithLimits(sessionID, &CellExecutionLimits{MaxYieldTimeMS: &maxYield})
+	if _, _, err := host.Handle(ctx, &open); err != nil {
+		t.Fatalf("Handle(open) error = %v", err)
+	}
+	request := ExecuteSessionRequest(sessionID, ExecuteRequest{
+		ToolCallID:  "call-limited",
+		Source:      "text('clamped')",
+		YieldTimeMS: uint64Ptr(10000),
+	})
+	// The clamped request must still execute; the yield value itself is
+	// capped at max_yield_time_ms by the host before reaching the runtime.
+	response, initial, err := host.Handle(ctx, &request)
+	if err != nil {
+		t.Fatalf("Handle(execute with limits) error = %v", err)
+	}
+	if response == nil || response.Type != "execution/started" || initial == nil {
+		t.Fatalf("response=%#v initial=%#v", response, initial)
+	}
+}
+
 func TestFramedCodecRoundTripsAndRejectsOversizedFrames(t *testing.T) {
 	var buf bytes.Buffer
 	writer := NewFramedWriter(&buf)

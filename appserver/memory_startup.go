@@ -525,8 +525,10 @@ func detachedMemoryWorkspace(ctx context.Context, cwd string) (string, codexapi.
 	if head, headErr := run("rev-parse", "HEAD"); headErr == nil {
 		workspace.LatestGitCommitHash = head
 	}
-	if status, statusErr := run("status", "--porcelain"); statusErr == nil {
-		hasChanges := status != ""
+	// Rust b6c3b51533 (#37151): coalesce concurrent `git status --porcelain`
+	// scans by the canonical repository root so sibling/symlink-alias
+	// metadata requests share a single in-flight invocation.
+	if hasChanges, statusErr := gitutil.HasChangesInRepo(ctx, cwd, root); statusErr == nil {
 		workspace.HasChanges = &hasChanges
 	}
 	if remotes, remoteErr := run("remote"); remoteErr == nil && remotes != "" {

@@ -500,6 +500,8 @@ type ConfigRequirements struct {
 	EnforceResidency                     *ResidencyRequirement           `json:"enforceResidency,omitempty"`
 	Network                              *NetworkRequirements            `json:"network,omitempty"`
 	Models                               *ModelsRequirements             `json:"models,omitempty"`
+	AllowedLoginMethods                  []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces             []string                        `json:"allowedChatGPTWorkspaces,omitempty"`
 	MCPServers                           map[string]MCPServerRequirement `json:"-"`
 	Plugins                              map[string]PluginRequirements   `json:"-"`
 }
@@ -523,6 +525,8 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency"`
 		Network                              *NetworkRequirements      `json:"network"`
 		Models                               *ModelsRequirements       `json:"models"`
+		AllowedLoginMethods                  []ForcedLoginMethod       `json:"allowedLoginMethods"`
+		AllowedChatGPTWorkspaces             []string                  `json:"allowedChatGPTWorkspaces"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -541,6 +545,8 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		EnforceResidency:                     cloneResidencyRequirementPtr(r.EnforceResidency),
 		Network:                              cloneNetwork(r.Network),
 		Models:                               cloneModels(r.Models),
+		AllowedLoginMethods:                  forcedLoginMethodsOrNil(r.AllowedLoginMethods),
+		AllowedChatGPTWorkspaces:             stringSliceOrNil(r.AllowedChatGPTWorkspaces),
 	})
 }
 
@@ -2927,6 +2933,15 @@ func stringSliceOrNil(values []string) []string {
 		return nil
 	}
 	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
+func forcedLoginMethodsOrNil(values []ForcedLoginMethod) []ForcedLoginMethod {
+	if values == nil {
+		return nil
+	}
+	out := make([]ForcedLoginMethod, len(values))
 	copy(out, values)
 	return out
 }
