@@ -533,8 +533,31 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 		case "turn.failed", "error":
 			m.activeSide.SideStatus = "error"
 		}
+		return nil
 	}
+	// Background subagent thread: keep a bounded replay buffer so switching to
+	// the agent later can render its in-progress activity (Rust parity).
+	m.bufferBackgroundThreadEvent(threadID, msg.Event)
 	return nil
+}
+
+// maxBackgroundThreadEvents bounds the per-thread replay buffer to avoid
+// unbounded growth while a subagent runs for a long time.
+const maxBackgroundThreadEvents = 600
+
+func (m *Model) bufferBackgroundThreadEvent(threadID string, event protocol.ThreadEvent) {
+	threadID = strings.TrimSpace(threadID)
+	if m == nil || threadID == "" {
+		return
+	}
+	if m.backgroundThreadEvents == nil {
+		m.backgroundThreadEvents = map[string][]protocol.ThreadEvent{}
+	}
+	events := append(m.backgroundThreadEvents[threadID], event)
+	if len(events) > maxBackgroundThreadEvents {
+		events = append([]protocol.ThreadEvent(nil), events[len(events)-maxBackgroundThreadEvents:]...)
+	}
+	m.backgroundThreadEvents[threadID] = events
 }
 
 func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {

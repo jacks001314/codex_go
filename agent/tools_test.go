@@ -95,9 +95,33 @@ func TestMultiAgentV2ControllerErrorsRespondToModel(t *testing.T) {
 	}
 }
 
+func TestMultiAgentV1ControllerErrorsRespondToModel(t *testing.T) {
+	registry := tool.NewRegistry()
+	controller := &limitV1Controller{MemoryToolController: NewMemoryToolController()}
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Version: VersionV1, Exposure: tool.ExposureModelVisible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	executor, _ := registry.Lookup(tool.NamespacedName(MultiAgentV1Namespace, "spawn_agent"))
+	_, err := executor.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind: tool.PayloadFunction, Arguments: `{"message":"compute"}`,
+	}})
+	var callErr *tool.FunctionCallError
+	if !tool.AsFunctionCallError(err, &callErr) || !callErr.RespondsToModel() || !strings.Contains(callErr.ModelMessage(), ErrAgentLimitReached.Error()) {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
 type limitV2Controller struct{ *MemoryToolController }
 
 func (c *limitV2Controller) SpawnAgent(context.Context, *SpawnAgentArgs) (*SpawnAgentResult, error) {
+	return nil, ErrAgentLimitReached
+}
+
+type limitV1Controller struct{ *MemoryToolController }
+
+func (c *limitV1Controller) SpawnAgent(context.Context, *SpawnAgentArgs) (*SpawnAgentResult, error) {
 	return nil, ErrAgentLimitReached
 }
 

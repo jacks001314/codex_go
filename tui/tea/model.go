@@ -785,6 +785,10 @@ type Model struct {
 	onLogout                          LogoutFunc
 	onReadAgents                      AgentThreadReaderFunc
 	onSwitchAgent                     AgentThreadSwitchFunc
+	// backgroundThreadEvents buffers app-server notifications for non-active
+	// (subagent) threads so switching to them can replay in-progress activity
+	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
+	backgroundThreadEvents map[string][]protocol.ThreadEvent
 	clipboardWrite                    func(text string) error
 	onReadTokenActivity               TokenActivityReaderFunc
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
@@ -1007,6 +1011,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLogout:                        options.OnLogout,
 		onReadAgents:                    options.OnReadAgents,
 		onSwitchAgent:                   options.OnSwitchAgent,
+		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
 		clipboardWrite:                  clipboardWrite,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,

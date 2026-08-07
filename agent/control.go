@@ -8,6 +8,10 @@ import (
 
 var ErrAgentLimitReached = errors.New("agent limit reached")
 
+// ErrAgentDepthLimitReached mirrors Rust's spawn/resume depth rejection:
+// the model is told to solve the task itself instead of ending the session.
+var ErrAgentDepthLimitReached = errors.New("Agent depth limit reached. Solve the task yourself.")
+
 type MultiAgentVersion string
 
 const (

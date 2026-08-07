@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/config"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -23,6 +24,8 @@ type runtimeAgentController struct {
 	scopePath    string
 	cwd          string
 	maxThreads   int
+	depth        int
+	maxDepth     int
 	version      agent.MultiAgentVersion
 	environments []map[string]any
 	registry     *agent.Registry
@@ -44,9 +47,13 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 	registry := (*agent.Registry)(nil)
 	rootID := strings.TrimSpace(parentID)
 	scopePath := "/root"
+	depth := 0
 	if router != nil {
 		rootID, scopePath = router.runtimeAgentIdentity(parentID)
 		registry = router.runtimeAgentRegistry(rootID)
+		if record, recordErr := router.threadRecord(session.ThreadID(strings.TrimSpace(parentID)), true, false); recordErr == nil && record != nil {
+			depth = record.Metadata.AgentDepth
+		}
 	}
 	return &runtimeAgentController{
 		router:       router,
@@ -56,6 +63,8 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 		scopePath:    scopePath,
 		cwd:          strings.TrimSpace(cwd),
 		maxThreads:   maxThreads,
+		depth:        depth,
+		maxDepth:     config.DefaultAgentMaxDepth,
 		version:      version,
 		environments: cloneMapSlice(environments),
 		registry:     registry,
@@ -71,6 +80,9 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	if args == nil {
 		args = &agent.SpawnAgentArgs{}
+	}
+	if c.version == agent.VersionV1 && c.maxDepth >= 0 && c.depth+1 > c.maxDepth {
+		return nil, agent.ErrAgentDepthLimitReached
 	}
 	registry := c.registry
 	if registry == nil {
@@ -156,6 +168,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	record.Metadata.AgentNickname = nickname
 	record.Metadata.AgentRole = args.ResolvedRole
 	record.Metadata.AgentPath = agentPath
+	record.Metadata.AgentDepth = c.depth + 1
 	record.Metadata.Instructions = developerInstructions
 	record.Metadata.MultiAgentVersion = string(c.version)
 	record.Metadata.SessionPrefix = session.PrefixForSessionID(string(threadID))
@@ -268,6 +281,9 @@ func (c *runtimeAgentController) WaitAgent(ctx context.Context, args *agent.Wait
 func (c *runtimeAgentController) ResumeAgent(ctx context.Context, args *agent.ResumeAgentArgs) (*agent.ResumeAgentResult, error) {
 	if args == nil || strings.TrimSpace(args.ID) == "" {
 		return nil, fmt.Errorf("id is required")
+	}
+	if c.version == agent.VersionV1 && c.maxDepth >= 0 && c.depth+1 > c.maxDepth {
+		return nil, agent.ErrAgentDepthLimitReached
 	}
 	id := strings.TrimSpace(args.ID)
 	record, err := c.router.threadRecord(session.ThreadID(id), true, false)

@@ -88,6 +88,41 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 	}
 }
 
+func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir()}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	root := newRuntimeAgentController(router, "parent", parent.Metadata.CWD, 4).(*runtimeAgentController)
+	child, err := root.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRecord, err := store.Read(session.ThreadID(child.AgentID), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childRecord.Metadata.AgentDepth != 1 {
+		t.Fatalf("child agent depth = %d, want 1", childRecord.Metadata.AgentDepth)
+	}
+	// A depth-1 agent cannot spawn or resume (Rust default max_depth = 1).
+	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	if _, err := childController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "nested"}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
+		t.Fatalf("nested spawn error = %v", err)
+	}
+	if _, err := childController.ResumeAgent(context.Background(), &agent.ResumeAgentArgs{ID: child.AgentID}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
+		t.Fatalf("nested resume error = %v", err)
+	}
+	// V2 ignores max_depth and relies on concurrency slots.
+	v2 := newRuntimeAgentControllerWithVersion(router, child.AgentID, childRecord.Metadata.CWD, 4, agent.VersionV2).(*runtimeAgentController)
+	if _, err := v2.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "nested"}); err != nil {
+		t.Fatalf("V2 nested spawn should ignore depth limit: %v", err)
+	}
+}
+
 func TestRuntimeAgentControllerV2InterruptMissingTargetReturnsError(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})

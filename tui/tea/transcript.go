@@ -1,12 +1,14 @@
 package tea
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 
 	"codex_go/eventmap"
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
@@ -328,6 +330,112 @@ func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []c
 		return messages
 	}
 	return append(messages, codextui.Message{Role: codextui.RoleAssistant, Text: text})
+}
+
+// applyBufferedThreadEventToMessages replays one buffered background-thread
+// event onto a message snapshot. It mirrors the subset of live transcript
+// rendering that matters when switching to a running agent (Rust parity).
+func applyBufferedThreadEventToMessages(messages []codextui.Message, event protocol.ThreadEvent) []codextui.Message {
+	switch event.Type {
+	case "item.delta":
+		if event.Delta != nil && strings.TrimSpace(event.Delta.Text) != "" {
+			return appendAssistantDeltaToMessages(messages, event.Delta.Text)
+		}
+	case "item.completed":
+		if event.Item != nil {
+			return applyBufferedThreadItemToMessages(messages, event.Item)
+		}
+	case "turn.failed", "error":
+		text := "Unknown error"
+		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
+			text = strings.TrimSpace(event.Error.Message)
+		}
+		return append(messages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + text})
+	}
+	return messages
+}
+
+func applyBufferedThreadItemToMessages(messages []codextui.Message, item *protocol.ThreadItem) []codextui.Message {
+	if item == nil {
+		return messages
+	}
+	switch item.Type {
+	case "user_message", "userMessage":
+		text := strings.TrimSpace(firstNonEmpty(item.Text, item.Message))
+		if text == "" {
+			return messages
+		}
+		return append(messages, codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text})
+	case "agent_message":
+		return mergeAssistantFinalToMessages(messages, item.Text)
+	case "plan":
+		return mergeAssistantFinalToMessages(messages, item.Text)
+	case "command_execution":
+		command := strings.TrimSpace(item.Command)
+		if command == "" {
+			command = strings.TrimSpace(item.Text)
+		}
+		if command == "" {
+			return messages
+		}
+		text := "$ " + command
+		return append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+	case "file_change":
+		text := fmt.Sprintf("Updated %d file(s)", len(item.Changes))
+		return append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+	case "collab_tool_call", "collabAgentToolCall", "collab_agent_tool_call":
+		if text := bufferedCollabToolCallSummary(item); text != "" {
+			return append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+		}
+	case "sub_agent_activity", "subAgentActivity":
+		action := ""
+		switch strings.ToLower(strings.TrimSpace(item.ActivityKind)) {
+		case "started":
+			action = "Started"
+		case "interacted":
+			action = "Contacted"
+		case "interrupted":
+			action = "Interrupted"
+		}
+		if action == "" {
+			return messages
+		}
+		path := strings.TrimSpace(item.AgentPath)
+		if path == "" {
+			path = strings.TrimSpace(item.AgentThreadID)
+		}
+		text := action
+		if path != "" {
+			text += " " + path
+		}
+		return append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
+	case "contextCompaction", "context_compaction":
+		return append(messages, codextui.Message{Role: codextui.RoleHistory, Text: "Context compacted", RawText: "Context compacted"})
+	}
+	return messages
+}
+
+func bufferedCollabToolCallSummary(item *protocol.ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(item.ToolName)) {
+	case "spawn_agent":
+		return "Spawned an agent"
+	case "send_input", "send_message":
+		return "Sent input to an agent"
+	case "resume_agent":
+		return "Resumed an agent"
+	case "wait", "wait_agent":
+		return "Waited for an agent"
+	case "close_agent", "interrupt_agent":
+		return "Closed an agent"
+	}
+	text := strings.TrimSpace(item.Text)
+	if text == "" {
+		text = strings.TrimSpace(item.Message)
+	}
+	return text
 }
 
 // assistantFinalExistsInCurrentTurn checks if the final text already exists in current turn.

@@ -7031,6 +7031,53 @@ func TestModelAgentPickerRejectsRefreshFromClearedSession(t *testing.T) {
 	}
 }
 
+func TestModelAgentSwitchReplaysBufferedBackgroundEvents(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	model := NewModel(state, Options{
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{
+				Entry:    codextui.AgentThreadEntry{ThreadID: threadID, AgentNickname: "Scout", AgentRole: "worker"},
+				Messages: nil, // running agent: nothing persisted yet
+				Status:   "running",
+			}, nil
+		},
+	})
+	// Background events for the running subagent arrive while it is not the
+	// active thread and must be buffered instead of dropped.
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-worker", Event: protocol.ThreadEvent{Type: "item.completed", Item: &protocol.ThreadItem{ID: "user-1", Type: "user_message", Text: "worker prompt"}}})
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-worker", Event: protocol.ThreadEvent{Type: "item.delta", Delta: &protocol.Delta{ItemID: "agent-1", Text: "work"}}})
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-worker", Event: protocol.ThreadEvent{Type: "item.completed", Item: &protocol.ThreadItem{ID: "agent-1", Type: "agent_message", Text: "working..."}}})
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-worker", Event: protocol.ThreadEvent{Type: "item.completed", Item: &protocol.ThreadItem{ID: "cmd-1", Type: "command_execution", Command: "go test"}}})
+	if len(model.backgroundThreadEvents["thread-worker"]) != 4 {
+		t.Fatalf("buffered events = %d, want 4", len(model.backgroundThreadEvents["thread-worker"]))
+	}
+	// Switching to the agent replays its in-progress activity.
+	model.Update(AgentSwitchResultMsg{
+		ThreadID: "thread-worker",
+		Response: AgentThreadSwitchResponse{
+			Entry:    codextui.AgentThreadEntry{ThreadID: "thread-worker", AgentNickname: "Scout", AgentRole: "worker"},
+			Status:   "running",
+			Messages: nil,
+		},
+	})
+	if state.ThreadID != "thread-worker" {
+		t.Fatalf("thread = %q, want thread-worker", state.ThreadID)
+	}
+	joined := ""
+	for _, message := range state.Messages {
+		joined += message.Text + "\n"
+	}
+	for _, want := range []string{"worker prompt", "working...", "$ go test"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("replayed transcript missing %q:\n%s", want, joined)
+		}
+	}
+	if len(model.backgroundThreadEvents["thread-worker"]) != 0 {
+		t.Fatalf("buffer not cleared after replay")
+	}
+}
+
 func TestModelAgentFastNavigationLoadsAndWraps(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-main")

@@ -13,6 +13,10 @@ import (
 
 const DefaultAgentMaxConcurrentThreadsPerSession = 4
 
+// DefaultAgentMaxDepth matches Rust's DEFAULT_AGENT_MAX_DEPTH for V1 agent
+// threads. Multi-agent V2 ignores max_depth (it relies on concurrency slots).
+const DefaultAgentMaxDepth = 1
+
 type AgentsConfig struct {
 	Enabled                        *bool
 	MaxConcurrentThreadsPerSession int

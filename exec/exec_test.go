@@ -2920,6 +2920,56 @@ func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
 	}
 }
 
+func TestExecAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 4).(*execAgentController)
+	t.Cleanup(controller.shutdown)
+	controller.multiAgentVersion = agent.VersionV1
+	controller.maxDepth = 1
+	// A depth-1 agent cannot spawn or resume (Rust: "Agent depth limit reached.
+	// Solve the task yourself.").
+	childView := controller.scoped("/root/worker", "worker-id")
+	childView.depth = 1
+	message := "task"
+	if _, err := childView.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "nested", Message: &message, ForkTurns: execStringPointer("none")}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
+		t.Fatalf("nested spawn error = %v", err)
+	}
+	if _, err := childView.ResumeAgent(context.Background(), &agent.ResumeAgentArgs{ID: "worker-id"}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
+		t.Fatalf("nested resume error = %v", err)
+	}
+	// Root (depth 0) can spawn a depth-1 agent.
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker", Message: &message, ForkTurns: execStringPointer("none")})
+	if err != nil {
+		t.Fatalf("root spawn error = %v", err)
+	}
+	if task := controller.task(spawned.AgentID); task == nil || task.depth != 1 {
+		t.Fatalf("task depth = %#v", task)
+	}
+}
+
+func TestMultiAgentToolsForRunHidesV1ToolsBeyondDepthLimit(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	cfg := &config.Config{Values: map[string]any{
+		"agents": map[string]any{"max_concurrent_threads_per_session": int64(4)},
+	}}
+	// A depth-1 subagent with default max_depth=1 must not get V1 collab tools.
+	req := &Request{subagent: &execSubagentContext{Depth: 1, Version: agent.VersionV1}}
+	tools, err := runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-child", "turn-child", nil)
+	if err != nil {
+		t.Fatalf("multiAgentToolsForRun() error = %v", err)
+	}
+	if tools != nil {
+		t.Fatalf("depth-limited V1 subagent still received agent tools: %#v", tools)
+	}
+	// The same subagent under V2 keeps the tools (max_depth is V1-only).
+	req.multiAgentVersion = ""
+	req.subagent.Version = agent.VersionV2
+	req.subagent.Controller = newExecAgentController(runner, context.Background(), &Request{}, "thread-child", 4)
+	tools, err = runner.multiAgentToolsForRun(context.Background(), req, cfg, "thread-child", "turn-child", nil)
+	if err != nil || tools == nil || tools.controller == nil {
+		t.Fatalf("V2 depth-limited subagent tools = %#v, %v", tools, err)
+	}
+}
+
 func TestExecAgentControllerV2LifecyclePathsAndSingleRollout(t *testing.T) {
 	home := t.TempDir()
 	runner := NewLocalRunner(home)

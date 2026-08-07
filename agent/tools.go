@@ -381,11 +381,15 @@ func (e *MultiAgentToolExecutor) Execute(ctx context.Context, invocation *tool.I
 		err = fmt.Errorf("unknown multi-agent tool %q", e.kind)
 	}
 	if err != nil {
-		return nil, err
+		var callErr *tool.FunctionCallError
+		if tool.AsFunctionCallError(err, &callErr) {
+			return nil, callErr
+		}
+		return nil, tool.RespondToModel(err.Error())
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
-		return nil, err
+		return nil, tool.RespondToModel(fmt.Sprintf("failed to serialize multi-agent result: %v", err))
 	}
 	return &tool.Output{Success: true, Body: string(body), Data: map[string]any{"result": result}, LogPreview: string(body)}, nil
 }

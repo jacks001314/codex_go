@@ -11,3 +11,4 @@ bin/
 !sandbox/windowssandbox/bin/
 !sandbox/windowssandbox/bin/**
 dist/
+func.md

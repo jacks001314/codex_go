@@ -5,6 +5,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
@@ -163,7 +164,15 @@ func (m *Model) resetAgentPickerRefresh(clearEntries bool) {
 	if clearEntries {
 		m.agentItems = nil
 		m.activeAgentLabel = ""
+		m.clearBackgroundThreadEvents()
 	}
+}
+
+func (m *Model) clearBackgroundThreadEvents() {
+	if m == nil {
+		return
+	}
+	m.backgroundThreadEvents = map[string][]protocol.ThreadEvent{}
 }
 
 func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
@@ -247,7 +256,18 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	}
 	if m.State != nil {
 		m.State.SetThreadID(entry.ThreadID)
-		m.State.Messages = append([]codextui.Message(nil), message.Response.Messages...)
+		messages := append([]codextui.Message(nil), message.Response.Messages...)
+		// Only replay the buffer when the persisted thread is empty (the typical
+		// running-agent case). Completed content is authoritative once persisted,
+		// and replaying item events on top of it would duplicate messages.
+		if len(messages) == 0 {
+			buffered := m.backgroundThreadEvents[entry.ThreadID]
+			for _, event := range buffered {
+				messages = applyBufferedThreadEventToMessages(messages, event)
+			}
+		}
+		delete(m.backgroundThreadEvents, entry.ThreadID)
+		m.State.Messages = messages
 		status := strings.TrimSpace(message.Response.Status)
 		if status == "" {
 			status = "idle"

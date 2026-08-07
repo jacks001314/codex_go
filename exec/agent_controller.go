@@ -32,6 +32,7 @@ type execSubagentContext struct {
 	Nickname       string
 	Role           string
 	AgentPath      string
+	Depth          int
 	Version        agent.MultiAgentVersion
 	Controller     agent.ToolController
 }
@@ -208,6 +209,17 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		return nil, nil
 	}
 	req.multiAgentVersion = version
+	// Rust hides the V1 collab tool surface for a thread whose next spawn depth
+	// would exceed max_depth; V2 ignores max_depth and relies on concurrency.
+	if version == agent.VersionV1 && req != nil && req.subagent != nil {
+		maxDepth := config.DefaultAgentMaxDepth
+		if agentsConfig.MaxDepth != nil {
+			maxDepth = *agentsConfig.MaxDepth
+		}
+		if agent.ExceedsThreadSpawnDepthLimit(req.subagent.Depth+1, maxDepth) {
+			return nil, nil
+		}
+	}
 
 	maxAgents := agentsConfig.MaxConcurrentThreadsPerSession
 	options := &execMultiAgentTools{
@@ -254,6 +266,10 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		rootController.multiAgentVersion = version
 		rootController.modelsManager = modelsManager
 		rootController.parentModel = execMultiAgentModelForRun(req, cfg, modelsManager)
+		rootController.maxDepth = config.DefaultAgentMaxDepth
+		if agentsConfig.MaxDepth != nil {
+			rootController.maxDepth = *agentsConfig.MaxDepth
+		}
 		rootController.waitDefault = options.waitDefault
 		rootController.waitMin = options.waitMin
 		rootController.waitMax = options.waitMax
@@ -413,6 +429,8 @@ type execAgentController struct {
 	parentID          string
 	scopePath         string
 	maxAgents         int
+	depth             int
+	maxDepth          int
 	parentModel       string
 	multiAgentVersion agent.MultiAgentVersion
 	modelsManager     model.ModelsManager
@@ -437,6 +455,7 @@ type execAgentTask struct {
 	path            string
 	nickname        string
 	role            string
+	depth           int
 	status          agent.AgentMessageStatus
 	cancel          context.CancelFunc
 	generation      uint64
@@ -458,12 +477,17 @@ func newExecAgentController(runner *Runner, ctx context.Context, req *Request, p
 		ctx = context.Background()
 	}
 	base := Request{}
+	depth := 0
 	if req != nil {
 		base = cloneExecAgentRequest(req)
+		if req.subagent != nil {
+			depth = req.subagent.Depth
+		}
 	}
 	return &execAgentController{
 		runner: runner, ctx: ctx, base: base, parentID: strings.TrimSpace(parentID),
-		scopePath: "/root", maxAgents: maxAgents, multiAgentVersion: agent.VersionV2, tasks: map[string]*execAgentTask{},
+		scopePath: "/root", maxAgents: maxAgents, depth: depth, maxDepth: -1,
+		multiAgentVersion: agent.VersionV2, tasks: map[string]*execAgentTask{},
 		updates: make(chan struct{}, 1), mailboxes: map[string]chan string{}, steerMailbox: turn.NewSteerMailbox(),
 	}
 }
@@ -544,6 +568,11 @@ func (c *execAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnA
 		s.mu.Unlock()
 		return nil, fmt.Errorf("agent runtime is shutting down")
 	}
+	// Rust enforces max_depth for V1 threads only; V2 relies on concurrency.
+	if s.multiAgentVersion == agent.VersionV1 && s.maxDepth >= 0 && c.depth+1 > s.maxDepth {
+		s.mu.Unlock()
+		return nil, agent.ErrAgentDepthLimitReached
+	}
 	if s.maxAgents >= 0 && len(s.tasks) >= s.maxAgents {
 		s.mu.Unlock()
 		return nil, agent.ErrAgentLimitReached
@@ -564,7 +593,7 @@ func (c *execAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnA
 	}
 	task := &execAgentTask{
 		id: id, taskName: taskName, path: path, nickname: nickname, role: strings.TrimSpace(args.ResolvedRole),
-		status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusPendingInit},
+		depth: c.depth + 1, status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusPendingInit},
 	}
 	s.tasks[id] = task
 	s.mu.Unlock()
@@ -722,6 +751,10 @@ func (c *execAgentController) ResumeAgent(ctx context.Context, args *agent.Resum
 	if args == nil || strings.TrimSpace(args.ID) == "" {
 		return nil, fmt.Errorf("id is required")
 	}
+	s := c.shared()
+	if s != nil && s.multiAgentVersion == agent.VersionV1 && s.maxDepth >= 0 && c.depth+1 > s.maxDepth {
+		return nil, agent.ErrAgentDepthLimitReached
+	}
 	task := c.task(args.ID)
 	if task == nil {
 		return &agent.ResumeAgentResult{Status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusNotFound}}, nil
@@ -729,7 +762,6 @@ func (c *execAgentController) ResumeAgent(ctx context.Context, args *agent.Resum
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s := c.shared()
 	s.mu.Lock()
 	status := task.status
 	s.mu.Unlock()
@@ -816,11 +848,13 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 			childReq.Exec.Subcommand = "resume"
 			childReq.Exec.Resume = cli.ExecResumeOptions{SessionID: task.id}
 		}
+		childController := c.scoped(task.path, task.id)
+		childController.depth = task.depth
 		childReq.subagent = &execSubagentContext{
 			ThreadID: task.id, SessionID: s.parentID, ParentThreadID: c.parentID,
 			Nickname: task.nickname, Role: task.role, AgentPath: task.path,
-			Version:    s.multiAgentVersion,
-			Controller: c.scoped(task.path, task.id),
+			Depth: task.depth, Version: s.multiAgentVersion,
+			Controller: childController,
 		}
 		childRunner := *s.runner
 		childRunner.ToolRouter = nil

@@ -9749,7 +9749,19 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 		enabled := agentsConfig.Enabled == nil || *agentsConfig.Enabled
 		v2Enabled := features.Enabled(cfg.FeatureSettings(), "multi_agent_v2")
-		if enabled && (len(agentsConfig.Roles) > 0 || v2Enabled) {
+		// Rust hides the V1 collab tool surface entirely for a thread whose next
+		// spawn depth would exceed max_depth ("Agent depth limit reached. Solve
+		// the task yourself."). V2 ignores max_depth and relies on concurrency.
+		maxDepth := config.DefaultAgentMaxDepth
+		if agentsConfig.MaxDepth != nil {
+			maxDepth = *agentsConfig.MaxDepth
+		}
+		currentDepth := 0
+		if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+			currentDepth = record.Metadata.AgentDepth
+		}
+		depthLimited := agent.ExceedsThreadSpawnDepthLimit(currentDepth+1, maxDepth)
+		if enabled && (len(agentsConfig.Roles) > 0 || v2Enabled) && !(depthLimited && !v2Enabled) {
 			options.EnableAgents = true
 			version := agent.VersionV1
 			maxThreads := agentsConfig.MaxConcurrentThreadsPerSession
@@ -9776,6 +9788,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			}
 			options.AgentVersion = version
 			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, cwd, maxThreads, version, params.Environments)
+			if runtimeController, ok := options.AgentController.(*runtimeAgentController); ok {
+				runtimeController.maxDepth = maxDepth
+			}
 			options.AgentRoles = agentsConfig.Roles
 			options.AgentDefaults = defaults
 		}

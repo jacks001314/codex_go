@@ -228,6 +228,7 @@ type Metadata struct {
 	AgentNickname           string            `json:"agent_nickname,omitempty"`
 	AgentRole               string            `json:"agent_role,omitempty"`
 	AgentPath               string            `json:"agent_path,omitempty"`
+	AgentDepth              int               `json:"agent_depth,omitempty"`
 	DynamicTools            []json.RawMessage `json:"dynamic_tools,omitempty"`
 	SelectedCapabilityRoots []json.RawMessage `json:"selected_capability_roots,omitempty"`
 	MultiAgentVersion       string            `json:"multi_agent_version,omitempty"`
@@ -314,6 +315,7 @@ type MetadataPatch struct {
 	AgentNickname           *string
 	AgentRole               *string
 	AgentPath               *string
+	AgentDepth              *int
 	DynamicTools            []json.RawMessage
 	SelectedCapabilityRoots []json.RawMessage
 	MultiAgentVersion       *string
@@ -1028,6 +1030,9 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 	}
 	if patch.AgentPath != nil {
 		record.Metadata.AgentPath = *patch.AgentPath
+	}
+	if patch.AgentDepth != nil {
+		record.Metadata.AgentDepth = *patch.AgentDepth
 	}
 	if patch.DynamicTools != nil {
 		record.Metadata.DynamicTools = cloneRawMessages(patch.DynamicTools)
