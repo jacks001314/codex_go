@@ -23,11 +23,12 @@ const (
 type UpdateActionKind string
 
 const (
-	UpdateActionNPMGlobalLatest UpdateActionKind = "npm-global-latest"
-	UpdateActionBunGlobalLatest UpdateActionKind = "bun-global-latest"
-	UpdateActionBrewUpgrade     UpdateActionKind = "brew-upgrade"
-	UpdateActionStandaloneUnix  UpdateActionKind = "standalone-unix"
-	UpdateActionStandaloneWin   UpdateActionKind = "standalone-windows"
+	UpdateActionNPMGlobalLatest  UpdateActionKind = "npm-global-latest"
+	UpdateActionBunGlobalLatest  UpdateActionKind = "bun-global-latest"
+	UpdateActionPnpmGlobalLatest UpdateActionKind = "pnpm-global-latest"
+	UpdateActionBrewUpgrade      UpdateActionKind = "brew-upgrade"
+	UpdateActionStandaloneUnix   UpdateActionKind = "standalone-unix"
+	UpdateActionStandaloneWin    UpdateActionKind = "standalone-windows"
 )
 
 type UpdateStatus string
@@ -96,13 +97,8 @@ func ActionFromContext(context *InstallContext) *UpdateAction {
 		return &UpdateAction{Kind: UpdateActionNPMGlobalLatest}
 	case InstallBun:
 		return &UpdateAction{Kind: UpdateActionBunGlobalLatest}
-	case InstallBrew:
-		return &UpdateAction{Kind: UpdateActionBrewUpgrade}
-	case InstallStandalone:
-		if context.Method.Platform != nil && *context.Method.Platform == StandaloneWindows {
-			return &UpdateAction{Kind: UpdateActionStandaloneWin}
-		}
-		return &UpdateAction{Kind: UpdateActionStandaloneUnix}
+	case InstallPnpm:
+		return &UpdateAction{Kind: UpdateActionPnpmGlobalLatest}
 	default:
 		return nil
 	}
@@ -117,6 +113,8 @@ func (a *UpdateAction) CommandArgs() (string, []string) {
 		return "npm", []string{"install", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBunGlobalLatest:
 		return "bun", []string{"install", "-g", NPMPackageName + "@latest"}
+	case UpdateActionPnpmGlobalLatest:
+		return "pnpm", []string{"add", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
 	case UpdateActionStandaloneUnix:
@@ -219,7 +217,7 @@ func RunUpdate(ctx context.Context, opts *RunUpdateOptions) (*UpdateResult, erro
 	if action == nil {
 		result.Status = UpdateStatusUnknown
 		result.Message = "could not detect the Codex installation method"
-		return result, errors.New("could not detect the Codex installation method; please update manually: https://developers.openai.com/codex/cli/")
+		return result, errors.New("could not detect the Codex installation method; please update manually: https://github.com/jacks001314/codex_go/releases/latest")
 	}
 	command, args := action.CommandArgs()
 	if command == "" {
@@ -267,19 +265,7 @@ func FetchLatestVersion(ctx context.Context, opts *UpdateCheckOptions) (string, 
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	switch {
-	case installContext != nil && installContext.Method.Kind == InstallBrew:
-		homebrewURL := firstNonEmpty(opts.HomebrewURL, DefaultHomebrewCaskURL)
-		var info struct {
-			Version string `json:"version"`
-		}
-		if err := getJSON(ctx, client, homebrewURL, &info); err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(info.Version) == "" {
-			return "", errors.New("homebrew cask metadata omitted version")
-		}
-		return strings.TrimSpace(info.Version), nil
-	case installContext != nil && (installContext.Method.Kind == InstallNPM || installContext.Method.Kind == InstallBun):
+	case installContext != nil && (installContext.Method.Kind == InstallNPM || installContext.Method.Kind == InstallBun || installContext.Method.Kind == InstallPnpm):
 		latest, err := fetchLatestGitHubReleaseVersion(ctx, client, firstNonEmpty(opts.GitHubURL, DefaultGitHubLatestReleaseURL))
 		if err != nil {
 			return "", err

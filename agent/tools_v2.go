@@ -199,7 +199,7 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			"timeout_ms": map[string]any{"type": "number", "description": fmt.Sprintf("Timeout in milliseconds. Defaults to %d, min %d, max %d.", e.waitDefault.Milliseconds(), e.waitMin.Milliseconds(), e.waitMax.Milliseconds())},
 		}, nil)
 		spec.OutputSchema = multiAgentObjectSchema(map[string]any{
-			"message":   map[string]any{"type": "string", "description": "Brief wait summary without the agent's final content."},
+			"message":   map[string]any{"type": "string", "description": "Brief wait summary without the agent's final content, including any timeout adjustment."},
 			"timed_out": map[string]any{"type": "boolean", "description": "Whether the wait call returned because no mailbox update arrived before the timeout."},
 		}, []string{"message", "timed_out"})
 	case multiAgentV2Interrupt:
@@ -294,11 +294,20 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 		}
 	case multiAgentV2Wait:
 		var args WaitForActivityArgs
+		var requestedTimeoutMS *int64
 		if err = invocation.DecodeArguments(&args); err == nil {
-			if args.TimeoutMS != nil && (*args.TimeoutMS < e.waitMin.Milliseconds() || *args.TimeoutMS > e.waitMax.Milliseconds()) {
-				return nil, tool.RespondToModel(fmt.Sprintf("timeout_ms must be between %d and %d", e.waitMin.Milliseconds(), e.waitMax.Milliseconds()))
+			requestedTimeoutMS = args.TimeoutMS
+			if args.TimeoutMS != nil && *args.TimeoutMS > e.waitMax.Milliseconds() {
+				return nil, tool.RespondToModel(fmt.Sprintf("timeout_ms must be at most %d", e.waitMax.Milliseconds()))
+			}
+			if args.TimeoutMS != nil && *args.TimeoutMS < e.waitMin.Milliseconds() {
+				clamped := e.waitMin.Milliseconds()
+				args.TimeoutMS = &clamped
 			}
 			result, err = e.controller.WaitForActivity(ctx, &args)
+			if waitResult, ok := result.(*WaitForActivityResult); ok && waitResult != nil && requestedTimeoutMS != nil && args.TimeoutMS != nil && *requestedTimeoutMS < *args.TimeoutMS {
+				waitResult.Message = fmt.Sprintf("%s\n\nRequested timeout of %dms was clamped to the minimum of %dms.", waitResult.Message, *requestedTimeoutMS, *args.TimeoutMS)
+			}
 		}
 	case multiAgentV2Interrupt:
 		var args InterruptAgentArgs
@@ -454,7 +463,7 @@ func (c *MemoryToolController) WaitForActivity(ctx context.Context, args *WaitFo
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return &WaitForActivityResult{TimedOut: true}, nil
+		return &WaitForActivityResult{Message: "Wait timed out.", TimedOut: true}, nil
 	}
 }
 

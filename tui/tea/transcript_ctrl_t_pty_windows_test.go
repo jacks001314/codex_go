@@ -78,7 +78,7 @@ func TestTranscriptCtrlTOpensThroughConPTY(t *testing.T) {
 		}
 	}()
 
-	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "OpenAI Codex", exited, 15*time.Second)
+	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "gcode", exited, 15*time.Second)
 	if !ready {
 		_ = command.Process.Kill()
 		if earlyExit != nil {

@@ -172,7 +172,7 @@ func (s *State) ResetThread() {
 
 func (s *State) RenderWelcome() string {
 	var builder strings.Builder
-	builder.WriteString("OpenAI Codex (Go)\n")
+	builder.WriteString("gcode (Go)\n")
 	builder.WriteString(s.RenderStatusCard())
 	builder.WriteString("\n")
 	if cwd := strings.TrimSpace(s.CWD); cwd != "" {
@@ -204,7 +204,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	provider := statusModelProvider(s.Provider)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
 	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
-	header := " >_ OpenAI Codex"
+	header := " >_ gcode"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"
 	}

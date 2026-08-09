@@ -49,6 +49,35 @@ func TestListModelsFiltersHiddenAndMarksDefault(t *testing.T) {
 	}
 }
 
+func TestListModelsExposesMultiAgentVersion(t *testing.T) {
+	manager := NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{
+		{Slug: "v2", DisplayName: "V2", Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 0, MultiAgentVersion: "v2"},
+		{Slug: "disabled", DisplayName: "Disabled", Visibility: VisibilityVisible, SupportedInAPI: true, Priority: 1, MultiAgentVersion: "disabled"},
+	}})
+	response, err := NewModelService(manager).List(&ModelListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	byID := make(map[string]ModelSummary, len(response.Data))
+	for _, summary := range response.Data {
+		byID[summary.ID] = summary
+	}
+	if got := byID["v2"].MultiAgentVersion; got == nil || *got != "v2" {
+		t.Fatalf("v2 multi-agent version = %#v", got)
+	}
+	if got := byID["disabled"].MultiAgentVersion; got == nil || *got != "disabled" {
+		t.Fatalf("disabled multi-agent version = %#v", got)
+	}
+	payload := marshalObjectForTest(t, response)
+	data := payload["data"].([]any)
+	for _, raw := range data {
+		model := raw.(map[string]any)
+		if model["id"] == "v2" && model["multiAgentVersion"] != "v2" {
+			t.Fatalf("wire model = %#v", model)
+		}
+	}
+}
+
 func TestModelListParamsMarshalRustShape(t *testing.T) {
 	payload := marshalObjectForTest(t, &ModelListParams{RefreshStrategy: string(RefreshOnline)})
 	for _, nullableKey := range []string{"cursor", "limit", "includeHidden"} {

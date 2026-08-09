@@ -104,7 +104,7 @@ func runWindowsPTYTerminalRestoreParent(t *testing.T) {
 		t.Fatalf("read ConPTY output: %v", err)
 	}
 
-	entered, exitCode, exited, err := waitForOutputContainsOrExit(created, &output, "OpenAI Codex", 3*time.Second)
+	entered, exitCode, exited, err := waitForOutputContainsOrExit(created, &output, "gcode", 3*time.Second)
 	if err != nil {
 		_ = windowssandbox.TerminateCreatedProcess(created, 1)
 		t.Fatalf("wait for ConPTY child output: %v", err)

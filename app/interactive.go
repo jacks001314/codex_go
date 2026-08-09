@@ -715,6 +715,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
 		MCPStartupExpectedServers: mcpExpectedServers,
 		InitialMessages:           initialMessages,
+		InitialHistoryCells:       interactiveUpdateHistoryCells(root),
 		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
 		TUITheme:                  settings.TUITheme,
 		TUIPet:                    settings.TUIPet,
@@ -1997,33 +1998,34 @@ func materializeDesktopHandoffRollout(codexHome string, record *session.Record) 
 		now = time.Now().UTC()
 	}
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
-		CodexHome:               codexHome,
-		SessionID:               record.SessionID,
-		SessionPrefix:           record.Metadata.SessionPrefix,
-		ThreadID:                string(record.ID),
-		ForkedFromID:            string(record.ForkedFromID),
-		Source:                  record.Metadata.Source,
-		ThreadSource:            record.Metadata.ThreadSource,
-		Originator:              record.Metadata.Originator,
-		CWD:                     record.Metadata.CWD,
-		Model:                   record.Metadata.Model,
-		ModelProvider:           record.Metadata.ModelProvider,
-		HistoryMode:             record.Metadata.HistoryMode,
-		HistoryBase:             desktopHistoryPositionFromRecord(record.HistoryBase),
-		MemoryMode:              record.Metadata.MemoryMode,
-		ParentThreadID:          string(record.ParentThreadID),
-		BaseInstructions:        record.Metadata.BaseInstructions,
-		AgentNickname:           record.Metadata.AgentNickname,
-		AgentRole:               record.Metadata.AgentRole,
-		AgentPath:               record.Metadata.AgentPath,
-		DynamicTools:            record.Metadata.DynamicTools,
-		SelectedCapabilityRoots: record.Metadata.SelectedCapabilityRoots,
-		MultiAgentVersion:       record.Metadata.MultiAgentVersion,
-		ContextWindow:           record.Metadata.ContextWindow,
-		CLIVersion:              record.Metadata.CLIVersion,
-		Git:                     record.Metadata.Git,
-		Extra:                   record.Metadata.Extra,
-		Now:                     now,
+		CodexHome:                  codexHome,
+		SessionID:                  record.SessionID,
+		SessionPrefix:              record.Metadata.SessionPrefix,
+		ThreadID:                   string(record.ID),
+		ForkedFromID:               string(record.ForkedFromID),
+		Source:                     record.Metadata.Source,
+		ThreadSource:               record.Metadata.ThreadSource,
+		Originator:                 record.Metadata.Originator,
+		CWD:                        record.Metadata.CWD,
+		Model:                      record.Metadata.Model,
+		ModelProvider:              record.Metadata.ModelProvider,
+		HistoryMode:                record.Metadata.HistoryMode,
+		HistoryBase:                desktopHistoryPositionFromRecord(record.HistoryBase),
+		MemoryMode:                 record.Metadata.MemoryMode,
+		ParentThreadID:             string(record.ParentThreadID),
+		BaseInstructions:           record.Metadata.BaseInstructions,
+		BaseInstructionsProvenance: cloneInteractiveBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
+		AgentNickname:              record.Metadata.AgentNickname,
+		AgentRole:                  record.Metadata.AgentRole,
+		AgentPath:                  record.Metadata.AgentPath,
+		DynamicTools:               record.Metadata.DynamicTools,
+		SelectedCapabilityRoots:    record.Metadata.SelectedCapabilityRoots,
+		MultiAgentVersion:          record.Metadata.MultiAgentVersion,
+		ContextWindow:              record.Metadata.ContextWindow,
+		CLIVersion:                 record.Metadata.CLIVersion,
+		Git:                        record.Metadata.Git,
+		Extra:                      record.Metadata.Extra,
+		Now:                        now,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to materialize session rollout for Desktop handoff: %w", err)
@@ -2043,6 +2045,14 @@ func desktopHistoryPositionFromRecord(value *session.HistoryPosition) *rollout.H
 		EndOrdinalExclusive: value.EndOrdinalExclusive,
 		EndByteOffset:       value.EndByteOffset,
 	}
+}
+
+func cloneInteractiveBaseInstructionsProvenance(value *session.BaseInstructionsProvenance) *session.BaseInstructionsProvenance {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func reconcileStateForDesktopHandoff(codexHome string, rolloutPath string) error {

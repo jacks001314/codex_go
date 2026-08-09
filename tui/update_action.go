@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"codex_go/install"
 	"strconv"
 	"strings"
 )
@@ -10,11 +11,12 @@ import (
 type UpdateAction string
 
 const (
-	UpdateActionNPMGlobalLatest UpdateAction = "npm-global-latest"
-	UpdateActionBunGlobalLatest UpdateAction = "bun-global-latest"
-	UpdateActionBrewUpgrade     UpdateAction = "brew-upgrade"
-	UpdateActionStandaloneUnix  UpdateAction = "standalone-unix"
-	UpdateActionStandaloneWin   UpdateAction = "standalone-windows"
+	UpdateActionNPMGlobalLatest  UpdateAction = "npm-global-latest"
+	UpdateActionBunGlobalLatest  UpdateAction = "bun-global-latest"
+	UpdateActionPnpmGlobalLatest UpdateAction = "pnpm-global-latest"
+	UpdateActionBrewUpgrade      UpdateAction = "brew-upgrade"
+	UpdateActionStandaloneUnix   UpdateAction = "standalone-unix"
+	UpdateActionStandaloneWin    UpdateAction = "standalone-windows"
 
 	UpdateActionInstall UpdateAction = "install"
 	UpdateActionSkip    UpdateAction = "skip"
@@ -23,9 +25,11 @@ const (
 func (a UpdateAction) CommandArgs() (string, []string) {
 	switch a {
 	case UpdateActionNPMGlobalLatest, UpdateActionInstall:
-		return "npm", []string{"install", "-g", "@openai/codex"}
+		return "npm", []string{"install", "-g", install.NPMPackageName + "@latest"}
 	case UpdateActionBunGlobalLatest:
-		return "bun", []string{"install", "-g", "@openai/codex"}
+		return "bun", []string{"install", "-g", install.NPMPackageName + "@latest"}
+	case UpdateActionPnpmGlobalLatest:
+		return "pnpm", []string{"add", "-g", install.NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
 	case UpdateActionStandaloneUnix:
@@ -35,6 +39,13 @@ func (a UpdateAction) CommandArgs() (string, []string) {
 	default:
 		return "", nil
 	}
+}
+
+func UpdateActionFromInstall(action *install.UpdateAction) UpdateAction {
+	if action == nil {
+		return ""
+	}
+	return UpdateAction(action.Kind)
 }
 
 func (a UpdateAction) CommandString() string {

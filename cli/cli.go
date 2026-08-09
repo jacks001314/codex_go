@@ -125,12 +125,19 @@ type ExecOptions struct {
 	SubArgs               []string
 	Review                ReviewOptions
 	Resume                ExecResumeOptions
+	Fork                  ExecForkOptions
 }
 
 type ExecResumeOptions struct {
 	SessionID string
 	Last      bool
 	All       bool
+	Prompt    string
+}
+
+type ExecForkOptions struct {
+	SessionID string
+	Images    []string
 	Prompt    string
 }
 
@@ -677,6 +684,9 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case arg == "resume":
 			exec.Subcommand = arg
 			return parseExecResume(args[i+1:], exec)
+		case arg == "fork":
+			exec.Subcommand = arg
+			return parseExecFork(args[i+1:], exec)
 		case arg == "review":
 			exec.Subcommand = arg
 			return parseReview(args[i+1:], &exec.Review)
@@ -839,6 +849,103 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 	default:
 		exec.Resume.SessionID = positionals[0]
 		exec.Resume.Prompt = strings.Join(positionals[1:], " ")
+	}
+	return nil
+}
+
+func parseExecFork(args []string, exec *ExecOptions) error {
+	var positionals []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--image" || arg == "-i" {
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.Fork.Images = append(exec.Fork.Images, splitComma(value)...)
+			i = next
+			continue
+		}
+		if strings.HasPrefix(arg, "--image=") {
+			exec.Fork.Images = append(exec.Fork.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+			continue
+		}
+		if handled, err := parseSharedOption(args, &i, &exec.Shared); err != nil {
+			return err
+		} else if handled {
+			continue
+		}
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		switch {
+		case arg == "-":
+			positionals = append(positionals, arg)
+		case arg == "--strict-config":
+			exec.StrictConfig = true
+		case arg == "--skip-git-repo-check":
+			exec.SkipGitRepoCheck = true
+		case arg == "--ephemeral":
+			exec.Ephemeral = true
+		case arg == "--ignore-user-config":
+			exec.IgnoreUserConfig = true
+		case arg == "--ignore-rules":
+			exec.IgnoreRules = true
+		case arg == "--json" || arg == "--experimental-json":
+			exec.JSON = true
+		case arg == "--output-schema" || arg == "--output-last-message" || arg == "-o":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if arg == "--output-schema" {
+				exec.OutputSchema = value
+			} else {
+				exec.LastMessageFile = value
+			}
+			i = next
+		case strings.HasPrefix(arg, "--output-schema="):
+			exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
+		case strings.HasPrefix(arg, "--output-last-message="):
+			exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
+		case arg == "--color" || strings.HasPrefix(arg, "--color="):
+			value := strings.TrimPrefix(arg, "--color=")
+			if arg == "--color" {
+				var next int
+				var err error
+				value, next, err = requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				i = next
+			}
+			if err := setExecColor(exec, value); err != nil {
+				return err
+			}
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.ConfigOverrides = append(exec.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c") && arg != "-C":
+			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		case strings.HasPrefix(arg, "-"):
+			return fmt.Errorf("unknown exec fork option %s", arg)
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) == 0 {
+		return errors.New("exec fork requires SESSION_ID")
+	}
+	exec.Fork.SessionID = positionals[0]
+	if len(positionals) > 1 {
+		exec.Fork.Prompt = strings.Join(positionals[1:], " ")
 	}
 	return nil
 }

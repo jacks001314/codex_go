@@ -42,7 +42,7 @@ var Registry = []Spec{
 	// direct mode unless code_mode is explicitly enabled; models that require
 	// code mode declare tool_mode in the catalog instead.
 	{Key: "code_mode", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "code_mode_buffered_exec", Stage: StageUnderDevelopment},
+	{Key: "code_mode_buffered_exec", Stage: StageRemoved},
 	{Key: "code_mode_host", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_only", Stage: StageUnderDevelopment},
 	{Key: "js_repl_tools_only", Stage: StageRemoved},
@@ -63,6 +63,7 @@ var Registry = []Spec{
 	},
 	{Key: "external_agent_memory_import", Stage: StageUnderDevelopment},
 	{Key: "local_thread_store_compression", Stage: StageUnderDevelopment},
+	{Key: "background_paginated_rollout_migration", Stage: StageUnderDevelopment},
 	{Key: "chronicle", Stage: StageUnderDevelopment},
 	{Key: "apply_patch_freeform", Stage: StageRemoved},
 	{Key: "apply_patch_streaming_events", Stage: StageUnderDevelopment},
@@ -114,6 +115,7 @@ var Registry = []Spec{
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "view_image", Stage: StageStable, DefaultEnabled: true},
 	{Key: "image_resize_notice", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "unified_image_budget", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "resize_all_images", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "item_ids", Stage: StageUnderDevelopment},
 	{Key: "concurrent_reasoning_summaries", Stage: StageUnderDevelopment},

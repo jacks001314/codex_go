@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -98,6 +99,8 @@ func ResolveResumeCWD(mode ResumeCWDMode, currentCWD, sessionCWD string) string 
 }
 
 const DefaultChatGPTBaseURL = "https://chatgpt.com/backend-api/"
+
+const DefaultProjectDocMaxBytes = 32 * 1024
 
 type LoadOptions struct {
 	Profile              string
@@ -393,6 +396,22 @@ func validateKnownFeatureFields(value any) error {
 			}
 		}
 	}
+	if codeMode, ok := features["code_mode"].(map[string]any); ok {
+		known := map[string]bool{"enabled": true, "default_exec_yield_time_ms": true, "excluded_tool_namespaces": true, "direct_only_tool_namespaces": true}
+		for key := range codeMode {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.code_mode.%s`", key)
+			}
+		}
+	}
+	if toolRegistry, ok := features["tool_registry"].(map[string]any); ok {
+		known := map[string]bool{"error_on_tool_collisions": true, "include_tool_metadata": true}
+		for key := range toolRegistry {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.tool_registry.%s`", key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -419,7 +438,8 @@ var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, 
 
 var knownStrictFeatureFields = map[string]bool{
 	"mcp_2026_07_28": true,
-	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "recommended_plugins": true, "plugins": true, "in_app_browser": true, "in_app_updates": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "view_image": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
+	"tool_registry":  true,
+	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "background_paginated_rollout_migration": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "recommended_plugins": true, "plugins": true, "in_app_browser": true, "in_app_updates": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "view_image": true, "unified_image_budget": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
 }
 
 func ProjectConfigPath(cwd string) string {
@@ -625,6 +645,44 @@ func (c *Config) DisableCodeModeInProcessFallback() bool {
 	return disabled
 }
 
+const DefaultCodeModeExecYieldTime = 30 * time.Second
+
+func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
+	if c == nil || c.Values == nil {
+		return DefaultCodeModeExecYieldTime
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return DefaultCodeModeExecYieldTime
+	}
+	codeMode, ok := features["code_mode"].(map[string]any)
+	if !ok {
+		return DefaultCodeModeExecYieldTime
+	}
+	value, ok := nonNegativeIntFromConfigValue(codeMode["default_exec_yield_time_ms"])
+	const maxDurationMilliseconds = int64(^uint64(0)>>1) / int64(time.Millisecond)
+	if !ok || int64(value) > maxDurationMilliseconds {
+		return DefaultCodeModeExecYieldTime
+	}
+	return time.Duration(value) * time.Millisecond
+}
+
+func (c *Config) ToolRegistryIncludeToolMetadata() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	toolRegistry, ok := features["tool_registry"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := toolRegistry["include_tool_metadata"].(bool)
+	return enabled
+}
+
 func (c *Config) ToolOutputTokenLimit() *int {
 	if c == nil || c.Values == nil {
 		return nil
@@ -787,6 +845,19 @@ func (c *Config) ChatGPTBaseURL() string {
 		return DefaultChatGPTBaseURL
 	}
 	return value
+}
+
+// ProjectDocMaxBytes is the aggregate project-instruction budget. The current
+// local runtime has one project filesystem; remote environment filesystems will
+// share this same budget when executor-scoped instruction loading is wired in.
+func (c *Config) ProjectDocMaxBytes() int {
+	if c == nil || c.Values == nil {
+		return DefaultProjectDocMaxBytes
+	}
+	if value, ok := nonNegativeIntFromConfigValue(c.Values["project_doc_max_bytes"]); ok {
+		return value
+	}
+	return DefaultProjectDocMaxBytes
 }
 
 func stringFromConfigValue(value any) string {

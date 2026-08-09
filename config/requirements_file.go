@@ -553,7 +553,16 @@ func hookHandlersAnyKey(values map[string]any, keys ...string) ([]ConfiguredHook
 		if value, ok := stringAnyKey(handlerMap, "command_windows", "commandWindows"); ok {
 			handler.CommandWindows = &value
 		}
-		if value, ok := uint64AnyKey(handlerMap, "timeout_sec", "timeoutSec"); ok {
+		if value, ok := stringAnyKey(handlerMap, "server"); ok {
+			handler.Server = value
+		}
+		if value, ok := stringAnyKey(handlerMap, "tool"); ok {
+			handler.Tool = value
+		}
+		if value, ok := mapAnyKey(handlerMap, "input"); ok {
+			handler.Input = cloneMap(value)
+		}
+		if value, ok := uint64AnyKey(handlerMap, "timeout_sec", "timeoutSec", "timeout"); ok {
 			handler.TimeoutSec = &value
 		}
 		if value, ok := boolAnyKey(handlerMap, "async"); ok {

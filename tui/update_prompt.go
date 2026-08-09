@@ -1,10 +1,16 @@
 package tui
 
-import "strings"
+import (
+	"context"
+	"io"
+	"strings"
+
+	bubbletea "github.com/charmbracelet/bubbletea"
+)
 
 // Rust parity: codex-rs/tui/src/update_prompt.rs.
 
-const ReleaseNotesURL = "https://github.com/openai/codex/releases/latest"
+const ReleaseNotesURL = "https://github.com/jacks001314/codex_go/releases/latest"
 
 type UpdatePrompt struct {
 	Version string
@@ -152,6 +158,57 @@ func (s *UpdatePromptScreen) Rows(width int) []string {
 	}
 	rows = append(rows, "", "  Press Enter to continue")
 	return rows
+}
+
+func RunUpdatePrompt(ctx context.Context, screen *UpdatePromptScreen, input io.Reader, output io.Writer, noAltScreen bool) (UpdateSelection, error) {
+	if screen == nil {
+		return "", nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	model := &updatePromptProgram{screen: screen, width: 80}
+	options := []bubbletea.ProgramOption{
+		bubbletea.WithInput(input),
+		bubbletea.WithOutput(output),
+		bubbletea.WithContext(ctx),
+	}
+	if !noAltScreen {
+		options = append(options, bubbletea.WithAltScreen())
+	}
+	if _, err := bubbletea.NewProgram(model, options...).Run(); err != nil {
+		return "", err
+	}
+	if screen.Selection == nil {
+		return "", nil
+	}
+	return *screen.Selection, nil
+}
+
+type updatePromptProgram struct {
+	screen *UpdatePromptScreen
+	width  int
+}
+
+func (m *updatePromptProgram) Init() bubbletea.Cmd {
+	return nil
+}
+
+func (m *updatePromptProgram) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	switch value := message.(type) {
+	case bubbletea.WindowSizeMsg:
+		m.width = value.Width
+	case bubbletea.KeyMsg:
+		m.screen.HandleKey(value.String())
+		if m.screen.IsDone() {
+			return m, bubbletea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m *updatePromptProgram) View() string {
+	return strings.Join(m.screen.Rows(m.width), "\n") + "\n"
 }
 
 func validUpdateSelection(selection UpdateSelection) bool {

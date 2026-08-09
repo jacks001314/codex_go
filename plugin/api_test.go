@@ -413,6 +413,81 @@ func TestMarketplacePluginSkillsListsNestedSkillFiles(t *testing.T) {
 	}
 }
 
+func TestAgentPluginReadExcludesNestedSkills(t *testing.T) {
+	root := t.TempDir()
+	marketplaceDir := filepath.Join(root, ".agents", "plugins")
+	if err := os.MkdirAll(marketplaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(marketplace) error = %v", err)
+	}
+	manifest := `{"name":"debug","plugins":[{"name":"agent-tools","source":{"source":"local","path":"./plugins/agent-tools"}}]}`
+	if err := os.WriteFile(filepath.Join(marketplaceDir, "marketplace.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("WriteFile(marketplace) error = %v", err)
+	}
+	pluginRoot := filepath.Join(root, "plugins", "agent-tools")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "direct"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(direct) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "group", "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"$schema":"`+AgentPluginSchemaURI+`","name":"agent-tools"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	for path, name := range map[string]string{
+		filepath.Join(pluginRoot, "skills", "direct", "SKILL.md"):          "direct",
+		filepath.Join(pluginRoot, "skills", "group", "nested", "SKILL.md"): "nested",
+	} {
+		if err := os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: "+name+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(skill) error = %v", err)
+		}
+	}
+	service := NewPluginService()
+	if _, err := service.AddMarketplace(&MarketplaceAddParams{Name: "debug", Source: root}); err != nil {
+		t.Fatalf("AddMarketplace() error = %v", err)
+	}
+	read, err := service.Read(&PluginReadParams{MarketplaceName: "debug", PluginName: "agent-tools"})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !read.Plugin.Summary.HasSkills || len(read.Plugin.Skills) != 1 || read.Plugin.Skills[0].Name != "direct" {
+		t.Fatalf("agent plugin skills = %#v, summary = %#v", read.Plugin.Skills, read.Plugin.Summary)
+	}
+}
+
+func TestAgentPluginReadWithOnlyNestedSkillsReportsNoSkills(t *testing.T) {
+	root := t.TempDir()
+	marketplaceDir := filepath.Join(root, ".agents", "plugins")
+	if err := os.MkdirAll(marketplaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(marketplace) error = %v", err)
+	}
+	manifest := `{"name":"debug","plugins":[{"name":"agent-tools","source":{"source":"local","path":"./plugins/agent-tools"}}]}`
+	if err := os.WriteFile(filepath.Join(marketplaceDir, "marketplace.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("WriteFile(marketplace) error = %v", err)
+	}
+	pluginRoot := filepath.Join(root, "plugins", "agent-tools", "skills", "group", "nested")
+	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	pluginBase := filepath.Join(root, "plugins", "agent-tools")
+	if err := os.WriteFile(filepath.Join(pluginBase, "plugin.json"), []byte(`{"$schema":"`+AgentPluginSchemaURI+`","name":"agent-tools"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "SKILL.md"), []byte("---\nname: nested\ndescription: nested\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	service := NewPluginService()
+	if _, err := service.AddMarketplace(&MarketplaceAddParams{Name: "debug", Source: root}); err != nil {
+		t.Fatalf("AddMarketplace() error = %v", err)
+	}
+	read, err := service.Read(&PluginReadParams{MarketplaceName: "debug", PluginName: "agent-tools"})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if read.Plugin.Summary.HasSkills || len(read.Plugin.Skills) != 0 {
+		t.Fatalf("nested-only agent plugin = %#v, summary = %#v", read.Plugin.Skills, read.Plugin.Summary)
+	}
+}
+
 func TestInstallMarketplaceManifestPluginByPath(t *testing.T) {
 	root := t.TempDir()
 	writeTestMarketplacePlugin(t, root, "sample")

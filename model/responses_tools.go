@@ -103,17 +103,17 @@ func ResponsesLoadableToolsFromValue(value any) ([]any, bool) {
 				specs = append(specs, item)
 			case *tool.Spec:
 				if item == nil {
-					return cloneAnySlice(typed), false
+					return normalizeResponseToolParameters(cloneAnySlice(typed)), false
 				}
 				specs = append(specs, *item)
 			default:
 				if loadableToolsHaveResponsesType(typed) {
-					return cloneAnySlice(typed), true
+					return normalizeResponseToolParameters(cloneAnySlice(typed)), true
 				}
 				if specs, ok := toolSpecsFromJSONValue(typed); ok {
 					return ResponsesLoadableToolsFromSpecs(specs), true
 				}
-				return cloneAnySlice(typed), false
+				return normalizeResponseToolParameters(cloneAnySlice(typed)), false
 			}
 		}
 		return ResponsesLoadableToolsFromSpecs(specs), true
@@ -130,9 +130,9 @@ func ResponsesLoadableToolsFromValue(value any) ([]any, bool) {
 			return nil, false
 		}
 		if loadableToolsHaveResponsesType(tools) {
-			return tools, true
+			return normalizeResponseToolParameters(tools), true
 		}
-		return tools, false
+		return normalizeResponseToolParameters(tools), false
 	}
 }
 
@@ -277,6 +277,111 @@ func responsesInputSchema(schema map[string]any) map[string]any {
 		// Providers such as DeepSeek reject schemas without an explicit type,
 		// so normalize here instead of failing the whole request.
 		out["type"] = "object"
+	}
+	return out
+}
+
+// normalizeResponseToolParameters sanitizes raw Responses tool definitions so a
+// request can never reach the API with an invalid function parameters schema
+// (missing or null "type", or null "required"). Stale persisted definitions
+// (session history, tool search output, dynamic tools) can carry the pre-fix
+// update_plan shape {"required": ["plan"]} or explicit nulls, which strict
+// providers reject with 400 ("schema must be a JSON Schema of 'type: object'",
+// "None is not of type 'array'").
+func normalizeResponseToolParameters(tools []any) []any {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]any, 0, len(tools))
+	for _, value := range tools {
+		item, ok := value.(map[string]any)
+		if !ok {
+			out = append(out, value)
+			continue
+		}
+		clone := cloneMapAny(item)
+		switch responseToolString(clone["type"]) {
+		case "function", "tool_search":
+			if params, ok := clone["parameters"].(map[string]any); ok {
+				clone["parameters"] = normalizeResponseSchema(params)
+			}
+		case "namespace":
+			switch children := clone["tools"].(type) {
+			case []any:
+				clone["tools"] = normalizeResponseToolParameters(children)
+			case []map[string]any:
+				converted := make([]any, 0, len(children))
+				for i := range children {
+					converted = append(converted, children[i])
+				}
+				clone["tools"] = normalizeResponseToolParameters(converted)
+			}
+		}
+		out = append(out, clone)
+	}
+	return out
+}
+
+// normalizeResponseSchema rewrites a function parameters schema so strict
+// providers never see null "type"/"required" values. Schema containers such as
+// "properties" are traversed through their values; they are not schemas
+// themselves and must never receive schema keywords.
+func normalizeResponseSchema(schema map[string]any) map[string]any {
+	if len(schema) == 0 {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	out := cloneMapAny(schema)
+	normalizeResponseSchemaNode(out, true)
+	return out
+}
+
+func normalizeResponseSchemaNode(schema map[string]any, requireObjectType bool) {
+	if schema == nil {
+		return
+	}
+	if schemaType, ok := schema["type"]; !ok || schemaType == nil || schemaType == "" {
+		if requireObjectType {
+			schema["type"] = "object"
+		} else {
+			delete(schema, "type")
+		}
+	}
+	if required, ok := schema["required"]; ok && required == nil {
+		delete(schema, "required")
+	}
+	for _, key := range []string{"properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"} {
+		if children, ok := schema[key].(map[string]any); ok {
+			for name, child := range children {
+				children[name] = normalizeResponseSchemaValue(child)
+			}
+		}
+	}
+	for _, key := range []string{"additionalProperties", "unevaluatedProperties", "additionalItems", "unevaluatedItems", "propertyNames", "items", "contains", "contentSchema", "not", "if", "then", "else"} {
+		if child, ok := schema[key]; ok {
+			schema[key] = normalizeResponseSchemaValue(child)
+		}
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		if children, ok := schema[key].([]any); ok {
+			schema[key] = normalizeResponseSchemaValues(children)
+		}
+	}
+}
+
+func normalizeResponseSchemaValue(value any) any {
+	switch schema := value.(type) {
+	case map[string]any:
+		normalizeResponseSchemaNode(schema, false)
+	case []any:
+		return normalizeResponseSchemaValues(schema)
+	}
+	return value
+}
+
+func normalizeResponseSchemaValues(values []any) []any {
+	out := make([]any, len(values))
+	for i := range values {
+		out[i] = normalizeResponseSchemaValue(values[i])
 	}
 	return out
 }

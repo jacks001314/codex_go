@@ -863,7 +863,7 @@ func TestRunHumanPrintsTokenUsageToStderr(t *testing.T) {
 		t.Fatalf("stdout = %q, result = %#v", stdout.String(), result)
 	}
 	for _, want := range []string{
-		"OpenAI Codex v",
+		"gcode v",
 		"workdir:",
 		"approval: never",
 		"sandbox: read-only",
@@ -1482,7 +1482,7 @@ func TestRunHumanPrintsFinalMessageToStderrWhenBothStreamsAreTTY(t *testing.T) {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 	for _, want := range []string{
-		"OpenAI Codex v",
+		"gcode v",
 		"approval: never",
 		"tokens used\n15\n",
 		"codex\ndone\n",
@@ -2275,6 +2275,139 @@ func TestResolveExecResumeByNameImportsRolloutOnlyThread(t *testing.T) {
 	if _, err := session.NewStore(filepath.Join(home, "sessions")).Read("rollout-named", true, true); err != nil {
 		t.Fatalf("named import store record returned error: %v", err)
 	}
+}
+
+func TestRunExecForkCreatesDistinctThreadsWithAndWithoutPrompt(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	source := &session.Record{
+		ID:        "fork-source",
+		SessionID: "fork-source",
+		Preview:   "source question",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           cwd,
+			Model:         "gpt-5.4",
+			ModelProvider: model.OpenAIProviderID,
+			Source:        "exec",
+			ThreadSource:  "user",
+			HistoryMode:   "legacy",
+		},
+		Items: []session.Item{
+			{ID: "source-user", Type: "message", Role: "user", Text: "source question", CreatedAt: now},
+			{ID: "source-assistant", Type: "message", Role: "assistant", Text: "source answer", CreatedAt: now},
+		},
+	}
+	if err := store.Save(source); err != nil {
+		t.Fatalf("Save source returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	agent := &recordingAgent{message: "fork completed"}
+	runner.Agent = agent
+	runner.Now = func() time.Time { return now.Add(time.Minute) }
+	if err := runner.createExecRollout(source, now); err != nil {
+		t.Fatalf("createExecRollout source returned error: %v", err)
+	}
+
+	var promptlessOut bytes.Buffer
+	promptless, err := runner.Run(Request{Exec: cli.ExecOptions{
+		Subcommand: "fork",
+		JSON:       true,
+		Shared:     cli.SharedOptions{CWD: cwd},
+		Fork:       cli.ExecForkOptions{SessionID: "fork-source"},
+	}}, strings.NewReader("stdin must remain unread"), &promptlessOut, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("promptless fork returned error: %v", err)
+	}
+	if promptless.ThreadID == "" || promptless.ThreadID == "fork-source" {
+		t.Fatalf("promptless thread id = %q", promptless.ThreadID)
+	}
+	events := decodeExecJSONLines(t, promptlessOut.String())
+	if len(events) != 1 || events[0].Type != "thread.started" || events[0].ThreadID != promptless.ThreadID {
+		t.Fatalf("promptless events = %#v", events)
+	}
+	if agent.request != nil {
+		t.Fatalf("promptless fork unexpectedly called agent: %#v", agent.request)
+	}
+	promptlessRecord := loadSessionRecord(t, home, promptless.ThreadID)
+	if promptlessRecord.ForkedFromID != source.ID || len(promptlessRecord.Items) != len(source.Items) {
+		t.Fatalf("promptless record = %#v", promptlessRecord)
+	}
+	source.Title = "Named Fork Source"
+	if err := store.Save(source); err != nil {
+		t.Fatalf("name source returned error: %v", err)
+	}
+	if err := rollout.AppendThreadName(home, string(source.ID), source.Title); err != nil {
+		t.Fatalf("AppendThreadName returned error: %v", err)
+	}
+
+	runner.Now = func() time.Time { return now.Add(2 * time.Minute) }
+	var promptedOut bytes.Buffer
+	prompted, err := runner.Run(Request{Exec: cli.ExecOptions{
+		Subcommand: "fork",
+		JSON:       true,
+		Shared:     cli.SharedOptions{CWD: cwd},
+		Fork:       cli.ExecForkOptions{SessionID: "Named Fork Source", Prompt: "-"},
+	}}, strings.NewReader("continue on the fork"), &promptedOut, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("prompted fork returned error: %v", err)
+	}
+	if prompted.ThreadID == "fork-source" || prompted.ThreadID == promptless.ThreadID {
+		t.Fatalf("prompted thread id = %q", prompted.ThreadID)
+	}
+	if agent.request == nil || !agentRequestInputItemsContainText(agent.request, "source question") || agent.request.Prompt != "continue on the fork" {
+		t.Fatalf("prompted fork agent request = %#v", agent.request)
+	}
+	promptedRecord := loadSessionRecord(t, home, prompted.ThreadID)
+	if promptedRecord.ForkedFromID != source.ID || !sessionItemsContainText(promptedRecord.Items, "source question") || !sessionItemsContainText(promptedRecord.Items, "continue on the fork") {
+		t.Fatalf("prompted record = %#v", promptedRecord)
+	}
+	reloadedSource := loadSessionRecord(t, home, string(source.ID))
+	if len(reloadedSource.Items) != len(source.Items) || !reloadedSource.UpdatedAt.Equal(source.UpdatedAt) {
+		t.Fatalf("source changed after fork: before=%#v after=%#v", source, reloadedSource)
+	}
+}
+
+func TestRunExecPromptlessForkRejectsTurnOnlyOptions(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	tests := []struct {
+		name string
+		exec cli.ExecOptions
+		want string
+	}{
+		{name: "images", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source", Images: []string{"unused.png"}}}, want: "Forking with images requires a prompt"},
+		{name: "output schema", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, OutputSchema: "unused.json"}, want: "Forking with output options requires a prompt"},
+		{name: "last message", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, LastMessageFile: "unused.md"}, want: "Forking with output options requires a prompt"},
+		{name: "ephemeral", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, Ephemeral: true}, want: "Ephemeral forks require a prompt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.exec.Subcommand = "fork"
+			_, err := NewLocalRunner(home).Run(Request{Exec: tt.exec}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("Run error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func sessionItemsContainText(items []session.Item, text string) bool {
+	for i := range items {
+		if strings.Contains(items[i].Text, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunExecResumeLastAllIgnoresArchivedLikeRust(t *testing.T) {

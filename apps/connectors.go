@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"os"
 	"sort"
 	"strings"
 )
@@ -168,8 +169,13 @@ func pluginConnectorToAppInfo(connector PluginConnector) AppEntry {
 }
 
 func ConnectorInstallURL(name string, connectorID string) string {
+	baseURL := strings.TrimSpace(os.Getenv("CODEX_APP_SERVER_CHATGPT_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://chatgpt.com"
+	}
+	origin := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/backend-api")
 	slug := ConnectorMentionSlugFromName(name)
-	return "https://chatgpt.com/apps/" + slug + "/" + strings.TrimSpace(connectorID)
+	return origin + "/apps/" + slug + "/" + strings.TrimSpace(connectorID)
 }
 
 func ConnectorMentionSlugFromName(name string) string {

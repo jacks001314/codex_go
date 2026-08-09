@@ -17,6 +17,8 @@ import (
 
 const CodeModeExecToolName = "exec"
 
+const CodeModeDefaultExecYieldTime = 30 * time.Second
+
 const (
 	codeModeMaxFrameBytes       = 64 * 1024 * 1024
 	codeModeMaxPendingCallbacks = 1024
@@ -47,6 +49,7 @@ type codeModeExecExecutor struct {
 	warningEmitted    atomic.Bool
 	remoteCellsMu     sync.RWMutex
 	remoteCells       map[string]*Registry
+	defaultYieldMS    int
 }
 
 type CodeModeRemoteProvider interface {
@@ -175,12 +178,21 @@ type CodeModeRuntime struct {
 func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *CodeModeRuntime {
 	exec := &codeModeExecExecutor{
 		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
-		provider: provider, disableFallback: disableFallback,
+		provider: provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
 		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
 	}
 	return &CodeModeRuntime{exec: exec, wait: &codeModeWaitExecutor{exec: exec}}
+}
+
+func (r *CodeModeRuntime) SetDefaultExecYieldTime(value time.Duration) {
+	if r == nil || r.exec == nil || value < 0 || value/time.Millisecond > codeModeMaxSafeInteger {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.defaultYieldMS = int(value / time.Millisecond)
+	r.exec.bindingMu.Unlock()
 }
 
 func (r *CodeModeRuntime) Executors(registry *Registry, nestedCommandTool ...ToolName) (Executor, Executor) {
@@ -234,16 +246,25 @@ func (e *codeModeExecExecutor) binding() (*Registry, ToolName) {
 	return e.registry, e.nestedCommandTool
 }
 
+func (e *codeModeExecExecutor) defaultExecYieldTimeMS() int {
+	if e == nil {
+		return int(CodeModeDefaultExecYieldTime / time.Millisecond)
+	}
+	e.bindingMu.RLock()
+	defer e.bindingMu.RUnlock()
+	return e.defaultYieldMS
+}
+
 func (e *codeModeExecExecutor) Spec() Spec {
 	registry, nestedCommandTool := e.binding()
 	return Spec{
 		Name:        PlainName(CodeModeExecToolName),
-		Description: codeModeExecDescription(registry, nestedCommandTool),
+		Description: codeModeExecDescription(registry, nestedCommandTool, e.defaultExecYieldTimeMS()),
 		Freeform:    &FreeformSpec{Syntax: "lark", Definition: codeModeExecGrammar},
 	}
 }
 
-func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName) string {
+func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName, defaultYieldTimeMS int) string {
 	description := `Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh isolate as an async module.
 - All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
@@ -267,6 +288,7 @@ Global helpers:
 - setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
 - ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
 - yield_control(): Yields accumulated output while the script keeps running.`
+	description = strings.Replace(description, "Defaults to 10000 ms.", fmt.Sprintf("Defaults to %d ms.", defaultYieldTimeMS), 1)
 
 	if registry == nil {
 		return description
@@ -329,7 +351,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 		}
 		return nil, Fatal(fmt.Sprintf("code-mode remote host unavailable: %v", remoteErr))
 	}
-	yieldTimeMS := 10000
+	yieldTimeMS := e.defaultExecYieldTimeMS()
 	if options.YieldTimeMS != nil {
 		yieldTimeMS = *options.YieldTimeMS
 	}
@@ -410,11 +432,12 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		outputSchema, _ := json.Marshal(spec.OutputSchema)
 		definitions = append(definitions, CodeModeRemoteToolDefinition{Name: nested.globalName, ToolName: name, Description: spec.Description, Kind: kind, InputSchema: inputSchema, OutputSchema: outputSchema})
 	}
-	var yield *uint64
+	yieldTimeMS := e.defaultExecYieldTimeMS()
 	if options.YieldTimeMS != nil {
-		value := uint64(*options.YieldTimeMS)
-		yield = &value
+		yieldTimeMS = *options.YieldTimeMS
 	}
+	yieldValue := uint64(yieldTimeMS)
+	yield := &yieldValue
 	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens})
 	if err != nil {
 		return nil, err

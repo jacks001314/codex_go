@@ -765,12 +765,15 @@ type ConfiguredHookGroup struct {
 }
 
 type ConfiguredHookHandler struct {
-	Type           string  `json:"type"`
-	Command        string  `json:"command,omitempty"`
-	CommandWindows *string `json:"commandWindows,omitempty"`
-	TimeoutSec     *uint64 `json:"timeoutSec,omitempty"`
-	Async          bool    `json:"async,omitempty"`
-	StatusMessage  *string `json:"statusMessage,omitempty"`
+	Type           string         `json:"type"`
+	Command        string         `json:"command,omitempty"`
+	CommandWindows *string        `json:"commandWindows,omitempty"`
+	Server         string         `json:"server,omitempty"`
+	Tool           string         `json:"tool,omitempty"`
+	Input          map[string]any `json:"input,omitempty"`
+	TimeoutSec     *uint64        `json:"timeoutSec,omitempty"`
+	Async          bool           `json:"async,omitempty"`
+	StatusMessage  *string        `json:"statusMessage,omitempty"`
 }
 
 func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
@@ -795,6 +798,18 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 		return json.Marshal(struct {
 			Type string `json:"type"`
 		}{Type: h.Type})
+	case "mcp_tool":
+		return json.Marshal(struct {
+			Type          string         `json:"type"`
+			Server        string         `json:"server"`
+			Tool          string         `json:"tool"`
+			Input         map[string]any `json:"input"`
+			TimeoutSec    *uint64        `json:"timeoutSec"`
+			StatusMessage *string        `json:"statusMessage"`
+		}{
+			Type: h.Type, Server: h.Server, Tool: h.Tool, Input: cloneMap(h.Input),
+			TimeoutSec: cloneUint64Ptr(h.TimeoutSec), StatusMessage: cloneStringPtr(h.StatusMessage),
+		})
 	default:
 		type configuredHookHandlerAlias ConfiguredHookHandler
 		return json.Marshal((*configuredHookHandlerAlias)(h))
@@ -3142,6 +3157,7 @@ func hookGroupsForJSON(values []ConfiguredHookGroup) []ConfiguredHookGroup {
 				out[i].Hooks[j].TimeoutSec = &value
 			}
 			out[i].Hooks[j].StatusMessage = cloneStringPtr(out[i].Hooks[j].StatusMessage)
+			out[i].Hooks[j].Input = cloneMap(out[i].Hooks[j].Input)
 		}
 		if out[i].Hooks == nil {
 			out[i].Hooks = []ConfiguredHookHandler{}

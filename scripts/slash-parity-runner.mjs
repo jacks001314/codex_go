@@ -97,7 +97,7 @@ async function runCase(testCase) {
   });
 
   proc.onData((data) => outputChunks.push(data));
-  await waitForOutput(outputChunks, "OpenAI Codex", 10000).catch(() => {});
+  await waitForOutput(outputChunks, "gcode", 10000).catch(() => {});
 
   for (const command of commands) {
     proc.write(command + "\r");

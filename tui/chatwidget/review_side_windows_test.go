@@ -73,8 +73,8 @@ func TestReviewCustomPromptTarget(t *testing.T) {
 }
 
 func TestSideConversationStateAndPlainSubmitPolicy(t *testing.T) {
-	state := NewSideConversationState(" Ask Codex ", " Ask in side thread ")
-	if state.Placeholder() != " Ask Codex " {
+	state := NewSideConversationState(" Ask gcode ", " Ask in side thread ")
+	if state.Placeholder() != " Ask gcode " {
 		t.Fatalf("placeholder = %q", state.Placeholder())
 	}
 	state.SetActive(true)

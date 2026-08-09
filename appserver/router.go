@@ -247,33 +247,34 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 		return nil, nil
 	}
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
-		CodexHome:               codexHome,
-		SessionID:               record.SessionID,
-		SessionPrefix:           record.Metadata.SessionPrefix,
-		ThreadID:                string(record.ID),
-		ForkedFromID:            string(record.ForkedFromID),
-		Source:                  record.Metadata.Source,
-		ThreadSource:            record.Metadata.ThreadSource,
-		Originator:              record.Metadata.Originator,
-		CWD:                     record.Metadata.CWD,
-		Model:                   record.Metadata.Model,
-		ModelProvider:           record.Metadata.ModelProvider,
-		HistoryMode:             record.Metadata.HistoryMode,
-		HistoryBase:             rolloutHistoryPositionFromRecord(record.HistoryBase),
-		MemoryMode:              record.Metadata.MemoryMode,
-		ParentThreadID:          string(record.ParentThreadID),
-		BaseInstructions:        record.Metadata.BaseInstructions,
-		AgentNickname:           record.Metadata.AgentNickname,
-		AgentRole:               record.Metadata.AgentRole,
-		AgentPath:               record.Metadata.AgentPath,
-		DynamicTools:            record.Metadata.DynamicTools,
-		SelectedCapabilityRoots: record.Metadata.SelectedCapabilityRoots,
-		MultiAgentVersion:       record.Metadata.MultiAgentVersion,
-		ContextWindow:           record.Metadata.ContextWindow,
-		CLIVersion:              record.Metadata.CLIVersion,
-		Git:                     record.Metadata.Git,
-		Extra:                   record.Metadata.Extra,
-		Now:                     now,
+		CodexHome:                  codexHome,
+		SessionID:                  record.SessionID,
+		SessionPrefix:              record.Metadata.SessionPrefix,
+		ThreadID:                   string(record.ID),
+		ForkedFromID:               string(record.ForkedFromID),
+		Source:                     record.Metadata.Source,
+		ThreadSource:               record.Metadata.ThreadSource,
+		Originator:                 record.Metadata.Originator,
+		CWD:                        record.Metadata.CWD,
+		Model:                      record.Metadata.Model,
+		ModelProvider:              record.Metadata.ModelProvider,
+		HistoryMode:                record.Metadata.HistoryMode,
+		HistoryBase:                rolloutHistoryPositionFromRecord(record.HistoryBase),
+		MemoryMode:                 record.Metadata.MemoryMode,
+		ParentThreadID:             string(record.ParentThreadID),
+		BaseInstructions:           record.Metadata.BaseInstructions,
+		BaseInstructionsProvenance: cloneSessionBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
+		AgentNickname:              record.Metadata.AgentNickname,
+		AgentRole:                  record.Metadata.AgentRole,
+		AgentPath:                  record.Metadata.AgentPath,
+		DynamicTools:               record.Metadata.DynamicTools,
+		SelectedCapabilityRoots:    record.Metadata.SelectedCapabilityRoots,
+		MultiAgentVersion:          record.Metadata.MultiAgentVersion,
+		ContextWindow:              record.Metadata.ContextWindow,
+		CLIVersion:                 record.Metadata.CLIVersion,
+		Git:                        record.Metadata.Git,
+		Extra:                      record.Metadata.Extra,
+		Now:                        now,
 	})
 	if err != nil {
 		return nil, err
@@ -377,32 +378,33 @@ func rolloutSessionMetaFromRecord(record *session.Record) *rollout.SessionMeta {
 		createdAt = time.Now().UTC()
 	}
 	return &rollout.SessionMeta{
-		ID:                      string(record.ID),
-		SessionID:               record.SessionID,
-		SessionPrefix:           record.Metadata.SessionPrefix,
-		ForkedFromID:            string(record.ForkedFromID),
-		Timestamp:               createdAt.Format(time.RFC3339),
-		CWD:                     record.Metadata.CWD,
-		Model:                   record.Metadata.Model,
-		Source:                  record.Metadata.Source,
-		ThreadSource:            record.Metadata.ThreadSource,
-		Originator:              record.Metadata.Originator,
-		ModelProvider:           record.Metadata.ModelProvider,
-		HistoryMode:             record.Metadata.HistoryMode,
-		HistoryBase:             rolloutHistoryPositionFromRecord(record.HistoryBase),
-		MemoryMode:              record.Metadata.MemoryMode,
-		ParentThreadID:          string(record.ParentThreadID),
-		BaseInstructions:        record.Metadata.BaseInstructions,
-		AgentNickname:           record.Metadata.AgentNickname,
-		AgentRole:               record.Metadata.AgentRole,
-		AgentPath:               record.Metadata.AgentPath,
-		DynamicTools:            cloneRawMessages(record.Metadata.DynamicTools),
-		SelectedCapabilityRoots: cloneRawMessages(record.Metadata.SelectedCapabilityRoots),
-		MultiAgentVersion:       record.Metadata.MultiAgentVersion,
-		ContextWindow:           append(json.RawMessage(nil), record.Metadata.ContextWindow...),
-		CLIVersion:              record.Metadata.CLIVersion,
-		Git:                     cloneStringMap(record.Metadata.Git),
-		Extra:                   cloneAnyMapForRouter(record.Metadata.Extra),
+		ID:                         string(record.ID),
+		SessionID:                  record.SessionID,
+		SessionPrefix:              record.Metadata.SessionPrefix,
+		ForkedFromID:               string(record.ForkedFromID),
+		Timestamp:                  createdAt.Format(time.RFC3339),
+		CWD:                        record.Metadata.CWD,
+		Model:                      record.Metadata.Model,
+		Source:                     record.Metadata.Source,
+		ThreadSource:               record.Metadata.ThreadSource,
+		Originator:                 record.Metadata.Originator,
+		ModelProvider:              record.Metadata.ModelProvider,
+		HistoryMode:                record.Metadata.HistoryMode,
+		HistoryBase:                rolloutHistoryPositionFromRecord(record.HistoryBase),
+		MemoryMode:                 record.Metadata.MemoryMode,
+		ParentThreadID:             string(record.ParentThreadID),
+		BaseInstructions:           record.Metadata.BaseInstructions,
+		BaseInstructionsProvenance: cloneSessionBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
+		AgentNickname:              record.Metadata.AgentNickname,
+		AgentRole:                  record.Metadata.AgentRole,
+		AgentPath:                  record.Metadata.AgentPath,
+		DynamicTools:               cloneRawMessages(record.Metadata.DynamicTools),
+		SelectedCapabilityRoots:    cloneRawMessages(record.Metadata.SelectedCapabilityRoots),
+		MultiAgentVersion:          record.Metadata.MultiAgentVersion,
+		ContextWindow:              append(json.RawMessage(nil), record.Metadata.ContextWindow...),
+		CLIVersion:                 record.Metadata.CLIVersion,
+		Git:                        cloneStringMap(record.Metadata.Git),
+		Extra:                      cloneAnyMapForRouter(record.Metadata.Extra),
 	}
 }
 
@@ -438,6 +440,38 @@ func (r *Router) appendThreadRollback(threadID session.ThreadID, numTurns int, n
 	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
 	return recorder.AppendThreadRolledBack(uint32(numTurns), now)
+}
+
+func (r *Router) appendThreadSettingsApplied(threadID session.ThreadID, approvalPolicy string, now time.Time) error {
+	if r == nil || r.store == nil || strings.TrimSpace(approvalPolicy) == "" {
+		return nil
+	}
+	path, err := r.findThreadRolloutPath(threadID, false)
+	if err != nil {
+		return nil
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	r.configureThreadHistoryRecorder(recorder, threadID)
+	defer recorder.Close()
+	return recorder.AppendThreadSettingsApplied(approvalPolicy, now)
+}
+
+func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, bool) {
+	if r == nil || record == nil {
+		return "", false
+	}
+	path := r.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return "", false
+	}
+	return rollout.LatestPersistedApprovalPolicy(lines)
 }
 
 func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string, replacement []session.Item, now time.Time) error {
@@ -1067,13 +1101,29 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 			thread.Turns = paginatedTurns
 		}
 	}
+	approvalPolicy := params.ApprovalPolicy
+	if approvalPolicy == nil {
+		if value, ok := r.latestPersistedApprovalPolicy(record); ok {
+			approvalPolicy = value
+		}
+	}
+	if approvalPolicy == nil {
+		if value, ok := params.Config["approval_policy"]; ok {
+			if _, valid := parseTurnApprovalPolicy(value); valid {
+				approvalPolicy = value
+			}
+		}
+	}
+	if approvalPolicy == nil && record != nil && strings.TrimSpace(record.Metadata.ApprovalPolicy) != "" {
+		approvalPolicy = record.Metadata.ApprovalPolicy
+	}
 	response := &ThreadResumeResponse{
 		Thread:                  thread,
 		CWD:                     cwd,
 		Model:                   firstNonEmpty(stringPtrValue(params.Model), record.Metadata.Model),
 		ModelProvider:           firstNonEmpty(stringPtrValue(params.ModelProvider), record.Metadata.ModelProvider),
 		ServiceTier:             resumeServiceTier(&params, record),
-		ApprovalPolicy:          params.ApprovalPolicy,
+		ApprovalPolicy:          approvalPolicy,
 		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
 		Sandbox:                 params.Sandbox,
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
@@ -1812,6 +1862,7 @@ func applyThreadForkOverrides(record *session.Record, params *ThreadForkParams) 
 	}
 	if params.BaseInstructions != nil {
 		record.Metadata.BaseInstructions = stringPtrValue(params.BaseInstructions)
+		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom}
 	}
 	if params.DeveloperInstructions != nil {
 		record.Metadata.Instructions = stringPtrValue(params.DeveloperInstructions)
@@ -1832,6 +1883,14 @@ func applyThreadForkOverrides(record *session.Record, params *ThreadForkParams) 
 	if params.ServiceTierSet || params.ServiceTier != nil {
 		record.Metadata.ServiceTier = threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, record.Metadata.Model)
 	}
+}
+
+func cloneSessionBaseInstructionsProvenance(value *session.BaseInstructionsProvenance) *session.BaseInstructionsProvenance {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 const explicitThreadNameExtraKey = "thread_name_explicit"

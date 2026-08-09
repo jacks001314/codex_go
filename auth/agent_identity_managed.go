@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 
 const maxAgentIdentityBootstrapAttempts = 3
 const agentIdentityBootstrapFailureCooldown = time.Hour
+
+const AgentIdentityAuthAPIBaseURLEnv = "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL"
 
 var agentIdentityBootstrapCooldown agentIdentityBootstrapCooldownState
 
@@ -398,6 +401,9 @@ func cloneAgentIdentityRecord(record *AgentIdentityAuthRecord) *AgentIdentityAut
 func agentIdentityAuthAPIBaseURL(chatGPTBaseURL string, explicit string) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return strings.TrimRight(strings.TrimSpace(explicit), "/"), nil
+	}
+	if override := strings.TrimSpace(os.Getenv(AgentIdentityAuthAPIBaseURLEnv)); override != "" {
+		return strings.TrimRight(override, "/"), nil
 	}
 	if strings.TrimSpace(chatGPTBaseURL) == "" {
 		environment := agent.ChatGPTProduction

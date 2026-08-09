@@ -34,6 +34,7 @@ const (
 	HookHandlerCommand HookHandlerType = "command"
 	HookHandlerPrompt  HookHandlerType = "prompt"
 	HookHandlerAgent   HookHandlerType = "agent"
+	HookHandlerMCPTool HookHandlerType = "mcp_tool"
 )
 
 type HookExecutionMode string

@@ -699,7 +699,7 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 		t.Fatalf("interactive returned error: %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "OpenAI Codex") ||
+	if !strings.Contains(output, "gcode") ||
 		!strings.Contains(output, "Model: gpt-5.6-sol") ||
 		!strings.Contains(output, "Directory:") ||
 		!strings.Contains(output, "first turn") ||
@@ -3342,7 +3342,7 @@ func TestInteractiveDumbTerminalTTYConfirmationLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "OpenAI Codex") || !strings.Contains(stdout.String(), "Directory:") {
+	if !strings.Contains(stdout.String(), "gcode") || !strings.Contains(stdout.String(), "Directory:") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

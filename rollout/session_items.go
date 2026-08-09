@@ -394,25 +394,26 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		UpdatedAt:      updatedAt,
 		RecencyAt:      recencyAt,
 		Metadata: session.Metadata{
-			CWD:                     meta.CWD,
-			Model:                   meta.Model,
-			ModelProvider:           meta.ModelProvider,
-			Source:                  meta.Source,
-			ThreadSource:            meta.ThreadSource,
-			Originator:              meta.Originator,
-			HistoryMode:             meta.HistoryMode,
-			MemoryMode:              meta.MemoryMode,
-			BaseInstructions:        meta.BaseInstructions,
-			SessionPrefix:           meta.SessionPrefix,
-			CLIVersion:              meta.CLIVersion,
-			AgentNickname:           meta.AgentNickname,
-			AgentRole:               meta.AgentRole,
-			AgentPath:               meta.AgentPath,
-			DynamicTools:            cloneRawMessages(meta.DynamicTools),
-			SelectedCapabilityRoots: cloneRawMessages(meta.SelectedCapabilityRoots),
-			MultiAgentVersion:       meta.MultiAgentVersion,
-			ContextWindow:           append(json.RawMessage(nil), meta.ContextWindow...),
-			Git:                     cloneStringMap(meta.Git),
+			CWD:                        meta.CWD,
+			Model:                      meta.Model,
+			ModelProvider:              meta.ModelProvider,
+			Source:                     meta.Source,
+			ThreadSource:               meta.ThreadSource,
+			Originator:                 meta.Originator,
+			HistoryMode:                meta.HistoryMode,
+			MemoryMode:                 meta.MemoryMode,
+			BaseInstructions:           meta.BaseInstructions,
+			BaseInstructionsProvenance: cloneBaseInstructionsProvenance(meta.BaseInstructionsProvenance),
+			SessionPrefix:              meta.SessionPrefix,
+			CLIVersion:                 meta.CLIVersion,
+			AgentNickname:              meta.AgentNickname,
+			AgentRole:                  meta.AgentRole,
+			AgentPath:                  meta.AgentPath,
+			DynamicTools:               cloneRawMessages(meta.DynamicTools),
+			SelectedCapabilityRoots:    cloneRawMessages(meta.SelectedCapabilityRoots),
+			MultiAgentVersion:          meta.MultiAgentVersion,
+			ContextWindow:              append(json.RawMessage(nil), meta.ContextWindow...),
+			Git:                        cloneStringMap(meta.Git),
 			PreviousResponseID: firstNonEmptyString(
 				stringFromMap(meta.Extra, "previous_response_id"),
 				stringFromMap(meta.Extra, "previousResponseId"),
@@ -452,6 +453,90 @@ func applyRolloutContextMetadata(record *session.Record, lines []Line) {
 			record.Metadata.WorldState = append(json.RawMessage(nil), lines[i].WorldState...)
 		}
 	}
+	if approvalPolicy, ok := LatestPersistedApprovalPolicy(lines); ok {
+		record.Metadata.ApprovalPolicy = approvalPolicy
+	}
+}
+
+// LatestPersistedApprovalPolicy returns the approval policy that a cold
+// thread resume should restore. A settings event applied during a turn takes
+// precedence over that turn's stale compacted context.
+func LatestPersistedApprovalPolicy(lines []Line) (string, bool) {
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := &lines[index]
+		if policy, ok := approvalPolicyFromSettingsEvent(line.Payload); ok {
+			return policy, true
+		}
+		if len(line.TurnContext) == 0 {
+			continue
+		}
+		contextPolicy, contextOK := approvalPolicyFromTurnContext(line.TurnContext)
+		if !contextOK {
+			continue
+		}
+		turnID := turnIDFromTurnContext(line.TurnContext)
+		if turnID != "" {
+			if turnStart := latestTurnStartBefore(lines, index, turnID); turnStart >= 0 {
+				for j := index - 1; j > turnStart; j-- {
+					if policy, ok := approvalPolicyFromSettingsEvent(lines[j].Payload); ok {
+						return policy, true
+					}
+				}
+			}
+		}
+		return contextPolicy, true
+	}
+	return "", false
+}
+
+func approvalPolicyFromSettingsEvent(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var event struct {
+		Type           string `json:"type"`
+		ThreadSettings struct {
+			ApprovalPolicy string `json:"approval_policy"`
+		} `json:"thread_settings"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil || strings.TrimSpace(event.Type) != "thread_settings_applied" {
+		return "", false
+	}
+	policy := strings.TrimSpace(event.ThreadSettings.ApprovalPolicy)
+	return policy, policy != ""
+}
+
+func approvalPolicyFromTurnContext(raw json.RawMessage) (string, bool) {
+	var values map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return "", false
+	}
+	policy := strings.TrimSpace(stringFromAny(values["approval_policy"]))
+	return policy, policy != ""
+}
+
+func turnIDFromTurnContext(raw json.RawMessage) string {
+	var values map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	return firstNonEmptyString(stringFromAny(values["turn_id"]), stringFromAny(values["turnId"]))
+}
+
+func latestTurnStartBefore(lines []Line, before int, turnID string) int {
+	for index := before - 1; index >= 0; index-- {
+		if lines[index].Type != "event_msg" || len(lines[index].Payload) == 0 {
+			continue
+		}
+		var event rolloutEventPayload
+		if json.Unmarshal(lines[index].Payload, &event) != nil || normalizeRolloutEventType(event.Type) != "turn_started" {
+			continue
+		}
+		if firstNonEmptyString(event.TurnID, event.TurnIDCamel) == turnID {
+			return index
+		}
+	}
+	return -1
 }
 
 func applyRolloutTokenUsageMetadata(record *session.Record, lines []Line) {

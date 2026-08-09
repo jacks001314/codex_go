@@ -118,7 +118,7 @@ func TestRuntimeCheckReportsBuildCommitAndInstallMethod(t *testing.T) {
 func TestInstallCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 	home := t.TempDir()
 	npmRoot := filepath.Join(home, "npm")
-	packageRoot := filepath.Join(npmRoot, "@openai", "codex")
+	packageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", packageRoot)
@@ -152,9 +152,9 @@ func TestInstallCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 
 func TestInstallCheckReportsNPMRootMismatchLikeRust(t *testing.T) {
 	home := t.TempDir()
-	runningRoot := filepath.Join(home, "running", "@openai", "codex")
+	runningRoot := filepath.Join(home, "running", "@jacks001314", "codex-go")
 	npmRoot := filepath.Join(home, "npm")
-	npmPackageRoot := filepath.Join(npmRoot, "@openai", "codex")
+	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", runningRoot)
@@ -168,7 +168,7 @@ func TestInstallCheckReportsNPMRootMismatchLikeRust(t *testing.T) {
 	check := installCheck(home, false, func() (string, error) {
 		return filepath.Join(home, "bin", "codex"), nil
 	})
-	if check.Status != CheckStatusFail || check.Summary != "npm install -g @openai/codex would update a different install" {
+	if check.Status != CheckStatusFail || check.Summary != "npm install -g @jacks001314/codex-go@latest would update a different install" {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
@@ -212,7 +212,7 @@ func TestInstallCheckIgnoresInheritedManagedEnvForCargoBinaryLikeRust(t *testing
 	home := t.TempDir()
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	t.Setenv("CODEX_MANAGED_BY_BUN", "")
-	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@openai", "codex"))
+	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@jacks001314", "codex-go"))
 	withNPMRootCommandForDoctor(t, func() (string, error) {
 		t.Fatal("npm root should not be called for target/release binary")
 		return "", nil
@@ -914,7 +914,7 @@ func TestUpdatesCheckReportsCacheAndProbeWarning(t *testing.T) {
 func TestUpdatesCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 	home := t.TempDir()
 	npmRoot := filepath.Join(home, "npm")
-	packageRoot := filepath.Join(npmRoot, "@openai", "codex")
+	packageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", packageRoot)
@@ -938,9 +938,9 @@ func TestUpdatesCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 
 func TestUpdatesCheckReportsNPMRootMismatchLikeRust(t *testing.T) {
 	home := t.TempDir()
-	runningRoot := filepath.Join(home, "running", "@openai", "codex")
+	runningRoot := filepath.Join(home, "running", "@jacks001314", "codex-go")
 	npmRoot := filepath.Join(home, "npm")
-	npmPackageRoot := filepath.Join(npmRoot, "@openai", "codex")
+	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", runningRoot)
@@ -999,7 +999,7 @@ func TestUpdatesCheckIgnoresInheritedNPMEnvForCargoBinaryLikeRust(t *testing.T) 
 	home := t.TempDir()
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
-	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@openai", "codex"))
+	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@jacks001314", "codex-go"))
 	withNPMRootCommandForDoctor(t, func() (string, error) {
 		t.Fatal("npm root should not be called for target/debug binary")
 		return "", nil
@@ -1083,7 +1083,7 @@ func TestConfigCheckReportsLegacyFeatureUsage(t *testing.T) {
 }
 
 func TestUpdateActionLabelAndStatusText(t *testing.T) {
-	if got := updateActionLabel(&install.InstallContext{Method: install.InstallMethod{Kind: install.InstallNPM}}); got != "npm install -g @openai/codex" {
+	if got := updateActionLabel(&install.InstallContext{Method: install.InstallMethod{Kind: install.InstallNPM}}); got != "npm install -g @jacks001314/codex-go@latest" {
 		t.Fatalf("updateActionLabel npm = %q", got)
 	}
 	if got := updateActionLabel(&install.InstallContext{Method: install.InstallMethod{Kind: install.InstallOther}}); got != "manual or unknown" {

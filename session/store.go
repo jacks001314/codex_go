@@ -206,40 +206,54 @@ type ContentPart struct {
 }
 
 type Metadata struct {
-	CWD                     string            `json:"cwd,omitempty"`
-	Model                   string            `json:"model,omitempty"`
-	ModelProvider           string            `json:"model_provider,omitempty"`
-	Source                  string            `json:"source,omitempty"`
-	ThreadSource            string            `json:"thread_source,omitempty"`
-	Originator              string            `json:"originator,omitempty"`
-	HistoryMode             string            `json:"history_mode,omitempty"`
-	MemoryMode              string            `json:"memory_mode,omitempty"`
-	Git                     map[string]string `json:"git,omitempty"`
-	BaseInstructions        string            `json:"base_instructions,omitempty"`
-	Instructions            string            `json:"instructions,omitempty"`
-	ApprovalPolicy          string            `json:"approval_policy,omitempty"`
-	SandboxPolicy           string            `json:"sandbox_policy,omitempty"`
-	ServiceTier             string            `json:"service_tier,omitempty"`
-	PromptCacheKey          string            `json:"prompt_cache_key,omitempty"`
-	PreviousResponseID      string            `json:"previous_response_id,omitempty"`
-	LastResponseID          string            `json:"last_response_id,omitempty"`
-	SessionPrefix           string            `json:"session_prefix,omitempty"`
-	CLIVersion              string            `json:"cli_version,omitempty"`
-	AgentNickname           string            `json:"agent_nickname,omitempty"`
-	AgentRole               string            `json:"agent_role,omitempty"`
-	AgentPath               string            `json:"agent_path,omitempty"`
-	AgentDepth              int               `json:"agent_depth,omitempty"`
-	DynamicTools            []json.RawMessage `json:"dynamic_tools,omitempty"`
-	SelectedCapabilityRoots []json.RawMessage `json:"selected_capability_roots,omitempty"`
-	MultiAgentVersion       string            `json:"multi_agent_version,omitempty"`
-	ContextWindow           json.RawMessage   `json:"context_window,omitempty"`
-	TurnContext             json.RawMessage   `json:"turn_context,omitempty"`
-	WorldState              json.RawMessage   `json:"world_state,omitempty"`
-	SelectedModelProvider   string            `json:"selected_model_provider,omitempty"`
-	ElicitationCount        int               `json:"elicitation_count,omitempty"`
-	Extra                   map[string]any    `json:"extra,omitempty"`
-	RolloutTurns            []TurnSnapshot    `json:"rollout_turns,omitempty"`
+	CWD                        string                      `json:"cwd,omitempty"`
+	Model                      string                      `json:"model,omitempty"`
+	ModelProvider              string                      `json:"model_provider,omitempty"`
+	Source                     string                      `json:"source,omitempty"`
+	ThreadSource               string                      `json:"thread_source,omitempty"`
+	Originator                 string                      `json:"originator,omitempty"`
+	HistoryMode                string                      `json:"history_mode,omitempty"`
+	MemoryMode                 string                      `json:"memory_mode,omitempty"`
+	Git                        map[string]string           `json:"git,omitempty"`
+	BaseInstructions           string                      `json:"base_instructions,omitempty"`
+	BaseInstructionsProvenance *BaseInstructionsProvenance `json:"base_instructions_provenance,omitempty"`
+	Instructions               string                      `json:"instructions,omitempty"`
+	ApprovalPolicy             string                      `json:"approval_policy,omitempty"`
+	SandboxPolicy              string                      `json:"sandbox_policy,omitempty"`
+	ServiceTier                string                      `json:"service_tier,omitempty"`
+	PromptCacheKey             string                      `json:"prompt_cache_key,omitempty"`
+	PreviousResponseID         string                      `json:"previous_response_id,omitempty"`
+	LastResponseID             string                      `json:"last_response_id,omitempty"`
+	SessionPrefix              string                      `json:"session_prefix,omitempty"`
+	CLIVersion                 string                      `json:"cli_version,omitempty"`
+	AgentNickname              string                      `json:"agent_nickname,omitempty"`
+	AgentRole                  string                      `json:"agent_role,omitempty"`
+	AgentPath                  string                      `json:"agent_path,omitempty"`
+	AgentDepth                 int                         `json:"agent_depth,omitempty"`
+	DynamicTools               []json.RawMessage           `json:"dynamic_tools,omitempty"`
+	SelectedCapabilityRoots    []json.RawMessage           `json:"selected_capability_roots,omitempty"`
+	MultiAgentVersion          string                      `json:"multi_agent_version,omitempty"`
+	ContextWindow              json.RawMessage             `json:"context_window,omitempty"`
+	TurnContext                json.RawMessage             `json:"turn_context,omitempty"`
+	WorldState                 json.RawMessage             `json:"world_state,omitempty"`
+	SelectedModelProvider      string                      `json:"selected_model_provider,omitempty"`
+	ElicitationCount           int                         `json:"elicitation_count,omitempty"`
+	Extra                      map[string]any              `json:"extra,omitempty"`
+	RolloutTurns               []TurnSnapshot              `json:"rollout_turns,omitempty"`
 }
+
+// BaseInstructionsProvenance records whether persisted instructions were explicit or
+// generated from a model template. Model-generated instructions are recomputed when
+// a resumed turn selects a different model or personality.
+type BaseInstructionsProvenance struct {
+	Type  string `json:"type"`
+	Model string `json:"model,omitempty"`
+}
+
+const (
+	BaseInstructionsProvenanceCustom = "custom"
+	BaseInstructionsProvenanceModel  = "model"
+)
 
 type TurnSnapshot struct {
 	ID             string `json:"id"`
@@ -2144,6 +2158,7 @@ func LocalRecord(record *Record) *Record {
 
 func cloneMetadata(metadata Metadata) Metadata {
 	metadata.Git = cloneStringMap(metadata.Git)
+	metadata.BaseInstructionsProvenance = cloneBaseInstructionsProvenance(metadata.BaseInstructionsProvenance)
 	metadata.Extra = cloneAnyMap(metadata.Extra)
 	metadata.DynamicTools = cloneRawMessages(metadata.DynamicTools)
 	metadata.SelectedCapabilityRoots = cloneRawMessages(metadata.SelectedCapabilityRoots)
@@ -2151,6 +2166,14 @@ func cloneMetadata(metadata Metadata) Metadata {
 	metadata.TurnContext = append(json.RawMessage(nil), metadata.TurnContext...)
 	metadata.WorldState = append(json.RawMessage(nil), metadata.WorldState...)
 	return metadata
+}
+
+func cloneBaseInstructionsProvenance(value *BaseInstructionsProvenance) *BaseInstructionsProvenance {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func forkMetadata(source *Record, options ForkOptions, now time.Time, itemCount int) Metadata {

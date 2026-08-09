@@ -29,7 +29,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 			"Thread: thread-wide",
 			" ACTIVITY ─────────",
 			"╭────────────────",
-			"│ > Ask Codex",
+			"│ > Ask gcode",
 			"╰────────────────",
 		} {
 			if !strings.Contains(got, want) {
@@ -70,7 +70,7 @@ Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sand.
 
 
 
-> Ask Codex
+> Ask gcode
 >
 >
 Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)

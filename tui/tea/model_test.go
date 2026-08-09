@@ -141,12 +141,12 @@ func TestModelStatusCommandAddsRustStyleHistoryCell(t *testing.T) {
 		t.Fatalf("status messages = %#v", state.Messages)
 	}
 	raw := state.Messages[0].RawText
-	for _, want := range []string{"OpenAI Codex (v0.145.0)", "Thread name:", "Status parity", "Session:", "thread-status"} {
+	for _, want := range []string{"gcode (v0.145.0)", "Thread name:", "Status parity", "Session:", "thread-status"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("status output missing %q:\n%s", want, raw)
 		}
 	}
-	for _, notWant := range []string{"OpenAI Codex (Go)", "API key configured", "Session:             new"} {
+	for _, notWant := range []string{"gcode (Go)", "API key configured", "Session:             new"} {
 		if strings.Contains(raw, notWant) {
 			t.Fatalf("status output contains stale %q:\n%s", notWant, raw)
 		}
@@ -164,7 +164,7 @@ func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
 	model := NewModel(state, Options{Width: 120, Height: 28})
 
 	view := utils.StripANSI(model.View())
-	for _, want := range []string{" ACTIVITY ─", "╭", "╰", "Ask Codex"} {
+	for _, want := range []string{" ACTIVITY ─", "╭", "╰", "Ask gcode"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("wide view missing region chrome %q:\n%s", want, view)
 		}
@@ -190,7 +190,7 @@ func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 	})
 	model := NewModel(state, Options{Width: 90, Height: 18, ShowSessionHeader: true, SessionHeaderVersion: "0.142.5"})
 	view := model.View()
-	for _, want := range []string{"OpenAI Codex", "model:", "gpt-5.5 xhigh", "directory:", `D:\repo`} {
+	for _, want := range []string{"gcode", "model:", "gpt-5.5 xhigh", "directory:", `D:\repo`} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -304,7 +304,7 @@ func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
 	if strings.Contains(view, "Thinking") {
 		t.Fatalf("Working indicator should not render a separate Thinking line:\n%s", view)
 	}
-	if !strings.Contains(view, "Ask Codex") {
+	if !strings.Contains(view, "Ask gcode") {
 		t.Fatalf("composer should remain visible below Working indicator:\n%s", view)
 	}
 }
@@ -1107,7 +1107,7 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	if !strings.Contains(view, "T R A N S C R I P T") {
 		t.Fatalf("overlay view missing title:\n%s", view)
 	}
-	if strings.Contains(view, "Ask Codex") {
+	if strings.Contains(view, "Ask gcode") {
 		t.Fatalf("overlay should hide composer:\n%s", view)
 	}
 	if !model.overlay.AtBottom() || model.overlay.YOffset() <= 0 {
@@ -1411,7 +1411,7 @@ func TestModelDiffCommandOpensPager(t *testing.T) {
 			t.Fatalf("diff pager missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Ask Codex") {
+	if strings.Contains(view, "Ask gcode") {
 		t.Fatalf("diff pager should hide composer:\n%s", view)
 	}
 }

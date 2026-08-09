@@ -64,6 +64,7 @@ type ResponsesAgentOptions struct {
 	ProviderID                 string
 	ProviderCapabilities       *ProviderCapabilities
 	ProviderRequiresOpenAIAuth bool
+	ProviderUsesOwnCredentials bool
 	Stream                     bool
 	StreamHandler              ResponsesStreamHandler
 	CodexHome                  string
@@ -87,6 +88,7 @@ type ResponsesAgentRunner struct {
 	ProviderID                 string
 	ProviderCapabilities       ProviderCapabilities
 	ProviderRequiresOpenAIAuth bool
+	ProviderUsesOwnCredentials bool
 	Stream                     bool
 	StreamHandler              ResponsesStreamHandler
 	CodexHome                  string
@@ -328,6 +330,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		ProviderID:                 strings.TrimSpace(options.ProviderID),
 		ProviderCapabilities:       providerCapabilities,
 		ProviderRequiresOpenAIAuth: providerRequiresOpenAIAuth,
+		ProviderUsesOwnCredentials: options.ProviderUsesOwnCredentials || provider.Auth != nil,
 		Stream:                     options.Stream,
 		StreamHandler:              options.StreamHandler,
 		CodexHome:                  strings.TrimSpace(options.CodexHome),
@@ -425,7 +428,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		modelID = "gpt-5.5"
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
@@ -541,7 +544,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: cloneAnySlice(request.Tools), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -754,6 +757,7 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		return nil, err
 	}
 	modelsManager := runtimeProvider.ModelsManager(nil)
+	providerInfo := runtimeProvider.Info()
 	if remote, ok := modelsManager.(*RemoteModelsManager); ok && strings.TrimSpace(codexHome) != "" {
 		remote.ConfigureCache(filepath.Clean(codexHome))
 	}
@@ -763,12 +767,13 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		HTTPClient:                 httpClient,
 		ProviderID:                 providerID,
 		ProviderCapabilities:       cloneProviderCapabilities(runtimeProvider.Capabilities()),
-		ProviderRequiresOpenAIAuth: runtimeProvider.Info().RequiresOpenAIAuth,
+		ProviderRequiresOpenAIAuth: providerInfo.RequiresOpenAIAuth,
+		ProviderUsesOwnCredentials: strings.TrimSpace(providerInfo.EnvKey) != "" || strings.TrimSpace(providerInfo.ExperimentalBearerToken) != "" || providerInfo.Auth != nil,
 		CodexHome:                  codexHome,
 		AuthSnapshot:               snapshot,
 		ModelsManager:              modelsManager,
 		IncludeAttestation:         runtimeProvider.SupportsAttestation(),
-		SupportsWebsockets:         runtimeProvider.Info().SupportsWebsockets,
+		SupportsWebsockets:         providerInfo.SupportsWebsockets,
 		WebsocketConnectTimeout: func() time.Duration {
 			info := runtimeProvider.Info()
 			return (&info).EffectiveWebsocketConnectTimeout()
@@ -819,10 +824,11 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	modelInfo := r.modelInfoForRequest(modelID)
 	instructions := responsesInstructions(request)
 	inputItems := responsesInputItemsForProvider(request, r.providerName())
-	tools := cloneAnySlice(request.Tools)
+	tools := normalizeResponseToolParameters(cloneAnySlice(request.Tools))
 	if !request.DisableHostedImageGeneration {
 		tools = r.withHostedToolsForRequest(tools, &modelInfo)
 	}
+	tools = normalizeResponseToolParameters(tools)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	if modelInfo.UseResponsesLite {
 		inputItems = responsesLiteInputItems(inputItems, tools, instructions)
@@ -1118,6 +1124,9 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
+	if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
+		httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
+	}
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
 	addMemoryGenerationHeader(httpRequest.Header, apiRequest.ClientMetadata)
 	addHeaders(httpRequest.Header, r.providerHeaders())
@@ -1133,6 +1142,21 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 		}
 	}
 	return httpRequest, nil
+}
+
+func (r *ResponsesAgentRunner) responsesRoutingHint(modelID, serviceTier string) string {
+	if r == nil || !strings.EqualFold(r.providerName(), OpenAIProviderName) || !r.ProviderRequiresOpenAIAuth || r.ProviderUsesOwnCredentials || r.Provider == nil || r.Provider.Auth != nil || !authSnapshotUsesCodexBackend(r.AuthSnapshot) {
+		return ""
+	}
+	modelID = strings.TrimSpace(modelID)
+	serviceTier = strings.TrimSpace(serviceTier)
+	if modelID == "" || strings.ContainsAny(modelID, "\r\n") || strings.ContainsAny(serviceTier, "\r\n") {
+		return ""
+	}
+	if serviceTier != "" {
+		return fmt.Sprintf("model=%s;tier=%s", modelID, serviceTier)
+	}
+	return "model=" + modelID
 }
 
 func (r *ResponsesAgentRunner) addAttestationHeader(ctx context.Context, headers http.Header, request *AgentRequest) error {

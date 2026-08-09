@@ -655,6 +655,7 @@ type Options struct {
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	MCPStartupExpectedServers      []string
 	InitialMessages                <-chan bubbletea.Msg
+	InitialHistoryCells            []historycell.HistoryCell
 	FeatureSettings                map[string]bool
 	UseMemories                    *bool
 	GenerateMemories               *bool
@@ -712,83 +713,83 @@ type Model struct {
 	footerStyle lipgloss.Style
 	bottomStyle lipgloss.Style
 
-	lastTurnError                     string
-	needsFinalMessageSeparator        bool
-	activeAssistantDeltaItemID        string
-	mcpStartup                        chatwidget.McpStartupRoundState
-	mcpStartupHeader                  string
-	mcpStartupActive                  bool
-	mcpStartupGeneration              uint64
-	mcpStartupFinishPending           bool
-	initialMessages                   <-chan bubbletea.Msg
-	notice                            string
-	retryMessageIndex                 int
-	retryActivityMessage              string
-	retryActivityActive               bool
-	bottom                            []string
-	attachments                       []bottompane.ComposerAttachment
-	composerMentionBindings           []string
-	modal                             *modalState
-	skillPopup                        skillPopupState
-	mentionPopup                      *mentionsv2.Popup
-	mentionDismissedToken             string
-	mentionFileSearchGeneration       uint64
-	mentionPluginInventory            []plugin.PluginSummary
-	mentionPluginInventoryReady       bool
-	mentionPluginInventoryLoading     bool
-	mentionPluginInventoryErr         string
-	modelPickerOpts                   []codextui.ModelPickerOption
-	serviceTierCommands               []bottompane.ServiceTierCommand
-	sessionItems                      []codextui.SessionSummary
-	sessionCWD                        string
-	sessionPickerDensity              codextui.SessionListDensity
-	skillsInventory                   *appserver.SkillsListResponse
-	skillsInventoryCWD                string
-	skillsInventoryErr                string
-	skillsInventoryLoading            bool
-	agentItems                        []codextui.AgentThreadEntry
-	activeAgentLabel                  string
-	nextAgentRefreshRequestID         uint64
-	pendingAgentRefreshRequestID      uint64
-	pendingAgentRefreshThreadID       string
-	backgroundProcesses               []historycell.UnifiedExecProcessDetails
-	mcpServers                        []historycell.McpServerStatus
-	onReadMCPInventory                func(detail bool) ([]historycell.McpServerStatus, error)
-	nextMCPInventoryRequestID         uint64
-	pendingMCPInventoryRequestID      uint64
-	pendingMCPInventoryMessageIndex   int
-	pendingMCPInventoryDetail         bool
-	featureSettings                   map[string]bool
-	personality                       chatwidget.Personality
-	tuiTheme                          string
-	tuiPet                            string
-	vimMode                           bool
-	petRuntime                        *petRuntime
-	petCodexHome                      string
-	petEnv                            map[string]string
-	petFetch                          pets.AssetFetchFunc
-	petLoadPending                    string
-	onSubmit                          SubmitFunc
-	onSubmitRequest                   SubmitRequestFunc
-	onSteerRequest                    SteerRequestFunc
-	onInterrupt                       InterruptFunc
-	onInterruptMCPStartup             InterruptFunc
-	onExternalEditor                  ExternalEditorFunc
-	keymapConfig                      *codextui.KeymapConfig
-	keymapSelectedContext             string
-	keymapSelectedAction              string
-	onKeymapEdit                      KeymapEditFunc
-	onModalResponse                   ModalResponseFunc
-	onSessionAction                   SessionActionFunc
-	onResumeSession                   SessionResumeFunc
-	onRenameThread                    ThreadRenameFunc
-	onLogout                          LogoutFunc
-	onReadAgents                      AgentThreadReaderFunc
-	onSwitchAgent                     AgentThreadSwitchFunc
+	lastTurnError                   string
+	needsFinalMessageSeparator      bool
+	activeAssistantDeltaItemID      string
+	mcpStartup                      chatwidget.McpStartupRoundState
+	mcpStartupHeader                string
+	mcpStartupActive                bool
+	mcpStartupGeneration            uint64
+	mcpStartupFinishPending         bool
+	initialMessages                 <-chan bubbletea.Msg
+	notice                          string
+	retryMessageIndex               int
+	retryActivityMessage            string
+	retryActivityActive             bool
+	bottom                          []string
+	attachments                     []bottompane.ComposerAttachment
+	composerMentionBindings         []string
+	modal                           *modalState
+	skillPopup                      skillPopupState
+	mentionPopup                    *mentionsv2.Popup
+	mentionDismissedToken           string
+	mentionFileSearchGeneration     uint64
+	mentionPluginInventory          []plugin.PluginSummary
+	mentionPluginInventoryReady     bool
+	mentionPluginInventoryLoading   bool
+	mentionPluginInventoryErr       string
+	modelPickerOpts                 []codextui.ModelPickerOption
+	serviceTierCommands             []bottompane.ServiceTierCommand
+	sessionItems                    []codextui.SessionSummary
+	sessionCWD                      string
+	sessionPickerDensity            codextui.SessionListDensity
+	skillsInventory                 *appserver.SkillsListResponse
+	skillsInventoryCWD              string
+	skillsInventoryErr              string
+	skillsInventoryLoading          bool
+	agentItems                      []codextui.AgentThreadEntry
+	activeAgentLabel                string
+	nextAgentRefreshRequestID       uint64
+	pendingAgentRefreshRequestID    uint64
+	pendingAgentRefreshThreadID     string
+	backgroundProcesses             []historycell.UnifiedExecProcessDetails
+	mcpServers                      []historycell.McpServerStatus
+	onReadMCPInventory              func(detail bool) ([]historycell.McpServerStatus, error)
+	nextMCPInventoryRequestID       uint64
+	pendingMCPInventoryRequestID    uint64
+	pendingMCPInventoryMessageIndex int
+	pendingMCPInventoryDetail       bool
+	featureSettings                 map[string]bool
+	personality                     chatwidget.Personality
+	tuiTheme                        string
+	tuiPet                          string
+	vimMode                         bool
+	petRuntime                      *petRuntime
+	petCodexHome                    string
+	petEnv                          map[string]string
+	petFetch                        pets.AssetFetchFunc
+	petLoadPending                  string
+	onSubmit                        SubmitFunc
+	onSubmitRequest                 SubmitRequestFunc
+	onSteerRequest                  SteerRequestFunc
+	onInterrupt                     InterruptFunc
+	onInterruptMCPStartup           InterruptFunc
+	onExternalEditor                ExternalEditorFunc
+	keymapConfig                    *codextui.KeymapConfig
+	keymapSelectedContext           string
+	keymapSelectedAction            string
+	onKeymapEdit                    KeymapEditFunc
+	onModalResponse                 ModalResponseFunc
+	onSessionAction                 SessionActionFunc
+	onResumeSession                 SessionResumeFunc
+	onRenameThread                  ThreadRenameFunc
+	onLogout                        LogoutFunc
+	onReadAgents                    AgentThreadReaderFunc
+	onSwitchAgent                   AgentThreadSwitchFunc
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
-	backgroundThreadEvents map[string][]protocol.ThreadEvent
+	backgroundThreadEvents            map[string][]protocol.ThreadEvent
 	clipboardWrite                    func(text string) error
 	onReadTokenActivity               TokenActivityReaderFunc
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
@@ -952,7 +953,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 	composer := textarea.New()
 	composer.Prompt = "> "
-	composer.Placeholder = firstNonEmpty(options.Placeholder, "Ask Codex")
+	composer.Placeholder = firstNonEmpty(options.Placeholder, "Ask gcode")
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 0
 	composer.SetHeight(defaultComposerHeight)
@@ -1113,6 +1114,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.resize(firstPositive(options.Width, defaultWidth), firstPositive(options.Height, defaultHeight))
 	if options.ShowSessionHeader {
 		model.addStartupSessionHeader(options.SessionHeaderVersion)
+	}
+	for _, cell := range options.InitialHistoryCells {
+		if cell != nil {
+			model.addHistoryCell(cell)
+		}
 	}
 	if options.WindowsSandboxStartupPrompt != nil {
 		model.openWindowsSandboxEnablePrompt(*options.WindowsSandboxStartupPrompt)

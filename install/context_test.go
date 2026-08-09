@@ -27,7 +27,7 @@ func TestDetectsStandaloneReleaseLayout(t *testing.T) {
 	if err := os.WriteFile(rgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("WriteFile(rg) error = %v", err)
 	}
-	context := FromExe(false, exePath, false, false, home)
+	context := FromExe(false, exePath, false, false, false, home)
 	if context.Method.Kind != InstallStandalone {
 		t.Fatalf("method = %+v, want standalone", context.Method)
 	}
@@ -141,10 +141,13 @@ func TestCodeModeHostProgramAcceptsSymlinkToFile(t *testing.T) {
 }
 
 func TestManagedByPackageManagersWins(t *testing.T) {
-	if got := FromExe(false, "codex", true, false, "").Method.Kind; got != InstallNPM {
+	if got := FromExe(false, "codex", true, true, true, "").Method.Kind; got != InstallPnpm {
+		t.Fatalf("pnpm precedence method = %q", got)
+	}
+	if got := FromExe(false, "codex", false, true, false, "").Method.Kind; got != InstallNPM {
 		t.Fatalf("npm method = %q", got)
 	}
-	if got := FromExe(false, "codex", false, true, "").Method.Kind; got != InstallBun {
+	if got := FromExe(false, "codex", false, false, true, "").Method.Kind; got != InstallBun {
 		t.Fatalf("bun method = %q", got)
 	}
 }

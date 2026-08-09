@@ -128,7 +128,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req == nil {
 		return nil, errors.New("exec request is nil")
 	}
-	if req.Exec.Subcommand != "" && req.Exec.Subcommand != "review" && req.Exec.Subcommand != "resume" {
+	if req.Exec.Subcommand != "" && req.Exec.Subcommand != "review" && req.Exec.Subcommand != "resume" && req.Exec.Subcommand != "fork" {
 		return nil, fmt.Errorf("unknown exec subcommand %s", req.Exec.Subcommand)
 	}
 	if err := validateExecWorkingDirectory(requestCWD(req)); err != nil {
@@ -149,10 +149,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	outputSchema, err := loadOutputSchema(req.Exec.OutputSchema)
-	if err != nil {
-		return nil, err
-	}
 	instructions, err := baseInstructionsForRequest(req, cfg)
 	if err != nil {
 		return nil, err
@@ -160,13 +156,21 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if extra := strings.TrimSpace(req.AdditionalInstructions); extra != "" {
 		instructions = strings.Join(nonEmptyStrings([]string{extra, instructions}), "\n\n")
 	}
+	var outputSchema any
+	if !execForkOnlyRequest(req) {
+		outputSchema, err = loadOutputSchema(req.Exec.OutputSchema)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	prompt, resumeContext, err := r.promptForRequest(req, stdin)
+	prompt, resumeContext, err := r.promptForRequest(req, cfg, stdin)
 	if err != nil {
 		return nil, err
 	}
 	requestInputs := requestTurnUserInputs(req)
-	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 && len(req.AdditionalInputItems) == 0 {
+	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 && len(req.AdditionalInputItems) == 0 &&
+		(resumeContext == nil || !resumeContext.ForkOnly) {
 		return nil, errors.New("No prompt provided. Either specify one as an argument or pipe the prompt into stdin.")
 	}
 	identityPrompt := firstNonEmpty(prompt, turnUserInputsSummary(requestInputs), execAdditionalInputIdentity(req.AdditionalInputItems))
@@ -218,6 +222,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
 		return nil, err
+	}
+	if resumeContext != nil && resumeContext.ForkOnly {
+		sessionPath, pathErr := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Path(session.ThreadID(threadID))
+		if pathErr != nil && !errors.Is(pathErr, session.ErrThreadNotFound) {
+			return nil, pathErr
+		}
+		return &Result{ThreadID: threadID, SessionPath: sessionPath, Events: eventSink.Events()}, nil
 	}
 	for index, usage := range cfg.LegacyFeatureUsages() {
 		notice := features.NoticeForLegacyFeatureUsage(usage)
@@ -326,6 +337,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ToolMode:                       model.ResolveToolMode(modelInfo.ToolMode, cfg.FeatureSettings()),
 		CodeModeHostEnabled:            features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
 		DisableCodeModeFallback:        cfg.DisableCodeModeInProcessFallback(),
+		CodeModeDefaultExecYieldTime:   cfg.CodeModeDefaultExecYieldTime(),
 		ProviderID:                     providerID,
 		TaskKind:                       taskKind,
 		ThreadID:                       threadID,
@@ -464,6 +476,7 @@ type agentRunConfig struct {
 	ToolMode                       string
 	CodeModeHostEnabled            bool
 	DisableCodeModeFallback        bool
+	CodeModeDefaultExecYieldTime   time.Duration
 	CodeModeProvider               tool.CodeModeRemoteProvider
 	CodeModeRuntime                *tool.CodeModeRuntime
 	ProviderID                     string
@@ -996,6 +1009,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.EnableUnifiedExec = run.UnifiedExecEnabled
 		options.CodeModeProvider = run.CodeModeProvider
 		options.CodeModeRuntime = run.CodeModeRuntime
+		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.DisableCodeModeFallback = run.DisableCodeModeFallback
 	}
 	if options.Shell != nil {
@@ -1351,6 +1365,7 @@ func (r *Runner) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
 type execResumeContext struct {
 	Record     *session.Record
 	UserPrompt string
+	ForkOnly   bool
 }
 
 func resumeInputItems(ctx *execResumeContext) []any {
@@ -1368,7 +1383,7 @@ func resumePreviousResponseID(ctx *execResumeContext) string {
 	return ""
 }
 
-func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execResumeContext, error) {
+func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Reader) (string, *execResumeContext, error) {
 	if req.Exec.Subcommand == "review" {
 		prompt, _, err := review.BuildPromptFromOptions(req.Exec.Review, stdin, &review.GitDiffProvider{
 			Dir: requestCWD(req),
@@ -1392,11 +1407,95 @@ func (r *Runner) promptForRequest(req *Request, stdin io.Reader) (string, *execR
 		}
 		return resumePrompt, &execResumeContext{Record: record, UserPrompt: resumePrompt}, nil
 	}
+	if req.Exec.Subcommand == "fork" {
+		promptArg := strings.TrimSpace(req.Exec.Fork.Prompt)
+		forkOnly := execForkOnlyRequest(req)
+		if forkOnly && len(requestImagePaths(req)) > 0 {
+			return "", nil, errors.New("Forking with images requires a prompt")
+		}
+		if forkOnly && (strings.TrimSpace(req.Exec.OutputSchema) != "" || strings.TrimSpace(req.Exec.LastMessageFile) != "") {
+			return "", nil, errors.New("Forking with output options requires a prompt")
+		}
+		if forkOnly && req.Exec.Ephemeral {
+			return "", nil, errors.New("Ephemeral forks require a prompt")
+		}
+		promptText := ""
+		if !forkOnly && promptArg != "" {
+			var err error
+			promptText, err = resolveExecResumePrompt(promptArg, stdin)
+			if err != nil {
+				return "", nil, err
+			}
+		} else if !forkOnly && len(req.Input) == 0 && len(req.AdditionalInputItems) == 0 {
+			if promptArg == "" {
+				promptArg = "-"
+			}
+			var err error
+			promptText, err = resolveExecResumePrompt(promptArg, stdin)
+			if err != nil {
+				return "", nil, err
+			}
+		}
+		resumeReq := *req
+		resumeReq.Exec.Subcommand = "resume"
+		resumeReq.Exec.Resume = cli.ExecResumeOptions{
+			SessionID: strings.TrimSpace(req.Exec.Fork.SessionID),
+			All:       true,
+		}
+		source, err := r.resolveExecResumeRecord(&resumeReq)
+		if err != nil {
+			return "", nil, err
+		}
+		if source.Archived {
+			return "", nil, fmt.Errorf("session %s is archived", source.ID)
+		}
+		store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+		now := r.now().UTC()
+		forked, err := store.ForkRecord(source, session.ForkOptions{
+			Mode:      session.ForkAll,
+			Ephemeral: req.Exec.Ephemeral,
+			Now:       now,
+		})
+		if err != nil {
+			return "", nil, err
+		}
+		forked.Metadata.CWD = requestCWD(req)
+		forked.Metadata.Model = effectiveModel(req, cfg)
+		provider, providerErr := effectiveProvider(req, cfg)
+		if providerErr != nil {
+			_ = store.Delete(forked.ID)
+			return "", nil, providerErr
+		}
+		if provider != "" {
+			forked.Metadata.ModelProvider = provider
+		}
+		forked.Metadata.Source = execSessionSource(req)
+		forked.Metadata.ThreadSource = execThreadSource(req)
+		forked.Metadata.Originator = execAgentOriginator(req)
+		forked.Metadata.CLIVersion = doctor.Version()
+		if !req.Exec.Ephemeral {
+			if err := store.Save(forked); err != nil {
+				return "", nil, err
+			}
+			if err := r.createExecRollout(forked, now); err != nil {
+				_ = store.Delete(forked.ID)
+				return "", nil, err
+			}
+		}
+		if forkOnly {
+			return "", &execResumeContext{Record: forked, ForkOnly: true}, nil
+		}
+		return promptText, &execResumeContext{Record: forked, UserPrompt: promptText}, nil
+	}
 	if req.Exec.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 		return "", nil, nil
 	}
 	resolved, err := prompt.Resolve(req.Exec.Prompt, stdin)
 	return resolved, nil, err
+}
+
+func execForkOnlyRequest(req *Request) bool {
+	return req != nil && req.Exec.Subcommand == "fork" && strings.TrimSpace(req.Exec.Fork.Prompt) == "" && len(req.Input) == 0 && len(req.AdditionalInputItems) == 0
 }
 
 func resolveExecResumePrompt(promptArg string, stdin io.Reader) (string, error) {
@@ -1433,9 +1532,10 @@ func requestImagePaths(req *Request) []string {
 	if req == nil {
 		return nil
 	}
-	images := make([]string, 0, len(req.Root.Shared.Images)+len(req.Exec.Shared.Images))
+	images := make([]string, 0, len(req.Root.Shared.Images)+len(req.Exec.Shared.Images)+len(req.Exec.Fork.Images))
 	images = append(images, req.Root.Shared.Images...)
 	images = append(images, req.Exec.Shared.Images...)
+	images = append(images, req.Exec.Fork.Images...)
 	return images
 }
 
@@ -1941,7 +2041,7 @@ func writeHumanConfigSummary(stderr io.Writer, req *Request, cfg *config.Config,
 	if stderr == nil {
 		return
 	}
-	fmt.Fprintf(stderr, "OpenAI Codex v%s\n", execHumanVersion())
+	fmt.Fprintf(stderr, "gcode v%s\n", execHumanVersion())
 	fmt.Fprintln(stderr, "--------")
 	fmt.Fprintf(stderr, "workdir: %s\n", absoluteRequestCWD(req))
 	fmt.Fprintf(stderr, "model: %s\n", displayHumanConfigValue(modelID, "default"))
@@ -4436,28 +4536,37 @@ func (r *Runner) newExecRolloutRecorder(record *session.Record, now time.Time) (
 		return nil, errors.New("exec rollout record is nil")
 	}
 	return rollout.NewRecorder(&rollout.CreateParams{
-		CodexHome:         r.CodexHome,
-		SessionID:         record.SessionID,
-		SessionPrefix:     record.Metadata.SessionPrefix,
-		ThreadID:          string(record.ID),
-		ForkedFromID:      string(record.ForkedFromID),
-		Source:            record.Metadata.Source,
-		ThreadSource:      record.Metadata.ThreadSource,
-		Originator:        record.Metadata.Originator,
-		CWD:               record.Metadata.CWD,
-		Model:             record.Metadata.Model,
-		ModelProvider:     record.Metadata.ModelProvider,
-		HistoryMode:       record.Metadata.HistoryMode,
-		MemoryMode:        record.Metadata.MemoryMode,
-		ParentThreadID:    string(record.ParentThreadID),
-		BaseInstructions:  record.Metadata.BaseInstructions,
-		AgentNickname:     record.Metadata.AgentNickname,
-		AgentRole:         record.Metadata.AgentRole,
-		AgentPath:         record.Metadata.AgentPath,
-		MultiAgentVersion: record.Metadata.MultiAgentVersion,
-		CLIVersion:        record.Metadata.CLIVersion,
-		Now:               now,
+		CodexHome:                  r.CodexHome,
+		SessionID:                  record.SessionID,
+		SessionPrefix:              record.Metadata.SessionPrefix,
+		ThreadID:                   string(record.ID),
+		ForkedFromID:               string(record.ForkedFromID),
+		Source:                     record.Metadata.Source,
+		ThreadSource:               record.Metadata.ThreadSource,
+		Originator:                 record.Metadata.Originator,
+		CWD:                        record.Metadata.CWD,
+		Model:                      record.Metadata.Model,
+		ModelProvider:              record.Metadata.ModelProvider,
+		HistoryMode:                record.Metadata.HistoryMode,
+		MemoryMode:                 record.Metadata.MemoryMode,
+		ParentThreadID:             string(record.ParentThreadID),
+		BaseInstructions:           record.Metadata.BaseInstructions,
+		BaseInstructionsProvenance: cloneExecBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
+		AgentNickname:              record.Metadata.AgentNickname,
+		AgentRole:                  record.Metadata.AgentRole,
+		AgentPath:                  record.Metadata.AgentPath,
+		MultiAgentVersion:          record.Metadata.MultiAgentVersion,
+		CLIVersion:                 record.Metadata.CLIVersion,
+		Now:                        now,
 	})
+}
+
+func cloneExecBaseInstructionsProvenance(value *session.BaseInstructionsProvenance) *session.BaseInstructionsProvenance {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func execRolloutItems(record *session.Record) []session.Item {

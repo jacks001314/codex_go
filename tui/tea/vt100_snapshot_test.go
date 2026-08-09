@@ -50,7 +50,7 @@ Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | San.
 
 
 
-> Ask Codex
+> Ask gcode
 >
 >
 Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)

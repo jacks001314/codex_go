@@ -60,26 +60,27 @@ type ToolRegistryOptions struct {
 	ImageGeneration                    *ImageGenerationOptions
 	ViewImage                          *tool.ViewImageOptions
 
-	EnableCore               bool
-	EnableShell              bool
-	EnableUnifiedExec        bool
-	EnableCodeMode           bool
-	CodeModeProvider         tool.CodeModeRemoteProvider
-	CodeModeRuntime          *tool.CodeModeRuntime
-	DisableCodeModeFallback  bool
-	EnableApplyPatch         bool
-	EnableMCP                bool
-	EnableAgents             bool
-	EnableToolSearch         bool
-	OmitToolSearchSources    bool
-	EnableCurrentTimeTool    bool
-	EnableSleepTool          bool
-	EnableWaitForEnvironment bool
-	DisableUpdatePlan        bool
-	DisableWaitAgent         bool
-	DynamicTools             []DynamicToolSpec
-	ThreadID                 string
-	TurnID                   string
+	EnableCore                   bool
+	EnableShell                  bool
+	EnableUnifiedExec            bool
+	EnableCodeMode               bool
+	CodeModeProvider             tool.CodeModeRemoteProvider
+	CodeModeRuntime              *tool.CodeModeRuntime
+	CodeModeDefaultExecYieldTime time.Duration
+	DisableCodeModeFallback      bool
+	EnableApplyPatch             bool
+	EnableMCP                    bool
+	EnableAgents                 bool
+	EnableToolSearch             bool
+	OmitToolSearchSources        bool
+	EnableCurrentTimeTool        bool
+	EnableSleepTool              bool
+	EnableWaitForEnvironment     bool
+	DisableUpdatePlan            bool
+	DisableWaitAgent             bool
+	DynamicTools                 []DynamicToolSpec
+	ThreadID                     string
+	TurnID                       string
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -94,26 +95,27 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 				// since b258c028fe); the turn runtime overrides this from the
 				// effective config when available.
 				AllowLoginShell: true,
-				CWD:                          cwd,
+				CWD:             cwd,
 			},
 		},
-		ApplyPatch:        &tool.ApplyPatchExecutorOptions{CWD: cwd},
-		UnifiedExec:       tool.NewUnifiedExecManager(),
-		AgentController:   agent.NewMemoryToolController(),
-		AgentExposure:     tool.ExposureDiscoverable,
-		EnableCore:        true,
-		EnableShell:       true,
-		EnableUnifiedExec: featureflags.Enabled(nil, "unified_exec"),
+		ApplyPatch:                   &tool.ApplyPatchExecutorOptions{CWD: cwd},
+		UnifiedExec:                  tool.NewUnifiedExecManager(),
+		CodeModeDefaultExecYieldTime: tool.CodeModeDefaultExecYieldTime,
+		AgentController:              agent.NewMemoryToolController(),
+		AgentExposure:                tool.ExposureDiscoverable,
+		EnableCore:                   true,
+		EnableShell:                  true,
+		EnableUnifiedExec:            featureflags.Enabled(nil, "unified_exec"),
 		// Rust registers the code-mode exec/wait executors from the effective
 		// tool mode, not the code_mode feature flag (finalize_tool_router in
 		// codex-rs/core/src/tools/spec_plan.rs). Register them unconditionally
 		// here; Runtime.Run filters the model-visible surface per turn based on
 		// the effective tool mode, so direct-mode turns still see shell tools.
-		EnableCodeMode:    true,
-		EnableApplyPatch:  true,
-		EnableMCP:         true,
-		EnableAgents:      true,
-		EnableToolSearch:  true,
+		EnableCodeMode:   true,
+		EnableApplyPatch: true,
+		EnableMCP:        true,
+		EnableAgents:     true,
+		EnableToolSearch: true,
 	}
 }
 
@@ -283,9 +285,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		registry.Remove(tool.PlainName("wait"))
 		var execExecutor, waitExecutor tool.Executor
 		if options.CodeModeRuntime != nil {
+			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			execExecutor, waitExecutor = options.CodeModeRuntime.Executors(registry, codeModeCommandTool)
 		} else {
-			execExecutor, waitExecutor = tool.NewCodeModeExecutorsWithProvider(registry, options.CodeModeProvider, options.DisableCodeModeFallback, codeModeCommandTool)
+			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)
+			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
+			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)
 		}
 		if err := registry.Prepend(waitExecutor); err != nil {
 			return nil, err

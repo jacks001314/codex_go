@@ -362,6 +362,9 @@ func marketplacePluginHasSkillsForManifest(pluginRoot string, manifest *pluginMa
 	if manifest != nil && strings.TrimSpace(manifest.SkillsPath) != "" {
 		root = manifest.SkillsPath
 	}
+	if manifest != nil && manifest.AgentPlugin {
+		return len(marketplacePluginSkillsForManifest(pluginRoot, manifest)) > 0
+	}
 	info, err := os.Stat(root)
 	return err == nil && info.IsDir()
 }
@@ -371,12 +374,12 @@ func marketplacePluginSkills(pluginRoot string) []PluginSkill {
 }
 
 func marketplacePluginSkillsForManifest(pluginRoot string, manifest *pluginManifestFile) []PluginSkill {
-	if !marketplacePluginHasSkillsForManifest(pluginRoot, manifest) {
-		return nil
-	}
 	skillsRoot := filepath.Join(pluginRoot, "skills")
 	if manifest != nil && strings.TrimSpace(manifest.SkillsPath) != "" {
 		skillsRoot = manifest.SkillsPath
+	}
+	if info, err := os.Stat(skillsRoot); err != nil || !info.IsDir() {
+		return nil
 	}
 	var skills []PluginSkill
 	_ = filepath.WalkDir(skillsRoot, func(path string, d os.DirEntry, err error) error {
@@ -423,7 +426,7 @@ func marketplacePluginSkillsForManifest(pluginRoot string, manifest *pluginManif
 		}
 		return skills[i].Name < skills[j].Name
 	})
-	if len(skills) == 0 {
+	if len(skills) == 0 && (manifest == nil || !manifest.AgentPlugin) {
 		return []PluginSkill{{Name: filepath.Base(pluginRoot), Enabled: true}}
 	}
 	return skills

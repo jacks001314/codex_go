@@ -62,6 +62,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "model_list", Owner: "model", Focus: "model/list RPC"},
 		{Module: "model_provider_capabilities_read", Owner: "model", Focus: "modelProvider/capabilities/read RPC"},
 		{Module: "multi_agent_v2_developer_instructions", Owner: "agent, prompt", Focus: "multi-agent developer instruction propagation"},
+		{Module: "otel", Owner: "telemetry, appserver", Focus: "OpenTelemetry provider reload after account and config changes"},
 		{Module: "output_schema", Owner: "model, turn", Focus: "turn output schema propagation"},
 		{Module: "permission_profile_list", Owner: "sandbox, appserver", Focus: "permissionProfile/list RPC"},
 		{Module: "plan_item", Owner: "turn, appserver", Focus: "plan item notifications"},

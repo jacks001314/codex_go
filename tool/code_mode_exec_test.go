@@ -35,6 +35,15 @@ func TestCodeModeExecUsesCustomPayloadAndNormalizesNestedOutput(t *testing.T) {
 	}
 }
 
+func TestCodeModeExecDescriptionUsesConfiguredDefaultYieldTime(t *testing.T) {
+	runtime := NewCodeModeRuntime(nil, false)
+	runtime.SetDefaultExecYieldTime(1250 * time.Millisecond)
+	executor, _ := runtime.Executors(NewRegistry())
+	if description := executor.Spec().Description; !strings.Contains(description, "Defaults to 1250 ms.") {
+		t.Fatalf("configured default missing from description: %s", description)
+	}
+}
+
 func TestCodeModeExecRunsLegacyShellCommandLikeRustWhenUnifiedExecDisabled(t *testing.T) {
 	runner := &recordingShellRunner{output: "WEATHER_LEGACY_OK\n"}
 	shell := NewShellExecutor(&ShellExecutorOptions{
@@ -557,6 +566,9 @@ func TestCodeModeRemoteSuccessDoesNotRunInProcessFallback(t *testing.T) {
 	if output.Body != "REMOTE_OK" || remote.executeCalls != 1 {
 		t.Fatalf("output = %#v execute calls = %d", output, remote.executeCalls)
 	}
+	if remote.request.YieldTimeMS == nil || *remote.request.YieldTimeMS != uint64(CodeModeDefaultExecYieldTime/time.Millisecond) {
+		t.Fatalf("remote default yield = %#v", remote.request.YieldTimeMS)
+	}
 }
 
 func TestCodeModeRemoteFailureNeverFallsBackInProcess(t *testing.T) {
@@ -783,10 +795,12 @@ type recordingCodeModeRemoteSession struct {
 	response     CodeModeRemoteResponse
 	err          error
 	executeCalls int
+	request      CodeModeRemoteExecuteRequest
 }
 
-func (s *recordingCodeModeRemoteSession) Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+func (s *recordingCodeModeRemoteSession) Execute(_ context.Context, request CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
 	s.executeCalls++
+	s.request = request
 	return s.response, s.err
 }
 

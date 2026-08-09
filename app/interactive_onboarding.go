@@ -27,6 +27,13 @@ func runInteractiveEntry(ctx context.Context, root *cli.RootOptions, stdin io.Re
 			}
 		}
 	}
+	updated, err := runInteractiveUpdatePromptIfNeeded(ctx, root, stdin, stdout, stderr)
+	if err != nil {
+		return err
+	}
+	if updated {
+		return nil
+	}
 	return runInteractive(ctx, root, stdin, stdout, stderr)
 }
 

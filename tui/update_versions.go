@@ -24,7 +24,7 @@ func IsNewerVersion(latest string, current string) *bool {
 }
 
 func ExtractVersionFromLatestTag(latestTagName string) (string, error) {
-	version, ok := strings.CutPrefix(strings.TrimSpace(latestTagName), "rust-v")
+	version, ok := strings.CutPrefix(strings.TrimSpace(latestTagName), "go-v")
 	if !ok || strings.TrimSpace(version) == "" {
 		return "", fmt.Errorf("failed to parse latest tag name %q", latestTagName)
 	}

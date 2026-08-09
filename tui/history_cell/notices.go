@@ -53,7 +53,7 @@ func (c UpdateAvailableHistoryCell) RawLines() []string {
 	if latest == "" {
 		latest = "latest"
 	}
-	updateInstruction := "See https://github.com/openai/codex for installation options."
+	updateInstruction := "See https://github.com/jacks001314/codex_go for installation options."
 	if c.UpdateCommand != "" {
 		updateInstruction = "Run " + c.UpdateCommand + " to update."
 	}
@@ -63,7 +63,7 @@ func (c UpdateAvailableHistoryCell) RawLines() []string {
 		updateInstruction,
 		"",
 		"See full release notes:",
-		"https://github.com/openai/codex/releases/latest",
+		"https://github.com/jacks001314/codex_go/releases/latest",
 	}
 }
 

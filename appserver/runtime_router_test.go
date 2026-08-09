@@ -665,6 +665,32 @@ func TestRuntimeRouterThreadStartInstructionSourcesFeedTurns(t *testing.T) {
 	}
 }
 
+func TestThreadStartProjectInstructionsRespectAggregateByteBudget(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("project_doc_max_bytes = 7\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("ABCDEFGHIJ"), 0o600); err != nil {
+		t.Fatalf("write project AGENTS.md: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
+	defer router.Close()
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: workspace}))
+	if response.Error != nil {
+		t.Fatalf("thread start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Load(session.ThreadID(threadID))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if record.Metadata.BaseInstructions != "ABCDEFG" {
+		t.Fatalf("BaseInstructions = %q, want byte-limited project instructions", record.Metadata.BaseInstructions)
+	}
+}
+
 func TestRuntimeRouterMaterializesUnpromptedThreadRolloutOnFirstTurn(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -12223,6 +12249,84 @@ func TestRuntimeRouterPermissionProfileUpdateAppliesToNextTurnLikeRust(t *testin
 	}
 }
 
+func TestPrepareTurnStartParamsDoesNotFreezeModelGeneratedBaseInstructions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	record := &session.Record{
+		ID: "thread-model-instructions",
+		Metadata: session.Metadata{
+			Model:            "old-model",
+			BaseInstructions: "old model instructions",
+			BaseInstructionsProvenance: &session.BaseInstructionsProvenance{
+				Type:  session.BaseInstructionsProvenanceModel,
+				Model: "old-model",
+			},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadExtras: NewThreadExtraService()})
+	defer router.Close()
+	params := &turn.TurnStartParams{ThreadID: string(record.ID), Model: "new-model"}
+	if err := router.prepareTurnStartParams(params); err != nil {
+		t.Fatalf("prepareTurnStartParams() error = %v", err)
+	}
+	if params.BaseInstructions != nil {
+		t.Fatalf("BaseInstructions = %q, want model catalog instructions for the new model", *params.BaseInstructions)
+	}
+}
+
+func TestThreadStartPersistsModelBaseInstructionProvenance(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	models := model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug:             "provenance-model",
+		DisplayName:      "provenance-model",
+		Visibility:       model.VisibilityVisible,
+		SupportedInAPI:   true,
+		BaseInstructions: "generated instructions",
+	}}}))
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Models: models})
+	defer router.Close()
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{Model: "provenance-model", CWD: t.TempDir()}))
+	if response.Error != nil {
+		t.Fatalf("thread start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Load(session.ThreadID(threadID))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	provenance := record.Metadata.BaseInstructionsProvenance
+	if record.Metadata.BaseInstructions != "generated instructions" || provenance == nil || provenance.Type != session.BaseInstructionsProvenanceModel || provenance.Model != "provenance-model" {
+		t.Fatalf("base instructions metadata = %#v", record.Metadata)
+	}
+}
+
+func TestPrepareTurnStartParamsPreservesCustomBaseInstructions(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	record := &session.Record{
+		ID: "thread-custom-instructions",
+		Metadata: session.Metadata{
+			BaseInstructions: "custom instructions",
+			BaseInstructionsProvenance: &session.BaseInstructionsProvenance{
+				Type: session.BaseInstructionsProvenanceCustom,
+			},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadExtras: NewThreadExtraService()})
+	defer router.Close()
+	params := &turn.TurnStartParams{ThreadID: string(record.ID)}
+	if err := router.prepareTurnStartParams(params); err != nil {
+		t.Fatalf("prepareTurnStartParams() error = %v", err)
+	}
+	if params.BaseInstructions == nil || *params.BaseInstructions != "custom instructions" {
+		t.Fatalf("BaseInstructions = %#v", params.BaseInstructions)
+	}
+}
+
 func TestActiveTurnEnvironmentSnapshotRemainsStableAcrossLaterUpdatesLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	original := &turn.TurnStartParams{
@@ -12937,6 +13041,48 @@ func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T)
 	}
 	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadSettingsApprovalPolicySurvivesColdResume(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		ThreadExtras: NewThreadExtraService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if started.Error != nil {
+		t.Fatalf("thread start error: %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("read started thread error: %v", err)
+	}
+	if err := threadRouter.createThreadRollout(record, time.Now().UTC()); err != nil {
+		t.Fatalf("create started rollout error: %v", err)
+	}
+	policy := string(sandbox.ApprovalNever)
+	updated := router.Handle(requestWithParams(t, IntID(2), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID: threadID, ApprovalPolicy: &policy,
+	}))
+	if updated.Error != nil {
+		t.Fatalf("settings update error: %+v", updated.Error)
+	}
+	cold := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	resumed := cold.Handle(requestWithParams(t, IntID(3), MethodThreadResume, ThreadResumeParams{
+		ThreadID: threadID, ExcludeTurns: true,
+	}))
+	if resumed.Error != nil {
+		t.Fatalf("cold resume error: %+v", resumed.Error)
+	}
+	if got := resumed.Result.(*ThreadResumeResponse).ApprovalPolicy; got != policy {
+		t.Fatalf("cold resume approval policy = %#v, want %q", got, policy)
+	}
 }
 
 func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.T) {

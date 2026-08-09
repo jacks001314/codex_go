@@ -807,6 +807,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	fs := cmd.PermissionProfile.Filesystem
 	if fs == nil || fs.hasFullDiskWriteAccess() {
 		args = append(args, "--bind", "/", "/")
+		args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
 	} else {
 		args = append(args, "--ro-bind", "/", "/")
 		for _, root := range fs.writableRoots(cmd.SandboxPolicyCWD) {

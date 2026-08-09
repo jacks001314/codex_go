@@ -22,7 +22,6 @@ func (r *recordingRunner) Run(ctx context.Context, command string, args []string
 }
 
 func TestActionFromContext(t *testing.T) {
-	platform := StandaloneWindows
 	tests := []struct {
 		name    string
 		context *InstallContext
@@ -31,8 +30,9 @@ func TestActionFromContext(t *testing.T) {
 	}{
 		{name: "npm", context: &InstallContext{Method: InstallMethod{Kind: InstallNPM}}, want: UpdateActionNPMGlobalLatest, has: true},
 		{name: "bun", context: &InstallContext{Method: InstallMethod{Kind: InstallBun}}, want: UpdateActionBunGlobalLatest, has: true},
-		{name: "brew", context: &InstallContext{Method: InstallMethod{Kind: InstallBrew}}, want: UpdateActionBrewUpgrade, has: true},
-		{name: "standalone-windows", context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone, Platform: &platform}}, want: UpdateActionStandaloneWin, has: true},
+		{name: "pnpm", context: &InstallContext{Method: InstallMethod{Kind: InstallPnpm}}, want: UpdateActionPnpmGlobalLatest, has: true},
+		{name: "brew", context: &InstallContext{Method: InstallMethod{Kind: InstallBrew}}, has: false},
+		{name: "standalone", context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone}}, has: false},
 		{name: "other", context: &InstallContext{Method: InstallMethod{Kind: InstallOther}}, has: false},
 	}
 	for _, test := range tests {
@@ -52,14 +52,9 @@ func TestActionFromContext(t *testing.T) {
 }
 
 func TestUpdateActionCommandArgs(t *testing.T) {
-	action := &UpdateAction{Kind: UpdateActionStandaloneUnix}
+	action := &UpdateAction{Kind: UpdateActionPnpmGlobalLatest}
 	command, args := action.CommandArgs()
-	if command != "sh" || len(args) != 2 || args[1] != "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" {
-		t.Fatalf("CommandArgs() = %q %#v", command, args)
-	}
-	action = &UpdateAction{Kind: UpdateActionStandaloneWin}
-	command, args = action.CommandArgs()
-	if command != "powershell" || len(args) != 4 || args[3] != "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex" {
+	if command != "pnpm" || len(args) != 3 || args[0] != "add" || args[2] != NPMPackageName+"@latest" {
 		t.Fatalf("CommandArgs() = %q %#v", command, args)
 	}
 }
@@ -88,16 +83,16 @@ func TestVersionParsingAndComparison(t *testing.T) {
 	}
 }
 
-func TestFetchLatestVersionUsesHomebrewMetadata(t *testing.T) {
+func TestFetchLatestVersionUsesGoReleaseForUnsupportedInstallMethod(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"version":"2.3.4"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"go-v2.3.4"}`))
 	}))
 	defer server.Close()
 
 	latest, err := FetchLatestVersion(context.Background(), &UpdateCheckOptions{
-		Context:     &InstallContext{Method: InstallMethod{Kind: InstallBrew}},
-		HomebrewURL: server.URL,
+		Context:   &InstallContext{Method: InstallMethod{Kind: InstallBrew}},
+		GitHubURL: server.URL,
 	})
 	if err != nil {
 		t.Fatalf("FetchLatestVersion() error = %v", err)

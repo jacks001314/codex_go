@@ -256,16 +256,19 @@ type hookJSONMatcherGroupWire struct {
 }
 
 type hookJSONHandlerConfigWire struct {
-	Type                string  `json:"type"`
-	Command             string  `json:"command"`
-	CommandWindows      *string `json:"commandWindows"`
-	CommandWindowsAlias *string `json:"command_windows"`
-	Timeout             *uint64 `json:"timeout"`
-	TimeoutSec          *uint64 `json:"timeoutSec"`
-	TimeoutSecAlias     *uint64 `json:"timeout_sec"`
-	Async               bool    `json:"async"`
-	StatusMessage       *string `json:"statusMessage"`
-	StatusMessageAlias  *string `json:"status_message"`
+	Type                string         `json:"type"`
+	Command             string         `json:"command"`
+	CommandWindows      *string        `json:"commandWindows"`
+	CommandWindowsAlias *string        `json:"command_windows"`
+	Server              string         `json:"server"`
+	Tool                string         `json:"tool"`
+	Input               map[string]any `json:"input"`
+	Timeout             *uint64        `json:"timeout"`
+	TimeoutSec          *uint64        `json:"timeoutSec"`
+	TimeoutSecAlias     *uint64        `json:"timeout_sec"`
+	Async               bool           `json:"async"`
+	StatusMessage       *string        `json:"statusMessage"`
+	StatusMessageAlias  *string        `json:"status_message"`
 }
 
 func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
@@ -514,6 +517,14 @@ func applyHooksTOMLHandlerValue(handler *hookJSONHandlerConfigWire, key string, 
 		if value, ok := parseHooksTOMLString(rawValue); ok {
 			handler.Command = value
 		}
+	case "server":
+		if value, ok := parseHooksTOMLString(rawValue); ok {
+			handler.Server = value
+		}
+	case "tool":
+		if value, ok := parseHooksTOMLString(rawValue); ok {
+			handler.Tool = value
+		}
 	case "commandWindows", "command_windows":
 		if value, ok := parseHooksTOMLString(rawValue); ok {
 			if key == "commandWindows" {
@@ -713,6 +724,8 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping prompt hook in %s: prompt hooks are not supported yet", source.Path))
 		case HookHandlerAgent:
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping agent hook in %s: agent hooks are not supported yet", source.Path))
+		case HookHandlerMCPTool:
+			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: MCP tool hooks are not supported yet", source.Path))
 		default:
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping unsupported hook handler %q in %s", handler.Type, source.Path))
 		}
@@ -753,6 +766,8 @@ func (h *hookJSONHandlerConfigWire) hookHandlerType() HookHandlerType {
 		return HookHandlerPrompt
 	case string(HookHandlerAgent):
 		return HookHandlerAgent
+	case string(HookHandlerMCPTool):
+		return HookHandlerMCPTool
 	default:
 		return ""
 	}

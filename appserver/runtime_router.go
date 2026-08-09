@@ -3023,18 +3023,40 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	if err := request.DecodeParams(&params); err != nil {
 		return
 	}
+	var cfg *config.Config
+	if loaded, cfgErr := r.effectiveConfigForThreadStart(&params); cfgErr == nil {
+		cfg = loaded
+	}
 	instructions, sources := r.threadStartInstructions(&params)
 	response.InstructionSources = sources
-	baseInstructions := firstNonEmpty(stringPtrValue(params.BaseInstructions), instructions)
-	if strings.TrimSpace(baseInstructions) == "" && len(sources) == 0 {
-		return
+	configuredBaseInstructions := ""
+	if cfg != nil {
+		configuredBaseInstructions, _ = appBaseInstructionsForConfig(cfg)
 	}
+	baseInstructions := firstNonEmpty(stringPtrValue(params.BaseInstructions), instructions, configuredBaseInstructions)
 	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
 	if err != nil || record == nil {
 		return
 	}
 	if strings.TrimSpace(baseInstructions) != "" {
 		record.Metadata.BaseInstructions = baseInstructions
+		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom}
+	} else if params.BaseInstructions != nil {
+		// An explicit empty value suppresses model instructions and is still a
+		// caller-owned choice that must survive a resumed turn.
+		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom}
+	} else if len(sources) == 0 {
+		modelID := firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model))
+		if info := r.modelInfoForRuntime(modelID); info != nil {
+			personality := stringPtrValue(params.Personality)
+			if cfg != nil {
+				personality = firstNonEmpty(personality, stringConfigValue(cfg, "personality"))
+			}
+			if generated := strings.TrimSpace(info.ModelInstructions(personality)); generated != "" {
+				record.Metadata.BaseInstructions = generated
+				record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceModel, Model: info.Slug}
+			}
+		}
 	}
 	setThreadRecordInstructionSources(record, sources)
 	_ = r.runtimeSaveThreadRecord(record)
@@ -3262,11 +3284,15 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadResume(response *ThreadResume
 	if err != nil {
 		return nil, err
 	}
+	resumeApprovalPolicy := params.ApprovalPolicy
+	if resumeApprovalPolicy == nil {
+		resumeApprovalPolicy = response.ApprovalPolicy
+	}
 	turnParams := &turn.TurnStartParams{
 		ThreadID:              response.Thread.ID,
 		CWD:                   firstNonEmpty(stringPtrValue(params.CWD), response.CWD, record.Metadata.CWD),
 		Model:                 firstNonEmpty(stringPtrValue(params.Model), response.Model, record.Metadata.Model),
-		ApprovalPolicy:        params.ApprovalPolicy,
+		ApprovalPolicy:        resumeApprovalPolicy,
 		ApprovalsReviewer:     cloneString(params.ApprovalsReviewer),
 		SandboxPolicy:         params.Sandbox,
 		Permissions:           cloneString(params.Permissions),
@@ -3285,7 +3311,7 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadResume(response *ThreadResume
 	if err != nil {
 		return nil, err
 	}
-	applyThreadLifecycleMCPConfig(cfg, turnParams.Model, providerID, params.ApprovalPolicy, params.ApprovalsReviewer, params.Sandbox, params.Permissions, params.ServiceTierSet, params.ServiceTier, params.Personality)
+	applyThreadLifecycleMCPConfig(cfg, turnParams.Model, providerID, resumeApprovalPolicy, params.ApprovalsReviewer, params.Sandbox, params.Permissions, params.ServiceTierSet, params.ServiceTier, params.Personality)
 	return cfg, nil
 }
 
@@ -3535,9 +3561,13 @@ func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (stri
 		}
 	}
 	if params.Environments == nil {
+		maxBytes := config.DefaultProjectDocMaxBytes
+		if cfg, err := r.effectiveConfigForThreadStart(params); err == nil && cfg != nil {
+			maxBytes = cfg.ProjectDocMaxBytes()
+		}
 		loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
 			CWD:      r.effectiveThreadStartCWD(params),
-			MaxBytes: -1,
+			MaxBytes: maxBytes,
 		})
 		if err == nil && loaded != nil {
 			projectText := strings.TrimSpace(loaded.Text())
@@ -5009,7 +5039,7 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.DynamicTools = dynamicToolsFromRecordMetadata(record.Metadata)
 	}
 	params.ExperimentalRawEvents = threadRecordExperimentalRawEvents(record)
-	if params.BaseInstructions == nil && strings.TrimSpace(record.Metadata.BaseInstructions) != "" {
+	if params.BaseInstructions == nil && strings.TrimSpace(record.Metadata.BaseInstructions) != "" && !r.baseInstructionsAreModelGenerated(record) {
 		params.BaseInstructions = cloneString(&record.Metadata.BaseInstructions)
 	} else if params.BaseInstructions == nil && boolFromMap(record.Metadata.Extra, "suppress_model_instructions") {
 		empty := ""
@@ -5019,6 +5049,25 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Config["model_provider"] = strings.TrimSpace(record.Metadata.ModelProvider)
 	}
 	return nil
+}
+
+func (r *RuntimeRouter) baseInstructionsAreModelGenerated(record *session.Record) bool {
+	if record == nil || strings.TrimSpace(record.Metadata.BaseInstructions) == "" {
+		return false
+	}
+	value := record.Metadata.BaseInstructionsProvenance
+	if value != nil {
+		return strings.EqualFold(strings.TrimSpace(value.Type), session.BaseInstructionsProvenanceModel)
+	}
+	info := r.modelInfoForRuntime(strings.TrimSpace(record.Metadata.Model))
+	if info == nil {
+		return false
+	}
+	personality := ""
+	if overrides := threadRecordConfigOverrides(record); overrides != nil {
+		personality = strings.TrimSpace(stringFromAny(firstMapValue(overrides, "personality")))
+	}
+	return record.Metadata.BaseInstructions == info.ModelInstructions(personality)
 }
 
 // applyThreadSettingsEnvironmentConfigToTurnStartParams applies permission-profile and
@@ -5508,6 +5557,9 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := r.persistThreadSettingsUpdate(&params); err != nil {
+			return nil, err
+		}
 		if r.mcpRuntimes != nil {
 			r.mcpRuntimes.invalidateThread(params.ThreadID)
 		}
@@ -5564,6 +5616,30 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
 	}
+}
+
+func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams) error {
+	if r == nil || params == nil || params.ApprovalPolicy == nil || strings.TrimSpace(*params.ApprovalPolicy) == "" {
+		return nil
+	}
+	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	record, err := r.threadRecord(threadID, true, true)
+	if err != nil || record == nil {
+		return err
+	}
+	policy := strings.TrimSpace(*params.ApprovalPolicy)
+	record.Metadata.ApprovalPolicy = policy
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	configOverrides := threadRecordConfigOverrides(record)
+	if configOverrides == nil {
+		configOverrides = map[string]any{}
+	}
+	configOverrides["approval_policy"] = policy
+	record.Metadata.Extra["config"] = configOverrides
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return err
+	}
+	return r.services.ThreadRouter.appendThreadSettingsApplied(threadID, policy, runtimeRouterNow(r).UTC())
 }
 
 func (r *RuntimeRouter) cleanBackgroundTerminals(params *BackgroundTerminalsCleanParams) (*BackgroundTerminalsCleanResponse, error) {
@@ -9639,6 +9715,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.CodeModeProvider = r.services.CodeModeProvider
 	}
 	options.CodeModeRuntime = r.codeModeRuntimeForThread(threadID)
+	if cfg != nil {
+		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
+	}
 	options.DisableCodeModeFallback = r.services.DisableCodeModeFallback
 	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
 	options.OmitToolSearchSources = cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")

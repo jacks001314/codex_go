@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResumeCWDModeAndResolution(t *testing.T) {
@@ -126,6 +127,26 @@ func TestCodeModeHostConfigSupportsFallbackPolicy(t *testing.T) {
 	invalid := map[string]any{"features": map[string]any{"code_mode_host": map[string]any{"future": true}}}
 	if err := validateKnownTopLevelConfigFields(invalid); err == nil || !strings.Contains(err.Error(), "features.code_mode_host.future") {
 		t.Fatalf("strict unknown code-mode host field error = %v", err)
+	}
+}
+
+func TestCodeModeAndToolRegistryNestedConfig(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"features": map[string]any{
+		"code_mode":     map[string]any{"enabled": true, "default_exec_yield_time_ms": int64(1250)},
+		"tool_registry": map[string]any{"include_tool_metadata": true},
+	}}}
+	if got := cfg.CodeModeDefaultExecYieldTime(); got != 1250*time.Millisecond {
+		t.Fatalf("code-mode default yield = %s", got)
+	}
+	if !cfg.ToolRegistryIncludeToolMetadata() {
+		t.Fatal("tool registry metadata flag was not enabled")
+	}
+	if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
+		t.Fatalf("strict nested config error = %v", err)
+	}
+	invalid := map[string]any{"features": map[string]any{"tool_registry": map[string]any{"future": true}}}
+	if err := validateKnownTopLevelConfigFields(invalid); err == nil || !strings.Contains(err.Error(), "features.tool_registry.future") {
+		t.Fatalf("strict unknown tool registry field error = %v", err)
 	}
 }
 
@@ -913,6 +934,27 @@ func TestForcedChatGPTWorkspaceIDs(t *testing.T) {
 	cfg = &Config{Values: map[string]any{"forced_chatgpt_workspace_id": " workspace-c "}}
 	if got := cfg.ForcedChatGPTWorkspaceIDs(); !reflect.DeepEqual(got, []string{"workspace-c"}) {
 		t.Fatalf("ForcedChatGPTWorkspaceIDs string = %#v", got)
+	}
+}
+
+func TestProjectDocMaxBytes(t *testing.T) {
+	if got := (*Config)(nil).ProjectDocMaxBytes(); got != DefaultProjectDocMaxBytes {
+		t.Fatalf("nil ProjectDocMaxBytes() = %d", got)
+	}
+	for name, tc := range map[string]struct {
+		value any
+		want  int
+	}{
+		"configured": {value: int64(17), want: 17},
+		"disabled":   {value: 0, want: 0},
+		"invalid":    {value: -1, want: DefaultProjectDocMaxBytes},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &Config{Values: map[string]any{"project_doc_max_bytes": tc.value}}
+			if got := cfg.ProjectDocMaxBytes(); got != tc.want {
+				t.Fatalf("ProjectDocMaxBytes() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

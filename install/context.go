@@ -41,6 +41,7 @@ const (
 	InstallStandalone InstallMethodKind = "standalone"
 	InstallNPM        InstallMethodKind = "npm"
 	InstallBun        InstallMethodKind = "bun"
+	InstallPnpm       InstallMethodKind = "pnpm"
 	InstallBrew       InstallMethodKind = "brew"
 	InstallOther      InstallMethodKind = "other"
 )
@@ -81,15 +82,24 @@ func Current() *InstallContext {
 	currentOnce.Do(func() {
 		exe, _ := os.Executable()
 		codexHome := os.Getenv("CODEX_HOME")
-		current = FromExe(runtime.GOOS == "darwin", exe, os.Getenv("CODEX_MANAGED_BY_NPM") != "", os.Getenv("CODEX_MANAGED_BY_BUN") != "", codexHome)
+		current = FromExe(
+			runtime.GOOS == "darwin",
+			exe,
+			os.Getenv("CODEX_MANAGED_BY_PNPM") != "",
+			os.Getenv("CODEX_MANAGED_BY_NPM") != "",
+			os.Getenv("CODEX_MANAGED_BY_BUN") != "",
+			codexHome,
+		)
 	})
 	return cloneContext(current)
 }
 
-func FromExe(isMacOS bool, currentExe string, managedByNPM bool, managedByBun bool, codexHome string) *InstallContext {
+func FromExe(isMacOS bool, currentExe string, managedByPnpm bool, managedByNPM bool, managedByBun bool, codexHome string) *InstallContext {
 	layout := PackageLayoutFromExe(currentExe)
 	method := InstallMethod{Kind: InstallOther}
 	switch {
+	case managedByPnpm:
+		method = InstallMethod{Kind: InstallPnpm}
 	case managedByNPM:
 		method = InstallMethod{Kind: InstallNPM}
 	case managedByBun:

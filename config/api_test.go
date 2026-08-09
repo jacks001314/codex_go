@@ -12,6 +12,22 @@ import (
 	"codex_go/sandbox"
 )
 
+func TestConfiguredMCPToolHookMarshalRustShape(t *testing.T) {
+	timeout := uint64(9)
+	status := "querying"
+	encoded, err := json.Marshal(&ConfiguredHookHandler{
+		Type: "mcp_tool", Server: "linear", Tool: "get_issue",
+		Input: map[string]any{"id": "ENG-1"}, TimeoutSec: &timeout, StatusMessage: &status,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"mcp_tool","server":"linear","tool":"get_issue","input":{"id":"ENG-1"},"timeoutSec":9,"statusMessage":"querying"}`
+	if string(encoded) != want {
+		t.Fatalf("MCP tool hook JSON = %s, want %s", encoded, want)
+	}
+}
+
 func TestConfigReadResponseMarshalRustShape(t *testing.T) {
 	response := &ConfigReadResponse{
 		Config: map[string]any{

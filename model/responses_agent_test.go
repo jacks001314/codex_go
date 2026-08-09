@@ -1480,6 +1480,40 @@ func TestResponsesAgentRunnerSendsOriginatorHeader(t *testing.T) {
 	}
 }
 
+func TestResponsesAgentRunnerRoutingHintUsesCodexBackendAuth(t *testing.T) {
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:     &APIProvider{Name: OpenAIProviderName, BaseURL: "https://example.test/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"},
+	})
+	request, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{
+		Model: "gpt-test", ServiceTier: "fast",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "model=gpt-test;tier=fast" {
+		t.Fatalf("routing hint = %q", got)
+	}
+
+	runner.ProviderUsesOwnCredentials = true
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
+		t.Fatalf("provider-credential routing hint = %q, want empty", got)
+	}
+	runner.ProviderUsesOwnCredentials = false
+	runner.AuthSnapshot = &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
+		t.Fatalf("API-key routing hint = %q, want empty", got)
+	}
+}
+
 func TestResponsesAgentRunnerSendsStoreAndMetadataFieldsWithoutHTTPPreviousResponseID(t *testing.T) {
 	var recordedBody map[string]any
 	var recordedHeaders http.Header

@@ -47,7 +47,7 @@ func newComposerComponent(placeholder string) ComposerComponent {
 	if placeholder != "" {
 		composer.Placeholder = placeholder
 	} else {
-		composer.Placeholder = "Ask Codex"
+		composer.Placeholder = "Ask gcode"
 	}
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 0

@@ -74,6 +74,41 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 }
 
+func TestLatestPersistedApprovalPolicyMatchesRustResumePrecedence(t *testing.T) {
+	settings := func(policy string) Line {
+		raw, _ := json.Marshal(map[string]any{
+			"type":            "thread_settings_applied",
+			"thread_settings": map[string]string{"approval_policy": policy},
+		})
+		return Line{Type: "event_msg", Payload: raw}
+	}
+	turnStarted := func(id string) Line {
+		raw, _ := json.Marshal(map[string]any{"type": "turn_started", "turn_id": id})
+		return Line{Type: "event_msg", Payload: raw}
+	}
+	turnContext := func(id, policy string) Line {
+		raw, _ := json.Marshal(map[string]any{"turn_id": id, "approval_policy": policy})
+		return Line{Type: "turn_context", TurnContext: raw}
+	}
+	tests := []struct {
+		name  string
+		lines []Line
+		want  string
+	}{
+		{"later settings snapshot wins", []Line{turnContext("turn-1", "never"), settings("on-request")}, "on-request"},
+		{"settings in same turn beats stale context", []Line{turnStarted("turn-1"), settings("never"), turnContext("turn-1", "on-request")}, "never"},
+		{"newer turn context wins", []Line{settings("never"), turnStarted("turn-2"), turnContext("turn-2", "on-request")}, "on-request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := LatestPersistedApprovalPolicy(test.lines)
+			if !ok || got != test.want {
+				t.Fatalf("LatestPersistedApprovalPolicy() = %q, %v; want %q, true", got, ok, test.want)
+			}
+		})
+	}
+}
+
 func TestRecorderWritesRustRequiredSessionMetaFields(t *testing.T) {
 	recorder, err := NewRecorder(&CreateParams{
 		CodexHome: t.TempDir(),
@@ -145,6 +180,7 @@ func TestSessionMetaBaseInstructionsAcceptsRustObjectAndLegacyString(t *testing.
 	for name, raw := range map[string]string{
 		"rust object":   `{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","base_instructions":{"text":"rust base"}}`,
 		"legacy string": `{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","base_instructions":"legacy base"}`,
+		"provenance":    `{"id":"thread-1","timestamp":"2026-06-29T01:02:03Z","base_instructions":{"text":"model base","provenance":{"type":"model","model":"gpt-5.2"}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var meta SessionMeta
@@ -154,11 +190,34 @@ func TestSessionMetaBaseInstructionsAcceptsRustObjectAndLegacyString(t *testing.
 			want := "rust base"
 			if name == "legacy string" {
 				want = "legacy base"
+			} else if name == "provenance" {
+				want = "model base"
 			}
 			if meta.BaseInstructions != want {
 				t.Fatalf("BaseInstructions = %q, want %q", meta.BaseInstructions, want)
 			}
+			if name == "provenance" {
+				if meta.BaseInstructionsProvenance == nil || meta.BaseInstructionsProvenance.Type != "model" || meta.BaseInstructionsProvenance.Model != "gpt-5.2" {
+					t.Fatalf("provenance = %#v", meta.BaseInstructionsProvenance)
+				}
+			}
 		})
+	}
+}
+
+func TestSessionMetaBaseInstructionsMarshalPreservesProvenance(t *testing.T) {
+	raw, err := json.Marshal(SessionMeta{ID: "thread-1", Timestamp: "2026-06-29T01:02:03Z", BaseInstructions: "base", BaseInstructionsProvenance: &session.BaseInstructionsProvenance{Type: "model", Model: "gpt-5.2"}})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	base := decoded["base_instructions"].(map[string]any)
+	provenance := base["provenance"].(map[string]any)
+	if base["text"] != "base" || provenance["type"] != "model" || provenance["model"] != "gpt-5.2" {
+		t.Fatalf("base_instructions = %#v", base)
 	}
 }
 

@@ -95,6 +95,47 @@ func TestMultiAgentV2ControllerErrorsRespondToModel(t *testing.T) {
 	}
 }
 
+type waitCaptureV2Controller struct {
+	*MemoryToolController
+	timeoutMS int64
+}
+
+func (c *waitCaptureV2Controller) WaitForActivity(_ context.Context, args *WaitForActivityArgs) (*WaitForActivityResult, error) {
+	if args != nil && args.TimeoutMS != nil {
+		c.timeoutMS = *args.TimeoutMS
+	}
+	return &WaitForActivityResult{Message: "Wait timed out.", TimedOut: true}, nil
+}
+
+func TestMultiAgentV2WaitClampsTimeoutBelowConfiguredMinimum(t *testing.T) {
+	controller := &waitCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
+		WaitConfigured: true, WaitMin: 50 * time.Millisecond, WaitMax: time.Second, WaitDefault: 100 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wait, _ := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, "wait_agent"))
+	output, err := wait.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind: tool.PayloadFunction, Arguments: `{"timeout_ms":1}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controller.timeoutMS != 50 {
+		t.Fatalf("controller timeout = %dms, want 50ms", controller.timeoutMS)
+	}
+	want := `{"message":"Wait timed out.\n\nRequested timeout of 1ms was clamped to the minimum of 50ms.","timed_out":true}`
+	if output.Body != want {
+		t.Fatalf("wait output = %q, want %q", output.Body, want)
+	}
+	messageSchema := wait.Spec().OutputSchema["properties"].(map[string]any)["message"].(map[string]any)
+	if !strings.Contains(messageSchema["description"].(string), "timeout adjustment") {
+		t.Fatalf("message schema = %#v", messageSchema)
+	}
+}
+
 func TestMultiAgentV1ControllerErrorsRespondToModel(t *testing.T) {
 	registry := tool.NewRegistry()
 	controller := &limitV1Controller{MemoryToolController: NewMemoryToolController()}

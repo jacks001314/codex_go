@@ -44,7 +44,7 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 	local := runCodexSlashPTY(t, localExe, root, commands)
 
 	for _, want := range []string{
-		"OpenAI Codex",
+		"gcode",
 		"/status",
 		"/mcp",
 		"model",
@@ -109,7 +109,7 @@ func runCodexSlashPTY(t *testing.T, exe string, cwd string, commands []string) s
 			}
 		}
 	}()
-	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "OpenAI Codex", exited, 10*time.Second)
+	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "gcode", exited, 10*time.Second)
 	if !ready {
 		if earlyExit != nil {
 			t.Fatalf("%s exited before rendering: %v output=%q", exe, earlyExit, output.String())

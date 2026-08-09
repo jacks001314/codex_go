@@ -134,10 +134,10 @@ func TestModelPickerSelectionDoesNotAccumulateComposerRows(t *testing.T) {
 
 	terminal := newTestVirtualTerminal(90, 24)
 	terminal.WriteString(output.String())
-	if count := strings.Count(output.String(), "Ask Codex"); count != 1 {
+	if count := strings.Count(output.String(), "Ask gcode"); count != 1 {
 		t.Fatalf("model selection wrote the composer %d times, want exactly 1", count)
 	}
-	if count := strings.Count(terminal.Snapshot(), "Ask Codex"); count != 1 {
+	if count := strings.Count(terminal.Snapshot(), "Ask gcode"); count != 1 {
 		t.Fatalf("terminal contains %d composer rows, want exactly 1\n%s", count, terminal.Snapshot())
 	}
 }
@@ -308,13 +308,13 @@ func TestModelPetAnimationDoesNotAccumulateComposerRows(t *testing.T) {
 			terminal := newTestVirtualTerminal(90, 24)
 			terminal.WriteString(output.String())
 			snapshot := terminal.Snapshot()
-			if count := strings.Count(output.String(), "Ask Codex"); count != 1 {
+			if count := strings.Count(output.String(), "Ask gcode"); count != 1 {
 				t.Fatalf("animation wrote the composer %d times, want exactly 1", count)
 			}
 			if count := strings.Count(output.String(), "\x1b7"); count < 2 {
 				t.Fatalf("pet image frames = %d, want at least 2", count)
 			}
-			if count := strings.Count(snapshot, "Ask Codex"); count != 1 {
+			if count := strings.Count(snapshot, "Ask gcode"); count != 1 {
 				t.Fatalf("composer placeholder count = %d, want 1\n--- terminal ---\n%s\n--- raw output ---\n%q", count, snapshot, output.String())
 			}
 		})

@@ -9,7 +9,7 @@ import (
 
 const (
 	HomebrewCaskAPIURL = "https://formulae.brew.sh/api/cask/codex.json"
-	LatestReleaseURL   = "https://api.github.com/repos/openai/codex/releases/latest"
+	LatestReleaseURL   = "https://api.github.com/repos/jacks001314/codex_go/releases/latest"
 	UpdateCacheTTL     = 20 * time.Hour
 )
 

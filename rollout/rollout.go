@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/session"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -71,33 +73,34 @@ type ContentPart struct {
 }
 
 type SessionMeta struct {
-	ID                          string            `json:"id"`
-	SessionID                   string            `json:"session_id"`
-	SessionPrefix               string            `json:"session_prefix,omitempty"`
-	ForkedFromID                string            `json:"forked_from_id,omitempty"`
-	Timestamp                   string            `json:"timestamp"`
-	CWD                         string            `json:"cwd"`
-	Source                      string            `json:"source,omitempty"`
-	ThreadSource                string            `json:"thread_source,omitempty"`
-	Originator                  string            `json:"originator"`
-	Model                       string            `json:"model,omitempty"`
-	ModelProvider               string            `json:"model_provider,omitempty"`
-	HistoryMode                 string            `json:"history_mode,omitempty"`
-	HistoryBase                 *HistoryPosition  `json:"history_base,omitempty"`
-	SubagentHistoryStartOrdinal *uint64           `json:"subagent_history_start_ordinal,omitempty"`
-	MemoryMode                  string            `json:"memory_mode,omitempty"`
-	ParentThreadID              string            `json:"parent_thread_id,omitempty"`
-	BaseInstructions            string            `json:"base_instructions,omitempty"`
-	AgentNickname               string            `json:"agent_nickname,omitempty"`
-	AgentRole                   string            `json:"agent_role,omitempty"`
-	AgentPath                   string            `json:"agent_path,omitempty"`
-	DynamicTools                []json.RawMessage `json:"dynamic_tools,omitempty"`
-	SelectedCapabilityRoots     []json.RawMessage `json:"selected_capability_roots,omitempty"`
-	MultiAgentVersion           string            `json:"multi_agent_version,omitempty"`
-	ContextWindow               json.RawMessage   `json:"context_window,omitempty"`
-	CLIVersion                  string            `json:"cli_version"`
-	Git                         map[string]string `json:"git,omitempty"`
-	Extra                       map[string]any    `json:"extra,omitempty"`
+	ID                          string                              `json:"id"`
+	SessionID                   string                              `json:"session_id"`
+	SessionPrefix               string                              `json:"session_prefix,omitempty"`
+	ForkedFromID                string                              `json:"forked_from_id,omitempty"`
+	Timestamp                   string                              `json:"timestamp"`
+	CWD                         string                              `json:"cwd"`
+	Source                      string                              `json:"source,omitempty"`
+	ThreadSource                string                              `json:"thread_source,omitempty"`
+	Originator                  string                              `json:"originator"`
+	Model                       string                              `json:"model,omitempty"`
+	ModelProvider               string                              `json:"model_provider,omitempty"`
+	HistoryMode                 string                              `json:"history_mode,omitempty"`
+	HistoryBase                 *HistoryPosition                    `json:"history_base,omitempty"`
+	SubagentHistoryStartOrdinal *uint64                             `json:"subagent_history_start_ordinal,omitempty"`
+	MemoryMode                  string                              `json:"memory_mode,omitempty"`
+	ParentThreadID              string                              `json:"parent_thread_id,omitempty"`
+	BaseInstructions            string                              `json:"base_instructions,omitempty"`
+	BaseInstructionsProvenance  *session.BaseInstructionsProvenance `json:"-"`
+	AgentNickname               string                              `json:"agent_nickname,omitempty"`
+	AgentRole                   string                              `json:"agent_role,omitempty"`
+	AgentPath                   string                              `json:"agent_path,omitempty"`
+	DynamicTools                []json.RawMessage                   `json:"dynamic_tools,omitempty"`
+	SelectedCapabilityRoots     []json.RawMessage                   `json:"selected_capability_roots,omitempty"`
+	MultiAgentVersion           string                              `json:"multi_agent_version,omitempty"`
+	ContextWindow               json.RawMessage                     `json:"context_window,omitempty"`
+	CLIVersion                  string                              `json:"cli_version"`
+	Git                         map[string]string                   `json:"git,omitempty"`
+	Extra                       map[string]any                      `json:"extra,omitempty"`
 }
 
 // UnmarshalJSON accepts both the legacy Go string representation and the
@@ -115,20 +118,24 @@ func (m *SessionMeta) UnmarshalJSON(data []byte) error {
 	}
 	if len(wire.BaseInstructions) == 0 || string(wire.BaseInstructions) == "null" {
 		m.BaseInstructions = ""
+		m.BaseInstructionsProvenance = nil
 		return nil
 	}
 	var legacy string
 	if err := json.Unmarshal(wire.BaseInstructions, &legacy); err == nil {
 		m.BaseInstructions = legacy
+		m.BaseInstructionsProvenance = nil
 		return nil
 	}
 	var object struct {
-		Text string `json:"text"`
+		Text       string                              `json:"text"`
+		Provenance *session.BaseInstructionsProvenance `json:"provenance,omitempty"`
 	}
 	if err := json.Unmarshal(wire.BaseInstructions, &object); err != nil {
 		return fmt.Errorf("base_instructions: expected string or object: %w", err)
 	}
 	m.BaseInstructions = object.Text
+	m.BaseInstructionsProvenance = object.Provenance
 	return nil
 }
 
@@ -143,10 +150,19 @@ func (m SessionMeta) MarshalJSON() ([]byte, error) {
 	wire.sessionMetaAlias = (*sessionMetaAlias)(&m)
 	if m.BaseInstructions != "" {
 		wire.BaseInstructions = struct {
-			Text string `json:"text"`
-		}{Text: m.BaseInstructions}
+			Text       string                              `json:"text"`
+			Provenance *session.BaseInstructionsProvenance `json:"provenance,omitempty"`
+		}{Text: m.BaseInstructions, Provenance: cloneBaseInstructionsProvenance(m.BaseInstructionsProvenance)}
 	}
 	return json.Marshal(&wire)
+}
+
+func cloneBaseInstructionsProvenance(value *session.BaseInstructionsProvenance) *session.BaseInstructionsProvenance {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 type HistoryPosition struct {
@@ -224,6 +240,7 @@ type CreateParams struct {
 	MemoryMode                  string
 	ParentThreadID              string
 	BaseInstructions            string
+	BaseInstructionsProvenance  *session.BaseInstructionsProvenance
 	AgentNickname               string
 	AgentRole                   string
 	AgentPath                   string
@@ -288,6 +305,7 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 		MemoryMode:                  params.MemoryMode,
 		ParentThreadID:              params.ParentThreadID,
 		BaseInstructions:            params.BaseInstructions,
+		BaseInstructionsProvenance:  cloneBaseInstructionsProvenance(params.BaseInstructionsProvenance),
 		AgentNickname:               params.AgentNickname,
 		AgentRole:                   params.AgentRole,
 		AgentPath:                   params.AgentPath,
@@ -504,6 +522,33 @@ func (r *Recorder) AppendThreadRolledBack(numTurns uint32, now time.Time) error 
 		Timestamp: now.UTC().Format(time.RFC3339Nano),
 		Payload:   payload,
 	})
+}
+
+// AppendThreadSettingsApplied persists the settings snapshot used to restore
+// thread-level approval behavior after a cold resume.
+func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.Time) error {
+	approvalPolicy = strings.TrimSpace(approvalPolicy)
+	if approvalPolicy == "" {
+		return errors.New("approval policy is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	payload, err := json.Marshal(struct {
+		Type           string `json:"type"`
+		ThreadSettings struct {
+			ApprovalPolicy string `json:"approval_policy"`
+		} `json:"thread_settings"`
+	}{
+		Type: "thread_settings_applied",
+		ThreadSettings: struct {
+			ApprovalPolicy string `json:"approval_policy"`
+		}{ApprovalPolicy: approvalPolicy},
+	})
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
 }
 
 func (r *Recorder) AppendTurnStarted(turnID string, startedAt time.Time) error {

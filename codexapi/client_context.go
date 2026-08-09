@@ -10,6 +10,7 @@ import (
 const (
 	ClientOpenAIBetaHeader                       = "OpenAI-Beta"
 	ClientCodexInstallationIDHeader              = "x-codex-installation-id"
+	ClientCodexRoutingHintHeader                 = "x-codex-routing-hint"
 	ClientCodexTurnStateHeader                   = "x-codex-turn-state"
 	ClientCodexTurnMetadataHeader                = "x-codex-turn-metadata"
 	ClientCodexParentThreadIDHeader              = "x-codex-parent-thread-id"

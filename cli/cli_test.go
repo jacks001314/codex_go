@@ -692,6 +692,39 @@ func TestParseExecResume(t *testing.T) {
 	}
 }
 
+func TestParseExecFork(t *testing.T) {
+	parsed, err := Parse([]string{
+		"exec",
+		"fork",
+		"session-123",
+		"--json",
+		"--model", "gpt-5.2-codex",
+		"--skip-git-repo-check",
+		"--ephemeral",
+		"--image", "one.png,two.png",
+		"continue on the fork",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if parsed.Command != CommandExec || parsed.Exec.Subcommand != "fork" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	if parsed.Exec.Fork.SessionID != "session-123" || parsed.Exec.Fork.Prompt != "continue on the fork" {
+		t.Fatalf("fork = %#v", parsed.Exec.Fork)
+	}
+	if !parsed.Exec.JSON || !parsed.Exec.Ephemeral || !parsed.Exec.SkipGitRepoCheck || parsed.Exec.Shared.Model != "gpt-5.2-codex" {
+		t.Fatalf("exec flags = %#v", parsed.Exec)
+	}
+	if strings.Join(parsed.Exec.Fork.Images, ",") != "one.png,two.png" {
+		t.Fatalf("fork images = %#v", parsed.Exec.Fork.Images)
+	}
+
+	if _, err := Parse([]string{"exec", "fork"}); err == nil || err.Error() != "exec fork requires SESSION_ID" {
+		t.Fatalf("missing session error = %v", err)
+	}
+}
+
 func TestParseReviewRejectsConflicts(t *testing.T) {
 	_, err := Parse([]string{"review", "--uncommitted", "custom"})
 	if err == nil {

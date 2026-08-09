@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	BaseInstructions = `You are Codex, a coding agent based on GPT-5.
+	BaseInstructions = `You are gcode, a coding agent based on GPT-5.
 
 ## Responsiveness
 
@@ -947,7 +947,7 @@ func localPersonalityMessagesForSlug(slug string) *ModelMessages {
 	switch slug {
 	case "gpt-5.2-codex", "exp-codex-personality":
 		return &ModelMessages{
-			InstructionsTemplate: "You are Codex, a coding agent based on GPT-5.\n\n{{ personality }}\n\n" + BaseInstructions,
+			InstructionsTemplate: "You are gcode, a coding agent based on GPT-5.\n\n{{ personality }}\n\n" + BaseInstructions,
 			PersonalityDefault:   "",
 			PersonalityFriendly:  "You optimize for team morale and being a supportive teammate as much as code quality.",
 			PersonalityPragmatic: "You are a deeply pragmatic, effective software engineer.",

@@ -44,7 +44,7 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 		return nil
 	}
 	lines := []string{
-		">_ OpenAI Codex " + c.versionLabel(),
+		">_ gcode " + c.versionLabel(),
 		"",
 		c.modelLine(),
 		c.directoryLine(innerWidth),
@@ -60,7 +60,7 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 
 func (c SessionHeaderHistoryCell) RawLines() []string {
 	lines := []string{
-		"OpenAI Codex " + c.versionLabel(),
+		"gcode " + c.versionLabel(),
 		"model: " + strings.TrimSpace(c.Model+reasoningSuffix(c.ReasoningEffort)),
 		"directory: " + c.formatDirectory(0),
 	}

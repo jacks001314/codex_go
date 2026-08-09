@@ -111,6 +111,49 @@ func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	}
 }
 
+func TestRouterThreadResumeRestoresPersistedApprovalPolicy(t *testing.T) {
+	now := fixedTime()
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	threadID := session.ThreadID("thread-resume-approval-policy")
+	record := &session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), SessionPrefix: session.PrefixForSessionID(string(threadID))},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := router.createThreadRollout(record, now); err != nil {
+		t.Fatalf("createThreadRollout() error = %v", err)
+	}
+	path := router.threadRolloutPath(record)
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if err := recorder.AppendThreadSettingsApplied("never", now.Add(time.Second)); err != nil {
+		recorder.Close()
+		t.Fatalf("AppendThreadSettingsApplied() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	resumed := router.Handle(requestWithParams(t, IntID(1), MethodThreadResume, ThreadResumeParams{ThreadID: string(threadID), ExcludeTurns: true}))
+	if resumed.Error != nil {
+		t.Fatalf("resume error = %v", resumed.Error)
+	}
+	if got := resumed.Result.(*ThreadResumeResponse).ApprovalPolicy; got != "never" {
+		t.Fatalf("resume approval policy = %#v, want never", got)
+	}
+	override := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{ThreadID: string(threadID), ApprovalPolicy: "on-request", ExcludeTurns: true}))
+	if override.Error != nil {
+		t.Fatalf("explicit resume error = %v", override.Error)
+	}
+	if got := override.Result.(*ThreadResumeResponse).ApprovalPolicy; got != "on-request" {
+		t.Fatalf("explicit resume approval policy = %#v, want on-request", got)
+	}
+}
+
 func TestRouterThreadStartAllowsOmittedCWD(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)

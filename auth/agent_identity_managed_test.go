@@ -74,6 +74,18 @@ func TestBootstrapManagedAgentIdentityRegistersAndPersistsRecord(t *testing.T) {
 	}
 }
 
+func TestAgentIdentityAuthAPIBaseURLEnvOverride(t *testing.T) {
+	t.Setenv(AgentIdentityAuthAPIBaseURLEnv, "https://identity.example.test/api/")
+	got, err := agentIdentityAuthAPIBaseURL("https://chatgpt.com/backend-api/", "")
+	if err != nil || got != "https://identity.example.test/api" {
+		t.Fatalf("agent identity auth API URL = %q, %v", got, err)
+	}
+	got, err = agentIdentityAuthAPIBaseURL("", "https://explicit.example.test/")
+	if err != nil || got != "https://explicit.example.test" {
+		t.Fatalf("explicit agent identity auth API URL = %q, %v", got, err)
+	}
+}
+
 func TestBootstrapManagedAgentIdentitySuppressesRetryDuringCooldown(t *testing.T) {
 	clearAgentIdentityBootstrapCooldown()
 	defer clearAgentIdentityBootstrapCooldown()

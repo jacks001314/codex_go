@@ -77,7 +77,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		m.State.SetThreadID(side.ParentThreadID)
 		m.State.Messages = cloneSideMessages(side.ParentMessages)
 		m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
-		m.composer.Placeholder = firstNonEmpty(side.ParentPlaceholder, "Ask Codex")
+		m.composer.Placeholder = firstNonEmpty(side.ParentPlaceholder, "Ask gcode")
 		side.ShowingSide = false
 	} else {
 		side.ParentMessages = cloneSideMessages(m.State.Messages)
@@ -86,7 +86,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		m.State.SetThreadID(side.SideThreadID)
 		m.State.Messages = cloneSideMessages(side.SideMessages)
 		m.setStatus(firstNonEmpty(side.SideStatus, "idle"))
-		m.composer.Placeholder = firstNonEmpty(side.SidePlaceholder, "Ask Codex in side conversation")
+		m.composer.Placeholder = firstNonEmpty(side.SidePlaceholder, "Ask gcode in side conversation")
 		side.ShowingSide = true
 	}
 	m.notice = m.sideContextLabel()
@@ -316,13 +316,13 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 		ParentStatus:      parentStatus,
 		ParentPlaceholder: m.composer.Placeholder,
 		SideStatus:        "idle",
-		SidePlaceholder:   "Ask Codex in side conversation",
+		SidePlaceholder:   "Ask gcode in side conversation",
 		ShowingSide:       true,
 	}
 	m.State.SetThreadID(sideThreadID)
 	m.State.Messages = nil
 	m.setStatus("idle")
-	m.composer.Placeholder = "Ask Codex in side conversation"
+	m.composer.Placeholder = "Ask gcode in side conversation"
 	m.notice = m.sideContextLabel()
 	m.refreshTranscript()
 	if prompt := strings.TrimSpace(msg.Params.UserMessage); prompt != "" {

@@ -65,6 +65,7 @@ type ModelSummary struct {
 	DefaultServiceTier        *string                 `json:"defaultServiceTier"`
 	InputModalities           []string                `json:"inputModalities"`
 	SupportsPersonality       bool                    `json:"supportsPersonality"`
+	MultiAgentVersion         *string                 `json:"multiAgentVersion,omitempty"`
 	Upgrade                   *string                 `json:"upgrade"`
 	UpgradeInfo               *ModelUpgradeInfo       `json:"upgradeInfo,omitempty"`
 	AvailabilityNux           *ModelAvailabilityNux   `json:"availabilityNux,omitempty"`
@@ -104,6 +105,7 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		DefaultServiceTier        *string                 `json:"defaultServiceTier"`
 		InputModalities           []string                `json:"inputModalities"`
 		SupportsPersonality       bool                    `json:"supportsPersonality"`
+		MultiAgentVersion         *string                 `json:"multiAgentVersion"`
 		Upgrade                   *string                 `json:"upgrade"`
 		UpgradeInfo               *ModelUpgradeInfo       `json:"upgradeInfo"`
 		AvailabilityNux           *ModelAvailabilityNux   `json:"availabilityNux"`
@@ -122,6 +124,7 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		DefaultServiceTier:        m.DefaultServiceTier,
 		InputModalities:           inputModalities,
 		SupportsPersonality:       m.SupportsPersonality,
+		MultiAgentVersion:         cloneStringPtr(m.MultiAgentVersion),
 		Upgrade:                   m.Upgrade,
 		UpgradeInfo:               m.UpgradeInfo,
 		AvailabilityNux:           m.AvailabilityNux,
@@ -295,6 +298,9 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 		InputModalities:           append([]string(nil), info.InputModalities...),
 		SupportsPersonality:       (&info).SupportsPersonality(),
 		SupportsSearchTool:        info.SupportsSearchTool,
+	}
+	if version := strings.TrimSpace(info.MultiAgentVersion); version != "" {
+		summary.MultiAgentVersion = &version
 	}
 	if info.DefaultServiceTier != "" {
 		value := info.DefaultServiceTier

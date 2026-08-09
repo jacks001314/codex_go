@@ -579,6 +579,7 @@ func installCheck(codexHome string, showDetails bool, currentExe func() (string,
 	details = append(details,
 		fmt.Sprintf("managed by npm: %t", doctorManagedByNPM(exe)),
 		fmt.Sprintf("managed by bun: %t", managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN")),
+		fmt.Sprintf("managed by pnpm: %t", managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM")),
 	)
 	pushEnvPathDetailForDoctor(&details, "managed package root", "CODEX_MANAGED_PACKAGE_ROOT")
 
@@ -601,7 +602,7 @@ func installCheck(codexHome string, showDetails bool, currentExe func() (string,
 			details = append(details, "npm update target: "+rootCheck.PackageRoot)
 		case npmRootCheckMismatch:
 			status = CheckStatusFail
-			summary = "npm install -g @openai/codex would update a different install"
+			summary = "npm install -g @jacks001314/codex-go@latest would update a different install"
 			remediation = fmt.Sprintf("Fix PATH or npm prefix so the running package root (%s) matches the npm global package root (%s).", rootCheck.RunningPackageRoot, rootCheck.NPMPackageRoot)
 			details = append(details,
 				"running package root: "+rootCheck.RunningPackageRoot,
@@ -717,6 +718,7 @@ func doctorInstallContextForDoctor(currentExe string, codexHome string) *install
 	return install.FromExe(
 		runtime.GOOS == "darwin",
 		currentExe,
+		managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM"),
 		doctorManagedByNPM(currentExe),
 		managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN"),
 		codexHome,
@@ -734,6 +736,8 @@ func installMethodNameForDoctor(ctx *install.InstallContext) string {
 		return "npm"
 	case install.InstallBun:
 		return "bun"
+	case install.InstallPnpm:
+		return "pnpm"
 	case install.InstallBrew:
 		return "brew"
 	default:
@@ -771,6 +775,8 @@ func describeInstallContextForDoctor(ctx *install.InstallContext) string {
 		return describeMethodWithPackageLayoutForDoctor("npm", ctx.PackageLayout)
 	case install.InstallBun:
 		return describeMethodWithPackageLayoutForDoctor("bun", ctx.PackageLayout)
+	case install.InstallPnpm:
+		return describeMethodWithPackageLayoutForDoctor("pnpm", ctx.PackageLayout)
 	case install.InstallBrew:
 		return describeMethodWithPackageLayoutForDoctor("brew", ctx.PackageLayout)
 	default:
@@ -1745,21 +1751,11 @@ func checkForUpdateOnStartup(cfg *config.Config) bool {
 }
 
 func updateActionLabel(context *install.InstallContext) string {
-	if context == nil {
+	action := install.ActionFromContext(context)
+	if action == nil {
 		return "manual or unknown"
 	}
-	switch context.Method.Kind {
-	case install.InstallNPM:
-		return "npm install -g @openai/codex"
-	case install.InstallBun:
-		return "bun install -g @openai/codex"
-	case install.InstallBrew:
-		return "brew upgrade --cask codex"
-	case install.InstallStandalone:
-		return "standalone installer"
-	default:
-		return "manual or unknown"
-	}
+	return action.CommandLine()
 }
 
 func pushCachedVersionDetails(details *[]string, path string) {
@@ -1812,7 +1808,7 @@ func doctorManagedByNPM(currentExe string) bool {
 }
 
 func inheritedManagedEnvForCargoBinary(currentExe string) bool {
-	if !managedEnvSetForDoctor("CODEX_MANAGED_BY_NPM") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN") {
+	if !managedEnvSetForDoctor("CODEX_MANAGED_BY_NPM") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM") {
 		return false
 	}
 	if strings.TrimSpace(currentExe) == "" {
@@ -1874,7 +1870,7 @@ func defaultRunCodexPathEntriesCommandForDoctor() (string, error) {
 }
 
 func compareNpmPackageRootsForDoctor(runningPackageRoot string, npmRoot string) npmRootCheck {
-	npmPackageRoot := filepath.Join(npmRoot, "@openai", "codex")
+	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
 	if normalizePathForDoctorCompare(runningPackageRoot) == normalizePathForDoctorCompare(npmPackageRoot) {
 		return npmRootCheck{Kind: npmRootCheckMatch, PackageRoot: npmPackageRoot}
 	}

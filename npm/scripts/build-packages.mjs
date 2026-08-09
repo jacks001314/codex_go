@@ -24,11 +24,11 @@ mkdirSync(stageRoot, { recursive: true });
 
 const targets = [
   { goos: "linux", goarch: "amd64", npmOS: "linux", npmCPU: "x64", targetTriple: "x86_64-unknown-linux-musl" },
-  { goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64", targetTriple: "aarch64-unknown-linux-musl" },
-  { goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64", targetTriple: "x86_64-apple-darwin" },
-  { goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64", targetTriple: "aarch64-apple-darwin" },
+  //{ goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64", targetTriple: "aarch64-unknown-linux-musl" },
+  //{ goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64", targetTriple: "x86_64-apple-darwin" },
+  //{ goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64", targetTriple: "aarch64-apple-darwin" },
   { goos: "windows", goarch: "amd64", npmOS: "win32", npmCPU: "x64", targetTriple: "x86_64-pc-windows-msvc" },
-  { goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64", targetTriple: "aarch64-pc-windows-msvc" },
+  //{ goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64", targetTriple: "aarch64-pc-windows-msvc" },
 ];
 
 function run(command, commandArgs, options = {}) {

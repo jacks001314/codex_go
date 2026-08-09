@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"codex_go/tool"
@@ -93,6 +94,105 @@ func TestResponsesFunctionToolNormalizesMissingSchemaTypeToObject(t *testing.T) 
 	required, _ := parameters["required"].([]string)
 	if len(required) != 1 || required[0] != "plan" {
 		t.Fatalf("parameters required = %#v", parameters["required"])
+	}
+}
+
+func TestResponsesLoadableToolsFromValueNormalizesRawFunctionToolParameters(t *testing.T) {
+	// Stale persisted tool definitions (session history, tool search output,
+	// dynamic tools) can carry the pre-fix update_plan shape
+	// {"required": ["plan"]} or explicit nulls for "type"/"required". The
+	// raw-map fast path must sanitize them the same way ResponsesToolsFromSpecs
+	// does, so strict providers never receive an invalid parameters schema.
+	raw := []any{
+		map[string]any{
+			"type":        "function",
+			"name":        "update_plan",
+			"description": "Updates the current task plan.",
+			"parameters":  map[string]any{"required": []string{"plan"}},
+		},
+		map[string]any{
+			"type":        "function",
+			"name":        "agent__spawn_agent",
+			"description": "Spawns a sub-agent to work on a task.",
+			"parameters": map[string]any{
+				"type":     nil,
+				"required": nil,
+				"properties": map[string]any{
+					"items": map[string]any{"type": "array", "items": map[string]any{}},
+				},
+			},
+		},
+		map[string]any{
+			"type":        "namespace",
+			"name":        "mcp__memory",
+			"description": "Memory tools",
+			"tools": []any{
+				map[string]any{
+					"type":       "function",
+					"name":       "create_entities",
+					"parameters": map[string]any{"required": nil},
+				},
+			},
+		},
+	}
+	tools, ok := ResponsesLoadableToolsFromValue(raw)
+	if !ok {
+		t.Fatalf("ResponsesLoadableToolsFromValue() = %#v, want ok", tools)
+	}
+	data, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	encoded := string(data)
+	for _, forbidden := range []string{`"type":null`, `"type": null`, `"required":null`, `"required": null`} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("serialized tools contain %q: %s", forbidden, encoded)
+		}
+	}
+	if len(tools) != 3 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	updatePlan, _ := tools[0].(map[string]any)
+	parameters, _ := updatePlan["parameters"].(map[string]any)
+	if parameters["type"] != "object" {
+		t.Fatalf("update_plan parameters = %#v, want type object", parameters)
+	}
+	spawn, _ := tools[1].(map[string]any)
+	spawnParameters, _ := spawn["parameters"].(map[string]any)
+	if spawnParameters["type"] != "object" {
+		t.Fatalf("agent__spawn_agent parameters = %#v, want type object", spawnParameters)
+	}
+	if _, exists := spawnParameters["required"]; exists {
+		t.Fatalf("agent__spawn_agent required should be dropped: %#v", spawnParameters["required"])
+	}
+	namespace, _ := tools[2].(map[string]any)
+	children, _ := namespace["tools"].([]any)
+	if len(children) != 1 {
+		t.Fatalf("namespace children = %#v", namespace["tools"])
+	}
+	child, _ := children[0].(map[string]any)
+	childParameters, _ := child["parameters"].(map[string]any)
+	if _, exists := childParameters["required"]; exists {
+		t.Fatalf("namespace child required should be dropped: %#v", childParameters["required"])
+	}
+}
+
+func TestNormalizeResponseToolParametersPreservesWaitPropertiesShape(t *testing.T) {
+	_, waitExecutor := tool.NewCodeModeExecutors(tool.NewRegistry())
+	tools := normalizeResponseToolParameters(ResponsesToolsFromSpecs([]tool.Spec{waitExecutor.Spec()}))
+	wait, _ := tools[0].(map[string]any)
+	if wait["name"] != "wait" {
+		t.Fatalf("tool = %#v, want wait", wait)
+	}
+	parameters, _ := wait["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	if _, exists := properties["type"]; exists {
+		t.Fatalf("properties container was mutated into a schema: %#v", properties)
+	}
+	for _, name := range []string{"cell_id", "yield_time_ms", "terminate"} {
+		if _, ok := properties[name].(map[string]any); !ok {
+			t.Fatalf("property %q = %#v, want schema object", name, properties[name])
+		}
 	}
 }
 

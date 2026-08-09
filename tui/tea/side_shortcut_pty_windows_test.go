@@ -107,7 +107,7 @@ func runSideShortcutTUIParityPTY(t *testing.T, binary string, cwd string, verify
 		}
 	}()
 
-	waitForSideShortcutOutput(t, &output, exited, 0, "OpenAI Codex", 15*time.Second)
+	waitForSideShortcutOutput(t, &output, exited, 0, "gcode", 15*time.Second)
 	writeSideShortcutInput(t, terminal, "Reply exactly MAIN_READY. Do not call tools.\r")
 	if !waitForWeatherFinalAnswer(home, exited, 120*time.Second) {
 		raw := output.String()

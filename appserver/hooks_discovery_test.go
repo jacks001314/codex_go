@@ -82,6 +82,22 @@ func TestHookDiscoveryLoadsProjectHooksJSON(t *testing.T) {
 	}
 }
 
+func TestHookDiscoveryRecognizesUnsupportedMCPToolHook(t *testing.T) {
+	cwd := t.TempDir()
+	hooksDir := filepath.Join(cwd, ".codex")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"mcp_tool","server":"linear","tool":"get_issue","input":{"id":"ENG-1"}}]}]}}`
+	if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response := NewHookDiscoveryService("").Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 0 || !warningsContain(response.Data[0].Warnings, "MCP tool hooks are not supported yet") {
+		t.Fatalf("MCP tool hook discovery = %+v", response)
+	}
+}
+
 func TestHookDiscoveryLoadsUserHooksJSON(t *testing.T) {
 	home := t.TempDir()
 	body := `{

@@ -10,7 +10,7 @@ import (
 )
 
 func TestUpdateVersionsMatchRust(t *testing.T) {
-	version, err := ExtractVersionFromLatestTag("rust-v1.5.0")
+	version, err := ExtractVersionFromLatestTag("go-v1.5.0")
 	if err != nil {
 		t.Fatalf("ExtractVersionFromLatestTag() error = %v", err)
 	}
@@ -19,6 +19,9 @@ func TestUpdateVersionsMatchRust(t *testing.T) {
 	}
 	if _, err := ExtractVersionFromLatestTag("v1.5.0"); err == nil {
 		t.Fatal("latest tag without prefix returned nil error")
+	}
+	if _, err := ExtractVersionFromLatestTag("rust-v1.5.0"); err == nil {
+		t.Fatal("Rust release tag returned nil error")
 	}
 	assertBoolPtrTUI(t, IsNewerVersion("0.11.1", "0.11.0"), true)
 	assertBoolPtrTUI(t, IsNewerVersion("0.11.0", "0.11.1"), false)
@@ -59,8 +62,11 @@ func TestUpdateActionCommandStringsMatchRust(t *testing.T) {
 	if command != "powershell" || len(args) != 4 || args[3] != "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex" {
 		t.Fatalf("StandaloneWin CommandArgs = %q %#v", command, args)
 	}
-	if got := UpdateActionNPMGlobalLatest.CommandString(); got != "npm install -g @openai/codex" {
+	if got := UpdateActionNPMGlobalLatest.CommandString(); got != "npm install -g @jacks001314/codex-go@latest" {
 		t.Fatalf("CommandString = %q", got)
+	}
+	if got := UpdateActionPnpmGlobalLatest.CommandString(); got != "pnpm add -g @jacks001314/codex-go@latest" {
+		t.Fatalf("pnpm CommandString = %q", got)
 	}
 }
 
@@ -193,7 +199,7 @@ func TestUpdatePromptRowsUseSelectedColorBar(t *testing.T) {
 	for _, want := range []string{
 		"Update available! 1.0.0 -> 9.9.9",
 		"Release notes: " + ReleaseNotesURL,
-		NumberedSelectionPrefix(0, true) + "Update now (runs `npm install -g @openai/codex`)",
+		NumberedSelectionPrefix(0, true) + "Update now (runs `npm install -g @jacks001314/codex-go@latest`)",
 		"\x1b[",
 	} {
 		if !strings.Contains(rows, want) {
