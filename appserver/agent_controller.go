@@ -253,30 +253,71 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	return &agent.SendInputResult{SubmissionID: response.Turn.ID}, nil
 }
 func (c *runtimeAgentController) WaitAgent(ctx context.Context, args *agent.WaitAgentArgs) (*agent.WaitAgentResult, error) {
-	if args == nil {
-		args = &agent.WaitAgentArgs{}
+	// Rust requires explicit targets for V1 wait_agent
+	// (parse_agent_id_targets rejects empty lists) and returns only final
+	// statuses; an empty result with timed_out=true means no target finished
+	// before the deadline.
+	if args == nil || len(args.Targets) == 0 {
+		return nil, fmt.Errorf("agent ids must be non-empty")
 	}
-	if args.TimeoutMS != nil && *args.TimeoutMS > 0 {
-		timer := time.NewTimer(time.Duration(*args.TimeoutMS) * time.Millisecond)
+	timeout := agent.MultiAgentV1DefaultWait
+	if args.TimeoutMS != nil {
+		timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			return nil, fmt.Errorf("timeout_ms must be greater than zero")
+		}
+		if timeout < agent.MultiAgentV1MinWait {
+			timeout = agent.MultiAgentV1MinWait
+		}
+		if timeout > agent.MultiAgentV1MaxWait {
+			timeout = agent.MultiAgentV1MaxWait
+		}
+	}
+	collectFinal := func(final map[string]agent.AgentMessageStatus) *agent.WaitAgentResult {
+		if len(final) == 0 {
+			return nil
+		}
+		return &agent.WaitAgentResult{Status: final, TimedOut: false}
+	}
+	final := map[string]agent.AgentMessageStatus{}
+	for _, target := range args.Targets {
+		target = strings.TrimSpace(target)
+		status := c.status(target)
+		if status.IsFinal() {
+			final[target] = status
+		}
+	}
+	if result := collectFinal(final); result != nil {
+		return result, nil
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		delay := time.Until(deadline)
+		if delay > 200*time.Millisecond {
+			delay = 200 * time.Millisecond
+		}
+		if delay <= 0 {
+			break
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
-	}
-	targets := append([]string(nil), args.Targets...)
-	if len(targets) == 0 {
-		for _, metadata := range c.registry.LiveAgents() {
-			targets = append(targets, metadata.ThreadID)
+		for _, target := range args.Targets {
+			target = strings.TrimSpace(target)
+			status := c.status(target)
+			if status.IsFinal() {
+				final[target] = status
+			}
+		}
+		if result := collectFinal(final); result != nil {
+			return result, nil
 		}
 	}
-	statuses := make(map[string]agent.AgentMessageStatus, len(targets))
-	for _, target := range targets {
-		target = strings.TrimSpace(target)
-		statuses[target] = c.status(target)
-	}
-	return &agent.WaitAgentResult{Status: statuses, TimedOut: false}, nil
+	return &agent.WaitAgentResult{Status: map[string]agent.AgentMessageStatus{}, TimedOut: true}, nil
 }
 func (c *runtimeAgentController) ResumeAgent(ctx context.Context, args *agent.ResumeAgentArgs) (*agent.ResumeAgentResult, error) {
 	if args == nil || strings.TrimSpace(args.ID) == "" {
@@ -320,19 +361,35 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 		return &agent.CloseAgentResult{PreviousStatus: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusNotFound}}, nil
 	}
 	previous := c.status(target)
-	if active := c.router.activeRuntimeTurnSnapshot(target); active != nil {
-		_, _ = c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: target, TurnID: active.ID}))
+	// Rust's close_agent shuts down the target and any open descendants
+	// reachable from the spawn tree (shutdown_agent_tree).
+	closeIDs := []string{target}
+	if c.router.services.SpawnGraph != nil {
+		openStatus := agent.ThreadSpawnEdgeOpen
+		if descendants, listErr := c.router.services.SpawnGraph.ListThreadSpawnDescendants(target, &openStatus); listErr == nil {
+			closeIDs = append(closeIDs, descendants...)
+		}
 	}
-	if previous.Kind != agent.AgentMessageStatusNotFound {
-		c.registry.ReleaseSpawnedThread(target)
-		if c.router.agentRegistry != c.registry {
-			c.router.agentRegistry.ReleaseSpawnedThread(target)
-		}
-		if c.router.services.SpawnGraph != nil {
-			_ = c.router.services.SpawnGraph.SetThreadSpawnEdgeStatus(target, agent.ThreadSpawnEdgeClosed)
-		}
+	for _, id := range closeIDs {
+		c.closeAgentThread(id)
 	}
 	return &agent.CloseAgentResult{PreviousStatus: previous}, nil
+}
+
+func (c *runtimeAgentController) closeAgentThread(threadID string) {
+	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
+		_, _ = c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: active.ID}))
+	}
+	previous := c.status(threadID)
+	if previous.Kind != agent.AgentMessageStatusNotFound {
+		c.registry.ReleaseSpawnedThread(threadID)
+		if c.router.agentRegistry != c.registry {
+			c.router.agentRegistry.ReleaseSpawnedThread(threadID)
+		}
+		if c.router.services.SpawnGraph != nil {
+			_ = c.router.services.SpawnGraph.SetThreadSpawnEdgeStatus(threadID, agent.ThreadSpawnEdgeClosed)
+		}
+	}
 }
 
 func (c *runtimeAgentController) status(threadID string) agent.AgentMessageStatus {

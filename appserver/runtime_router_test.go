@@ -25151,3 +25151,172 @@ func clearAuthEnvAppserver(t *testing.T) {
 	t.Setenv(auth.CodexAPIKeyEnv, "")
 	t.Setenv(auth.CodexAccessTokenEnv, "")
 }
+
+func TestRuntimeMultiAgentVersionForThreadMatchesRustPrecedence(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir(), Model: "catalog-v2"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	manager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+		{Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2"},
+		{Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1"},
+		{Slug: "catalog-disabled", DisplayName: "catalog-disabled", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "disabled"},
+		{Slug: "catalog-unspecified", DisplayName: "catalog-unspecified", Visibility: model.VisibilityVisible, SupportedInAPI: true},
+	}})
+	models := model.NewModelService(manager)
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Models: models})
+	enabled := true
+	disabled := false
+	tests := []struct {
+		name          string
+		model         string
+		features      map[string]any
+		agentsEnabled *bool
+		want          agent.MultiAgentVersion
+	}{
+		{name: "catalog v2", model: "catalog-v2", want: agent.VersionV2},
+		{name: "catalog v1", model: "catalog-v1", want: agent.VersionV1},
+		{name: "catalog disabled", model: "catalog-disabled", want: ""},
+		{name: "stable fallback", model: "catalog-unspecified", want: agent.VersionV1},
+		{name: "agents disabled overrides catalog", model: "catalog-v2", agentsEnabled: &disabled, want: ""},
+		{name: "explicit v2 overrides agents disabled", model: "catalog-v1", features: map[string]any{"multi_agent_v2": map[string]any{"enabled": true}}, agentsEnabled: &disabled, want: agent.VersionV2},
+		{name: "explicit v2 overrides catalog", model: "catalog-v1", features: map[string]any{"multi_agent_v2": map[string]any{"enabled": true}}, want: agent.VersionV2},
+		{name: "stable fallback can be disabled", model: "catalog-unspecified", features: map[string]any{"multi_agent": map[string]any{"enabled": false}}, want: ""},
+		{name: "agents explicitly enabled keeps catalog", model: "catalog-v2", agentsEnabled: &enabled, want: agent.VersionV2},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			values := map[string]any{}
+			if tc.features != nil {
+				values["features"] = tc.features
+			}
+			cfg := &config.Config{Values: values}
+			agentsConfig := &config.AgentsConfig{Enabled: tc.agentsEnabled}
+			record := *parent
+			record.ID = session.ThreadID(fmt.Sprintf("parent-%d", i))
+			record.SessionID = string(record.ID)
+			record.Metadata.Model = tc.model
+			if err := store.Create(&record); err != nil {
+				t.Fatal(err)
+			}
+			if got := router.runtimeMultiAgentVersionForThread(string(record.ID), cfg, agentsConfig); got != tc.want {
+				t.Fatalf("runtimeMultiAgentVersionForThread() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeMultiAgentVersionForTurnPrefersPersistedVersion(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir(), Model: "catalog-unspecified"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Models: model.NewModelService(nil)})
+	cfg := &config.Config{Values: map[string]any{}}
+	agentsConfig := &config.AgentsConfig{}
+	// Unresolvable model plus the stable fallback would resolve to V1, but the
+	// persisted V2 version from spawn must win (Rust session version).
+	child := &session.Record{ID: "child", SessionID: "child", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir(), Model: "unknown-model", MultiAgentVersion: string(agent.VersionV2), AgentPath: "/root/child", AgentDepth: 1}}
+	if err := store.Create(child); err != nil {
+		t.Fatal(err)
+	}
+	if got := router.runtimeMultiAgentVersionForTurn("child", cfg, agentsConfig); got != agent.VersionV2 {
+		t.Fatalf("persisted v2 child version = %q, want v2", got)
+	}
+	if got := router.runtimeMultiAgentVersionForTurn("root", cfg, agentsConfig); got != agent.VersionV1 {
+		t.Fatalf("root fallback version = %q, want v1", got)
+	}
+}
+
+func TestRuntimeV2SubagentToolsEnabledMatchesRust(t *testing.T) {
+	manager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+		{Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2"},
+		{Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1"},
+		{Slug: "catalog-unspecified", DisplayName: "catalog-unspecified", Visibility: model.VisibilityVisible, SupportedInAPI: true},
+	}})
+	models := model.NewModelService(manager)
+	router := NewRuntimeRouter(RuntimeServices{Models: models})
+	cfg := &config.Config{Values: map[string]any{}}
+	tests := []struct {
+		name  string
+		model string
+		cfg   *config.Config
+		want  bool
+	}{
+		{name: "v2 model", model: "catalog-v2", want: true},
+		{name: "v1 model", model: "catalog-v1", want: false},
+		{name: "unspecified model", model: "catalog-unspecified", want: false},
+		{name: "unknown model", model: "unknown-model", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			record := &session.Record{Metadata: session.Metadata{Model: tc.model, AgentPath: "/root/child", AgentDepth: 1}}
+			useCfg := tc.cfg
+			if useCfg == nil {
+				useCfg = cfg
+			}
+			if got := runtimeV2SubagentToolsEnabled(router, record, useCfg); got != tc.want {
+				t.Fatalf("runtimeV2SubagentToolsEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouterMultiAgentV2InjectsUsageHintWorldState(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"catalog-v2\"\n\n[features.multi_agent_v2]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	router.SetNotificationSink(sink)
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "hello"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+	if !inputItemsContainFragment(request.InputItems, "<multi_agent_usage_hint>", "You are `/root`") {
+		t.Fatalf("V2 usage hint missing from turn input items: %#v", request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+func inputItemsContainFragment(items []any, marker string, identity string) bool {
+	for _, input := range items {
+		raw, ok := input.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := raw["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for i := range content {
+			if content[i]["type"] == "input_text" {
+				text, _ := content[i]["text"].(string)
+				if strings.Contains(text, marker) && strings.Contains(text, identity) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

@@ -52,6 +52,9 @@ type execMultiAgentTools struct {
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
 	maxConcurrency            int
+	rootHint                  *string
+	subagentHint              *string
+	usageHintText             *string
 }
 
 func execAgentSteerMailboxFromTools(req *Request, options *execMultiAgentTools) *turn.SteerMailbox {
@@ -109,6 +112,13 @@ func execAgentNamespaceFromTools(options *execMultiAgentTools) string {
 		return ""
 	}
 	return options.namespace
+}
+
+func execAgentUsageHintFromTools(options *execMultiAgentTools) *string {
+	if options == nil {
+		return nil
+	}
+	return options.usageHintText
 }
 
 func execAgentWaitConfigFromTools(options *execMultiAgentTools) (time.Duration, time.Duration, time.Duration, bool, bool) {
@@ -222,8 +232,15 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 	}
 
 	maxAgents := agentsConfig.MaxConcurrentThreadsPerSession
+	// Rust exposes V1 collaboration tools deferred behind tool search when the
+	// model supports search (spec_plan.rs `add_collaboration_tools`); otherwise
+	// they are directly visible. V2 defaults to direct exposure.
+	exposure := tool.ExposureModelVisible
+	if version == agent.VersionV1 && execModelSupportsToolSearch(req, cfg, modelsManager) {
+		exposure = tool.ExposureDiscoverable
+	}
 	options := &execMultiAgentTools{
-		exposure:  tool.ExposureModelVisible,
+		exposure:  exposure,
 		version:   version,
 		namespace: agent.MultiAgentV1Namespace,
 		roles:     agentsConfig.Roles,
@@ -248,6 +265,9 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		options.waitMax = v2Config.MaxWaitTimeout
 		options.hideSpawnMetadata = v2Config.HideSpawnAgentMetadata
 		options.exposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
+		options.rootHint = v2Config.RootAgentUsageHintText
+		options.subagentHint = v2Config.SubagentUsageHintText
+		options.usageHintText = v2Config.UsageHintText
 		options.maxConcurrency = v2Config.MaxConcurrentThreadsPerSession
 		if v2Config.NonCodeModeOnly {
 			options.exposure = tool.ExposureDirectModelOnly
@@ -280,6 +300,14 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 	}
 	options.controller = controller
 	return options, nil
+}
+
+func execModelSupportsToolSearch(req *Request, cfg *config.Config, modelsManager model.ModelsManager) bool {
+	if modelsManager == nil {
+		modelsManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+	}
+	modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
+	return modelsManager.GetModelInfo(modelID, nil).SupportsSearchTool
 }
 
 func execMultiAgentVersionForRun(req *Request, cfg *config.Config, agentsConfig *config.AgentsConfig, modelsManager model.ModelsManager) agent.MultiAgentVersion {
@@ -362,55 +390,15 @@ func execMultiAgentV2UsageHint(req *Request, options *execMultiAgentTools) strin
 	if options == nil || options.version != agent.VersionV2 {
 		return ""
 	}
-	identity := execMultiAgentV2RootUsageHint
-	if req != nil && req.subagent != nil {
-		identity = execMultiAgentV2SubagentUsageHint
-	}
-	parts := []string{
-		identity,
-		execMultiAgentV2SharedUsageHint,
-	}
-	// Rust 92b83e226d (#37189): present wait_agent polling guidance in the
-	// developer instructions only when the tool is enabled.
-	if !options.disableWait {
-		parts = append(parts, execMultiAgentV2WaitAgentUsageHint)
-	}
-	parts = append(parts, fmt.Sprintf("There are %d available concurrency slots, meaning that up to %d agents can be active at once, including you.", options.maxConcurrency, options.maxConcurrency))
-	if options.exposeSpawnModelOverrides {
-		parts = append(parts, execMultiAgentV2ModelOverrideUsageHint)
-	}
-	return strings.Join(nonEmptyStrings(parts), "\n\n")
+	return agent.MultiAgentV2UsageHint(agent.MultiAgentV2UsageHintOptions{
+		IsSubagent:                     req != nil && req.subagent != nil,
+		MaxConcurrency:                 options.maxConcurrency,
+		WaitAgentEnabled:               !options.disableWait,
+		ExposeSpawnAgentModelOverrides: options.exposeSpawnModelOverrides,
+		RootUsageHintText:              options.rootHint,
+		SubagentUsageHintText:          options.subagentHint,
+	})
 }
-
-const execMultiAgentV2RootUsageHint = "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\n" +
-	"At the start of your turn, you are the active agent.\n" +
-	"You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.\n" +
-	"All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.\n\n" +
-	"You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.\n" +
-	"Child agents can also spawn their own sub-agents.\n" +
-	"You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.\n\n" +
-	"You will receive messages in the analysis channel in the form:\n" +
-	"```\nMessage Type: MESSAGE | FINAL_ANSWER\nTask name: <recipient>\nSender: <author>\nPayload:\n<payload text>\n```\n" +
-	"They may be addressed as to=/root"
-
-const execMultiAgentV2SubagentUsageHint = "You are an agent in a team of agents collaborating to complete a task.\n\n" +
-	"You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.\n\n" +
-	"You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.\n" +
-	"Child agents can also spawn their own sub-agents.\n\n" +
-	"When you provide a response in the final channel, that content is immediately delivered back to your parent agent.\n\n" +
-	"You will receive messages in the analysis channel in the form:\n" +
-	"```\nMessage Type: NEW_TASK | MESSAGE | FINAL_ANSWER\nTask name: <recipient>\nSender: <author>\nPayload:\n<payload text>\n```\n" +
-	"You may also see them addressed as to=/root/..., which indicates your identity is /root/..."
-
-const execMultiAgentV2SharedUsageHint = "Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.\n\n" +
-	"All agents share the same directory. In detail:\n" +
-	"- All agents have access to the same container and filesystem as you.\n" +
-	"- All agents use the same current working directory.\n" +
-	"- As a result, edits made by one agent are immediately visible to all other agents."
-
-const execMultiAgentV2WaitAgentUsageHint = "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling."
-
-const execMultiAgentV2ModelOverrideUsageHint = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string."
 
 func closeExecMultiAgentTools(options *execMultiAgentTools) {
 	if options == nil || !options.ownTree {
@@ -719,30 +707,50 @@ func (c *execAgentController) SendInput(ctx context.Context, args *agent.SendInp
 }
 
 func (c *execAgentController) WaitAgent(ctx context.Context, args *agent.WaitAgentArgs) (*agent.WaitAgentResult, error) {
-	if args == nil {
-		args = &agent.WaitAgentArgs{}
+	// Rust requires explicit targets for V1 wait_agent and clamps the timeout
+	// into [MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS]; only final statuses are
+	// returned and timed_out=true means no target finished before the deadline.
+	if args == nil || len(args.Targets) == 0 {
+		return nil, fmt.Errorf("agent ids must be non-empty")
 	}
-	timeout := execDefaultAgentWait
+	timeout := agent.MultiAgentV1DefaultWait
 	if args.TimeoutMS != nil {
 		timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			return nil, fmt.Errorf("timeout_ms must be greater than zero")
+		}
+		if timeout < agent.MultiAgentV1MinWait {
+			timeout = agent.MultiAgentV1MinWait
+		}
+		if timeout > agent.MultiAgentV1MaxWait {
+			timeout = agent.MultiAgentV1MaxWait
+		}
 	}
-	if timeout < 0 {
-		timeout = 0
+	finalStatuses := func() map[string]agent.AgentMessageStatus {
+		all, _ := c.statuses(args.Targets)
+		result := map[string]agent.AgentMessageStatus{}
+		for id, status := range all {
+			if status.IsFinal() {
+				result[id] = status
+			}
+		}
+		return result
+	}
+	if statuses := finalStatuses(); len(statuses) > 0 {
+		return &agent.WaitAgentResult{Status: statuses}, nil
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
-		statuses, hasFinal := c.statuses(args.Targets)
-		if hasFinal {
-			return &agent.WaitAgentResult{Status: statuses}, nil
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timer.C:
-			statuses, _ = c.statuses(args.Targets)
-			return &agent.WaitAgentResult{Status: statuses, TimedOut: true}, nil
+			return &agent.WaitAgentResult{Status: map[string]agent.AgentMessageStatus{}, TimedOut: true}, nil
 		case <-c.shared().updates:
+			if statuses := finalStatuses(); len(statuses) > 0 {
+				return &agent.WaitAgentResult{Status: statuses}, nil
+			}
 		}
 	}
 }
@@ -779,11 +787,23 @@ func (c *execAgentController) CloseAgent(_ context.Context, args *agent.CloseAge
 	s := c.shared()
 	s.mu.Lock()
 	previous := task.status
-	task.generation++
-	if task.cancel != nil {
-		task.cancel()
+	// Rust's close_agent shuts down the target and any open descendants
+	// reachable from the spawn tree (shutdown_agent_tree). Exec tasks carry
+	// canonical paths, so descendants are the tasks rooted beneath the target.
+	prefix := strings.TrimSuffix(task.path, "/") + "/"
+	closeTasks := []*execAgentTask{}
+	for _, candidate := range s.tasks {
+		if candidate == task || strings.HasPrefix(candidate.path, prefix) {
+			closeTasks = append(closeTasks, candidate)
+		}
 	}
-	task.status = agent.AgentMessageStatus{Kind: agent.AgentMessageStatusShutdown}
+	for _, closeTask := range closeTasks {
+		closeTask.generation++
+		if closeTask.cancel != nil {
+			closeTask.cancel()
+		}
+		closeTask.status = agent.AgentMessageStatus{Kind: agent.AgentMessageStatusShutdown}
+	}
 	s.mu.Unlock()
 	c.notify()
 	return &agent.CloseAgentResult{PreviousStatus: previous}, nil

@@ -95,6 +95,7 @@ type multiAgentV2ToolExecutor struct {
 	controller                V2ToolController
 	exposure                  tool.Exposure
 	namespace                 string
+	usageHintText             *string
 	waitMin                   time.Duration
 	waitMax                   time.Duration
 	waitDefault               time.Duration
@@ -133,7 +134,8 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 	for _, kind := range kinds {
 		if err := registry.Register(&multiAgentV2ToolExecutor{
 			kind: kind, controller: v2, exposure: options.Exposure, namespace: namespace,
-			waitMin: waitMin, waitMax: waitMax, waitDefault: waitDefault, hideSpawnMetadata: options.HideSpawnMetadata,
+			usageHintText: options.UsageHintText,
+			waitMin:       waitMin, waitMax: waitMax, waitDefault: waitDefault, hideSpawnMetadata: options.HideSpawnMetadata,
 			exposeSpawnModelOverrides: options.ExposeSpawnModelOverrides,
 		}); err != nil {
 			return err
@@ -158,6 +160,11 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 	switch e.kind {
 	case multiAgentV2Spawn:
 		spec.Description = "Spawns an agent to work on the specified task. The new agent's canonical task name will be provided to it along with the message."
+		if e.usageHintText != nil && strings.TrimSpace(*e.usageHintText) != "" {
+			// Rust appends the configured multi_agent_v2.usage_hint_text to the
+			// spawn_agent tool description.
+			spec.Description += "\n\n" + strings.TrimSpace(*e.usageHintText)
+		}
 		properties := map[string]any{
 			"task_name":        map[string]any{"type": "string", "description": "Task name for the new agent. Use lowercase letters, digits, and underscores."},
 			"message":          map[string]any{"type": "string", "description": "Initial plain-text task for the new agent.", "encrypted": true},

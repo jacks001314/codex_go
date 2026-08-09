@@ -2838,8 +2838,8 @@ func TestToolRouterRegistersRealMultiAgentV2Tools(t *testing.T) {
 			t.Fatalf("model-visible tools = %#v, missing %s", visible, name)
 		}
 	}
-	if visible["agent.spawn_agent"] {
-		t.Fatalf("legacy agent namespace leaked into v2 tools: %#v", visible)
+	if visible["multi_agent_v1.spawn_agent"] {
+		t.Fatalf("legacy multi_agent_v1 namespace leaked into v2 tools: %#v", visible)
 	}
 }
 
@@ -2965,7 +2965,7 @@ func TestToolRouterUsesCatalogSelectedV1WithoutFeatureFlag(t *testing.T) {
 	for _, spec := range router.ModelVisibleSpecs() {
 		visible[spec.Name.Key()] = true
 	}
-	for _, name := range []string{"agent.spawn_agent", "agent.send_input", "agent.wait_agent", "agent.resume_agent", "agent.close_agent"} {
+	for _, name := range []string{"multi_agent_v1.spawn_agent", "multi_agent_v1.send_input", "multi_agent_v1.wait_agent", "multi_agent_v1.resume_agent", "multi_agent_v1.close_agent"} {
 		if !visible[name] {
 			t.Fatalf("model-visible tools = %#v, missing %s", visible, name)
 		}
@@ -4702,7 +4702,7 @@ func TestEmitFinalEventsMapsCollabToolCallLikeRust(t *testing.T) {
 		Response: &model.AgentResponse{Items: []model.AgentItem{{
 			ID:        "collab-1",
 			Type:      "function_call",
-			Namespace: "agent",
+			Namespace: agent.MultiAgentV1Namespace,
 			Name:      "spawn_agent",
 			CallID:    "collab-1",
 			Arguments: `{"message":"draft a plan"}`,
@@ -4710,13 +4710,13 @@ func TestEmitFinalEventsMapsCollabToolCallLikeRust(t *testing.T) {
 		ToolExecutions: []turn.ToolExecutionResult{{
 			Invocation: &tool.Invocation{
 				CallID:   "collab-1",
-				ToolName: tool.NamespacedName("agent", "spawn_agent"),
+				ToolName: tool.NamespacedName(agent.MultiAgentV1Namespace, "spawn_agent"),
 				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"message":"draft a plan"}`},
 				Context:  map[string]any{"thread_id": "thread-parent"},
 			},
 			Output: &tool.Output{
 				CallID:   "collab-1",
-				ToolName: tool.NamespacedName("agent", "spawn_agent"),
+				ToolName: tool.NamespacedName(agent.MultiAgentV1Namespace, "spawn_agent"),
 				Success:  true,
 				Body:     `{"agent_id":"thread-child"}`,
 				Data: map[string]any{
@@ -4766,13 +4766,13 @@ func TestEmitFinalEventsMapsCollabWaitAgentToRustWait(t *testing.T) {
 		ToolExecutions: []turn.ToolExecutionResult{{
 			Invocation: &tool.Invocation{
 				CallID:   "collab-wait",
-				ToolName: tool.NamespacedName("agent", "wait_agent"),
+				ToolName: tool.NamespacedName(agent.MultiAgentV1Namespace, "wait_agent"),
 				Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"targets":["thread-child"]}`},
 				Context:  map[string]any{"thread_id": "thread-parent"},
 			},
 			Output: &tool.Output{
 				CallID:   "collab-wait",
-				ToolName: tool.NamespacedName("agent", "wait_agent"),
+				ToolName: tool.NamespacedName(agent.MultiAgentV1Namespace, "wait_agent"),
 				Success:  true,
 				Data: map[string]any{
 					"result": map[string]any{

@@ -20,6 +20,10 @@ type MultiAgentV2Config struct {
 	MaxWaitTimeout                 time.Duration
 	DefaultWaitTimeout             time.Duration
 	ToolNamespace                  string
+	UsageHintText                  *string
+	RootAgentUsageHintText         *string
+	SubagentUsageHintText          *string
+	MultiAgentModeHintText         *string
 	HideSpawnAgentMetadata         bool
 	ExposeSpawnAgentModelOverrides bool
 	WaitAgentEnabled               bool
@@ -86,6 +90,19 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 			return nil, err
 		}
 		out.ToolNamespace = value
+	}
+	// Rust exposes these as optional overrides; when absent, the runtime uses
+	// built-in hints that mention the configured concurrency cap.
+	for key, target := range map[string]**string{
+		"usage_hint_text":            &out.UsageHintText,
+		"root_agent_usage_hint_text": &out.RootAgentUsageHintText,
+		"subagent_usage_hint_text":   &out.SubagentUsageHintText,
+		"multi_agent_mode_hint_text": &out.MultiAgentModeHintText,
+	} {
+		if value, ok := raw[key].(string); ok {
+			trimmed := strings.TrimSpace(value)
+			*target = &trimmed
+		}
 	}
 	if value, ok := raw["subagent_developer_instructions"].(string); ok {
 		trimmed := strings.TrimSpace(value)

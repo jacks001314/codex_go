@@ -34,11 +34,17 @@ func TestPlanHandlerUpdatesStore(t *testing.T) {
 	if len(plan) != 2 || plan[0].Status != PlanInProgress {
 		t.Fatalf("plan = %#v", plan)
 	}
-	_, err = handler.Execute(context.Background(), &Invocation{
+	// Rust's update_plan does not enforce the "one in_progress" rule at
+	// runtime; parallel agent workflows may mark several steps in_progress.
+	output, err = handler.Execute(context.Background(), &Invocation{
 		Payload: Payload{Kind: PayloadFunction, Arguments: `{"plan":[{"step":"a","status":"in_progress"},{"step":"b","status":"in_progress"}]}`},
 	})
-	if err == nil {
-		t.Fatalf("expected validation error")
+	if err != nil || !output.Success {
+		t.Fatalf("multiple in_progress plan items rejected: err=%v output=%#v", err, output)
+	}
+	_, plan, _ = store.Snapshot()
+	if len(plan) != 2 || plan[0].Status != PlanInProgress || plan[1].Status != PlanInProgress {
+		t.Fatalf("plan = %#v", plan)
 	}
 }
 

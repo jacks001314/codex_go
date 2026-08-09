@@ -10,6 +10,7 @@ type WorldState struct {
 	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
 	RealtimeConversation   json.RawMessage `json:"realtimeConversation,omitempty"`
 	MultiAgentMode         json.RawMessage `json:"multiAgentMode,omitempty"`
+	MultiAgentUsageHint    json.RawMessage `json:"multiAgentUsageHint,omitempty"`
 	Tools                  json.RawMessage `json:"tools,omitempty"`
 }
 
@@ -28,6 +29,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
 	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
+	state.MultiAgentUsageHint = append(json.RawMessage(nil), state.MultiAgentUsageHint...)
 	state.Tools = append(json.RawMessage(nil), state.Tools...)
 	return &state, nil
 }

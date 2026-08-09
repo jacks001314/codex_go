@@ -375,6 +375,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AgentExposure:                  execAgentExposureFromTools(multiAgentTools),
 		AgentVersion:                   execAgentVersionFromTools(multiAgentTools),
 		AgentNamespace:                 execAgentNamespaceFromTools(multiAgentTools),
+		AgentUsageHintText:             execAgentUsageHintFromTools(multiAgentTools),
 		AgentWaitDefault:               agentWaitDefault,
 		AgentWaitMin:                   agentWaitMin,
 		AgentWaitMax:                   agentWaitMax,
@@ -516,6 +517,7 @@ type agentRunConfig struct {
 	AgentExposure                  tool.Exposure
 	AgentVersion                   multiagent.MultiAgentVersion
 	AgentNamespace                 string
+	AgentUsageHintText             *string
 	AgentWaitDefault               time.Duration
 	AgentWaitMin                   time.Duration
 	AgentWaitMax                   time.Duration
@@ -1056,6 +1058,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.AgentExposure = run.AgentExposure
 		options.AgentVersion = run.AgentVersion
 		options.AgentNamespace = run.AgentNamespace
+		options.AgentUsageHintText = run.AgentUsageHintText
 		options.AgentWaitDefault = run.AgentWaitDefault
 		options.AgentWaitMin = run.AgentWaitMin
 		options.AgentWaitMax = run.AgentWaitMax
@@ -2953,7 +2956,7 @@ func normalizeCollabToolName(name tool.ToolName) (string, bool) {
 		}
 		return "", false
 	}
-	if strings.TrimSpace(name.Namespace) == "agent" {
+	if strings.TrimSpace(name.Namespace) == multiagent.MultiAgentV1Namespace {
 		if toolName, ok := normalizeCollabToolString(name.Name); ok {
 			return toolName, true
 		}
@@ -2969,11 +2972,19 @@ func normalizeCollabToolString(raw string) (string, bool) {
 	switch value {
 	case "agent_spawn_agent", "spawn_agent", "spawnagent":
 		return "spawn_agent", true
+	case "multi_agent_v1_spawn_agent":
+		return "spawn_agent", true
 	case "agent_send_input", "send_input", "sendinput":
+		return "send_input", true
+	case "multi_agent_v1_send_input":
 		return "send_input", true
 	case "agent_wait_agent", "wait_agent", "agent_wait", "waitagent":
 		return "wait", true
+	case "multi_agent_v1_wait_agent":
+		return "wait", true
 	case "agent_close_agent", "close_agent", "closeagent":
+		return "close_agent", true
+	case "multi_agent_v1_close_agent":
 		return "close_agent", true
 	default:
 		return "", false

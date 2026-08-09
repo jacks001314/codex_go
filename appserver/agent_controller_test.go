@@ -21,7 +21,8 @@ func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	}
 	graph := agent.NewMemoryStore()
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), SpawnGraph: graph})
-	controller := newRuntimeAgentController(router, "parent", parent.Metadata.CWD, 1)
+	runtimeController := newRuntimeAgentController(router, "parent", parent.Metadata.CWD, 1).(*runtimeAgentController)
+	controller := agent.ToolController(runtimeController)
 	modelID := "gpt-review"
 	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{Model: &modelID, ResolvedRole: "reviewer", NicknameCandidates: []string{"Sage"}})
 	if err != nil {
@@ -45,9 +46,10 @@ func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	if !errors.Is(err, agent.ErrAgentLimitReached) {
 		t.Fatalf("second spawn error = %v", err)
 	}
-	waited, err := controller.WaitAgent(context.Background(), &agent.WaitAgentArgs{Targets: []string{result.AgentID}})
-	if err != nil || waited.Status[result.AgentID].Kind != agent.AgentMessageStatusPendingInit {
-		t.Fatalf("waited = %+v, err=%v", waited, err)
+	// V1 wait_agent only returns final statuses and otherwise blocks until the
+	// timeout, so assert the current (pending_init) status directly instead.
+	if status := runtimeController.status(result.AgentID); status.Kind != agent.AgentMessageStatusPendingInit {
+		t.Fatalf("status = %+v", status)
 	}
 	closed, err := controller.CloseAgent(context.Background(), &agent.CloseAgentArgs{Target: result.AgentID})
 	if err != nil || closed.PreviousStatus.Kind != agent.AgentMessageStatusPendingInit {

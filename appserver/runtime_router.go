@@ -3954,6 +3954,118 @@ func effectiveRestoredModelContextWindow(modelID string) int64 {
 	return window * int64(percent) / 100
 }
 
+// runtimeMultiAgentVersionForThread resolves the multi-agent version for a
+// turn in the same precedence order as Rust's
+// Config::multi_agent_version_for_model:
+//  1. the MultiAgentV2 feature flag (override),
+//  2. the thread model's declared multi-agent version,
+//  3. the stable `multi_agent` (Collab) feature fallback (V1).
+//
+// `agents.enabled=false` disables the whole surface regardless of model or
+// features, and an empty result means the collaboration tools are withheld.
+func (r *RuntimeRouter) runtimeMultiAgentVersionForThread(threadID string, cfg *config.Config, agentsConfig *config.AgentsConfig) agent.MultiAgentVersion {
+	if cfg == nil {
+		return ""
+	}
+	settings := cfg.FeatureSettings()
+	// The MultiAgentV2 feature is a hard override in Rust's
+	// `multi_agent_version_override`: it wins even when agents.enabled=false.
+	if features.Enabled(settings, "multi_agent_v2") {
+		return agent.VersionV2
+	}
+	if agentsConfig != nil && agentsConfig.Enabled != nil && !*agentsConfig.Enabled {
+		return ""
+	}
+	modelID := ""
+	if r != nil {
+		if record, recordErr := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); recordErr == nil && record != nil {
+			modelID = strings.TrimSpace(record.Metadata.Model)
+		}
+	}
+	if version, declared := runtimeModelMultiAgentVersion(r, modelID); declared {
+		return version
+	}
+	if features.Enabled(settings, "multi_agent") {
+		return agent.VersionV1
+	}
+	return ""
+}
+
+// runtimeMultiAgentVersionForTurn resolves the multi-agent version for a turn
+// like Rust's per-session resolved version: a version persisted on the thread
+// record (set when the thread was spawned/resumed) wins over re-resolving from
+// features/model each turn. This keeps V2 sub-agent threads on V2 even when the
+// model catalog lookup is unavailable, and matches Rust's
+// `resolve_multi_agent_version` (history/inherited version takes precedence).
+func (r *RuntimeRouter) runtimeMultiAgentVersionForTurn(threadID string, cfg *config.Config, agentsConfig *config.AgentsConfig) agent.MultiAgentVersion {
+	if r != nil {
+		if record, recordErr := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); recordErr == nil && record != nil {
+			if version := knownRuntimeMultiAgentVersion(strings.TrimSpace(record.Metadata.MultiAgentVersion)); version != "" {
+				return version
+			}
+		}
+	}
+	return r.runtimeMultiAgentVersionForThread(threadID, cfg, agentsConfig)
+}
+
+func knownRuntimeMultiAgentVersion(version string) agent.MultiAgentVersion {
+	switch strings.ToLower(strings.TrimSpace(version)) {
+	case string(agent.VersionV1):
+		return agent.VersionV1
+	case string(agent.VersionV2):
+		return agent.VersionV2
+	default:
+		return ""
+	}
+}
+
+// runtimeV2SubagentToolsEnabled mirrors Rust's collab_tools_enabled V2 branch
+// for sub-agent threads: the spawn surface stays visible only when the
+// sub-agent's current model declares multi_agent_version v2.
+func runtimeV2SubagentToolsEnabled(r *RuntimeRouter, record *session.Record, cfg *config.Config) bool {
+	if record == nil {
+		return true
+	}
+	modelID := strings.TrimSpace(record.Metadata.Model)
+	if modelID == "" && cfg != nil {
+		modelID = stringConfigValue(cfg, "model")
+	}
+	modelVersion, declared := runtimeModelMultiAgentVersion(r, modelID)
+	return declared && modelVersion == agent.VersionV2
+}
+
+// runtimeModelMultiAgentVersion maps a model's declared multi-agent version to
+// the version used for tool exposure, mirroring Rust's model catalog handling:
+// unknown values fall back to the feature-derived version. The bool reports
+// whether the model declared a version at all; a declared "disabled" stops the
+// resolution instead of falling back to V1.
+func runtimeModelMultiAgentVersion(r *RuntimeRouter, modelID string) (agent.MultiAgentVersion, bool) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return "", false
+	}
+	version := ""
+	if r != nil && r.services.Models != nil {
+		info := r.services.Models.Info(&model.ModelInfoReadParams{Model: modelID})
+		if info != nil {
+			version = strings.TrimSpace(info.MultiAgentVersion)
+		}
+	} else {
+		info := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+		version = strings.TrimSpace(info.MultiAgentVersion)
+	}
+	switch strings.ToLower(version) {
+	case string(agent.VersionV2):
+		return agent.VersionV2, true
+	case string(agent.VersionV1):
+		return agent.VersionV1, true
+	case "disabled":
+		return "", true
+	default:
+		return "", false
+	}
+}
+
 // RestoredTokenUsageForRecord exposes the Rust-compatible restored token
 // snapshot to front-ends that resume through thread/read rather than
 // thread/resume.
@@ -9826,33 +9938,52 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		if agentsErr != nil {
 			return nil, agentsErr
 		}
-		enabled := agentsConfig.Enabled == nil || *agentsConfig.Enabled
-		v2Enabled := features.Enabled(cfg.FeatureSettings(), "multi_agent_v2")
-		// Rust hides the V1 collab tool surface entirely for a thread whose next
-		// spawn depth would exceed max_depth ("Agent depth limit reached. Solve
-		// the task yourself."). V2 ignores max_depth and relies on concurrency.
 		maxDepth := config.DefaultAgentMaxDepth
 		if agentsConfig.MaxDepth != nil {
 			maxDepth = *agentsConfig.MaxDepth
 		}
-		currentDepth := 0
+		// Rust resolves the per-thread multi-agent version as
+		// `multi_agent_version_for_model`: the MultiAgentV2 feature overrides
+		// first, then the model's declared multi-agent version, then the stable
+		// `multi_agent` (Collab) feature falls back to V1. `agents.enabled=false`
+		// disables the whole surface regardless of model/features.
+		threadRecord := (*session.Record)(nil)
 		if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
-			currentDepth = record.Metadata.AgentDepth
+			threadRecord = record
 		}
-		depthLimited := agent.ExceedsThreadSpawnDepthLimit(currentDepth+1, maxDepth)
-		if enabled && (len(agentsConfig.Roles) > 0 || v2Enabled) && !(depthLimited && !v2Enabled) {
-			options.EnableAgents = true
-			version := agent.VersionV1
+		version := r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig)
+		if version != "" {
+			// Rust hides the V1 collab tool surface entirely for a thread whose
+			// next spawn depth would exceed max_depth ("Agent depth limit
+			// reached. Solve the task yourself."). V2 ignores max_depth and
+			// relies on concurrency.
+			currentDepth := 0
+			if threadRecord != nil {
+				currentDepth = threadRecord.Metadata.AgentDepth
+			}
+			depthLimited := agent.ExceedsThreadSpawnDepthLimit(currentDepth+1, maxDepth)
+			canEnable := version != agent.VersionV1 || !depthLimited
+			// Rust only exposes V2 collaboration tools to sub-agents whose
+			// current model declares multi_agent_version v2
+			// (collab_tools_enabled); root threads are always allowed.
+			if canEnable && version == agent.VersionV2 && threadRecord != nil && (strings.TrimSpace(threadRecord.Metadata.AgentPath) != "" || threadRecord.Metadata.AgentDepth > 0) {
+				canEnable = runtimeV2SubagentToolsEnabled(r, threadRecord, cfg)
+			}
+			if canEnable {
+				options.EnableAgents = true
+			}
+		}
+		if options.EnableAgents {
 			maxThreads := agentsConfig.MaxConcurrentThreadsPerSession
 			defaults := agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
-			if v2Enabled {
+			if version == agent.VersionV2 {
 				v2Config, configErr := cfg.MultiAgentV2Config(maxThreads)
 				if configErr != nil {
 					return nil, configErr
 				}
-				version = agent.VersionV2
 				maxThreads = v2Config.MaxConcurrentThreadsPerSession
 				options.AgentNamespace = v2Config.ToolNamespace
+				options.AgentUsageHintText = v2Config.UsageHintText
 				options.AgentWaitMin = v2Config.MinWaitTimeout
 				options.AgentWaitMax = v2Config.MaxWaitTimeout
 				options.AgentWaitDefault = v2Config.DefaultWaitTimeout
@@ -9861,6 +9992,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				options.AgentExposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
 				if v2Config.NonCodeModeOnly {
 					options.AgentExposure = tool.ExposureDirectModelOnly
+				} else {
+					// Rust exposes V2 collaboration tools with ToolExposure::Direct
+					// when non_code_mode_only is disabled; the Go default of
+					// Discoverable would defer them behind tool search instead.
+					options.AgentExposure = tool.ExposureModelVisible
 				}
 				options.DisableWaitAgent = options.DisableWaitAgent || !v2Config.WaitAgentEnabled
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions

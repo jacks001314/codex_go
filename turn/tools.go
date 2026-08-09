@@ -43,6 +43,7 @@ type ToolRegistryOptions struct {
 	AgentExposure                  tool.Exposure
 	AgentVersion                   agent.MultiAgentVersion
 	AgentNamespace                 string
+	AgentUsageHintText             *string
 	AgentWaitDefault               time.Duration
 	AgentWaitMin                   time.Duration
 	AgentWaitMax                   time.Duration
@@ -202,6 +203,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			Exposure:                  options.AgentExposure,
 			Version:                   options.AgentVersion,
 			Namespace:                 options.AgentNamespace,
+			UsageHintText:             options.AgentUsageHintText,
 			WaitDefault:               options.AgentWaitDefault,
 			WaitMin:                   options.AgentWaitMin,
 			WaitMax:                   options.AgentWaitMax,

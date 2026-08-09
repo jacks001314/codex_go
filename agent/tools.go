@@ -12,8 +12,17 @@ import (
 )
 
 const (
-	MultiAgentV1Namespace = "agent"
+	// MultiAgentV1Namespace matches Rust's MULTI_AGENT_V1_NAMESPACE
+	// (codex-rs/core/src/tools/handlers/multi_agents_spec.rs).
+	MultiAgentV1Namespace = "multi_agent_v1"
 	MultiAgentV2Namespace = "collaboration"
+
+	// MultiAgentV1 wait timeouts mirror Rust's WaitAgentTimeoutOptions: the V1
+	// surface reuses the V2 default/min/max values
+	// (DEFAULT_WAIT_TIMEOUT_MS / MIN_WAIT_TIMEOUT_MS / MAX_WAIT_TIMEOUT_MS).
+	MultiAgentV1DefaultWait = 30 * time.Second
+	MultiAgentV1MinWait     = 10 * time.Second
+	MultiAgentV1MaxWait     = time.Hour
 )
 
 type ToolController interface {
@@ -273,6 +282,7 @@ type MultiAgentHandlerOptions struct {
 	Exposure                  tool.Exposure
 	Version                   MultiAgentVersion
 	Namespace                 string
+	UsageHintText             *string
 	Roles                     map[string]RoleConfig
 	Defaults                  SpawnDefaults
 	DisableWaitAgent          bool
@@ -455,9 +465,9 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 		}, []string{"target"})}
 	case MultiAgentToolWait:
 		return tool.Spec{Name: name, Description: "Waits for one or more sub-agents and reports status.", InputSchema: multiAgentObjectSchema(map[string]any{
-			"targets":    map[string]any{"type": "array", "description": "Agent ids.", "items": map[string]any{"type": "string"}},
-			"timeout_ms": map[string]any{"type": "integer", "minimum": 0, "description": "Optional timeout in milliseconds."},
-		}, nil)}
+			"targets":    map[string]any{"type": "array", "description": "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first.", "items": map[string]any{"type": "string"}},
+			"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": fmt.Sprintf("Timeout in milliseconds. Defaults to %d, min %d, max %d. Prefer longer waits (minutes) to avoid busy polling.", MultiAgentV1DefaultWait.Milliseconds(), MultiAgentV1MinWait.Milliseconds(), MultiAgentV1MaxWait.Milliseconds())},
+		}, []string{"targets"})}
 	case MultiAgentToolResume:
 		return tool.Spec{Name: name, Description: "Resumes a closed sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
 			"id": map[string]any{"type": "string", "description": "Agent id."},

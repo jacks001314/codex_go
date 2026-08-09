@@ -33,7 +33,6 @@ func (a *UpdatePlanArgs) Validate() error {
 	if a == nil {
 		return fmt.Errorf("plan args are nil")
 	}
-	active := 0
 	for _, item := range a.Plan {
 		if strings.TrimSpace(item.Step) == "" {
 			return fmt.Errorf("plan step is required")
@@ -43,12 +42,6 @@ func (a *UpdatePlanArgs) Validate() error {
 		default:
 			return fmt.Errorf("invalid plan status %q", item.Status)
 		}
-		if item.Status == PlanInProgress {
-			active++
-		}
-	}
-	if active > 1 {
-		return fmt.Errorf("at most one plan item may be in progress")
 	}
 	return nil
 }
@@ -106,8 +99,11 @@ func NewPlanHandler(store *PlanStore) *PlanHandler {
 
 func (h *PlanHandler) Spec() Spec {
 	return Spec{
-		Name:        PlainName("update_plan"),
-		Description: "Updates the current task plan.",
+		Name: PlainName("update_plan"),
+		// Mirrors Rust's plan_spec.rs description. "At most one step can be
+		// in_progress at a time" is model guidance, not a runtime constraint:
+		// parallel agent workflows may mark several steps in_progress at once.
+		Description: "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -149,7 +145,9 @@ func (h *PlanHandler) Execute(ctx context.Context, invocation *Invocation) (*Out
 		return nil, err
 	}
 	if err := h.store.Update(args); err != nil {
-		return nil, err
+		// Rust's plan handler only reports JSON parse failures to the model and
+		// never aborts the turn; validation failures must stay non-fatal too.
+		return nil, RespondToModel(err.Error())
 	}
 	data := map[string]any{
 		"planUpdate": true,

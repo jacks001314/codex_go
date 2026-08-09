@@ -5332,6 +5332,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	if item, err := r.multiAgentUsageHintInputItem(threadID, cfg); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	if item, err := r.deferredToolsWorldStateInputItem(threadID, turnRuntime, features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")); err != nil {
 		return nil, err
 	} else if item != nil {
@@ -9298,6 +9303,16 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 			mode = candidate
 		}
 	}
+	// Rust's effective_multi_agent_mode uses a configured
+	// multi_agent_mode_hint_text as a custom mode when present.
+	customModeText := ""
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
+		if agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents()); agentsErr == nil {
+			if v2Config, v2Err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession); v2Err == nil && v2Config.MultiAgentModeHintText != nil {
+				customModeText = strings.TrimSpace(*v2Config.MultiAgentModeHintText)
+			}
+		}
+	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return nil, err
@@ -9316,10 +9331,14 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 		}
 		previous = strings.TrimSpace(snapshot.Mode)
 	}
-	if previous == mode {
+	modeSnapshot := mode
+	if customModeText != "" {
+		modeSnapshot = "custom"
+	}
+	if previous == modeSnapshot {
 		return nil, nil
 	}
-	snapshot, err := json.Marshal(map[string]string{"mode": mode})
+	snapshot, err := json.Marshal(map[string]string{"mode": modeSnapshot})
 	if err != nil {
 		return nil, err
 	}
@@ -9332,10 +9351,69 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 		return nil, err
 	}
 	body := explicitRequestOnlyMultiAgentModeText
-	if mode == string(MultiAgentModeProactive) {
+	if customModeText != "" {
+		body = customModeText
+	} else if mode == string(MultiAgentModeProactive) {
 		body = proactiveMultiAgentModeText
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
+	return renderedFragmentInputItem(rendered), nil
+}
+
+// multiAgentUsageHintInputItem renders the multi-agent V2 usage hint as a
+// developer world-state section for V2 threads, mirroring Rust's
+// MultiAgentUsageHintState. The hint is persisted so it is only emitted again
+// when the configured text or the concurrency cap changes.
+func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *config.Config) (any, error) {
+	if r == nil || cfg == nil {
+		return nil, nil
+	}
+	agentsConfig, err := cfg.AgentsConfig(r.configBaseDirForAgents())
+	if err != nil {
+		return nil, err
+	}
+	if r.runtimeMultiAgentVersionForThread(threadID, cfg, agentsConfig) != agent.VersionV2 {
+		return nil, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return nil, err
+	}
+	v2Config, err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
+	if err != nil {
+		return nil, err
+	}
+	hint := agent.MultiAgentV2UsageHint(agent.MultiAgentV2UsageHintOptions{
+		IsSubagent:                     strings.TrimSpace(record.Metadata.AgentPath) != "" || record.Metadata.AgentDepth > 0,
+		MaxConcurrency:                 v2Config.MaxConcurrentThreadsPerSession,
+		WaitAgentEnabled:               v2Config.WaitAgentEnabled,
+		ExposeSpawnAgentModelOverrides: v2Config.ExposeSpawnAgentModelOverrides,
+		RootUsageHintText:              v2Config.RootAgentUsageHintText,
+		SubagentUsageHintText:          v2Config.SubagentUsageHintText,
+	})
+	if strings.TrimSpace(hint) == "" {
+		return nil, nil
+	}
+	hintData, err := json.Marshal(hint)
+	if err != nil {
+		return nil, err
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		return nil, err
+	}
+	if string(state.MultiAgentUsageHint) == string(hintData) {
+		return nil, nil
+	}
+	state.MultiAgentUsageHint = json.RawMessage(hintData)
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return nil, err
+	}
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_usage_hint>", "</multi_agent_usage_hint>", hint))
 	return renderedFragmentInputItem(rendered), nil
 }
 
