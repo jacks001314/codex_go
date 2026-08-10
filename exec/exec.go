@@ -408,7 +408,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
 	tokenUsage := execTokenUsageForResult(resumeContext, turnResult, modelID, cfg)
-	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage, stringConfigValue(cfg, "model_auto_compact_token_limit_scope"))
+	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage)
 	if err != nil {
 		return nil, err
 	}
@@ -3573,7 +3573,7 @@ func todoItemFromPlanFields(step string, status string) (protocol.TodoItem, bool
 	}, true
 }
 
-func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext, tokenUsage *protocol.ThreadTokenUsage, autoCompactScope string) (string, error) {
+func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext, tokenUsage *protocol.ThreadTokenUsage) (string, error) {
 	if req.Exec.Ephemeral {
 		return "", nil
 	}
@@ -3620,15 +3620,6 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
 	}
 	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
-	// BodyAfterPrefix scope: the first server-observed request input in a
-	// window becomes the carried-prefix baseline (mirrors Rust
-	// ensure_server_observed_prefill_from_usage).
-	if autoCompactScope == "body_after_prefix" && tokenUsage != nil && tokenUsage.Last.InputTokens > 0 {
-		if observed := execBoolPtrFromAny(record.Metadata.Extra["auto_compact_window_prefill_server_observed"]); observed == nil || !*observed {
-			record.Metadata.Extra["auto_compact_window_prefill"] = tokenUsage.Last.InputTokens
-			record.Metadata.Extra["auto_compact_window_prefill_server_observed"] = true
-		}
-	}
 	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
 	record.UpdatedAt = now
 	record.RecencyAt = now
@@ -4294,18 +4285,6 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	}
 	usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
 	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
-	// BodyAfterPrefix scope: Rust recompute_token_usage re-estimates the
-	// carried prefix from the compacted history after the window advances, but
-	// set_estimated_prefill is a no-op for a server-observed baseline. Retain
-	// the observed value; only replace estimated baselines with the compacted
-	// estimate.
-	if _, ok := record.Metadata.Extra["auto_compact_window_prefill"]; ok {
-		observed := execBoolPtrFromAny(record.Metadata.Extra["auto_compact_window_prefill_server_observed"])
-		if observed == nil || !*observed {
-			record.Metadata.Extra["auto_compact_window_prefill"] = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
-			record.Metadata.Extra["auto_compact_window_prefill_server_observed"] = false
-		}
-	}
 	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
 		return false, err
 	}
@@ -4352,12 +4331,11 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 	if stringConfigValue(cfg, "model_auto_compact_token_limit_scope") == "body_after_prefix" {
 		// Mirrors Rust AutoCompactTokenLimitScope::BodyAfterPrefix: charge only
 		// tokens grown after the carried window prefix against the limit.
+		// Rust apply_rollout_reconstruction re-estimates the carried prefix
+		// from the reconstructed history on every resume, so a persisted
+		// server-observed baseline from a previous process does not survive.
 		policy.Scope = compact.ScopeBodyAfterPrefix
-		if prefill, ok := intFromAny(record.Metadata.Extra["auto_compact_window_prefill"]); ok && prefill > 0 {
-			policy.PrefillTokens = prefill
-		} else {
-			policy.PrefillTokens = compact.EstimateTokens(execCompactItemsFromSession(record.Items))
-		}
+		policy.PrefillTokens = compact.EstimateTokens(execCompactItemsFromSession(record.Items))
 	}
 	status := compact.Evaluate(policy, int(active))
 	if execStoredContextWindowRequired(record.Metadata.Extra) {
