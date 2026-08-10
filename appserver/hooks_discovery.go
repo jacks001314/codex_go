@@ -672,6 +672,15 @@ func parseHooksTOMLBool(raw string) (bool, bool) {
 	}
 }
 
+// hookDiscoveryExecutionMode mirrors Rust discovery.rs: async command hooks
+// run in the background except SessionEnd, which stays synchronous.
+func hookDiscoveryExecutionMode(async bool, event HookEventName) HookExecutionMode {
+	if async && event != HookEventSessionEnd {
+		return HookExecutionAsync
+	}
+	return HookExecutionSync
+}
+
 func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource, event HookEventName, group hookJSONMatcherGroupWire, groupIndex int, displayOrder int64) int64 {
 	matcher := normalizedHookMatcher(event, group.Matcher)
 	if matcher != nil {
@@ -686,10 +695,6 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 		switch handlerType {
 		case HookHandlerCommand:
 			command := handler.commandForPlatform()
-			if handler.Async {
-				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping async hook in %s: async hooks are not supported yet", source.Path))
-				continue
-			}
 			if strings.TrimSpace(command) == "" {
 				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping empty hook command in %s", source.Path))
 				continue
@@ -703,7 +708,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Key:           key,
 				EventName:     event,
 				HandlerType:   HookHandlerCommand,
-				ExecutionMode: HookExecutionSync,
+				ExecutionMode: hookDiscoveryExecutionMode(handler.Async, event),
 				Matcher:       cloneString(matcher),
 				Command:       &displayCommand,
 				TimeoutSec:    timeoutSec,

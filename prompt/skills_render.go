@@ -207,6 +207,16 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 				selected = aliased
 			}
 		}
+		// Rust ce22ea9712: executor locators are compacted with provider-specific
+		// `e` aliases alongside host `r` aliases under metadata pressure.
+		if plan, ok := buildExtensionAliasPlan(executorLines, budget); ok && plan.tableCost < budget.Limit {
+			adjustedBudget := budget
+			adjustedBudget.Limit -= plan.tableCost
+			aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
+			if combinedSkillsRenderIsBetter(aliased, selected, budget) {
+				selected = aliased
+			}
+		}
 	}
 
 	hostWarning := skillRenderWarning(selected.hostReport, budget)
@@ -553,6 +563,79 @@ func buildSkillAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*
 	}, true
 }
 
+// buildExtensionAliasPlan builds an alias plan for executor/orchestrator skill
+// locators using provider-specific `e`/`o` prefixes (Rust ce22ea9712 aliases.rs).
+// Locator roots are derived from the locator path's leading URI segments.
+func buildExtensionAliasPlan(lines []skillRenderLine, budget SkillMetadataBudget) (*skillAliasPlan, bool) {
+	usedRoots := make([]string, 0, len(lines))
+	seen := map[string]bool{}
+	for _, line := range lines {
+		root := extensionSkillAliasRoot(line.path)
+		if root == "" || seen[root] {
+			continue
+		}
+		if _, ok := extensionSkillPathRelativeToRoot(line.path, root); !ok {
+			continue
+		}
+		seen[root] = true
+		usedRoots = append(usedRoots, root)
+	}
+	if len(usedRoots) == 0 {
+		return nil, false
+	}
+	rootAliases := make(map[string]string, len(usedRoots))
+	rootLines := make([]string, 0, len(usedRoots))
+	for i, root := range usedRoots {
+		alias := fmt.Sprintf("e%d", i)
+		rootAliases[root] = alias
+		rootLines = append(rootLines, fmt.Sprintf("- `%s` = `%s`", alias, root))
+	}
+	aliasRootByPath := make(map[string]string, len(lines))
+	for _, line := range lines {
+		root := extensionSkillAliasRoot(line.path)
+		if root == "" {
+			continue
+		}
+		if _, ok := extensionSkillPathRelativeToRoot(line.path, root); !ok {
+			continue
+		}
+		aliasRootByPath[line.path] = root
+	}
+	if len(aliasRootByPath) == 0 {
+		return nil, false
+	}
+	return &skillAliasPlan{
+		rootLines:       rootLines,
+		rootAliases:     rootAliases,
+		aliasRootByPath: aliasRootByPath,
+		tableCost:       aliasedMetadataOverheadCost(budget, rootLines),
+	}, true
+}
+
+// extensionSkillAliasRoot derives the alias root for an extension locator from
+// its leading URI segments (Rust executor alias_root from discovery paths).
+func extensionSkillAliasRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	scheme := ""
+	trimmed := path
+	if schemeIndex := strings.Index(trimmed, "://"); schemeIndex >= 0 {
+		scheme = trimmed[:schemeIndex+3]
+		trimmed = trimmed[schemeIndex+3:]
+		if strings.HasPrefix(trimmed, "/") {
+			scheme += "/"
+			trimmed = strings.TrimLeft(trimmed, "/")
+		}
+	}
+	segments := strings.Split(trimmed, "/")
+	if len(segments) < 3 {
+		return ""
+	}
+	return scheme + segments[0] + "/" + segments[1]
+}
+
 func applySkillAliases(lines []skillRenderLine, plan *skillAliasPlan) []skillRenderLine {
 	if plan == nil {
 		return lines
@@ -561,7 +644,7 @@ func applySkillAliases(lines []skillRenderLine, plan *skillAliasPlan) []skillRen
 	for _, line := range lines {
 		if aliasRoot := plan.aliasRootByPath[line.path]; aliasRoot != "" {
 			if alias := plan.rootAliases[aliasRoot]; alias != "" {
-				if relative, ok := skillPathRelativeToRoot(line.path, aliasRoot); ok {
+				if relative, ok := extensionSkillPathRelativeToRoot(line.path, aliasRoot); ok {
 					line.path = alias + "/" + relative
 				}
 			}
@@ -569,6 +652,38 @@ func applySkillAliases(lines []skillRenderLine, plan *skillAliasPlan) []skillRen
 		out = append(out, line)
 	}
 	return out
+}
+
+// extensionSkillPathRelativeToRoot computes the path relative to an extension
+// alias root, tolerating a URI scheme prefix (Rust aliases.rs shorten).
+func extensionSkillPathRelativeToRoot(path string, root string) (string, bool) {
+	root = strings.TrimSpace(root)
+	path = strings.TrimSpace(path)
+	if root == "" || path == "" {
+		return "", false
+	}
+	scheme := ""
+	if index := strings.Index(path, "://"); index >= 0 {
+		scheme = path[:index+3]
+		path = path[index+3:]
+	}
+	if scheme != "" && strings.HasPrefix(root, scheme) {
+		root = strings.TrimPrefix(root, scheme)
+	}
+	path = strings.Trim(path, "/")
+	root = strings.Trim(root, "/")
+	if path == root {
+		return "", true
+	}
+	prefix := root
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	relative, ok := strings.CutPrefix(path, prefix)
+	if !ok || relative == "" || strings.HasPrefix(relative, "../") {
+		return "", false
+	}
+	return relative, true
 }
 
 func aliasedRenderIsBetter(aliasedLines []string, aliasedReport *SkillRenderReport, aliasedRootLines []string, absoluteLines []string, absoluteReport *SkillRenderReport, absoluteRootLines []string, budget SkillMetadataBudget) bool {

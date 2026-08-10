@@ -17145,6 +17145,40 @@ func TestCompactTokenStatusFromMetadata(t *testing.T) {
 	}
 }
 
+func TestCompactTokenStatusForTurnReadsSnakeCaseUsageAndTrailingItems(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID: "thread-mixed-usage", SessionID: "thread-mixed-usage",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			Model: "gpt-5.4",
+			Extra: map[string]any{
+				// Exec-persisted usage uses snake_case; the runtime must accept
+				// it when threads are shared across surfaces.
+				"last_token_usage": map[string]any{"total_tokens": int64(245000)},
+			},
+		},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+			// Trailing prompt from an interrupted turn is not reflected in the
+			// stored usage and is added back like Rust get_total_token_usage.
+			{ID: "u2", Type: "message", Role: "user", Text: strings.Repeat("resume prompt ", 50), CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	status := router.compactTokenStatusForTurn("thread-mixed-usage", "gpt-5.4", &turn.TurnStartParams{})
+	if !status.ShouldCompact {
+		t.Fatalf("snake_case stored usage at limit should compact: %#v", status)
+	}
+	if status.ActiveContextTokens <= 245000 {
+		t.Fatalf("active context tokens should exceed stored usage: %#v", status)
+	}
+}
+
 func TestPersistContextWindowExceededStatusPreservesUsageAndMarksPreTurnCompact(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()
@@ -17169,6 +17203,274 @@ func TestPersistContextWindowExceededStatusPreservesUsageAndMarksPreTurnCompact(
 	status := compactTokenStatusFromMetadata(record.Metadata.Extra)
 	if status.ActiveContextTokens != 1234 || !status.ShouldCompact || !status.NewContextWindowRequired || status.Reason != compact.ReasonContextWindowExceeded {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestCompactTokenStatusForTurnBodyAfterPrefixChargesGrowthOnly(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	createThread := func(id string, prefill any) {
+		extra := map[string]any{
+			"last_token_usage":     map[string]any{"input_tokens": int64(244790), "output_tokens": int64(10), "total_tokens": int64(244800)},
+			"model_context_window": int64(258400),
+		}
+		if prefill != nil {
+			extra["auto_compact_window_prefill"] = prefill
+		}
+		if err := store.Create(&session.Record{
+			ID: session.ThreadID(id), SessionID: id,
+			CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+			Metadata: session.Metadata{Model: "gpt-5.4", Extra: extra},
+			Items: []session.Item{
+				{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+				{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+			},
+		}); err != nil {
+			t.Fatalf("Create record %s error = %v", id, err)
+		}
+	}
+	createThread("thread-body-prefix", int64(220000))
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	params := &turn.TurnStartParams{Config: map[string]any{"model_auto_compact_token_limit_scope": "body_after_prefix"}}
+	status := router.compactTokenStatusForTurn("thread-body-prefix", "gpt-5.4", params)
+	if status.ShouldCompact {
+		t.Fatalf("body_after_prefix should charge only growth past the carried prefix: %#v", status)
+	}
+	if got, want := status.AutoCompactScopeTokens, 244800-220000; got != want {
+		t.Fatalf("scope tokens = %d, want %d", got, want)
+	}
+	// Without a persisted baseline, the runtime estimates the prefix from the
+	// resumed history like Rust; the scoped charge stays below the limit.
+	createThread("thread-body-prefix-estimated", nil)
+	status = router.compactTokenStatusForTurn("thread-body-prefix-estimated", "gpt-5.4", params)
+	if status.ShouldCompact {
+		t.Fatalf("estimated prefix should keep scope charge below limit: %#v", status)
+	}
+	estimated := compact.EstimateTokens(compactItemsFromSessionItems([]session.Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+	}))
+	if got, want := status.AutoCompactScopeTokens, 244800-estimated; got != want {
+		t.Fatalf("estimated-prefix scope tokens = %d, want %d", got, want)
+	}
+}
+
+func TestPersistCompactTokenStatusRecordsServerObservedPrefillOnce(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID: "thread-prefill-usage", SessionID: "thread-prefill-usage",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Model: "gpt-5.4", Extra: map[string]any{}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	params := &turn.TurnStartParams{Config: map[string]any{"model_auto_compact_token_limit_scope": "body_after_prefix"}}
+	last := model.AgentUsage{InputTokens: 220000, OutputTokens: 5000, TotalTokens: 225000}
+	if _, _, err := router.persistCompactTokenStatus("thread-prefill-usage", "gpt-5.4", params, last, last); err != nil {
+		t.Fatalf("persist compact token status error = %v", err)
+	}
+	record, err := store.Read(session.ThreadID("thread-prefill-usage"), true, true)
+	if err != nil {
+		t.Fatalf("Get record error = %v", err)
+	}
+	if got := intFromAny(record.Metadata.Extra["auto_compact_window_prefill"]); got != 220000 {
+		t.Fatalf("server-observed prefill = %d, want 220000", got)
+	}
+	if observed, ok := record.Metadata.Extra["auto_compact_window_prefill_server_observed"].(bool); !ok || !observed {
+		t.Fatalf("server-observed flag = %#v, want true", record.Metadata.Extra["auto_compact_window_prefill_server_observed"])
+	}
+	// A later sample in the same window must not overwrite the baseline.
+	later := model.AgentUsage{InputTokens: 230000, OutputTokens: 5000, TotalTokens: 235000}
+	if _, _, err := router.persistCompactTokenStatus("thread-prefill-usage", "gpt-5.4", params, later, later); err != nil {
+		t.Fatalf("persist compact token status error = %v", err)
+	}
+	record, err = store.Read(session.ThreadID("thread-prefill-usage"), true, true)
+	if err != nil {
+		t.Fatalf("Get record error = %v", err)
+	}
+	if got := intFromAny(record.Metadata.Extra["auto_compact_window_prefill"]); got != 220000 {
+		t.Fatalf("prefill overwritten by later sample = %d, want 220000", got)
+	}
+}
+
+func TestCompactThreadRetainsServerObservedPrefillAndReplacesEstimated(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	createThread := func(id string, prefill int64, observed bool, fallbackDelivered bool) {
+		extra := map[string]any{
+			"last_token_usage":     map[string]any{"total_tokens": int64(244800)},
+			"model_context_window": int64(258400),
+		}
+		if prefill > 0 {
+			extra["auto_compact_window_prefill"] = prefill
+			extra["auto_compact_window_prefill_server_observed"] = observed
+		}
+		if fallbackDelivered {
+			extra["auto_compact_fallback_delivered"] = true
+			extra["token_budget_reminder_delivered"] = true
+		}
+		if err := store.Create(&session.Record{
+			ID: session.ThreadID(id), SessionID: id,
+			CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+			Metadata: session.Metadata{Model: "gpt-5.4", Extra: extra},
+			Items: []session.Item{
+				{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+				{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+			},
+		}); err != nil {
+			t.Fatalf("Create record %s error = %v", id, err)
+		}
+	}
+	createThread("thread-compact-observed", 220000, true, true)
+	createThread("thread-compact-estimated", 5000, false, false)
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	for _, id := range []string{"thread-compact-observed", "thread-compact-estimated"} {
+		if _, err := router.compactThread(context.Background(), &runtimeCompactRequest{
+			ThreadID: id,
+			TurnID:   "turn-" + id,
+			Trigger:  compact.TriggerAuto,
+			Reason:   compact.ReasonTokenLimit,
+			Phase:    compact.PhaseMidTurn,
+			Prompt:   "Summarize the conversation so far.",
+		}); err != nil {
+			t.Fatalf("compactThread(%s) error = %v", id, err)
+		}
+	}
+	// A server-observed baseline is retained across the window advance
+	// (Rust set_estimated_prefill is a no-op for ServerObserved).
+	observedRecord, err := store.Read(session.ThreadID("thread-compact-observed"), true, true)
+	if err != nil {
+		t.Fatalf("Read observed record error = %v", err)
+	}
+	if got := intFromAny(observedRecord.Metadata.Extra["auto_compact_window_prefill"]); got != 220000 {
+		t.Fatalf("server-observed prefill after compact = %d, want 220000", got)
+	}
+	if observed, ok := observedRecord.Metadata.Extra["auto_compact_window_prefill_server_observed"].(bool); !ok || !observed {
+		t.Fatalf("server-observed flag after compact = %#v, want true", observedRecord.Metadata.Extra["auto_compact_window_prefill_server_observed"])
+	}
+	// Rust AutoCompactWindow::advance re-arms token-budget deliveries for the
+	// new window; the persisted fallback marker must be cleared.
+	if delivered := boolFromAny(observedRecord.Metadata.Extra["auto_compact_fallback_delivered"]); delivered {
+		t.Fatalf("auto_compact_fallback_delivered should reset after compact")
+	}
+	if delivered := boolFromAny(observedRecord.Metadata.Extra["token_budget_reminder_delivered"]); delivered {
+		t.Fatalf("token_budget_reminder_delivered should reset after compact")
+	}
+	// An estimated baseline is replaced by the compacted-history estimate.
+	estimatedRecord, err := store.Read(session.ThreadID("thread-compact-estimated"), true, true)
+	if err != nil {
+		t.Fatalf("Read estimated record error = %v", err)
+	}
+	recomputed := compact.EstimateTokens(compactItemsFromSessionItems(estimatedRecord.Items))
+	if got := intFromAny(estimatedRecord.Metadata.Extra["auto_compact_window_prefill"]); got != recomputed {
+		t.Fatalf("estimated prefill after compact = %d, want recomputed %d", got, recomputed)
+	}
+	if observed, ok := estimatedRecord.Metadata.Extra["auto_compact_window_prefill_server_observed"].(bool); ok && observed {
+		t.Fatalf("estimated prefill flag should stay unobserved after compact")
+	}
+}
+
+func TestAutoCompactFallbackFollowUpReminderAndFallback(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID: "thread-token-budget", SessionID: "thread-token-budget",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			Model: "gpt-5.4",
+			Extra: map[string]any{
+				"auto_compact_token_limit":               int64(244800),
+				"auto_compact_fallback_prompt":           "wrap up and summarize",
+				"auto_compact_fallback_buffer_tokens":    int64(30000),
+				"token_budget_reminder_threshold_tokens": int64(12000),
+				"token_budget_reminder_message_template": "only {n_remaining} tokens remaining",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	followUp, delivery := router.autoCompactFallbackFollowUp("thread-token-budget", &appTurnRunConfig{})
+	if followUp == nil || delivery == nil {
+		t.Fatal("expected a follow-up when token budget metadata is present")
+	}
+	limit := int64(244800)
+	// Reminder only: remaining 5000 is below the threshold but above zero.
+	items := followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{TotalTokens: limit - 5000}})
+	if len(items) != 1 {
+		t.Fatalf("reminder should inject once, got %d items", len(items))
+	}
+	if !delivery.reminderDelivered || delivery.fallbackDelivered {
+		t.Fatalf("delivery state = %#v, want reminder only", delivery)
+	}
+	// Once per window: a later sample does not redeliver.
+	if items := followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{TotalTokens: limit - 4000}}); len(items) != 0 {
+		t.Fatalf("reminder should deliver only once, got %d items", len(items))
+	}
+	// Base-window exhaustion delivers the fallback prompt.
+	if items := followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{TotalTokens: limit}}); len(items) != 1 {
+		t.Fatalf("fallback at exhaustion should inject once, got %d items", len(items))
+	}
+	if !delivery.fallbackDelivered {
+		t.Fatalf("fallback delivery not recorded: %#v", delivery)
+	}
+	// A fresh follow-up delivers both when the threshold and exhaustion coincide.
+	fresh, freshDelivery := router.autoCompactFallbackFollowUp("thread-token-budget", &appTurnRunConfig{})
+	if items := fresh(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{TotalTokens: limit}}); len(items) != 2 {
+		t.Fatalf("reminder + fallback at exhaustion should inject 2 items, got %d", len(items))
+	}
+	if !freshDelivery.reminderDelivered || !freshDelivery.fallbackDelivered {
+		t.Fatalf("fresh delivery state = %#v, want both", freshDelivery)
+	}
+}
+
+func TestPersistAutoCompactFallbackOutcomeDistinguishesReminderAndFallback(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	create := func(id string) {
+		if err := store.Create(&session.Record{
+			ID: session.ThreadID(id), SessionID: id,
+			CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+			Metadata: session.Metadata{Model: "gpt-5.4", Extra: map[string]any{}},
+		}); err != nil {
+			t.Fatalf("Create record %s error = %v", id, err)
+		}
+	}
+	create("thread-tb-reminder")
+	create("thread-tb-fallback")
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	status := &compact.TokenStatus{ActiveContextTokens: 239800}
+	// A reminder-only delivery persists the reminder marker but not the fallback.
+	reminderOnly := &tokenBudgetDeliveryState{reminderDelivered: true}
+	if err := router.persistAutoCompactFallbackOutcome("thread-tb-reminder", "turn-1", &turn.AgentLoopResult{SamplingFollowUps: 1}, status, reminderOnly); err != nil {
+		t.Fatalf("persist reminder-only error = %v", err)
+	}
+	record, err := store.Read(session.ThreadID("thread-tb-reminder"), true, true)
+	if err != nil {
+		t.Fatalf("Read reminder record error = %v", err)
+	}
+	if !boolFromAny(record.Metadata.Extra["token_budget_reminder_delivered"]) {
+		t.Fatalf("reminder marker not persisted: %#v", record.Metadata.Extra)
+	}
+	if boolFromAny(record.Metadata.Extra["auto_compact_fallback_delivered"]) {
+		t.Fatalf("reminder-only delivery must not set the fallback marker: %#v", record.Metadata.Extra)
+	}
+	// A fallback-only delivery persists the fallback marker but not the reminder.
+	fallbackOnly := &tokenBudgetDeliveryState{fallbackDelivered: true}
+	if err := router.persistAutoCompactFallbackOutcome("thread-tb-fallback", "turn-1", &turn.AgentLoopResult{SamplingFollowUps: 1}, status, fallbackOnly); err != nil {
+		t.Fatalf("persist fallback-only error = %v", err)
+	}
+	record, err = store.Read(session.ThreadID("thread-tb-fallback"), true, true)
+	if err != nil {
+		t.Fatalf("Read fallback record error = %v", err)
+	}
+	if !boolFromAny(record.Metadata.Extra["auto_compact_fallback_delivered"]) {
+		t.Fatalf("fallback marker not persisted: %#v", record.Metadata.Extra)
+	}
+	if boolFromAny(record.Metadata.Extra["token_budget_reminder_delivered"]) {
+		t.Fatalf("fallback-only delivery must not set the reminder marker: %#v", record.Metadata.Extra)
 	}
 }
 

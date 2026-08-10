@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -387,6 +388,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
 		SteerMailbox:                   firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
 		OnSteerCommitted:               req.OnSteerCommitted,
+		SamplingFollowUp:               r.execAutoCompactFallbackFollowUp(cfg, modelID),
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -406,7 +408,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
 	tokenUsage := execTokenUsageForResult(resumeContext, turnResult, modelID, cfg)
-	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage)
+	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage, stringConfigValue(cfg, "model_auto_compact_token_limit_scope"))
 	if err != nil {
 		return nil, err
 	}
@@ -529,6 +531,7 @@ type agentRunConfig struct {
 	DisableWaitAgent               bool
 	SteerMailbox                   *turn.SteerMailbox
 	OnSteerCommitted               func(count int)
+	SamplingFollowUp               turn.SamplingFollowUp
 }
 
 func firstSteerMailbox(values ...*turn.SteerMailbox) *turn.SteerMailbox {
@@ -990,6 +993,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OnWarning:                    run.StreamEvents.Warning,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 		OnSteerCommitted:             run.OnSteerCommitted,
+		SamplingFollowUp:             run.SamplingFollowUp,
 	})
 }
 
@@ -3569,7 +3573,7 @@ func todoItemFromPlanFields(step string, status string) (protocol.TodoItem, bool
 	}, true
 }
 
-func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext, tokenUsage *protocol.ThreadTokenUsage) (string, error) {
+func (r *Runner) persistSession(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, result *turn.AgentLoopResult, resumeContext *execResumeContext, tokenUsage *protocol.ThreadTokenUsage, autoCompactScope string) (string, error) {
 	if req.Exec.Ephemeral {
 		return "", nil
 	}
@@ -3616,6 +3620,15 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
 	}
 	record.Metadata.Extra = execTokenUsageMetadata(record.Metadata.Extra, tokenUsage)
+	// BodyAfterPrefix scope: the first server-observed request input in a
+	// window becomes the carried-prefix baseline (mirrors Rust
+	// ensure_server_observed_prefill_from_usage).
+	if autoCompactScope == "body_after_prefix" && tokenUsage != nil && tokenUsage.Last.InputTokens > 0 {
+		if observed := execBoolPtrFromAny(record.Metadata.Extra["auto_compact_window_prefill_server_observed"]); observed == nil || !*observed {
+			record.Metadata.Extra["auto_compact_window_prefill"] = tokenUsage.Last.InputTokens
+			record.Metadata.Extra["auto_compact_window_prefill_server_observed"] = true
+		}
+	}
 	execCompleteTurnSnapshot(&record.Metadata, turnID, now)
 	record.UpdatedAt = now
 	record.RecencyAt = now
@@ -3993,6 +4006,89 @@ func execModelInfo(modelID string, cfg *config.Config) model.ModelInfo {
 	return model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, modelConfig)
 }
 
+func execModelTokenBudgetDefaults(info model.ModelInfo) *config.TokenBudgetDefaults {
+	if info.ModelMessages == nil || info.ModelMessages.TokenBudget == nil {
+		return nil
+	}
+	defaults := info.ModelMessages.TokenBudget
+	return &config.TokenBudgetDefaults{
+		ReminderThresholdTokens:         defaults.ReminderThresholdTokens,
+		ReminderMessageTemplate:         defaults.ReminderMessageTemplate,
+		GuidanceMessage:                 defaults.GuidanceMessage,
+		AutoCompactFallbackPrompt:       defaults.AutoCompactFallbackPrompt,
+		AutoCompactFallbackBufferTokens: defaults.AutoCompactFallbackBufferTokens,
+	}
+}
+
+// execAutoCompactFallbackFollowUp mirrors the app-server auto-compact fallback
+// follow-up (RuntimeRouter::autoCompactFallbackFollowUp) and Rust
+// token_budget::maybe_record: the token-budget reminder fires once per window
+// when the base window remaining drops to the reminder threshold, and the
+// model-owned fallback prompt fires once per window when the base window is
+// exactly exhausted without forcing compaction.
+func (r *Runner) execAutoCompactFallbackFollowUp(cfg *config.Config, modelID string) turn.SamplingFollowUp {
+	if cfg == nil {
+		return nil
+	}
+	info := execModelInfo(modelID, cfg)
+	tokenBudget, err := cfg.TokenBudgetConfigWithDefaults(execModelTokenBudgetDefaults(info))
+	if err != nil || tokenBudget == nil || !tokenBudget.Enabled {
+		return nil
+	}
+	prompt := strings.TrimSpace(tokenBudget.AutoCompactFallbackPrompt)
+	buffer := 0
+	if tokenBudget.AutoCompactFallbackBufferTokens != nil {
+		buffer = *tokenBudget.AutoCompactFallbackBufferTokens
+	}
+	reminderThreshold := 0
+	if tokenBudget.ReminderThresholdTokens != nil {
+		reminderThreshold = *tokenBudget.ReminderThresholdTokens
+	}
+	reminderTemplate := strings.TrimSpace(tokenBudget.ReminderMessageTemplate)
+	if (prompt == "" || buffer <= 0) && (reminderThreshold <= 0 || reminderTemplate == "") {
+		return nil
+	}
+	resolvedWindow := info.ContextWindow
+	if resolvedWindow <= 0 {
+		resolvedWindow = info.MaxContextWindow
+	}
+	limit := resolvedWindow * 9 / 10
+	if info.AutoCompactTokenLimit > 0 && (limit == 0 || info.AutoCompactTokenLimit < limit) {
+		limit = info.AutoCompactTokenLimit
+	}
+	if limit <= 0 {
+		return nil
+	}
+	reminderDelivered := false
+	fallbackDelivered := false
+	return func(ctx *turn.SamplingFollowUpContext) []any {
+		if ctx == nil {
+			return nil
+		}
+		status := compact.Evaluate(compact.Policy{Enabled: true, TokenLimit: int(limit), FallbackBufferTokens: buffer}, int(model.AgentUsageTotalTokens(ctx.Usage)))
+		if status.BaseWindowTokensRemaining == nil {
+			return nil
+		}
+		remaining := *status.BaseWindowTokensRemaining
+		var items []any
+		// The reminder fires even when compaction is already due (Rust records
+		// it before the roll-over check).
+		if !reminderDelivered && reminderThreshold > 0 && reminderTemplate != "" && remaining <= reminderThreshold {
+			if item := model.DeveloperMessageInputItem(strings.ReplaceAll(reminderTemplate, "{n_remaining}", strconv.Itoa(remaining))); item != nil {
+				items = append(items, item)
+				reminderDelivered = true
+			}
+		}
+		if !fallbackDelivered && !status.ShouldCompact && prompt != "" && buffer > 0 && remaining == 0 {
+			if item := model.DeveloperMessageInputItem(prompt); item != nil {
+				items = append(items, item)
+				fallbackDelivered = true
+			}
+		}
+		return items
+	}
+}
+
 func execTokenUsageMetadata(extra map[string]any, usage *protocol.ThreadTokenUsage) map[string]any {
 	if usage == nil {
 		return extra
@@ -4198,6 +4294,18 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	}
 	usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
 	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
+	// BodyAfterPrefix scope: Rust recompute_token_usage re-estimates the
+	// carried prefix from the compacted history after the window advances, but
+	// set_estimated_prefill is a no-op for a server-observed baseline. Retain
+	// the observed value; only replace estimated baselines with the compacted
+	// estimate.
+	if _, ok := record.Metadata.Extra["auto_compact_window_prefill"]; ok {
+		observed := execBoolPtrFromAny(record.Metadata.Extra["auto_compact_window_prefill_server_observed"])
+		if observed == nil || !*observed {
+			record.Metadata.Extra["auto_compact_window_prefill"] = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
+			record.Metadata.Extra["auto_compact_window_prefill_server_observed"] = false
+		}
+	}
 	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
 		return false, err
 	}
@@ -4233,8 +4341,25 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 	active := stored.Last.TotalTokens
 	if active <= 0 {
 		active = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
+	} else {
+		// Rust derives the active context from the last server-reported total
+		// plus an estimate of any local items recorded after the last
+		// model-generated item (for example a persisted prompt from an
+		// interrupted turn).
+		active = int64(compact.EstimateActiveContextTokens(execCompactItemsFromSession(record.Items), int(active)))
 	}
-	status := compact.Evaluate(compact.Policy{Enabled: true, TokenLimit: int(limit), WindowTokens: int(window)}, int(active))
+	policy := compact.Policy{Enabled: true, TokenLimit: int(limit), WindowTokens: int(window)}
+	if stringConfigValue(cfg, "model_auto_compact_token_limit_scope") == "body_after_prefix" {
+		// Mirrors Rust AutoCompactTokenLimitScope::BodyAfterPrefix: charge only
+		// tokens grown after the carried window prefix against the limit.
+		policy.Scope = compact.ScopeBodyAfterPrefix
+		if prefill, ok := intFromAny(record.Metadata.Extra["auto_compact_window_prefill"]); ok && prefill > 0 {
+			policy.PrefillTokens = prefill
+		} else {
+			policy.PrefillTokens = compact.EstimateTokens(execCompactItemsFromSession(record.Items))
+		}
+	}
+	status := compact.Evaluate(policy, int(active))
 	if execStoredContextWindowRequired(record.Metadata.Extra) {
 		status.ShouldCompact = true
 		status.Reason = compact.ReasonContextWindowExceeded

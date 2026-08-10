@@ -2,6 +2,7 @@ package bottompane
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	codextui "codex_go/tui"
@@ -307,42 +308,200 @@ func (t *TextAreaState) WrappedLines(width int) []string {
 	return wrappedTextAreaLines(t.Text, width)
 }
 
-// wrappedTextAreaLines mirrors Rust textarea wrapped_lines (ad6e48ddd3,
-// #37166): overflowing spaces wrap onto their own rows and full logical lines
-// reserve a continuation row so the insertion point stays visible.
+// wrappedTextAreaLines mirrors Rust textarea wrapped_lines (a16863f870,
+// #37709 + ad6e48ddd3): grapheme-safe wrapping keeps breakable Unicode
+// whitespace with the following word, preserves semantic breakpoints such as
+// hyphens and nonbreaking spaces, and reserves an insertion row for full
+// logical lines so the cursor stays visible.
 func wrappedTextAreaLines(text string, width int) []string {
 	if width <= 0 {
 		width = 1
 	}
 	lines := []string{}
 	for _, logical := range strings.Split(text, "\n") {
-		if logical == "" {
-			lines = append(lines, "")
-			continue
-		}
-		var line strings.Builder
-		used := 0
-		graphemes := uniseg.NewGraphemes(logical)
-		for graphemes.Next() {
-			grapheme := graphemes.Str()
-			graphemeWidth := codextui.DisplayWidth(grapheme)
-			if used > 0 && used+graphemeWidth > width {
-				lines = append(lines, line.String())
-				line.Reset()
-				used = 0
-			}
-			line.WriteString(grapheme)
-			used += graphemeWidth
-		}
-		lines = append(lines, line.String())
-		if used >= width {
-			lines = append(lines, "")
-		}
+		lines = append(lines, wrapTextAreaLogicalLine(logical, width)...)
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "")
 	}
 	return lines
+}
+
+// textAreaWrapUnit is leading breakable whitespace plus the following word.
+// The whitespace stays attached to the word that follows it so overflowing
+// spaces never occupy a separate blank row (Rust wrapping.rs).
+type textAreaWrapUnit struct {
+	text  string
+	width int
+	lead  int // byte length of leading breakable whitespace
+}
+
+// wrapTextAreaLogicalLine wraps one logical line with textwrap FirstFit-like
+// semantics: units are placed greedily, breakable whitespace rides with the
+// next word, nonbreaking whitespace stays inside its word, and full logical
+// lines reserve an insertion row.
+func wrapTextAreaLogicalLine(line string, width int) []string {
+	if line == "" {
+		return []string{""}
+	}
+	units := textAreaWrapUnits(line)
+	var out []string
+	var current strings.Builder
+	used := 0
+	for _, unit := range units {
+		pieces := []textAreaWrapUnit{unit}
+		if unit.width > width {
+			pieces = splitTextAreaUnitByWidth(unit, width)
+		}
+		for _, piece := range pieces {
+			if used > 0 && used+piece.width > width {
+				out = append(out, current.String())
+				current.Reset()
+				used = 0
+			}
+			text := piece.text
+			if current.Len() == 0 && piece.lead > 0 {
+				// Leading breakable whitespace is dropped at the start of a row.
+				text = text[piece.lead:]
+			}
+			current.WriteString(text)
+			used += codextui.DisplayWidth(text)
+		}
+	}
+	out = append(out, current.String())
+	if used >= width {
+		out = append(out, "")
+	}
+	return out
+}
+
+// textAreaWrapUnits splits a logical line into word+trailing-breakable-space
+// units. Nonbreaking whitespace stays inside its word.
+func textAreaWrapUnits(line string) []textAreaWrapUnit {
+	// Pass 1: split into word spans (nonbreaking whitespace stays inside a word).
+	type span struct{ start, end int }
+	var spans []span
+	start := -1
+	runes := []rune(line)
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		if unicode.IsSpace(r) && isBreakableTextAreaRune(r) {
+			if start >= 0 {
+				spans = append(spans, span{start: start, end: i})
+				start = -1
+			}
+			i++
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+		// A breakable space ends the word even inside a grapheme cluster.
+		i++
+	}
+	if start >= 0 {
+		spans = append(spans, span{start: start, end: len(runes)})
+	}
+	// Pass 2: attach preceding breakable whitespace to the following word.
+	var units []textAreaWrapUnit
+	byteOffset := 0
+	for _, word := range spans {
+		leadStart := byteOffset
+		wordStart := byteLenOfRunes(line, word.start)
+		wordEnd := byteLenOfRunes(line, word.end)
+		if leadStart < wordStart {
+			lead := line[leadStart:wordStart]
+			text := lead + line[wordStart:wordEnd]
+			units = append(units, textAreaWrapUnit{text: text, width: codextui.DisplayWidth(text), lead: len(lead)})
+		} else {
+			text := line[wordStart:wordEnd]
+			units = append(units, textAreaWrapUnit{text: text, width: codextui.DisplayWidth(text)})
+		}
+		byteOffset = wordEnd
+	}
+	// Trailing breakable whitespace with no following word stays on its own row
+	// so the cursor never escapes the textarea (Rust ad6e48ddd3).
+	if byteOffset < len(line) {
+		trailing := line[byteOffset:]
+		units = append(units, textAreaWrapUnit{text: trailing, width: codextui.DisplayWidth(trailing)})
+	}
+	if len(units) == 0 && line != "" {
+		units = append(units, textAreaWrapUnit{text: line, width: codextui.DisplayWidth(line)})
+	}
+	return units
+}
+
+func isBreakableTextAreaRune(r rune) bool {
+	switch r {
+	case ' ', '\t', '\u3000', '\r', '\v', '\f':
+		return true
+	case '\u00a0', '\u202f', '\u2007':
+		return false
+	default:
+		return unicode.IsSpace(r)
+	}
+}
+
+func byteLenOfRunes(text string, runeCount int) int {
+	if runeCount <= 0 {
+		return 0
+	}
+	byteLen := 0
+	for _, r := range text {
+		if runeCount <= 0 {
+			break
+		}
+		byteLen += len(string(r))
+		runeCount--
+	}
+	return byteLen
+}
+
+// isBreakableTextAreaWhitespace reports whether a grapheme is breakable
+// whitespace that may ride with the following word.
+func isBreakableTextAreaWhitespace(grapheme string) bool {
+	if grapheme == "" {
+		return false
+	}
+	runes := []rune(grapheme)
+	for _, r := range runes {
+		if !isBreakableTextAreaRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitTextAreaUnitByWidth(unit textAreaWrapUnit, width int) []textAreaWrapUnit {
+	var out []textAreaWrapUnit
+	var current strings.Builder
+	used := 0
+	start := unit.lead
+	first := true
+	graphemes := uniseg.NewGraphemes(unit.text[start:])
+	for graphemes.Next() {
+		grapheme := graphemes.Str()
+		graphemeWidth := codextui.DisplayWidth(grapheme)
+		if used > 0 && used+graphemeWidth > width {
+			out = append(out, textAreaWrapUnit{text: current.String(), width: used})
+			current.Reset()
+			used = 0
+			first = false
+		}
+		current.WriteString(grapheme)
+		used += graphemeWidth
+	}
+	if current.Len() > 0 {
+		text := current.String()
+		lead := 0
+		if first {
+			text = unit.text[:unit.lead] + text
+			used += codextui.DisplayWidth(unit.text[:unit.lead])
+			lead = unit.lead
+		}
+		out = append(out, textAreaWrapUnit{text: text, width: used, lead: lead})
+	}
+	return out
 }
 
 func (t *TextAreaState) CursorPosition(width int, height int) (int, int) {

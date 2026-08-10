@@ -194,6 +194,7 @@ type RuntimeRouter struct {
 	clientInfo             map[string]ClientInfo
 	notificationOptOut     map[string]map[NotificationMethod]struct{}
 	experimentalAPI        map[string]bool
+	diagnosticsGauges      *serverDiagnosticsGaugeRegistry
 	requestAttestation     map[string]bool
 	mcpOpenAIForm          map[string]bool
 	authRevisionMu         sync.Mutex
@@ -328,6 +329,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		clientInfo:           map[string]ClientInfo{},
 		notificationOptOut:   map[string]map[NotificationMethod]struct{}{},
 		experimentalAPI:      map[string]bool{},
+		diagnosticsGauges:    newServerDiagnosticsGaugeRegistry(),
 		requestAttestation:   map[string]bool{},
 		mcpOpenAIForm:        map[string]bool{},
 		mcpRuntimes:          newMCPRuntimeCoordinator(),
@@ -1633,6 +1635,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodRemoteControlPairingStart,
 		MethodRemoteControlPairingStatus,
 		MethodRemoteControlStatusRead,
+		MethodServerDiagnostics,
 		MethodThreadBackgroundTerminalsClean,
 		MethodThreadBackgroundTerminalsList,
 		MethodThreadBackgroundTerminalsTerminate,
@@ -1994,6 +1997,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleConfigBatchWrite(request)
 	case MethodConfigRequirementsRead:
 		return r.requireConfig().Requirements(), nil
+	case MethodServerDiagnostics:
+		return r.handleServerDiagnostics(request)
 	case MethodExternalAgentConfigDetect:
 		return r.handleExternalAgentConfigDetect(request)
 	case MethodExternalAgentConfigImport:
@@ -2775,6 +2780,8 @@ func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason str
 	if err != nil {
 		slog.Warn("session end hook failed", "thread_id", threadID, "reason", reason, "error", err)
 	}
+	// Rust 6f647caa9b: abort outstanding background hook work during shutdown.
+	r.requireHookRunner().ShutdownAsync(threadID)
 }
 
 func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*ThreadStartResponse, bool, error) {
@@ -3189,6 +3196,16 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 			record.Metadata.Extra["auto_compact_fallback_buffer_tokens"] = *tokenBudget.AutoCompactFallbackBufferTokens
 		} else {
 			delete(record.Metadata.Extra, "auto_compact_fallback_buffer_tokens")
+		}
+		if tokenBudget.ReminderThresholdTokens != nil {
+			record.Metadata.Extra["token_budget_reminder_threshold_tokens"] = *tokenBudget.ReminderThresholdTokens
+		} else {
+			delete(record.Metadata.Extra, "token_budget_reminder_threshold_tokens")
+		}
+		if strings.TrimSpace(tokenBudget.ReminderMessageTemplate) != "" {
+			record.Metadata.Extra["token_budget_reminder_message_template"] = strings.TrimSpace(tokenBudget.ReminderMessageTemplate)
+		} else {
+			delete(record.Metadata.Extra, "token_budget_reminder_message_template")
 		}
 	}
 	if len(runtimeWorkspaceRoots) > 0 {
@@ -9752,6 +9769,25 @@ func (r *RuntimeRouter) deleteCodeModeRuntime(threadID string) error {
 		return runtime.Close()
 	}
 	return nil
+}
+
+func (r *RuntimeRouter) codeModeInterruptEnabledForThread(threadID string) bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	readParams := &config.ConfigReadParams{}
+	cwd := ""
+	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false); err == nil && record != nil {
+		cwd = record.Metadata.CWD
+	}
+	if cwd != "" {
+		readParams.CWD = &cwd
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil || read == nil {
+		return false
+	}
+	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "code_mode_interrupt")
 }
 
 func (r *RuntimeRouter) closeCodeModeRuntimes() error {

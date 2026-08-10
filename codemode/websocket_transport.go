@@ -24,6 +24,7 @@ func DialWebSocket(ctx context.Context, url string, httpClient *http.Client) (*W
 		return nil, response, err
 	}
 	conn.SetReadLimit(ProtocolMaxFrameBytes + 4)
+	disableWebSocketNagle(response)
 	return &WebSocketTransport{conn: conn}, response, nil
 }
 
@@ -32,6 +33,18 @@ func NewWebSocketTransport(conn *websocket.Conn) *WebSocketTransport {
 		conn.SetReadLimit(ProtocolMaxFrameBytes + 4)
 	}
 	return &WebSocketTransport{conn: conn}
+}
+
+// disableWebSocketNagle mirrors Rust abc5d0b552: disable Nagle's algorithm so
+// interactive cells and delegate callbacks are not delayed by TCP buffering.
+// The handshake response body is the underlying network connection.
+func disableWebSocketNagle(response *http.Response) {
+	if response == nil || response.Body == nil {
+		return
+	}
+	if tcpConn, ok := response.Body.(interface{ SetNoDelay(bool) error }); ok {
+		_ = tcpConn.SetNoDelay(true)
+	}
 }
 
 func (t *WebSocketTransport) Read(ctx context.Context, target any) (bool, error) {

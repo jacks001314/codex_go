@@ -165,7 +165,9 @@ func compactionAnalyticsActiveContextTokensFromRecord(record *session.Record) in
 			return int64(status.ActiveContextTokens)
 		}
 		if usage, ok := record.Metadata.Extra["last_token_usage"].(map[string]any); ok {
-			if total := intFromAny(usage["totalTokens"]); total > 0 {
+			// Threads persisted by the exec runner (or the Rust CLI) use
+			// snake_case; accept both like tokenUsageBreakdownFromMetadata.
+			if total := intFromAny(firstMapValue(usage, "total_tokens", "totalTokens")); total > 0 {
 				return int64(total)
 			}
 		}

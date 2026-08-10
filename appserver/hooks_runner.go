@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/envutil"
@@ -20,6 +21,9 @@ type HookRunner struct {
 	ShellArgs    []string
 	Notify       func(NotificationMethod, any)
 	Now          func() time.Time
+
+	mu            sync.Mutex
+	asyncRuntimes map[string]*asyncHookRuntime
 }
 
 type HookRunRequest struct {
@@ -55,7 +59,7 @@ type hookCommandRunResult struct {
 }
 
 func NewHookRunner() *HookRunner {
-	return &HookRunner{Now: time.Now}
+	return &HookRunner{Now: time.Now, asyncRuntimes: map[string]*asyncHookRuntime{}}
 }
 
 func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRunResult, error) {
@@ -78,6 +82,10 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 	runs := make([]HookRunSummary, 0, len(selected))
 	result := &HookRunResult{}
 	for _, metadata := range selected {
+		if metadata.ExecutionMode == HookExecutionAsync && request.EventName != HookEventSessionEnd {
+			r.scheduleAsyncHook(ctx, request, metadata)
+			continue
+		}
 		started := runningHookSummary(metadata, r.now())
 		started = hookSummaryWithRunIDSuffix(started, request.RunIDSuffix)
 		r.notify(NotificationHookStarted, &HookRunStartedNotification{
@@ -130,8 +138,27 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubCommandEnv(cmd)
 	cmd.Stdin = strings.NewReader(inputJSON)
+	var stdoutBuffer lockedOutputBuffer
+	var stderrBuffer lockedOutputBuffer
+	cmd.Stdout = &stdoutBuffer
+	cmd.Stderr = &stderrBuffer
 
-	stdout, stderr, err := runCommandCaptured(cmd)
+	tree, err := startHookProcessTree(cmd)
+	stdout := ""
+	stderr := ""
+	if err == nil {
+		waitErr := make(chan error, 1)
+		go func() { waitErr <- tree.wait() }()
+		select {
+		case err = <-waitErr:
+		case <-execCtx.Done():
+			// Rust dd916428cd: terminate the whole process tree on timeout.
+			tree.terminate()
+			err = <-waitErr
+		}
+		stdout = stdoutBuffer.String()
+		stderr = stderrBuffer.String()
+	}
 	completed := r.now()
 	result := &hookCommandRunResult{
 		StartedAt:   startedAt,
@@ -141,18 +168,30 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 		Stderr:      stderr,
 	}
 	if err == nil {
+		if tree != nil {
+			tree.preserveDescendants()
+		}
 		code := int32(0)
 		result.ExitCode = &code
 		return result
 	}
 	if execCtx.Err() == context.DeadlineExceeded {
+		if tree != nil {
+			tree.terminate()
+		}
 		result.Error = stringPointer(fmt.Sprintf("hook timed out after %ds", timeoutSec))
 		return result
 	}
 	if exitErr, ok := err.(*osexec.ExitError); ok {
+		if tree != nil {
+			tree.preserveDescendants()
+		}
 		code := int32(exitErr.ExitCode())
 		result.ExitCode = &code
 		return result
+	}
+	if tree != nil {
+		tree.terminate()
 	}
 	result.Error = stringPointer(err.Error())
 	return result

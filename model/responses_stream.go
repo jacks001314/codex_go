@@ -4,20 +4,30 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"codex_go/codexapi"
 )
+
+// Rust 5a0d0929e2: connection failures during sampling are retried with
+// exponential delays from 5s to 60s so the stream stays alive while the
+// provider becomes reachable again.
+const initialConnectionRetryDelay = 5 * time.Second
+const maxConnectionRetryDelay = 60 * time.Second
 
 type ResponsesStreamEventKind string
 
@@ -52,6 +62,7 @@ type ResponsesStreamEvent struct {
 	RetryError         string
 	RetryDelay         time.Duration
 	RetryHTTPStatus    *uint16
+	RetryStatus        string
 	ResponseID         string
 	RequestID          string
 	Model              string
@@ -163,6 +174,7 @@ func newResponsesStreamAccumulator(request *AgentRequest) *responsesStreamAccumu
 
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	maxRetries := r.streamMaxRetries()
+	connectionRetryDelay := initialConnectionRetryDelay
 	for attempt := uint64(0); ; attempt++ {
 		fields := responsesRequestDiagnosticFields(request, apiRequest)
 		fields["stream_attempt"] = attempt + 1
@@ -172,6 +184,27 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		if err == nil {
 			responsesDiagnostic("sampling.completed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "response_id": response.ResponseID})
 			return response, nil
+		}
+		// Rust 5a0d0929e2: connection failures get an unbounded reconnect
+		// window (5-60s exponential) that does not consume the bounded stream
+		// retry budget, for regular sampling on non-Bedrock providers.
+		if isResponsesConnectionFailure(err) && !r.providerIsAmazonBedrock() {
+			responsesDiagnostic("sampling.connection_retry", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "delay_ms": connectionRetryDelay.Milliseconds()})
+			emitResponsesStreamEvent(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), &ResponsesStreamEvent{
+				Kind:        ResponsesStreamEventRetrying,
+				RetryError:  "Reconnecting... waiting for network",
+				RetryDelay:  connectionRetryDelay,
+				RetryMax:    maxRetries,
+				RetryStatus: "connection_failed",
+			})
+			if err := sleepWithContext(ctx, connectionRetryDelay); err != nil {
+				return nil, err
+			}
+			connectionRetryDelay *= 2
+			if connectionRetryDelay > maxConnectionRetryDelay {
+				connectionRetryDelay = maxConnectionRetryDelay
+			}
+			continue
 		}
 		retryable := isRetryableResponsesStreamError(err)
 		responsesDiagnostic("sampling.failed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "error": err.Error(), "error_kind": responsesDiagnosticErrorKind(err), "retryable": retryable, "retry_budget_remaining": attempt < maxRetries})
@@ -194,6 +227,58 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 			return nil, err
 		}
 	}
+}
+
+// isResponsesConnectionFailure reports whether err is a transport-level
+// connection failure (dial refused, no route, DNS, TLS handshake), mirroring
+// Rust TransportError::Connection. It never inspects request URLs.
+func isResponsesConnectionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		switch opErr.Op {
+		case "dial", "connect":
+			return true
+		}
+		if opErr.Err != nil {
+			return errors.Is(opErr.Err, syscall.ECONNREFUSED) ||
+				errors.Is(opErr.Err, syscall.ECONNRESET) ||
+				errors.Is(opErr.Err, syscall.EHOSTUNREACH) ||
+				errors.Is(opErr.Err, syscall.ENETUNREACH) ||
+				errors.Is(opErr.Err, syscall.ETIMEDOUT)
+		}
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		isTLSCertificateError(err)
+}
+
+func isTLSCertificateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var certErr x509.UnknownAuthorityError
+	if errors.As(err, &certErr) {
+		return true
+	}
+	var hostErr x509.HostnameError
+	if errors.As(err, &hostErr) {
+		return true
+	}
+	return false
+}
+
+func (r *ResponsesAgentRunner) providerIsAmazonBedrock() bool {
+	return r != nil && r.Provider != nil && strings.EqualFold(r.Provider.Name, AmazonBedrockProviderName)
 }
 
 func responsesStreamErrorHTTPStatus(err error) *uint16 {

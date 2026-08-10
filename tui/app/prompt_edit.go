@@ -69,6 +69,24 @@ func ApplyPromptEdit(ctx context.Context, client PromptEditForkClient, source Th
 	return PromptEditResult{Session: threadSessionStateFromPromptEditResponse(forked.Thread, source), Turns: append([]appserver.Turn(nil), forked.Thread.Turns...), Composer: clonePromptEditComposer(selection.Prompt), Branched: true}
 }
 
+// ApplyPromptEditWithStore applies a prompt edit using the store's snapshot
+// turns plus buffered live turns reconstructed from turn/item notifications
+// (Rust 266c6920d9: buffered turns must be visible to prompt-edit lookups).
+func ApplyPromptEditWithStore(ctx context.Context, client PromptEditForkClient, source ThreadSessionState, store *ThreadEventStore, selection PromptEditSelection) PromptEditResult {
+	turns := append([]appserver.Turn(nil), sourceTurns(store)...)
+	if store != nil {
+		turns = store.TurnsIncludingBuffered()
+	}
+	return ApplyPromptEdit(ctx, client, source, turns, selection)
+}
+
+func sourceTurns(store *ThreadEventStore) []appserver.Turn {
+	if store == nil {
+		return nil
+	}
+	return append([]appserver.Turn(nil), store.Turns...)
+}
+
 func promptEditBeforeTurnID(turns []appserver.Turn, ordinal int) (string, error) {
 	if ordinal < 0 {
 		return "", fmt.Errorf("selected prompt index is invalid")

@@ -42,6 +42,123 @@ func NewThreadEventStore(capacity int) *ThreadEventStore {
 	}
 }
 
+// TurnsIncludingBuffered reconstructs buffered turns from turn and item
+// notifications before prompt-edit lookups, mirroring Rust 266c6920d9: newer
+// live turns may exist only in the replay buffer and must be visible to the
+// selected-prompt search. Completion metadata is preserved and turns/items
+// already present in the snapshot are not duplicated.
+func (s *ThreadEventStore) TurnsIncludingBuffered() []appserver.Turn {
+	if s == nil {
+		return nil
+	}
+	turns := cloneAppTurns(s.Turns)
+	for _, event := range s.Buffer {
+		if event.Type != ThreadBufferedEventNotification || event.Notification == nil {
+			continue
+		}
+		notification := event.Notification
+		switch notification.Name {
+		case ServerNotificationTurnStarted:
+			turn := notification.Turn
+			if turn == nil || appTurnsContain(turns, turn.ID) {
+				continue
+			}
+			cloned := *turn
+			cloned.Items = append([]appserver.ThreadItem(nil), turn.Items...)
+			turns = append(turns, cloned)
+		case ServerNotificationItemCompleted:
+			if notification.Item == nil || !bufferedPromptEditItem(notification.Item) {
+				continue
+			}
+			idx := appTurnsIndex(turns, notification.TurnID)
+			if idx < 0 || threadItemsContain(turns[idx].Items, notification.Item.ID) {
+				continue
+			}
+			turns[idx].Items = append(turns[idx].Items, cloneAppThreadItem(notification.Item))
+		case ServerNotificationTurnCompleted:
+			turn := notification.Turn
+			if turn == nil {
+				continue
+			}
+			idx := appTurnsIndex(turns, turn.ID)
+			if idx < 0 {
+				continue
+			}
+			turns[idx].Status = turn.Status
+			turns[idx].Error = cloneTurnError(turn.Error)
+			turns[idx].StartedAt = turn.StartedAt
+			turns[idx].CompletedAt = turn.CompletedAt
+			turns[idx].DurationMS = turn.DurationMS
+		}
+	}
+	return turns
+}
+
+func bufferedPromptEditItem(item *appserver.ThreadItem) bool {
+	if item == nil {
+		return false
+	}
+	switch item.Type {
+	case "message", "user_message", "userMessage":
+		return true
+	case "entered_review_mode", "exited_review_mode":
+		return true
+	default:
+		return false
+	}
+}
+
+func appTurnsContain(turns []appserver.Turn, id string) bool {
+	return appTurnsIndex(turns, id) >= 0
+}
+
+func appTurnsIndex(turns []appserver.Turn, id string) int {
+	for i := range turns {
+		if turns[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func threadItemsContain(items []appserver.ThreadItem, id string) bool {
+	for i := range items {
+		if items[i].ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneAppThreadItem(item *appserver.ThreadItem) appserver.ThreadItem {
+	if item == nil {
+		return appserver.ThreadItem{}
+	}
+	out := *item
+	out.Content = append([]appserver.ThreadItemContent(nil), item.Content...)
+	out.Data = cloneThreadItemData(item.Data)
+	return out
+}
+
+func cloneThreadItemData(data map[string]any) map[string]any {
+	if data == nil {
+		return nil
+	}
+	out := make(map[string]any, len(data))
+	for key, value := range data {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneTurnError(err *appserver.TurnError) *appserver.TurnError {
+	if err == nil {
+		return nil
+	}
+	out := *err
+	return &out
+}
+
 func NewThreadEventStoreWithSession(capacity int, session ThreadSessionState, turns []appserver.Turn) *ThreadEventStore {
 	store := NewThreadEventStore(capacity)
 	store.SetSession(session, turns)
@@ -327,6 +444,20 @@ func cloneServerEventForRouting(event *ServerEvent) *ServerEvent {
 			item.Raw = append([]byte(nil), event.Item.Raw...)
 		}
 		cloned.Item = &item
+	}
+	if event.Turn != nil {
+		turn := *event.Turn
+		if event.Turn.Items != nil {
+			turn.Items = make([]appserver.ThreadItem, len(event.Turn.Items))
+			for i := range event.Turn.Items {
+				turn.Items[i] = cloneAppThreadItem(&event.Turn.Items[i])
+			}
+		}
+		if event.Turn.Error != nil {
+			clonedError := *event.Turn.Error
+			turn.Error = &clonedError
+		}
+		cloned.Turn = &turn
 	}
 	return &cloned
 }

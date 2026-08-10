@@ -109,9 +109,13 @@ func Evaluate(policy Policy, activeContextTokens int) TokenStatus {
 		status.TokensUntilCompaction = nil
 		return status
 	}
-	baseRemaining := limit - scopeTokens
-	if baseRemaining < 0 {
-		baseRemaining = 0
+	// Mirrors Rust Session::context_window_token_status: the base window
+	// remaining is the minimum of the auto-compact scope remaining and the
+	// full context window remaining, whichever is tighter. Callers use it for
+	// the token-budget reminder and auto-compact fallback prompt.
+	baseRemaining := max(0, limit-scopeTokens)
+	if policy.WindowTokens > 0 {
+		baseRemaining = min(baseRemaining, max(0, policy.WindowTokens-activeContextTokens))
 	}
 	status.BaseWindowTokensRemaining = &baseRemaining
 	bufferedLimit := limit + max(0, policy.FallbackBufferTokens)
@@ -616,6 +620,53 @@ func EstimateTokens(items []Item) int {
 		total += EstimateItemTokens(&items[i])
 	}
 	return total
+}
+
+// IsModelGeneratedItem mirrors Rust history::is_model_generated_item. It
+// reports whether the item was produced by the model rather than injected
+// locally (for example a persisted user prompt from an interrupted turn).
+func IsModelGeneratedItem(item *Item) bool {
+	if item == nil {
+		return false
+	}
+	if item.Role == "assistant" {
+		return true
+	}
+	switch item.Type {
+	case "reasoning", "function_call", "tool_search_call", "web_search_call",
+		"image_generation_call", "custom_tool_call", "local_shell_call",
+		"compaction", "context_compaction":
+		return true
+	}
+	return false
+}
+
+// ItemsAfterLastModelGeneratedItem mirrors Rust
+// history::items_after_last_model_generated_item: the local items recorded
+// after the most recent model-generated item. These are not reflected in the
+// last server-reported token usage and must be added back when estimating the
+// active context.
+func ItemsAfterLastModelGeneratedItem(items []Item) []Item {
+	last := -1
+	for i := range items {
+		if IsModelGeneratedItem(&items[i]) {
+			last = i
+		}
+	}
+	if last < 0 || last+1 >= len(items) {
+		return nil
+	}
+	return append([]Item(nil), items[last+1:]...)
+}
+
+// EstimateActiveContextTokens mirrors Rust Session::get_total_token_usage:
+// the last server-reported total plus an estimate of any local items recorded
+// after the most recent model-generated item.
+func EstimateActiveContextTokens(items []Item, lastTotalTokens int) int {
+	if lastTotalTokens < 0 {
+		lastTotalTokens = 0
+	}
+	return lastTotalTokens + EstimateTokens(ItemsAfterLastModelGeneratedItem(items))
 }
 
 func EstimateTextTokens(text string) int {

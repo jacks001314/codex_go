@@ -139,6 +139,7 @@ const (
 	MethodConfigValueWrite                       Method = "config/value/write"
 	MethodConfigBatchWrite                       Method = "config/batchWrite"
 	MethodConfigRequirementsRead                 Method = "configRequirements/read"
+	MethodServerDiagnostics                      Method = "server/diagnostics"
 	MethodExternalAgentConfigDetect              Method = "externalAgentConfig/detect"
 	MethodExternalAgentConfigImport              Method = "externalAgentConfig/import"
 	MethodExternalAgentConfigImportHistoryRecord Method = "externalAgentConfig/import/recordHistory"

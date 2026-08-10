@@ -1106,12 +1106,16 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
 	inputItems = append(inputItems, params.AdditionalInputItems...)
+	// Rust 6f647caa9b: async hook results recorded before the user prompt
+	// appear ahead of the new prompt in conversation history.
+	inputItems = append(inputItems, r.asyncHookContextInputItems(threadID)...)
 	if turnStartUsesStructuredUserInput(params) {
 		if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
 			inputItems = append(inputItems, item)
 			agentPrompt = ""
 		}
 	}
+	samplingFollowUp, tokenBudgetDelivery := r.autoCompactFallbackFollowUp(threadID, runConfig)
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Instructions:                 runConfig.Instructions,
@@ -1148,7 +1152,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnWarning: func(message string) {
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
-		SamplingFollowUp:                r.autoCompactFallbackFollowUp(threadID, runConfig),
+		SamplingFollowUp:                samplingFollowUp,
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	if err != nil {
@@ -1245,7 +1249,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			TokenUsage: *usage,
 		})
 		if statusErr == nil && status != nil {
-			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status)
+			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status, tokenBudgetDelivery)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
 			if !fallbackRecorded && fallbackErr == nil && status.ShouldCompact {
 				_, _ = r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status)
@@ -1279,8 +1283,8 @@ func (r *RuntimeRouter) notifyCompactionActivity(threadID string, active bool) {
 	r.notify(NotificationWarning, &WarningNotification{Message: message, ThreadID: stringPtrIfNotEmpty(threadID)})
 }
 
-func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnID string, result *turn.AgentLoopResult, status *compact.TokenStatus) error {
-	if r == nil || result == nil || result.SamplingFollowUps == 0 || status == nil {
+func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnID string, result *turn.AgentLoopResult, status *compact.TokenStatus, delivery *tokenBudgetDeliveryState) error {
+	if r == nil || result == nil || result.SamplingFollowUps == 0 || status == nil || delivery == nil {
 		return nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
@@ -1288,15 +1292,22 @@ func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnI
 		return err
 	}
 	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
-	extra["auto_compact_fallback_delivered"] = true
-	extra["auto_compact_fallback_turn_id"] = strings.TrimSpace(turnID)
-	extra["auto_compact_fallback_follow_up_count"] = result.SamplingFollowUps
-	extra["auto_compact_fallback_active_context_tokens"] = status.ActiveContextTokens
-	outcome := "reserve_remaining"
-	if status.ShouldCompact {
-		outcome = "reserve_exhausted"
+	if delivery.reminderDelivered {
+		extra["token_budget_reminder_delivered"] = true
+		extra["token_budget_reminder_turn_id"] = strings.TrimSpace(turnID)
+		extra["token_budget_reminder_active_context_tokens"] = status.ActiveContextTokens
 	}
-	extra["auto_compact_fallback_outcome"] = outcome
+	if delivery.fallbackDelivered {
+		extra["auto_compact_fallback_delivered"] = true
+		extra["auto_compact_fallback_turn_id"] = strings.TrimSpace(turnID)
+		extra["auto_compact_fallback_follow_up_count"] = result.SamplingFollowUps
+		extra["auto_compact_fallback_active_context_tokens"] = status.ActiveContextTokens
+		outcome := "reserve_remaining"
+		if status.ShouldCompact {
+			outcome = "reserve_exhausted"
+		}
+		extra["auto_compact_fallback_outcome"] = outcome
+	}
 	record.Metadata.Extra = extra
 	if runtimeRecordEphemeral(record) {
 		r.saveEphemeralThreadRecord(record)
@@ -1305,36 +1316,63 @@ func (r *RuntimeRouter) persistAutoCompactFallbackOutcome(threadID string, turnI
 	return r.runtimeSaveThreadRecord(record)
 }
 
-func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *appTurnRunConfig) turn.SamplingFollowUp {
+type tokenBudgetDeliveryState struct {
+	reminderDelivered bool
+	fallbackDelivered bool
+}
+
+// autoCompactFallbackFollowUp mirrors Rust token_budget::maybe_record: the
+// token-budget reminder fires once per window when the base window remaining
+// drops to the reminder threshold, and the auto-compact fallback prompt fires
+// once per window when the base window is exactly exhausted without forcing
+// compaction. Delivery state is shared with persistAutoCompactFallbackOutcome
+// so the persisted per-window markers distinguish the two.
+func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *appTurnRunConfig) (turn.SamplingFollowUp, *tokenBudgetDeliveryState) {
 	if r == nil || runConfig == nil {
-		return nil
+		return nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
-		return nil
+		return nil, nil
 	}
 	extra := cloneAnyMap(record.Metadata.Extra)
 	prompt := strings.TrimSpace(stringFromAny(extra["auto_compact_fallback_prompt"]))
 	buffer := intFromAny(extra["auto_compact_fallback_buffer_tokens"])
 	limit := compactTokenLimitFromMetadata(extra)
-	if prompt == "" || buffer <= 0 || limit <= 0 || boolFromAny(extra["auto_compact_fallback_delivered"]) {
-		return nil
+	reminderThreshold := intFromAny(extra["token_budget_reminder_threshold_tokens"])
+	reminderTemplate := strings.TrimSpace(stringFromAny(extra["token_budget_reminder_message_template"]))
+	fallbackConfigured := prompt != "" && buffer > 0 && limit > 0 && !boolFromAny(extra["auto_compact_fallback_delivered"])
+	reminderConfigured := reminderThreshold > 0 && reminderTemplate != "" && !boolFromAny(extra["token_budget_reminder_delivered"])
+	if !fallbackConfigured && !reminderConfigured {
+		return nil, nil
 	}
-	delivered := false
+	delivery := &tokenBudgetDeliveryState{}
 	return func(ctx *turn.SamplingFollowUpContext) []any {
-		if delivered || ctx == nil {
+		if ctx == nil {
 			return nil
 		}
 		status := compact.Evaluate(compact.Policy{Enabled: true, TokenLimit: limit, FallbackBufferTokens: buffer}, int(model.AgentUsageTotalTokens(ctx.Usage)))
-		if status.ShouldCompact || status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 0 {
+		if status.BaseWindowTokensRemaining == nil {
 			return nil
 		}
-		delivered = true
-		if item := model.DeveloperMessageInputItem(prompt); item != nil {
-			return []any{item}
+		remaining := *status.BaseWindowTokensRemaining
+		var items []any
+		// The reminder fires even when compaction is already due (Rust records
+		// it before the roll-over check).
+		if reminderConfigured && !delivery.reminderDelivered && remaining <= reminderThreshold {
+			if item := model.DeveloperMessageInputItem(strings.ReplaceAll(reminderTemplate, "{n_remaining}", strconv.Itoa(remaining))); item != nil {
+				items = append(items, item)
+				delivery.reminderDelivered = true
+			}
 		}
-		return nil
-	}
+		if fallbackConfigured && !delivery.fallbackDelivered && !status.ShouldCompact && remaining == 0 {
+			if item := model.DeveloperMessageInputItem(prompt); item != nil {
+				items = append(items, item)
+				delivery.fallbackDelivered = true
+			}
+		}
+		return items
+	}, delivery
 }
 
 func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime, connectionID string) {
@@ -1359,10 +1397,12 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		return
 	}
 	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
+	inputItems := append(append([]any(nil), runConfig.InputItems...), params.AdditionalInputItems...)
+	inputItems = append(inputItems, r.asyncHookContextInputItems(threadID)...)
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       promptFromTurnStart(params),
 		Instructions:                 runConfig.Instructions,
-		InputItems:                   append(append([]any(nil), runConfig.InputItems...), params.AdditionalInputItems...),
+		InputItems:                   inputItems,
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
@@ -2524,6 +2564,9 @@ func (r *RuntimeRouter) registerActiveRuntimeTurn(threadID string, turnID string
 		}
 		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
+	if r.diagnosticsGauges != nil {
+		defer r.diagnosticsGauges.track("app.turns.active")()
+	}
 	return r.threads.RegisterTurn(threadID, turnID, cancel, startedAtMS, params)
 }
 
@@ -2635,6 +2678,11 @@ func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
 	}
 	if _, ok := r.threads.ConsumeTurn(threadID, turnID, true); !ok {
 		return
+	}
+	if r.diagnosticsGauges != nil {
+		if v := r.diagnosticsGauges.gauge("app.turns.active"); v.Load() > 0 {
+			v.Add(^uint64(0))
+		}
 	}
 	if r.networkApproval != nil {
 		r.networkApproval.cancelPendingForTurn(threadID, turnID)
@@ -2975,6 +3023,13 @@ func (r *RuntimeRouter) finishTurnInterrupted(threadID string, turnID string, st
 func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext) {
 	if r == nil {
 		return
+	}
+	// Rust 509565820f: interrupting a turn stops active code-mode cells when
+	// the code_mode_interrupt feature is enabled, keeping the session alive.
+	if r.codeModeInterruptEnabledForThread(threadID) {
+		if runtime := r.codeModeRuntimeForThread(threadID); runtime != nil {
+			runtime.InterruptActiveCells()
+		}
 	}
 	now := time.Now().UTC()
 	completedAt := now.Unix()
@@ -4029,6 +4084,14 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 	extra["token_usage_info"] = map[string]any{
 		"total_token_usage": totalMap, "last_token_usage": lastMap, "model_context_window": window,
 	}
+	// BodyAfterPrefix scope: the first server-observed request input in a
+	// window becomes the carried-prefix baseline (mirrors Rust
+	// ensure_server_observed_prefill_from_usage). Estimates written after
+	// compaction are replaced by the next real usage sample.
+	if policy.Scope == compact.ScopeBodyAfterPrefix && !boolFromAny(extra["auto_compact_window_prefill_server_observed"]) && lastUsage.InputTokens > 0 {
+		extra["auto_compact_window_prefill"] = lastUsage.InputTokens
+		extra["auto_compact_window_prefill_server_observed"] = true
+	}
 	info := &TokenUsage{Total: total, Last: tokenUsageBreakdownFromAgentUsage(lastUsage), ModelContextWindow: positiveInt64Ptr(window)}
 	if runtimeRecordEphemeral(record) {
 		record.Metadata.Extra = extra
@@ -4129,15 +4192,28 @@ func (r *RuntimeRouter) compactTokenStatusForTurn(threadID string, modelID strin
 	stored := compactTokenStatusFromMetadata(extra)
 	active := stored.ActiveContextTokens
 	if usage, ok := extra["last_token_usage"].(map[string]any); ok {
-		active = intFromAny(usage["totalTokens"])
+		// Threads may carry usage persisted by the exec runner (snake_case)
+		// or by the runtime (camelCase); accept both like execStoredTokenUsage.
+		active = intFromAny(firstMapValue(usage, "totalTokens", "total_tokens"))
 	}
 	// Resumed threads may predate token usage persistence. Rust derives the
 	// current context from the loaded session, so estimate it from history
 	// instead of treating the resumed context as zero.
 	if active <= 0 {
 		active = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
+	} else {
+		// Rust adds an estimate of any local items recorded after the last
+		// model-generated item (for example a persisted prompt from an
+		// interrupted turn).
+		active = compact.EstimateActiveContextTokens(compactItemsFromSessionItems(record.Items), active)
 	}
-	return compact.Evaluate(r.compactPolicyForTurn(modelID, params, extra), active)
+	policy := r.compactPolicyForTurn(modelID, params, extra)
+	if policy.Scope == compact.ScopeBodyAfterPrefix && policy.PrefillTokens <= 0 {
+		// Rust estimates the carried prefix from the resumed history when no
+		// server-observed baseline exists yet for the current window.
+		policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
+	}
+	return compact.Evaluate(policy, active)
 }
 
 // compactPolicyForTurn mirrors Rust ModelInfo::auto_compact_token_limit and
@@ -4171,6 +4247,9 @@ func (r *RuntimeRouter) compactPolicyForTurn(modelID string, params *turn.TurnSt
 		}
 		if stringConfigValue(cfg, "model_auto_compact_token_limit_scope") == string(AutoCompactTokenLimitScopeBodyAfterPrefix) {
 			policy.Scope = compact.ScopeBodyAfterPrefix
+			if prefill := intFromAny(extra["auto_compact_window_prefill"]); prefill > 0 {
+				policy.PrefillTokens = prefill
+			}
 		}
 	}
 	return policy
@@ -4354,6 +4433,20 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	extra["compaction_trigger"] = string(request.Trigger)
 	extra["compaction_phase"] = string(request.Phase)
 	extra["compaction_status"] = string(compacted.Status)
+	// BodyAfterPrefix scope: Rust recompute_token_usage re-estimates the
+	// carried prefix from the compacted history after the window advances, but
+	// set_estimated_prefill is a no-op for a server-observed baseline. Retain
+	// the observed value; only replace estimated baselines with the compacted
+	// estimate.
+	if _, ok := extra["auto_compact_window_prefill"]; ok && !boolFromAny(extra["auto_compact_window_prefill_server_observed"]) {
+		extra["auto_compact_window_prefill"] = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
+		extra["auto_compact_window_prefill_server_observed"] = false
+	}
+	// Rust AutoCompactWindow::advance re-arms the token-budget deliveries for
+	// the new window; clear the persisted markers so a later window can deliver
+	// the reminder and fallback prompt again.
+	extra["auto_compact_fallback_delivered"] = false
+	extra["token_budget_reminder_delivered"] = false
 	// A successful pre-turn compaction satisfies the full-context requirement.
 	if request.Phase == compact.PhasePreTurn {
 		status := compactTokenStatusFromMetadata(extra)
@@ -4387,6 +4480,10 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	_ = r.appendRuntimeCompacted(request.ThreadID, compacted.Summary, record.Items, now)
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
 	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
+	// Rust c2bcb9a26b: restart Guardian review sessions after parent history
+	// rewrites, seeding them with the latest reusable compaction when the
+	// guardian_reuse_parent_compaction feature is enabled.
+	r.resetGuardianAfterParentCompaction(request.ThreadID, compacted)
 	return &ContextCompactedNotification{
 		ThreadID:    request.ThreadID,
 		TurnID:      request.TurnID,

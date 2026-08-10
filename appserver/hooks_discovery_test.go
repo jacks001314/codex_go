@@ -385,10 +385,10 @@ func TestHookDiscoveryWarningsForUnsupportedHandlers(t *testing.T) {
 		t.Fatalf("Discover() = %+v", response)
 	}
 	entry := response.Data[0]
-	if len(entry.Hooks) != 0 {
-		t.Fatalf("hooks = %+v, want none", entry.Hooks)
+	if len(entry.Hooks) != 1 || entry.Hooks[0].ExecutionMode != HookExecutionAsync {
+		t.Fatalf("hooks = %+v, want one async hook", entry.Hooks)
 	}
-	for _, want := range []string{"async hook", "empty hook command", "prompt hook", "agent hook", "unsupported hook handler", "unsupported hook event"} {
+	for _, want := range []string{"empty hook command", "prompt hook", "agent hook", "unsupported hook handler", "unsupported hook event"} {
 		if !warningsContain(entry.Warnings, want) {
 			t.Fatalf("warnings = %+v, want substring %q", entry.Warnings, want)
 		}

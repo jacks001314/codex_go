@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/compact"
+	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/state"
@@ -36,6 +38,7 @@ type guardianSessionRunner struct {
 	mu       sync.Mutex
 	agent    model.AgentRunner
 	previous string
+	seeded   string
 }
 
 type guardianPrewarmer interface {
@@ -77,7 +80,18 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 	defer r.mu.Unlock()
 	clone := *request
 	clone.ClientMetadata = cloneStringMap(request.ClientMetadata)
-	clone.PreviousResponseID = r.previous
+	if strings.TrimSpace(request.PreviousResponseID) != "" && strings.TrimSpace(r.seeded) != "" {
+		clone.PreviousResponseID = strings.TrimSpace(r.seeded)
+		r.previous = strings.TrimSpace(r.seeded)
+		r.seeded = ""
+	} else if strings.TrimSpace(request.PreviousResponseID) != "" {
+		// A caller-provided seed (e.g. from SeedForReview after a compaction
+		// reset) takes precedence until the session produces its own response.
+		clone.PreviousResponseID = strings.TrimSpace(request.PreviousResponseID)
+		r.previous = strings.TrimSpace(request.PreviousResponseID)
+	} else {
+		clone.PreviousResponseID = r.previous
+	}
 	clone.Store = false
 	var response *model.AgentResponse
 	var err error
@@ -99,6 +113,35 @@ func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentReq
 		r.previous = strings.TrimSpace(response.ResponseID)
 	}
 	return response, err
+}
+
+// ResetAfterParentCompaction restarts the review session seeded with the
+// latest encrypted parent compaction response ID (Rust c2bcb9a26b
+// guardian_reuse_parent_compaction). An empty responseID keeps the existing
+// reviewer so its authorization and restriction context is preserved.
+func (r *guardianSessionRunner) ResetAfterParentCompaction(responseID string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.TrimSpace(responseID) != "" {
+		r.previous = ""
+		r.seeded = strings.TrimSpace(responseID)
+		return
+	}
+	// No reusable compaction: preserve the current reviewer context.
+}
+
+func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
+	if r == nil || request == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.TrimSpace(r.seeded) != "" {
+		request.PreviousResponseID = strings.TrimSpace(r.seeded)
+	}
 }
 
 func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
@@ -153,7 +196,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			return state.DecisionAborted, "", err
 		}
 	}
-	response, err := r.agent.Run(reviewCtx, &model.AgentRequest{
+	reviewRequest := &model.AgentRequest{
 		Prompt:       prompt,
 		InputItems:   inputItems,
 		Model:        r.modelForTurn(threadID, turnID),
@@ -167,7 +210,11 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			"parent_turn_id":    turnID,
 			"target_item_id":    targetItemID,
 		},
-	})
+	}
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		runner.SeedForReview(reviewRequest)
+	}
+	response, err := r.agent.Run(reviewCtx, reviewRequest)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.DeadlineExceeded) {
 			completed, finishErr := store.Timeout(event.ID)
@@ -512,4 +559,38 @@ func optionalStringPointer(value string) *string {
 	}
 	copy := value
 	return &copy
+}
+
+// resetGuardianAfterParentCompaction restarts the thread's Guardian review
+// session after a parent history rewrite when guardian_reuse_parent_compaction
+// is enabled (Rust c2bcb9a26b). The latest reusable compaction response ID
+// seeds the new session; an absent compaction keeps the existing reviewer.
+func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, compacted *compact.Result) {
+	if r == nil || r.services.GuardianReviewer == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	params := &turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}
+	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false); err == nil && record != nil {
+		params.CWD = record.Metadata.CWD
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return
+	}
+	if !features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction") {
+		return
+	}
+	runner, ok := r.services.GuardianReviewer.(*modelGuardianReviewer)
+	if !ok {
+		return
+	}
+	sessionRunner, ok := runner.agent.(*guardianSessionRunner)
+	if !ok {
+		return
+	}
+	responseID := ""
+	if compacted != nil && strings.TrimSpace(compacted.ResponseID) != "" {
+		responseID = strings.TrimSpace(compacted.ResponseID)
+	}
+	sessionRunner.ResetAfterParentCompaction(responseID)
 }

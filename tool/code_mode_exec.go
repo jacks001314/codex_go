@@ -230,6 +230,40 @@ func (r *CodeModeRuntime) Close() error {
 	return r.closeErr
 }
 
+// InterruptActiveCells terminates all active and background code-mode cells
+// while keeping the reusable session alive (Rust 509565820f). Active local
+// cells are cancelled; remote cells are terminated through the host session.
+func (r *CodeModeRuntime) InterruptActiveCells() {
+	if r == nil || r.exec == nil {
+		return
+	}
+	e := r.exec
+	cellIDs := make([]string, 0)
+	e.cellsMu.Lock()
+	for id, cell := range e.cells {
+		if cell != nil {
+			cellIDs = append(cellIDs, id)
+			if cell.cancel != nil {
+				cell.cancel()
+			}
+			cell.terminated = true
+		}
+	}
+	e.cellsMu.Unlock()
+	e.remoteCellsMu.RLock()
+	remoteIDs := make([]string, 0, len(e.remoteCells))
+	for id := range e.remoteCells {
+		remoteIDs = append(remoteIDs, id)
+	}
+	e.remoteCellsMu.RUnlock()
+	cellIDs = append(cellIDs, remoteIDs...)
+	if e.remote != nil {
+		for _, cellID := range cellIDs {
+			_, _ = e.remote.Terminate(context.Background(), cellID)
+		}
+	}
+}
+
 func (e *codeModeExecExecutor) bind(registry *Registry, nestedCommandTool ToolName) {
 	e.bindingMu.Lock()
 	e.registry = registry

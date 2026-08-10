@@ -32,6 +32,7 @@ type ServerEvent struct {
 	ItemID     string
 	ItemKind   string
 	Item       *appserver.ThreadItem
+	Turn       *appserver.Turn
 	RequestID  string
 	ServerName string
 }

@@ -42,6 +42,51 @@ func TestEvaluatePolicyReservesFallbackBuffer(t *testing.T) {
 	}
 }
 
+func TestEvaluateBaseWindowRemainingUsesTighterLimitLikeRust(t *testing.T) {
+	// Rust context_window_token_status reports the minimum of the auto-compact
+	// scope remaining and the full context window remaining.
+	status := Evaluate(Policy{Enabled: true, TokenLimit: 200, WindowTokens: 150}, 120)
+	if status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 30 {
+		t.Fatalf("window remaining should win: %+v", status)
+	}
+	status = Evaluate(Policy{Enabled: true, TokenLimit: 130, WindowTokens: 500}, 120)
+	if status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 10 {
+		t.Fatalf("scope remaining should win: %+v", status)
+	}
+	status = Evaluate(Policy{Enabled: true, TokenLimit: 130, WindowTokens: 500}, 520)
+	if status.BaseWindowTokensRemaining == nil || *status.BaseWindowTokensRemaining != 0 || !status.ShouldCompact || status.Reason != ReasonContextWindowExceeded {
+		t.Fatalf("window overflow status = %+v", status)
+	}
+}
+
+func TestEstimateActiveContextTokensIncludesItemsAfterLastModelItem(t *testing.T) {
+	items := []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "first question"},
+		{ID: "a1", Type: "message", Role: "assistant", Text: "an answer"},
+		{ID: "u2", Type: "message", Role: "user", Text: "trailing prompt from an interrupted turn"},
+	}
+	if !IsModelGeneratedItem(&items[1]) {
+		t.Fatalf("assistant message should be model generated")
+	}
+	if IsModelGeneratedItem(&items[0]) || IsModelGeneratedItem(&items[2]) {
+		t.Fatalf("user messages should not be model generated")
+	}
+	after := ItemsAfterLastModelGeneratedItem(items)
+	if len(after) != 1 || after[0].ID != "u2" {
+		t.Fatalf("items after last model item = %+v", after)
+	}
+	active := EstimateActiveContextTokens(items, 500)
+	if active <= 500 {
+		t.Fatalf("active context tokens = %d, want > 500", active)
+	}
+	if got := EstimateActiveContextTokens(items, 0); got != EstimateTokens(after) {
+		t.Fatalf("estimate without stored usage = %d, want %d", got, EstimateTokens(after))
+	}
+	if got := ItemsAfterLastModelGeneratedItem(nil); len(got) != 0 {
+		t.Fatalf("nil items after = %+v", got)
+	}
+}
+
 func TestWindowLifecycle(t *testing.T) {
 	window := NewWindowWithIDs(WindowIDs{FirstWindowID: "first", WindowID: "current"})
 	next := "next"
