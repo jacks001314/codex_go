@@ -23,7 +23,7 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string
 	if strings.TrimSpace(cwd) == "" {
 		cwd = "."
 	}
-	result, err := Apply(patch, &ApplyOptions{CWD: cwd})
+	result, err := Apply(patch, &ApplyOptions{CWD: cwd, FileUpdateMode: FileUpdateModeFromEnv()})
 	if err != nil {
 		writeCLIError(stderr, err)
 		return 1

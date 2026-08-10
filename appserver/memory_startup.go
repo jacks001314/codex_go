@@ -35,6 +35,7 @@ type appServerMemoryStageOne struct {
 	originator       string
 	reasoningSummary string
 	serviceTier      string
+	parentProfile    *sandbox.PermissionProfile
 }
 
 func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request memories.StageOneExtractionRequest) (memories.StageOneExtractionResponse, error) {
@@ -86,6 +87,7 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 	if root, workspace, ok := detachedMemoryWorkspace(ctx, e.parentCWD); ok {
 		metadata.Workspaces[root] = workspace
 	}
+	metadata.SandboxMode = permissionProfilePolicyTagFromProfile(e.parentProfile, e.parentCWD)
 	return metadata.ClientMetadata()
 }
 
@@ -267,6 +269,7 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 			router: r, parentThreadID: response.Thread.ID, parentCWD: record.Metadata.CWD,
 			providerID: providerID, originator: record.Metadata.Originator,
 			reasoningSummary: reasoningSummary, serviceTier: serviceTier,
+			parentProfile: parentProfile,
 		},
 		PhaseTwo: &appServerMemoryConsolidator{
 			router: r, providerID: providerID, originator: record.Metadata.Originator,

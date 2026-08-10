@@ -2,8 +2,14 @@
 
 package mcp
 
-import "os/exec"
+import (
+	"os/exec"
+
+	"codex_go/envutil"
+)
 
 func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
-	return exec.Command(command, args...)
+	cmd := exec.Command(command, args...)
+	envutil.ScrubCommandEnv(cmd)
+	return cmd
 }

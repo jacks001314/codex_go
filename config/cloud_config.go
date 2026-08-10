@@ -309,6 +309,23 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	if overlay.BrowserUse != nil {
 		out.BrowserUse = cloneBrowserUse(overlay.BrowserUse)
 	}
+	if overlay.AutoReview != nil {
+		// Rust 208f05b233: `auto_review.required_on_models` unions model slugs
+		// across requirement layers so protected models stay protected even
+		// when a lower layer omits the setting. `ignore_rules` follows the
+		// first-wins layer semantics for the app-server protocol exposure.
+		if out.AutoReview == nil {
+			out.AutoReview = cloneAutoReview(overlay.AutoReview)
+		} else {
+			out.AutoReview.RequiredOnModels = stringUnion(
+				out.AutoReview.RequiredOnModels,
+				overlay.AutoReview.RequiredOnModels,
+			)
+			if len(out.AutoReview.IgnoreRules) == 0 {
+				out.AutoReview.IgnoreRules = append([]string(nil), overlay.AutoReview.IgnoreRules...)
+			}
+		}
+	}
 	if overlay.FeatureRequirements != nil {
 		out.FeatureRequirements = cloneBoolMap(overlay.FeatureRequirements)
 	}
@@ -329,6 +346,25 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	}
 	if overlay.Plugins != nil {
 		out.Plugins = clonePluginRequirements(overlay.Plugins)
+	}
+	return out
+}
+
+func stringUnion(values ...[]string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, slice := range values {
+		for _, value := range slice {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

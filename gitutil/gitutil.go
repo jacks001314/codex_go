@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"codex_go/envutil"
 )
 
 const defaultGitTimeout = 5 * time.Second
@@ -32,6 +34,9 @@ func RunWithTimeout(ctx context.Context, timeout time.Duration, cwd string, args
 		cmd.Stdin = nil
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
+		// Rust c4513cb982: git helper processes must not inherit Codex launch
+		// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
+		envutil.ScrubCommandEnv(cmd)
 		return cmd
 	}
 	tree, err := startGitTree(newCommand(), newCommand)

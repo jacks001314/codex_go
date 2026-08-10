@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/envutil"
 )
 
 type ProcessService struct {
@@ -39,6 +41,9 @@ type managedProcess struct {
 
 type ProcessSpawnOptions struct {
 	ConnectionID string
+	// ApplyPatchPreserveLineEndings carries the apply_patch line-ending
+	// rollout state (Rust c9c6c0daa9) into spawned process children.
+	ApplyPatchPreserveLineEndings bool
 }
 
 type processSessionKey struct {
@@ -83,7 +88,14 @@ func (s *ProcessService) SpawnWithOptions(ctx context.Context, params *ProcessSp
 	execCtx, cancel := s.contextForProcess(ctx, params)
 	cmd := osexec.CommandContext(execCtx, params.Command[0], params.Command[1:]...)
 	cmd.Dir = params.CWD
-	cmd.Env = commandExecEnv(os.Environ(), params.Env)
+	envMap := commandExecEnvMap(os.Environ(), params.Env)
+	// Rust c4513cb982: model-reachable exec children must not inherit Codex
+	// launch context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
+	envutil.ScrubMap(envMap)
+	// Rust c9c6c0daa9: carry the apply_patch line-ending rollout state into
+	// spawned process children, authoritative over client-provided values.
+	envMap = envutil.InjectApplyPatchEnv(envMap, applyPatchProcessPreserveLineEndings(options))
+	cmd.Env = commandExecEnvList(envMap)
 
 	stdout := newCommandExecOutputBuffer(s.outputBytesCap(params))
 	stderr := newCommandExecOutputBuffer(s.outputBytesCap(params))
@@ -136,6 +148,10 @@ func (s *ProcessService) SpawnWithOptions(ctx context.Context, params *ProcessSp
 
 	go s.waitProcess(execCtx, process, notify)
 	return &ProcessSpawnResponse{}, nil
+}
+
+func applyPatchProcessPreserveLineEndings(options *ProcessSpawnOptions) bool {
+	return options != nil && options.ApplyPatchPreserveLineEndings
 }
 
 func normalizeProcessConnectionID(options *ProcessSpawnOptions) string {

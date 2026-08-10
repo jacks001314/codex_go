@@ -1,6 +1,8 @@
 package appserver
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,26 @@ import (
 	"codex_go/config"
 	"codex_go/session"
 )
+
+func TestSessionImportIOCategorySubtypeLikeRust(t *testing.T) {
+	// Rust 50ef7395fa: session config import failures append a stable
+	// std::io::ErrorKind-style category (not_found, permission_denied, ...).
+	if got := sessionImportIOCategorySubtype("session_parse_failed", &fs.PathError{Err: fs.ErrNotExist}); got != "session_parse_failed_not_found" {
+		t.Fatalf("not_found subtype = %q", got)
+	}
+	if got := sessionImportIOCategorySubtype("session_parse_failed", &fs.PathError{Err: fs.ErrPermission}); got != "session_parse_failed_permission_denied" {
+		t.Fatalf("permission_denied subtype = %q", got)
+	}
+	if got := sessionImportIOCategorySubtype("session_parse_failed", &os.PathError{Err: os.ErrPermission}); got != "session_parse_failed_permission_denied" {
+		t.Fatalf("os.PathError permission subtype = %q", got)
+	}
+	if got := sessionImportIOCategorySubtype("session_parse_failed", errors.New("invalid json")); got != "session_parse_failed" {
+		t.Fatalf("format error should keep base subtype = %q", got)
+	}
+	if got := sessionImportIOCategorySubtype("session_parse_failed", nil); got != "session_parse_failed" {
+		t.Fatalf("nil error subtype = %q", got)
+	}
+}
 
 func TestExternalAgentSessionImportPersistsSourceChronology(t *testing.T) {
 	home := t.TempDir()

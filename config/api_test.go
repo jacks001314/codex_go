@@ -936,3 +936,24 @@ func writeConfig(t *testing.T, home string, body string) {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
 }
+
+func TestAutoReviewRequiredForModelMatchesExactProviderAliasesLikeRust(t *testing.T) {
+	requirements := &ConfigRequirements{
+		AutoReview: &AutoReviewRequirements{
+			RequiredOnModels: []string{"managed-model", "cyber-model"},
+		},
+	}
+	for _, model := range []string{"managed-model", "cyber-model", "openai/managed-model", "org-name/managed-model"} {
+		if !requirements.AutoReviewRequiredForModel(model) {
+			t.Fatalf("AutoReviewRequiredForModel(%q) = false, want true", model)
+		}
+	}
+	for _, model := range []string{"other-model", "managed-model/extra", "openai", "", "ns/managed-model/x", "bad ns/managed-model"} {
+		if requirements.AutoReviewRequiredForModel(model) {
+			t.Fatalf("AutoReviewRequiredForModel(%q) = true, want false", model)
+		}
+	}
+	if (&ConfigRequirements{}).AutoReviewRequiredForModel("managed-model") {
+		t.Fatalf("empty requirements should not require auto review")
+	}
+}

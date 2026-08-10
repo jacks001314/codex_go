@@ -103,6 +103,7 @@ type ClientMetadata struct {
 	SubagentKind        string
 	ThreadSource        string
 	Sandbox             string
+	SandboxMode         string
 	Workspaces          map[string]ClientWorkspaceMetadata
 	TurnStartedAtUnixMS int64
 	Extra               map[string]string
@@ -164,6 +165,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.Sandbox != "" {
 		value["sandbox"] = m.Sandbox
+	}
+	if m.SandboxMode != "" {
+		value["sandbox_mode"] = m.SandboxMode
 	}
 	if len(m.Workspaces) > 0 {
 		value["workspaces"] = m.Workspaces
@@ -269,7 +273,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id",
-		"subagent_kind", "thread_source", "sandbox", "workspaces",
+		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
 		CodeModeToolNamesKey,
 	}
 	out := make(map[string]bool, len(keys))

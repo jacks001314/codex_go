@@ -44,6 +44,9 @@ var Registry = []Spec{
 	{Key: "code_mode", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_buffered_exec", Stage: StageRemoved},
 	{Key: "code_mode_host", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs 509565820f): terminate active code-mode
+	// cells when their turn is interrupted.
+	{Key: "code_mode_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_only", Stage: StageUnderDevelopment},
 	{Key: "js_repl_tools_only", Stage: StageRemoved},
 	{Key: "terminal_resize_reflow", Stage: StageRemoved, DefaultEnabled: true},
@@ -67,6 +70,9 @@ var Registry = []Spec{
 	{Key: "chronicle", Stage: StageUnderDevelopment},
 	{Key: "apply_patch_freeform", Stage: StageRemoved},
 	{Key: "apply_patch_streaming_events", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs c9c6c0daa9): preserve CRLF, CR, and
+	// mixed line endings when apply_patch updates files.
+	{Key: "apply_patch_preserve_line_endings", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "exec_permission_approvals", Stage: StageUnderDevelopment},
 	{Key: "hooks", Stage: StageStable, DefaultEnabled: true},
 	{Key: "request_permissions_tool", Stage: StageUnderDevelopment},
@@ -127,6 +133,9 @@ var Registry = []Spec{
 	{Key: "default_mode_request_user_input", Stage: StageUnderDevelopment},
 	{Key: "terminal_visualization_instructions", Stage: StageUnderDevelopment},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
+	// compaction when restarting Guardian review sessions.
+	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},

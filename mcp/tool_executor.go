@@ -146,6 +146,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		ThreadID:   e.threadID,
 		TurnID:     e.turnID,
 		ItemID:     invocation.CallID,
+		CallID:     invocation.CallID,
 		Meta:       meta,
 	}
 	var response *MCPToolCallResponse

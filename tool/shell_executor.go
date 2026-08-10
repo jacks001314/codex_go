@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
@@ -36,6 +37,10 @@ type ShellExecutorOptions struct {
 	UnifiedExecTurnID       string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
 	ManagedNetworkResolver  ManagedNetworkResolver
+	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
+	// (c9c6c0daa9): carry the rollout state into shell child processes so
+	// arg0-dispatched apply_patch preserves CRLF/CR line endings.
+	PreserveLineEndings bool
 }
 
 type ShellExecutor struct {
@@ -51,6 +56,7 @@ type ShellExecutor struct {
 	unifiedExecTurnID       string
 	unifiedExecEnvironments []UnifiedExecEnvironment
 	managedNetworkResolver  ManagedNetworkResolver
+	preserveLineEndings     bool
 }
 
 type ShellApprovalDecision struct {
@@ -106,6 +112,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.unifiedExecTurnID = options.UnifiedExecTurnID
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
+	executor.preserveLineEndings = options.PreserveLineEndings
 	return executor
 }
 
@@ -435,6 +442,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if invocationPermissionPreapproved(invocation) {
 		validation.PermissionsPreapproved = true
 	}
+	// Rust c9c6c0daa9: the active feature configuration is authoritative over
+	// inherited, shell snapshot, and client-provided environment values.
+	validation.Env = envutil.InjectApplyPatchEnv(validation.Env, e.preserveLineEndings)
 	req, err := BuildShellRequest(args, sessionShell, validation)
 	if err != nil {
 		return nil, RespondToModel(err.Error())

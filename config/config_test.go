@@ -133,12 +133,12 @@ func TestCodeModeHostConfigSupportsFallbackPolicy(t *testing.T) {
 func TestCodeModeAndToolRegistryNestedConfig(t *testing.T) {
 	cfg := &Config{Values: map[string]any{"features": map[string]any{
 		"code_mode":     map[string]any{"enabled": true, "default_exec_yield_time_ms": int64(1250)},
-		"tool_registry": map[string]any{"include_tool_metadata": true},
+		"tool_registry": map[string]any{"turn_metadata_includes_tool_info": true},
 	}}}
 	if got := cfg.CodeModeDefaultExecYieldTime(); got != 1250*time.Millisecond {
 		t.Fatalf("code-mode default yield = %s", got)
 	}
-	if !cfg.ToolRegistryIncludeToolMetadata() {
+	if !cfg.ToolRegistryTurnMetadataIncludesToolInfo() {
 		t.Fatal("tool registry metadata flag was not enabled")
 	}
 	if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {

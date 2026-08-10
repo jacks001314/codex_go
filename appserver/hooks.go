@@ -177,6 +177,7 @@ type HookMetadata struct {
 	Key           string            `json:"key"`
 	EventName     HookEventName     `json:"eventName"`
 	HandlerType   HookHandlerType   `json:"handlerType"`
+	ExecutionMode HookExecutionMode `json:"executionMode"`
 	Matcher       *string           `json:"matcher"`
 	Command       *string           `json:"command"`
 	TimeoutSec    int64             `json:"timeoutSec"`
@@ -296,6 +297,11 @@ func (r *HookRegistry) SetClock(clock func() time.Time) {
 func (r *HookRegistry) Add(cwd string, metadata HookMetadata) error {
 	if err := metadata.Validate(); err != nil {
 		return err
+	}
+	if metadata.ExecutionMode == "" {
+		// Rust 3aae5d885b: hooks/list reports executionMode with "sync" as the
+		// default for compatibility.
+		metadata.ExecutionMode = HookExecutionSync
 	}
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {

@@ -270,6 +270,7 @@ type MetadataState struct {
 	ThreadSource                 string
 	TurnID                       string
 	Sandbox                      string
+	SandboxMode                  string
 	Workspaces                   map[string]WorkspaceMetadata
 	TurnStartedAtUnixMS          int64
 	Extra                        map[string]string
@@ -358,6 +359,9 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 	if m.Sandbox != "" {
 		value["sandbox"] = m.Sandbox
 	}
+	if m.SandboxMode != "" {
+		value["sandbox_mode"] = m.SandboxMode
+	}
 	if m.TurnStartedAtUnixMS != 0 {
 		value["turn_started_at_unix_ms"] = m.TurnStartedAtUnixMS
 	}
@@ -387,6 +391,7 @@ type ResponsesClientMetadataOptions struct {
 	SubagentKind       string
 	ThreadSource       string
 	Sandbox            string
+	SandboxMode        string
 	Extra              map[string]string
 	StartedAtMS        int64
 	UseResponsesLite   bool
@@ -423,6 +428,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.SubagentKind = strings.TrimSpace(options.SubagentKind)
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
+	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	clientMetadata := metadata.ClientMetadata()

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/shell"
@@ -319,14 +320,18 @@ type InitializeResponse struct {
 }
 
 type EnvironmentInfo struct {
-	Shell        ShellInfo               `json:"shell"`
-	CWD          *string                 `json:"cwd"`
-	Capabilities EnvironmentCapabilities `json:"capabilities"`
+	Shell                ShellInfo               `json:"shell"`
+	CWD                  *string                 `json:"cwd"`
+	TemporaryDirectories []string                `json:"temporaryDirectories,omitempty"`
+	Capabilities         EnvironmentCapabilities `json:"capabilities"`
 }
 
 type EnvironmentCapabilities struct {
 	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
 	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
+	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
+	// defaults to false when deserializing legacy executor responses.
+	EnvironmentConfigRead bool `json:"environmentConfigRead"`
 }
 
 type EnvironmentStatus struct {
@@ -3087,7 +3092,9 @@ func hasJSONValue(raw json.RawMessage) bool {
 func localEnvironmentInfo() *EnvironmentInfo {
 	detected := shell.UltimateFallbackShell()
 	cwd := ""
+	var cwdPath string
 	if current, err := os.Getwd(); err == nil {
+		cwdPath = current
 		if uri, err := utils.FromHostNativePath(current); err == nil {
 			cwd = uri.String()
 		} else {
@@ -3095,10 +3102,57 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		}
 	}
 	return &EnvironmentInfo{
-		Shell:        ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
-		CWD:          stringPtr(cwd),
-		Capabilities: EnvironmentCapabilities{NetworkProxyLaunch: true, CapabilityDiscoverySandbox: true},
+		Shell:                ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
+		CWD:                  stringPtr(cwd),
+		TemporaryDirectories: localTemporaryDirectories(cwdPath),
+		Capabilities: EnvironmentCapabilities{
+			NetworkProxyLaunch:         true,
+			CapabilityDiscoverySandbox: true,
+			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
+			EnvironmentConfigRead: true,
+		},
 	}
+}
+
+// localTemporaryDirectories mirrors Rust 92fb33b758: executor-local default
+// directories for resolving `:tmpdir`, populated from TMPDIR on Unix and
+// TEMP/TMP on Windows, deduplicated as file URIs.
+func localTemporaryDirectories(cwd string) []string {
+	names := []string{"TMPDIR"}
+	if runtime.GOOS == "windows" {
+		names = []string{"TEMP", "TMP"}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range names {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			continue
+		}
+		path := value
+		if runtime.GOOS != "windows" && !filepath.IsAbs(path) {
+			if cwd == "" {
+				continue
+			}
+			path = filepath.Join(cwd, path)
+		} else if runtime.GOOS == "windows" && !filepath.IsAbs(path) {
+			continue
+		}
+		uri, err := utils.FromHostNativePath(path)
+		if err != nil {
+			continue
+		}
+		encoded := uri.String()
+		if seen[encoded] {
+			continue
+		}
+		seen[encoded] = true
+		out = append(out, encoded)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func envPairs(env map[string]string) []string {
@@ -3131,6 +3185,9 @@ func childEnv(params *ExecParams) map[string]string {
 			env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
 		}
 	}
+	// Rust c4513cb982: model-reachable child processes must not inherit Codex
+	// launch context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
+	envutil.ScrubMap(env)
 	return env
 }
 

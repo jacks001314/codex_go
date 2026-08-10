@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"codex_go/envutil"
 	"codex_go/filesearch"
 )
 
@@ -513,6 +514,7 @@ func gitRemoteCandidates(cwd string, remote string, upstream string) []string {
 func gitOutput(cwd string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
+	envutil.ScrubCommandEnv(cmd)
 	stdout, stderr, err := runCommandCaptured(cmd)
 	if err != nil {
 		message := strings.TrimSpace(stderr)

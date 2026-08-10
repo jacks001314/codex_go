@@ -8856,7 +8856,13 @@ func (r *RuntimeRouter) handleProcessSpawn(request *Request) (*ProcessSpawnRespo
 	if err := r.ensureLocalEnvironment(); err != nil {
 		return nil, err
 	}
-	return r.requireProcesses().SpawnWithOptions(nil, &params, r.notify, &ProcessSpawnOptions{ConnectionID: request.normalizedConnectionID()})
+	processOptions := &ProcessSpawnOptions{ConnectionID: request.normalizedConnectionID()}
+	if r != nil && r.services.Config != nil {
+		// Rust c9c6c0daa9: the active feature configuration is authoritative over
+		// client-provided environment values.
+		processOptions.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
+	}
+	return r.requireProcesses().SpawnWithOptions(nil, &params, r.notify, processOptions)
 }
 
 func (r *RuntimeRouter) handleProcessWriteStdin(request *Request) (*ProcessWriteStdinResponse, error) {
@@ -8883,6 +8889,18 @@ func (r *RuntimeRouter) handleProcessResizePty(request *Request) (*ProcessResize
 	return r.requireProcesses().ResizeWithConnection(request.normalizedConnectionID(), &params)
 }
 
+func (r *RuntimeRouter) applyPatchPreserveLineEndingsFromConfig() bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return false
+	}
+	cfg := &config.Config{Values: read.Config}
+	return features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings")
+}
+
 func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecResponse, error) {
 	var params CommandExecParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -8894,6 +8912,9 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 	options := &CommandExecOptions{ConnectionID: request.normalizedConnectionID()}
 	if r != nil && r.services.Config != nil {
 		options.PermissionProfileResolver = r.commandExecPermissionProfileResolver()
+		// Rust c9c6c0daa9: the active feature configuration is authoritative over
+		// client-provided environment values.
+		options.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
 	}
 	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, options)
 }
@@ -9848,6 +9869,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.ApplyPatch.PermissionProfile = permissionProfile.Profile
 		options.ApplyPatch.SandboxPolicy = nil
 	}
+	if cfg != nil {
+		// Rust c9c6c0daa9: apply_patch_preserve_line_endings controls the
+		// in-process tool mode and the rollout env var for child processes.
+		preserveLineEndings := features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings")
+		if options.ApplyPatch != nil {
+			options.ApplyPatch.PreserveLineEndings = preserveLineEndings
+		}
+		if options.Shell != nil {
+			options.Shell.PreserveLineEndings = preserveLineEndings
+		}
+	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	if options.Shell != nil {
 		if managedNetwork != nil {
@@ -9908,7 +9940,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.Validation.PermissionsPreapproved = true
 		}
 		if r.serverRequestSinkConfigured() {
-			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID))
+			modelID := strings.TrimSpace(params.Model)
+			if modelID == "" {
+				modelID = stringConfigValue(cfg, "model")
+			}
+			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID), r.modelIgnoresAllowPrefixRules(cfg, modelID))
 		}
 	}
 	if options.ApplyPatch != nil && r.serverRequestSinkConfigured() && applyPatchApprovalRequiredForTurn(approvalPolicy) {
@@ -10280,11 +10316,19 @@ func (r *RuntimeRouter) rememberApprovalForSession(cache map[string]struct{}, th
 func turnApprovalPolicyForTurn(cfg *config.Config, params *turn.TurnStartParams) sandbox.AskForApproval {
 	if params != nil && params.ApprovalPolicy != nil {
 		if policy, ok := parseTurnApprovalPolicy(params.ApprovalPolicy); ok {
+			if autoReviewProtectedModel(cfg, params) {
+				// Rust 208f05b233: auto-review-protected models always run with
+				// on-request approvals.
+				return sandbox.ApprovalOnRequest
+			}
 			return policy
 		}
 	}
 	if cfg != nil && cfg.Values != nil {
 		if policy, ok := parseTurnApprovalPolicy(cfg.Values["approval_policy"]); ok {
+			if autoReviewProtectedModel(cfg, params) {
+				return sandbox.ApprovalOnRequest
+			}
 			return policy
 		}
 	}
@@ -10344,7 +10388,24 @@ func applyPatchApprovalRequiredForTurn(policy sandbox.AskForApproval) bool {
 	return policy != sandbox.ApprovalNever
 }
 
-func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string) tool.ShellApprovalFunc {
+// modelIgnoresAllowPrefixRules mirrors Rust's AllowPrefixRules resolution
+// (codex-rs/core/src/exec_policy/model_policy.rs and session/turn_context.rs,
+// Rust e734a1a5c1): cyber-specialized models and models listed in
+// auto_review.ignore_rules ignore saved allow-prefix rules, so every command
+// approval is a one-time decision without a reusable policy amendment.
+func (r *RuntimeRouter) modelIgnoresAllowPrefixRules(cfg *config.Config, modelID string) bool {
+	modelID = strings.TrimSpace(modelID)
+	if modelID != "" && cfg != nil && cfg.Requirements != nil && cfg.Requirements.AutoReview != nil {
+		for _, model := range cfg.Requirements.AutoReview.IgnoreRules {
+			if strings.TrimSpace(model) == modelID {
+				return true
+			}
+		}
+	}
+	info := r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID})
+	return info != nil && info.ModelSpecialty == model.ModelSpecialtyCyber
+}
+func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ignoreAllowPrefixRules bool) tool.ShellApprovalFunc {
 	return func(ctx context.Context, request *tool.ShellApprovalRequest) (tool.ShellApprovalDecision, error) {
 		if request == nil || request.Request == nil {
 			return tool.ShellApprovalDecision{}, nil
@@ -10382,8 +10443,13 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string) too
 		if reason != "" {
 			params.Reason = &reason
 		}
-		if amendment := commandExecutionProposedExecPolicyAmendment(request.Request.PrefixRule); len(amendment) > 0 {
-			params.ProposedExecPolicyAmendment = amendment
+		// Rust e734a1a5c1: cyber-specialized models and models listed in
+		// auto_review.ignore_rules get one-time decisions without proposing reusable
+		// exec-policy amendments.
+		if !ignoreAllowPrefixRules {
+			if amendment := commandExecutionProposedExecPolicyAmendment(request.Request.PrefixRule); len(amendment) > 0 {
+				params.ProposedExecPolicyAmendment = amendment
+			}
 		}
 		var response CommandExecutionRequestApprovalResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {

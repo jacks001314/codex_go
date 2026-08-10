@@ -442,6 +442,7 @@ type MCPToolCallParams struct {
 	ToolName   string `json:"toolName,omitempty"`
 	Arguments  any    `json:"arguments,omitempty"`
 	Meta       any    `json:"_meta,omitempty"`
+	CallID     string `json:"-"`
 
 	PermissionProfile        string `json:"-"`
 	SandboxCWD               string `json:"-"`
@@ -1541,6 +1542,20 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 
 func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
 	meta := mcpToolCallMetaWithThreadID(params.Meta, params.ThreadID)
+	if callID := strings.TrimSpace(params.CallID); callID != "" {
+		// Rust 248d8c0e22: include the tool call ID in _meta.callId for every
+		// MCP tool request.
+		if metaMap, ok := meta.(map[string]any); ok {
+			out := cloneAnyMap(metaMap)
+			if out == nil {
+				out = map[string]any{}
+			}
+			out["callId"] = callID
+			meta = out
+		} else if meta == nil {
+			meta = map[string]any{"callId": callID}
+		}
+	}
 	if !params.SupportsSandboxStateMeta {
 		return meta
 	}

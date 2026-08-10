@@ -703,6 +703,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Key:           key,
 				EventName:     event,
 				HandlerType:   HookHandlerCommand,
+				ExecutionMode: HookExecutionSync,
 				Matcher:       cloneString(matcher),
 				Command:       &displayCommand,
 				TimeoutSec:    timeoutSec,

@@ -5,10 +5,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 )
+
+// maxCurProjectPathProbes and curProjectSeparators mirror Rust f344a80a3b
+// (codex-rs/external-agent-migration/src/detect/sessions/cur.rs): resolving the
+// working directory encoded in a Cursor project name probes a bounded set of
+// path candidates instead of recursively walking directory trees.
+const maxCurProjectPathProbes = 128
+
+var curProjectSeparators = []string{"-", "_", ".", " ", "--", "..", "__", "  ", "+", "@", "&"}
 
 func (s *ConfigService) detectExternalSessionMigration() (ExternalAgentConfigMigrationItem, bool) {
 	return s.detectExternalSessionMigrationForSource(externalMigrationSourceClaude, nil)
@@ -273,50 +282,141 @@ func externalCursorSessionSummary(path string, fallbackCWD string) (string, stri
 }
 
 func externalCursorProjectCWD(encoded string) string {
-	encoded = strings.TrimSpace(encoded)
-	if len(encoded) < 3 || encoded[1] != '-' || !((encoded[0] >= 'a' && encoded[0] <= 'z') || (encoded[0] >= 'A' && encoded[0] <= 'Z')) {
+	decoded, ok := decodeCurProjectPath(strings.TrimSpace(encoded))
+	if !ok {
 		return ""
 	}
-	root := string(encoded[0]) + `:\`
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		return ""
-	}
-	wanted := encoded[2:]
-	matches := make([]string, 0, 2)
-	collectExternalCursorProjectPaths(wanted, root, root, 0, &matches)
-	if len(matches) == 1 {
-		return matches[0]
-	}
-	return ""
+	return decoded
 }
 
-func collectExternalCursorProjectPaths(encoded string, base string, root string, depth int, matches *[]string) {
-	if encoded == "" || depth > 32 || len(*matches) > 1 {
-		return
-	}
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if len(*matches) > 1 || !entry.IsDir() {
-			continue
+func decodeCurProjectPath(encoded string) (string, bool) {
+	path := ""
+	if runtime.GOOS == "windows" {
+		var rest string
+		var ok bool
+		path, rest, ok = decodeCurWindowsProjectDrive(encoded)
+		if !ok {
+			return "", false
 		}
-		candidate := filepath.Join(base, entry.Name())
-		relative, err := filepath.Rel(root, candidate)
-		if err != nil {
-			continue
+		encoded = rest
+	} else {
+		path = "/"
+	}
+	encoded = strings.TrimPrefix(encoded, "-")
+	for _, component := range strings.Split(encoded, "-") {
+		if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `/\:`) {
+			return "", false
 		}
-		slug := externalCursorPathSlug(relative)
-		if slug == encoded {
-			if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
-				*matches = append(*matches, candidate)
+		path = filepath.Join(path, component)
+	}
+
+	matchedPath := ""
+	probes := 0
+	inspect := func(candidate string) bool {
+		if probes >= maxCurProjectPathProbes {
+			return false
+		}
+		probes++
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			if matchedPath != "" && matchedPath != candidate {
+				return false
 			}
-			continue
+			matchedPath = candidate
 		}
-		if strings.HasPrefix(encoded, slug+"-") {
-			collectExternalCursorProjectPaths(encoded, candidate, root, depth+1, matches)
+		return true
+	}
+	if !inspect(path) {
+		return "", false
+	}
+
+	for suffixLength := 2; suffixLength <= 4; suffixLength++ {
+		parent := path
+		suffix := make([]string, 0, suffixLength)
+		for i := 0; i < suffixLength; i++ {
+			component := filepath.Base(parent)
+			if component == "." || component == string(filepath.Separator) || component == "" {
+				break
+			}
+			suffix = append(suffix, component)
+			next := filepath.Dir(parent)
+			if next == parent {
+				break
+			}
+			parent = next
 		}
+		if len(suffix) != suffixLength {
+			break
+		}
+		reverseStrings(suffix)
+		for _, separator := range curProjectSeparators {
+			candidate := filepath.Join(parent, strings.Join(suffix, separator))
+			if !inspect(candidate) {
+				return "", false
+			}
+		}
+	}
+
+	ancestor := filepath.Dir(path)
+	for {
+		rightName := filepath.Base(ancestor)
+		if rightName == "." || rightName == string(filepath.Separator) || rightName == "" {
+			break
+		}
+		left := filepath.Dir(ancestor)
+		leftName := filepath.Base(left)
+		if leftName == "." || leftName == string(filepath.Separator) || leftName == "" {
+			break
+		}
+		prefix := filepath.Dir(left)
+		trailing, err := filepath.Rel(ancestor, path)
+		if err != nil || trailing == "." || strings.HasPrefix(trailing, "..") {
+			return "", false
+		}
+		for _, separator := range curProjectSeparators {
+			mergedPrefix := filepath.Join(prefix, leftName+separator+rightName)
+			if probes >= maxCurProjectPathProbes {
+				return "", false
+			}
+			probes++
+			if info, err := os.Stat(mergedPrefix); err != nil || !info.IsDir() {
+				continue
+			}
+			if probes >= maxCurProjectPathProbes {
+				return "", false
+			}
+			probes++
+			candidate := filepath.Join(mergedPrefix, trailing)
+			if info, err := os.Stat(candidate); err != nil || !info.IsDir() {
+				return "", false
+			}
+			if matchedPath != "" && matchedPath != candidate {
+				return "", false
+			}
+			matchedPath = candidate
+		}
+		ancestor = left
+	}
+	if matchedPath == "" {
+		return "", false
+	}
+	return matchedPath, true
+}
+
+func decodeCurWindowsProjectDrive(encoded string) (string, string, bool) {
+	encoded = strings.TrimSpace(encoded)
+	if len(encoded) < 3 || encoded[1] != '-' {
+		return "", "", false
+	}
+	drive := encoded[0]
+	if !((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) {
+		return "", "", false
+	}
+	return string(drive) + `:\`, encoded[2:], true
+}
+
+func reverseStrings(values []string) {
+	for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
+		values[i], values[j] = values[j], values[i]
 	}
 }
 

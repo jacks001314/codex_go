@@ -41,6 +41,21 @@ func TestMemoryRequestOmitsTurnIdentity(t *testing.T) {
 	}
 }
 
+func TestSandboxModeReservedAndEmitted(t *testing.T) {
+	metadata := NewResponsesMetadata("install", "session", "thread", "window")
+	metadata.TurnID = "turn"
+	metadata.SandboxMode = "workspace-write"
+	metadata.RequestKind = &ResponsesRequestKind{Kind: RequestKindTurn}
+	metadata.Extra = map[string]string{"sandbox_mode": "client-provided", "custom": "ok"}
+	payload := metadata.TurnMetadataValue()
+	if payload[SandboxModeKey] != "workspace-write" {
+		t.Fatalf("sandbox_mode = %#v, want workspace-write", payload[SandboxModeKey])
+	}
+	if payload["custom"] != "ok" {
+		t.Fatalf("custom extra should survive: %#v", payload)
+	}
+}
+
 func TestFilterExtraMetadataAndSubagentHeader(t *testing.T) {
 	filtered := FilterExtraMetadata(map[string]string{ThreadIDKey: "bad", "custom": "ok"})
 	if len(filtered) != 1 || filtered["custom"] != "ok" {

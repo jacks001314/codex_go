@@ -463,3 +463,38 @@ func assertApplyPatchMissing(t *testing.T, path string) {
 		t.Fatalf("path %s exists or stat error = %v", path, err)
 	}
 }
+
+func TestApplyPatchExecutorPreserveLineEndingsOption(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "crlf.txt")
+	run := func(executor *ApplyPatchExecutor) string {
+		t.Helper()
+		if err := os.WriteFile(target, []byte("before\r\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		patch := "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-before\n+after\n*** End Patch"
+		output, err := executor.Execute(context.Background(), &Invocation{
+			CallID:   "call-apply-crlf",
+			ToolName: PlainName(DefaultApplyPatchToolName),
+			Payload:  Payload{Kind: PayloadCustom, Input: patch},
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !output.Success {
+			t.Fatalf("output = %#v", output)
+		}
+		data, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	if got := run(NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})); got != "after\n" {
+		t.Fatalf("default mode target = %q, want %q", got, "after\n")
+	}
+	if got := run(NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir, PreserveLineEndings: true})); got != "after\r\n" {
+		t.Fatalf("preserve mode target = %q, want %q", got, "after\r\n")
+	}
+}

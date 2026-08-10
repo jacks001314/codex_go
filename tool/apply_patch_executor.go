@@ -20,6 +20,9 @@ type ApplyPatchExecutorOptions struct {
 	Approval             ApplyPatchApprovalFunc
 	PermissionProfile    *sandbox.PermissionProfile
 	SandboxPolicy        *sandbox.SandboxPolicy
+	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
+	// (c9c6c0daa9): retain CRLF/CR/mixed line endings when updating files.
+	PreserveLineEndings bool
 }
 
 type ApplyPatchExecutor struct {
@@ -29,6 +32,7 @@ type ApplyPatchExecutor struct {
 	approval             ApplyPatchApprovalFunc
 	permissionProfile    *sandbox.PermissionProfile
 	sandboxPolicy        *sandbox.SandboxPolicy
+	preserveLineEndings  bool
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -55,6 +59,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.approval = options.Approval
 	executor.permissionProfile = options.PermissionProfile
 	executor.sandboxPolicy = options.SandboxPolicy
+	executor.preserveLineEndings = options.PreserveLineEndings
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -98,7 +103,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	if err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
-	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd()}
+	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd(), FileUpdateMode: e.fileUpdateMode()}
 	if deniedPath := applyPatchDeniedPath(action, e.cwd(), e.permissionProfile, e.sandboxPolicy); deniedPath != "" {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
@@ -207,6 +212,13 @@ func ApplyPatchChanges(invocation *Invocation, cwd string) []map[string]any {
 		return nil
 	}
 	return applyPatchFileChanges(action, cwd)
+}
+
+func (e *ApplyPatchExecutor) fileUpdateMode() applypatch.FileUpdateMode {
+	if e != nil && e.preserveLineEndings {
+		return applypatch.UpdateModePreserveLineEndings
+	}
+	return applypatch.UpdateModeNormalizeToLF
 }
 
 func (e *ApplyPatchExecutor) cwd() string {

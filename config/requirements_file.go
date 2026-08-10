@@ -136,6 +136,9 @@ func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, erro
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
 		out.BrowserUse = browserUseRequirementsFromMap(nested)
 	}
+	if nested, ok := mapAnyKey(values, "auto_review", "autoReview"); ok {
+		out.AutoReview = autoReviewRequirementsFromMap(nested)
+	}
 	if values, ok := boolMapAnyKey(values, "feature_requirements", "featureRequirements", "features"); ok {
 		out.FeatureRequirements = values
 	}
@@ -170,6 +173,23 @@ func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, erro
 		return nil, nil
 	}
 	return &out, nil
+}
+
+func autoReviewRequirementsFromMap(values map[string]any) *AutoReviewRequirements {
+	if len(values) == 0 {
+		return nil
+	}
+	out := AutoReviewRequirements{}
+	if values, ok := stringListAnyKey(values, "required_on_models", "requiredOnModels"); ok {
+		out.RequiredOnModels = append([]string(nil), values...)
+	}
+	if values, ok := stringListAnyKey(values, "ignore_rules", "ignoreRules"); ok {
+		out.IgnoreRules = append([]string(nil), values...)
+	}
+	if len(out.RequiredOnModels) == 0 && len(out.IgnoreRules) == 0 {
+		return nil
+	}
+	return &out
 }
 
 func mcpServerRequirementsFromMap(values map[string]any) (map[string]MCPServerRequirement, error) {
@@ -590,6 +610,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowRemoteControl == nil &&
 			value.ComputerUse == nil &&
 			value.BrowserUse == nil &&
+			value.AutoReview == nil &&
 			value.FeatureRequirements == nil &&
 			value.Hooks == nil &&
 			value.EnforceResidency == nil &&

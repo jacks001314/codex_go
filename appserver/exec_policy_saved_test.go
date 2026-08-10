@@ -51,6 +51,42 @@ func inputMessageText(value any) string {
 	return text
 }
 
+func TestShellApprovalSkipsExecPolicyAmendmentForCyberModelLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("approval_policy = \"on_request\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), DefaultCWD: home})
+	var received *CommandExecutionRequestApprovalParams
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method == ServerRequestCommandExecutionApproval && request.Params != nil {
+			received, _ = request.Params.(*CommandExecutionRequestApprovalParams)
+		}
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalAccept,
+		}))
+	}))
+	approval := router.shellApprovalForTurn("thread-cyber", "turn-cyber", true)
+	decision, err := approval(context.Background(), &tool.ShellApprovalRequest{
+		Request: &tool.ShellRequest{
+			HookCommand:    "echo amendment-ok",
+			CWD:            home,
+			ApprovalReason: "requires approval",
+			PrefixRule:     []string{"echo", "amendment-ok"},
+		},
+		Invocation: &tool.Invocation{CallID: "call-cyber"},
+	})
+	if err != nil || !decision.Approved {
+		t.Fatalf("approval decision = %#v err = %v", decision, err)
+	}
+	if received == nil || len(stringSliceFromAny(received.ProposedExecPolicyAmendment)) != 0 {
+		t.Fatalf("cyber-model approval proposed an exec-policy amendment: %#v", received)
+	}
+	if fragments := router.execPolicySaved.take("thread-cyber", "turn-cyber"); len(fragments) != 0 {
+		t.Fatalf("cyber-model approval saved reusable prefix fragments: %#v", fragments)
+	}
+}
+
 func TestShellApprovalWithExecpolicyAmendmentRemembersPrefix(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("approval_policy = \"on_request\"\n"), 0o600); err != nil {
@@ -66,7 +102,7 @@ func TestShellApprovalWithExecpolicyAmendmentRemembersPrefix(t *testing.T) {
 		response := OK(request.ID, &CommandExecutionRequestApprovalResponse{Decision: decision})
 		router.requireServerRequests().Resolve(response)
 	}))
-	approval := router.shellApprovalForTurn("thread-exec", "turn-exec")
+	approval := router.shellApprovalForTurn("thread-exec", "turn-exec", false)
 	decision, err := approval(context.Background(), &tool.ShellApprovalRequest{
 		Request: &tool.ShellRequest{
 			HookCommand:    "echo amendment-ok",

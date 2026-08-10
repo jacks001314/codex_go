@@ -405,7 +405,10 @@ func validateKnownFeatureFields(value any) error {
 		}
 	}
 	if toolRegistry, ok := features["tool_registry"].(map[string]any); ok {
-		known := map[string]bool{"error_on_tool_collisions": true, "include_tool_metadata": true}
+		// Rust 248d8c0e22 renamed include_tool_metadata to
+		// turn_metadata_includes_tool_info; the old key is rejected so
+		// configuration matches the upstream schema.
+		known := map[string]bool{"error_on_tool_collisions": true, "turn_metadata_includes_tool_info": true}
 		for key := range toolRegistry {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `features.tool_registry.%s`", key)
@@ -667,7 +670,7 @@ func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
 	return time.Duration(value) * time.Millisecond
 }
 
-func (c *Config) ToolRegistryIncludeToolMetadata() bool {
+func (c *Config) ToolRegistryTurnMetadataIncludesToolInfo() bool {
 	if c == nil || c.Values == nil {
 		return false
 	}
@@ -679,7 +682,7 @@ func (c *Config) ToolRegistryIncludeToolMetadata() bool {
 	if !ok {
 		return false
 	}
-	enabled, _ := toolRegistry["include_tool_metadata"].(bool)
+	enabled, _ := toolRegistry["turn_metadata_includes_tool_info"].(bool)
 	return enabled
 }
 

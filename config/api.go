@@ -495,6 +495,7 @@ type ConfigRequirements struct {
 	AllowRemoteControl                   *bool                           `json:"allowRemoteControl,omitempty"`
 	ComputerUse                          *ComputerUseRequirements        `json:"computerUse,omitempty"`
 	BrowserUse                           *BrowserUseRequirements         `json:"browserUse,omitempty"`
+	AutoReview                           *AutoReviewRequirements         `json:"autoReview,omitempty"`
 	FeatureRequirements                  map[string]bool                 `json:"featureRequirements,omitempty"`
 	Hooks                                *ManagedHooksRequirements       `json:"hooks,omitempty"`
 	EnforceResidency                     *ResidencyRequirement           `json:"enforceResidency,omitempty"`
@@ -520,6 +521,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowRemoteControl                   *bool                     `json:"allowRemoteControl"`
 		ComputerUse                          *ComputerUseRequirements  `json:"computerUse"`
 		BrowserUse                           *BrowserUseRequirements   `json:"browserUse"`
+		AutoReview                           *AutoReviewRequirements   `json:"autoReview"`
 		FeatureRequirements                  map[string]bool           `json:"featureRequirements"`
 		Hooks                                *ManagedHooksRequirements `json:"hooks"`
 		EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency"`
@@ -540,6 +542,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowRemoteControl:                   cloneBoolPtr(r.AllowRemoteControl),
 		ComputerUse:                          cloneComputerUse(r.ComputerUse),
 		BrowserUse:                           cloneBrowserUse(r.BrowserUse),
+		AutoReview:                           cloneAutoReview(r.AutoReview),
 		FeatureRequirements:                  cloneBoolMap(r.FeatureRequirements),
 		Hooks:                                cloneManagedHooks(r.Hooks),
 		EnforceResidency:                     cloneResidencyRequirementPtr(r.EnforceResidency),
@@ -548,6 +551,49 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowedLoginMethods:                  forcedLoginMethodsOrNil(r.AllowedLoginMethods),
 		AllowedChatGPTWorkspaces:             stringSliceOrNil(r.AllowedChatGPTWorkspaces),
 	})
+}
+
+// AutoReviewRequiredForModel mirrors Rust's auto_review_required_for_model
+// (codex-rs/config/src/config_requirements.rs, Rust 208f05b233): a model slug
+// (or its exact provider-alias suffix) listed in auto_review.required_on_models
+// must run with on-request approvals and the auto_review reviewer.
+func (r *ConfigRequirements) AutoReviewRequiredForModel(model string) bool {
+	if r == nil || r.AutoReview == nil || len(r.AutoReview.RequiredOnModels) == 0 {
+		return false
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	if idx := strings.Index(model, "/"); idx > 0 {
+		namespace := model[:idx]
+		suffix := model[idx+1:]
+		if strings.Contains(suffix, "/") || !simpleModelNamespace(namespace) {
+			return false
+		}
+		model = suffix
+	}
+	for _, slug := range r.AutoReview.RequiredOnModels {
+		if slug == model {
+			return true
+		}
+	}
+	return false
+}
+
+func simpleModelNamespace(namespace string) bool {
+	if namespace == "" {
+		return false
+	}
+	for _, character := range namespace {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 type BrowserUseRequirements struct {
@@ -559,6 +605,26 @@ func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 		DisableAutoReview *bool `json:"disableAutoReview"`
 	}{
 		DisableAutoReview: cloneBoolPtr(r.DisableAutoReview),
+	})
+}
+
+// AutoReviewRequirements mirrors Rust's AutoReviewRequirementsToml plus the
+// ignore-rule exposure from `auto_review.ignore_rules` (Rust 208f05b233 and
+// 2e3a1702c2). requiredOnModels lists model slugs that must run with
+// on-request approvals and the auto_review reviewer; ignoreRules lists models
+// that ignore saved command-prefix approvals.
+type AutoReviewRequirements struct {
+	RequiredOnModels []string `json:"requiredOnModels,omitempty"`
+	IgnoreRules      []string `json:"ignoreRules,omitempty"`
+}
+
+func (r *AutoReviewRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		RequiredOnModels []string `json:"requiredOnModels"`
+		IgnoreRules      []string `json:"ignoreRules"`
+	}{
+		RequiredOnModels: stringSliceOrNil(r.RequiredOnModels),
+		IgnoreRules:      stringSliceOrNil(r.IgnoreRules),
 	})
 }
 
@@ -2707,6 +2773,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowRemoteControl = cloneBoolPtr(requirements.AllowRemoteControl)
 	clone.ComputerUse = cloneComputerUse(requirements.ComputerUse)
 	clone.BrowserUse = cloneBrowserUse(requirements.BrowserUse)
+	clone.AutoReview = cloneAutoReview(requirements.AutoReview)
 	clone.Hooks = cloneManagedHooks(requirements.Hooks)
 	clone.EnforceResidency = cloneResidencyRequirementPtr(requirements.EnforceResidency)
 	clone.Network = cloneNetwork(requirements.Network)
@@ -2714,6 +2781,16 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
 	clone.Plugins = clonePluginRequirements(requirements.Plugins)
 	return &clone
+}
+
+func cloneAutoReview(value *AutoReviewRequirements) *AutoReviewRequirements {
+	if value == nil {
+		return nil
+	}
+	return &AutoReviewRequirements{
+		RequiredOnModels: stringSliceOrNil(value.RequiredOnModels),
+		IgnoreRules:      stringSliceOrNil(value.IgnoreRules),
+	}
 }
 
 func cloneMCPServerRequirements(values map[string]MCPServerRequirement) map[string]MCPServerRequirement {

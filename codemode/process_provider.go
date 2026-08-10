@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/tool"
 )
 
@@ -171,6 +172,9 @@ type processTransport struct {
 
 func spawnProcessTransport(program string) (*processTransport, error) {
 	cmd := exec.Command(program)
+	// Rust c4513cb982: remote helper processes must not inherit Codex launch
+	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
+	envutil.ScrubCommandEnv(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("spawned code-mode host has no stdin: %w", err)

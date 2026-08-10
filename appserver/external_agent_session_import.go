@@ -2,8 +2,11 @@ package appserver
 
 import (
 	"errors"
+	"io/fs"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"codex_go/config"
@@ -20,6 +23,7 @@ func (r *RuntimeRouter) importExternalAgentSessions(params *config.ExternalAgent
 	if params == nil {
 		return nil
 	}
+
 	selected, _ := config.ValidatePendingSessionImports(params.MigrationItems)
 	if len(selected) == 0 {
 		return nil
@@ -83,7 +87,10 @@ func (r *RuntimeRouter) importExternalAgentSession(migration config.SessionMigra
 		record, err = rollout.ExternalAgentSessionRecord(path, now)
 	}
 	if err != nil {
-		return fail("session_parse", "session_parse_failed", err)
+		// Rust 50ef7395fa: append a stable std::io::ErrorKind-style category to
+		// session import failure subtypes so I/O failures are distinguishable
+		// from format errors.
+		return fail("session_parse", sessionImportIOCategorySubtype("session_parse_failed", err), err)
 	}
 	canonicalPath, sourceHash, err := config.ExternalSessionContentSHA256(path)
 	if err != nil {
@@ -315,4 +322,70 @@ func externalAgentStringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// sessionImportIOCategorySubtype mirrors Rust 50ef7395fa: when the error is an
+// I/O error it appends a stable category derived from the underlying error kind
+// (not_found, permission_denied, invalid_data, ...), otherwise it keeps the
+// base subtype unchanged.
+func sessionImportIOCategorySubtype(base string, err error) string {
+	kind := sessionImportIOErrorKind(err)
+	if kind == "" {
+		return base
+	}
+	return base + "_" + kind
+}
+
+func sessionImportIOErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pathErr *fs.PathError
+	var linkErr *os.LinkError
+	var syscallErr *os.SyscallError
+	var underlying error
+	switch {
+	case errors.As(err, &pathErr):
+		underlying = pathErr.Err
+	case errors.As(err, &linkErr):
+		underlying = linkErr.Err
+	case errors.As(err, &syscallErr):
+		underlying = syscallErr.Err
+	default:
+		return ""
+	}
+	if errors.Is(underlying, fs.ErrNotExist) {
+		return "not_found"
+	}
+	if errors.Is(underlying, fs.ErrPermission) {
+		return "permission_denied"
+	}
+	if errors.Is(underlying, fs.ErrExist) {
+		return "already_exists"
+	}
+	if errors.Is(underlying, fs.ErrInvalid) {
+		return "invalid_input"
+	}
+	if errors.Is(underlying, syscall.EISDIR) {
+		return "is_a_directory"
+	}
+	if errors.Is(underlying, syscall.ENOTDIR) {
+		return "not_a_directory"
+	}
+	if errors.Is(underlying, syscall.ETIMEDOUT) {
+		return "timed_out"
+	}
+	if errors.Is(underlying, syscall.ENOSPC) {
+		return "storage_full"
+	}
+	if errors.Is(underlying, syscall.EDQUOT) {
+		return "quota_exceeded"
+	}
+	if errors.Is(underlying, syscall.EFBIG) {
+		return "file_too_large"
+	}
+	if errors.Is(underlying, syscall.EROFS) {
+		return "read_only_filesystem"
+	}
+	return "other"
 }

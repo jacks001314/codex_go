@@ -5392,6 +5392,20 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
+	protectedModel := autoReviewRequiredForModel(cfg, modelProviderConfig.Model)
+	if protectedModel && permissionProfile != nil && permissionProfile.Profile != nil && permissionProfile.Profile.Disabled {
+		// Rust 208f05b233: downgrade Full Access to workspace-write for
+		// auto-review-protected models.
+		workspace := sandbox.WorkspaceWritePermissionProfile()
+		permissionProfile = &config.SandboxPermissionProfileResolution{ID: sandbox.BuiltInPermissionProfileWorkspace, Profile: &workspace}
+	}
+	if protectedModel {
+		approvalPolicy = sandbox.ApprovalOnRequest
+	}
+	approvalsReviewer := turnApprovalsReviewerForTurn(cfg, params)
+	if protectedModel {
+		approvalsReviewer = string(config.ApprovalsReviewerAutoReview)
+	}
 	installationID := ""
 	if r != nil && r.services.Config != nil {
 		if codexHome := strings.TrimSpace(r.services.Config.CodexHome()); codexHome != "" {
@@ -5431,7 +5445,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		NumInputImages:                  countTurnStartInputImages(params),
 		IsFirstTurn:                     threadSnapshot.IsFirstTurn,
 		ApprovalPolicy:                  string(approvalPolicy),
-		ApprovalsReviewer:               turnApprovalsReviewerForTurn(cfg, params),
+		ApprovalsReviewer:               approvalsReviewer,
 		SandboxPolicy:                   analyticsSandboxPolicy(permissionProfile, cwd),
 		SandboxNetworkAccess:            analyticsSandboxNetworkAccess(permissionProfile),
 		CollaborationMode:               analyticsCollaborationMode(params),
@@ -5469,6 +5483,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			SubagentHeader:     lineage.SubagentHeader,
 			SubagentKind:       lineage.SubagentKind,
 			ThreadSource:       lineage.ThreadSource,
+			SandboxMode:        permissionProfilePolicyTag(permissionProfile, cwd),
 			Extra:              extraMetadata,
 			StartedAtMS:        startedAtMS,
 			UseResponsesLite:   r.modelUsesResponsesLite(modelProviderConfig.Model),
@@ -5621,6 +5636,11 @@ func (r *RuntimeRouter) analyticsThreadSnapshot(threadID string) appTurnAnalytic
 func turnApprovalsReviewerForTurn(cfg *config.Config, params *turn.TurnStartParams) string {
 	if params != nil && params.ApprovalsReviewer != nil {
 		if value := strings.TrimSpace(*params.ApprovalsReviewer); value != "" {
+			if autoReviewProtectedModel(cfg, params) {
+				// Rust 208f05b233: models listed in auto_review.required_on_models
+				// always use the auto_review reviewer.
+				return string(config.ApprovalsReviewerAutoReview)
+			}
 			return value
 		}
 	}
@@ -5628,10 +5648,26 @@ func turnApprovalsReviewerForTurn(cfg *config.Config, params *turn.TurnStartPara
 		stringConfigValue(cfg, "approvals_reviewer"),
 		stringConfigValue(cfg, "approvalsReviewer"),
 	)
+	if autoReviewProtectedModel(cfg, params) {
+		return string(config.ApprovalsReviewerAutoReview)
+	}
 	if value == "" {
 		return "user"
 	}
 	return value
+}
+
+// autoReviewProtectedModel reports whether the effective turn model is listed in
+// auto_review.required_on_models (Rust 208f05b233).
+func autoReviewProtectedModel(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if params == nil {
+		return false
+	}
+	model := strings.TrimSpace(params.Model)
+	if model == "" && cfg != nil {
+		model = stringConfigValue(cfg, "model")
+	}
+	return autoReviewRequiredForModel(cfg, model)
 }
 
 func analyticsSandboxPolicy(resolution *config.SandboxPermissionProfileResolution, cwd string) string {
@@ -5663,6 +5699,51 @@ func analyticsSandboxPolicy(resolution *config.SandboxPermissionProfileResolutio
 
 func analyticsSandboxNetworkAccess(resolution *config.SandboxPermissionProfileResolution) bool {
 	return resolution != nil && resolution.Profile != nil && resolution.Profile.AllowsNetwork()
+}
+
+// autoReviewRequiredForModel mirrors Rust's auto_review_required_for_model
+// (codex-rs/config/src/config_requirements.rs, Rust 208f05b233): models listed
+// in auto_review.required_on_models (or their exact provider-alias suffix) must
+// run with on-request approvals and the auto_review reviewer.
+func autoReviewRequiredForModel(cfg *config.Config, model string) bool {
+	if cfg == nil || cfg.Requirements == nil {
+		return false
+	}
+	return cfg.Requirements.AutoReviewRequiredForModel(model)
+}
+
+// permissionProfilePolicyTag mirrors Rust's permission_profile_policy_tag
+// (codex-rs/core/src/sandbox_tags.rs, Rust 4ca25a2c4e): it derives the
+// `sandbox_mode` turn-metadata value from the effective permission profile and
+// the working directory.
+func permissionProfilePolicyTag(resolution *config.SandboxPermissionProfileResolution, cwd string) string {
+	if resolution == nil {
+		return "danger-full-access"
+	}
+	return permissionProfilePolicyTagFromProfile(resolution.Profile, cwd)
+}
+
+func permissionProfilePolicyTagFromProfile(profile *sandbox.PermissionProfile, cwd string) string {
+	if profile == nil {
+		return "danger-full-access"
+	}
+	if profile.Disabled {
+		return "danger-full-access"
+	}
+	policy := profile.SandboxPolicy
+	if policy == nil {
+		if profile.AllowsNetwork() {
+			return "danger-full-access"
+		}
+		return "read-only"
+	}
+	if policy.HasFullDiskWriteAccess() {
+		return "danger-full-access"
+	}
+	if len(policy.GetWritableRootsWithCWD(cwd)) == 0 {
+		return "read-only"
+	}
+	return "workspace-write"
 }
 
 func analyticsCollaborationMode(params *turn.TurnStartParams) string {

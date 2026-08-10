@@ -429,6 +429,11 @@ func TestRuntimeRouterHooksListMergesRegistryAndDiscovery(t *testing.T) {
 	if result.Data[0].Hooks[0].Key == result.Data[0].Hooks[1].Key {
 		t.Fatalf("expected distinct hooks, got %+v", result.Data[0].Hooks)
 	}
+	for _, hook := range result.Data[0].Hooks {
+		if hook.ExecutionMode != HookExecutionSync {
+			t.Fatalf("hooks/list executionMode = %q, want sync (Rust 3aae5d885b)", hook.ExecutionMode)
+		}
+	}
 }
 
 func TestRuntimeRouterHooksListIncludesPluginHooks(t *testing.T) {

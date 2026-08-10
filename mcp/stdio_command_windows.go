@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"codex_go/envutil"
 )
 
 func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
@@ -17,9 +19,12 @@ func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
 		}
 		cmd := exec.Command(comspec)
 		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: windowsBatchCommandLine(command, args)}
+		envutil.ScrubCommandEnv(cmd)
 		return cmd
 	default:
-		return exec.Command(command, args...)
+		cmd := exec.Command(command, args...)
+		envutil.ScrubCommandEnv(cmd)
+		return cmd
 	}
 }
 

@@ -22,6 +22,7 @@ const (
 	SubagentKindKey        = "subagent_kind"
 	ThreadSourceKey        = "thread_source"
 	SandboxKey             = "sandbox"
+	SandboxModeKey         = "sandbox_mode"
 	WorkspacesKey          = "workspaces"
 	InstallationIDHeader   = "x-codex-installation-id"
 	WindowIDHeader         = "x-codex-window-id"
@@ -55,6 +56,7 @@ var reservedMetadataKeys = map[string]bool{
 	SubagentKindKey:        true,
 	ThreadSourceKey:        true,
 	SandboxKey:             true,
+	SandboxModeKey:         true,
 	WorkspacesKey:          true,
 }
 
@@ -95,6 +97,7 @@ type ResponsesMetadata struct {
 	SubagentKind        string
 	ThreadSource        string
 	Sandbox             string
+	SandboxMode         string
 	Workspaces          map[string]ResponsesWorkspace
 	TurnStartedAtUnixMS *int64
 	Extra               map[string]string
@@ -143,6 +146,7 @@ func (m *ResponsesMetadata) TurnMetadataValue() map[string]any {
 	putStringAny(payload, SubagentKindKey, m.SubagentKind)
 	putStringAny(payload, ThreadSourceKey, m.ThreadSource)
 	putStringAny(payload, SandboxKey, m.Sandbox)
+	putStringAny(payload, SandboxModeKey, m.SandboxMode)
 	if len(m.Workspaces) > 0 {
 		payload[WorkspacesKey] = m.Workspaces
 	}

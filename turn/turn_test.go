@@ -109,12 +109,14 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 		SubagentHeader:     "guardian",
 		SubagentKind:       "guardian",
 		ThreadSource:       "automation",
+		SandboxMode:        "workspace-write",
 		Extra: map[string]string{
 			"workspace_kind":           "git",
 			"thread_id":                "bad",
 			"x-codex-turn-metadata":    "bad",
 			"x-codex-parent-thread-id": "bad",
 			"parent_turn_id":           "bad",
+			"sandbox_mode":             "client-provided",
 		},
 		StartedAtMS:      42,
 		UseResponsesLite: true,
@@ -137,6 +139,9 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 	if turnMetadata["workspace_kind"] != "git" || turnMetadata["thread_id"] != "thread" || turnMetadata["turn_started_at_unix_ms"].(float64) != 42 {
 		t.Fatalf("turn metadata = %#v", turnMetadata)
+	}
+	if turnMetadata["sandbox_mode"] != "workspace-write" {
+		t.Fatalf("sandbox_mode = %#v, want workspace-write (Rust 4ca25a2c4e)", turnMetadata["sandbox_mode"])
 	}
 	if turnMetadata["forked_from_thread_id"] != "source-thread" || turnMetadata["parent_thread_id"] != "parent-thread" || turnMetadata["parent_turn_id"] != "parent-turn" || turnMetadata["subagent_kind"] != "guardian" || turnMetadata["thread_source"] != "automation" {
 		t.Fatalf("lineage turn metadata = %#v", turnMetadata)

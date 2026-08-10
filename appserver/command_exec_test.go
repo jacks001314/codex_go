@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/applypatch"
 	"codex_go/config"
 	"codex_go/network"
 	"codex_go/sandbox"
@@ -1200,4 +1201,38 @@ func commandExecTestEnvCommand(name string) []string {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func TestCommandExecApplyPatchPreserveLineEndingsEnvInjection(t *testing.T) {
+	service := NewCommandExecService()
+	cwd := t.TempDir()
+	params := &CommandExecParams{
+		Command: commandExecTestEnvCommand(applypatch.PreserveLineEndingsEnvVar),
+		Env: map[string]*string{
+			applypatch.PreserveLineEndingsEnvVar: applyPatchEnvStringPtr("0"),
+		},
+	}
+
+	// Enabled: the active feature configuration overrides the client value.
+	response, err := service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{ApplyPatchPreserveLineEndings: true})
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions(enabled) error = %v", err)
+	}
+	if response.ExitCode != 0 || strings.TrimSpace(response.Stdout) != "1" {
+		t.Fatalf("enabled response = %+v, want stdout %q", response, "1")
+	}
+
+	// Disabled: stale client-provided values must be removed.
+	response, err = service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions(disabled) error = %v", err)
+	}
+	disabledOut := strings.TrimSpace(response.Stdout)
+	if response.ExitCode != 0 || disabledOut == "1" || disabledOut == "0" {
+		t.Fatalf("disabled response = %+v, want the stale client value removed", response)
+	}
+}
+
+func applyPatchEnvStringPtr(value string) *string {
+	return &value
 }

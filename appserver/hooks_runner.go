@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"codex_go/envutil"
 )
 
 type HookRunner struct {
@@ -124,6 +126,9 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	cmd := r.commandForHook(execCtx, metadata)
 	cmd.Dir = cwd
 	cmd.Env = hookCommandEnv(os.Environ(), metadata.Env)
+	// Rust c4513cb982: hook child processes must not inherit Codex launch
+	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
+	envutil.ScrubCommandEnv(cmd)
 	cmd.Stdin = strings.NewReader(inputJSON)
 
 	stdout, stderr, err := runCommandCaptured(cmd)

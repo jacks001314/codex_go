@@ -63,7 +63,8 @@ type Action struct {
 }
 
 type ApplyOptions struct {
-	CWD string
+	CWD            string
+	FileUpdateMode FileUpdateMode
 }
 
 type ApplyResult struct {
@@ -247,7 +248,7 @@ func (a *Action) Verify(options *ApplyOptions) error {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.preflight(cwd)
+	return a.preflight(cwd, applyFileUpdateMode(options))
 }
 
 // ApplyVerified commits an action after Verify has succeeded.
@@ -259,13 +260,20 @@ func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.applyCommitted(cwd)
+	return a.applyCommitted(cwd, applyFileUpdateMode(options))
 }
 
-func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
+func applyFileUpdateMode(options *ApplyOptions) FileUpdateMode {
+	if options != nil {
+		return options.FileUpdateMode
+	}
+	return UpdateModeNormalizeToLF
+}
+
+func (a *Action) applyCommitted(cwd string, mode FileUpdateMode) (*ApplyResult, error) {
 	result := &ApplyResult{}
 	for _, change := range a.Hunks {
-		applied, err := applyChange(cwd, &change)
+		applied, err := applyChange(cwd, &change, mode)
 		if err != nil {
 			return nil, err
 		}
@@ -275,7 +283,7 @@ func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
 	return result, nil
 }
 
-func (a *Action) preflight(cwd string) error {
+func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
 	tempDir, err := os.MkdirTemp("", "codex-apply-patch-preflight-")
 	if err != nil {
 		return fmt.Errorf("failed to create apply_patch preflight workspace: %w", err)
@@ -348,7 +356,7 @@ func (a *Action) preflight(cwd string) error {
 			shadowAction.Hunks[index].MovePath = moveShadow
 		}
 	}
-	_, err = shadowAction.applyCommitted(tempDir)
+	_, err = shadowAction.applyCommitted(tempDir, mode)
 	return err
 }
 
@@ -441,7 +449,7 @@ func (a *Action) addChange(change Change) {
 	a.Hunks = append(a.Hunks, change)
 }
 
-func applyChange(cwd string, change *Change) (*AppliedFile, error) {
+func applyChange(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile, error) {
 	if change == nil {
 		return nil, fmt.Errorf("%w: nil change", ErrInvalidPatch)
 	}
@@ -451,7 +459,7 @@ func applyChange(cwd string, change *Change) (*AppliedFile, error) {
 	case ChangeDelete:
 		return applyDelete(cwd, change)
 	case ChangeUpdate:
-		return applyUpdate(cwd, change)
+		return applyUpdate(cwd, change, mode)
 	default:
 		return nil, fmt.Errorf("%w: unknown change kind %q", ErrInvalidPatch, change.Kind)
 	}
@@ -504,7 +512,7 @@ func applyDelete(cwd string, change *Change) (*AppliedFile, error) {
 	}, nil
 }
 
-func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
+func applyUpdate(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile, error) {
 	path, err := resolveWorkspacePath(cwd, change.Path)
 	if err != nil {
 		return nil, err
@@ -513,7 +521,7 @@ func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file to update %s: %w", path, err)
 	}
-	updated, err := applyUpdateDiffToContent(string(data), change)
+	updated, err := applyUpdateDiffToContent(string(data), change, mode)
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s", err, path)
 	}
@@ -550,7 +558,13 @@ func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
 	}, nil
 }
 
-func applyUnifiedDiffToContent(content string, diff string) (string, error) {
+func applyUnifiedDiffToContent(content string, diff string, mode FileUpdateMode) (string, error) {
+	if mode == UpdateModePreserveLineEndings {
+		return applyUnifiedDiffToContentPreserving(content, diff)
+	}
+	// Rust NormalizeToLf splits on '\n' and rejoins with '\n' (21aa552e87),
+	// which drops the '\r' from CRLF endings during matching.
+	content = strings.ReplaceAll(content, "\r\n", "\n")
 	chunks, err := parseUpdateChunks(diff)
 	if err != nil {
 		return "", err
@@ -560,7 +574,7 @@ func applyUnifiedDiffToContent(content string, diff string) (string, error) {
 	}
 	current := content
 	for _, chunk := range chunks {
-		next, ok := replaceFirstChunk(current, &chunk)
+		next, ok := replaceFirstChunk(current, chunk)
 		if !ok {
 			return "", fmt.Errorf("failed to find expected lines:\n%s", chunk.Old)
 		}
@@ -569,11 +583,11 @@ func applyUnifiedDiffToContent(content string, diff string) (string, error) {
 	return current, nil
 }
 
-func applyUpdateDiffToContent(content string, change *Change) (string, error) {
+func applyUpdateDiffToContent(content string, change *Change, mode FileUpdateMode) (string, error) {
 	if change != nil && change.MovePath != "" && strings.TrimSpace(change.UnifiedDiff) == "" {
 		return content, nil
 	}
-	return applyUnifiedDiffToContent(content, change.UnifiedDiff)
+	return applyUnifiedDiffToContent(content, change.UnifiedDiff, mode)
 }
 
 func replaceFirstChunk(content string, chunk *updateChunk) (string, bool) {
@@ -595,53 +609,65 @@ func replaceFirstChunk(content string, chunk *updateChunk) (string, bool) {
 }
 
 type updateChunk struct {
-	Old string
-	New string
+	Old            string
+	New            string
+	oldLines       []string
+	newLines       []string
+	contextIndices [][2]int
+	changeContext  string
+	isEndOfFile    bool
 }
 
-func parseUpdateChunks(diff string) ([]updateChunk, error) {
+func parseUpdateChunks(diff string) ([]*updateChunk, error) {
 	lines := splitLines(diff)
-	var chunks []updateChunk
-	var oldBuilder strings.Builder
-	var newBuilder strings.Builder
-	inChunk := false
+	var chunks []*updateChunk
+	current := (*updateChunk)(nil)
 	flush := func() {
-		if !inChunk {
+		if current == nil {
 			return
 		}
-		chunks = append(chunks, updateChunk{Old: oldBuilder.String(), New: newBuilder.String()})
-		oldBuilder.Reset()
-		newBuilder.Reset()
-		inChunk = false
+		chunks = append(chunks, current)
+		current = nil
 	}
 	for _, line := range lines {
 		switch {
 		case line == "*** End of File":
+			if current != nil {
+				current.isEndOfFile = true
+			}
 			continue
 		case strings.HasPrefix(line, "@@"):
 			flush()
-			inChunk = true
+			current = &updateChunk{}
+			rest := strings.TrimPrefix(line, "@@")
+			rest = strings.TrimPrefix(rest, " ")
+			if context := strings.TrimSpace(rest); context != "" {
+				current.changeContext = context
+			}
 		case strings.HasPrefix(line, "-"):
-			if !inChunk {
-				inChunk = true
+			if current == nil {
+				current = &updateChunk{}
 			}
-			oldBuilder.WriteString(strings.TrimPrefix(line, "-"))
-			oldBuilder.WriteByte('\n')
+			value := strings.TrimPrefix(line, "-")
+			current.Old += value + "\n"
+			current.oldLines = append(current.oldLines, value)
 		case strings.HasPrefix(line, "+"):
-			if !inChunk {
-				inChunk = true
+			if current == nil {
+				current = &updateChunk{}
 			}
-			newBuilder.WriteString(strings.TrimPrefix(line, "+"))
-			newBuilder.WriteByte('\n')
+			value := strings.TrimPrefix(line, "+")
+			current.New += value + "\n"
+			current.newLines = append(current.newLines, value)
 		case strings.HasPrefix(line, " "):
-			if !inChunk {
-				inChunk = true
+			if current == nil {
+				current = &updateChunk{}
 			}
 			value := strings.TrimPrefix(line, " ")
-			oldBuilder.WriteString(value)
-			oldBuilder.WriteByte('\n')
-			newBuilder.WriteString(value)
-			newBuilder.WriteByte('\n')
+			current.Old += value + "\n"
+			current.New += value + "\n"
+			current.contextIndices = append(current.contextIndices, [2]int{len(current.oldLines), len(current.newLines)})
+			current.oldLines = append(current.oldLines, value)
+			current.newLines = append(current.newLines, value)
 		case strings.TrimSpace(line) == "":
 			continue
 		default:
@@ -649,7 +675,7 @@ func parseUpdateChunks(diff string) ([]updateChunk, error) {
 		}
 	}
 	flush()
-	filtered := make([]updateChunk, 0, len(chunks))
+	filtered := make([]*updateChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if chunk.Old == "" && chunk.New == "" {
 			continue

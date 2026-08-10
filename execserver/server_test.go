@@ -159,6 +159,45 @@ func TestStdioInitializeAndEnvironmentInfo(t *testing.T) {
 	if !strings.Contains(output, `"sessionId"`) || !strings.Contains(output, `"shell"`) {
 		t.Fatalf("stdout = %q", output)
 	}
+	if !strings.Contains(output, `"environmentConfigRead":true`) {
+		t.Fatalf("local environment info should advertise environmentConfigRead: %q", output)
+	}
+}
+
+func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing.T) {
+	info := localEnvironmentInfo()
+	if info == nil {
+		t.Fatal("localEnvironmentInfo() = nil")
+	}
+	if !info.Capabilities.EnvironmentConfigRead {
+		t.Fatalf("EnvironmentConfigRead = false, want true (Rust 646f7c0a91)")
+	}
+	if len(info.TemporaryDirectories) == 0 {
+		t.Fatalf("TemporaryDirectories empty, want TEMP/TMP (Rust 92fb33b758)")
+	}
+	seen := map[string]bool{}
+	for _, dir := range info.TemporaryDirectories {
+		if seen[dir] {
+			t.Fatalf("duplicate temporary directory %q", dir)
+		}
+		seen[dir] = true
+		if !strings.HasPrefix(dir, "file://") {
+			t.Fatalf("temporary directory %q is not a file URI", dir)
+		}
+	}
+}
+
+func TestLocalTemporaryDirectoriesDedupesAndSkipsRelativeOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows TEMP/TMP resolution only")
+	}
+	t.Setenv("TEMP", "C:\\Temp")
+	t.Setenv("TMP", "C:\\Temp")
+	t.Setenv("TMPDIR", "relative-temp")
+	got := localTemporaryDirectories("C:\\work")
+	if len(got) != 1 || got[0] != "file:///C:/Temp" {
+		t.Fatalf("TemporaryDirectories = %#v, want [file:///C:/Temp]", got)
+	}
 }
 
 func TestStdioInitializeAndEnvironmentStatus(t *testing.T) {

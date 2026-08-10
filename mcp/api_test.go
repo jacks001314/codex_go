@@ -785,6 +785,33 @@ func TestMCPToolCallMetaWithThreadID(t *testing.T) {
 	}
 }
 
+func TestMCPToolCallMetaIncludesCallIDLikeRust(t *testing.T) {
+	service := NewMCPService(nil)
+	meta := service.augmentToolCallMeta(&MCPToolCallParams{
+		ThreadID: "thread-call-id",
+		Meta:     map[string]any{"source": "client"},
+		CallID:   "call-123",
+	})
+	metaMap, ok := meta.(map[string]any)
+	if !ok || metaMap["callId"] != "call-123" || metaMap["threadId"] != "thread-call-id" || metaMap["source"] != "client" {
+		t.Fatalf("augmented meta = %#v", meta)
+	}
+
+	withExisting := service.augmentToolCallMeta(&MCPToolCallParams{
+		Meta:   map[string]any{"callId": "client-provided"},
+		CallID: "call-456",
+	})
+	existingMap, ok := withExisting.(map[string]any)
+	if !ok || existingMap["callId"] != "call-456" {
+		t.Fatalf("existing callId should be overridden: %#v", withExisting)
+	}
+
+	withoutCallID := service.augmentToolCallMeta(&MCPToolCallParams{Meta: map[string]any{"source": "client"}})
+	if _, ok := withoutCallID.(map[string]any)["callId"]; ok {
+		t.Fatalf("unexpected callId without CallID: %#v", withoutCallID)
+	}
+}
+
 func TestMCPValidation(t *testing.T) {
 	service := NewMCPService(nil)
 	if _, err := service.OauthLogin(&MCPServerOauthLoginParams{}); !errors.Is(err, ErrInvalidMCPRequest) || err.Error() != "name is required" {
