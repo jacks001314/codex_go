@@ -961,6 +961,20 @@ func (s *ThreadExtraService) SetBackgroundTerminals(threadID string, terminals [
 	s.terminals[threadID] = cloneBackgroundTerminals(terminals)
 }
 
+// CountBackgroundTerminals returns the number of background terminals still
+// tracked for the thread (mirrors the Rust turn-completion running-process
+// metric source).
+func (s *ThreadExtraService) CountBackgroundTerminals(threadID string) int {
+	threadID = strings.TrimSpace(threadID)
+	if s == nil || threadID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureLocked()
+	return len(s.terminals[threadID])
+}
+
 func validGoalStatus(status GoalStatus) bool {
 	switch status {
 	case GoalActive, GoalPaused, GoalBlocked, GoalUsageLimited, GoalBudgetLimited, GoalComplete:

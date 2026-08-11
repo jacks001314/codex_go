@@ -3,10 +3,12 @@ package install
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -51,6 +53,12 @@ type CodexPackageLayout struct {
 	BinDir       string  `json:"binDir"`
 	ResourcesDir *string `json:"resourcesDir,omitempty"`
 	PathDir      *string `json:"pathDir,omitempty"`
+}
+
+// CodexPackageManifest is the version metadata recorded in a bundled Codex
+// runtime package (codex-package.json).
+type CodexPackageManifest struct {
+	Version string `json:"version"`
 }
 
 type InstallMethod struct {
@@ -216,6 +224,45 @@ func (c *InstallContext) BundledZshBinDir() *string {
 	return &dir
 }
 
+// PackageManifest reads the manifest for the package that contains the current
+// executable. It returns nil when no package layout is known or the manifest is
+// missing or malformed (mirrors the Rust install-context behavior).
+func (c *InstallContext) PackageManifest() *CodexPackageManifest {
+	if c == nil || c.PackageLayout == nil {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(c.PackageLayout.PackageDir, packageMetadataFilename))
+	if err != nil {
+		return nil
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil
+	}
+	if !validPackageManifestVersion(manifest.Version) {
+		return nil
+	}
+	return &CodexPackageManifest{Version: manifest.Version}
+}
+
+func validPackageManifestVersion(version string) bool {
+	parts := strings.Split(strings.TrimSpace(version), ".")
+	if len(parts) < 3 {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if parts[i] == "" {
+			return false
+		}
+		if _, err := strconv.Atoi(parts[i]); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func ManagedCodexBin(codexHome string) string {
 	return filepath.Join(codexHome, "packages", standalonePackagesDirname, "current", managedCodexFileName())
 }
@@ -245,16 +292,30 @@ func PackageLayoutFromExe(exePath string) *CodexPackageLayout {
 		canonicalExe = resolved
 	}
 	exeDir := filepath.Dir(canonicalExe)
-	if filepath.Base(exeDir) != binDirname {
+	binDir := exeDir
+	switch filepath.Base(exeDir) {
+	case binDirname:
+		// The executable lives directly in the package bin/ directory.
+		if existingDir(binDir) == nil {
+			return nil
+		}
+	case resourcesDirname:
+		// The executable lives in the package codex-resources/ directory;
+		// resolve the sibling bin/ directory and require it to exist.
+		binDir = filepath.Join(filepath.Dir(exeDir), binDirname)
+		if existingDir(binDir) == nil {
+			return nil
+		}
+	default:
 		return nil
 	}
-	packageDir := filepath.Dir(exeDir)
+	packageDir := filepath.Dir(binDir)
 	if !isFile(filepath.Join(packageDir, packageMetadataFilename)) {
 		return nil
 	}
 	return &CodexPackageLayout{
 		PackageDir:   packageDir,
-		BinDir:       exeDir,
+		BinDir:       binDir,
 		ResourcesDir: existingDir(filepath.Join(packageDir, resourcesDirname)),
 		PathDir:      existingDir(filepath.Join(packageDir, pathDirname)),
 	}

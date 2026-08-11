@@ -5932,6 +5932,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		CodexErrorKind:                       codexErrorKind,
 		CodexErrorHTTPStatusCode:             codexErrorHTTPStatusCode,
 		SteerCount:                           intPtrAppserver(steerCount),
+		RunningBackgroundProcessCount:        intPtrAppserver(r.requireThreadExtras().CountBackgroundTerminals(params.ThreadID)),
 		ToolCounts:                           analyticsTurnToolCounts(result),
 		TokenUsage:                           analyticsTurnTokenUsage(result),
 		TimingProfile:                        analyticsTurnTimingProfile(result),

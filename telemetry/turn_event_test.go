@@ -31,6 +31,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 		IsFirstTurn:          true,
 		Status:               stringPtrTelemetry("completed"),
 		SteerCount:           intPtrTelemetry(0),
+		RunningBackgroundProcessCount: intPtrTelemetry(3),
 		TimingProfile: CodexTurnTimingProfile{
 			BeforeFirstSamplingMS:     100,
 			SamplingMS:                700,
@@ -95,6 +96,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"codex_error_kind": null,
 			"codex_error_http_status_code": null,
 			"steer_count": 0,
+			"running_background_process_count": 3,
 			"total_tool_call_count": null,
 			"shell_command_count": null,
 			"file_change_count": null,

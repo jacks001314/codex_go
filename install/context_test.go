@@ -90,6 +90,103 @@ func TestDetectsPackageLayout(t *testing.T) {
 	}
 }
 
+func TestDetectsPackageLayoutFromResourcesDir(t *testing.T) {
+	packageDir := t.TempDir()
+	binDir := filepath.Join(packageDir, binDirname)
+	resourcesDir := filepath.Join(packageDir, resourcesDirname)
+	pathDir := filepath.Join(packageDir, pathDirname)
+	for _, dir := range []string{binDir, resourcesDir, pathDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	exePath := filepath.Join(resourcesDir, "codex")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	layout := PackageLayoutFromExe(exePath)
+	if layout == nil || layout.PackageDir != packageDir || layout.BinDir != binDir {
+		t.Fatalf("layout = %+v, want packageDir %q binDir %q", layout, packageDir, binDir)
+	}
+	if layout.ResourcesDir == nil || *layout.ResourcesDir != resourcesDir {
+		t.Fatalf("resourcesDir = %#v, want %q", layout.ResourcesDir, resourcesDir)
+	}
+}
+
+func TestDetectsPackageLayoutFromResourcesDirRequiresBinDir(t *testing.T) {
+	packageDir := t.TempDir()
+	resourcesDir := filepath.Join(packageDir, resourcesDirname)
+	if err := os.MkdirAll(resourcesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(resources) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	exePath := filepath.Join(resourcesDir, "codex")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	if layout := PackageLayoutFromExe(exePath); layout != nil {
+		t.Fatalf("PackageLayoutFromExe() = %+v, want nil (sibling bin/ missing)", layout)
+	}
+}
+
+func TestPackageManifestParsesVersion(t *testing.T) {
+	packageDir := t.TempDir()
+	binDir := filepath.Join(packageDir, binDirname)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(bin) error = %v", err)
+	}
+	manifest := `{
+  "layoutVersion": 1,
+  "version": "1.2.3",
+  "target": "x86_64-unknown-linux-musl",
+  "variant": "codex",
+  "entrypoint": "bin/codex",
+  "resourcesDir": "codex-resources",
+  "pathDir": "codex-path"
+}
+`
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	exePath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	context := &InstallContext{Method: InstallMethod{Kind: InstallOther}, PackageLayout: PackageLayoutFromExe(exePath)}
+	if got := context.PackageManifest(); got == nil || got.Version != "1.2.3" {
+		t.Fatalf("PackageManifest() = %#v, want version 1.2.3", got)
+	}
+}
+
+func TestPackageManifestRejectsMissingOrInvalidManifest(t *testing.T) {
+	packageDir := t.TempDir()
+	binDir := filepath.Join(packageDir, binDirname)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(bin) error = %v", err)
+	}
+	exePath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	// Missing manifest file.
+	context := &InstallContext{Method: InstallMethod{Kind: InstallOther}, PackageLayout: PackageLayoutFromExe(exePath)}
+	if got := context.PackageManifest(); got != nil {
+		t.Fatalf("PackageManifest(missing) = %#v, want nil", got)
+	}
+	// Malformed version.
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte(`{"version":"not-a-version"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	if got := context.PackageManifest(); got != nil {
+		t.Fatalf("PackageManifest(invalid) = %#v, want nil", got)
+	}
+}
+
 func TestCodeModeHostProgramFallsBackNextToCurrentExecutable(t *testing.T) {
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, managedCodexFileName())
