@@ -77,6 +77,8 @@ func RenderDebugConfigLines(read *config.ConfigReadResponse, requirements *confi
 
 func FormatConfigLayerSource(source config.LayerSource) string {
 	switch source.Type {
+	case config.LayerSourcePackagedDefaults:
+		return fmt.Sprintf("packaged defaults (%s)", source.File)
 	case config.LayerSourceMDM:
 		return fmt.Sprintf("MDM (%s:%s)", source.Domain, source.Key)
 	case config.LayerSourceSystem:

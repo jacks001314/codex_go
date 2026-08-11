@@ -69,6 +69,7 @@ type LayerSourceType string
 
 const (
 	LayerSourceMDM                         LayerSourceType = "mdm"
+	LayerSourcePackagedDefaults            LayerSourceType = "packagedDefaults"
 	LayerSourceSystem                      LayerSourceType = "system"
 	LayerSourceEnterpriseManaged           LayerSourceType = "enterpriseManaged"
 	LayerSourceUser                        LayerSourceType = "user"
@@ -92,6 +93,11 @@ type LayerSource struct {
 
 func (s LayerSource) MarshalJSON() ([]byte, error) {
 	switch s.Type {
+	case LayerSourcePackagedDefaults:
+		return json.Marshal(struct {
+			Type LayerSourceType `json:"type"`
+			File string          `json:"file"`
+		}{Type: s.Type, File: s.File})
 	case LayerSourceMDM:
 		return json.Marshal(struct {
 			Type   LayerSourceType `json:"type"`
@@ -140,6 +146,8 @@ func (s *LayerSource) Precedence() int16 {
 		return -1
 	}
 	switch s.Type {
+	case LayerSourcePackagedDefaults:
+		return -10
 	case LayerSourceMDM:
 		return 0
 	case LayerSourceSystem:
@@ -1437,19 +1445,20 @@ func migrationDetailsHasEntries(item *ExternalAgentConfigMigrationItem) bool {
 }
 
 type ConfigService struct {
-	mu                   sync.Mutex
-	codexHome            string
-	profile              string
-	userConfig           string
-	requirements         *ConfigRequirements
-	requirementsOverride bool
-	warnings             []ConfigWarningNotification
-	managedLayers        []Layer
-	featureDefaults      map[string]bool
-	importHistory        []ExternalAgentConfigImportHistory
-	nextImportID         int
-	externalAgentHome    string
-	now                  func() time.Time
+	mu                    sync.Mutex
+	codexHome             string
+	profile               string
+	userConfig            string
+	packagedDefaultsLayer *Layer
+	requirements          *ConfigRequirements
+	requirementsOverride  bool
+	warnings              []ConfigWarningNotification
+	managedLayers         []Layer
+	featureDefaults       map[string]bool
+	importHistory         []ExternalAgentConfigImportHistory
+	nextImportID          int
+	externalAgentHome     string
+	now                   func() time.Time
 }
 
 func NewConfigService(codexHome string) *ConfigService {
@@ -1610,6 +1619,31 @@ func (s *ConfigService) SetManagedLayers(layers []Layer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.managedLayers = cloneLayers(layers)
+}
+
+// SetPackagedDefaultsLayer installs an optional package-supplied configuration
+// file as the lowest-precedence configuration layer. A configured path that is
+// missing on disk is an error (mirrors the Rust loader behavior).
+func (s *ConfigService) SetPackagedDefaultsLayer(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	values, exists, err := loadConfigFileIfExists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("packaged defaults config file %s not found", path)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packagedDefaultsLayer = &Layer{
+		Name:    LayerSource{Type: LayerSourcePackagedDefaults, File: path},
+		Version: configVersion(values),
+		Config:  cloneMap(values),
+	}
+	return nil
 }
 
 func (s *ConfigService) SetFeatureEnablementDefaults(enablement map[string]bool) {
@@ -1862,8 +1896,12 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 func (s *ConfigService) readLayers(userLayer Layer) []Layer {
 	s.mu.Lock()
 	managed := cloneLayers(s.managedLayers)
+	packagedDefaults := cloneLayerPtr(s.packagedDefaultsLayer)
 	s.mu.Unlock()
 	layers := make([]Layer, 0, 1+len(managed))
+	if packagedDefaults != nil {
+		layers = append(layers, *packagedDefaults)
+	}
 	layers = append(layers, userLayer)
 	layers = append(layers, managed...)
 	sort.SliceStable(layers, func(i int, j int) bool {
@@ -1878,11 +1916,18 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 	if err != nil {
 		return nil, err
 	}
-	layers := []Layer{{
+	s.mu.Lock()
+	packagedDefaults := cloneLayerPtr(s.packagedDefaultsLayer)
+	s.mu.Unlock()
+	layers := []Layer{}
+	if packagedDefaults != nil {
+		layers = append(layers, *packagedDefaults)
+	}
+	layers = append(layers, Layer{
 		Name:    LayerSource{Type: LayerSourceUser, File: userPath},
 		Version: configVersion(userValues),
 		Config:  cloneMap(userValues),
-	}}
+	})
 	if projectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {
 			path := filepath.Join(dotCodexFolder, "config.toml")
@@ -1980,16 +2025,29 @@ func cloneLayers(layers []Layer) []Layer {
 	}
 	out := make([]Layer, len(layers))
 	for i := range layers {
-		out[i] = layers[i]
-		if configMap, ok := layers[i].Config.(map[string]any); ok {
-			out[i].Config = cloneMap(configMap)
-		}
-		if layers[i].DisabledReason != nil {
-			value := *layers[i].DisabledReason
-			out[i].DisabledReason = &value
-		}
+		out[i] = cloneLayer(&layers[i])
 	}
 	return out
+}
+
+func cloneLayerPtr(layer *Layer) *Layer {
+	if layer == nil {
+		return nil
+	}
+	cloned := cloneLayer(layer)
+	return &cloned
+}
+
+func cloneLayer(layer *Layer) Layer {
+	cloned := *layer
+	if configMap, ok := layer.Config.(map[string]any); ok {
+		cloned.Config = cloneMap(configMap)
+	}
+	if layer.DisabledReason != nil {
+		value := *layer.DisabledReason
+		cloned.DisabledReason = &value
+	}
+	return cloned
 }
 
 func (s *ConfigService) currentProfile() string {

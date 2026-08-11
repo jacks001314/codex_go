@@ -105,6 +105,7 @@ const DefaultProjectDocMaxBytes = 32 * 1024
 type LoadOptions struct {
 	Profile              string
 	CWD                  string
+	PackagedDefaultsPath string
 	IncludeManagedConfig bool
 	ManagedConfigPath    string
 	CloudConfigBundle    *CloudConfigLoader
@@ -113,6 +114,7 @@ type LoadOptions struct {
 type EffectiveOptions struct {
 	Profile              string
 	CWD                  string
+	PackagedDefaultsPath string
 	RawOverrides         []string
 	EnableFeatures       []string
 	DisableFeatures      []string
@@ -127,10 +129,26 @@ func Load(codexHome string) (*Config, error) {
 }
 
 func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
-	values, err := loadConfigFile(ConfigPath(codexHome))
+	values := map[string]any{}
+	packagedDefaultsPath := ""
+	if opts != nil {
+		packagedDefaultsPath = strings.TrimSpace(opts.PackagedDefaultsPath)
+	}
+	if packagedDefaultsPath != "" {
+		packagedDefaults, exists, err := loadConfigFileIfExists(packagedDefaultsPath)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, fmt.Errorf("packaged defaults config file %s not found", packagedDefaultsPath)
+		}
+		values = packagedDefaults
+	}
+	userValues, err := loadConfigFile(ConfigPath(codexHome))
 	if err != nil {
 		return nil, err
 	}
+	mergeConfigMaps(values, userValues)
 	profile := ""
 	cwd := ""
 	if opts != nil {
@@ -202,6 +220,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if opts != nil {
 		loadOpts.Profile = opts.Profile
 		loadOpts.CWD = opts.CWD
+		loadOpts.PackagedDefaultsPath = opts.PackagedDefaultsPath
 		loadOpts.IncludeManagedConfig = opts.IncludeManagedConfig
 		loadOpts.ManagedConfigPath = opts.ManagedConfigPath
 		loadOpts.CloudConfigBundle = opts.CloudConfigBundle

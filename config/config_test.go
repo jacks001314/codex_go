@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,6 +52,77 @@ func TestLoadConfigAcceptsUTF8BOM(t *testing.T) {
 	}
 	if loaded.Values["model"] != "gpt-bom" {
 		t.Fatalf("model = %#v", loaded.Values["model"])
+	}
+}
+
+func TestPackagedDefaultsLowestPrecedenceAndMissingFileError(t *testing.T) {
+	home := t.TempDir()
+	packagedPath := filepath.Join(home, "packaged.toml")
+	if err := os.WriteFile(packagedPath, []byte("model = \"packaged-model\"\napproval_policy = \"never\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(packaged) error = %v", err)
+	}
+	userPath := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(userPath, []byte("model = \"user-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	cfg, err := LoadWithOptions(home, &LoadOptions{PackagedDefaultsPath: packagedPath})
+	if err != nil {
+		t.Fatalf("LoadWithOptions(packaged defaults) error = %v", err)
+	}
+	if got := cfg.Values["model"]; got != "user-model" {
+		t.Fatalf("user layer should override packaged defaults; model = %v", got)
+	}
+	if got := cfg.Values["approval_policy"]; got != "never" {
+		t.Fatalf("packaged defaults value should survive when user layer is silent; approval_policy = %v", got)
+	}
+	missing := filepath.Join(home, "missing.toml")
+	if _, err := LoadWithOptions(home, &LoadOptions{PackagedDefaultsPath: missing}); err == nil {
+		t.Fatal("expected missing packaged defaults file error")
+	}
+}
+
+func TestPackagedDefaultsLayerSourceWireShape(t *testing.T) {
+	home := t.TempDir()
+	packagedPath := filepath.Join(home, "packaged.toml")
+	if err := os.WriteFile(packagedPath, []byte("model = \"packaged-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(packaged) error = %v", err)
+	}
+	if err := os.WriteFile(ConfigPath(home), []byte("model = \"user-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	service := NewConfigService(home)
+	if err := service.SetPackagedDefaultsLayer(packagedPath); err != nil {
+		t.Fatalf("SetPackagedDefaultsLayer error = %v", err)
+	}
+	read, err := service.Read(&ConfigReadParams{IncludeLayers: true})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(read.Layers) < 2 {
+		t.Fatalf("layers = %d, want packaged defaults + user", len(read.Layers))
+	}
+	packaged := read.Layers[0]
+	if packaged.Name.Type != LayerSourcePackagedDefaults || packaged.Name.File != packagedPath {
+		t.Fatalf("first layer = %+v, want packagedDefaults %s", packaged.Name, packagedPath)
+	}
+	if got := read.Origins["model"].Name.Type; got != LayerSourceUser {
+		t.Fatalf("model origin = %v, want user (packaged defaults are overridden)", got)
+	}
+	if got := read.Config["model"]; got != "user-model" {
+		t.Fatalf("effective model = %v, want user-model", got)
+	}
+	data, err := json.Marshal(packaged.Name)
+	if err != nil {
+		t.Fatalf("Marshal(layer source) error = %v", err)
+	}
+	if !strings.Contains(string(data), "\"type\":\"packagedDefaults\"") || !strings.Contains(string(data), "\"file\":") {
+		t.Fatalf("wire shape = %s, want packagedDefaults type + file", data)
+	}
+	if got := packaged.Name.Precedence(); got != -10 {
+		t.Fatalf("packaged defaults precedence = %d, want -10", got)
+	}
+	if err := service.SetPackagedDefaultsLayer(filepath.Join(home, "nope.toml")); err == nil {
+		t.Fatal("expected missing packaged defaults layer error")
 	}
 }
 
