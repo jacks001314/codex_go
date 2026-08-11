@@ -1131,7 +1131,16 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 	optionalDeadlines := map[int]time.Time{}
 	for index, name := range pending {
 		if !requiredIndexes[index] {
-			optionalDeadlines[index] = sharedOptionalStartupDeadline(name, configs[name], defaultDeadline)
+			config := configs[name]
+			agentPlugin := servers[index].PluginID != nil
+			oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
+			if key, eligible := mcpToolCatalogGraceKey(name, &config, s.openAIForm, agentPlugin, oauthResolved); eligible {
+				optionalDeadlines[index] = sharedOptionalStartupDeadlineForKey(key, defaultDeadline)
+			} else {
+				// OAuth / dynamically-resolved-credential HTTP configs stay out of
+				// the shared catalog cache: each connection set warms its own.
+				optionalDeadlines[index] = defaultDeadline
+			}
 		}
 	}
 	for len(pending) > 0 {
@@ -1232,7 +1241,10 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	config := s.configs[name]
 	s.mu.Unlock()
 	if status.State == MCPServerReady {
-		clearSharedOptionalStartupDeadline(name, config)
+		oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
+		if key, eligible := mcpToolCatalogGraceKey(name, &config, s.openAIForm, status.PluginID != nil, oauthResolved); eligible {
+			clearSharedOptionalStartupDeadlineForKey(key)
+		}
 	}
 }
 
@@ -1248,8 +1260,7 @@ func (s *MCPService) markServerStartupStarted(name string) {
 	s.mu.Unlock()
 }
 
-func sharedOptionalStartupDeadline(name string, config ServerConfig, fallback time.Time) time.Time {
-	key := optionalStartupGraceKey(name, config)
+func sharedOptionalStartupDeadlineForKey(key string, fallback time.Time) time.Time {
 	sharedOptionalMCPStartupGrace.Lock()
 	defer sharedOptionalMCPStartupGrace.Unlock()
 	if deadline, ok := sharedOptionalMCPStartupGrace.deadlines[key]; ok {
@@ -1259,15 +1270,107 @@ func sharedOptionalStartupDeadline(name string, config ServerConfig, fallback ti
 	return fallback
 }
 
-func clearSharedOptionalStartupDeadline(name string, config ServerConfig) {
-	key := optionalStartupGraceKey(name, config)
+func clearSharedOptionalStartupDeadlineForKey(key string) {
 	sharedOptionalMCPStartupGrace.Lock()
 	delete(sharedOptionalMCPStartupGrace.deadlines, key)
 	sharedOptionalMCPStartupGrace.Unlock()
 }
 
-func optionalStartupGraceKey(name string, config ServerConfig) string {
-	return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(&config, false)
+// hasExplicitHTTPAuthorization mirrors Rust's has_explicit_http_authorization
+// (codex-rs/codex-mcp/src/server.rs): a streamable HTTP config has an explicit
+// authorization only when it carries a non-empty, printable Authorization value
+// in http_headers and does not defer the credential to a bearer token env var or
+// env-supplied http headers.
+func hasExplicitHTTPAuthorization(config *ServerConfig) bool {
+	if config == nil || strings.TrimSpace(config.URL) == "" {
+		return false
+	}
+	if strings.TrimSpace(config.BearerTokenEnvVar) != "" || len(config.EnvHTTPHeaders) > 0 {
+		return false
+	}
+	for name, value := range config.HTTPHeaders {
+		if !strings.EqualFold(strings.TrimSpace(name), "Authorization") || strings.TrimSpace(value) == "" {
+			continue
+		}
+		valid := true
+		for _, character := range []byte(value) {
+			if character != '\t' && (character < ' ' || character == 0x7f) {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpToolCatalogCacheEligible mirrors Rust's ToolCatalogTransportIdentity::new
+// HTTP branch (codex-rs/codex-mcp/src/tool_catalog_cache.rs): streamable HTTP
+// configs participate in the process-scoped tool catalog cache only when their
+// authentication identity can be derived safely. OAuth / scopes / oauth_resource
+// configs, ChatGpt auth without explicit HTTP authorization, and dynamically
+// resolved OAuth credentials are kept out of the shared cache. Stdio configs
+// remain eligible as before.
+func mcpToolCatalogCacheEligible(config *ServerConfig, oauthCredentialsResolved bool) bool {
+	if config == nil || strings.TrimSpace(config.URL) == "" {
+		return true
+	}
+	if strings.TrimSpace(config.OAuthClientID) != "" || strings.TrimSpace(config.OAuthResource) != "" || config.ScopesConfigured {
+		return false
+	}
+	explicit := hasExplicitHTTPAuthorization(config)
+	if strings.EqualFold(config.EffectiveAuth(), ServerAuthChatGPT) && !explicit {
+		return false
+	}
+	if !explicit && oauthCredentialsResolved {
+		return false
+	}
+	return true
+}
+
+// mcpToolCatalogGraceKey builds the shared optional-startup-grace identity for a
+// server. The returned eligible flag mirrors Rust: only cache-eligible servers
+// (stdio, or HTTP configs whose auth identity can be derived safely) share the
+// process-wide catalog identity; OAuth / dynamically-resolved-credential HTTP
+// configs stay out of the shared cache and each connection set warms its own
+// catalog.
+//
+// For streamable HTTP configs the fingerprint additionally covers resolved
+// bearer-token / env-header values and agent-plugin status, so catalogs are
+// reused only across equivalent connections (Rust 0ca439900e).
+func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, agentPlugin bool, oauthCredentialsResolved bool) (string, bool) {
+	if config == nil {
+		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
+	}
+	if strings.TrimSpace(config.Command) != "" {
+		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
+	}
+	if strings.TrimSpace(config.URL) == "" {
+		return "", false
+	}
+	if !mcpToolCatalogCacheEligible(config, oauthCredentialsResolved) {
+		return "", false
+	}
+	key := mcpConnectionCacheKey(config, openAIForm)
+	envNames := make([]string, 0, 1+len(config.EnvHTTPHeaders))
+	if envVar := strings.TrimSpace(config.BearerTokenEnvVar); envVar != "" {
+		envNames = append(envNames, envVar)
+	}
+	for _, envVar := range config.EnvHTTPHeaders {
+		if envVar = strings.TrimSpace(envVar); envVar != "" {
+			envNames = append(envNames, envVar)
+		}
+	}
+	sort.Strings(envNames)
+	for _, envName := range envNames {
+		key += "\x1f" + envName + "=" + os.Getenv(envName)
+	}
+	if agentPlugin {
+		key += "|agentPlugin=1"
+	}
+	return strings.TrimSpace(name) + "\x00" + key, true
 }
 
 func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOauthLoginResponse, error) {

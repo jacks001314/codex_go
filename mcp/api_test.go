@@ -1215,3 +1215,183 @@ func TestNewMCPServicePopulatesPluginIDFromRegistration(t *testing.T) {
 		t.Fatalf("config server status = %#v", status)
 	}
 }
+
+func TestHasExplicitHTTPAuthorizationMatchesRust(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *ServerConfig
+		want   bool
+	}{
+		{name: "nil"},
+		{name: "stdio", config: &ServerConfig{Command: "mcp-server", Enabled: true}},
+		{name: "no headers", config: &ServerConfig{URL: "https://example.test/mcp", Enabled: true}},
+		{name: "authorization header", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"Authorization": "Bearer cached-http-test-token"},
+		}, want: true},
+		{name: "mixed-case authorization header", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"aUtHoRiZaTiOn": "Bearer cached-http-test-token"},
+		}, want: true},
+		{name: "empty authorization", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"Authorization": ""},
+		}},
+		{name: "whitespace authorization", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"Authorization": " \t "},
+		}},
+		{name: "non-authorization header only", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"X-API-Key": "secret"},
+		}},
+		{name: "bearer token env var", config: &ServerConfig{
+			URL:               "https://example.test/mcp",
+			HTTPHeaders:       map[string]string{"Authorization": "Bearer cached-http-test-token"},
+			BearerTokenEnvVar: "MCP_TOKEN",
+		}},
+		{name: "env http headers", config: &ServerConfig{
+			URL:            "https://example.test/mcp",
+			HTTPHeaders:    map[string]string{"Authorization": "Bearer cached-http-test-token"},
+			EnvHTTPHeaders: map[string]string{"X-Trace": "TRACE_TOKEN"},
+		}},
+		{name: "control characters rejected", config: &ServerConfig{
+			URL:         "https://example.test/mcp",
+			HTTPHeaders: map[string]string{"Authorization": "Bearer cached-http-test-token\r\nX: y"},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hasExplicitHTTPAuthorization(test.config); got != test.want {
+				t.Fatalf("hasExplicitHTTPAuthorization() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMCPToolCatalogCacheEligibleMatchesRust(t *testing.T) {
+	tests := []struct {
+		name                     string
+		config                   *ServerConfig
+		oauthCredentialsResolved bool
+		want                     bool
+	}{
+		{name: "nil", want: true},
+		{name: "stdio", config: &ServerConfig{Command: "mcp-server", Enabled: true}, want: true},
+		{name: "stdio with oauth fields still eligible", config: &ServerConfig{
+			Command: "mcp-server", OAuthClientID: "client-1", Enabled: true,
+		}, want: true},
+		{name: "http explicit authorization", config: &ServerConfig{
+			URL: "https://example.test/mcp", HTTPHeaders: map[string]string{"Authorization": "Bearer token"},
+		}, want: true},
+		{name: "http oauth client id excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp", OAuthClientID: "client-1",
+		}},
+		{name: "http oauth resource excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp", OAuthResource: "https://resource.example.test",
+		}},
+		{name: "http scopes configured excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp", ScopesConfigured: true,
+		}},
+		{name: "http chatgpt without explicit auth excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp", Auth: ServerAuthChatGPT,
+		}},
+		{name: "http chatgpt with explicit auth eligible", config: &ServerConfig{
+			URL: "https://example.test/mcp", Auth: ServerAuthChatGPT,
+			HTTPHeaders: map[string]string{"Authorization": "Bearer chatgpt-token"},
+		}, want: true},
+		{name: "http no explicit auth with resolved oauth credentials excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp",
+		}, oauthCredentialsResolved: true},
+		{name: "http explicit auth with resolved oauth credentials still eligible", config: &ServerConfig{
+			URL: "https://example.test/mcp", HTTPHeaders: map[string]string{"Authorization": "Bearer token"},
+		}, oauthCredentialsResolved: true, want: true},
+		{name: "http bearer token env var no explicit auth resolved oauth excluded", config: &ServerConfig{
+			URL: "https://example.test/mcp", BearerTokenEnvVar: "MCP_TOKEN",
+		}, oauthCredentialsResolved: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := mcpToolCatalogCacheEligible(test.config, test.oauthCredentialsResolved); got != test.want {
+				t.Fatalf("mcpToolCatalogCacheEligible() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMCPToolCatalogGraceKeyFingerprintsHTTPEnvironmentAndPlugin(t *testing.T) {
+	base := &ServerConfig{
+		URL:               "https://example.test/mcp",
+		HTTPHeaders:       map[string]string{"Authorization": "Bearer cached-http-test-token", "X-Extra": "1"},
+		BearerTokenEnvVar: "MCP_BEARER_TOKEN",
+		EnvHTTPHeaders:    map[string]string{"X-Trace": "MCP_TRACE_TOKEN"},
+		EnvironmentID:     "local",
+	}
+	firstKey, firstEligible := mcpToolCatalogGraceKey("docs", base, false, false, false)
+	if !firstEligible {
+		t.Fatal("explicit-auth HTTP config should be cache eligible")
+	}
+
+	t.Setenv("MCP_BEARER_TOKEN", "token-a")
+	t.Setenv("MCP_TRACE_TOKEN", "trace-a")
+	keyA, eligibleA := mcpToolCatalogGraceKey("docs", base, false, false, false)
+	if !eligibleA {
+		t.Fatal("explicit-auth HTTP config should be cache eligible with env values")
+	}
+	if keyA == firstKey {
+		t.Fatal("grace key should differ when referenced env var values change")
+	}
+
+	pluginKey, pluginEligible := mcpToolCatalogGraceKey("docs", base, false, true, false)
+	if !pluginEligible {
+		t.Fatal("explicit-auth HTTP config should be cache eligible for plugins")
+	}
+	if pluginKey == keyA {
+		t.Fatal("grace key should differ when agent plugin status changes")
+	}
+
+	openAIKey, openAIEligible := mcpToolCatalogGraceKey("docs", base, true, false, false)
+	if !openAIEligible {
+		t.Fatal("explicit-auth HTTP config should be cache eligible in openAI form")
+	}
+	if openAIKey == keyA {
+		t.Fatal("grace key should differ when client capabilities change")
+	}
+
+	if _, eligible := mcpToolCatalogGraceKey("docs", &ServerConfig{
+		URL: "https://example.test/oauth", OAuthClientID: "client-1",
+	}, false, false, false); eligible {
+		t.Fatal("OAuth HTTP config should stay out of the shared catalog cache")
+	}
+
+	reordered := *base
+	reordered.HTTPHeaders = map[string]string{"X-Extra": "1", "Authorization": "Bearer cached-http-test-token"}
+	keyReordered, eligibleReordered := mcpToolCatalogGraceKey("docs", &reordered, false, false, false)
+	if !eligibleReordered {
+		t.Fatal("explicit-auth HTTP config should be cache eligible after header reorder")
+	}
+	if keyReordered != keyA {
+		t.Fatal("grace key should be insensitive to header map order")
+	}
+}
+
+func TestMCPToolCatalogGraceKeySharesOnlyForEligibleServers(t *testing.T) {
+	eligible := &ServerConfig{
+		URL: "https://example.test/mcp", HTTPHeaders: map[string]string{"Authorization": "Bearer token"},
+	}
+	key, eligibleOK := mcpToolCatalogGraceKey("docs", eligible, false, false, false)
+	if !eligibleOK {
+		t.Fatal("explicit-auth HTTP config should be cache eligible")
+	}
+	first := sharedOptionalStartupDeadlineForKey(key, time.Now().Add(time.Minute))
+	second := sharedOptionalStartupDeadlineForKey(key, time.Now().Add(2*time.Minute))
+	if !first.Equal(second) {
+		t.Fatal("eligible HTTP config should share the process-wide optional startup grace")
+	}
+	clearSharedOptionalStartupDeadlineForKey(key)
+
+	oauth := &ServerConfig{URL: "https://example.test/oauth", OAuthClientID: "client-1"}
+	if key, eligible := mcpToolCatalogGraceKey("docs", oauth, false, false, false); eligible {
+		t.Fatalf("OAuth HTTP config should not produce a shared grace key, got %q", key)
+	}
+}
