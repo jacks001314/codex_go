@@ -8,6 +8,7 @@ import (
 
 const (
 	ThreadIDEnvVar          = "CODEX_THREAD_ID"
+	SessionIDEnvVar         = "CODEX_SESSION_ID"
 	PermissionProfileEnvVar = "CODEX_PERMISSION_PROFILE"
 )
 
@@ -100,6 +101,19 @@ func InjectPermissionProfile(env map[string]string, profileID *string) {
 	removeKey(env, PermissionProfileEnvVar)
 	if profileID != nil && strings.TrimSpace(*profileID) != "" {
 		env[PermissionProfileEnvVar] = strings.TrimSpace(*profileID)
+	}
+}
+
+// InjectSessionID exposes the shared root-session identity to model-reachable
+// shell commands. The session ID is applied after the shell environment policy
+// so the runtime-selected value is authoritative.
+func InjectSessionID(env map[string]string, sessionID *string) {
+	if env == nil {
+		return
+	}
+	removeKey(env, SessionIDEnvVar)
+	if sessionID != nil && strings.TrimSpace(*sessionID) != "" {
+		env[SessionIDEnvVar] = strings.TrimSpace(*sessionID)
 	}
 }
 

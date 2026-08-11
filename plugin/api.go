@@ -980,6 +980,9 @@ type PluginInstallParams struct {
 	MarketplacePath       string `json:"marketplacePath,omitempty"`
 	MarketplaceName       string `json:"marketplaceName,omitempty"`
 	RemoteMarketplaceName string `json:"remoteMarketplaceName,omitempty"`
+	// InstallAttemptID lets clients correlate a remote plugin installation
+	// request with a specific installation attempt (Rust 89a335ed50).
+	InstallAttemptID string `json:"installAttemptId,omitempty"`
 }
 
 func (p *PluginInstallParams) MarshalJSON() ([]byte, error) {
@@ -997,10 +1000,12 @@ func (p *PluginInstallParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		MarketplacePath       *string `json:"marketplacePath"`
 		RemoteMarketplaceName *string `json:"remoteMarketplaceName"`
+		InstallAttemptID      *string `json:"installAttemptId"`
 		PluginName            string  `json:"pluginName"`
 	}{
 		MarketplacePath:       stringPtrIfNotEmpty(p.MarketplacePath),
 		RemoteMarketplaceName: stringPtrIfNotEmpty(remoteMarketplaceName),
+		InstallAttemptID:      stringPtrIfNotEmpty(p.InstallAttemptID),
 		PluginName:            pluginName,
 	})
 }

@@ -2133,7 +2133,8 @@ func TestResponsesAgentRunnerStreamsResponsesSSE(t *testing.T) {
 		w.Header().Set("x-codex-secondary-limit-name", "gpt-secondary")
 		_, _ = w.Write([]byte(responsesSSE(
 			`{"type":"response.metadata","headers":{"openai-model":"gpt-metadata"}}`,
-			`{"type":"response.metadata","metadata":{"model_reroute":{"from_model":"gpt-old","to_model":"gpt-new","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"flagged":true},"safety_buffering":{"model":"gpt-new","use_cases":["cyber"],"reasons":["review"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}}`,
+			`{"type":"response.metadata","metadata":{"model_reroute":{"from_model":"gpt-old","to_model":"gpt-new","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"flagged":true}}}`,
+			`{"type":"response.metadata","metadata":{"type":"safety_buffering","use_cases":["cyber"],"reasons":["review"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}`,
 			`{"type":"response.created","response":{"id":"resp-1"}}`,
 			`{"type":"responsesapi.websocket_timing","timing_metrics":{"responses_duration_excl_engine_and_client_tool_time_ms":120,"engine_iapi_ttft_total_ms":310,"engine_service_ttft_total_ms":340}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,

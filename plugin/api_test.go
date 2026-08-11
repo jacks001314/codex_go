@@ -1302,18 +1302,22 @@ func TestPluginLifecycleAndShares(t *testing.T) {
 		MarketplaceName:       "legacy-local",
 		RemoteMarketplaceName: "remote-catalog",
 		PluginName:            "sample",
+		InstallAttemptID:      "attempt-42",
 	})
 	for _, legacyKey := range []string{"pluginId", "marketplaceName"} {
 		if _, ok := installParamsPayload[legacyKey]; ok {
 			t.Fatalf("legacy install params key %q should not be emitted: %#v", legacyKey, installParamsPayload)
 		}
 	}
-	if installParamsPayload["remoteMarketplaceName"] != "remote-catalog" || installParamsPayload["pluginName"] != "sample" {
+	if installParamsPayload["remoteMarketplaceName"] != "remote-catalog" || installParamsPayload["pluginName"] != "sample" || installParamsPayload["installAttemptId"] != "attempt-42" {
 		t.Fatalf("install params payload = %#v", installParamsPayload)
 	}
 	installNullablePayload := marshalObject(t, &PluginInstallParams{MarketplacePath: "/marketplaces/local", PluginName: "sample"})
 	if value, ok := installNullablePayload["remoteMarketplaceName"]; !ok || value != nil {
 		t.Fatalf("install nullable remote marketplace = %#v in %#v", value, installNullablePayload)
+	}
+	if value, ok := installNullablePayload["installAttemptId"]; !ok || value != nil {
+		t.Fatalf("install nullable installAttemptId = %#v in %#v", value, installNullablePayload)
 	}
 	summaryEncoded, err := json.Marshal(list.Plugins[0])
 	if err != nil {

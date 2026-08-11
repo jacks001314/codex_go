@@ -378,23 +378,24 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 }
 
 type ResponsesClientMetadataOptions struct {
-	InstallationID     string
-	SessionID          string
-	ThreadID           string
-	TurnID             string
-	WindowID           string
-	RequestKind        codexapi.ClientRequestKind
-	ForkedFromThreadID string
-	ParentThreadID     string
-	ParentTurnID       string
-	SubagentHeader     string
-	SubagentKind       string
-	ThreadSource       string
-	Sandbox            string
-	SandboxMode        string
-	Extra              map[string]string
-	StartedAtMS        int64
-	UseResponsesLite   bool
+	InstallationID       string
+	SessionID            string
+	ThreadID             string
+	TurnID               string
+	WindowID             string
+	RequestKind          codexapi.ClientRequestKind
+	ForkedFromThreadID   string
+	ParentThreadID       string
+	ParentTurnID         string
+	SubagentHeader       string
+	SubagentKind         string
+	ThreadSource         string
+	Sandbox              string
+	SandboxMode          string
+	Extra                map[string]string
+	ResponsesAPIMetadata map[string]string
+	StartedAtMS          int64
+	UseResponsesLite     bool
 }
 
 func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[string]string {
@@ -431,6 +432,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
+	metadata.ResponsesAPIMetadata = cloneStringMap(options.ResponsesAPIMetadata)
 	clientMetadata := metadata.ClientMetadata()
 	if options.UseResponsesLite {
 		clientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"

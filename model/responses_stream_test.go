@@ -169,3 +169,37 @@ func TestSoleAccumulatedToolInputDeltaRejectsAmbiguousInputs(t *testing.T) {
 		t.Fatalf("sole delta = %q, want empty for ambiguous inputs", got)
 	}
 }
+
+func TestSafetyBufferingFallsBackToTypedResponseMetadata(t *testing.T) {
+	event := []byte(`{"type":"response.metadata","metadata":{"type":"safety_buffering","use_cases":["cyber"],"reasons":["user_risk"]}}`)
+	buffering := safetyBufferingFromStreamMetadata(event)
+	if buffering == nil || len(buffering.UseCases) != 1 || buffering.UseCases[0] != "cyber" || len(buffering.Reasons) != 1 || buffering.Reasons[0] != "user_risk" {
+		t.Fatalf("safety buffering = %#v", buffering)
+	}
+}
+
+func TestSafetyBufferingTopLevelPresenceWinsOverMetadata(t *testing.T) {
+	event := []byte(`{"type":"response.metadata","safety_buffering":{"use_cases":["top_level"],"reasons":["top"]},"metadata":{"type":"safety_buffering","use_cases":["nested"],"reasons":["nested"]}}`)
+	buffering := safetyBufferingFromStreamMetadata(event)
+	if buffering == nil || len(buffering.UseCases) != 1 || buffering.UseCases[0] != "top_level" {
+		t.Fatalf("top-level safety buffering should win: %#v", buffering)
+	}
+}
+
+func TestSafetyBufferingTopLevelMalformedIsAuthoritative(t *testing.T) {
+	// A present top-level `safety_buffering` wins even when it is null or not
+	// an object (Rust 9558d830f6).
+	for _, topLevel := range []string{"null", "false"} {
+		event := []byte(`{"type":"response.metadata","safety_buffering":` + topLevel + `,"metadata":{"type":"safety_buffering","use_cases":["nested"],"reasons":["nested"]}}`)
+		if buffering := safetyBufferingFromStreamMetadata(event); buffering != nil {
+			t.Fatalf("malformed top-level %s should win over metadata: %#v", topLevel, buffering)
+		}
+	}
+}
+
+func TestSafetyBufferingIgnoresUnrelatedMetadata(t *testing.T) {
+	event := []byte(`{"type":"response.metadata","metadata":{"type":"other_metadata","use_cases":["cyber"]}}`)
+	if buffering := safetyBufferingFromStreamMetadata(event); buffering != nil {
+		t.Fatalf("unrelated metadata should not produce safety buffering: %#v", buffering)
+	}
+}

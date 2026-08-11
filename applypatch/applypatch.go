@@ -284,6 +284,20 @@ func (a *Action) applyCommitted(cwd string, mode FileUpdateMode) (*ApplyResult, 
 }
 
 func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
+	// Rust a1c88e865d: reject patches containing multiple operations whose paths
+	// resolve to the same file (e.g. `duplicate.txt` and `./duplicate.txt`).
+	resolvedPaths := map[string]string{}
+	for _, name := range a.FilePaths() {
+		resolved, err := resolveWorkspacePath(cwd, name)
+		if err != nil {
+			return err
+		}
+		key := filepath.Clean(resolved)
+		if previous, ok := resolvedPaths[key]; ok {
+			return fmt.Errorf("%w: multiple operations target %s", ErrInvalidPatch, previous)
+		}
+		resolvedPaths[key] = name
+	}
 	tempDir, err := os.MkdirTemp("", "codex-apply-patch-preflight-")
 	if err != nil {
 		return fmt.Errorf("failed to create apply_patch preflight workspace: %w", err)

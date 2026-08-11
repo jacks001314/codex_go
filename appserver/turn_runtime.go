@@ -5358,6 +5358,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
+	// Rust 9e301c8c9a: responses_api_metadata is validated while loading config
+	// (bounded entries, ASCII identifier keys, no reserved Codex keys).
+	if err := codexapi.ValidateResponsesAPIMetadata(cfg.ResponsesAPIMetadata()); err != nil {
+		return nil, err
+	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
 	if err != nil {
 		return nil, err
@@ -5568,22 +5573,23 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		UnifiedExecEnabled:              unifiedExecEnabled,
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:     installationID,
-			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
-			ThreadID:           threadID,
-			TurnID:             turnID,
-			WindowID:           threadID + ":1",
-			RequestKind:        codexapi.ClientRequestTurn,
-			ForkedFromThreadID: lineage.ForkedFromThreadID,
-			ParentThreadID:     lineage.ParentThreadID,
-			ParentTurnID:       params.ParentTurnID,
-			SubagentHeader:     lineage.SubagentHeader,
-			SubagentKind:       lineage.SubagentKind,
-			ThreadSource:       lineage.ThreadSource,
-			SandboxMode:        permissionProfilePolicyTag(permissionProfile, cwd),
-			Extra:              extraMetadata,
-			StartedAtMS:        startedAtMS,
-			UseResponsesLite:   r.modelUsesResponsesLite(modelProviderConfig.Model),
+			InstallationID:       installationID,
+			SessionID:            firstNonEmpty(lineage.SessionID, threadID),
+			ThreadID:             threadID,
+			TurnID:               turnID,
+			WindowID:             threadID + ":1",
+			RequestKind:          codexapi.ClientRequestTurn,
+			ForkedFromThreadID:   lineage.ForkedFromThreadID,
+			ParentThreadID:       lineage.ParentThreadID,
+			ParentTurnID:         params.ParentTurnID,
+			SubagentHeader:       lineage.SubagentHeader,
+			SubagentKind:         lineage.SubagentKind,
+			ThreadSource:         lineage.ThreadSource,
+			SandboxMode:          permissionProfilePolicyTag(permissionProfile, cwd),
+			Extra:                extraMetadata,
+			ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
+			StartedAtMS:          startedAtMS,
+			UseResponsesLite:     r.modelUsesResponsesLite(modelProviderConfig.Model),
 		}),
 	}, nil
 }
@@ -6079,21 +6085,22 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		parentTurnID = active.Params.ParentTurnID
 	}
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		InstallationID:     installationID,
-		SessionID:          firstNonEmpty(lineage.SessionID, params.ThreadID),
-		ThreadID:           params.ThreadID,
-		TurnID:             params.ExpectedTurnID,
-		WindowID:           params.ThreadID + ":1",
-		RequestKind:        codexapi.ClientRequestTurn,
-		ForkedFromThreadID: lineage.ForkedFromThreadID,
-		ParentThreadID:     lineage.ParentThreadID,
-		ParentTurnID:       parentTurnID,
-		SubagentHeader:     lineage.SubagentHeader,
-		SubagentKind:       lineage.SubagentKind,
-		ThreadSource:       lineage.ThreadSource,
-		Extra:              extraMetadata,
-		StartedAtMS:        active.StartedAtMS,
-		UseResponsesLite:   r.modelUsesResponsesLite(modelID),
+		InstallationID:       installationID,
+		SessionID:            firstNonEmpty(lineage.SessionID, params.ThreadID),
+		ThreadID:             params.ThreadID,
+		TurnID:               params.ExpectedTurnID,
+		WindowID:             params.ThreadID + ":1",
+		RequestKind:          codexapi.ClientRequestTurn,
+		ForkedFromThreadID:   lineage.ForkedFromThreadID,
+		ParentThreadID:       lineage.ParentThreadID,
+		ParentTurnID:         parentTurnID,
+		SubagentHeader:       lineage.SubagentHeader,
+		SubagentKind:         lineage.SubagentKind,
+		ThreadSource:         lineage.ThreadSource,
+		Extra:                extraMetadata,
+		ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
+		StartedAtMS:          active.StartedAtMS,
+		UseResponsesLite:     r.modelUsesResponsesLite(modelID),
 	})
 }
 

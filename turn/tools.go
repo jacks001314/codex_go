@@ -82,6 +82,7 @@ type ToolRegistryOptions struct {
 	DynamicTools                 []DynamicToolSpec
 	ThreadID                     string
 	TurnID                       string
+	SessionID                    string
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -150,6 +151,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		shellOptions.ToolName = tool.PlainName(tool.DefaultShellCommandToolName)
 		shellOptions.UnifiedExecThreadID = options.ThreadID
 		shellOptions.UnifiedExecTurnID = options.TurnID
+		shellOptions.SessionID = options.SessionID
 		shellOptions.UnifiedExec = nil
 		if options.EnableUnifiedExec {
 			shellOptions.ToolName = tool.PlainName(tool.DefaultExecCommandToolName)

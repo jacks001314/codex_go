@@ -1158,3 +1158,60 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+func TestMCPServerStatusSerializesPluginIDLikeRust(t *testing.T) {
+	pluginID := "acme/weather"
+	status := MCPServerStatus{
+		Name:     "docs",
+		PluginID: &pluginID,
+		Server:   MCPServerInfo{Name: "docs"},
+		State:    MCPServerReady,
+	}
+	encoded, err := json.Marshal(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["pluginId"] != "acme/weather" {
+		t.Fatalf("pluginId = %#v", payload["pluginId"])
+	}
+	noPlugin := MCPServerStatus{Name: "config", Server: MCPServerInfo{Name: "config"}, State: MCPServerReady}
+	encodedNo, err := json.Marshal(&noPlugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloadNo map[string]any
+	if err := json.Unmarshal(encodedNo, &payloadNo); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := payloadNo["pluginId"]; !ok || value != nil {
+		t.Fatalf("pluginId for non-plugin server = %#v (present=%v)", value, ok)
+	}
+}
+
+func TestNewMCPServicePopulatesPluginIDFromRegistration(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{
+		Servers: map[string]ServerRegistration{
+			"docs": {
+				Name:     "docs",
+				Config:   ServerConfig{Enabled: true},
+				Source:   "plugin",
+				PluginID: "acme/weather",
+			},
+			"local": {
+				Name:   "local",
+				Config: ServerConfig{Enabled: true},
+				Source: "config",
+			},
+		},
+	})
+	if status, ok := service.servers["docs"]; !ok || status.PluginID == nil || *status.PluginID != "acme/weather" {
+		t.Fatalf("plugin server status = %#v", status)
+	}
+	if status, ok := service.servers["local"]; !ok || status.PluginID != nil {
+		t.Fatalf("config server status = %#v", status)
+	}
+}

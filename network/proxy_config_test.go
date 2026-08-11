@@ -3,6 +3,7 @@ package network
 import (
 	"net"
 	"reflect"
+	runtimeos "runtime"
 	"strings"
 	"testing"
 
@@ -82,12 +83,20 @@ func TestResolveRuntimeAndClampBindAddrs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runtime.HTTPAddr.IP.IsLoopback() || !runtime.SocksAddr.IP.IsLoopback() {
+	// Rust 9742cc8ed5: Unix socket proxy permissions are macOS-only and are
+	// excluded from Windows runtime settings and bind-address clamping.
+	if runtimeos.GOOS == "windows" {
+		if runtime.HTTPAddr.IP.IsLoopback() || runtime.SocksAddr.IP.IsLoopback() {
+			t.Fatalf("windows must ignore unix socket clamping: %#v", runtime)
+		}
+	} else if !runtime.HTTPAddr.IP.IsLoopback() || !runtime.SocksAddr.IP.IsLoopback() {
 		t.Fatalf("unix sockets should force loopback: %#v", runtime)
 	}
 	settings.SetAllowUnixSockets([]string{"relative.sock"})
 	if _, err := ResolveProxyRuntime(ProxyConfig{Network: settings}); err == nil {
-		t.Fatalf("relative unix socket should fail")
+		if runtimeos.GOOS != "windows" {
+			t.Fatalf("relative unix socket should fail")
+		}
 	}
 }
 
@@ -137,7 +146,7 @@ func TestProxyConfigFromConfigValuesRejectsInvalidRuntime(t *testing.T) {
 			"allow_unix_sockets": []any{"relative.sock"},
 		},
 	})
-	if err == nil {
+	if err == nil && runtimeos.GOOS != "windows" {
 		t.Fatal("ProxyConfigFromConfigValues returned nil error")
 	}
 }

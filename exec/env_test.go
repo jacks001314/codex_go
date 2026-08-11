@@ -27,6 +27,22 @@ func TestCreateEnvInheritExcludeSetAndThreadID(t *testing.T) {
 	}
 }
 
+func TestInjectSessionID(t *testing.T) {
+	env := map[string]string{"PATH": "/bin", "codex_session_id": "stale"}
+	sessionID := "session-1"
+	InjectSessionID(env, &sessionID)
+	if env[SessionIDEnvVar] != "session-1" {
+		t.Fatalf("CODEX_SESSION_ID = %q", env[SessionIDEnvVar])
+	}
+	if _, ok := env["codex_session_id"]; ok {
+		t.Fatalf("stale case-variant CODEX_SESSION_ID was not removed: %#v", env)
+	}
+	InjectSessionID(env, nil)
+	if _, ok := env[SessionIDEnvVar]; ok {
+		t.Fatalf("CODEX_SESSION_ID should be removed when session id is nil: %#v", env)
+	}
+}
+
 func TestCreateEnvIncludeOnly(t *testing.T) {
 	env := CreateEnv(&EnvPolicy{
 		IncludeOnly: []EnvVariablePattern{{Mode: EnvPatternLiteral, Value: "PATH"}},

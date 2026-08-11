@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,6 +286,11 @@ func ResolveProxyAddr(value string, defaultPort uint16) (net.TCPAddr, error) {
 func ClampProxyBindAddrs(httpAddr net.TCPAddr, socksAddr net.TCPAddr, settings ProxySettings) (net.TCPAddr, net.TCPAddr) {
 	httpAddr = clampNonLoopback(httpAddr, settings.DangerouslyAllowNonLoopbackProxy)
 	socksAddr = clampNonLoopback(socksAddr, settings.DangerouslyAllowNonLoopbackProxy)
+	// Rust 9742cc8ed5: Unix socket proxy permissions are macOS-only; on Windows
+	// they must not clamp proxy listeners to loopback.
+	if runtime.GOOS == "windows" {
+		return httpAddr, socksAddr
+	}
 	if len(settings.AllowUnixSockets()) == 0 && !settings.DangerouslyAllowAllUnixSockets {
 		return httpAddr, socksAddr
 	}
@@ -335,6 +341,11 @@ func ProxyHostAndPortFromNetworkAddr(value string, defaultPort uint16) string {
 }
 
 func ValidateProxyUnixSocketAllowlistPaths(config ProxyConfig) error {
+	if runtime.GOOS == "windows" {
+		// Rust 9742cc8ed5: Unix socket permissions are macOS-only and excluded
+		// from Windows runtime settings.
+		return nil
+	}
 	for index, socketPath := range config.Network.AllowUnixSockets() {
 		if !strings.HasPrefix(socketPath, "/") {
 			return fmt.Errorf("invalid network.allow_unix_sockets[%d]: expected an absolute path, got %q", index, socketPath)

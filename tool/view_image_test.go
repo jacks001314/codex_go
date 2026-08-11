@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// tinyPNG is a valid 1x1 red PNG used to exercise image decode validation.
+const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
 func TestViewImageSpecMatchesRustSource(t *testing.T) {
 	spec := NewViewImageHandler(ViewImageOptions{CanRequestOriginalDetail: true, IncludeEnvironmentID: true}).Spec()
 	if spec.Name.Key() != "view_image" || spec.Description != "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk." {
@@ -25,7 +28,10 @@ func TestViewImageSpecMatchesRustSource(t *testing.T) {
 
 func TestViewImageReadsRelativePathAndReturnsRustWireShape(t *testing.T) {
 	dir := t.TempDir()
-	want := []byte("image-bytes")
+	want, err := base64.StdEncoding.DecodeString(tinyPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "sample.png"), want, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +40,7 @@ func TestViewImageReadsRelativePathAndReturnsRustWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if out.Data["detail"] != "original" || !strings.HasPrefix(out.Data["image_url"].(string), "data:image/png;base64,") {
+	if out.Data["detail"] != "original" || !strings.HasPrefix(out.Data["image_url"].(string), "data:application/octet-stream;base64,") {
 		t.Fatalf("view_image output = %#v", out)
 	}
 	contentItems, ok := out.Data["content_items"].([]map[string]any)
@@ -44,10 +50,22 @@ func TestViewImageReadsRelativePathAndReturnsRustWireShape(t *testing.T) {
 	if contentItems[0]["image_url"] != out.Data["image_url"] {
 		t.Fatal("view_image content item does not carry the returned image URL")
 	}
-	encoded := strings.TrimPrefix(out.Data["image_url"].(string), "data:image/png;base64,")
+	encoded := strings.TrimPrefix(out.Data["image_url"].(string), "data:application/octet-stream;base64,")
 	got, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil || string(got) != string(want) {
 		t.Fatalf("decoded image = %q, %v", got, err)
+	}
+}
+
+func TestViewImageRejectsInvalidImageBeforeReturningOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "not-an-image.txt"), []byte("arbitrary file contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewViewImageHandler(ViewImageOptions{CWD: dir})
+	_, err := handler.Execute(context.Background(), &Invocation{Payload: Payload{Kind: PayloadFunction, Arguments: `{"path":"not-an-image.txt"}`}})
+	if err == nil || !strings.Contains(err.Error(), "unable to process image: invalid or unsupported image data") {
+		t.Fatalf("Execute(non-image) error = %v", err)
 	}
 }
 

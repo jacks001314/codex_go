@@ -763,6 +763,16 @@ func (c *Config) ResponsesAPIClientMetadata() map[string]string {
 	return stringMapFromConfigValue(c.Values["responsesapi_client_metadata"])
 }
 
+// ResponsesAPIMetadata returns the bounded, product-owned metadata attached to
+// every Responses API turn metadata payload (Rust 9e301c8c9a). The setting is
+// ignored in project-local configuration.
+func (c *Config) ResponsesAPIMetadata() map[string]string {
+	if c == nil {
+		return nil
+	}
+	return stringMapFromConfigValue(c.Values["responses_api_metadata"])
+}
+
 func (c *Config) CLIAuthCredentialsStoreMode() string {
 	if c == nil {
 		return ""
@@ -1204,6 +1214,7 @@ func sanitizeProjectConfigValues(values map[string]any) {
 		"openai_base_url",
 		"chatgpt_base_url",
 		"apps_mcp_product_sku",
+		"responses_api_metadata",
 		"model_provider",
 		"model_providers",
 		"notify",

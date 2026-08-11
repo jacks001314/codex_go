@@ -708,3 +708,17 @@ func (r *fakeShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellRes
 	}
 	return &ShellResult{}, nil
 }
+
+func TestInjectSessionIDEnvShellExecutor(t *testing.T) {
+	env := injectSessionIDEnv(map[string]string{"codex_session_id": "stale"}, "session-9")
+	if env["CODEX_SESSION_ID"] != "session-9" {
+		t.Fatalf("CODEX_SESSION_ID = %q", env["CODEX_SESSION_ID"])
+	}
+	if _, ok := env["codex_session_id"]; ok {
+		t.Fatalf("stale case-variant key survived: %#v", env)
+	}
+	cleared := injectSessionIDEnv(nil, "")
+	if _, ok := cleared["CODEX_SESSION_ID"]; ok {
+		t.Fatalf("empty session id should not inject CODEX_SESSION_ID: %#v", cleared)
+	}
+}

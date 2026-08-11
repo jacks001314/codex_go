@@ -2,6 +2,7 @@ package codexapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -59,6 +60,12 @@ var reservedMetadataKeys = map[string]bool{
 	SandboxModeKey:         true,
 	WorkspacesKey:          true,
 }
+
+const (
+	maxExtraMetadataEntries    = 16
+	maxExtraMetadataKeyBytes   = 64
+	maxExtraMetadataValueBytes = 128
+)
 
 type ResponsesRequestKind struct {
 	Kind       string                       `json:"kind"`
@@ -221,6 +228,48 @@ func FilterExtraMetadata(extra map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+// ValidateResponsesAPIMetadata mirrors Rust validate_extra_metadata
+// (9e301c8c9a): bounded product-owned metadata for `responses_api_metadata`
+// with ASCII identifier keys, no reserved Codex keys, and bounded values.
+func ValidateResponsesAPIMetadata(metadata map[string]string) error {
+	count := 0
+	for key, value := range metadata {
+		count++
+		if count > maxExtraMetadataEntries {
+			return fmt.Errorf("responses_api_metadata may contain at most %d entries", maxExtraMetadataEntries)
+		}
+		if len(key) > maxExtraMetadataKeyBytes || !validExtraMetadataKey(key) {
+			return fmt.Errorf("responses_api_metadata keys must be short ASCII identifiers")
+		}
+		if reservedMetadataKeys[key] {
+			return fmt.Errorf("responses_api_metadata contains a reserved key")
+		}
+		if len(value) > maxExtraMetadataValueBytes {
+			return fmt.Errorf("responses_api_metadata values may contain at most %d bytes", maxExtraMetadataValueBytes)
+		}
+	}
+	return nil
+}
+
+func validExtraMetadataKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for index, character := range []byte(key) {
+		if index == 0 {
+			if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') {
+				return false
+			}
+			continue
+		}
+		isAlphanumeric := (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
+		if !isAlphanumeric && character != '_' && character != '.' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func SubagentHeaderValue(sessionSource string) string {

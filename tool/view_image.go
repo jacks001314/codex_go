@@ -1,11 +1,14 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime"
-	"net/http"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,8 @@ import (
 )
 
 const ViewImageToolName = "view_image"
+
+const viewImageInvalidMessage = "unable to process image: invalid or unsupported image data"
 
 type ViewImageOptions struct {
 	CWD                      string
@@ -117,14 +122,13 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if err != nil {
 		return nil, RespondToModel(fmt.Sprintf("unable to read image at `%s`: %v", path, err))
 	}
-	mimeType := strings.TrimSpace(strings.SplitN(http.DetectContentType(data), ";", 2)[0])
-	if !strings.HasPrefix(mimeType, "image/") {
-		mimeType = strings.TrimSpace(strings.SplitN(mime.TypeByExtension(filepath.Ext(path)), ";", 2)[0])
+	// Reject non-images before their bytes can reach code mode without changing
+	// valid image bytes, metadata, or centralized image preparation.
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		return nil, RespondToModel(viewImageInvalidMessage)
 	}
-	if !strings.HasPrefix(mimeType, "image/") {
-		return nil, RespondToModel(fmt.Sprintf("file at `%s` is not a supported image", path))
-	}
-	result := ViewImageResult{ImageURL: utils.DataURLFromBytes(mimeType, data), Detail: detail}
+	// The history insertion path owns image preparation and resizing.
+	result := ViewImageResult{ImageURL: utils.DataURLFromBytes("application/octet-stream", data), Detail: detail}
 	body, err := json.Marshal(result)
 	if err != nil {
 		return nil, err

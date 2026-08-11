@@ -211,6 +211,24 @@ model = "gpt-5.4-mini"
 	}
 }
 
+func TestResponsesAPIMetadataAccessorAndProjectSanitize(t *testing.T) {
+	cfg := &Config{Values: map[string]any{
+		"responses_api_metadata": map[string]any{
+			"product.sku": "pro",
+			"tier":        "1",
+		},
+	}}
+	metadata := cfg.ResponsesAPIMetadata()
+	if metadata["product.sku"] != "pro" || metadata["tier"] != "1" {
+		t.Fatalf("ResponsesAPIMetadata = %#v", metadata)
+	}
+	values := map[string]any{"responses_api_metadata": map[string]any{"sku": "pro"}}
+	sanitizeProjectConfigValues(values)
+	if _, ok := values["responses_api_metadata"]; ok {
+		t.Fatalf("responses_api_metadata must be ignored in project-local config: %#v", values)
+	}
+}
+
 func TestFeatureRequirementsOverrideDefaultAndCLISettingsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[features]\nin_app_updates = false\n"), 0o600); err != nil {

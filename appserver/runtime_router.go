@@ -6315,7 +6315,7 @@ func (r *RuntimeRouter) handleAppRead(request *Request) (*apps.AppsReadResponse,
 	if len(params.AppIDs) > 100 {
 		return nil, &appReadInvalidParamsError{message: "app/read accepts at most 100 appIds"}
 	}
-	configValues, err := r.appListConfigValues(nil)
+	configValues, err := r.appListConfigValues(&apps.AppListParams{ThreadID: params.ThreadID})
 	if err != nil {
 		return nil, err
 	}
@@ -10111,6 +10111,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ViewImage = viewImageOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
+	// Rust 97729885d4: expose the shared root-session ID to model-reachable
+	// shell commands as CODEX_SESSION_ID. Fall back to the thread ID when the
+	// session record is unavailable.
+	options.SessionID = threadID
+	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil && strings.TrimSpace(record.SessionID) != "" {
+		options.SessionID = record.SessionID
+	}
 	return turn.BuildToolRouter(options)
 }
 

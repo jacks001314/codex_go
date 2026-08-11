@@ -107,6 +107,11 @@ type ClientMetadata struct {
 	Workspaces          map[string]ClientWorkspaceMetadata
 	TurnStartedAtUnixMS int64
 	Extra               map[string]string
+	// ResponsesAPIMetadata carries bounded, product-owned metadata from the
+	// `responses_api_metadata` config (Rust 9e301c8c9a). Product metadata takes
+	// precedence over client-provided Extra values and is kept out of metadata
+	// sent to external MCP servers.
+	ResponsesAPIMetadata map[string]string
 }
 
 func NewClientMetadata(installationID string, sessionID string, threadID string, windowID string) *ClientMetadata {
@@ -180,6 +185,12 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 			continue
 		}
 		value[key] = extra
+	}
+	for key, productValue := range m.ResponsesAPIMetadata {
+		if ClientReservedMetadataKeys()[key] {
+			continue
+		}
+		value[key] = productValue
 	}
 	return value
 }

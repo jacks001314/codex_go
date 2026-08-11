@@ -1345,11 +1345,32 @@ func turnModerationMetadataFromStreamMetadata(data []byte) (any, bool) {
 }
 
 func safetyBufferingFromStreamMetadata(data []byte) *ResponsesSafetyBuffering {
-	value := streamMetadataValue(data, "safety_buffering", "safetyBuffering", "model_safety_buffering", "modelSafetyBuffering")
-	payload, ok := value.(map[string]any)
-	if !ok {
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil
 	}
+	// Rust 9558d830f6: a present top-level `safety_buffering` field is the
+	// authoritative value, including when it is null or malformed.
+	if value, ok := payload["safety_buffering"]; ok {
+		parsed, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		return safetyBufferingFromPayload(parsed)
+	}
+	// Fallback: typed `response.metadata` events whose metadata object declares
+	// `"type": "safety_buffering"` carry the payload directly on the metadata.
+	metadata := streamMetadataObject(payload)
+	if metadata == nil {
+		return nil
+	}
+	if text, _ := metadata["type"].(string); text != "safety_buffering" {
+		return nil
+	}
+	return safetyBufferingFromPayload(metadata)
+}
+
+func safetyBufferingFromPayload(payload map[string]any) *ResponsesSafetyBuffering {
 	buffering := &ResponsesSafetyBuffering{
 		Model:           stringFromAnyMap(payload, "model"),
 		UseCases:        stringSliceFromAny(firstAnyFromMap(payload, "use_cases", "useCases")),
@@ -1361,6 +1382,18 @@ func safetyBufferingFromStreamMetadata(data []byte) *ResponsesSafetyBuffering {
 		return nil
 	}
 	return buffering
+}
+
+func streamMetadataObject(payload map[string]any) map[string]any {
+	if metadata, ok := payload["metadata"].(map[string]any); ok {
+		return metadata
+	}
+	if response, ok := payload["response"].(map[string]any); ok {
+		if metadata, ok := response["metadata"].(map[string]any); ok {
+			return metadata
+		}
+	}
+	return nil
 }
 
 func (a *responsesStreamAccumulator) agentResponse(request *AgentRequest, providerID string) (*AgentResponse, error) {

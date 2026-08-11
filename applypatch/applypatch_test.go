@@ -413,3 +413,30 @@ func readApplyFile(t *testing.T, dir string, name string) string {
 	}
 	return string(data)
 }
+
+func TestApplyRejectsDuplicateResolvedPathsLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	writeApplyFile(t, dir, "duplicate.txt", "before\n")
+	action, err := Parse("*** Begin Patch\n*** Update File: duplicate.txt\n@@\n-before\n+first after\n*** Update File: ./duplicate.txt\n@@\n-before\n+second after\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	err = action.Verify(&ApplyOptions{CWD: dir})
+	if err == nil || !strings.Contains(err.Error(), "multiple operations target") {
+		t.Fatalf("Verify(duplicate paths) error = %v", err)
+	}
+	if got := readApplyFile(t, dir, "duplicate.txt"); got != "before\n" {
+		t.Fatalf("duplicate.txt mutated despite rejection: %q", got)
+	}
+
+	// Distinct files remain accepted (Rust apply_patch_cli_preserves_distinct_updated_paths).
+	writeApplyFile(t, dir, "first.txt", "first before\n")
+	writeApplyFile(t, dir, "second.txt", "second before\n")
+	distinct, err := Parse("*** Begin Patch\n*** Update File: first.txt\n@@\n-first before\n+first after\n*** Update File: second.txt\n@@\n-second before\n+second after\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse(distinct) error = %v", err)
+	}
+	if err := distinct.Verify(&ApplyOptions{CWD: dir}); err != nil {
+		t.Fatalf("Verify(distinct) error = %v", err)
+	}
+}

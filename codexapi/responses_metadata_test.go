@@ -2,8 +2,59 @@ package codexapi
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestValidateResponsesAPIMetadataBoundsAndKeys(t *testing.T) {
+	valid := map[string]string{
+		"product.sku": "abc",
+		"tier":        "pro",
+	}
+	if err := ValidateResponsesAPIMetadata(valid); err != nil {
+		t.Fatalf("ValidateResponsesAPIMetadata(valid) = %v", err)
+	}
+	if err := ValidateResponsesAPIMetadata(nil); err != nil {
+		t.Fatalf("ValidateResponsesAPIMetadata(nil) = %v", err)
+	}
+	over := map[string]string{}
+	for i := 0; i < 17; i++ {
+		over[strings.Repeat("k", 2)+string(rune('a'+i))] = "v"
+	}
+	if err := ValidateResponsesAPIMetadata(over); err == nil || !strings.Contains(err.Error(), "at most 16") {
+		t.Fatalf("ValidateResponsesAPIMetadata(17 entries) = %v", err)
+	}
+	reserved := map[string]string{TurnIDKey: "x"}
+	if err := ValidateResponsesAPIMetadata(reserved); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("ValidateResponsesAPIMetadata(reserved) = %v", err)
+	}
+	badKey := map[string]string{"bad key": "v"}
+	if err := ValidateResponsesAPIMetadata(badKey); err == nil {
+		t.Fatalf("ValidateResponsesAPIMetadata(space key) = nil")
+	}
+	digitKey := map[string]string{"1abc": "v"}
+	if err := ValidateResponsesAPIMetadata(digitKey); err == nil {
+		t.Fatalf("ValidateResponsesAPIMetadata(digit-leading key) = nil")
+	}
+	longValue := map[string]string{"k": strings.Repeat("v", 129)}
+	if err := ValidateResponsesAPIMetadata(longValue); err == nil || !strings.Contains(err.Error(), "128") {
+		t.Fatalf("ValidateResponsesAPIMetadata(long value) = %v", err)
+	}
+}
+
+func TestClientMetadataProductMetadataPrecedenceOverExtra(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.Extra = map[string]string{"product.sku": "client-value", "client_only": "kept"}
+	metadata.ResponsesAPIMetadata = map[string]string{"product.sku": "product-value"}
+	value := metadata.TurnMetadataValue()
+	if value["product.sku"] != "product-value" {
+		t.Fatalf("product metadata must win over client metadata: %#v", value["product.sku"])
+	}
+	if value["client_only"] != "kept" {
+		t.Fatalf("client extra should be preserved: %#v", value)
+	}
+}
 
 func TestMetadataClientAndTurnMetadata(t *testing.T) {
 	metadata := NewResponsesMetadata("install", "session", "thread", "window")

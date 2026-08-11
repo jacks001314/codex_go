@@ -88,6 +88,11 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 		metadata.Workspaces[root] = workspace
 	}
 	metadata.SandboxMode = permissionProfilePolicyTagFromProfile(e.parentProfile, e.parentCWD)
+	// Rust 9e301c8c9a: product-owned responses_api_metadata is attached to every
+	// Responses API request, including detached memory requests.
+	if cfg, err := e.router.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: e.parentThreadID, CWD: e.parentCWD}); err == nil && cfg != nil {
+		metadata.ResponsesAPIMetadata = cfg.ResponsesAPIMetadata()
+	}
 	return metadata.ClientMetadata()
 }
 

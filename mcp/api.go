@@ -229,7 +229,10 @@ func (t MCPToolInfo) MarshalJSON() ([]byte, error) {
 }
 
 type MCPServerStatus struct {
-	Name              string                `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// PluginID reports the owning plugin for plugin-contributed servers and is
+	// nil for servers from other sources (Rust 78d3665d15).
+	PluginID          *string               `json:"pluginId,omitempty"`
 	ServerInfo        *MCPServerInfo        `json:"serverInfo,omitempty"`
 	Tools             []MCPToolInfo         `json:"tools,omitempty"`
 	Resources         []MCPResource         `json:"resources,omitempty"`
@@ -260,6 +263,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(struct {
 		Name              string                            `json:"name"`
+		PluginID          *string                           `json:"pluginId"`
 		ServerInfo        *MCPServerInfo                    `json:"serverInfo"`
 		Tools             map[string]MCPToolInfo            `json:"tools"`
 		Resources         []mcpServerStatusResource         `json:"resources"`
@@ -269,6 +273,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		Error             *string                           `json:"error,omitempty"`
 	}{
 		Name:              name,
+		PluginID:          cloneStringPtr(s.PluginID),
 		ServerInfo:        serverInfo,
 		Tools:             toolMapFromList(s.Tools),
 		Resources:         mcpServerStatusResources(s.Resources),
@@ -616,8 +621,13 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			}
 			service.configs[name] = config
 			authStatus := service.authStatusForConfig(name, &config)
+			var pluginID *string
+			if strings.TrimSpace(registration.PluginID) != "" {
+				pluginID = cloneStringPtr(&registration.PluginID)
+			}
 			service.servers[name] = MCPServerStatus{
 				Name:       name,
+				PluginID:   pluginID,
 				Server:     info,
 				ServerInfo: &info,
 				State:      MCPServerReady,
@@ -2031,6 +2041,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 }
 
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
+	status.PluginID = cloneStringPtr(status.PluginID)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
 	status.Server.Icons = append([]any(nil), status.Server.Icons...)
 	if status.Server.Title != nil {

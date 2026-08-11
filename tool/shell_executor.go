@@ -25,16 +25,19 @@ const (
 )
 
 type ShellExecutorOptions struct {
-	Runner                  ShellRunner
-	Shell                   *Shell
-	Validation              ShellValidationOptions
-	ToolName                ToolName
-	Approval                ShellApprovalFunc
-	MaxOutputTokens         *int
-	UnifiedExec             *UnifiedExecManager
-	UnifiedExecEvents       UnifiedExecEventSink
-	UnifiedExecThreadID     string
-	UnifiedExecTurnID       string
+	Runner              ShellRunner
+	Shell               *Shell
+	Validation          ShellValidationOptions
+	ToolName            ToolName
+	Approval            ShellApprovalFunc
+	MaxOutputTokens     *int
+	UnifiedExec         *UnifiedExecManager
+	UnifiedExecEvents   UnifiedExecEventSink
+	UnifiedExecThreadID string
+	UnifiedExecTurnID   string
+	// SessionID mirrors Rust 97729885d4: the shared root-session ID is exposed
+	// to model-reachable shell commands as CODEX_SESSION_ID.
+	SessionID               string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
 	ManagedNetworkResolver  ManagedNetworkResolver
 	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
@@ -54,6 +57,7 @@ type ShellExecutor struct {
 	unifiedExecEvents       UnifiedExecEventSink
 	unifiedExecThreadID     string
 	unifiedExecTurnID       string
+	sessionID               string
 	unifiedExecEnvironments []UnifiedExecEnvironment
 	managedNetworkResolver  ManagedNetworkResolver
 	preserveLineEndings     bool
@@ -110,6 +114,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.unifiedExecEvents = options.UnifiedExecEvents
 	executor.unifiedExecThreadID = options.UnifiedExecThreadID
 	executor.unifiedExecTurnID = options.UnifiedExecTurnID
+	executor.sessionID = options.SessionID
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.preserveLineEndings = options.PreserveLineEndings
@@ -445,6 +450,8 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	// Rust c9c6c0daa9: the active feature configuration is authoritative over
 	// inherited, shell snapshot, and client-provided environment values.
 	validation.Env = envutil.InjectApplyPatchEnv(validation.Env, e.preserveLineEndings)
+	// Rust 97729885d4: expose the shared root-session identity to shell commands.
+	validation.Env = injectSessionIDEnv(validation.Env, e.sessionID)
 	req, err := BuildShellRequest(args, sessionShell, validation)
 	if err != nil {
 		return nil, RespondToModel(err.Error())
@@ -898,6 +905,24 @@ func (e *ShellExecutor) validationOptions() ShellValidationOptions {
 
 func bashHookToolName() *HookToolName {
 	return &HookToolName{Name: "Bash"}
+}
+
+// injectSessionIDEnv exposes the shared root-session identity to shell child
+// processes as CODEX_SESSION_ID (Rust 97729885d4). The runtime-selected value is
+// authoritative over inherited and client-provided values.
+func injectSessionIDEnv(env map[string]string, sessionID string) map[string]string {
+	if env == nil {
+		env = map[string]string{}
+	}
+	for key := range env {
+		if strings.EqualFold(key, "CODEX_SESSION_ID") {
+			delete(env, key)
+		}
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		env["CODEX_SESSION_ID"] = strings.TrimSpace(sessionID)
+	}
+	return env
 }
 
 func shellHookInput(args *ExecCommandArgs) map[string]any {

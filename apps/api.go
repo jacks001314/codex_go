@@ -20,8 +20,11 @@ type AppListParams struct {
 }
 
 type AppsReadParams struct {
-	AppIDs       []string `json:"appIds"`
-	IncludeTools bool     `json:"includeTools,omitempty"`
+	AppIDs []string `json:"appIds"`
+	// ThreadID, when provided, evaluates effective app configuration against
+	// the loaded thread (Rust 7f928f6ddc).
+	ThreadID     *string `json:"threadId"`
+	IncludeTools bool    `json:"includeTools,omitempty"`
 }
 
 type AppsInstalledParams struct {

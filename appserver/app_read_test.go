@@ -65,7 +65,9 @@ func TestRuntimeRouterAppReadRejectsMoreThanOneHundredIDs(t *testing.T) {
 
 func TestAppReadProtocolJSONShape(t *testing.T) {
 	params, err := json.Marshal(apps.AppsReadParams{AppIDs: []string{"app"}})
-	if err != nil || string(params) != `{"appIds":["app"]}` {
+	// Rust 7f928f6ddc: app/read accepts an optional threadId that evaluates the
+	// thread's effective configuration; the wire shape includes it as null.
+	if err != nil || string(params) != `{"appIds":["app"],"threadId":null}` {
 		t.Fatalf("params JSON = %s err=%v", params, err)
 	}
 }
