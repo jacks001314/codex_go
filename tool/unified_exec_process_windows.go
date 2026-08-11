@@ -63,7 +63,7 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 }
 
 func windowsUnifiedExecSandboxLevel(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) windowsunified.WindowsSandboxLevel {
-	if windowsShellSandboxUsesElevated(profile, configured, false) {
+	if windowsShellSandboxUsesElevated(profile, configured) {
 		return windowsunified.WindowsSandboxLevelElevated
 	}
 	return windowsunified.WindowsSandboxLevelLegacy

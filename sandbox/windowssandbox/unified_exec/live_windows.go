@@ -25,8 +25,11 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	capture.TTY = req.PTY
 	capture.StdinOpen = capture.StdinOpen || req.PTY
 	capture.ProxyEnforced = req.ProxyEnforced
-	if capture.ProxyEnforced || req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
+	if req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
 		return spawnWindowsSandboxLiveSessionElevated(&capture)
+	}
+	if capture.ProxyEnforced {
+		return nil, fmt.Errorf("managed networking requires the elevated Windows sandbox backend")
 	}
 	if err := capture.Validate(); err != nil {
 		return nil, err

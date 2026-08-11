@@ -197,18 +197,44 @@ func TestLocalShellRunnerUsesWindowsSandboxForSandboxedProfile(t *testing.T) {
 
 func TestWindowsShellSandboxUsesElevatedLikeRust(t *testing.T) {
 	profile := sandbox.WorkspaceWritePermissionProfile()
-	if windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, false) {
+	if windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated) {
 		t.Fatal("ordinary unelevated profile selected elevated backend")
 	}
-	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxElevated, false) {
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxElevated) {
 		t.Fatal("explicit elevated profile did not select elevated backend")
 	}
-	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, true) {
-		t.Fatal("managed proxy did not select elevated backend")
-	}
 	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{}}
-	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated, false) {
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated) {
 		t.Fatal("deny-read profile did not select elevated backend")
+	}
+}
+
+func TestManagedNetworkingRejectedWithRestrictedTokenSandbox(t *testing.T) {
+	cwd := t.TempDir()
+	codexHome := t.TempDir()
+	oldCapture := runWindowsShellSandboxCapture
+	oldCodexHome := defaultShellRunnerCodexHome
+	runWindowsShellSandboxCapture = func(capture *windowssandbox.CaptureRequest, elevated bool) (*windowssandbox.CaptureResult, error) {
+		t.Fatal("managed networking with a restricted-token sandbox must be rejected before spawning")
+		return nil, nil
+	}
+	defaultShellRunnerCodexHome = func() string { return codexHome }
+	defer func() {
+		runWindowsShellSandboxCapture = oldCapture
+		defaultShellRunnerCodexHome = oldCodexHome
+	}()
+
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	_, err := NewLocalShellRunner().Run(context.Background(), &ShellRequest{
+		Command:               []string{"cmd", "/c", "echo managed"},
+		CWD:                   cwd,
+		PermissionProfileID:   ":workspace",
+		PermissionProfile:     &profile,
+		WindowsSandboxLevel:   sandbox.WindowsSandboxUnelevated,
+		EnforceManagedNetwork: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "managed networking requires the elevated Windows sandbox backend") {
+		t.Fatalf("Run error = %v, want managed networking rejection", err)
 	}
 }
 

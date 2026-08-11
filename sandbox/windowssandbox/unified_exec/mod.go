@@ -78,8 +78,11 @@ func SpawnWindowsSandboxSessionForLevel(req *WindowsSandboxSessionRequest) (*Win
 	if req == nil {
 		return nil, windowssandbox.ErrInvalidRequest
 	}
-	if req.ProxyEnforced || req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
+	if req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
 		return SpawnWindowsSandboxSessionElevatedForPermissionProfile(req)
+	}
+	if req.ProxyEnforced {
+		return nil, fmt.Errorf("managed networking requires the elevated Windows sandbox backend")
 	}
 	return SpawnWindowsSandboxSessionLegacy(req)
 }

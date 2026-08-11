@@ -101,6 +101,9 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if req.EnforceManagedNetwork && req.WindowsSandboxLevel != sandbox.WindowsSandboxElevated {
+		return nil, errors.New("managed networking requires the elevated Windows sandbox backend")
+	}
 	commandCWD := filepath.Clean(plan.CWD)
 	if strings.TrimSpace(commandCWD) == "" {
 		return nil, errors.New("windows sandbox cwd is required")
@@ -136,7 +139,7 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 	}
 	result, err := runWindowsShellSandboxCapture(
 		capture,
-		windowsShellSandboxUsesElevated(plan.PermissionProfile, req.WindowsSandboxLevel, req.EnforceManagedNetwork),
+		windowsShellSandboxUsesElevated(plan.PermissionProfile, req.WindowsSandboxLevel),
 	)
 	if err != nil {
 		return nil, err
@@ -153,8 +156,8 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 	}, nil
 }
 
-func windowsShellSandboxUsesElevated(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel, proxyEnforced bool) bool {
-	return proxyEnforced || configured == sandbox.WindowsSandboxElevated || profile != nil && profile.HasDenyReadEntries()
+func windowsShellSandboxUsesElevated(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) bool {
+	return configured == sandbox.WindowsSandboxElevated || profile != nil && profile.HasDenyReadEntries()
 }
 
 func windowsSandboxProxySettingsMode(mode execserver.WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {

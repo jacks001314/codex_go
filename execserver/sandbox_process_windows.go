@@ -27,6 +27,9 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, true, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
+	if params.EnforceManagedNetwork && sandboxContext.WindowsSandboxLevel != "elevated" {
+		return nil, true, fmt.Errorf("managed networking requires the elevated Windows sandbox backend")
+	}
 	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
 		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
 	}

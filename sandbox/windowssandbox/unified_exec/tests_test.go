@@ -18,3 +18,13 @@ func TestSpawnWindowsSandboxSessionForLevelRejectsNilRequest(t *testing.T) {
 		t.Fatalf("SpawnWindowsSandboxSessionForLevel(nil) error = nil, want invalid request")
 	}
 }
+
+func TestSpawnWindowsSandboxSessionForLevelRejectsManagedNetworkingWithLegacyLevel(t *testing.T) {
+	_, err := SpawnWindowsSandboxSessionForLevel(&WindowsSandboxSessionRequest{
+		WindowsSandboxLevel: WindowsSandboxLevelLegacy,
+		ProxyEnforced:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "managed networking requires the elevated Windows sandbox backend") {
+		t.Fatalf("SpawnWindowsSandboxSessionForLevel(legacy, proxy) error = %v, want managed networking rejection", err)
+	}
+}
