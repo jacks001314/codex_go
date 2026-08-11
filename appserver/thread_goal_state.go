@@ -40,17 +40,34 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 			}
 			var budget *int64
 			if params.TokenBudgetSet || params.TokenBudget != nil {
-				budget = cloneInt64PtrAppserver(params.TokenBudget)
+				if params.TokenBudget != nil {
+					budget = cloneInt64PtrAppserver(params.TokenBudget)
+				} else {
+					budget = cloneInt64PtrAppserver(params.MaxGoalTokenBudget)
+				}
+			} else {
+				budget = cloneInt64PtrAppserver(params.MaxGoalTokenBudget)
+			}
+			if err := validateGoalBudgetAgainstMax(budget, params.MaxGoalTokenBudget); err != nil {
+				return nil, nil, record, err
 			}
 			persisted, err = r.services.StateRuntime.ReplaceThreadGoal(ctx, params.ThreadID, objective, status, budget)
 		} else {
-			persisted, err = r.services.StateRuntime.UpdateThreadGoal(ctx, params.ThreadID, stateGoalUpdate(params, existingState.GoalID))
+			update := stateGoalUpdate(params, existingState.GoalID, params.MaxGoalTokenBudget)
+			if err := validateGoalBudgetAgainstMax(update.TokenBudget, params.MaxGoalTokenBudget); err != nil {
+				return nil, nil, record, err
+			}
+			persisted, err = r.services.StateRuntime.UpdateThreadGoal(ctx, params.ThreadID, update)
 		}
 	} else {
 		if existingState == nil {
 			return nil, nil, record, jsonRPCInvalidRequest(fmt.Sprintf("cannot update goal for thread %s: no goal exists", strings.TrimSpace(params.ThreadID)))
 		}
-		persisted, err = r.services.StateRuntime.UpdateThreadGoal(ctx, params.ThreadID, stateGoalUpdate(params, existingState.GoalID))
+		update := stateGoalUpdate(params, existingState.GoalID, params.MaxGoalTokenBudget)
+		if err := validateGoalBudgetAgainstMax(update.TokenBudget, params.MaxGoalTokenBudget); err != nil {
+			return nil, nil, record, err
+		}
+		persisted, err = r.services.StateRuntime.UpdateThreadGoal(ctx, params.ThreadID, update)
 	}
 	if err != nil {
 		return nil, existing, record, fmt.Errorf("failed to update thread goal: %w", err)
@@ -117,7 +134,7 @@ func (r *RuntimeRouter) materializedGoalThread(threadID string) (*session.Record
 	return record, path, nil
 }
 
-func stateGoalUpdate(params *GoalSetParams, expectedGoalID string) state.GoalUpdate {
+func stateGoalUpdate(params *GoalSetParams, expectedGoalID string, maxGoalTokenBudget *int64) state.GoalUpdate {
 	update := state.GoalUpdate{TokenBudgetSet: params.TokenBudgetSet || params.TokenBudget != nil}
 	if params.Objective != nil {
 		objective := strings.TrimSpace(*params.Objective)
@@ -128,13 +145,24 @@ func stateGoalUpdate(params *GoalSetParams, expectedGoalID string) state.GoalUpd
 		update.Status = &status
 	}
 	if update.TokenBudgetSet {
-		update.TokenBudget = cloneInt64PtrAppserver(params.TokenBudget)
+		if params.TokenBudget != nil {
+			update.TokenBudget = cloneInt64PtrAppserver(params.TokenBudget)
+		} else {
+			update.TokenBudget = cloneInt64PtrAppserver(maxGoalTokenBudget)
+		}
 	}
 	if strings.TrimSpace(expectedGoalID) != "" {
 		expectedGoalID = strings.TrimSpace(expectedGoalID)
 		update.ExpectedGoalID = &expectedGoalID
 	}
 	return update
+}
+
+func validateGoalBudgetAgainstMax(budget *int64, maxGoalTokenBudget *int64) error {
+	if budget != nil && maxGoalTokenBudget != nil && *budget > *maxGoalTokenBudget {
+		return jsonRPCInvalidRequest(fmt.Sprintf("goal token budget %d exceeds the maximum allowed goal token budget of %d", *budget, *maxGoalTokenBudget))
+	}
+	return nil
 }
 
 func apiGoalFromState(goal *state.ThreadGoal) *Goal {

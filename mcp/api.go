@@ -1878,6 +1878,11 @@ func (s *MCPService) elicitationHandler() MCPElicitationHandler {
 	return s.elicitation
 }
 
+// ElicitationHandler returns the currently installed MCP elicitation handler.
+func (s *MCPService) ElicitationHandler() MCPElicitationHandler {
+	return s.elicitationHandler()
+}
+
 func (s *MCPService) progressHandler() MCPProgressHandler {
 	if s == nil {
 		return nil

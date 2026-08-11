@@ -1086,3 +1086,70 @@ func sameIDs(left []ThreadID, right []ThreadID) bool {
 	}
 	return true
 }
+
+func TestStoreCustomSectionsAppearanceLifecycle(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	icon := "work"
+	color := "#ff0000"
+	section, err := store.CreateSection("Work", &ThreadSectionAppearance{Icon: &icon, Color: &color})
+	if err != nil {
+		t.Fatalf("CreateSection() error = %v", err)
+	}
+	if section.Appearance == nil || section.Appearance.Icon == nil || *section.Appearance.Icon != icon || *section.Appearance.Color != color {
+		t.Fatalf("created appearance = %#v", section.Appearance)
+	}
+	sections, _, err := store.ListSections("", 10)
+	if err != nil || len(sections) != 2 || sections[1].ID != section.ID {
+		t.Fatalf("ListSections() = %#v, %v; want pinned + custom", sections, err)
+	}
+	// Persistence across restart (new Store instance on same root).
+	reopened := NewStore(root)
+	sections, _, err = reopened.ListSections("", 10)
+	if err != nil || len(sections) != 2 || sections[1].Appearance == nil || *sections[1].Appearance.Icon != icon {
+		t.Fatalf("reopened ListSections() = %#v, %v", sections, err)
+	}
+	// Update replaces appearance when set.
+	newColor := "#00ff00"
+	updated, err := reopened.UpdateSection(section.ID, "Work v2", &ThreadSectionAppearance{Color: &newColor}, true)
+	if err != nil {
+		t.Fatalf("UpdateSection() error = %v", err)
+	}
+	if updated.Name != "Work v2" || updated.Appearance == nil || updated.Appearance.Icon != nil || *updated.Appearance.Color != newColor {
+		t.Fatalf("updated = %#v", updated)
+	}
+	// Omitted appearance is preserved.
+	kept, err := reopened.UpdateSection(section.ID, "Work v3", nil, false)
+	if err != nil {
+		t.Fatalf("UpdateSection(omit) error = %v", err)
+	}
+	if kept.Appearance == nil || *kept.Appearance.Color != newColor {
+		t.Fatalf("omitted appearance should be preserved: %#v", kept.Appearance)
+	}
+	// Null clears appearance.
+	cleared, err := reopened.UpdateSection(section.ID, "Work v4", nil, true)
+	if err != nil {
+		t.Fatalf("UpdateSection(clear) error = %v", err)
+	}
+	if cleared.Appearance != nil {
+		t.Fatalf("null appearance should clear: %#v", cleared.Appearance)
+	}
+	// 64-byte limit enforced.
+	long := strings.Repeat("x", 65)
+	if _, err := reopened.CreateSection("Bad", &ThreadSectionAppearance{Icon: &long}); err == nil {
+		t.Fatal("expected 64-byte icon rejection")
+	}
+	if _, err := reopened.UpdateSection(section.ID, "Bad", &ThreadSectionAppearance{Color: &long}, true); err == nil {
+		t.Fatal("expected 64-byte color rejection")
+	}
+	// Delete removes the section.
+	if err := reopened.DeleteSection(section.ID); err != nil {
+		t.Fatalf("DeleteSection() error = %v", err)
+	}
+	if err := reopened.DeleteSection(section.ID); !errors.Is(err, ErrThreadSectionMissing) {
+		t.Fatalf("second DeleteSection() = %v, want ErrThreadSectionMissing", err)
+	}
+	if err := reopened.DeleteSection(PinnedThreadSectionID); err == nil {
+		t.Fatal("expected pinned section delete rejection")
+	}
+}

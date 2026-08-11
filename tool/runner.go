@@ -156,8 +156,11 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 	}, nil
 }
 
-func windowsShellSandboxUsesElevated(profile *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) bool {
-	return configured == sandbox.WindowsSandboxElevated || profile != nil && profile.HasDenyReadEntries()
+func windowsShellSandboxUsesElevated(_ *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) bool {
+	// Rust a603d7ca5c: the Windows sandbox backend is selected solely from the
+	// configured WindowsSandboxLevel; managed networking with a
+	// restricted-token sandbox is rejected before spawning.
+	return configured == sandbox.WindowsSandboxElevated
 }
 
 func windowsSandboxProxySettingsMode(mode execserver.WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {

@@ -18,7 +18,12 @@ func TestWindowsUnifiedExecSandboxLevelUsesElevatedForDenyReadLikeRust(t *testin
 		t.Fatalf("configured elevated profile level = %q", got)
 	}
 	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{}}
-	if got := windowsUnifiedExecSandboxLevel(&profile, sandbox.WindowsSandboxDisabled); got != windowsunified.WindowsSandboxLevelElevated {
-		t.Fatalf("deny-read profile level = %q", got)
+	// Rust a603d7ca5c: the backend is selected solely from the configured
+	// WindowsSandboxLevel; a deny-read profile no longer forces elevated.
+	if got := windowsUnifiedExecSandboxLevel(&profile, sandbox.WindowsSandboxDisabled); got != windowsunified.WindowsSandboxLevelLegacy {
+		t.Fatalf("deny-read profile with disabled level = %q, want legacy", got)
+	}
+	if got := windowsUnifiedExecSandboxLevel(&profile, sandbox.WindowsSandboxElevated); got != windowsunified.WindowsSandboxLevelElevated {
+		t.Fatalf("deny-read profile with elevated level = %q", got)
 	}
 }

@@ -63,7 +63,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		workspaceRoots = []string{cwd}
 	}
 	level := windowsunified.WindowsSandboxLevelLegacy
-	if sandboxContext.WindowsSandboxLevel == "elevated" || profile.HasDenyReadEntries() {
+	if sandboxContext.WindowsSandboxLevel == "elevated" {
 		level = windowsunified.WindowsSandboxLevelElevated
 	}
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{

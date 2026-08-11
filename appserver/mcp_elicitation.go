@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"codex_go/mcp"
 	"codex_go/sandbox"
@@ -13,9 +14,25 @@ import (
 )
 
 type appserverMCPElicitationHandler struct {
-	broker    *ServerRequestBroker
-	reviewer  GuardianReviewer
-	authority func(string) mcpElicitationAuthority
+	broker              *ServerRequestBroker
+	reviewer            GuardianReviewer
+	authority           func(string) mcpElicitationAuthority
+	fullAccessFormInput atomic.Bool
+}
+
+// EnableFullAccessFormInput turns on surfacing non-approval MCP forms in
+// full-access, user-initiated root threads. It is enabled only after session
+// startup so required MCP servers cannot block startup waiting for form input
+// (Rust 4b0e2a0bff).
+func (h *appserverMCPElicitationHandler) EnableFullAccessFormInput() {
+	if h == nil {
+		return
+	}
+	h.fullAccessFormInput.Store(true)
+}
+
+func (h *appserverMCPElicitationHandler) fullAccessFormInputEnabled() bool {
+	return h != nil && h.fullAccessFormInput.Load()
 }
 
 type mcpElicitationAuthority struct {
@@ -26,6 +43,11 @@ type mcpElicitationAuthority struct {
 }
 
 func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
+	// Rust 4b0e2a0bff: tool-suggestion elicitations are never surfaced as
+	// form input; they stay on their existing decline path.
+	if mcpElicitationApprovalKind(request) == "tool_suggestion" {
+		return mcpElicitationAutoDecline(), nil
+	}
 	authority := mcpElicitationAuthority{ApprovalPolicy: sandbox.ApprovalOnRequest, ApprovalsReviewer: "user", AllowsMCPElicitations: true}
 	legacyAuthority := h == nil || h.authority == nil
 	if h != nil && h.authority != nil {
@@ -37,8 +59,12 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 	}
 	switch authority.ApprovalPolicy {
 	case sandbox.ApprovalNever:
-		if mcpElicitationPermissionAutoApproved(authority.PermissionProfile) && mcpElicitationHasEmptyForm(request) {
+		permissionAutoApproved := mcpElicitationPermissionAutoApproved(authority.PermissionProfile)
+		if permissionAutoApproved && mcpElicitationHasEmptyForm(request) {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionAccept, Content: map[string]any{}}, nil
+		}
+		if permissionAutoApproved && h.fullAccessFormInputEnabled() && mcpElicitationSurfacedForm(request) {
+			return h.requestMCPElicitation(ctx, request)
 		}
 		return mcpElicitationAutoDecline(), nil
 	case sandbox.ApprovalGranular:
@@ -109,6 +135,33 @@ func mcpElicitationHasEmptyForm(request *mcp.MCPElicitationRequest) bool {
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	return !ok || len(properties) == 0
+}
+
+// mcpElicitationSurfacedForm reports whether a standard MCP form requires
+// user-entered values and is eligible for full-access form input surfacing:
+// a form elicitation with a non-empty properties schema and no privileged
+// Codex approval-kind metadata.
+func mcpElicitationSurfacedForm(request *mcp.MCPElicitationRequest) bool {
+	if request == nil || strings.TrimSpace(request.Method) != "elicitation/create" || strings.TrimSpace(request.URL) != "" {
+		return false
+	}
+	if mcpElicitationApprovalKind(request) != "" {
+		return false
+	}
+	schema, ok := request.RequestedSchema.(map[string]any)
+	if !ok {
+		return false
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	return ok && len(properties) > 0
+}
+
+func mcpElicitationApprovalKind(request *mcp.MCPElicitationRequest) string {
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringFromMap(meta, "codex_approval_kind"))
 }
 
 func guardianMCPAction(request *mcp.MCPElicitationRequest) state.Action {

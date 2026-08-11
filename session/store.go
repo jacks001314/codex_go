@@ -53,8 +53,17 @@ type SortDirection string
 type ThreadID string
 
 type ThreadSection struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string                   `json:"id"`
+	Name       string                   `json:"name"`
+	Appearance *ThreadSectionAppearance `json:"appearance,omitempty"`
+}
+
+// ThreadSectionAppearance carries optional visual presentation metadata for a
+// custom thread section (mirrors the Rust ThreadSectionAppearance protocol
+// type). Both fields are limited to 64 bytes.
+type ThreadSectionAppearance struct {
+	Icon  *string `json:"icon,omitempty"`
+	Color *string `json:"color,omitempty"`
 }
 
 type Item struct {
@@ -483,12 +492,15 @@ type Store struct {
 	physicalResolver      PhysicalHistoryResolver
 	writerLocksOnce       sync.Once
 	writerLockCoordinator *writerLockCoordinator
+	customSections        []ThreadSection
 }
 
 var storeRootLocks sync.Map
 
 func NewStore(root string) *Store {
-	return &Store{root: root, mu: storeRootLock(root)}
+	store := &Store{root: root, mu: storeRootLock(root)}
+	store.loadCustomSectionsLocked()
+	return store
 }
 
 func storeRootLock(root string) *sync.RWMutex {
@@ -780,7 +792,7 @@ func (s *Store) MoveThreadToSection(threadID ThreadID, sectionID *string, before
 			return nil, err
 		}
 	}
-	section, err := threadSectionForID(sectionID)
+	section, err := s.threadSectionForID(sectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -963,7 +975,7 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 		record.Archived = *patch.Archived
 	}
 	if patch.SectionSet {
-		section, err := threadSectionForID(patch.SectionID)
+		section, err := s.threadSectionForID(patch.SectionID)
 		if err != nil {
 			return nil, err
 		}
@@ -1187,7 +1199,12 @@ func (s *Store) AllRecords() ([]Record, error) {
 }
 
 func (s *Store) ListSections(cursor string, limit int) ([]ThreadSection, string, error) {
-	sections := []ThreadSection{{ID: PinnedThreadSectionID, Name: PinnedThreadSectionName}}
+	s.mu.RLock()
+	customSections := cloneThreadSections(s.customSections)
+	s.mu.RUnlock()
+	sections := make([]ThreadSection, 0, 1+len(customSections))
+	sections = append(sections, ThreadSection{ID: PinnedThreadSectionID, Name: PinnedThreadSectionName})
+	sections = append(sections, customSections...)
 	start := 0
 	for start < len(sections) && sections[start].ID <= strings.TrimSpace(cursor) {
 		start++
@@ -1205,6 +1222,99 @@ func (s *Store) ListSections(cursor string, limit int) ([]ThreadSection, string,
 		next = page[len(page)-1].ID
 	}
 	return page, next, nil
+}
+
+// CreateSection adds a custom thread section and persists it (mirrors the Rust
+// ThreadSectionCreateParams flow).
+func (s *Store) CreateSection(name string, appearance *ThreadSectionAppearance) (*ThreadSection, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("section name is required")
+	}
+	if err := validateSectionAppearance(appearance); err != nil {
+		return nil, err
+	}
+	section := ThreadSection{
+		ID:         uuid.NewString(),
+		Name:       name,
+		Appearance: cloneThreadSectionAppearance(appearance),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.customSections = append(s.customSections, section)
+	if err := s.saveCustomSectionsLocked(); err != nil {
+		return nil, err
+	}
+	return cloneThreadSection(&section), nil
+}
+
+// UpdateSection updates a custom section name and appearance. An omitted
+// appearance is preserved, null clears it, and a value replaces it (double
+// option semantics; the caller tracks whether the field was present).
+func (s *Store) UpdateSection(sectionID string, name string, appearance *ThreadSectionAppearance, appearanceSet bool) (*ThreadSection, error) {
+	sectionID = strings.TrimSpace(sectionID)
+	if sectionID == "" {
+		return nil, fmt.Errorf("section id is required")
+	}
+	if sectionID == PinnedThreadSectionID {
+		return nil, fmt.Errorf("the pinned section cannot be updated")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("section name is required")
+	}
+	if appearanceSet {
+		if err := validateSectionAppearance(appearance); err != nil {
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := -1
+	for i := range s.customSections {
+		if s.customSections[i].ID == sectionID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("%w: %s", ErrThreadSectionMissing, sectionID)
+	}
+	updated := s.customSections[index]
+	updated.Name = name
+	if appearanceSet {
+		updated.Appearance = cloneThreadSectionAppearance(appearance)
+	}
+	s.customSections[index] = updated
+	if err := s.saveCustomSectionsLocked(); err != nil {
+		return nil, err
+	}
+	return cloneThreadSection(&updated), nil
+}
+
+// DeleteSection removes a custom thread section.
+func (s *Store) DeleteSection(sectionID string) error {
+	sectionID = strings.TrimSpace(sectionID)
+	if sectionID == "" {
+		return fmt.Errorf("section id is required")
+	}
+	if sectionID == PinnedThreadSectionID {
+		return fmt.Errorf("the pinned section cannot be deleted")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := -1
+	for i := range s.customSections {
+		if s.customSections[i].ID == sectionID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("%w: %s", ErrThreadSectionMissing, sectionID)
+	}
+	s.customSections = append(s.customSections[:index], s.customSections[index+1:]...)
+	return s.saveCustomSectionsLocked()
 }
 
 func ListRecords(records []Record, options ListOptions) (*Page, error) {
@@ -2093,16 +2203,101 @@ func cloneThreadSection(section *ThreadSection) *ThreadSection {
 		return nil
 	}
 	cloned := *section
+	cloned.Appearance = cloneThreadSectionAppearance(section.Appearance)
 	return &cloned
 }
 
-func threadSectionForID(id *string) (*ThreadSection, error) {
+func cloneThreadSections(sections []ThreadSection) []ThreadSection {
+	if sections == nil {
+		return nil
+	}
+	out := make([]ThreadSection, len(sections))
+	for i := range sections {
+		out[i] = *cloneThreadSection(&sections[i])
+	}
+	return out
+}
+
+func cloneThreadSectionAppearance(appearance *ThreadSectionAppearance) *ThreadSectionAppearance {
+	if appearance == nil {
+		return nil
+	}
+	cloned := *appearance
+	if appearance.Icon != nil {
+		value := *appearance.Icon
+		cloned.Icon = &value
+	}
+	if appearance.Color != nil {
+		value := *appearance.Color
+		cloned.Color = &value
+	}
+	return &cloned
+}
+
+func validateSectionAppearance(appearance *ThreadSectionAppearance) error {
+	if appearance == nil {
+		return nil
+	}
+	if appearance.Icon != nil && len(*appearance.Icon) > 64 {
+		return fmt.Errorf("section appearance icon must not exceed 64 bytes")
+	}
+	if appearance.Color != nil && len(*appearance.Color) > 64 {
+		return fmt.Errorf("section appearance color must not exceed 64 bytes")
+	}
+	return nil
+}
+
+func sectionsFilePath(root string) string {
+	return filepath.Join(root, "sections.json")
+}
+
+func (s *Store) loadCustomSectionsLocked() {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return
+	}
+	data, err := os.ReadFile(sectionsFilePath(s.root))
+	if err != nil {
+		return
+	}
+	var sections []ThreadSection
+	if err := json.Unmarshal(data, &sections); err != nil {
+		return
+	}
+	s.customSections = cloneThreadSections(sections)
+}
+
+func (s *Store) saveCustomSectionsLocked() error {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(cloneThreadSections(s.customSections), "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(sectionsFilePath(s.root), append(data, '\n'), 0o600)
+}
+
+func (s *Store) threadSectionForID(id *string) (*ThreadSection, error) {
 	if id == nil {
 		return nil, nil
 	}
 	value := strings.TrimSpace(*id)
 	if value == PinnedThreadSectionID {
 		return pinnedThreadSection(), nil
+	}
+	if s != nil {
+		s.mu.RLock()
+		for i := range s.customSections {
+			if s.customSections[i].ID == value {
+				cloned := s.customSections[i]
+				s.mu.RUnlock()
+				return &cloned, nil
+			}
+		}
+		s.mu.RUnlock()
 	}
 	return nil, fmt.Errorf("%w: %s", ErrThreadSectionMissing, value)
 }

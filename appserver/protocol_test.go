@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/config"
@@ -332,5 +333,41 @@ func TestThreadStartResponseSandboxUsesRustResponseShape(t *testing.T) {
 	custom := map[string]any{"type": "externalSandbox", "networkAccess": "disabled"}
 	if got := threadStartResponseSandbox(custom); !reflect.DeepEqual(got, custom) {
 		t.Fatalf("custom sandbox response = %#v, want %#v", got, custom)
+	}
+}
+
+func TestThreadSectionUpdateParamsAppearanceDoubleOption(t *testing.T) {
+	// Omitted appearance -> preserved (AppearanceSet false).
+	var omitted ThreadSectionUpdateParams
+	if err := json.Unmarshal([]byte(`{"sectionId":"s1","name":"Work"}`), &omitted); err != nil {
+		t.Fatalf("Unmarshal(omit) error = %v", err)
+	}
+	if omitted.AppearanceSet || omitted.Appearance != nil {
+		t.Fatalf("omitted appearance = set:%v %#v", omitted.AppearanceSet, omitted.Appearance)
+	}
+	// Null appearance -> clear (AppearanceSet true, Appearance nil).
+	var cleared ThreadSectionUpdateParams
+	if err := json.Unmarshal([]byte(`{"sectionId":"s1","name":"Work","appearance":null}`), &cleared); err != nil {
+		t.Fatalf("Unmarshal(null) error = %v", err)
+	}
+	if !cleared.AppearanceSet || cleared.Appearance != nil {
+		t.Fatalf("null appearance = set:%v %#v", cleared.AppearanceSet, cleared.Appearance)
+	}
+	// Value appearance -> replace.
+	icon := "work"
+	var replaced ThreadSectionUpdateParams
+	if err := json.Unmarshal([]byte(`{"sectionId":"s1","name":"Work","appearance":{"icon":"work","color":"#ff0000"}}`), &replaced); err != nil {
+		t.Fatalf("Unmarshal(value) error = %v", err)
+	}
+	if !replaced.AppearanceSet || replaced.Appearance == nil || replaced.Appearance.Icon == nil || *replaced.Appearance.Icon != icon {
+		t.Fatalf("value appearance = set:%v %#v", replaced.AppearanceSet, replaced.Appearance)
+	}
+	// 64-byte validation.
+	long := strings.Repeat("x", 65)
+	if err := (&ThreadSectionUpdateParams{SectionID: "s1", Name: "Work", Appearance: &ThreadSectionAppearance{Icon: &long}, AppearanceSet: true}).Validate(); err == nil {
+		t.Fatal("expected 64-byte icon rejection")
+	}
+	if err := (&ThreadSectionCreateParams{Name: "Work", Appearance: &ThreadSectionAppearance{Color: &long}}).Validate(); err == nil {
+		t.Fatal("expected 64-byte color rejection")
 	}
 }

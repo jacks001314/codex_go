@@ -547,8 +547,16 @@ type GitInfo struct {
 }
 
 type ThreadSection struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string                   `json:"id"`
+	Name       string                   `json:"name"`
+	Appearance *ThreadSectionAppearance `json:"appearance,omitempty"`
+}
+
+// ThreadSectionAppearance is the optional visual presentation for a custom
+// thread section. Both icon and color are limited to 64 bytes.
+type ThreadSectionAppearance struct {
+	Icon  *string `json:"icon,omitempty"`
+	Color *string `json:"color,omitempty"`
 }
 
 type Thread struct {
@@ -2140,6 +2148,103 @@ func (r *ThreadSectionListResponse) MarshalJSON() ([]byte, error) {
 		Data       []ThreadSection `json:"data"`
 		NextCursor *string         `json:"nextCursor"`
 	}{Data: data, NextCursor: r.NextCursor})
+}
+
+type ThreadSectionCreateParams struct {
+	Name       string                   `json:"name"`
+	Appearance *ThreadSectionAppearance `json:"appearance,omitempty"`
+}
+
+func (p *ThreadSectionCreateParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.Name) == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidRequest)
+	}
+	if err := validateThreadSectionAppearance(p.Appearance); err != nil {
+		return err
+	}
+	return nil
+}
+
+type ThreadSectionCreateResponse struct {
+	Section ThreadSection `json:"section"`
+}
+
+type ThreadSectionUpdateParams struct {
+	SectionID     string                   `json:"sectionId"`
+	Name          string                   `json:"name"`
+	Appearance    *ThreadSectionAppearance `json:"-"`
+	AppearanceSet bool                     `json:"-"`
+}
+
+func (p *ThreadSectionUpdateParams) UnmarshalJSON(data []byte) error {
+	type threadSectionUpdateParamsAlias ThreadSectionUpdateParams
+	var decoded threadSectionUpdateParamsAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if appearanceRaw, ok := raw["appearance"]; ok {
+		decoded.AppearanceSet = true
+		if strings.TrimSpace(string(appearanceRaw)) != "null" {
+			var appearance ThreadSectionAppearance
+			if err := json.Unmarshal(appearanceRaw, &appearance); err != nil {
+				return err
+			}
+			decoded.Appearance = &appearance
+		}
+	}
+	*p = ThreadSectionUpdateParams(decoded)
+	return nil
+}
+
+func (p *ThreadSectionUpdateParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.SectionID) == "" {
+		return fmt.Errorf("%w: sectionId is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidRequest)
+	}
+	if p.AppearanceSet {
+		if err := validateThreadSectionAppearance(p.Appearance); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type ThreadSectionUpdateResponse struct {
+	Section ThreadSection `json:"section"`
+}
+
+type ThreadSectionDeleteParams struct {
+	SectionID string `json:"sectionId"`
+}
+
+func (p *ThreadSectionDeleteParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.SectionID) == "" {
+		return fmt.Errorf("%w: sectionId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+type ThreadSectionDeleteResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
+func validateThreadSectionAppearance(appearance *ThreadSectionAppearance) error {
+	if appearance == nil {
+		return nil
+	}
+	if appearance.Icon != nil && len(*appearance.Icon) > 64 {
+		return fmt.Errorf("%w: section appearance icon must not exceed 64 bytes", ErrInvalidRequest)
+	}
+	if appearance.Color != nil && len(*appearance.Color) > 64 {
+		return fmt.Errorf("%w: section appearance color must not exceed 64 bytes", ErrInvalidRequest)
+	}
+	return nil
 }
 
 func (p *ThreadListParams) Validate() error {

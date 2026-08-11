@@ -164,6 +164,45 @@ func TestGoalSetValidation(t *testing.T) {
 	}
 }
 
+func TestGoalMaxTokenBudgetDefaultsAndRejectsOversized(t *testing.T) {
+	max := int64(1000)
+	store := NewGoalStore()
+	objective := "ship"
+	// New goal without a budget defaults to the configured maximum.
+	created, err := store.Set(&GoalSetParams{ThreadID: "thread-a", Objective: &objective, MaxGoalTokenBudget: &max})
+	if err != nil {
+		t.Fatalf("Set(new goal) error = %v", err)
+	}
+	if created.Goal.TokenBudget == nil || *created.Goal.TokenBudget != max {
+		t.Fatalf("new goal budget = %#v, want %d", created.Goal.TokenBudget, max)
+	}
+	// Explicit Set(null) resets the budget to the configured maximum.
+	explicit := int64(500)
+	if _, err := store.Set(&GoalSetParams{ThreadID: "thread-a", Objective: &objective, TokenBudget: &explicit, MaxGoalTokenBudget: &max}); err != nil {
+		t.Fatalf("Set(explicit) error = %v", err)
+	}
+	var cleared GoalSetParams
+	if err := json.Unmarshal([]byte(`{"threadId":"thread-a","tokenBudget":null}`), &cleared); err != nil {
+		t.Fatalf("Unmarshal null tokenBudget error = %v", err)
+	}
+	cleared.MaxGoalTokenBudget = &max
+	reset, err := store.Set(&cleared)
+	if err != nil {
+		t.Fatalf("Set(null with max) error = %v", err)
+	}
+	if reset.Goal.TokenBudget == nil || *reset.Goal.TokenBudget != max {
+		t.Fatalf("null reset budget = %#v, want %d", reset.Goal.TokenBudget, max)
+	}
+	// Oversized budgets are rejected for creation and updates.
+	oversized := int64(1001)
+	if _, err := store.Set(&GoalSetParams{ThreadID: "thread-b", Objective: &objective, TokenBudget: &oversized, MaxGoalTokenBudget: &max}); !errors.Is(err, ErrInvalidThreadExtraRequest) {
+		t.Fatalf("expected oversized budget rejection, got %v", err)
+	}
+	if _, err := store.Set(&GoalSetParams{ThreadID: "thread-a", Objective: &objective, TokenBudget: &oversized, MaxGoalTokenBudget: &max}); !errors.Is(err, ErrInvalidThreadExtraRequest) {
+		t.Fatalf("expected oversized budget update rejection, got %v", err)
+	}
+}
+
 func TestSettingsUpdateValidation(t *testing.T) {
 	permissions := "workspace"
 	sandbox := "read-only"

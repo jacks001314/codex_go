@@ -152,7 +152,7 @@ func (e *CloudConfigLoadError) Error() string {
 }
 
 type CloudConfigLoader struct {
-	once   sync.Once
+	mu     sync.Mutex
 	load   func() (*CloudConfigBundle, error)
 	bundle *CloudConfigBundle
 	err    error
@@ -169,10 +169,23 @@ func (l *CloudConfigLoader) Get() (*CloudConfigBundle, error) {
 	if l == nil {
 		return nil, nil
 	}
-	l.once.Do(func() {
-		l.bundle, l.err = l.load()
-	})
-	return l.bundle, l.err
+	// Rust 070a26a1f0: retrieve the latest shared bundle on each
+	// configuration load so later sessions observe refreshed bundles instead
+	// of the startup snapshot. The last successful bundle is preserved when a
+	// refresh fails.
+	bundle, err := l.load()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err == nil {
+		l.bundle = bundle
+		l.err = nil
+		return bundle, nil
+	}
+	if l.bundle != nil && l.err == nil {
+		return l.bundle, nil
+	}
+	l.err = err
+	return nil, err
 }
 
 func ParseCloudConfigSimpleTOML(input string) (map[string]any, error) {

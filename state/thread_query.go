@@ -22,6 +22,7 @@ type ThreadListRow struct {
 	ArchivedAt                                        sql.NullInt64
 	GitSHA, GitBranch, GitOriginURL                   sql.NullString
 	SectionID, SectionName                            sql.NullString
+	SectionAppearance                                 sql.NullString
 	SectionPosition, SectionEnteredAtMS               sql.NullInt64
 	ParentThreadID                                    sql.NullString
 }
@@ -106,6 +107,7 @@ SELECT
     threads.git_origin_url,
     threads.thread_section_id,
     thread_sections.name,
+    thread_sections.appearance,
     threads.section_position,
     threads.section_entered_at_ms,
     thread_spawn_edges.parent_thread_id
@@ -127,7 +129,7 @@ LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
 			&item.ModelProvider, &item.Model, &item.ReasoningEffort, &item.CWD, &item.CLIVersion,
 			&item.Title, &item.Name, &item.Preview, &item.SandboxPolicy, &item.ApprovalMode,
 			&item.TokensUsed, &item.FirstUserMessage, &item.MemoryMode, &item.Archived, &item.ArchivedAt,
-			&item.GitSHA, &item.GitBranch, &item.GitOriginURL, &item.SectionID, &item.SectionName,
+			&item.GitSHA, &item.GitBranch, &item.GitOriginURL, &item.SectionID, &item.SectionName, &item.SectionAppearance,
 			&item.SectionPosition, &item.SectionEnteredAtMS, &item.ParentThreadID,
 		); err != nil {
 			return nil, fmt.Errorf("scan thread row: %w", err)

@@ -197,6 +197,7 @@ type RuntimeRouter struct {
 	diagnosticsGauges      *serverDiagnosticsGaugeRegistry
 	requestAttestation     map[string]bool
 	mcpOpenAIForm          map[string]bool
+	mcpStandardFormInput   map[string]bool
 	authRevisionMu         sync.Mutex
 	authRevision           uint64
 	mcpRuntimes            *mcpRuntimeCoordinator
@@ -332,6 +333,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		diagnosticsGauges:    newServerDiagnosticsGaugeRegistry(),
 		requestAttestation:   map[string]bool{},
 		mcpOpenAIForm:        map[string]bool{},
+		mcpStandardFormInput: map[string]bool{},
 		mcpRuntimes:          newMCPRuntimeCoordinator(),
 		commandApprovals:     map[string]struct{}{},
 		fileApprovals:        map[string]struct{}{},
@@ -1093,7 +1095,9 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionExperimentalAPI(connectionID)
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
+	r.clearConnectionMCPStandardFormInput(connectionID)
 	r.syncMCPOpenAIFormElicitationCapability()
+	r.syncMCPStandardFormInputCapability()
 	if r.services.CommandExec != nil {
 		r.services.CommandExec.ConnectionClosed(connectionID)
 	}
@@ -1336,6 +1340,20 @@ func (r *RuntimeRouter) rememberConnectionMCPOpenAIForm(connectionID string, cap
 	r.mcpOpenAIForm[connectionID] = enabled
 }
 
+func (r *RuntimeRouter) rememberConnectionMCPStandardFormInput(connectionID string, capabilities *InitializeCapabilities) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	enabled := capabilities != nil && capabilities.MCPServerStandardFormInput
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	if r.mcpStandardFormInput == nil {
+		r.mcpStandardFormInput = map[string]bool{}
+	}
+	r.mcpStandardFormInput[connectionID] = enabled
+}
+
 func (r *RuntimeRouter) rememberConnectionRequestAttestation(connectionID string, capabilities *InitializeCapabilities) {
 	if r == nil {
 		return
@@ -1388,6 +1406,16 @@ func (r *RuntimeRouter) clearConnectionMCPOpenAIForm(connectionID string) {
 	r.clientInfoMu.Lock()
 	defer r.clientInfoMu.Unlock()
 	delete(r.mcpOpenAIForm, connectionID)
+}
+
+func (r *RuntimeRouter) clearConnectionMCPStandardFormInput(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clientInfoMu.Lock()
+	defer r.clientInfoMu.Unlock()
+	delete(r.mcpStandardFormInput, connectionID)
 }
 
 func (r *RuntimeRouter) clearConnectionRequestAttestation(connectionID string) {
@@ -1450,6 +1478,20 @@ func (r *RuntimeRouter) anyConnectionMCPOpenAIFormElicitation() bool {
 	return false
 }
 
+func (r *RuntimeRouter) anyConnectionMCPStandardFormInput() bool {
+	if r == nil {
+		return false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	for _, enabled := range r.mcpStandardFormInput {
+		if enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *RuntimeRouter) syncMCPOpenAIFormElicitationCapability() {
 	if r == nil {
 		return
@@ -1462,6 +1504,17 @@ func (r *RuntimeRouter) syncMCPOpenAIFormElicitationCapability() {
 		r.mcpRuntimes.setOpenAIFormElicitationEnabled(enabled)
 	}
 	r.prewarmLoadedMCPThreads()
+}
+
+func (r *RuntimeRouter) syncMCPStandardFormInputCapability() {
+	if r == nil {
+		return
+	}
+	if r.services.MCP != nil {
+		if handler, ok := r.services.MCP.ElicitationHandler().(*appserverMCPElicitationHandler); ok && r.anyConnectionMCPStandardFormInput() {
+			handler.EnableFullAccessFormInput()
+		}
+	}
 }
 
 func (r *RuntimeRouter) notificationMethodOptedOut(method NotificationMethod) bool {
@@ -4589,7 +4642,9 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 	r.rememberConnectionExperimentalAPI(connectionID, params.Capabilities)
 	r.rememberConnectionRequestAttestation(connectionID, params.Capabilities)
 	r.rememberConnectionMCPOpenAIForm(connectionID, params.Capabilities)
+	r.rememberConnectionMCPStandardFormInput(connectionID, params.Capabilities)
 	r.syncMCPOpenAIFormElicitationCapability()
+	r.syncMCPStandardFormInputCapability()
 	codexHome := ""
 	if r.services.Config != nil {
 		codexHome = r.services.Config.CodexHome()
@@ -5820,6 +5875,7 @@ func (r *RuntimeRouter) terminateBackgroundTerminal(params *BackgroundTerminalsT
 }
 
 func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string) (*GoalSetResponse, error) {
+	r.applyGoalTokenBudgetLimit(params)
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -7003,6 +7059,32 @@ func (r *RuntimeRouter) handleSkillsExtraRootsSet(request *Request) (*SkillsExtr
 		r.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
 	}
 	return response, err
+}
+
+// applyGoalTokenBudgetLimit resolves the thread's effective
+// goals.max_goal_token_budget configuration and attaches it to the goal set
+// params so every persistence path defaults and validates budgets identically
+// (mirrors the Rust GoalExtensionConfig.max_goal_token_budget plumbing).
+func (r *RuntimeRouter) applyGoalTokenBudgetLimit(params *GoalSetParams) {
+	if r == nil || params == nil || strings.TrimSpace(params.ThreadID) == "" {
+		return
+	}
+	cfg := &config.Config{Values: map[string]any{}}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
+	if err == nil && record != nil {
+		if loaded, loadErr := r.effectiveConfigForThreadStart(&ThreadStartParams{
+			CWD: record.Metadata.CWD,
+		}); loadErr == nil && loaded != nil {
+			cfg = loaded
+		}
+	} else if r.services.Config != nil {
+		if loaded, loadErr := config.LoadWithOptions(strings.TrimSpace(r.services.Config.CodexHome()), &config.LoadOptions{}); loadErr == nil && loaded != nil {
+			cfg = loaded
+		}
+	}
+	if goals, err := cfg.GoalsConfig(); err == nil && goals != nil {
+		params.MaxGoalTokenBudget = cloneInt64PtrAppserver(goals.MaxGoalTokenBudget)
+	}
 }
 
 func (r *RuntimeRouter) handleSkillsConfigWrite(request *Request) (*SkillsConfigWriteResponse, error) {
@@ -9251,6 +9333,13 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 	}))
 	service.SetOAuthLoginCompletionHandler(&appserverMCPOAuthLoginCompletionHandler{notify: r.notify})
 	service.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
+	if handler, ok := service.ElicitationHandler().(*appserverMCPElicitationHandler); ok && r.anyConnectionMCPStandardFormInput() {
+		// Rust 4b0e2a0bff: enable full-access form input only after the
+		// session has started so required MCP servers cannot block startup
+		// waiting for form input. The Go service is configured per turn start,
+		// which is after session startup.
+		handler.EnableFullAccessFormInput()
+	}
 }
 
 func (r *RuntimeRouter) mcpServiceForThread(threadID string, cfg *config.Config) *mcp.MCPService {

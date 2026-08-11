@@ -31,6 +31,10 @@ type InitializeCapabilities struct {
 	RequestAttestation             bool     `json:"requestAttestation,omitempty"`
 	OptOutNotificationMethods      []string `json:"optOutNotificationMethods,omitempty"`
 	MCPServerOpenAIFormElicitation bool     `json:"mcpServerOpenaiFormElicitation,omitempty"`
+	// MCPServerStandardFormInput mirrors the client-only
+	// "openai/standard-form-input" extension: it enables surfacing standard MCP
+	// forms in full-access user threads but is never advertised to MCP servers.
+	MCPServerStandardFormInput bool `json:"mcpServerStandardFormInput,omitempty"`
 }
 
 type InitializeParams struct {

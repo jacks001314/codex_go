@@ -48,19 +48,52 @@ func TestCloudConfigBundleLayersIncludesRequirements(t *testing.T) {
 	}
 }
 
-func TestCloudConfigLoaderCachesResult(t *testing.T) {
+func TestCloudConfigLoaderRetrievesLatestOnEachLoadLikeRust(t *testing.T) {
 	calls := 0
 	loader := NewCloudConfigLoader(func() (*CloudConfigBundle, error) {
 		calls++
-		return &CloudConfigBundle{}, nil
+		return &CloudConfigBundle{ConfigTOML: CloudConfigTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{ID: "latest"}}}}, nil
 	})
-	if _, err := loader.Get(); err != nil {
-		t.Fatalf("first Get() error = %v", err)
+	first, err := loader.Get()
+	if err != nil || first == nil {
+		t.Fatalf("first Get() = %#v, %v", first, err)
 	}
-	if _, err := loader.Get(); err != nil {
-		t.Fatalf("second Get() error = %v", err)
+	second, err := loader.Get()
+	if err != nil || second == nil || len(second.ConfigTOML.EnterpriseManaged) == 0 {
+		t.Fatalf("second Get() = %#v, %v", second, err)
 	}
-	if calls != 1 {
-		t.Fatalf("loader calls = %d, want 1", calls)
+	if calls != 2 {
+		t.Fatalf("loader calls = %d, want 2 (each load retrieves the latest bundle)", calls)
+	}
+}
+
+func TestCloudConfigLoaderPreservesLastSuccessfulOnRefreshFailure(t *testing.T) {
+	calls := 0
+	loader := NewCloudConfigLoader(func() (*CloudConfigBundle, error) {
+		calls++
+		if calls == 2 {
+			return nil, NewCloudConfigLoadError(CloudConfigLoadRequestFailed, nil, "network down")
+		}
+		return &CloudConfigBundle{ConfigTOML: CloudConfigTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{ID: "ok"}}}}, nil
+	})
+	first, err := loader.Get()
+	if err != nil || first == nil {
+		t.Fatalf("first Get() = %#v, %v", first, err)
+	}
+	second, err := loader.Get()
+	if err != nil {
+		t.Fatalf("second Get() error = %v, want the last successful bundle", err)
+	}
+	if second == nil || len(second.ConfigTOML.EnterpriseManaged) == 0 || second.ConfigTOML.EnterpriseManaged[0].ID != "ok" {
+		t.Fatalf("second Get() = %#v, want preserved last successful bundle", second)
+	}
+}
+
+func TestCloudConfigLoaderReturnsErrorWhenNeverSucceeded(t *testing.T) {
+	loader := NewCloudConfigLoader(func() (*CloudConfigBundle, error) {
+		return nil, NewCloudConfigLoadError(CloudConfigLoadRequestFailed, nil, "network down")
+	})
+	if _, err := loader.Get(); err == nil {
+		t.Fatal("Get() error = nil, want error when no successful bundle exists")
 	}
 }

@@ -204,8 +204,13 @@ func TestWindowsShellSandboxUsesElevatedLikeRust(t *testing.T) {
 		t.Fatal("explicit elevated profile did not select elevated backend")
 	}
 	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{}}
-	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated) {
-		t.Fatal("deny-read profile did not select elevated backend")
+	// Rust a603d7ca5c: the backend is selected solely from the configured
+	// WindowsSandboxLevel; a deny-read profile no longer forces elevated.
+	if windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxUnelevated) {
+		t.Fatal("deny-read profile with unelevated level selected elevated backend")
+	}
+	if !windowsShellSandboxUsesElevated(&profile, sandbox.WindowsSandboxElevated) {
+		t.Fatal("deny-read profile with elevated level did not select elevated backend")
 	}
 }
 

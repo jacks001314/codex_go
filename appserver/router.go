@@ -869,6 +869,12 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadMetadataUpdate(request)
 	case MethodThreadSectionMove:
 		return r.handleThreadSectionMove(request)
+	case MethodThreadSectionCreate:
+		return r.handleThreadSectionCreate(request)
+	case MethodThreadSectionUpdate:
+		return r.handleThreadSectionUpdate(request)
+	case MethodThreadSectionDelete:
+		return r.handleThreadSectionDelete(request)
 	case MethodThreadList:
 		return r.handleThreadList(request)
 	case MethodThreadSectionList:
@@ -2563,6 +2569,80 @@ func (r *Router) handleThreadSectionMove(request *Request) (*ThreadSectionMoveRe
 		}
 	}
 	return &ThreadSectionMoveResponse{}, nil
+}
+
+func (r *Router) handleThreadSectionCreate(request *Request) (*ThreadSectionCreateResponse, error) {
+	var params ThreadSectionCreateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	section, err := r.store.CreateSection(params.Name, sessionAppearanceFromProtocol(params.Appearance))
+	if err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	return &ThreadSectionCreateResponse{Section: protocolSectionFromStore(section)}, nil
+}
+
+func (r *Router) handleThreadSectionUpdate(request *Request) (*ThreadSectionUpdateResponse, error) {
+	var params ThreadSectionUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	section, err := r.store.UpdateSection(params.SectionID, params.Name, sessionAppearanceFromProtocol(params.Appearance), params.AppearanceSet)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadSectionMissing) {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread section not found: %s", strings.TrimSpace(params.SectionID)))
+		}
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	return &ThreadSectionUpdateResponse{Section: protocolSectionFromStore(section)}, nil
+}
+
+func (r *Router) handleThreadSectionDelete(request *Request) (*ThreadSectionDeleteResponse, error) {
+	var params ThreadSectionDeleteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.store.DeleteSection(params.SectionID); err != nil {
+		if errors.Is(err, session.ErrThreadSectionMissing) {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread section not found: %s", strings.TrimSpace(params.SectionID)))
+		}
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	return &ThreadSectionDeleteResponse{Deleted: true}, nil
+}
+
+func sessionAppearanceFromProtocol(appearance *ThreadSectionAppearance) *session.ThreadSectionAppearance {
+	if appearance == nil {
+		return nil
+	}
+	return &session.ThreadSectionAppearance{
+		Icon:  cloneStringPtrAppserver(appearance.Icon),
+		Color: cloneStringPtrAppserver(appearance.Color),
+	}
+}
+
+func protocolSectionFromStore(section *session.ThreadSection) ThreadSection {
+	if section == nil {
+		return ThreadSection{}
+	}
+	out := ThreadSection{ID: section.ID, Name: section.Name}
+	if section.Appearance != nil {
+		out.Appearance = &ThreadSectionAppearance{
+			Icon:  cloneStringPtrAppserver(section.Appearance.Icon),
+			Color: cloneStringPtrAppserver(section.Appearance.Color),
+		}
+	}
+	return out
 }
 
 func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error) {

@@ -66,11 +66,12 @@ func (g *Goal) MarshalJSON() ([]byte, error) {
 }
 
 type GoalSetParams struct {
-	ThreadID       string      `json:"threadId"`
-	Objective      *string     `json:"objective,omitempty"`
-	TokenBudget    *int64      `json:"tokenBudget,omitempty"`
-	TokenBudgetSet bool        `json:"-"`
-	Status         *GoalStatus `json:"status,omitempty"`
+	ThreadID           string      `json:"threadId"`
+	Objective          *string     `json:"objective,omitempty"`
+	TokenBudget        *int64      `json:"tokenBudget,omitempty"`
+	TokenBudgetSet     bool        `json:"-"`
+	Status             *GoalStatus `json:"status,omitempty"`
+	MaxGoalTokenBudget *int64      `json:"-"`
 }
 
 func (p *GoalSetParams) UnmarshalJSON(data []byte) error {
@@ -1018,10 +1019,22 @@ func buildGoalFromSetParams(params *GoalSetParams, existing *Goal, now int64) (G
 		return Goal{}, fmt.Errorf("%w: objective is required", ErrInvalidThreadExtraRequest)
 	}
 	if params.TokenBudgetSet || params.TokenBudget != nil {
-		tokenBudget = cloneInt64(params.TokenBudget)
+		if params.TokenBudget != nil {
+			tokenBudget = cloneInt64(params.TokenBudget)
+		} else {
+			// A null budget reset uses the configured maximum as the default
+			// budget (mirrors Rust GoalTokenBudgetUpdate::Set(None) semantics).
+			tokenBudget = cloneInt64(params.MaxGoalTokenBudget)
+		}
+	} else if existing == nil && tokenBudget == nil {
+		// New goals default to the configured maximum token budget.
+		tokenBudget = cloneInt64(params.MaxGoalTokenBudget)
 	}
 	if params.Status != nil {
 		status = *params.Status
+	}
+	if tokenBudget != nil && params.MaxGoalTokenBudget != nil && *tokenBudget > *params.MaxGoalTokenBudget {
+		return Goal{}, fmt.Errorf("%w: goal token budget %d exceeds the maximum allowed goal token budget of %d", ErrInvalidThreadExtraRequest, *tokenBudget, *params.MaxGoalTokenBudget)
 	}
 	if goalID == "" {
 		goalID = uuid.NewString()
