@@ -14,6 +14,22 @@ const (
 	WebSearchModeLive     WebSearchMode = "live"
 )
 
+// RestrictTo restricts search to the access permitted by both modes (Rust
+// WebSearchMode::restrict_to): the conservative intersection of the two
+// policies, ordered Disabled < Cached < Indexed < Live.
+func (m WebSearchMode) RestrictTo(requested WebSearchMode) WebSearchMode {
+	switch {
+	case m == WebSearchModeDisabled || requested == WebSearchModeDisabled:
+		return WebSearchModeDisabled
+	case m == WebSearchModeCached || requested == WebSearchModeCached:
+		return WebSearchModeCached
+	case m == WebSearchModeIndexed || requested == WebSearchModeIndexed:
+		return WebSearchModeIndexed
+	default:
+		return WebSearchModeLive
+	}
+}
+
 // WebSearchModeFromValue mirrors Rust's cached default while accepting the
 // legacy boolean/enabled forms still produced by older clients.
 func WebSearchModeFromValue(value any) WebSearchMode {

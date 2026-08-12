@@ -565,6 +565,7 @@ type ChatGPTJWTClaims struct {
 	AccountID string
 	Email     string
 	PlanType  string
+	UserID    string
 	FedRAMP   bool
 }
 
@@ -596,6 +597,12 @@ func ChatGPTClaimsFromJWT(jwt string) *ChatGPTJWTClaims {
 	for _, key := range []string{"plan_type", "chatgpt_plan_type"} {
 		if value := firstStringClaim(claimMaps, key); value != "" {
 			claims.PlanType = value
+			break
+		}
+	}
+	for _, key := range []string{"chatgpt_user_id", "user_id"} {
+		if value := firstStringClaim(claimMaps, key); value != "" {
+			claims.UserID = value
 			break
 		}
 	}

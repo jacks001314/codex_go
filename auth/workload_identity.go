@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -57,6 +58,20 @@ type WorkloadIdentityToken struct {
 }
 
 type workloadIdentityError string
+
+// workloadAssertionFileError wraps a failure to read the assertion file so
+// retry classification can inspect the underlying I/O error (Rust
+// WorkloadIdentityError::AssertionFile).
+type workloadAssertionFileError struct {
+	path string
+	err  error
+}
+
+func (e *workloadAssertionFileError) Error() string {
+	return fmt.Sprintf("could not read workload identity assertion file %s: %v", e.path, e.err)
+}
+
+func (e *workloadAssertionFileError) Unwrap() error { return e.err }
 
 const (
 	workloadErrInvalidFederationRuleID   workloadIdentityError = "the workload identity federation rule ID must not be empty"
@@ -142,12 +157,12 @@ func filepathIsAbsolute(path string) bool {
 func readWorkloadAssertion(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("could not read workload identity assertion file %s: %w", path, err)
+		return "", &workloadAssertionFileError{path: path, err: err}
 	}
 	defer file.Close()
 	bytes, err := io.ReadAll(io.LimitReader(file, workloadMaxAssertionBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("could not read workload identity assertion file %s: %w", path, err)
+		return "", &workloadAssertionFileError{path: path, err: err}
 	}
 	if len(bytes) > workloadMaxAssertionBytes {
 		return "", workloadErrAssertionTooLarge
@@ -191,7 +206,7 @@ func (e *WorkloadIdentityExchange) Resolve(ctx context.Context) (WorkloadIdentit
 		if cached := e.state.cached; cached != nil {
 			result = cached.token
 		}
-	} else if workloadAllowsCachedFallback(err) && e.state.cached != nil && now.Before(e.state.cached.expiresAt) {
+	} else if workloadErrorIsTransient(err) && e.state.cached != nil && now.Before(e.state.cached.expiresAt) {
 		if e.state.cached.refreshAt.After(now) {
 			e.state.cached.refreshAt = now.Add(workloadTransientRetry)
 		}
@@ -232,6 +247,21 @@ func (e *WorkloadIdentityExchange) Refresh(ctx context.Context, observedTokenVer
 	e.completedAttempts++
 	e.state.lastAttemptError = err
 	return result, err
+}
+
+// InvalidateIfCurrent drops the cached token only when it is still the token
+// the caller rejected, so a newer concurrent exchange is never discarded
+// (Rust WorkloadIdentityExchange::invalidate_if_current).
+func (e *WorkloadIdentityExchange) InvalidateIfCurrent(observedTokenVersion uint64) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state.tokenGeneration == observedTokenVersion {
+		e.state.cached = nil
+		e.state.lastAttemptError = nil
+	}
 }
 
 func (e *WorkloadIdentityExchange) exchange(ctx context.Context) (WorkloadIdentityToken, error) {
@@ -281,15 +311,37 @@ func (e *workloadExchangeRejected) Error() string {
 	return fmt.Sprintf("workload identity token exchange rejected with status %d", e.Status)
 }
 
-func workloadAllowsCachedFallback(err error) bool {
+// IsTransient reports whether retrying the rejected exchange may succeed
+// without changing configuration (Rust WorkloadIdentityError::is_transient).
+func (e *workloadExchangeRejected) IsTransient() bool {
+	return e.Status == http.StatusRequestTimeout || e.Status == http.StatusTooManyRequests || e.Status >= 500
+}
+
+// workloadErrorIsTransient classifies exchange failures for retry handling
+// (Rust WorkloadIdentityError::is_transient): transient failures are limited
+// to unavailable exchanges, retryable HTTP statuses, and transient
+// assertion-file I/O errors.
+func workloadErrorIsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
 	var rejected *workloadExchangeRejected
 	if errors.As(err, &rejected) {
-		return rejected.Status == http.StatusRequestTimeout || rejected.Status == http.StatusTooManyRequests || rejected.Status >= 500
+		return rejected.IsTransient()
 	}
-	return err == workloadErrExchangeUnavailable || strings.Contains(err.Error(), "could not read workload identity assertion file")
+	var assertion *workloadAssertionFileError
+	if errors.As(err, &assertion) {
+		return workloadAssertionErrorIsTransient(assertion.err)
+	}
+	return err == workloadErrExchangeUnavailable
+}
+
+func workloadAssertionErrorIsTransient(err error) bool {
+	return errors.Is(err, syscall.EINTR) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, syscall.EWOULDBLOCK) ||
+		errors.Is(err, syscall.EAGAIN)
 }
 
 type workloadTokenExchangeResponse struct {

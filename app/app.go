@@ -1557,7 +1557,11 @@ func authFromCodexAccessToken(ctx context.Context, accessToken string, cfg *conf
 }
 
 func authStoreOptionsFromLoadedConfig(loaded *config.Config) *auth.StoreOptions {
-	return auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	options := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	options.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{
+		ChatGPTBaseURL: loaded.ChatGPTBaseURL(),
+	}
+	return options
 }
 
 func authStoreOptionsFromConfig(codexHome string, overrides []string) (*auth.StoreOptions, error) {

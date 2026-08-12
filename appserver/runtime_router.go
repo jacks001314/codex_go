@@ -200,6 +200,8 @@ type RuntimeRouter struct {
 	mcpStandardFormInput   map[string]bool
 	authRevisionMu         sync.Mutex
 	authRevision           uint64
+	skillShadowMu          sync.Mutex
+	skillShadowState       map[string]*skillShadowThreadState
 	mcpRuntimes            *mcpRuntimeCoordinator
 	mcpConfigManaged       atomic.Bool
 	loginRuntimeMu         sync.Mutex
@@ -602,7 +604,11 @@ func (r *RuntimeRouter) authStoreOptions() *auth.StoreOptions {
 		return auth.StoreOptionsFromConfig("", false)
 	}
 	cfg := &config.Config{Values: read.Config}
-	return auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
+	options := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
+	options.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{
+		ChatGPTBaseURL: cfg.ChatGPTBaseURL(),
+	}
+	return options
 }
 
 func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*auth.ResolvedAuth, error) {
@@ -674,7 +680,7 @@ func (r *RuntimeRouter) loginRestrictionViolation(snapshot *auth.AuthDotJSON) (s
 
 func authSourceIsEnvironment(source string) bool {
 	switch strings.TrimSpace(source) {
-	case auth.OpenAIAPIKeyEnv, auth.CodexAPIKeyEnv, auth.CodexAccessTokenEnv:
+	case auth.OpenAIAPIKeyEnv, auth.CodexAPIKeyEnv, auth.CodexAccessTokenEnv, auth.WorkloadIdentitySource:
 		return true
 	default:
 		return false

@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestWebSearchModeRestrictionsNeverExpandEitherMode(t *testing.T) {
+	modes := []WebSearchMode{
+		WebSearchModeDisabled,
+		WebSearchModeCached,
+		WebSearchModeIndexed,
+		WebSearchModeLive,
+	}
+	expected := [][]WebSearchMode{
+		{WebSearchModeDisabled, WebSearchModeDisabled, WebSearchModeDisabled, WebSearchModeDisabled},
+		{WebSearchModeDisabled, WebSearchModeCached, WebSearchModeCached, WebSearchModeCached},
+		{WebSearchModeDisabled, WebSearchModeCached, WebSearchModeIndexed, WebSearchModeIndexed},
+		{WebSearchModeDisabled, WebSearchModeCached, WebSearchModeIndexed, WebSearchModeLive},
+	}
+	for parentIndex, parent := range modes {
+		for requestedIndex, requested := range modes {
+			if got := parent.RestrictTo(requested); got != expected[parentIndex][requestedIndex] {
+				t.Fatalf("parent: %q, requested: %q -> RestrictTo = %q, want %q", parent, requested, got, expected[parentIndex][requestedIndex])
+			}
+		}
+	}
+}
+
 func TestWebSearchModeAndSettingsMatchRust(t *testing.T) {
 	tests := []struct {
 		value       any

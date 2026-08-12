@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,10 @@ type StoreOptions struct {
 	Mode           AuthCredentialsStoreMode
 	KeyringBackend KeyringBackendKind
 	KeyringStore   *KeyringStore
+	// WorkloadIdentity, when set, configures process-scoped workload identity
+	// authentication selected from OPENAI_FEDERATION_RULE_ID /
+	// OPENAI_IDENTITY_TOKEN_FILE (Rust 96c8be200c, #38188).
+	WorkloadIdentity *WorkloadIdentityAuthOptions
 }
 
 type authStorageBackend interface {
@@ -130,14 +135,25 @@ func (s *Store) Load() (*AuthDotJSON, error) {
 }
 
 func (s *Store) Resolve() (*ResolvedAuth, error) {
-	if apiKey := readNonEmptyEnv(OpenAIAPIKeyEnv); apiKey != "" {
-		return &ResolvedAuth{Auth: FromAPIKey(apiKey), Source: OpenAIAPIKeyEnv}, nil
+	// Once a workload identity session is active in this process, it is the
+	// configured external auth and keeps precedence over explicit env keys
+	// (Rust has_explicit_process_auth && !active_session).
+	workloadActive := workloadIdentitySessionActive()
+	if !workloadActive {
+		if apiKey := readNonEmptyEnv(OpenAIAPIKeyEnv); apiKey != "" {
+			return &ResolvedAuth{Auth: FromAPIKey(apiKey), Source: OpenAIAPIKeyEnv}, nil
+		}
+		if apiKey := readNonEmptyEnv(CodexAPIKeyEnv); apiKey != "" {
+			return &ResolvedAuth{Auth: FromAPIKey(apiKey), Source: CodexAPIKeyEnv}, nil
+		}
+		if accessToken := readNonEmptyEnv(CodexAccessTokenEnv); accessToken != "" {
+			return &ResolvedAuth{Auth: FromCodexAccessToken(accessToken), Source: CodexAccessTokenEnv}, nil
+		}
 	}
-	if apiKey := readNonEmptyEnv(CodexAPIKeyEnv); apiKey != "" {
-		return &ResolvedAuth{Auth: FromAPIKey(apiKey), Source: CodexAPIKeyEnv}, nil
-	}
-	if accessToken := readNonEmptyEnv(CodexAccessTokenEnv); accessToken != "" {
-		return &ResolvedAuth{Auth: FromCodexAccessToken(accessToken), Source: CodexAccessTokenEnv}, nil
+	if resolved, err := s.resolveWorkloadIdentity(workloadActive); err != nil {
+		return nil, err
+	} else if resolved != nil {
+		return resolved, nil
 	}
 	backend := s.backend()
 	loaded, err := backend.Load()
@@ -145,6 +161,39 @@ func (s *Store) Resolve() (*ResolvedAuth, error) {
 		return nil, err
 	}
 	return &ResolvedAuth{Auth: *loaded, Source: backend.Source()}, nil
+}
+
+// resolveWorkloadIdentity resolves process-configured workload identity when
+// selected, failing closed on incomplete, conflicting, or unsupported
+// configurations (Rust try_shared_from_auth_config).
+func (s *Store) resolveWorkloadIdentity(workloadActive bool) (*ResolvedAuth, error) {
+	env := workloadReadProcessEnv()
+	if !env.hasMarker() {
+		return nil, nil
+	}
+	opts := s.options.WorkloadIdentity
+	config, err := resolveWorkloadIdentityConfig(
+		opts.baseURL(),
+		env,
+		workloadHasExplicitProcessAuth() && !workloadActive,
+		opts.chatgptLoginAllowed(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		return nil, nil
+	}
+	config.httpClient = opts.httpClient()
+	session, err := workloadIdentityProcessRegistry.session(*config)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := (&WorkloadIdentityAuth{session: session}).ResolveAuth(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return &ResolvedAuth{Auth: *auth, Source: WorkloadIdentitySource}, nil
 }
 
 func (s *Store) Save(auth AuthDotJSON) error {
@@ -555,6 +604,11 @@ func FromChatGPTAuthTokens(accessToken string, accountID string, planType *strin
 
 func readNonEmptyEnv(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+func osEnvPresent(key string) bool {
+	_, present := os.LookupEnv(key)
+	return present
 }
 
 func SafeFormatSecret(secret string) string {

@@ -7190,7 +7190,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	customMetadata, customWarnings := r.customSkillMetadataForRuntime(ctx, turnID)
 	skillMetadata = append(skillMetadata, customMetadata...)
 	r.notifySkillWarnings(threadID, customWarnings)
-	r.runSkillShadowSelection(cfg, params, hostSkillMetadata, orchestratorMetadata)
+	r.runSkillShadowSelection(threadID, turnID, cfg, params, hostSkillMetadata, orchestratorMetadata)
 	hostSkillMetadata = selectSkillMetadata(cfg, params, hostSkillMetadata)
 	selectedCapabilitySkillMetadata = selectSkillMetadata(cfg, params, selectedCapabilitySkillMetadata)
 	orchestratorMetadata = selectSkillMetadata(cfg, params, orchestratorMetadata)
@@ -8214,6 +8214,9 @@ func implicitSkillInvocationSeenKey(skill promptctx.InstructionsSkillMetadata) s
 }
 
 func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID string, turnID string, modelID string, productClientID string, skill promptctx.InstructionsSkillMetadata, invokeType string) {
+	if invokeType == telemetry.SkillInvocationTypeImplicit {
+		r.recordSkillShadowInvocation(threadID, turnID, skill)
+	}
 	if r == nil || r.services.Analytics == nil {
 		return
 	}

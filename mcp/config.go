@@ -598,6 +598,8 @@ func runtimeConfigAppToolApproval(values map[string]any, keys ...string) *apps.A
 			approval = apps.AppToolApprovalAuto
 		case "prompt":
 			approval = apps.AppToolApprovalPrompt
+		case "writes":
+			approval = apps.AppToolApprovalWrites
 		case "approve":
 			approval = apps.AppToolApprovalApprove
 		default:

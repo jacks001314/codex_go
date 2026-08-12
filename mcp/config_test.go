@@ -8,8 +8,36 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/apps"
 	managedconfig "codex_go/config"
 )
+
+func TestRuntimeConfigAppToolApprovalParsesAllModes(t *testing.T) {
+	approval := func(value apps.AppToolApproval) *apps.AppToolApproval { return &value }
+	tests := []struct {
+		name  string
+		value any
+		want  *apps.AppToolApproval
+	}{
+		{name: "auto", value: "auto", want: approval(apps.AppToolApprovalAuto)},
+		{name: "prompt", value: "prompt", want: approval(apps.AppToolApprovalPrompt)},
+		{name: "writes", value: "writes", want: approval(apps.AppToolApprovalWrites)},
+		{name: "approve", value: "approve", want: approval(apps.AppToolApprovalApprove)},
+		{name: "snake default_tools_approval_mode", value: "writes", want: approval(apps.AppToolApprovalWrites)},
+		{name: "unknown", value: "bogus", want: nil},
+		{name: "non-string", value: 42, want: nil},
+		{name: "empty", value: "", want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]any{"default_tools_approval_mode": test.value}
+			got := runtimeConfigAppToolApproval(values, "default_tools_approval_mode", "defaultToolsApprovalMode")
+			if (got == nil) != (test.want == nil) || (got != nil && *got != *test.want) {
+				t.Fatalf("runtimeConfigAppToolApproval(%#v) = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
 
 func TestMCPServerOAuthCredentialNameIsolatedByEnvironment(t *testing.T) {
 	tests := []struct {

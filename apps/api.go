@@ -198,8 +198,31 @@ type AppToolApproval string
 const (
 	AppToolApprovalAuto    AppToolApproval = "auto"
 	AppToolApprovalPrompt  AppToolApproval = "prompt"
+	AppToolApprovalWrites  AppToolApproval = "writes"
 	AppToolApprovalApprove AppToolApproval = "approve"
 )
+
+// RestrictTo combines a parent and a requested approval policy without
+// granting access beyond either policy (Rust AppToolApproval::restrict_to).
+//
+// Auto and Writes are incomparable: each can require approval for a tool the
+// other would approve. Their conservative intersection is Prompt.
+func (a AppToolApproval) RestrictTo(requested AppToolApproval) AppToolApproval {
+	switch {
+	case a == AppToolApprovalPrompt || requested == AppToolApprovalPrompt:
+		return AppToolApprovalPrompt
+	case a == AppToolApprovalApprove:
+		return requested
+	case requested == AppToolApprovalApprove:
+		return a
+	case a == AppToolApprovalAuto && requested == AppToolApprovalAuto:
+		return AppToolApprovalAuto
+	case a == AppToolApprovalWrites && requested == AppToolApprovalWrites:
+		return AppToolApprovalWrites
+	default:
+		return AppToolApprovalPrompt
+	}
+}
 
 type AppToolConfig struct {
 	Enabled      *bool            `json:"enabled"`

@@ -1,6 +1,8 @@
 package appserver
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	promptctx "codex_go/prompt"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/telemetry"
 	"codex_go/turn"
 )
 
@@ -59,11 +62,11 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 		{Name: "sheets", Description: "Analyze tabular data."},
 		{Name: "hidden", Description: "Create slides secretly.", AllowImplicitInvocation: &disabled},
 	}
-	router.runSkillShadowSelection(cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
+	router.runSkillShadowSelection("thread-one", "turn-one", cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
 
 	records := metrics.Records()
-	if len(records) != 36 {
-		t.Fatalf("metric records = %d, want 36", len(records))
+	if len(records) != 48 {
+		t.Fatalf("metric records = %d, want 48", len(records))
 	}
 	methods := map[string]bool{}
 	for _, record := range records {
@@ -80,7 +83,7 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 			t.Fatalf("catalog metric = %#v", record)
 		}
 	}
-	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "character_routing_card_v1", "multi_query_lexical_v1", "routing_card_exact_v1"} {
+	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "character_routing_card_v1", "multi_query_lexical_v1", "routing_card_exact_v1", "lru_v1", "lru_plus_lexical_v1"} {
 		if !methods[method] {
 			t.Fatalf("missing method %q in %#v", method, methods)
 		}
@@ -91,7 +94,7 @@ func TestRuntimeRouterSkillShadowSelectionDisabledBySkillSearchFeature(t *testin
 	metrics := &recordingSkillShadowMetrics{}
 	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
 	defer router.Close()
-	router.runSkillShadowSelection(&config.Config{Values: map[string]any{"features": map[string]any{"skill_search": false}}}, &turn.TurnStartParams{Prompt: "slides"}, []promptctx.InstructionsSkillMetadata{{Name: "slides"}})
+	router.runSkillShadowSelection("thread-disabled", "turn-disabled", &config.Config{Values: map[string]any{"features": map[string]any{"skill_search": false}}}, &turn.TurnStartParams{Prompt: "slides"}, []promptctx.InstructionsSkillMetadata{{Name: "slides"}})
 	if records := metrics.Records(); len(records) != 0 {
 		t.Fatalf("records = %#v", records)
 	}
@@ -102,7 +105,7 @@ func TestRuntimeRouterSkillShadowSelectionExcludesExplicitSkillsLikeRust(t *test
 	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
 	defer router.Close()
 	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
-	router.runSkillShadowSelection(cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "skill", Name: "slides"}}}, []promptctx.InstructionsSkillMetadata{
+	router.runSkillShadowSelection("thread-explicit", "turn-explicit", cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "skill", Name: "slides"}}}, []promptctx.InstructionsSkillMetadata{
 		{Name: "slides", Description: "Create presentations."},
 		{Name: "sheets", Description: "Analyze tabular data."},
 	})
@@ -152,5 +155,109 @@ func TestSkillSelectionIsOptInAndPreservesExplicitOnlySkills(t *testing.T) {
 	}
 	if empty := selectSkillMetadata(cfg, &turn.TurnStartParams{}, skills); len(empty) != len(skills) {
 		t.Fatalf("empty query removed skills = %#v", empty)
+	}
+}
+
+func TestSkillShadowRecentInvocationsRefreshRecencyAndEvictOldSkills(t *testing.T) {
+	recent := []string{}
+	for index := 0; index <= promptctx.SkillShadowSelectionMaxResults; index++ {
+		recent = skillShadowRecordRecent(recent, fmt.Sprintf("skill-%d", index))
+	}
+	recent = skillShadowRecordRecent(recent, "skill-1")
+
+	if len(recent) != promptctx.SkillShadowSelectionMaxResults {
+		t.Fatalf("recent length = %d, want %d", len(recent), promptctx.SkillShadowSelectionMaxResults)
+	}
+	if recent[0] != "skill-1" || recent[len(recent)-1] != "skill-2" {
+		t.Fatalf("recent = %#v, want skill-1 first and skill-2 last", recent)
+	}
+	for _, skill := range recent {
+		if skill == "skill-0" {
+			t.Fatalf("skill-0 was not evicted: %#v", recent)
+		}
+	}
+}
+
+func TestSkillShadowRankBucketsDistinguishResultsAboveTwenty(t *testing.T) {
+	tests := []struct {
+		rank int
+		want string
+	}{
+		{rank: 0, want: "miss"},
+		{rank: 1, want: "1"},
+		{rank: 5, want: "2_5"},
+		{rank: 10, want: "6_10"},
+		{rank: 20, want: "11_20"},
+		{rank: 21, want: "21_50"},
+		{rank: 50, want: "21_50"},
+		{rank: 51, want: "miss"},
+	}
+	for _, test := range tests {
+		if got := skillShadowRankBucket(test.rank); got != test.want {
+			t.Fatalf("rankBucket(%d) = %q, want %q", test.rank, got, test.want)
+		}
+	}
+}
+
+func TestSkillShadowInvocationRecordingEmitsRankMetrics(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	defer router.Close()
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	params := &turn.TurnStartParams{Prompt: "manage python environments"}
+	skills := []promptctx.InstructionsSkillMetadata{
+		{Name: "slides", Path: "/skills/slides", Description: "Create presentations."},
+		{Name: "python-tools", Path: "/skills/python-tools", Description: "Manage Python environments."},
+	}
+	router.runSkillShadowSelection("thread-invocation", "turn-one", cfg, params, skills)
+	router.recordSkillShadowInvocation("thread-invocation", "turn-one", skills[1])
+
+	invocations := 0
+	var lruRank string
+	for _, record := range metrics.Records() {
+		if record.name != skillShadowInvocationMetric {
+			continue
+		}
+		invocations++
+		if record.tags["query_script"] != "ascii_latin" {
+			t.Fatalf("invocation tags = %#v", record.tags)
+		}
+		if record.tags["method"] == "lru_v1" {
+			lruRank = record.tags["rank"]
+		}
+	}
+	if invocations != 8 {
+		t.Fatalf("invocation records = %d, want 8", invocations)
+	}
+	if lruRank != "miss" {
+		t.Fatalf("lru_v1 rank before history = %q, want miss", lruRank)
+	}
+
+	// Second turn: lru_v1 recovers the skill invoked on the earlier turn.
+	router.runSkillShadowSelection("thread-invocation", "turn-two", cfg, params, skills)
+	router.recordSkillShadowInvocation("thread-invocation", "turn-two", skills[1])
+	for _, record := range metrics.Records() {
+		if record.name != skillShadowInvocationMetric || record.tags["method"] != "lru_v1" {
+			continue
+		}
+		lruRank = record.tags["rank"]
+	}
+	if lruRank != "1" {
+		t.Fatalf("lru_v1 rank on second turn = %q, want 1", lruRank)
+	}
+}
+
+func TestSkillShadowInvocationSkipsExplicitInvokeType(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	defer router.Close()
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	skills := []promptctx.InstructionsSkillMetadata{{Name: "slides", Path: "/skills/slides", Description: "Create presentations."}}
+	router.runSkillShadowSelection("thread-explicit-type", "turn-one", cfg, &turn.TurnStartParams{Prompt: "slides"}, skills)
+	router.trackSkillInvocationEvent(context.Background(), "thread-explicit-type", "turn-one", "model", "", skills[0], telemetry.SkillInvocationTypeExplicit)
+	for _, record := range metrics.Records() {
+		if record.name == skillShadowInvocationMetric {
+			t.Fatalf("explicit invocation recorded: %#v", record)
+		}
 	}
 }

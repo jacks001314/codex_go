@@ -13,6 +13,28 @@ func (f metadataProviderFunc) ReadAppMetadata(params *AppMetadataReadParams) (*A
 	return f(params)
 }
 
+func TestAppToolApprovalRestrictionsNeverWeakenEitherPolicy(t *testing.T) {
+	modes := []AppToolApproval{
+		AppToolApprovalApprove,
+		AppToolApprovalAuto,
+		AppToolApprovalWrites,
+		AppToolApprovalPrompt,
+	}
+	expected := [][]AppToolApproval{
+		{AppToolApprovalApprove, AppToolApprovalAuto, AppToolApprovalWrites, AppToolApprovalPrompt},
+		{AppToolApprovalAuto, AppToolApprovalAuto, AppToolApprovalPrompt, AppToolApprovalPrompt},
+		{AppToolApprovalWrites, AppToolApprovalPrompt, AppToolApprovalWrites, AppToolApprovalPrompt},
+		{AppToolApprovalPrompt, AppToolApprovalPrompt, AppToolApprovalPrompt, AppToolApprovalPrompt},
+	}
+	for parentIndex, parent := range modes {
+		for requestedIndex, requested := range modes {
+			if got := parent.RestrictTo(requested); got != expected[parentIndex][requestedIndex] {
+				t.Fatalf("parent: %q, requested: %q -> RestrictTo = %q, want %q", parent, requested, got, expected[parentIndex][requestedIndex])
+			}
+		}
+	}
+}
+
 func TestReadDeduplicatesOrdersMissesAndCaches(t *testing.T) {
 	service := NewAppService(nil)
 	calls := 0

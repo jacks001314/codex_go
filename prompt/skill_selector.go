@@ -16,7 +16,44 @@ const (
 	skillSelectorMaxDocumentGrams = 512
 	skillSelectorMaxCandidates    = 1000
 	skillSelectorMaxResults       = 50
+	skillSelectorRRFConstant      = 10
 )
+
+// fuseSkillRankingsWithConstant combines ranked candidate id lists through
+// reciprocal rank fusion with the given rank constant (Rust
+// fuse_rankings_with_constant): score is the sum of 1/(rankConstant+rank),
+// tie-broken by the best rank then the id.
+func fuseSkillRankingsWithConstant(rankings [][]int, limit int, rankConstant int) []int {
+	scores := map[int]float64{}
+	bestRanks := map[int]int{}
+	for _, ranking := range rankings {
+		for index, id := range ranking {
+			rank := index + 1
+			scores[id] += 1.0 / float64(rankConstant+rank)
+			if current, ok := bestRanks[id]; !ok || rank < current {
+				bestRanks[id] = rank
+			}
+		}
+	}
+	ordered := make([]int, 0, len(scores))
+	for id := range scores {
+		ordered = append(ordered, id)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftID, rightID := ordered[i], ordered[j]
+		if scores[leftID] != scores[rightID] {
+			return scores[leftID] > scores[rightID]
+		}
+		if bestRanks[leftID] != bestRanks[rightID] {
+			return bestRanks[leftID] < bestRanks[rightID]
+		}
+		return leftID < rightID
+	})
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
+	return ordered
+}
 
 var skillSelectorStopWords = map[string]bool{
 	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
