@@ -490,9 +490,6 @@ func (s *TurnService) Steer(params *TurnSteerParams) (*TurnSteerResponse, error)
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	if len(params.Input) == 0 && strings.TrimSpace(params.Prompt) == "" {
-		return nil, ErrEmptyTurnSteerInput
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	turn, ok := s.active[params.ThreadID]

@@ -6846,8 +6846,8 @@ func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {
 		t.Fatalf("turn steer = %+v", turnSteer)
 	}
 	emptySteer := router.Handle(requestWithParams(t, IntID(61), MethodTurnSteer, turn.TurnSteerParams{ThreadID: threadID, ExpectedTurnID: turnID}))
-	if emptySteer.Error == nil || emptySteer.Error.Code != -32600 || emptySteer.Error.Message != "input must not be empty" {
-		t.Fatalf("empty steer = %+v", emptySteer)
+	if emptySteer.Error != nil || emptySteer.Result.(*turn.TurnSteerResponse).TurnID != turnID {
+		t.Fatalf("empty steer (Rust 52d9218424 allows empty immediate admission) = %+v", emptySteer)
 	}
 	missingExpected := router.Handle(requestWithParams(t, IntID(62), MethodTurnSteer, turn.TurnSteerParams{ThreadID: threadID, Prompt: "more"}))
 	if missingExpected.Error == nil || missingExpected.Error.Code != -32600 || missingExpected.Error.Message != "expectedTurnId must not be empty" {
@@ -11326,7 +11326,7 @@ func TestRuntimeRouterTurnSteerRejectsOversizedInputWithRustErrorData(t *testing
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
 }
 
-func TestRuntimeRouterTurnSteerRejectsContextOnlyInputWithoutMergingContextLikeRust(t *testing.T) {
+func TestRuntimeRouterTurnSteerAcceptsContextOnlyInputWithoutUserMessageItemLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newBlockingAgent()
@@ -11366,8 +11366,8 @@ func TestRuntimeRouterTurnSteerRejectsContextOnlyInputWithoutMergingContextLikeR
 			"browser_info": {Value: "tab one", Kind: turn.AdditionalContextUntrusted},
 		},
 	}))
-	if steer.Error == nil || steer.Error.Code != -32600 || steer.Error.Message != "input must not be empty" {
-		t.Fatalf("context-only steer response = %+v", steer)
+	if steer.Error != nil || steer.Result.(*turn.TurnSteerResponse).TurnID != turnID {
+		t.Fatalf("context-only steer response (Rust 52d9218424 allows empty immediate admission) = %+v", steer)
 	}
 	after, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
@@ -15964,7 +15964,7 @@ func TestRuntimeRouterTurnStartRepairsRolloutOnlyThread(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
+func TestRuntimeRouterAppTurnDisablesStorageForAllResponsesProviders(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	runConfig, err := router.appTurnModelProviderConfig(&config.Config{Values: map[string]any{
 		"model_provider": "azure",
@@ -15979,8 +15979,8 @@ func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("appTurnModelProviderConfig() error = %v", err)
 	}
-	if !runConfig.Store {
-		t.Fatalf("Azure responses provider Store = false, want true")
+	if runConfig.Store {
+		t.Fatalf("Azure responses provider Store = true, want false (Rust 46c3268542)")
 	}
 
 	runConfig, err = router.appTurnModelProviderConfig(&config.Config{Values: map[string]any{
@@ -15991,6 +15991,49 @@ func TestRuntimeRouterAppTurnStoreOnlyForAzureResponsesProvider(t *testing.T) {
 	}
 	if runConfig.Store {
 		t.Fatalf("OpenAI provider Store = true, want false")
+	}
+}
+
+func TestAutoReviewEnabledForTurnRoutesApprovalPolicyToGuardian(t *testing.T) {
+	cases := []struct {
+		name     string
+		values   map[string]any
+		params   *turn.TurnStartParams
+		reviewer *string
+		want     bool
+	}{
+		{
+			name:   "on-request plus auto_review routes to guardian",
+			values: map[string]any{"approval_policy": "on-request", "approvals_reviewer": "auto_review"},
+			want:   true,
+		},
+		{
+			name:   "granular plus auto_review routes to guardian",
+			values: map[string]any{"approval_policy": "granular", "approvals_reviewer": "auto_review"},
+			want:   true,
+		},
+		{
+			name:   "never plus auto_review does not route to guardian",
+			values: map[string]any{"approval_policy": "never", "approvals_reviewer": "auto_review"},
+			want:   false,
+		},
+		{
+			name:   "on-request plus user reviewer does not route to guardian",
+			values: map[string]any{"approval_policy": "on-request", "approvals_reviewer": "user"},
+			want:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Values: map[string]any{}}
+			for key, value := range tc.values {
+				cfg.Values[key] = value
+			}
+			enabled := autoReviewEnabledForTurn(cfg, tc.params)
+			if enabled == nil || *enabled != tc.want {
+				t.Fatalf("autoReviewEnabledForTurn() = %v, want %v (Rust f2a6f2585c)", enabled, tc.want)
+			}
+		})
 	}
 }
 

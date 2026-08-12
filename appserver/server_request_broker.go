@@ -46,8 +46,9 @@ type serverRequestResult struct {
 }
 
 type pendingServerRequest struct {
-	ch      chan *serverRequestResult
-	request *ServerRequest
+	ch           chan *serverRequestResult
+	request      *ServerRequest
+	connectionID string
 }
 
 func NewServerRequestBroker() *ServerRequestBroker {
@@ -104,7 +105,7 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 	id := b.nextRequestID()
 	ch := make(chan *serverRequestResult, 1)
 	request := &ServerRequest{ID: StringID(id), Method: method, Params: params}
-	sink := b.register(id, &pendingServerRequest{ch: ch, request: request})
+	sink := b.register(id, &pendingServerRequest{ch: ch, request: request, connectionID: connectionID})
 	if sink == nil {
 		b.unregister(id)
 		return fmt.Errorf("%w: server request sink is not configured", ErrInvalidRequest)
@@ -141,6 +142,41 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 		}
 		return normalizeServerRequestResponse(method, params, target)
 	}
+}
+
+// RejectPending resolves every pending server request for the given connection
+// (including non-targeted requests delivered through the shared sink) with an
+// error so waiters fail promptly instead of hanging until their context
+// deadline. Rust 38035 propagates MCP elicitation delivery failures the same
+// way, dropping the pending-request guard immediately.
+func (b *ServerRequestBroker) RejectPending(connectionID string, err error) int {
+	if b == nil {
+		return 0
+	}
+	connectionID = strings.TrimSpace(connectionID)
+	b.mu.Lock()
+	rejected := make([]*pendingServerRequest, 0, len(b.pending))
+	for id, entry := range b.pending {
+		if entry == nil {
+			continue
+		}
+		if entry.connectionID != connectionID && entry.connectionID != "" {
+			continue
+		}
+		rejected = append(rejected, entry)
+		delete(b.pending, id)
+	}
+	b.mu.Unlock()
+	if len(rejected) == 0 {
+		return 0
+	}
+	for _, entry := range rejected {
+		b.notifyResolved(entry.request)
+		if entry.ch != nil {
+			entry.ch <- &serverRequestResult{err: err}
+		}
+	}
+	return len(rejected)
 }
 
 func normalizeServerRequestResponse(method ServerRequestMethod, params any, target any) error {

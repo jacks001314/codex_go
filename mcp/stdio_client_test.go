@@ -84,6 +84,53 @@ func TestMCPClientInitializeParamsUseCurrentProtocol(t *testing.T) {
 	}
 }
 
+func TestMCPCustomCAEnvPairsForwardInheritedSettings(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "certs/ca.pem")
+	t.Setenv("CURL_CA_BUNDLE", "")
+	t.Setenv("NODE_EXTRA_CA_CERTS", "")
+	pairs := mcpCustomCAEnvPairs(nil)
+	got := map[string]string{}
+	for _, entry := range pairs {
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	// Relative inherited paths are converted to absolute paths
+	// (Rust b2543af02b).
+	if value := got["SSL_CERT_FILE"]; value == "" || !filepath.IsAbs(value) || filepath.Base(value) != "ca.pem" {
+		t.Fatalf("SSL_CERT_FILE = %q, want absolute path to ca.pem", value)
+	}
+	if _, ok := got["CURL_CA_BUNDLE"]; ok {
+		t.Fatalf("empty CURL_CA_BUNDLE should not be forwarded: %#v", got)
+	}
+	if _, ok := got["NODE_EXTRA_CA_CERTS"]; ok {
+		t.Fatalf("empty NODE_EXTRA_CA_CERTS should not be forwarded: %#v", got)
+	}
+}
+
+func TestMCPCustomCAEnvPairsExplicitOverridesWin(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "certs/inherited.pem")
+	for _, launchEnv := range []map[string]string{
+		{"SSL_CERT_FILE": "certs/explicit.pem"},
+	} {
+		pairs := mcpCustomCAEnvPairs(launchEnv)
+		for _, entry := range pairs {
+			name, _, _ := strings.Cut(entry, "=")
+			if name == "SSL_CERT_FILE" {
+				t.Fatalf("inherited SSL_CERT_FILE forwarded despite explicit override: %#v", pairs)
+			}
+		}
+	}
+	if runtime.GOOS == "windows" {
+		pairs := mcpCustomCAEnvPairs(map[string]string{"ssl_cert_file": "certs/explicit.pem"})
+		for _, entry := range pairs {
+			name, _, _ := strings.Cut(entry, "=")
+			if name == "SSL_CERT_FILE" {
+				t.Fatalf("inherited SSL_CERT_FILE forwarded despite case-insensitive override: %#v", pairs)
+			}
+		}
+	}
+}
+
 func TestMCPClientInitializeParamsAdvertisesOpenAIFormExtension(t *testing.T) {
 	params := mcpClientInitializeParams(true)
 	capabilities, ok := params["capabilities"].(map[string]any)

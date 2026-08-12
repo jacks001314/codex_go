@@ -258,6 +258,14 @@ func durationMS(duration time.Duration) uint64 {
 	return uint64(duration.Milliseconds())
 }
 
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 type MetadataState struct {
 	mu                           sync.RWMutex
 	SessionID                    string
@@ -392,6 +400,7 @@ type ResponsesClientMetadataOptions struct {
 	ThreadSource         string
 	Sandbox              string
 	SandboxMode          string
+	AutoReviewEnabled    *bool
 	Extra                map[string]string
 	ResponsesAPIMetadata map[string]string
 	StartedAtMS          int64
@@ -430,6 +439,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
+	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	metadata.ResponsesAPIMetadata = cloneStringMap(options.ResponsesAPIMetadata)

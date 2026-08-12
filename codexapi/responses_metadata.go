@@ -24,6 +24,7 @@ const (
 	ThreadSourceKey        = "thread_source"
 	SandboxKey             = "sandbox"
 	SandboxModeKey         = "sandbox_mode"
+	AutoReviewEnabledKey   = "auto_review_enabled"
 	WorkspacesKey          = "workspaces"
 	InstallationIDHeader   = "x-codex-installation-id"
 	WindowIDHeader         = "x-codex-window-id"
@@ -58,6 +59,7 @@ var reservedMetadataKeys = map[string]bool{
 	ThreadSourceKey:        true,
 	SandboxKey:             true,
 	SandboxModeKey:         true,
+	AutoReviewEnabledKey:   true,
 	WorkspacesKey:          true,
 }
 

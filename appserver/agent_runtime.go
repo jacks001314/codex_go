@@ -150,14 +150,16 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 func (r *RuntimeRouter) appTurnModelProviderConfig(cfg *config.Config, params *turn.TurnStartParams) (*appTurnRunConfig, error) {
 	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
 	providerID := firstNonEmpty(providerFromTurnStart(params), stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID)
-	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	_, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
 	if err != nil {
 		return nil, err
 	}
 	return &appTurnRunConfig{
 		Model:      modelID,
 		ProviderID: providerID,
-		Store:      model.IsAzureResponsesProvider(provider.Name, provider.BaseURL),
+		// Rust 46c3268542: storage is disabled for every Responses request,
+		// including requests sent through Azure providers.
+		Store: false,
 	}, nil
 }
 

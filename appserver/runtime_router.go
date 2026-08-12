@@ -1107,6 +1107,9 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	if r.services.FS != nil {
 		r.services.FS.ConnectionClosed(connectionID)
 	}
+	if r.services.ServerRequests != nil {
+		r.services.ServerRequests.RejectPending(connectionID, fmt.Errorf("server request failed: connection closed"))
+	}
 }
 
 func (r *RuntimeRouter) Close() error {

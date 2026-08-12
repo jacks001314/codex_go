@@ -46,7 +46,14 @@ func InjectGitSafeDirectory(envMap map[string]string, cwd string) {
 		return
 	}
 	count, _ := strconv.Atoi(envMap["GIT_CONFIG_COUNT"])
-	envMap["GIT_CONFIG_KEY_"+strconv.Itoa(count)] = "safe.directory"
-	envMap["GIT_CONFIG_VALUE_"+strconv.Itoa(count)] = strings.ReplaceAll(gitRoot, `\`, "/")
-	envMap["GIT_CONFIG_COUNT"] = strconv.Itoa(count + 1)
+	gitPath := strings.ReplaceAll(gitRoot, `\`, "/")
+	// Rust 7c47952f7c: trust both the worktree root and its `/*` wildcard so
+	// nested repositories owned by the primary user stay usable by the sandbox
+	// user.
+	for _, entry := range []string{gitPath, gitPath + "/*"} {
+		envMap["GIT_CONFIG_KEY_"+strconv.Itoa(count)] = "safe.directory"
+		envMap["GIT_CONFIG_VALUE_"+strconv.Itoa(count)] = entry
+		count++
+	}
+	envMap["GIT_CONFIG_COUNT"] = strconv.Itoa(count)
 }

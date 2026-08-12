@@ -721,6 +721,17 @@ func TestMCPParamsMarshalRustV2Shape(t *testing.T) {
 	if _, ok := loginPayload["serverName"]; ok {
 		t.Fatalf("legacy serverName should not be emitted: %#v", loginPayload)
 	}
+	dcr := MCPServerOauthClientRegistrationDcr
+	encodedLoginWithRegistration, err := json.Marshal(MCPServerOauthLoginParams{
+		Name:               "canonical",
+		ClientRegistration: &dcr,
+	})
+	if err != nil {
+		t.Fatalf("Marshal oauth params with registration returned error: %v", err)
+	}
+	if !strings.Contains(string(encodedLoginWithRegistration), `"clientRegistration":"dcr"`) {
+		t.Fatalf("oauth params with clientRegistration = %s", encodedLoginWithRegistration)
+	}
 
 	encodedResource, err := json.Marshal(MCPResourceReadParams{
 		ThreadID:   &threadID,
@@ -763,6 +774,47 @@ func TestMCPParamsMarshalRustV2Shape(t *testing.T) {
 	}
 	if _, ok := toolPayload["toolName"]; ok {
 		t.Fatalf("legacy toolName should not be emitted: %#v", toolPayload)
+	}
+}
+
+func TestMCPServerOauthClientRegistrationValidation(t *testing.T) {
+	bogus := MCPServerOauthClientRegistration("bogus")
+	if _, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &bogus}); err == nil || !strings.Contains(err.Error(), "clientRegistration must be one of: auto, cimd, dcr") {
+		t.Fatalf("bogus clientRegistration error = %v", err)
+	}
+	cimd := MCPServerOauthClientRegistrationCimd
+	if _, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &cimd}); err == nil || !strings.Contains(err.Error(), "cimd") {
+		t.Fatalf("cimd clientRegistration error = %v", err)
+	}
+	dcr := MCPServerOauthClientRegistration("Dcr")
+	value, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &dcr})
+	if err != nil || value != MCPServerOauthClientRegistrationDcr {
+		t.Fatalf("Dcr clientRegistration = %q/%v, want dcr", value, err)
+	}
+	value, err = mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{})
+	if err != nil || value != MCPServerOauthClientRegistrationAuto {
+		t.Fatalf("omitted clientRegistration = %q/%v, want auto", value, err)
+	}
+}
+
+func TestMCPServiceOauthLoginForcedDCRRequiresRegistrationEndpoint(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{
+		CodexHome: t.TempDir(),
+		Servers: map[string]ServerRegistration{
+			"no-registration": {Config: ServerConfig{URL: "http://127.0.0.1:1/mcp", Enabled: true}},
+			"configured":      {Config: ServerConfig{URL: "http://127.0.0.1:1/mcp", Enabled: true, OAuthClientID: "configured-client"}},
+		},
+	})
+	defer service.Close()
+	dcr := MCPServerOauthClientRegistrationDcr
+	_, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "no-registration", ClientRegistration: &dcr})
+	if err == nil || !strings.Contains(err.Error(), "requires dynamic client registration") {
+		t.Fatalf("forced DCR without registration endpoint error = %v", err)
+	}
+	// A configured OAuth client ID takes precedence over the registration
+	// strategy (Rust 6dc3ac8721), so forced DCR still starts the login.
+	if _, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "configured", ClientRegistration: &dcr}); err != nil {
+		t.Fatalf("forced DCR with configured client id error = %v", err)
 	}
 }
 

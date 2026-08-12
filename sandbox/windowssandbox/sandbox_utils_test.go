@@ -18,10 +18,10 @@ func TestInjectGitSafeDirectoryForGitDirectory(t *testing.T) {
 	}
 	env := map[string]string{}
 	InjectGitSafeDirectory(env, nested)
-	if env["GIT_CONFIG_COUNT"] != "1" || env["GIT_CONFIG_KEY_0"] != "safe.directory" {
+	if env["GIT_CONFIG_COUNT"] != "2" || env["GIT_CONFIG_KEY_0"] != "safe.directory" || env["GIT_CONFIG_KEY_1"] != "safe.directory" {
 		t.Fatalf("env = %#v", env)
 	}
-	if env["GIT_CONFIG_VALUE_0"] == "" {
+	if env["GIT_CONFIG_VALUE_0"] == "" || env["GIT_CONFIG_VALUE_1"] != env["GIT_CONFIG_VALUE_0"]+"/*" {
 		t.Fatalf("safe.directory value missing: %#v", env)
 	}
 }
@@ -34,7 +34,7 @@ func TestInjectGitSafeDirectoryAppendsExistingConfig(t *testing.T) {
 	}
 	env := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.autocrlf", "GIT_CONFIG_VALUE_0": "false"}
 	InjectGitSafeDirectory(env, repo)
-	if env["GIT_CONFIG_COUNT"] != "2" || env["GIT_CONFIG_KEY_1"] != "safe.directory" {
+	if env["GIT_CONFIG_COUNT"] != "3" || env["GIT_CONFIG_KEY_1"] != "safe.directory" || env["GIT_CONFIG_KEY_2"] != "safe.directory" {
 		t.Fatalf("env = %#v", env)
 	}
 }

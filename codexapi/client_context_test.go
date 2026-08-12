@@ -31,6 +31,8 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	metadata := NewClientMetadata("install", "session", "thread", "window")
 	metadata.TurnID = "turn"
 	metadata.RequestKind = ClientRequestTurn
+	enabled := true
+	metadata.AutoReviewEnabled = &enabled
 	metadata.ParentThreadID = "parent"
 	metadata.ParentTurnID = "parent-turn"
 	metadata.SubagentHeader = "review"
@@ -51,9 +53,25 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	if strings.Contains(client[ClientCodexTurnMetadataHeader], `"thread_id":"bad"`) {
 		t.Fatalf("reserved extra leaked: %s", client[ClientCodexTurnMetadataHeader])
 	}
+	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"auto_review_enabled":true`) {
+		t.Fatalf("turn metadata missing auto_review_enabled: %s", client[ClientCodexTurnMetadataHeader])
+	}
 	headers := metadata.CompatibilityHeaders()
 	if headers[ClientCodexTurnMetadataHeader] == "" || headers[ClientCodexWindowIDHeader] != "window" {
 		t.Fatalf("CompatibilityHeaders() = %v", headers)
+	}
+}
+
+func TestClientReservedMetadataKeysIncludeAutoReviewEnabled(t *testing.T) {
+	if !ClientReservedMetadataKeys()["auto_review_enabled"] {
+		t.Fatal("auto_review_enabled must be a reserved metadata key (Rust f2a6f2585c)")
+	}
+	filtered := ClientFilterExtraMetadata(map[string]string{"auto_review_enabled": "client-value", "workspace_kind": "git"})
+	if _, ok := filtered["auto_review_enabled"]; ok {
+		t.Fatalf("client-provided auto_review_enabled leaked: %#v", filtered)
+	}
+	if filtered["workspace_kind"] != "git" {
+		t.Fatalf("non-reserved extra was filtered: %#v", filtered)
 	}
 }
 

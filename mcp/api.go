@@ -305,26 +305,49 @@ func (r *MCPListServerStatusResponse) MarshalJSON() ([]byte, error) {
 }
 
 type MCPServerOauthLoginParams struct {
-	Name        string   `json:"name,omitempty"`
-	ServerName  string   `json:"serverName,omitempty"`
-	ThreadID    *string  `json:"threadId,omitempty"`
-	Scopes      []string `json:"scopes,omitempty"`
-	TimeoutSecs *uint64  `json:"timeoutSecs,omitempty"`
+	Name               string                            `json:"name,omitempty"`
+	ServerName         string                            `json:"serverName,omitempty"`
+	ThreadID           *string                           `json:"threadId,omitempty"`
+	ClientRegistration *MCPServerOauthClientRegistration `json:"clientRegistration,omitempty"`
+	Scopes             []string                          `json:"scopes,omitempty"`
+	TimeoutSecs        *uint64                           `json:"timeoutSecs,omitempty"`
 }
 
 func (p MCPServerOauthLoginParams) MarshalJSON() ([]byte, error) {
 	type payload struct {
-		Name        string   `json:"name"`
-		ThreadID    *string  `json:"threadId,omitempty"`
-		Scopes      []string `json:"scopes,omitempty"`
-		TimeoutSecs *uint64  `json:"timeoutSecs,omitempty"`
+		Name               string                            `json:"name"`
+		ThreadID           *string                           `json:"threadId,omitempty"`
+		ClientRegistration *MCPServerOauthClientRegistration `json:"clientRegistration,omitempty"`
+		Scopes             []string                          `json:"scopes,omitempty"`
+		TimeoutSecs        *uint64                           `json:"timeoutSecs,omitempty"`
 	}
 	return json.Marshal(payload{
-		Name:        firstNonEmptyMCP(p.Name, p.ServerName),
-		ThreadID:    cloneStringPtr(p.ThreadID),
-		Scopes:      append([]string(nil), p.Scopes...),
-		TimeoutSecs: cloneUint64PtrMCP(p.TimeoutSecs),
+		Name:               firstNonEmptyMCP(p.Name, p.ServerName),
+		ThreadID:           cloneStringPtr(p.ThreadID),
+		ClientRegistration: p.ClientRegistration,
+		Scopes:             append([]string(nil), p.Scopes...),
+		TimeoutSecs:        cloneUint64PtrMCP(p.TimeoutSecs),
 	})
+}
+
+// MCPServerOauthClientRegistration mirrors Rust
+// McpServerOauthClientRegistration (auto|cimd|dcr) for a single OAuth login
+// (Rust 6dc3ac8721 / 4c89139da9). Omission preserves automatic discovery.
+type MCPServerOauthClientRegistration string
+
+const (
+	MCPServerOauthClientRegistrationAuto MCPServerOauthClientRegistration = "auto"
+	MCPServerOauthClientRegistrationCimd MCPServerOauthClientRegistration = "cimd"
+	MCPServerOauthClientRegistrationDcr  MCPServerOauthClientRegistration = "dcr"
+)
+
+func (r MCPServerOauthClientRegistration) Valid() bool {
+	switch r {
+	case MCPServerOauthClientRegistrationAuto, MCPServerOauthClientRegistrationCimd, MCPServerOauthClientRegistrationDcr:
+		return true
+	default:
+		return false
+	}
 }
 
 type MCPServerOauthLoginResponse struct {
@@ -1384,6 +1407,10 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	if name == "" {
 		return nil, invalidMCPRequest("name is required")
 	}
+	registration, err := mcpServerOauthClientRegistration(params)
+	if err != nil {
+		return nil, err
+	}
 	url := "http://localhost/oauth/" + name
 	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
@@ -1391,12 +1418,33 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 		}
 		if loginURL, ok := s.startOAuthLoginServer(name, &config, params); ok {
 			url = loginURL
+		} else if registration == MCPServerOauthClientRegistrationDcr && strings.TrimSpace(config.OAuthClientID) == "" {
+			// Rust 6dc3ac8721: forced DCR must not silently fall back to a
+			// non-registered authorize URL when the server cannot register.
+			return nil, invalidMCPRequest("MCP OAuth login requires dynamic client registration (clientRegistration=dcr), but the server does not advertise a registration endpoint")
 		} else {
 			client := s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
 			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
 		}
 	}
 	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url}, nil
+}
+
+func mcpServerOauthClientRegistration(params *MCPServerOauthLoginParams) (MCPServerOauthClientRegistration, error) {
+	if params == nil || params.ClientRegistration == nil {
+		return MCPServerOauthClientRegistrationAuto, nil
+	}
+	value := MCPServerOauthClientRegistration(strings.ToLower(strings.TrimSpace(string(*params.ClientRegistration))))
+	if !value.Valid() {
+		return MCPServerOauthClientRegistrationAuto, invalidMCPRequest("clientRegistration must be one of: auto, cimd, dcr")
+	}
+	if value == MCPServerOauthClientRegistrationCimd {
+		// Rust 4c89139da9 adds a native CIMD client-metadata-document flow; the
+		// Go OAuth client has no CIMD flow yet, so reject explicitly instead of
+		// silently performing DCR.
+		return MCPServerOauthClientRegistrationAuto, invalidMCPRequest("MCP OAuth clientRegistration `cimd` is not supported by the Go client yet")
+	}
+	return value, nil
 }
 
 func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServerOauthCancelResponse, error) {

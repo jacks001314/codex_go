@@ -138,8 +138,8 @@ func TestSteerRustStyleErrors(t *testing.T) {
 	if _, err := service.Steer(nil); !errors.Is(err, ErrInvalidTurnRequest) {
 		t.Fatalf("Steer(nil) error = %v, want ErrInvalidTurnRequest", err)
 	}
-	if _, err := service.Steer(&TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: "turn-1"}); !errors.Is(err, ErrEmptyTurnSteerInput) {
-		t.Fatalf("empty steer error = %v", err)
+	if _, err := service.Steer(&TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: "turn-1"}); !errors.Is(err, ErrNoActiveTurnToSteer) {
+		t.Fatalf("empty steer without active turn error = %v, want ErrNoActiveTurnToSteer", err)
 	}
 	if _, err := service.Steer(&TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: "turn-1", Prompt: "more"}); !errors.Is(err, ErrNoActiveTurnToSteer) {
 		t.Fatalf("no active turn error = %v", err)
@@ -150,6 +150,23 @@ func TestSteerRustStyleErrors(t *testing.T) {
 	}
 	if _, err := service.Steer(&TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: start.Turn.ID + "-old", Prompt: "more"}); !errors.Is(err, ErrExpectedTurnMismatch) {
 		t.Fatalf("expected turn mismatch error = %v", err)
+	}
+}
+
+func TestSteerAllowsEmptyInputToResumeActiveTurn(t *testing.T) {
+	service := NewTurnService()
+	start, err := service.Start(&TurnStartParams{ThreadID: "thread-1", Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	// Rust 52d9218424: immediate user-message admission accepts empty input; the
+	// turn proceeds with its generated environment context and no user-message item.
+	response, err := service.Steer(&TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: start.Turn.ID})
+	if err != nil {
+		t.Fatalf("empty steer on active turn error = %v, want success", err)
+	}
+	if response.TurnID != start.Turn.ID {
+		t.Fatalf("empty steer turn id = %q, want %q", response.TurnID, start.Turn.ID)
 	}
 }
 

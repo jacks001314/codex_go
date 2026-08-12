@@ -151,6 +151,41 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesClientMetadataIncludesAutoReviewEnabled(t *testing.T) {
+	enabled := true
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID:    "install",
+		SessionID:         "session",
+		ThreadID:          "thread",
+		TurnID:            "turn",
+		RequestKind:       codexapi.ClientRequestTurn,
+		AutoReviewEnabled: &enabled,
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata["auto_review_enabled"] != true {
+		t.Fatalf("auto_review_enabled = %#v, want true (Rust f2a6f2585c)", turnMetadata["auto_review_enabled"])
+	}
+	// Client-provided values for the reserved key are never accepted.
+	filtered := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID: "install",
+		SessionID:      "session",
+		ThreadID:       "thread",
+		TurnID:         "turn",
+		RequestKind:    codexapi.ClientRequestTurn,
+		Extra:          map[string]string{"auto_review_enabled": "client-value"},
+	})
+	var filteredMetadata map[string]any
+	if err := json.Unmarshal([]byte(filtered[codexapi.ClientCodexTurnMetadataHeader]), &filteredMetadata); err != nil {
+		t.Fatalf("filtered turn metadata json error = %v", err)
+	}
+	if _, ok := filteredMetadata["auto_review_enabled"]; ok {
+		t.Fatalf("client-provided auto_review_enabled leaked: %#v", filteredMetadata)
+	}
+}
+
 func TestBudgetStateMaybeReminder(t *testing.T) {
 	state := NewBudgetState()
 	tokens := int64(50)

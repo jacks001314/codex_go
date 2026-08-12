@@ -410,9 +410,12 @@ type ReviewDecision string
 const (
 	ReviewDecisionApproved           ReviewDecision = "approved"
 	ReviewDecisionApprovedForSession ReviewDecision = "approved_for_session"
-	ReviewDecisionDenied             ReviewDecision = "denied"
-	ReviewDecisionTimedOut           ReviewDecision = "timed_out"
-	ReviewDecisionAbort              ReviewDecision = "abort"
+	// Rust 67afc79674: MCP tool approval that persists as a policy amendment
+	// across sessions. Non-MCP approval paths reject this decision.
+	ReviewDecisionApprovedMcpPolicyAmendment ReviewDecision = "approved_mcp_policy_amendment"
+	ReviewDecisionDenied                     ReviewDecision = "denied"
+	ReviewDecisionTimedOut                   ReviewDecision = "timed_out"
+	ReviewDecisionAbort                      ReviewDecision = "abort"
 )
 
 type ExecCommandApprovalParams struct {

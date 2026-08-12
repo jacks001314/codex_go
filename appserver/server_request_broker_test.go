@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,34 @@ func TestServerRequestBrokerResolvesResponse(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broker response")
+	}
+}
+
+func TestServerRequestBrokerRejectsPendingOnConnectionClose(t *testing.T) {
+	broker := NewServerRequestBroker()
+	sent := make(chan *ServerRequest, 1)
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) { sent <- request }))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	var response authRefreshTestResponse
+	go func() {
+		done <- broker.Request(ctx, ServerRequestChatGPTAuthTokensRefresh, map[string]string{"reason": "test"}, &response)
+	}()
+	<-sent
+
+	rejected := broker.RejectPending("", errors.New("server request failed: connection closed"))
+	if rejected != 1 {
+		t.Fatalf("RejectPending() rejected %d requests, want 1", rejected)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "connection closed") {
+			t.Fatalf("Request() error = %v, want connection-closed rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending request was not rejected promptly on connection close")
 	}
 }
 

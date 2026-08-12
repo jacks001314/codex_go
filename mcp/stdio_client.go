@@ -383,6 +383,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	if stripProtocolMarker {
 		baseEnv = withoutEnvironmentVariable(baseEnv, mcpProtocolVersionEnvVar)
 	}
+	baseEnv = append(baseEnv, mcpCustomCAEnvPairs(launchEnv)...)
 	cmd.Env = append(baseEnv, envPairs(launchEnv)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -984,6 +985,61 @@ func withoutEnvironmentVariable(env []string, target string) []string {
 		out = append(out, entry)
 	}
 	return out
+}
+
+// mcpCustomCAEnvKeys mirrors Rust codex_network_proxy::CUSTOM_CA_ENV_KEYS: the
+// curated set of CA-bundle environment variables forwarded to child toolchains.
+var mcpCustomCAEnvKeys = []string{
+	"CODEX_CA_CERTIFICATE",
+	"SSL_CERT_FILE",
+	"REQUESTS_CA_BUNDLE",
+	"CURL_CA_BUNDLE",
+	"NODE_EXTRA_CA_CERTS",
+	"GIT_SSL_CAINFO",
+	"CARGO_HTTP_CAINFO",
+	"PIP_CERT",
+	"BUNDLE_SSL_CA_CERT",
+	"npm_config_cafile",
+	"NPM_CONFIG_CAFILE",
+}
+
+// mcpCustomCAEnvPairs forwards inherited custom CA settings to local stdio MCP
+// servers, converting non-empty relative paths to absolute paths (the server
+// may start in a different working directory). Explicit MCP environment
+// overrides take precedence and suppress the inherited entry
+// (Rust b2543af02b).
+func mcpCustomCAEnvPairs(launchEnv map[string]string) []string {
+	var pairs []string
+	for _, key := range mcpCustomCAEnvKeys {
+		if mcpEnvHasKey(launchEnv, key) {
+			continue
+		}
+		value, ok := os.LookupEnv(key)
+		if !ok || value == "" {
+			continue
+		}
+		if absolute, err := filepath.Abs(value); err == nil {
+			value = absolute
+		}
+		pairs = append(pairs, key+"="+value)
+	}
+	return pairs
+}
+
+func mcpEnvHasKey(env map[string]string, key string) bool {
+	for name := range env {
+		if sameMCPEnvKey(name, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameMCPEnvKey(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func envPairs(values map[string]string) []string {

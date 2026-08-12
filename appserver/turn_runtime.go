@@ -5586,12 +5586,26 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			SubagentKind:         lineage.SubagentKind,
 			ThreadSource:         lineage.ThreadSource,
 			SandboxMode:          permissionProfilePolicyTag(permissionProfile, cwd),
+			AutoReviewEnabled:    autoReviewEnabledForTurn(cfg, params),
 			Extra:                extraMetadata,
 			ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
 			StartedAtMS:          startedAtMS,
 			UseResponsesLite:     r.modelUsesResponsesLite(modelProviderConfig.Model),
 		}),
 	}, nil
+}
+
+// autoReviewEnabledForTurn mirrors Rust routes_approval_policy_to_guardian
+// (Rust f2a6f2585c): auto-review is enabled when the effective approval policy
+// routes to Guardian (on-request or granular) with the auto_review reviewer.
+func autoReviewEnabledForTurn(cfg *config.Config, params *turn.TurnStartParams) *bool {
+	enabled := false
+	policy := turnApprovalPolicyForTurn(cfg, params)
+	reviewer := strings.TrimSpace(turnApprovalsReviewerForTurn(cfg, params))
+	if (policy == sandbox.ApprovalOnRequest || policy == sandbox.ApprovalGranular) && strings.EqualFold(reviewer, string(config.ApprovalsReviewerAutoReview)) {
+		enabled = true
+	}
+	return &enabled
 }
 
 // turnEnvironmentContextInputItem mirrors Rust's per-turn world-state context.
