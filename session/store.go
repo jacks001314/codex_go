@@ -792,7 +792,7 @@ func (s *Store) MoveThreadToSection(threadID ThreadID, sectionID *string, before
 			return nil, err
 		}
 	}
-	section, err := s.threadSectionForID(sectionID)
+	section, err := s.threadSectionForIDLocked(sectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -975,7 +975,7 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 		record.Archived = *patch.Archived
 	}
 	if patch.SectionSet {
-		section, err := s.threadSectionForID(patch.SectionID)
+		section, err := s.threadSectionForIDLocked(patch.SectionID)
 		if err != nil {
 			return nil, err
 		}
@@ -2281,6 +2281,18 @@ func (s *Store) saveCustomSectionsLocked() error {
 }
 
 func (s *Store) threadSectionForID(id *string) (*ThreadSection, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.threadSectionForIDLocked(id)
+}
+
+// threadSectionForIDLocked assumes the caller already holds s.mu. It must not
+// re-acquire the lock: MoveThreadToSection and updateMetadataLocked call it
+// while holding the write lock, and sync.RWMutex is not reentrant.
+func (s *Store) threadSectionForIDLocked(id *string) (*ThreadSection, error) {
 	if id == nil {
 		return nil, nil
 	}
@@ -2289,15 +2301,12 @@ func (s *Store) threadSectionForID(id *string) (*ThreadSection, error) {
 		return pinnedThreadSection(), nil
 	}
 	if s != nil {
-		s.mu.RLock()
 		for i := range s.customSections {
 			if s.customSections[i].ID == value {
 				cloned := s.customSections[i]
-				s.mu.RUnlock()
 				return &cloned, nil
 			}
 		}
-		s.mu.RUnlock()
 	}
 	return nil, fmt.Errorf("%w: %s", ErrThreadSectionMissing, value)
 }

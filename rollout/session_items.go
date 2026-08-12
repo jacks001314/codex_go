@@ -1082,6 +1082,14 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 		return
 	}
 	if index := b.generatedEventMirrorIndex(item, turnID); index >= 0 {
+		if b.current != nil {
+			replacedTurn := sessionItemTurnID(&b.items[index], index)
+			if isSyntheticRolloutTurn(replacedTurn) && b.current.snapshot.ID == replacedTurn {
+				// The synthetic turn only existed to host the mirror; the
+				// canonical item carries the real turn, so adopt it.
+				b.current.snapshot.ID = turnID
+			}
+		}
 		item.CreatedAt = b.items[index].CreatedAt
 		item.CreatedAtOrdinal = b.items[index].CreatedAtOrdinal
 		b.items[index] = item
@@ -1101,7 +1109,14 @@ func (b *rolloutReplayBuilder) hasCanonicalEventMirror(item session.Item, kind s
 	turnID := sessionItemTurnID(&item, len(b.items))
 	for i := len(b.items) - 1; i >= 0; i-- {
 		candidate := &b.items[i]
-		if len(candidate.Raw) == 0 || sessionItemTurnID(candidate, i) != turnID {
+		if len(candidate.Raw) == 0 {
+			continue
+		}
+		// Go-written legacy rollouts emit the event mirror before its canonical
+		// response item without a turn_started event, so the mirror carries a
+		// synthetic "rollout-N" turn while the canonical carries the real turn.
+		// Relax the turn match for synthetic mirrors so the canonical wins.
+		if !isSyntheticRolloutTurn(turnID) && sessionItemTurnID(candidate, i) != turnID {
 			continue
 		}
 		if rolloutItemsMirror(candidate, &item, kind) {
@@ -1123,7 +1138,14 @@ func (b *rolloutReplayBuilder) generatedEventMirrorIndex(item session.Item, turn
 	}
 	for i := len(b.items) - 1; i >= 0; i-- {
 		candidate := &b.items[i]
-		if len(candidate.Raw) != 0 || sessionItemTurnID(candidate, i) != turnID {
+		if len(candidate.Raw) != 0 {
+			continue
+		}
+		candidateTurn := sessionItemTurnID(candidate, i)
+		// Same synthetic-turn relaxation as hasCanonicalEventMirror: a mirror
+		// hosted under a synthetic "rollout-N" turn is replaced by the canonical
+		// response item regardless of the canonical's real turn.
+		if !isSyntheticRolloutTurn(candidateTurn) && candidateTurn != turnID {
 			continue
 		}
 		if rolloutItemsMirror(candidate, &item, kind) {
@@ -1139,6 +1161,12 @@ func rolloutItemsMirror(left *session.Item, right *session.Item, kind string) bo
 	}
 	return strings.TrimSpace(left.Role) == strings.TrimSpace(right.Role) &&
 		strings.TrimSpace(left.Text) == strings.TrimSpace(right.Text)
+}
+
+// isSyntheticRolloutTurn reports whether a turn id was synthesized by the
+// replay builder (ensureTurn) because the rollout had no turn_started event.
+func isSyntheticRolloutTurn(turnID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(turnID), "rollout-")
 }
 
 func (b *rolloutReplayBuilder) nextItemID() string {
