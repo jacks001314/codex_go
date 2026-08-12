@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/plugin"
 	"codex_go/session"
+	"codex_go/telemetry"
 )
 
 func TestAttributeCommandExecutionItemUsesVerifiedRemotePlugin(t *testing.T) {
@@ -131,9 +133,41 @@ func TestAttributeSessionCommandItemsPreservesHistoryFields(t *testing.T) {
 		},
 	}}
 
-	router.attributeSessionCommandItems(items)
+	router.attributeSessionCommandItems("", "", items)
 
 	if items[0].Data["pluginId"] != id.Key() || items[0].Data["scriptPath"] != "scripts/run.py" {
 		t.Fatalf("persisted item data = %#v", items[0].Data)
+	}
+}
+
+func TestEmitArtifactOperationForCommandItemLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	item := &ThreadItem{
+		ID: "item-artifact",
+		Data: map[string]any{
+			"pluginId":    "presentations@openai-primary-runtime",
+			"scriptPath":  "skills/presentations/container_tools/mark_artifact_operation_started.mjs",
+			"command":     "python /plugins/presentations/skills/presentations/container_tools/mark_artifact_operation_started.mjs --operation-kind create --expected-output-count 2 --output-format pptx",
+			"startedAtMs": int64(1786000000000),
+		},
+	}
+	router.emitArtifactOperationForCommandItem("thread-art", "turn-art", item)
+	select {
+	case event := <-analytics.artifactOperation:
+		if event.EventType != telemetry.ArtifactOperationEventType {
+			t.Fatalf("event type = %q", event.EventType)
+		}
+		params := event.EventParams
+		if params.ThreadID != "thread-art" || params.TurnID != "turn-art" || params.ItemID != "item-artifact" {
+			t.Fatalf("context = %+v", params)
+		}
+		if params.Lifecycle != telemetry.ArtifactOperationLifecycleStarted || params.Skill != "presentations" ||
+			params.ArtifactType != "presentation" || params.OperationKind != "create" ||
+			params.ExpectedOutputCount != 2 || params.OutputFormat != "pptx" || params.ExecutionBackend != "unified_exec" {
+			t.Fatalf("artifact operation params = %+v", params)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for artifact operation analytics")
 	}
 }

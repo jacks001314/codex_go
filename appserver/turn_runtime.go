@@ -91,15 +91,69 @@ func (r *RuntimeRouter) attributeCommandExecutionItem(item *ThreadItem) {
 	item.Data["scriptPath"] = attribution.ScriptPath
 }
 
-func (r *RuntimeRouter) attributeSessionCommandItems(items []session.Item) {
+func (r *RuntimeRouter) attributeSessionCommandItems(threadID string, turnID string, items []session.Item) {
 	for i := range items {
 		threadItem := BuildThreadItem(items[i])
 		if threadItemWireType(&threadItem) != "commandExecution" {
 			continue
 		}
 		r.attributeCommandExecutionItem(&threadItem)
+		r.emitArtifactOperationForCommandItem(threadID, turnID, &threadItem)
 		items[i].Data = cloneAnyMap(threadItem.Data)
 	}
+}
+
+// emitArtifactOperationForCommandItem records a codex_artifact_operation
+// "started" event for a trusted primary-runtime artifact marker command
+// (Rust #38057).
+func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, turnID string, item *ThreadItem) {
+	if r == nil || r.services.Analytics == nil || item == nil {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.ArtifactOperationEventSink)
+	if !ok {
+		return
+	}
+	pluginID := ""
+	if raw, ok := item.Data["pluginId"].(string); ok {
+		pluginID = strings.TrimSpace(raw)
+	}
+	scriptPath := ""
+	if raw, ok := item.Data["scriptPath"].(string); ok {
+		scriptPath = strings.TrimSpace(raw)
+	}
+	if pluginID == "" || scriptPath == "" {
+		return
+	}
+	command := strings.TrimSpace(threadItemCommand(item))
+	if command == "" {
+		return
+	}
+	attribution := &plugin.PluginCommandAttribution{PluginID: pluginID, ScriptPath: scriptPath}
+	operation := plugin.RecognizeArtifactOperation(attribution, shell.SplitCommandLine(command))
+	if operation == nil {
+		return
+	}
+	occurredAtMS := uint64(threadItemInt64FromData(item.Data, "startedAtMs", "started_at_ms"))
+	if occurredAtMS == 0 {
+		occurredAtMS = uint64(time.Now().UTC().UnixMilli())
+	}
+	sink.TrackArtifactOperationEvent(context.Background(), telemetry.NewArtifactOperationEvent(telemetry.ArtifactOperationEventParams{
+		ThreadID:            threadID,
+		TurnID:              turnID,
+		ItemID:              strings.TrimSpace(item.ID),
+		Lifecycle:           telemetry.ArtifactOperationLifecycleStarted,
+		OccurredAtMS:        occurredAtMS,
+		Runtime:             telemetry.CurrentRuntimeMetadata(),
+		PluginID:            pluginID,
+		ScriptPath:          operation.ScriptPath,
+		Skill:               operation.PluginName,
+		ArtifactType:        operation.ArtifactType,
+		OperationKind:       operation.OperationKind,
+		ExpectedOutputCount: operation.ExpectedOutputCount,
+		OutputFormat:        operation.OutputFormat,
+		ExecutionBackend:    "unified_exec",
+	}))
 }
 
 func appReasoningEffortForTurn(cfg *config.Config, params *turn.TurnStartParams) string {
@@ -415,6 +469,24 @@ func (r *RuntimeRouter) notifyAgentMessageStarted(threadID string, turnID string
 		TurnID:      turnID,
 		StartedAtMS: time.Now().UTC().UnixMilli(),
 	})
+}
+
+func resourceOrHostSkillInvocationID(skill promptctx.InstructionsSkillMetadata, repoURL string, repoRoot string) string {
+	if isResourceBackedSkill(skill) {
+		id := strings.TrimSpace(firstNonEmpty(skill.ResourceID, skill.PackageID, skill.LocatorPath))
+		if id == "" {
+			return ""
+		}
+		digest := sha1.Sum([]byte(id))
+		return fmt.Sprintf("%x", digest)
+	}
+	return skillInvocationID(repoURL, repoRoot, skill.Path, skill.Name)
+}
+
+func isResourceBackedSkill(skill promptctx.InstructionsSkillMetadata) bool {
+	kind := strings.ToLower(strings.TrimSpace(skill.LocatorKind))
+	return kind == "executor package" || kind == "orchestrator package" ||
+		strings.TrimSpace(skill.PackageID) != "" || strings.TrimSpace(skill.ResourceID) != ""
 }
 
 func (r *RuntimeRouter) notifyPlanItemStarted(threadID string, turnID string, state *responsesStreamNotificationState) {
@@ -1191,7 +1263,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
 	}
-	r.attributeSessionCommandItems(items)
+	r.attributeSessionCommandItems(threadID, turnID, items)
 	if len(items) > 0 {
 		if _, err := r.runtimeAppendItems(session.ThreadID(threadID), items); err != nil {
 			r.unifiedExecPersistMu.Unlock()
@@ -7819,6 +7891,11 @@ func (r *RuntimeRouter) implicitSkillInvocationEventProvider(threadID string, tu
 		if skill == nil {
 			return nil
 		}
+		if implicitSkillResourceReadInvocation(invocation) && (output == nil || !output.Success) {
+			// Resource-backed implicit invocations are recorded only when the
+			// main resource is successfully read (Rust #38066).
+			return nil
+		}
 		key := implicitSkillInvocationSeenKey(*skill)
 		if key == "" {
 			return nil
@@ -7840,6 +7917,33 @@ func implicitSkillForToolInvocation(skills []promptctx.InstructionsSkillMetadata
 		return nil
 	}
 	name := invocation.ToolName.Key()
+	if name == "skills.read" {
+		// Resource-backed skill reads (Rust #38066): match the requested
+		// package to an executor/orchestrator skill catalog entry.
+		var args struct {
+			Package string `json:"package"`
+		}
+		if strings.TrimSpace(invocation.Payload.Arguments) == "" {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &args); err != nil {
+			return nil
+		}
+		pkg := strings.TrimSpace(args.Package)
+		if pkg == "" {
+			return nil
+		}
+		for i := range skills {
+			skill := skills[i]
+			if !isResourceBackedSkill(skill) {
+				continue
+			}
+			if skill.PackageID == pkg || skill.ResourceID == pkg || skill.LocatorPath == pkg {
+				return &skill
+			}
+		}
+		return nil
+	}
 	if !tool.IsShellCommandToolName(invocation.ToolName) && name != "shell" {
 		return nil
 	}
@@ -7859,6 +7963,10 @@ func implicitSkillForToolInvocation(skills []promptctx.InstructionsSkillMetadata
 		return nil
 	}
 	return promptctx.DetectImplicitSkillInvocationForCommand(skills, command, workdir)
+}
+
+func implicitSkillResourceReadInvocation(invocation *tool.Invocation) bool {
+	return invocation != nil && invocation.ToolName.Key() == "skills.read"
 }
 
 func implicitSkillWorkdir(base string, override string) string {
@@ -7885,6 +7993,12 @@ func implicitSkillWorkdir(base string, override string) string {
 }
 
 func implicitSkillInvocationSeenKey(skill promptctx.InstructionsSkillMetadata) string {
+	if isResourceBackedSkill(skill) {
+		if id := strings.TrimSpace(firstNonEmpty(skill.ResourceID, skill.PackageID, skill.LocatorPath)); id != "" {
+			return "resource:" + id
+		}
+		return ""
+	}
 	if skill.Path == "" || skill.Name == "" {
 		return ""
 	}
@@ -7901,9 +8015,15 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 	}
 	repoRoot, repoURL := skillInvocationRepo(skill.Path)
 	scope := skillInvocationScope(skill.Scope)
+	if isResourceBackedSkill(skill) {
+		// Resource-backed skills (Rust #38066): stable fallback ID derived from
+		// the main resource, provider-scoped, no repository context.
+		repoRoot = ""
+		repoURL = ""
+	}
 	sink.TrackSkillInvocationEvent(ctx, telemetry.SkillInvocationEventRequest{
 		EventType: telemetry.SkillInvocationEventType,
-		SkillID:   skillInvocationID(repoURL, repoRoot, skill.Path, skill.Name),
+		SkillID:   resourceOrHostSkillInvocationID(skill, repoURL, repoRoot),
 		SkillName: skill.Name,
 		EventParams: telemetry.SkillInvocationEventParams{
 			ProductClientID: stringPtrIfNotEmpty(productClientID),

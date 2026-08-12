@@ -14509,6 +14509,49 @@ func TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust(t *testing
 	}
 }
 
+func TestResourceBackedSkillInvocationTrackingLikeRust(t *testing.T) {
+	analytics := newRecordingTurnEventSink()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	skill := promptctx.InstructionsSkillMetadata{
+		Name:        "exec-skill",
+		Scope:       "environment",
+		LocatorKind: "executor package",
+		PackageID:   "authority:exec:exec-skill",
+		ResourceID:  "authority:exec:exec-skill/SKILL.md",
+	}
+	// A skills.read invocation resolves to the resource-backed skill.
+	readInvocation := &tool.Invocation{
+		ToolName: tool.NamespacedName("skills", "read"),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"authority":{"kind":"executor","id":"exec"},"package":"authority:exec:exec-skill","resource":"authority:exec:exec-skill/SKILL.md"}`,
+		},
+	}
+	matched := implicitSkillForToolInvocation([]promptctx.InstructionsSkillMetadata{skill}, readInvocation, "")
+	if matched == nil || matched.Name != "exec-skill" {
+		t.Fatalf("matched = %#v, want resource-backed executor skill", matched)
+	}
+	// Dedupe key is the resource id (Rust #38066).
+	if key := implicitSkillInvocationSeenKey(skill); key != "resource:authority:exec:exec-skill/SKILL.md" {
+		t.Fatalf("seen key = %q, want resource-scoped key", key)
+	}
+	router.trackSkillInvocationEvent(context.Background(), "thread-res", "turn-res", "gpt-5", "codex-test", skill, telemetry.SkillInvocationTypeImplicit)
+	select {
+	case event := <-analytics.skillInvocation:
+		if event.EventType != telemetry.SkillInvocationEventType || event.SkillName != "exec-skill" || event.SkillID == "" {
+			t.Fatalf("skill invocation event = %#v", event)
+		}
+		if stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeImplicit {
+			t.Fatalf("invoke type = %q, want implicit", stringPtrValue(event.EventParams.InvokeType))
+		}
+		if stringPtrValue(event.EventParams.RepoURL) != "" {
+			t.Fatalf("repo url = %q, want empty for resource-backed skill", stringPtrValue(event.EventParams.RepoURL))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resource-backed skill invocation analytics")
+	}
+}
+
 func TestSanitizeMetricTagValueMatchesRust(t *testing.T) {
 	for input, want := range map[string]string{
 		" skill name ": "skill_name",
@@ -23946,6 +23989,7 @@ type recordingTurnEventSink struct {
 	webSearch         chan telemetry.CodexWebSearchEventRequest
 	imageGeneration   chan telemetry.CodexImageGenerationEventRequest
 	skillInvocation   chan telemetry.SkillInvocationEventRequest
+	artifactOperation chan telemetry.ArtifactOperationEventRequest
 }
 
 type standaloneWebSearchRuntimeAgent struct {
@@ -24023,6 +24067,7 @@ func newRecordingTurnEventSink() *recordingTurnEventSink {
 		webSearch:         make(chan telemetry.CodexWebSearchEventRequest, 8),
 		imageGeneration:   make(chan telemetry.CodexImageGenerationEventRequest, 8),
 		skillInvocation:   make(chan telemetry.SkillInvocationEventRequest, 8),
+		artifactOperation: make(chan telemetry.ArtifactOperationEventRequest, 8),
 	}
 }
 
@@ -24038,6 +24083,13 @@ func (s *recordingTurnEventSink) TrackSkillInvocationEvent(ctx context.Context, 
 		return
 	}
 	s.skillInvocation <- event
+}
+
+func (s *recordingTurnEventSink) TrackArtifactOperationEvent(ctx context.Context, event telemetry.ArtifactOperationEventRequest) {
+	if s == nil {
+		return
+	}
+	s.artifactOperation <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexThreadInitializedEvent(ctx context.Context, event telemetry.CodexThreadInitializedEventRequest) {
