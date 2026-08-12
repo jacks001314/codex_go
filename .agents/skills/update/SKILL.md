@@ -10,6 +10,7 @@ description: 每天检查rust版本codex github 库的更新情况, 根据最新
 codex-go是官方rust版本codex cli的go版本同步实现，需要功能高度对齐，每天必须检查github上rust版本codex cli的变化更新，制定便于追踪，开发，测试的对齐计划，并落实更新对齐代码落地功能。
 
 ## 工作流
+0. git 当git 连接失败的时候，要用系统代理
 
 1. 上游rust codex cli 本地git库位于目录：D:\qax\reagent\dev\git\codex，使用git pull origin main拉取最新更新
 

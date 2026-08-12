@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -277,6 +278,57 @@ func newPendingEnvironmentStatusExecServerForTest(t *testing.T) (string, <-chan 
 	}))
 	t.Cleanup(server.Close)
 	return "ws" + strings.TrimPrefix(server.URL, "http"), done
+}
+
+func TestFetchRemoteEnvironmentStatusRetriesAfterTransientStartupFailureLikeRust(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			// Rust 38020: a retryable failure during the initial remote
+			// exec-server connection must not leave the environment
+			// disconnected on later readiness checks. Go status fetches dial
+			// per call, so the failed startup is not memoized.
+			http.Error(w, "transient startup failure", http.StatusInternalServerError)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		if err != nil {
+			t.Errorf("websocket accept error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := expectExecServerRequestForTest(ctx, conn, "initialize", func(request map[string]any) error {
+			return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{"sessionId": "status-session"})
+		}); err != nil {
+			t.Errorf("initialize error = %v", err)
+			return
+		}
+		if err := expectExecServerRequestForTest(ctx, conn, "initialized", nil); err != nil {
+			t.Errorf("initialized error = %v", err)
+			return
+		}
+		if err := expectExecServerRequestForTest(ctx, conn, "environment/status", func(request map[string]any) error {
+			return writeExecServerResponseForTest(ctx, conn, request["id"], map[string]any{"status": "ready"})
+		}); err != nil {
+			t.Errorf("environment/status error = %v", err)
+			return
+		}
+	}))
+	t.Cleanup(server.Close)
+	record := &EnvironmentRecord{ExecServerURL: "ws" + strings.TrimPrefix(server.URL, "http")}
+
+	if _, err := fetchRemoteEnvironmentStatus(context.Background(), record); err == nil {
+		t.Fatal("first readiness check should fail transiently")
+	}
+	status, err := fetchRemoteEnvironmentStatus(context.Background(), record)
+	if err != nil {
+		t.Fatalf("later readiness check should retry startup: %v", err)
+	}
+	if status == nil || status.Status != EnvironmentStatusReady {
+		t.Fatalf("EnvironmentStatus after retry = %#v", status)
+	}
 }
 
 func newRemoteSkillsExecServerForTest(t *testing.T, rootPath string, files map[string]string) (string, <-chan error) {
