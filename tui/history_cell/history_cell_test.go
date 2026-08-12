@@ -230,13 +230,6 @@ func TestApprovalHistoryCells(t *testing.T) {
 		t.Fatalf("many patch raw = %q", got)
 	}
 
-	approvedAction := NewGuardianApprovedActionRequest("  run check  ")
-	if got := strings.Join(approvedAction.DisplayLines(120), "\n"); !strings.Contains(got, "✔ Request approved for run check") {
-		t.Fatalf("guardian approved action display:\n%s", got)
-	}
-	if got := strings.Join(approvedAction.RawLines(), "|"); got != "Request approved for   run check  " {
-		t.Fatalf("guardian approved action raw = %q", got)
-	}
 	deniedAction := NewGuardianDeniedActionRequest("  run check  ")
 	if got := strings.Join(deniedAction.RawLines(), "|"); got != "Request denied for   run check  " {
 		t.Fatalf("guardian denied action raw = %q", got)
@@ -379,6 +372,37 @@ func TestMCPHistoryCells(t *testing.T) {
 	failed.MarkFailed("interrupted")
 	if got := strings.Join(failed.RawLines(), "|"); !strings.Contains(got, "Error: interrupted") {
 		t.Fatalf("failed mcp raw = %q", got)
+	}
+
+	// Rust #38044: node_repl.js calls render compactly in history (title +
+	// meaningful output), and in full in transcript/raw mode.
+	nodeREPL := NewMcpToolCall("call-3", McpInvocation{
+		Server:    "node_repl",
+		Tool:      "js",
+		Arguments: `{"title":"  compute sum  ","code":"1+2"}`,
+	}, McpToolResult{Content: []string{"Script completed\nOutput:\n3\n"}})
+	display := strings.Join(nodeREPL.DisplayLines(80), "\n")
+	if !strings.Contains(display, "compute sum") || strings.Contains(display, "node_repl.js(") {
+		t.Fatalf("node_repl compact display should use the title:\n%s", display)
+	}
+	if !strings.Contains(display, "3") || strings.Contains(display, "Script completed") {
+		t.Fatalf("node_repl compact display should show meaningful output only:\n%s", display)
+	}
+	transcript := strings.Join(nodeREPL.TranscriptLines(80), "\n")
+	if !strings.Contains(transcript, "node_repl.js(") || !strings.Contains(transcript, "Script completed") || !strings.Contains(transcript, "Output:") || !strings.Contains(transcript, "3") {
+		t.Fatalf("node_repl transcript should keep the full invocation and output:\n%s", transcript)
+	}
+	raw := strings.Join(nodeREPL.RawLines(), "|")
+	if !strings.Contains(raw, "node_repl.js(") || !strings.Contains(raw, "Script completed") {
+		t.Fatalf("node_repl raw should keep the full invocation and output:\n%s", raw)
+	}
+	// Structured zero-exit output JSON is shown as its output field.
+	structured := NewMcpToolCall("call-4", McpInvocation{
+		Server: "node_repl",
+		Tool:   "js",
+	}, McpToolResult{Content: []string{`{"exit_code":0,"output":"42"}`}})
+	if got := strings.Join(structured.DisplayLines(80), "\n"); !strings.Contains(got, "42") {
+		t.Fatalf("node_repl structured output display:\n%s", got)
 	}
 
 	empty := EmptyMCPOutput()

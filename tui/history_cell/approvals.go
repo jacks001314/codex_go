@@ -67,10 +67,6 @@ func NewGuardianDeniedActionRequest(summary string) PrefixedWrappedHistoryCell {
 	return NewPrefixedWrappedHistoryCell("Request denied for "+summary, "\u2717 ", "  ")
 }
 
-func NewGuardianApprovedActionRequest(summary string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell("Request approved for "+summary, "\u2714 ", "  ")
-}
-
 func NewGuardianTimedOutPatchRequest(files []string) PrefixedWrappedHistoryCell {
 	return NewPrefixedWrappedHistoryCell(guardianPatchSummary("Review timed out before codex could apply ", files), "\u2717 ", "  ")
 }

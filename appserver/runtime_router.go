@@ -7025,7 +7025,7 @@ func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse,
 		return entries[i].Name < entries[j].Name
 	})
 	errors := append(cloneSkillErrors(response.Errors), pluginErrors...)
-	return skillsListResponse(entries, errors, requestedCWDs), nil
+	return skillsListResponse(entries, errors, requestedCWDs, nil), nil
 }
 
 func (r *RuntimeRouter) pluginEnabledCWDs(cwds []string) []string {

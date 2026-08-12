@@ -10,6 +10,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -414,10 +415,23 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 	if !hasPersistentConfig || len(params.Config) > 0 {
 		configFingerprint = configEntriesFingerprint(configEntries)
 	}
+	// Each CWD's effective config decides whether bundled system skills are
+	// included (Rust #37979), so per-CWD flags participate in the cache key.
+	bundledEnabled := map[string]bool{}
+	for _, cwd := range params.CWDs {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			continue
+		}
+		bundledEnabled[cwd] = s.bundledSkillsEnabledForCWD(cwd)
+	}
 	key := strings.Join(params.CWDs, "\x00") + "\x00" + strings.Join(s.extraRoots, "\x00") + "\x00" + configFingerprint
+	for _, cwd := range params.CWDs {
+		key += "\x00bundled:" + strconv.FormatBool(bundledEnabled[strings.TrimSpace(cwd)])
+	}
 	if !params.ForceReload {
 		if cached, ok := s.cache[key]; ok {
-			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs), nil
+			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs, bundledEnabled), nil
 		}
 	}
 	roots := cloneSkillsRoots(s.roots)
@@ -450,7 +464,7 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		return entries[i].Name < entries[j].Name
 	})
 	s.cache[key] = skillsCacheEntry{skills: cloneSkills(entries), errors: cloneSkillErrors(skillErrors)}
-	return skillsListResponse(entries, skillErrors, params.CWDs), nil
+	return skillsListResponse(entries, skillErrors, params.CWDs, bundledEnabled), nil
 }
 
 func setSkillRootOrder(entries []SkillsListEntry, order int) {
@@ -1799,7 +1813,7 @@ func cloneSkillErrors(errors []SkillErrorInfo) []SkillErrorInfo {
 	return out
 }
 
-func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, cwds []string) *SkillsListResponse {
+func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, cwds []string, bundledEnabled map[string]bool) *SkillsListResponse {
 	response := &SkillsListResponse{Skills: cloneSkills(skills), Errors: cloneSkillErrors(skillErrors)}
 	if len(cwds) == 0 {
 		response.Data = []SkillsListEntry{{
@@ -1819,7 +1833,12 @@ func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, 
 			continue
 		}
 		var scoped []SkillsListEntry
+		includeSystem := bundledEnabled[cwd]
+		_, hasExplicitFlag := bundledEnabled[cwd]
 		for _, skill := range skills {
+			if !includeSystem && hasExplicitFlag && strings.EqualFold(strings.TrimSpace(skill.Scope), "system") {
+				continue
+			}
 			if skillAppliesToCWD(skill, cwd) {
 				scoped = append(scoped, cloneSkill(skill))
 			}
@@ -1828,6 +1847,36 @@ func skillsListResponse(skills []SkillsListEntry, skillErrors []SkillErrorInfo, 
 	}
 	response.Data = data
 	return response
+}
+
+// bundledSkillsEnabledForCWD reports whether bundled system skills are enabled
+// for the supplied working directory, resolving [skills.bundled] enabled from
+// the per-CWD effective configuration (Rust #37979).
+func (s *SkillsService) bundledSkillsEnabledForCWD(cwd string) bool {
+	if s == nil || s.configService == nil {
+		return true
+	}
+	read, err := s.configService.Read(&config.ConfigReadParams{CWD: &cwd})
+	if err != nil || read == nil {
+		return true
+	}
+	return bundledSkillsEnabledFromValues(read.Config)
+}
+
+func bundledSkillsEnabledFromValues(values map[string]any) bool {
+	if values == nil {
+		return true
+	}
+	skills, ok := values["skills"].(map[string]any)
+	if !ok {
+		return true
+	}
+	bundled, ok := skills["bundled"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := bundled["enabled"].(bool)
+	return !ok || enabled
 }
 
 func skillErrorsForCWD(errors []SkillErrorInfo, cwd string) []SkillErrorInfo {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -265,6 +266,83 @@ func TestSkillsServiceIncludesBundledSystemSkillsRoot(t *testing.T) {
 	}
 	if len(response.Skills) != 1 || response.Skills[0].Name != "sys-skill" || response.Skills[0].Scope != "system" {
 		t.Fatalf("skills = %#v, want bundled system skill", response.Skills)
+	}
+}
+
+func TestSkillsListUsesEachCWDBundledSkillsConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	packageDir := t.TempDir()
+	resourcesDir := filepath.Join(packageDir, "codex-resources")
+	skillDir := filepath.Join(resourcesDir, "skills", ".system", "sys-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(system skill) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: sys-skill\ndescription: Bundled system skill\n---\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(system skill) error = %v", err)
+	}
+	disabledCWD := t.TempDir()
+	enabledCWD := t.TempDir()
+	var userConfig strings.Builder
+	userConfig.WriteString("model = \"gpt-user\"\n")
+	for _, tc := range []struct {
+		cwd     string
+		enabled bool
+	}{
+		{disabledCWD, false},
+		{enabledCWD, true},
+	} {
+		if err := os.MkdirAll(filepath.Join(tc.cwd, ".git"), 0o755); err != nil {
+			t.Fatalf("MkdirAll(.git) error = %v", err)
+		}
+		trustKey := strings.ReplaceAll(filepath.Clean(tc.cwd), `\`, `\\`)
+		userConfig.WriteString("\n[projects.\"" + trustKey + "\"]\ntrust_level = \"trusted\"\n")
+		dotCodex := filepath.Join(tc.cwd, ".codex")
+		if err := os.MkdirAll(dotCodex, 0o755); err != nil {
+			t.Fatalf("MkdirAll(.codex) error = %v", err)
+		}
+		contents := "[skills.bundled]\nenabled = " + strconv.FormatBool(tc.enabled) + "\n"
+		if err := os.WriteFile(filepath.Join(dotCodex, "config.toml"), []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(project config) error = %v", err)
+		}
+	}
+	if err := os.WriteFile(config.ConfigPath(home), []byte(userConfig.String()), 0o600); err != nil {
+		t.Fatalf("WriteFile(user config) error = %v", err)
+	}
+	service := NewSkillsServiceWithOptions(&SkillsServiceOptions{
+		InstallContext:      &install.InstallContext{PackageLayout: &install.CodexPackageLayout{ResourcesDir: &resourcesDir}},
+		IncludeDefaultRoots: true,
+		Config:              config.NewConfigService(home),
+	})
+	response, err := service.List(&SkillsListParams{CWDs: []string{disabledCWD, enabledCWD}})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(response.Data) != 2 {
+		t.Fatalf("data = %d entries, want 2 per-CWD entries", len(response.Data))
+	}
+	byCWD := map[string]*SkillsListEntry{}
+	for i := range response.Data {
+		byCWD[response.Data[i].CWD] = &response.Data[i]
+	}
+	disabled := byCWD[disabledCWD]
+	enabled := byCWD[enabledCWD]
+	if disabled == nil || enabled == nil {
+		t.Fatalf("data = %#v, want entries for both cwds", response.Data)
+	}
+	for _, skill := range disabled.Skills {
+		if skill.Scope == "system" {
+			t.Fatalf("disabled cwd includes system skill %s: %#v", skill.Name, disabled.Skills)
+		}
+	}
+	foundSystem := false
+	for _, skill := range enabled.Skills {
+		if skill.Scope == "system" {
+			foundSystem = true
+			break
+		}
+	}
+	if !foundSystem {
+		t.Fatalf("enabled cwd missing system skill: %#v", enabled.Skills)
 	}
 }
 

@@ -196,10 +196,10 @@ func GuardianAssessmentHistoryMessage(event GuardianAssessmentEvent) string {
 	command := GuardianCommand(action)
 	switch event.Status {
 	case GuardianAssessmentApproved:
-		if len(command) > 0 {
-			return firstRawHistoryLine(historycell.NewApprovalDecisionCell(historycell.NewCommandApprovalSubject(command), historycell.ReviewApproved, historycell.ApprovalActorGuardian))
-		}
-		return firstRawHistoryLine(historycell.NewGuardianApprovedActionRequest(GuardianActionSummary(action)))
+		// Rust #38032: approved Guardian assessments complete silently after
+		// clearing the live review status; no approval entry is added to
+		// conversation history.
+		return ""
 	case GuardianAssessmentTimedOut:
 		if len(command) > 0 {
 			return firstRawHistoryLine(historycell.NewApprovalDecisionCell(historycell.NewCommandApprovalSubject(command), historycell.ReviewTimedOut, historycell.ApprovalActorGuardian))

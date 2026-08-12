@@ -84,8 +84,8 @@ func TestGuardianAssessmentTerminalMessagesAndDenialsMatchRust(t *testing.T) {
 		Status: GuardianAssessmentApproved,
 		Action: GuardianAssessmentAction{Kind: GuardianActionMcpToolCall, Server: "github", ToolName: "search"},
 	})
-	if approved != "Request approved for MCP search on github" {
-		t.Fatalf("approved history = %q", approved)
+	if approved != "" {
+		t.Fatalf("approved history = %q, want empty (approved Guardian assessments are hidden, Rust #38032)", approved)
 	}
 
 	timedOut := GuardianAssessmentHistoryMessage(GuardianAssessmentEvent{

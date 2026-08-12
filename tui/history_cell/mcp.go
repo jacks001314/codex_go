@@ -1,6 +1,7 @@
 package historycell
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -54,13 +55,29 @@ func (c *McpToolCallCell) MarkFailed(message string) {
 }
 
 func (c McpToolCallCell) DisplayLines(width int) []string {
+	return c.renderLines(width, false)
+}
+
+// TranscriptLines renders the full invocation and result used by the Ctrl+T
+// transcript view (Rust #38044): node_repl.js calls keep their complete
+// invocation and untruncated output in transcript mode.
+func (c McpToolCallCell) TranscriptLines(width int) []string {
+	return c.renderLines(width, true)
+}
+
+func (c McpToolCallCell) renderLines(width int, transcript bool) []string {
 	width = max(width, 1)
 	header := "Calling"
 	if c.Result != nil {
 		header = "Called"
 	}
 	headerLine := "\u2022 " + header
+	nodeREPL := c.Invocation.Server == "node_repl" && c.Invocation.Tool == "js"
+	compact := nodeREPL && !transcript
 	invocation := formatMcpInvocation(c.Invocation)
+	if compact {
+		invocation = mcpNodeREPLTitle(c.Invocation.Arguments)
+	}
 	inlineInvocation := tui.DisplayWidth(headerLine+" "+invocation) <= width
 	lines := []string{}
 	if inlineInvocation {
@@ -78,7 +95,7 @@ func (c McpToolCallCell) DisplayLines(width int) []string {
 	if !inlineInvocation {
 		detailPrefix = "    "
 	}
-	for _, detail := range c.detailLines(width) {
+	for _, detail := range c.detailLines(width, nodeREPL, compact) {
 		lines = append(lines, tui.AdaptiveWrapLine(detail, tui.WrapOptions{
 			Width:            width,
 			InitialIndent:    detailPrefix,
@@ -95,11 +112,12 @@ func (c McpToolCallCell) RawLines() []string {
 		header = "Called"
 	}
 	lines := []string{header + " " + formatMcpInvocation(c.Invocation)}
-	lines = append(lines, c.detailLines(120)...)
+	nodeREPL := c.Invocation.Server == "node_repl" && c.Invocation.Tool == "js"
+	lines = append(lines, c.detailLines(120, nodeREPL, false)...)
 	return lines
 }
 
-func (c McpToolCallCell) detailLines(width int) []string {
+func (c McpToolCallCell) detailLines(width int, nodeREPL bool, compact bool) []string {
 	if c.Result == nil {
 		return nil
 	}
@@ -112,9 +130,67 @@ func (c McpToolCallCell) detailLines(width int) []string {
 		if block == "" {
 			continue
 		}
+		if nodeREPL && !compact && !c.Result.IsError {
+			// Transcript/raw mode: full untruncated output.
+			for _, segment := range strings.Split(strings.TrimRight(block, "\n"), "\n") {
+				out = append(out, segment)
+			}
+			continue
+		}
+		if compact && !c.Result.IsError {
+			if meaningful, ok := mcpNodeREPLMeaningfulOutput(block); ok {
+				if meaningful == "" {
+					continue
+				}
+				out = append(out, truncateToolResultLines(meaningful, width)...)
+				continue
+			}
+		}
 		out = append(out, truncateToolResultLines(block, width)...)
 	}
 	return out
+}
+
+// mcpNodeREPLTitle extracts the short title for a compact node_repl.js history
+// entry (Rust #38044): the arguments "title" field, whitespace-normalized and
+// truncated to 80 runes, falling back to "node_repl.js".
+func mcpNodeREPLTitle(arguments string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err == nil {
+		if title, ok := args["title"].(string); ok {
+			title = strings.Join(strings.Fields(title), " ")
+			if title != "" {
+				runes := []rune(title)
+				if len(runes) > 80 {
+					title = string(runes[:80])
+				}
+				return title
+			}
+		}
+	}
+	return "node_repl.js"
+}
+
+// mcpNodeREPLMeaningfulOutput extracts the meaningful output of a successful
+// node_repl.js execution (Rust #38044): the portion after "Script completed /
+// Output:" or the "output" field of a zero-exit-code NodeReplExecOutput JSON
+// payload. The second result reports whether the block is a node_repl
+// structured result at all.
+func mcpNodeREPLMeaningfulOutput(text string) (string, bool) {
+	if strings.HasPrefix(text, "Script completed\n") {
+		if _, after, ok := strings.Cut(text, "\nOutput:\n"); ok {
+			return after, true
+		}
+		return "", false
+	}
+	var output struct {
+		ExitCode int    `json:"exit_code"`
+		Output   string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(text), &output); err == nil && output.ExitCode == 0 {
+		return output.Output, true
+	}
+	return "", false
 }
 
 func NewCompletedMcpToolCallWithImageOutput() PlainHistoryCell {

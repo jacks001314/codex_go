@@ -116,7 +116,13 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string) []string {
 		if len(rows) > 1 {
 			lines = append(lines, "  "+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
 		}
-		for _, line := range RenderFileChange(row.Change, wrapCols-4) {
+		// Saturate the content width so extremely narrow terminals stay
+		// renderable (Rust #38075).
+		contentWidth := wrapCols - 4
+		if contentWidth < 0 {
+			contentWidth = 0
+		}
+		for _, line := range RenderFileChange(row.Change, contentWidth) {
 			lines = append(lines, "    "+line)
 		}
 	}
@@ -128,7 +134,7 @@ func RenderLineCountSummary(added int, removed int) string {
 }
 
 func RenderFileChange(change FileChange, width int) []string {
-	if width <= 0 {
+	if width < 0 {
 		width = 80
 	}
 	switch change.Type {
