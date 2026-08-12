@@ -63,6 +63,10 @@ func runInteractiveLocalReview(ctx context.Context, state *codextui.State, inter
 		return
 	}
 	defer router.Close()
+	if err := initializeLocalTUIConnection(router.Handle, interactiveReviewConnectionID); err != nil {
+		messages <- codextea.ReviewStartResultMsg{Target: reviewChatTarget(params.Target), Err: err}
+		return
+	}
 
 	completed := make(chan struct{}, 1)
 	client := &remoteAppServerTUIClient{state: state, messages: messages}
@@ -107,7 +111,7 @@ func localReviewStart(router interactiveReviewRouter, params review.StartParams)
 	}
 	response := router.Handle(&appserver.Request{
 		JSONRPC:      "2.0",
-		ID:           appserver.IntID(1),
+		ID:           appserver.IntID(2),
 		Method:       appserver.MethodReviewStart,
 		Params:       raw,
 		ConnectionID: interactiveReviewConnectionID,
@@ -138,7 +142,7 @@ func localReviewInterrupt(router interactiveReviewRouter, threadID string, turnI
 	}
 	response := router.Handle(&appserver.Request{
 		JSONRPC:      "2.0",
-		ID:           appserver.IntID(2),
+		ID:           appserver.IntID(3),
 		Method:       appserver.MethodTurnInterrupt,
 		Params:       raw,
 		ConnectionID: interactiveReviewConnectionID,

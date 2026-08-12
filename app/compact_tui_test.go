@@ -35,6 +35,8 @@ func (r *interactiveCompactRouterStub) Close() error {
 func (r *interactiveCompactRouterStub) Handle(request *appserver.Request) *appserver.Response {
 	r.methods = append(r.methods, request.Method)
 	switch request.Method {
+	case appserver.MethodInitialize:
+		return appserver.OK(request.ID, &appserver.InitializeResponse{})
 	case appserver.MethodThreadResume:
 		r.loaded = true
 		return appserver.OK(request.ID, &appserver.ThreadResumeResponse{})
@@ -82,7 +84,7 @@ func TestInteractiveLocalCompactCommandResumesAndStreamsActivity(t *testing.T) {
 	if !sawStarted || !sawCompleted || !sawResult {
 		t.Fatalf("compact stream started=%v completed=%v result=%v", sawStarted, sawCompleted, sawResult)
 	}
-	if len(router.methods) != 2 || router.methods[0] != appserver.MethodThreadResume || router.methods[1] != appserver.MethodThreadCompactStart {
+	if len(router.methods) != 3 || router.methods[0] != appserver.MethodInitialize || router.methods[1] != appserver.MethodThreadResume || router.methods[2] != appserver.MethodThreadCompactStart {
 		t.Fatalf("compact methods = %#v", router.methods)
 	}
 }

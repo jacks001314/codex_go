@@ -32,7 +32,10 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 			return nil, errors.New("thread/goal/get failed in TUI: app-server is unavailable")
 		}
 		defer router.Close()
-		response, err := localGoalRequest(router, appserver.IntID(1), appserver.MethodThreadGoalGet, appserver.GoalGetParams{ThreadID: strings.TrimSpace(threadID)})
+		if err := initializeLocalTUIConnection(router.Handle, interactiveGoalConnectionID); err != nil {
+			return nil, err
+		}
+		response, err := localGoalRequest(router, appserver.IntID(2), appserver.MethodThreadGoalGet, appserver.GoalGetParams{ThreadID: strings.TrimSpace(threadID)})
 		if err != nil {
 			return nil, err
 		}
@@ -48,6 +51,9 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 			return appserver.Goal{}, errors.New("thread/goal/set failed in TUI: app-server is unavailable")
 		}
 		defer router.Close()
+		if err := initializeLocalTUIConnection(router.Handle, interactiveGoalConnectionID); err != nil {
+			return appserver.Goal{}, err
+		}
 		params := appserver.GoalSetParams{
 			ThreadID:    strings.TrimSpace(threadID),
 			Objective:   trimStringPtrRemote(objective),
@@ -57,7 +63,7 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 		if tokenBudget != nil {
 			params.TokenBudgetSet = true
 		}
-		response, err := localGoalRequest(router, appserver.IntID(2), appserver.MethodThreadGoalSet, params)
+		response, err := localGoalRequest(router, appserver.IntID(3), appserver.MethodThreadGoalSet, params)
 		if err != nil {
 			return appserver.Goal{}, err
 		}
@@ -73,7 +79,10 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 			return false, errors.New("thread/goal/clear failed in TUI: app-server is unavailable")
 		}
 		defer router.Close()
-		response, err := localGoalRequest(router, appserver.IntID(3), appserver.MethodThreadGoalClear, appserver.GoalClearParams{ThreadID: strings.TrimSpace(threadID)})
+		if err := initializeLocalTUIConnection(router.Handle, interactiveGoalConnectionID); err != nil {
+			return false, err
+		}
+		response, err := localGoalRequest(router, appserver.IntID(4), appserver.MethodThreadGoalClear, appserver.GoalClearParams{ThreadID: strings.TrimSpace(threadID)})
 		if err != nil {
 			return false, err
 		}

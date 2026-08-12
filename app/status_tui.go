@@ -22,13 +22,16 @@ func interactiveLocalRateLimitsReader() func() ([]codextui.RateLimitStatus, erro
 	return func() ([]codextui.RateLimitStatus, error) {
 		router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
 		defer router.Close()
+		if err := initializeLocalTUIConnection(router.Handle, interactiveStatusConnectionID); err != nil {
+			return nil, err
+		}
 		raw, err := json.Marshal(map[string]any{})
 		if err != nil {
 			return nil, err
 		}
 		response := router.Handle(&appserver.Request{
 			JSONRPC:      "2.0",
-			ID:           appserver.IntID(1),
+			ID:           appserver.IntID(2),
 			Method:       appserver.MethodGetAccountRateLimits,
 			Params:       raw,
 			ConnectionID: interactiveStatusConnectionID,

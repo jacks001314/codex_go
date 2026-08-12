@@ -53,6 +53,10 @@ func runInteractiveLocalCompact(ctx context.Context, state *codextui.State, fact
 		return
 	}
 	defer router.Close()
+	if err := initializeLocalTUIConnection(router.Handle, interactiveCompactConnectionID); err != nil {
+		messages <- codextea.CompactStartResultMsg{Err: err}
+		return
+	}
 	if err := localCompactEnsureThreadLoaded(router, threadID); err != nil {
 		messages <- codextea.CompactStartResultMsg{Err: err}
 		return
@@ -72,11 +76,11 @@ func runInteractiveLocalCompact(ctx context.Context, state *codextui.State, fact
 }
 
 func localCompactEnsureThreadLoaded(router interactiveCompactRouter, threadID string) error {
-	return localCompactRequest(router, appserver.IntID(1), appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)})
+	return localCompactRequest(router, appserver.IntID(2), appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)})
 }
 
 func localCompactStart(router interactiveCompactRouter, threadID string) error {
-	return localCompactRequest(router, appserver.IntID(2), appserver.MethodThreadCompactStart, appserver.ThreadCompactStartParams{ThreadID: strings.TrimSpace(threadID)})
+	return localCompactRequest(router, appserver.IntID(3), appserver.MethodThreadCompactStart, appserver.ThreadCompactStartParams{ThreadID: strings.TrimSpace(threadID)})
 }
 
 func localCompactRequest(router interactiveCompactRouter, id appserver.RequestID, method appserver.Method, params any) error {

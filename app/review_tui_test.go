@@ -34,6 +34,8 @@ func (r *interactiveReviewRouterStub) Close() error {
 
 func (r *interactiveReviewRouterStub) Handle(request *appserver.Request) *appserver.Response {
 	switch request.Method {
+	case appserver.MethodInitialize:
+		return appserver.OK(request.ID, &appserver.InitializeResponse{})
 	case appserver.MethodReviewStart:
 		r.notify(appserver.NotificationItemStarted, &appserver.ItemStartedNotification{
 			ThreadID: "thread-review", TurnID: "review-turn",
