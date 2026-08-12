@@ -14611,6 +14611,86 @@ func TestSkillMCPDependencyPromptOnlyForSelectedSkillAndDedupesLikeRust(t *testi
 	}
 }
 
+func TestSkillMCPDependencyPromptSkippedWhenApprovalPolicyNeverLikeRust(t *testing.T) {
+	// Rust 95aada11c4 (#38205): when the approval policy is `never` (and the
+	// install is not full-access auto-approved), missing skill MCP
+	// dependencies must not prompt and must not install.
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "never-skill")
+	configService := config.NewConfigService(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+	})
+	requestCount := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method == ServerRequestToolUserInput {
+			requestCount++
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{"approval_policy": "never"}}
+	params := &turn.TurnStartParams{
+		CWD:            t.TempDir(),
+		Originator:     "codex_cli_rs",
+		ApprovalPolicy: "never",
+		Input:          []turn.TurnUserInput{{Type: "skill", Name: "never-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-never", "turn-never", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("dependency prompt count = %d, want 0 (approval policy never)", requestCount)
+	}
+	read, err := configService.Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Config.Read() error = %v", err)
+	}
+	if _, ok := read.Config["mcp_servers"]; ok {
+		t.Fatalf("mcp_servers written despite approval policy never: %#v", read.Config["mcp_servers"])
+	}
+}
+
+func TestSkillMCPDependencyAutoInstalledWhenApprovalPolicyNeverFullAccessLikeRust(t *testing.T) {
+	// Rust 95aada11c4 (#38205): the full-access auto-approve check runs before
+	// the never check, so never + full-access still installs without a prompt.
+	skillsRoot := t.TempDir()
+	skillPath := writeSkillWithMCPDependencyForTest(t, skillsRoot, "full-access-skill")
+	configService := config.NewConfigService(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		Skills: NewSkillsService([]string{skillsRoot}),
+		Config: configService,
+		MCP:    mcp.NewMCPService(nil),
+	})
+	requestCount := 0
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method == ServerRequestToolUserInput {
+			requestCount++
+		}
+	}))
+	cfg := &config.Config{Values: map[string]any{"approval_policy": "never"}}
+	params := &turn.TurnStartParams{
+		CWD:            t.TempDir(),
+		Originator:     "codex_cli_rs",
+		ApprovalPolicy: "never",
+		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
+		Input:          []turn.TurnUserInput{{Type: "skill", Name: "full-access-skill", Path: skillPath}},
+	}
+	if _, _, _, err := router.instructionsWithSkillsContextForTurn(context.Background(), "thread-full", "turn-full", cfg, params, ""); err != nil {
+		t.Fatalf("instructions error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("dependency prompt count = %d, want 0 (full access auto-installs)", requestCount)
+	}
+	read, err := configService.Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Config.Read() error = %v", err)
+	}
+	servers, ok := read.Config["mcp_servers"].(map[string]any)
+	if !ok || servers["docs"] == nil {
+		t.Fatalf("mcp_servers not auto-installed under full access: %#v", read.Config["mcp_servers"])
+	}
+}
+
 func TestSkillMCPDependencyInstallPersistsGlobalConfigLikeRust(t *testing.T) {
 	home := t.TempDir()
 	skillsRoot := t.TempDir()

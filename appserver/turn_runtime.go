@@ -7813,6 +7813,13 @@ func (r *RuntimeRouter) maybePromptAndInstallSkillMCPDependencies(ctx context.Co
 		return
 	}
 	install := skillMCPDependencyPromptAutoApproved(cfg, params)
+	if !install && turnApprovalPolicyForTurn(cfg, params) == sandbox.ApprovalNever {
+		// Rust 95aada11c4 (#38205): when the approval policy is `never`,
+		// skip the prompt for missing skill MCP dependencies entirely (do not
+		// prompt, do not install). Full-access auto-approval above still
+		// installs without a prompt.
+		return
+	}
 	if !install {
 		question := ToolRequestUserInputQuestion{
 			ID:       skillMCPDependencyPromptID,

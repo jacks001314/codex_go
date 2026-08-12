@@ -2760,6 +2760,25 @@ func TestEffectiveExecApprovalPolicyHonorsExplicitInteractivePolicy(t *testing.T
 	}
 }
 
+func TestEffectiveExecApprovalPolicyReviewForcesNeverLikeRust(t *testing.T) {
+	// Rust tasks/review.rs + 95aada11c4 (#38205): review delegates always run
+	// with approval policy `never`, rejecting any prompt-capable policy.
+	req := &Request{
+		Exec: cli.ExecOptions{
+			Subcommand: "review",
+			Shared:     cli.SharedOptions{ApprovalPolicy: string(sandbox.ApprovalOnRequest)},
+		},
+		Root: cli.RootOptions{Shared: cli.SharedOptions{ApprovalPolicy: string(sandbox.ApprovalGranular)}},
+	}
+	cfg := &config.Config{Values: map[string]any{
+		"approval_policy":    string(sandbox.ApprovalOnRequest),
+		"approvals_reviewer": string(config.ApprovalsReviewerAutoReview),
+	}}
+	if got := effectiveExecApprovalPolicy(cfg, req); got != sandbox.ApprovalNever {
+		t.Fatalf("review approval policy = %q, want never", got)
+	}
+}
+
 func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 	runner := NewLocalRunner(t.TempDir())
 	req := &Request{Exec: cli.ExecOptions{Prompt: "hello"}}

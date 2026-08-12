@@ -1295,6 +1295,13 @@ func sandboxPermissionProfile(resolution *config.SandboxPermissionProfileResolut
 }
 
 func effectiveExecApprovalPolicy(cfg *config.Config, req *Request) sandbox.AskForApproval {
+	if req != nil && req.Exec.Subcommand == "review" {
+		// Rust tasks/review.rs + 95aada11c4 (#38205): review delegates run
+		// with approval policy `never`; approval-requiring commands are denied
+		// inside the delegate instead of prompting or forwarding to the
+		// parent session.
+		return sandbox.ApprovalNever
+	}
 	if req != nil && (req.Exec.Shared.DangerouslyBypassApprovalsAndSandbox ||
 		req.Root.Shared.DangerouslyBypassApprovalsAndSandbox) {
 		return sandbox.ApprovalNever
