@@ -17,6 +17,45 @@ import (
 	"codex_go/tool"
 )
 
+func TestImageGenerationUsageLimitFailureDetectionLikeRust(t *testing.T) {
+	failure := imageGenerationUsageLimitFailure([]byte(`{"error":{"message":"usage limit","limit_id":"image_gen","resets_at":1786000000}}`))
+	if failure == nil {
+		t.Fatal("failure = nil, want usageLimitExceeded")
+	}
+	if failure["type"] != "usageLimitExceeded" || failure["limitId"] != "image_gen" {
+		t.Fatalf("failure = %#v", failure)
+	}
+	resetsAt, ok := failure["resetsAt"].(*int64)
+	if !ok || resetsAt == nil || *resetsAt != 1786000000 {
+		t.Fatalf("resetsAt = %#v", failure["resetsAt"])
+	}
+	// Non-image limits and malformed bodies are not treated as failures.
+	if got := imageGenerationUsageLimitFailure([]byte(`{"error":{"limit_id":"other"}}`)); got != nil {
+		t.Fatalf("other limit failure = %#v, want nil", got)
+	}
+	if got := imageGenerationUsageLimitFailure([]byte(`not json`)); got != nil {
+		t.Fatalf("malformed failure = %#v, want nil", got)
+	}
+}
+
+func TestImageGenerationErrorOutputCarriesUsageLimitFailure(t *testing.T) {
+	invocation := &tool.Invocation{ToolName: tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName)}
+	output := imageGenerationErrorOutput(invocation, "draw x", "image generation failed: usage limit",
+		map[string]any{"type": "usageLimitExceeded", "limitId": "image_gen", "resetsAt": int64(1786000000)})
+	if output.Success {
+		t.Fatal("output should be a failure")
+	}
+	failure, ok := output.Data["failure"].(map[string]any)
+	if !ok || failure["type"] != "usageLimitExceeded" || failure["limitId"] != "image_gen" {
+		t.Fatalf("failure = %#v", output.Data["failure"])
+	}
+	// Without a failure the data has no failure key.
+	plain := imageGenerationErrorOutput(invocation, "draw x", "boom")
+	if _, ok := plain.Data["failure"]; ok {
+		t.Fatalf("unexpected failure in plain error output: %#v", plain.Data)
+	}
+}
+
 func TestBuildToolRegistryRegistersStandaloneImageGenerationTool(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false

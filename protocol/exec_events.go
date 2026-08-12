@@ -199,6 +199,18 @@ func PlanDelta(itemID, text string) ThreadEvent {
 	return ThreadEvent{Type: "item.plan.delta", Delta: &Delta{ItemID: itemID, Text: text}}
 }
 
+// ImageGenerationFailure mirrors the Rust ImageGenerationFailure enum
+// (Rust #38024): the wire shape is a tagged object with type "usageLimitExceeded".
+type ImageGenerationFailure struct {
+	Type     string `json:"type"`
+	LimitID  string `json:"limitId"`
+	ResetsAt *int64 `json:"resetsAt"`
+}
+
+func UsageLimitExceededFailure(limitID string, resetsAt *int64) ImageGenerationFailure {
+	return ImageGenerationFailure{Type: "usageLimitExceeded", LimitID: limitID, ResetsAt: resetsAt}
+}
+
 func ImageGenerationItem(id string, status string, revisedPrompt string, savedPath string, transparentBackground ...*bool) ThreadItem {
 	var transparent *bool
 	if len(transparentBackground) > 0 {

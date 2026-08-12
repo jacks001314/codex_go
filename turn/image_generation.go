@@ -64,6 +64,20 @@ type imageGenerationRequest struct {
 	edit     codexapi.ImageEditRequest
 }
 
+// imageGenerationAPIError carries the usage-limit failure (if any) alongside
+// the API error message (Rust #38024).
+type imageGenerationAPIError struct {
+	message string
+	failure map[string]any
+}
+
+func (e *imageGenerationAPIError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
 func NewImageGenerationHandler(options *ImageGenerationOptions) *ImageGenerationHandler {
 	if options == nil {
 		options = &ImageGenerationOptions{}
@@ -103,7 +117,12 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	}
 	result, transparentBackground, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
-		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation failed: "+err.Error()), nil
+		var apiErr *imageGenerationAPIError
+		failure := map[string]any(nil)
+		if errors.As(err, &apiErr) {
+			failure = apiErr.failure
+		}
+		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation failed: "+err.Error(), failure), nil
 	}
 	result = strings.TrimSpace(result)
 	if result == "" {
@@ -315,6 +334,9 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 		if message == "" {
 			message = resp.Status
 		}
+		if failure := imageGenerationUsageLimitFailure(respBody); failure != nil {
+			return nil, &imageGenerationAPIError{message: message, failure: failure}
+		}
 		return nil, errors.New(message)
 	}
 	var decoded codexapi.ImageResponse
@@ -346,12 +368,32 @@ func (h *ImageGenerationHandler) sessionID() string {
 	return "session"
 }
 
-func imageGenerationErrorOutput(invocation *tool.Invocation, prompt string, message string) *tool.Output {
+func imageGenerationUsageLimitFailure(body []byte) map[string]any {
+	var payload struct {
+		Error struct {
+			LimitID  string `json:"limit_id"`
+			ResetsAt *int64 `json:"resets_at"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Error.LimitID != "image_gen" {
+		return nil
+	}
+	return map[string]any{
+		"type":     "usageLimitExceeded",
+		"limitId":  payload.Error.LimitID,
+		"resetsAt": payload.Error.ResetsAt,
+	}
+}
+
+func imageGenerationErrorOutput(invocation *tool.Invocation, prompt string, message string, failures ...map[string]any) *tool.Output {
 	data := map[string]any{
 		"image_generation": true,
 		"status":           "failed",
 		"revisedPrompt":    strings.TrimSpace(prompt),
 		"revised_prompt":   strings.TrimSpace(prompt),
+	}
+	if len(failures) > 0 && failures[0] != nil {
+		data["failure"] = failures[0]
 	}
 	return &tool.Output{
 		CallID:      invocation.CallID,

@@ -2398,7 +2398,15 @@ func protocolImageGenerationItemFromAgentItem(item *model.AgentItem) protocol.Th
 	revisedPrompt := firstNonEmpty(execStringFromAny(data["revisedPrompt"]), execStringFromAny(data["revised_prompt"]))
 	savedPath := firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"]))
 	transparentBackground := execBoolPtrFromAny(firstExecAny(data, "transparentBackground", "transparent_background"))
-	return protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground)
+	built := protocol.ImageGenerationItem(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground)
+	// Rust #38024: usage-limit failures ride on the item as a typed failure.
+	if failure := data["failure"]; failure != nil {
+		if built.Metadata == nil {
+			built.Metadata = map[string]any{}
+		}
+		built.Metadata["failure"] = failure
+	}
+	return built
 }
 
 func firstExecAny(data map[string]any, keys ...string) any {
