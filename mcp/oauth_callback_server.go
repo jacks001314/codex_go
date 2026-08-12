@@ -31,6 +31,9 @@ type OAuthLoginServerOptions struct {
 	Store                 *OAuthStore
 	HTTPClient            *http.Client
 	Timeout               time.Duration
+	ClientRegistration    MCPServerOauthClientRegistration
+	CIMDAdvertised        *bool
+	PublicClientAuth      *bool
 }
 
 type OAuthLoginServerResult struct {
@@ -88,6 +91,10 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		Resource:              options.Resource,
 		Scopes:                options.Scopes,
 		State:                 options.State,
+		ClientRegistration:    options.ClientRegistration,
+		CallbackID:            callbackID,
+		CIMDAdvertised:        options.CIMDAdvertised,
+		PublicClientAuth:      options.PublicClientAuth,
 	}, options.HTTPClient)
 	if err != nil {
 		_ = listener.Close()

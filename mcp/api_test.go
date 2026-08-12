@@ -783,11 +783,12 @@ func TestMCPServerOauthClientRegistrationValidation(t *testing.T) {
 		t.Fatalf("bogus clientRegistration error = %v", err)
 	}
 	cimd := MCPServerOauthClientRegistrationCimd
-	if _, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &cimd}); err == nil || !strings.Contains(err.Error(), "cimd") {
-		t.Fatalf("cimd clientRegistration error = %v", err)
+	value, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &cimd})
+	if err != nil || value != MCPServerOauthClientRegistrationCimd {
+		t.Fatalf("cimd clientRegistration = %q/%v, want cimd (Rust #38089)", value, err)
 	}
 	dcr := MCPServerOauthClientRegistration("Dcr")
-	value, err := mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &dcr})
+	value, err = mcpServerOauthClientRegistration(&MCPServerOauthLoginParams{ClientRegistration: &dcr})
 	if err != nil || value != MCPServerOauthClientRegistrationDcr {
 		t.Fatalf("Dcr clientRegistration = %q/%v, want dcr", value, err)
 	}

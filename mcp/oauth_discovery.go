@@ -22,20 +22,24 @@ const (
 )
 
 type StreamableHTTPOAuthDiscovery struct {
-	AuthorizationEndpoint string
-	TokenEndpoint         string
-	RegistrationEndpoint  string
-	ScopesSupported       []string
-	Resource              string
-	AuthorizationServer   string
+	AuthorizationEndpoint             string
+	TokenEndpoint                     string
+	RegistrationEndpoint              string
+	ScopesSupported                   []string
+	Resource                          string
+	AuthorizationServer               string
+	ClientIDMetadataDocumentSupported bool
+	PublicClientTokenAuthSupported    bool
 }
 
 type oauthAuthorizationServerMetadata struct {
-	Issuer                string   `json:"issuer"`
-	AuthorizationEndpoint string   `json:"authorization_endpoint"`
-	TokenEndpoint         string   `json:"token_endpoint"`
-	RegistrationEndpoint  string   `json:"registration_endpoint"`
-	ScopesSupported       []string `json:"scopes_supported"`
+	Issuer                            string   `json:"issuer"`
+	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
+	TokenEndpoint                     string   `json:"token_endpoint"`
+	RegistrationEndpoint              string   `json:"registration_endpoint"`
+	ScopesSupported                   []string `json:"scopes_supported"`
+	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 }
 
 type oauthProtectedResourceMetadata struct {
@@ -400,12 +404,23 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		authorizationServer = strings.TrimSpace(serverURL)
 	}
 	return &StreamableHTTPOAuthDiscovery{
-		AuthorizationEndpoint: strings.TrimSpace(metadata.AuthorizationEndpoint),
-		TokenEndpoint:         strings.TrimSpace(metadata.TokenEndpoint),
-		RegistrationEndpoint:  strings.TrimSpace(metadata.RegistrationEndpoint),
-		ScopesSupported:       normalizeMCPOAuthScopes(metadata.ScopesSupported),
-		AuthorizationServer:   authorizationServer,
+		AuthorizationEndpoint:             strings.TrimSpace(metadata.AuthorizationEndpoint),
+		TokenEndpoint:                     strings.TrimSpace(metadata.TokenEndpoint),
+		RegistrationEndpoint:              strings.TrimSpace(metadata.RegistrationEndpoint),
+		ScopesSupported:                   normalizeMCPOAuthScopes(metadata.ScopesSupported),
+		AuthorizationServer:               authorizationServer,
+		ClientIDMetadataDocumentSupported: metadata.ClientIDMetadataDocumentSupported,
+		PublicClientTokenAuthSupported:    metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
 	}
+}
+
+func metadataHasPublicClientTokenAuth(methods []string) bool {
+	for _, method := range methods {
+		if method == "none" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeMCPOAuthScopes(scopes []string) []string {

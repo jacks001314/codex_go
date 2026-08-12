@@ -117,6 +117,8 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		Store:                 store,
 		HTTPClient:            client,
 		Timeout:               timeout,
+		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
+		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
 	})
 	if err != nil {
 		return err

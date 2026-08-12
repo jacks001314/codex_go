@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -26,6 +27,10 @@ type OAuthLoginSessionOptions struct {
 	Resource              string
 	Scopes                []string
 	State                 string
+	ClientRegistration    MCPServerOauthClientRegistration
+	CallbackID            string
+	CIMDAdvertised        *bool
+	PublicClientAuth      *bool
 }
 
 type OAuthLoginSession struct {
@@ -129,6 +134,41 @@ func NewOAuthLoginSessionWithClientRegistration(ctx context.Context, options *OA
 	if strings.TrimSpace(options.ClientID) != "" {
 		return NewOAuthLoginSession(options)
 	}
+	registration := options.ClientRegistration
+	if registration == "" {
+		registration = MCPServerOauthClientRegistrationAuto
+	}
+	callbackID := strings.TrimSpace(options.CallbackID)
+	if registration == MCPServerOauthClientRegistrationAuto || registration == MCPServerOauthClientRegistrationCimd {
+		cimdAdvertised := false
+		publicClientAuthSupported := false
+		if options.CIMDAdvertised != nil && options.PublicClientAuth != nil {
+			cimdAdvertised = *options.CIMDAdvertised
+			publicClientAuthSupported = *options.PublicClientAuth
+		} else {
+			var err error
+			cimdAdvertised, publicClientAuthSupported, err = mcpOAuthMetadataCIMDFlags(ctx, client, options.ServerURL)
+			if err != nil && registration == MCPServerOauthClientRegistrationCimd {
+				return nil, err
+			}
+		}
+		nativeRedirect := mcpOAuthNativeRedirectSupported(options.RedirectURL, callbackID)
+		offerCIMD := cimdAdvertised && publicClientAuthSupported && nativeRedirect
+		if registration == MCPServerOauthClientRegistrationCimd {
+			if !cimdAdvertised || !publicClientAuthSupported {
+				return nil, errors.New("MCP authorization server does not advertise CIMD with token endpoint auth method `none`")
+			}
+			if !nativeRedirect {
+				return nil, fmt.Errorf("MCP OAuth CIMD requires an ephemeral loopback callback at `/callback/%s`", callbackID)
+			}
+		}
+		if offerCIMD {
+			return newOAuthLoginSessionCIMD(options)
+		}
+	}
+	if registration == MCPServerOauthClientRegistrationDcr && strings.TrimSpace(options.RegistrationEndpoint) == "" {
+		return nil, errors.New("MCP OAuth login requires dynamic client registration (clientRegistration=dcr), but the server does not advertise a registration endpoint")
+	}
 	if strings.TrimSpace(options.RegistrationEndpoint) == "" {
 		return NewOAuthLoginSession(options)
 	}
@@ -145,6 +185,103 @@ func NewOAuthLoginSessionWithClientRegistration(ctx context.Context, options *OA
 	cloned.ClientID = registered.ClientID
 	cloned.ClientSecret = registered.ClientSecret
 	return NewOAuthLoginSession(&cloned)
+}
+
+// newOAuthLoginSessionCIMD builds a login session for the native Client ID
+// Metadata Document flow: the client identifier is the ChatGPT-hosted Codex
+// metadata document URL and the authorization request carries it explicitly
+// (Rust #38089, draft-ietf-oauth-client-id-metadata-document).
+func newOAuthLoginSessionCIMD(options *OAuthLoginSessionOptions) (*OAuthLoginSession, error) {
+	if options == nil {
+		return nil, errors.New("MCP OAuth login session options are required")
+	}
+	callbackID := strings.TrimSpace(options.CallbackID)
+	if callbackID == "" {
+		return nil, errors.New("MCP OAuth CIMD requires a callback id")
+	}
+	clientMetadataURL := fmt.Sprintf("https://chatgpt.com/oauth/codex/%s/client.json", callbackID)
+	cloned := *options
+	cloned.ClientID = clientMetadataURL
+	session, err := NewOAuthLoginSession(&cloned)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(session.AuthorizationURL)
+	if err != nil {
+		return nil, err
+	}
+	query := parsed.Query()
+	query.Set("client_metadata_url", clientMetadataURL)
+	parsed.RawQuery = query.Encode()
+	session.AuthorizationURL = parsed.String()
+	return session, nil
+}
+
+// mcpOAuthMetadataCIMDFlags reports whether the authorization server
+// advertises Client ID Metadata Documents with public-client token auth.
+func mcpOAuthMetadataCIMDFlags(ctx context.Context, client *http.Client, serverURL string) (bool, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	candidates, err := mcpOAuthAuthorizationServerMetadataURLs(serverURL)
+	if err != nil {
+		return false, false, err
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		var metadata oauthAuthorizationServerMetadata
+		ok, err := fetchMCPOAuthMetadata(ctx, client, candidate, &metadata)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !ok {
+			continue
+		}
+		publicClient := false
+		for _, method := range metadata.TokenEndpointAuthMethodsSupported {
+			if method == "none" {
+				publicClient = true
+				break
+			}
+		}
+		return metadata.ClientIDMetadataDocumentSupported, publicClient, nil
+	}
+	if lastErr != nil {
+		return false, false, lastErr
+	}
+	return false, false, errors.New("MCP OAuth authorization server metadata not found")
+}
+
+// mcpOAuthNativeRedirectSupported validates the ephemeral loopback callback
+// shape required by the CIMD flow (Rust #38089).
+func mcpOAuthNativeRedirectSupported(redirectURL string, callbackID string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(redirectURL))
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "127.0.0.1" && host != "localhost" {
+		return false
+	}
+	port := parsed.Port()
+	if port == "" {
+		return false
+	}
+	if portValue, err := strconv.Atoi(port); err != nil || portValue <= 0 {
+		return false
+	}
+	callbackID = strings.TrimSpace(callbackID)
+	if callbackID == "" || parsed.Path != "/callback/"+callbackID {
+		return false
+	}
+	return parsed.RawQuery == "" && parsed.Fragment == "" && parsed.User == nil
 }
 
 func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string, client *OAuthTokenClient, serverName string) (*OAuthTokenSet, error) {

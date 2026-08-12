@@ -1438,12 +1438,6 @@ func mcpServerOauthClientRegistration(params *MCPServerOauthLoginParams) (MCPSer
 	if !value.Valid() {
 		return MCPServerOauthClientRegistrationAuto, invalidMCPRequest("clientRegistration must be one of: auto, cimd, dcr")
 	}
-	if value == MCPServerOauthClientRegistrationCimd {
-		// Rust 4c89139da9 adds a native CIMD client-metadata-document flow; the
-		// Go OAuth client has no CIMD flow yet, so reject explicitly instead of
-		// silently performing DCR.
-		return MCPServerOauthClientRegistrationAuto, invalidMCPRequest("MCP OAuth clientRegistration `cimd` is not supported by the Go client yet")
-	}
 	return value, nil
 }
 
@@ -1478,6 +1472,10 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 	if s == nil || config == nil || params == nil || strings.TrimSpace(config.URL) == "" {
 		return "", false
 	}
+	registration, err := mcpServerOauthClientRegistration(params)
+	if err != nil {
+		return "", false
+	}
 	store := s.oauthStoreForConfig(config)
 	if store == nil {
 		return "", false
@@ -1505,6 +1503,9 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		Store:                 store,
 		HTTPClient:            client,
 		Timeout:               callbackTimeout,
+		ClientRegistration:    registration,
+		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
+		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
 	})
 	if err != nil {
 		return "", false

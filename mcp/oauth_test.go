@@ -22,6 +22,72 @@ func (f oauthRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, er
 	return f(request)
 }
 
+func TestOAuthLoginSessionCIMDFlowLikeRust(t *testing.T) {
+	// Forced CIMD requires an advertised metadata document + public client
+	// token auth + a native loopback callback.
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/.well-known/oauth-authorization-server/mcp") {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"issuer":                                "https://issuer.example.test",
+			"authorization_endpoint":                "https://issuer.example.test/authorize",
+			"token_endpoint":                        "https://issuer.example.test/token",
+			"client_id_metadata_document_supported": true,
+			"token_endpoint_auth_methods_supported": []string{"client_secret_post", "none"},
+		})
+	}))
+	defer issuer.Close()
+
+	session, err := NewOAuthLoginSessionWithClientRegistration(context.Background(), &OAuthLoginSessionOptions{
+		ServerURL:             issuer.URL + "/mcp",
+		AuthorizationEndpoint: "https://issuer.example.test/authorize",
+		TokenEndpoint:         "https://issuer.example.test/token",
+		RedirectURL:           "http://127.0.0.1:43210/callback/abc123",
+		Scopes:                []string{"read"},
+		ClientRegistration:    MCPServerOauthClientRegistrationCimd,
+		CallbackID:            "abc123",
+	}, issuer.Client())
+	if err != nil {
+		t.Fatalf("CIMD session error = %v", err)
+	}
+	if session.ClientID != "https://chatgpt.com/oauth/codex/abc123/client.json" {
+		t.Fatalf("CIMD client id = %q", session.ClientID)
+	}
+	parsed, err := url.Parse(session.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("client_metadata_url"); got != "https://chatgpt.com/oauth/codex/abc123/client.json" {
+		t.Fatalf("client_metadata_url = %q", got)
+	}
+
+	// Forced CIMD without an advertised document is an error.
+	plainIssuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/.well-known/oauth-authorization-server/mcp") {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"issuer":                 "https://plain.example.test",
+			"authorization_endpoint": "https://plain.example.test/authorize",
+			"token_endpoint":         "https://plain.example.test/token",
+		})
+	}))
+	defer plainIssuer.Close()
+	if _, err := NewOAuthLoginSessionWithClientRegistration(context.Background(), &OAuthLoginSessionOptions{
+		ServerURL:             plainIssuer.URL + "/mcp",
+		AuthorizationEndpoint: "https://plain.example.test/authorize",
+		TokenEndpoint:         "https://plain.example.test/token",
+		RedirectURL:           "http://127.0.0.1:43210/callback/abc123",
+		ClientRegistration:    MCPServerOauthClientRegistrationCimd,
+		CallbackID:            "abc123",
+	}, plainIssuer.Client()); err == nil || !strings.Contains(err.Error(), "does not advertise CIMD") {
+		t.Fatalf("forced CIMD without advertisement error = %v", err)
+	}
+}
+
 func TestOAuthStoreSaveLoadStatusAndDelete(t *testing.T) {
 	home := t.TempDir()
 	store := NewOAuthStore(home)
