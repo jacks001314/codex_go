@@ -81,7 +81,7 @@ func TestPackagedDefaultsLowestPrecedenceAndMissingFileError(t *testing.T) {
 	}
 }
 
-func TestPackagedDefaultsLayerSourceWireShape(t *testing.T) {
+func TestPackagedDefaultsLayerSourceWireShapeAndRPCHiddenLikeRust(t *testing.T) {
 	home := t.TempDir()
 	packagedPath := filepath.Join(home, "packaged.toml")
 	if err := os.WriteFile(packagedPath, []byte("model = \"packaged-model\"\n"), 0o600); err != nil {
@@ -98,12 +98,11 @@ func TestPackagedDefaultsLayerSourceWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(read.Layers) < 2 {
-		t.Fatalf("layers = %d, want packaged defaults + user", len(read.Layers))
-	}
-	packaged := read.Layers[0]
-	if packaged.Name.Type != LayerSourcePackagedDefaults || packaged.Name.File != packagedPath {
-		t.Fatalf("first layer = %+v, want packagedDefaults %s", packaged.Name, packagedPath)
+	// Rust #38179: the packaged-defaults layer is filtered out of the config
+	// RPC layer list and origins (it contributes to the effective config but
+	// is not surfaced as a layer).
+	if len(read.Layers) != 1 || read.Layers[0].Name.Type != LayerSourceUser {
+		t.Fatalf("layers = %+v, want only the user layer (packaged defaults hidden)", read.Layers)
 	}
 	if got := read.Origins["model"].Name.Type; got != LayerSourceUser {
 		t.Fatalf("model origin = %v, want user (packaged defaults are overridden)", got)
@@ -111,18 +110,110 @@ func TestPackagedDefaultsLayerSourceWireShape(t *testing.T) {
 	if got := read.Config["model"]; got != "user-model" {
 		t.Fatalf("effective model = %v, want user-model", got)
 	}
-	data, err := json.Marshal(packaged.Name)
+	packagedSource := LayerSource{Type: LayerSourcePackagedDefaults, File: packagedPath}
+	data, err := json.Marshal(packagedSource)
 	if err != nil {
 		t.Fatalf("Marshal(layer source) error = %v", err)
 	}
 	if !strings.Contains(string(data), "\"type\":\"packagedDefaults\"") || !strings.Contains(string(data), "\"file\":") {
 		t.Fatalf("wire shape = %s, want packagedDefaults type + file", data)
 	}
-	if got := packaged.Name.Precedence(); got != -10 {
+	if got := packagedSource.Precedence(); got != -10 {
 		t.Fatalf("packaged defaults precedence = %d, want -10", got)
+	}
+	// The explicit packaged defaults still override the embedded defaults in
+	// the internal layer stack used for the effective config.
+	internalLayers := service.readLayers(Layer{
+		Name:   LayerSource{Type: LayerSourceUser, File: ConfigPath(home)},
+		Config: map[string]any{},
+	})
+	if len(internalLayers) < 2 || internalLayers[0].Name.Type != LayerSourcePackagedDefaults || internalLayers[0].Name.File != packagedPath {
+		t.Fatalf("internal first layer = %+v, want explicit packagedDefaults %s", internalLayers[0].Name, packagedPath)
 	}
 	if err := service.SetPackagedDefaultsLayer(filepath.Join(home, "nope.toml")); err == nil {
 		t.Fatal("expected missing packaged defaults layer error")
+	}
+}
+
+func TestEmbeddedDefaultsAlwaysInstalledAndHiddenFromRPC(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigPath(home), []byte("model = \"user-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	// Loader: with no packaged-defaults path the embedded defaults are the
+	// lowest-precedence base layer (Rust #38179).
+	cfg, err := LoadWithOptions(home, nil)
+	if err != nil {
+		t.Fatalf("LoadWithOptions() error = %v", err)
+	}
+	if got := cfg.Values["model"]; got != "user-model" {
+		t.Fatalf("model = %v, want user-model over embedded defaults", got)
+	}
+	if got := cfg.Values["file_opener"]; got != "vscode" {
+		t.Fatalf("file_opener = %v, want embedded default vscode", got)
+	}
+	if got := cfg.Values["include_environment_context"]; got != true {
+		t.Fatalf("include_environment_context = %v, want embedded default true", got)
+	}
+	history, ok := cfg.Values["history"].(map[string]any)
+	if !ok || history["persistence"] != "save-all" {
+		t.Fatalf("history = %#v, want embedded [history] persistence = save-all", cfg.Values["history"])
+	}
+
+	// Service: embedded defaults contribute to the effective config but are
+	// filtered out of RPC layers and origins.
+	service := NewConfigService(home)
+	read, err := service.Read(&ConfigReadParams{IncludeLayers: true})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got := read.Config["file_opener"]; got != "vscode" {
+		t.Fatalf("effective file_opener = %v, want vscode", got)
+	}
+	if len(read.Layers) != 1 || read.Layers[0].Name.Type != LayerSourceUser {
+		t.Fatalf("layers = %+v, want only user layer", read.Layers)
+	}
+	if _, ok := read.Origins["file_opener"]; ok {
+		t.Fatalf("origins contains file_opener (%+v), want packaged defaults hidden from origins", read.Origins["file_opener"])
+	}
+	if got := read.Origins["model"].Name.Type; got != LayerSourceUser {
+		t.Fatalf("model origin = %v, want user", got)
+	}
+}
+
+func TestOverrideMetadataIgnoresPackagedDefaultsFallbackLikeRust(t *testing.T) {
+	home := t.TempDir()
+	// User sets include_environment_context explicitly; the embedded default
+	// is true.
+	if err := os.WriteFile(ConfigPath(home), []byte("include_environment_context = false\nmodel = \"user-model\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	service := NewConfigService(home)
+
+	// Clearing the user value falls back to the packaged default: no false
+	// "overridden" metadata (Rust #38179).
+	if meta := service.overriddenMetadataAfterWrite([]ConfigEdit{{
+		KeyPath: "include_environment_context",
+		Value:   nil,
+	}}); meta != nil {
+		t.Fatalf("overridden metadata = %+v, want nil (packaged-default fallback)", meta)
+	}
+
+	// A strictly-higher-precedence layer (legacy managed, 40 > user 20) is
+	// still reported as overridden.
+	service.SetManagedLayers([]Layer{{
+		Name:   LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: filepath.Join(home, "managed.toml")},
+		Config: map[string]any{"model": "managed-model"},
+	}})
+	meta := service.overriddenMetadataAfterWrite([]ConfigEdit{{
+		KeyPath: "model",
+		Value:   "user-model",
+	}})
+	if meta == nil {
+		t.Fatal("overridden metadata = nil, want override reported for legacy managed layer")
+	}
+	if got := meta.OverridingLayer.Name.Type; got != LayerSourceLegacyManagedConfigFromFile {
+		t.Fatalf("overriding layer = %v, want legacyManagedConfigTomlFromFile", got)
 	}
 }
 

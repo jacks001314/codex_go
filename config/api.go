@@ -1668,10 +1668,6 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		params = &ConfigReadParams{}
 	}
 	profile := s.currentProfile()
-	userConfigPath, err := s.currentUserConfigPath()
-	if err != nil {
-		return nil, err
-	}
 	if cwd := configReadCWD(params); cwd != "" {
 		layers, err := s.readLayersForCWD(cwd, profile)
 		if err != nil {
@@ -1682,22 +1678,27 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		applySupportedFeatureEnablement(values)
 		response := &ConfigReadResponse{Config: values, Origins: origins}
 		if params.IncludeLayers {
-			response.Layers = cloneLayers(layers)
+			response.Layers = cloneLayers(rpcLayers(layers))
 		}
 		return response, nil
 	}
-	cfg, err := LoadWithOptions(s.codexHome, &LoadOptions{Profile: profile})
+	userConfigPath, err := s.currentUserConfigPath()
 	if err != nil {
 		return nil, err
 	}
-	origin := LayerMetadata{
-		Name:    LayerSource{Type: LayerSourceUser, File: userConfigPath, Profile: stringPtrIfNotEmpty(profile)},
-		Version: configVersion(cfg.Values),
+	userValues, err := loadConfigFile(ConfigPath(s.codexHome))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(profile) != "" {
+		if err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+			return nil, err
+		}
 	}
 	userLayer := Layer{
-		Name:    origin.Name,
-		Version: origin.Version,
-		Config:  cloneMap(cfg.Values),
+		Name:    LayerSource{Type: LayerSourceUser, File: userConfigPath, Profile: stringPtrIfNotEmpty(profile)},
+		Version: configVersion(userValues),
+		Config:  cloneMap(userValues),
 	}
 	layers := s.readLayers(userLayer)
 	values, origins := mergeConfigLayers(layers)
@@ -1705,7 +1706,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	applySupportedFeatureEnablement(values)
 	response := &ConfigReadResponse{Config: values, Origins: origins}
 	if params.IncludeLayers {
-		response.Layers = cloneLayers(layers)
+		response.Layers = cloneLayers(rpcLayers(layers))
 	}
 	return response, nil
 }
@@ -1874,6 +1875,10 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 	if err != nil || read == nil {
 		return nil
 	}
+	userPrecedence := int16(20)
+	if profile := s.currentProfile(); profile != "" {
+		userPrecedence = 21
+	}
 	for i := range edits {
 		keyPath := strings.TrimSpace(edits[i].KeyPath)
 		effective, ok := valueAtPath(read.Config, keyPath)
@@ -1884,6 +1889,13 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 			continue
 		}
 		origin := read.Origins[keyPath]
+		// Only report an override when the effective layer has strictly higher
+		// precedence than the user layer (Rust #38179): clearing a user value
+		// falls back to the packaged default without a false override, and a
+		// value the user set themselves is not "overridden".
+		if origin.Name.Precedence() <= userPrecedence {
+			continue
+		}
 		return &OverriddenMetadata{
 			Message:         fmt.Sprintf("%s was written but is overridden by a higher-priority config layer", keyPath),
 			OverridingLayer: origin,
@@ -1894,10 +1906,8 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 }
 
 func (s *ConfigService) readLayers(userLayer Layer) []Layer {
-	s.mu.Lock()
 	managed := cloneLayers(s.managedLayers)
-	packagedDefaults := cloneLayerPtr(s.packagedDefaultsLayer)
-	s.mu.Unlock()
+	packagedDefaults := s.packagedDefaultsLayerForRead()
 	layers := make([]Layer, 0, 1+len(managed))
 	if packagedDefaults != nil {
 		layers = append(layers, *packagedDefaults)
@@ -1916,9 +1926,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	packagedDefaults := cloneLayerPtr(s.packagedDefaultsLayer)
-	s.mu.Unlock()
+	packagedDefaults := s.packagedDefaultsLayerForRead()
 	layers := []Layer{}
 	if packagedDefaults != nil {
 		layers = append(layers, *packagedDefaults)
@@ -1962,6 +1970,46 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 	}
 	layers = append(layers, s.managedLayersForRead()...)
 	return layers, nil
+}
+
+// packagedDefaultsLayerForRead returns the explicit packaged-defaults layer
+// when one was installed via SetPackagedDefaultsLayer; otherwise it returns
+// the embedded packaged defaults, which are always installed as the
+// lowest-precedence layer (Rust #38179).
+func (s *ConfigService) packagedDefaultsLayerForRead() *Layer {
+	s.mu.Lock()
+	explicit := cloneLayerPtr(s.packagedDefaultsLayer)
+	s.mu.Unlock()
+	if explicit != nil {
+		return explicit
+	}
+	values, err := embeddedDefaultsValues()
+	if err != nil {
+		return nil
+	}
+	file := ""
+	if exe, err := os.Executable(); err == nil {
+		file = exe
+	}
+	return &Layer{
+		Name:    LayerSource{Type: LayerSourcePackagedDefaults, File: file},
+		Version: configVersion(values),
+		Config:  cloneMap(values),
+	}
+}
+
+// rpcLayers filters the packaged-defaults layer out of the config RPC layer
+// list (Rust #38179): packaged defaults contribute to the effective config but
+// are not surfaced as a layer or origin.
+func rpcLayers(layers []Layer) []Layer {
+	out := make([]Layer, 0, len(layers))
+	for i := range layers {
+		if layers[i].Name.Type == LayerSourcePackagedDefaults {
+			continue
+		}
+		out = append(out, layers[i])
+	}
+	return out
 }
 
 func (s *ConfigService) profileLayer(profile string) (*Layer, error) {
@@ -2014,6 +2062,11 @@ func mergeConfigLayers(layers []Layer) (map[string]any, map[string]LayerMetadata
 		}
 		layerValues = cloneMap(layerValues)
 		cloudConfigMergeMap(values, layerValues)
+		// Packaged defaults contribute to the effective config but stay out of
+		// origin metadata (Rust #38179).
+		if layers[i].Name.Type == LayerSourcePackagedDefaults {
+			continue
+		}
 		fillOrigins("", layerValues, LayerMetadata{Name: layers[i].Name, Version: layers[i].Version}, origins)
 	}
 	return values, origins

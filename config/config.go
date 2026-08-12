@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	featureflags "codex_go/features"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+//go:embed defaults.toml
+var embeddedDefaultsTOML string
 
 type Config struct {
 	Values       map[string]any
@@ -143,6 +147,14 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			return nil, fmt.Errorf("packaged defaults config file %s not found", packagedDefaultsPath)
 		}
 		values = packagedDefaults
+	} else {
+		// Rust #38179: when no packaged-defaults path is supplied, always
+		// install the embedded defaults as the lowest-precedence layer.
+		embedded, err := embeddedDefaultsValues()
+		if err != nil {
+			return nil, err
+		}
+		values = embedded
 	}
 	userValues, err := loadConfigFile(ConfigPath(codexHome))
 	if err != nil {
@@ -266,6 +278,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"analytics":                         {},
 	"agents":                            {},
 	"allow_login_shell":                 {},
+	"background_terminal_max_timeout":   {},
 	"apps":                              {},
 	"apps_mcp_product_sku":              {},
 	"approval_policy":                   {},
@@ -283,10 +296,18 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"experimental_realtime_start_instructions":   {},
 	"experimental_use_unified_exec_tool":         {},
 	"features":                                   {},
+	"file_opener":                                {},
 	"forced_chatgpt_workspace_id":                {},
 	"forced_login_method":                        {},
+	"hide_agent_reasoning":                       {},
+	"history":                                    {},
 	"hooks":                                      {},
+	"include_apps_instructions":                  {},
+	"include_collaboration_mode_instructions":    {},
+	"include_environment_context":                {},
+	"include_permissions_instructions":           {},
 	"instructions":                               {},
+	"mcp_oauth_credentials_store":                {},
 	"mcp_servers":                                {},
 	"model":                                      {},
 	"model_auto_compact_token_limit":             {},
@@ -303,6 +324,9 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"openai_base_url":                            {},
 	"otel":                                       {},
 	"personality":                                {},
+	"project_doc_fallback_filenames":             {},
+	"project_doc_max_bytes":                      {},
+	"project_root_markers":                       {},
 	"realtime":                                   {},
 	"profile":                                    {},
 	"profiles":                                   {},
@@ -1006,6 +1030,19 @@ func currentTimeDeliveryModeFromConfig(value any) CurrentTimeReminderDeliveryMod
 func loadConfigFile(path string) (map[string]any, error) {
 	values, _, err := loadConfigFileIfExists(path)
 	return values, err
+}
+
+// embeddedDefaultsValues parses the embedded packaged defaults TOML. A parse
+// failure is a build error and is surfaced as such (mirrors the Rust loader).
+func embeddedDefaultsValues() (map[string]any, error) {
+	var values map[string]any
+	if err := toml.Unmarshal([]byte(embeddedDefaultsTOML), &values); err != nil {
+		return nil, fmt.Errorf("invalid embedded packaged defaults; this is a Codex build error: %w", err)
+	}
+	if values == nil {
+		values = map[string]any{}
+	}
+	return values, nil
 }
 
 func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
