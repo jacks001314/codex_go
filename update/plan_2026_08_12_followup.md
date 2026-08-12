@@ -142,3 +142,45 @@
   regression test, with per-server reviewer resolution / persistent MCP
   approval / resolution-source telemetry tracked. Pushed to `origin/main`.
 - This plan document (`update/plan_2026_08_12_followup.md`).
+
+## Delivered
+
+- Implemented (Go commit `0e35687`, 2026-08-12): **#38101 hosted upload
+  context** fully implemented with tests. `mcp/openai_file.go`
+  `LocalOpenAIFileUploader` create body gains
+  `codex_connector_id`/`codex_action_name`/`codex_model` when hosted context is
+  present; the finalize response parses the optional `file_size_bytes` with a
+  fallback to the local request size; the finalize body stays empty for
+  older-server compatibility. The hosted context is threaded through
+  `OpenAIFileRewriter` → `RewriteArgumentsWithOptionalFields` →
+  `buildUploadedValue` → `UploadOpenAIFile`, populated in `mcp/tool_executor.go`
+  `Execute` from the MCP tool metadata (connector id + action name) and the
+  turn model, and wired from `appserver/runtime_router.go` turn params.
+- **#38108 MCP shared approval routing** verified equivalent: Go already routes
+  MCP tool calls through the shared approval gate —
+  `Router.DispatchWithHooks` runs permission hooks (`PreToolUsePayload`)
+  before the MCP call executes, and Codex-initiated MCP approval requests
+  (`codex_request_type=approval_request`) route through
+  `appserverMCPElicitationHandler` with the same guardian-vs-user reviewer
+  split as Rust `routes_approval_policy_to_guardian`.
+  `ReviewDecisionApprovedMcpPolicyAmendment` was added in the previous batch
+  (wire format). Added regression test
+  `TestDispatchWithHooksPermissionHookResolvesMcpToolCallBeforeReviewLikeRust`
+  mirroring Rust `hooks_mcp.rs` (permission-hook Allow executes the MCP tool
+  call, Deny blocks it; neither reaches user/guardian review). Tracked deltas
+  (documented, not structural ports): per-server/per-connector
+  `approvals_reviewer` resolution from MCP config layers; persistent MCP
+  policy-amendment approvals ("Allow and don't ask me again" wire action +
+  policy store, enum value unused so far); unified approval resolution-source
+  telemetry (hook runs + `approvals_reviewer=auto_review` meta recorded, no
+  single Hook/Guardian/User source).
+- Verification: `go build ./...` clean; `go vet ./mcp ./turn ./appserver`
+  clean; `gofmt -l` empty (LF-normalized); `git diff --check` clean;
+  `go test ./mcp ./turn -count=1` passes; `go test ./appserver -count=1`
+  passes. The pre-existing appserver fork/resume/rollback cluster and the
+  thread-section deadlock hang noted in the plan were repaired afterwards in
+  `f01d404` (see `update/plan_2026_08_12_repair.md`); appserver now passes with
+  no skips.
+- Commit `0e35687` "Align Go Codex with Rust 4ef836f883: hosted app upload
+  context (#38101) + MCP permission-hook approval precedence (#38108)" pushed
+  to `origin/main`.
