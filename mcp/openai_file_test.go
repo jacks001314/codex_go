@@ -99,7 +99,7 @@ func TestRewriteArgumentsUsesSelectedWindowsEnvironmentPathConvention(t *testing
 	})
 	rewritten, err := rewriter.RewriteArgumentsWithOptionalFields(context.Background(), map[string]any{
 		"file": `reports\q1.txt`,
-	}, map[string][]string{"file": {"file_name"}})
+	}, map[string][]string{"file": {"file_name"}}, nil)
 	if err != nil {
 		t.Fatalf("RewriteArgumentsWithOptionalFields() error = %v", err)
 	}
@@ -196,7 +196,7 @@ func TestRewriteArgumentsIncludesOnlySchemaSupportedOptionalFields(t *testing.T)
 	rewriter := NewOpenAIFileRewriter(dir, &OpenAIFileAuth{ChatGPTBackend: true}, &fakeUploader{})
 	rewritten, err := rewriter.RewriteArgumentsWithOptionalFields(context.Background(), map[string]any{"file": "report.txt"}, map[string][]string{
 		"file": {"mime_type", "file_name"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("rewrite failed: %v", err)
 	}
@@ -343,6 +343,140 @@ func TestLocalOpenAIFileUploaderRedactsSignedBlobURL(t *testing.T) {
 		if strings.Contains(message, secret) {
 			t.Fatalf("error leaked %q: %s", secret, message)
 		}
+	}
+}
+
+func TestLocalOpenAIFileUploaderAttachesHostedAppContextLikeRust(t *testing.T) {
+	var server *httptest.Server
+	var createBody map[string]any
+	var finalizeBody map[string]any
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/backend-api/files":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			createBody = body
+			writeOpenAIFileTestJSON(t, w, map[string]any{"file_id": "file_hosted", "upload_url": server.URL + "/blob"})
+		case "/blob":
+			w.WriteHeader(http.StatusOK)
+		case "/backend-api/files/file_hosted/uploaded":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode finalize body: %v", err)
+			}
+			finalizeBody = body
+			writeOpenAIFileTestJSON(t, w, map[string]any{
+				"status":          "success",
+				"download_url":    server.URL + "/download/file_hosted",
+				"file_name":       "report.pdf",
+				"mime_type":       "application/pdf",
+				"file_size_bytes": 42,
+			})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "report.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.4"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &LocalOpenAIFileUploader{
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true, BaseURL: server.URL + "/backend-api"},
+		HTTPClient: server.Client(),
+	}
+	uploaded, err := uploader.UploadOpenAIFile(context.Background(), OpenAIFileUploadRequest{
+		Path:          path,
+		FileName:      "report.pdf",
+		FileSizeBytes: 8,
+		HostedContext: &HostedFileUploadContext{ConnectorID: "library", ActionName: "create_library_file", Model: "gpt-work"},
+	})
+	if err != nil {
+		t.Fatalf("UploadOpenAIFile() error = %v", err)
+	}
+	if createBody["file_name"] != "report.pdf" || createBody["file_size"] != float64(8) || createBody["use_case"] != "codex" {
+		t.Fatalf("create body = %#v", createBody)
+	}
+	if createBody["codex_connector_id"] != "library" || createBody["codex_action_name"] != "create_library_file" || createBody["codex_model"] != "gpt-work" {
+		t.Fatalf("create body missing hosted app context: %#v", createBody)
+	}
+	if len(finalizeBody) != 0 {
+		t.Fatalf("finalize body should stay empty for older servers: %#v", finalizeBody)
+	}
+	if uploaded.FileSizeBytes != 42 {
+		t.Fatalf("uploaded.FileSizeBytes = %d, want finalize-reported size 42", uploaded.FileSizeBytes)
+	}
+}
+
+func TestLocalOpenAIFileUploaderFallsBackToLocalSizeForLegacyFinalizeLikeRust(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/backend-api/files":
+			writeOpenAIFileTestJSON(t, w, map[string]any{"file_id": "file_legacy", "upload_url": server.URL + "/blob"})
+		case "/blob":
+			w.WriteHeader(http.StatusOK)
+		case "/backend-api/files/file_legacy/uploaded":
+			writeOpenAIFileTestJSON(t, w, map[string]any{
+				"status":       "success",
+				"download_url": server.URL + "/download/file_legacy",
+				"file_name":    "report.pdf",
+				"mime_type":    "application/pdf",
+			})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "report.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.4"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &LocalOpenAIFileUploader{
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true, BaseURL: server.URL + "/backend-api"},
+		HTTPClient: server.Client(),
+	}
+	uploaded, err := uploader.UploadOpenAIFile(context.Background(), OpenAIFileUploadRequest{
+		Path:          path,
+		FileName:      "report.pdf",
+		FileSizeBytes: 8,
+		HostedContext: &HostedFileUploadContext{ConnectorID: "library", ActionName: "create_library_file", Model: "gpt-work"},
+	})
+	if err != nil {
+		t.Fatalf("UploadOpenAIFile() error = %v", err)
+	}
+	if uploaded.FileSizeBytes != 8 {
+		t.Fatalf("uploaded.FileSizeBytes = %d, want local fallback 8", uploaded.FileSizeBytes)
+	}
+}
+
+func TestRewriteArgumentsThreadsHostedAppContextToUploaderLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &fakeUploader{}
+	rewriter := NewOpenAIFileRewriter(dir, &OpenAIFileAuth{ChatGPTBackend: true}, uploader)
+	hosted := &HostedFileUploadContext{ConnectorID: "library", ActionName: "create_library_file", Model: "gpt-work"}
+	if _, err := rewriter.RewriteArgumentsWithOptionalFields(context.Background(), map[string]any{"file": "report.txt"}, map[string][]string{"file": nil}, hosted); err != nil {
+		t.Fatalf("RewriteArgumentsWithOptionalFields() error = %v", err)
+	}
+	if len(uploader.requests) != 1 {
+		t.Fatalf("uploader requests = %d, want 1", len(uploader.requests))
+	}
+	got := uploader.requests[0].HostedContext
+	if got == nil || got.ConnectorID != "library" || got.ActionName != "create_library_file" || got.Model != "gpt-work" {
+		t.Fatalf("HostedContext = %#v", got)
+	}
+	if _, err := rewriter.RewriteArgumentsWithOptionalFields(context.Background(), map[string]any{"file": "report.txt"}, map[string][]string{"file": nil}, nil); err != nil {
+		t.Fatalf("RewriteArgumentsWithOptionalFields() without hosted error = %v", err)
+	}
+	if len(uploader.requests) != 2 || uploader.requests[1].HostedContext != nil {
+		t.Fatalf("HostedContext should be nil without hosted param: %#v", uploader.requests)
 	}
 }
 

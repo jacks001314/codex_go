@@ -38,6 +38,7 @@ type ToolRegistryOptions struct {
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
 	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
+	Model                     string
 
 	AgentController                agent.ToolController
 	AgentExposure                  tool.Exposure
@@ -431,6 +432,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 				Description: info.Tool.Description,
 				InputSchema: info.Tool.InputSchema,
 				Annotations: info.Tool.Annotations,
+				Meta:        info.Meta,
 			},
 			ToolName:                      tool.NamespacedName(info.CallableNamespace, info.CallableName),
 			ThreadID:                      options.ThreadID,
@@ -438,6 +440,8 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			RequestMeta:                   mcpRuntimeToolRequestMeta(&info),
 			OpenAIFileRewriter:            options.OpenAIFileRewriter,
 			OpenAIFileInputOptionalFields: info.OpenAIFileInputOptionalFields,
+			ConnectorID:                   info.ConnectorID,
+			Model:                         options.Model,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)

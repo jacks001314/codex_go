@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"codex_go/agent"
@@ -1049,6 +1050,69 @@ func TestBuildToolRegistryMCPWrapperKeepsHookInterfaces(t *testing.T) {
 	})
 	if !ok || payload.ToolName == nil || payload.ToolName.Name != "mcp__memory__create_entities" {
 		t.Fatalf("payload = %#v/%v", payload, ok)
+	}
+}
+
+type mcpPermissionHookRunner struct {
+	pre *tool.PreToolUseHookOutcome
+}
+
+func (h *mcpPermissionHookRunner) RunPreToolUse(ctx context.Context, invocation *tool.Invocation, payload *tool.PreToolUsePayload) (*tool.PreToolUseHookOutcome, error) {
+	return h.pre, nil
+}
+
+func (h *mcpPermissionHookRunner) RunPostToolUse(ctx context.Context, invocation *tool.Invocation, payload *tool.PostToolUsePayload) (*tool.PostToolUseHookOutcome, error) {
+	return nil, nil
+}
+
+// TestDispatchWithHooksPermissionHookResolvesMcpToolCallBeforeReviewLikeRust
+// mirrors Rust #38108 hooks_mcp.rs: permission hooks resolve MCP tool calls
+// before any user or guardian review, so an allow lets the call execute and a
+// deny blocks it without surfacing an approval (elicitation) to a reviewer.
+func TestDispatchWithHooksPermissionHookResolvesMcpToolCallBeforeReviewLikeRust(t *testing.T) {
+	service := mcp.NewMCPService(nil)
+	var elicitations atomic.Int32
+	service.SetElicitationHandler(mcp.MCPElicitationHandlerFunc(func(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
+		elicitations.Add(1)
+		return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline}, nil
+	}))
+	registry := tool.NewRegistry()
+	if err := mcp.RegisterToolExecutors(registry, service, []mcp.RuntimeToolInfo{{
+		ServerName: "memory",
+		Tool:       mcp.RuntimeTool{Name: "create_entities"},
+	}}); err != nil {
+		t.Fatalf("RegisterToolExecutors() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	invocation := &tool.Invocation{
+		CallID:   "call-mcp",
+		ToolName: tool.NamespacedName("mcp__memory", "create_entities"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"name":"Ada"}`},
+	}
+
+	denied, err := router.DispatchWithHooks(context.Background(), invocation, &mcpPermissionHookRunner{pre: &tool.PreToolUseHookOutcome{
+		Blocked:     true,
+		BlockReason: "MCP tool access denied by the integration-test hook",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "MCP tool access denied by the integration-test hook") {
+		t.Fatalf("deny error = %v", err)
+	}
+	if denied != nil {
+		t.Fatalf("deny output = %#v", denied)
+	}
+	if elicitations.Load() != 0 {
+		t.Fatalf("deny should not reach user/guardian review: %d elicitations", elicitations.Load())
+	}
+
+	allowed, err := router.DispatchWithHooks(context.Background(), invocation, &mcpPermissionHookRunner{})
+	if err != nil {
+		t.Fatalf("allow error = %v", err)
+	}
+	if allowed == nil || !allowed.Success {
+		t.Fatalf("allow output = %#v", allowed)
+	}
+	if elicitations.Load() != 0 {
+		t.Fatalf("allow should not reach user/guardian review: %d elicitations", elicitations.Load())
 	}
 }
 

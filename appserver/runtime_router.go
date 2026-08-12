@@ -10087,6 +10087,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.SkillProviders = executorSkillProviders
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
+	if params != nil {
+		options.Model = strings.TrimSpace(params.Model)
+	}
 	if runtimeToolsUseOpenAIFileUpload(mcpTools) {
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		options.OpenAIFileRewriter = mcp.NewOpenAIFileRewriterWithOptions(mcp.OpenAIFileRewriterOptions{

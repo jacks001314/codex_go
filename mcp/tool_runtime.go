@@ -52,6 +52,10 @@ type RuntimeToolInfo struct {
 	OpenAIFileInputOptionalFields map[string][]string `json:"openaiFileInputOptionalFields,omitempty"`
 	OmitLegacyPrefix              bool                `json:"-"`
 	Tool                          RuntimeTool         `json:"tool"`
+	// Meta carries the raw MCP tool _meta (including _codex_apps for Codex
+	// Apps tools). It is internal-only (not serialized to the model) and feeds
+	// hosted-app upload context and approval metadata (Rust #38101/#38108).
+	Meta any `json:"-"`
 }
 
 func (t *RuntimeToolInfo) IsModelVisible() bool {
@@ -111,6 +115,7 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 			}
 			runtimeTool := RuntimeToolInfo{
 				ServerName: runtimeServerName,
+				Meta:       cloneJSONValue(toolInfo.Meta),
 				Tool: RuntimeTool{
 					Name:         toolName,
 					Title:        strings.TrimSpace(toolInfo.Title),
@@ -818,6 +823,7 @@ func cloneRuntimeToolInfo(info *RuntimeToolInfo) RuntimeToolInfo {
 	out.PluginDisplayNames = append([]string(nil), info.PluginDisplayNames...)
 	out.Tool.InputSchema = deepCloneRuntimeAnyMap(info.Tool.InputSchema)
 	out.OpenAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(info.OpenAIFileInputOptionalFields)
+	out.Meta = cloneJSONValue(info.Meta)
 	return out
 }
 

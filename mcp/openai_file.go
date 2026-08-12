@@ -74,6 +74,19 @@ type OpenAIFileUploadRequest struct {
 	FileName      string
 	FileSizeBytes int64
 	Open          func(context.Context) (io.ReadCloser, error)
+	// HostedContext carries the hosted-app connector/action/model identity for
+	// Codex Apps tool calls. When set, the file creation request includes
+	// codex_connector_id/codex_action_name/codex_model (Rust #38101).
+	HostedContext *HostedFileUploadContext
+}
+
+// HostedFileUploadContext mirrors Rust codex_api::HostedFileUploadContext: the
+// hosted-app context attached to OpenAI file uploads made from Codex Apps MCP
+// tool calls.
+type HostedFileUploadContext struct {
+	ConnectorID string
+	ActionName  string
+	Model       string
 }
 
 type OpenAIFileUploader interface {
@@ -146,6 +159,11 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 		"file_size": request.FileSizeBytes,
 		"use_case":  "codex",
 	}
+	if request.HostedContext != nil {
+		createBody["codex_connector_id"] = request.HostedContext.ConnectorID
+		createBody["codex_action_name"] = request.HostedContext.ActionName
+		createBody["codex_model"] = request.HostedContext.Model
+	}
 	var created struct {
 		FileID    string `json:"file_id"`
 		UploadURL string `json:"upload_url"`
@@ -170,6 +188,9 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 			FileName     string `json:"file_name"`
 			MimeType     string `json:"mime_type"`
 			ErrorMessage string `json:"error_message"`
+			// file_size_bytes is optional for older servers; fall back to the
+			// local size when absent (Rust #38101).
+			FileSizeBytes *int64 `json:"file_size_bytes"`
 		}
 		if err := u.authorizedJSON(ctx, http.MethodPost, finalizeURL, map[string]any{}, &finalized); err != nil {
 			return nil, err
@@ -183,13 +204,17 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 			if fileName == "" {
 				fileName = request.FileName
 			}
+			fileSizeBytes := request.FileSizeBytes
+			if finalized.FileSizeBytes != nil {
+				fileSizeBytes = *finalized.FileSizeBytes
+			}
 			return &OpenAIUploadedFile{
 				DownloadURL:   finalized.DownloadURL,
 				FileID:        created.FileID,
 				MimeType:      finalized.MimeType,
 				FileName:      fileName,
 				URI:           "sediment://" + created.FileID,
-				FileSizeBytes: request.FileSizeBytes,
+				FileSizeBytes: fileSizeBytes,
 			}, nil
 		case "retry":
 			if !time.Now().Before(deadline) {
@@ -404,10 +429,10 @@ func (r *OpenAIFileRewriter) RewriteArguments(ctx context.Context, arguments any
 			optionalFields[fieldName] = nil
 		}
 	}
-	return r.RewriteArgumentsWithOptionalFields(ctx, arguments, optionalFields)
+	return r.RewriteArgumentsWithOptionalFields(ctx, arguments, optionalFields, nil)
 }
 
-func (r *OpenAIFileRewriter) RewriteArgumentsWithOptionalFields(ctx context.Context, arguments any, openAIFileInputOptionalFields map[string][]string) (any, error) {
+func (r *OpenAIFileRewriter) RewriteArgumentsWithOptionalFields(ctx context.Context, arguments any, openAIFileInputOptionalFields map[string][]string, hosted *HostedFileUploadContext) (any, error) {
 	if len(openAIFileInputOptionalFields) == 0 || arguments == nil {
 		return arguments, nil
 	}
@@ -422,7 +447,7 @@ func (r *OpenAIFileRewriter) RewriteArgumentsWithOptionalFields(ctx context.Cont
 		if !exists {
 			continue
 		}
-		uploaded, ok, err := r.rewriteValue(ctx, fieldName, value, optionalFields)
+		uploaded, ok, err := r.rewriteValue(ctx, fieldName, value, optionalFields, hosted)
 		if err != nil {
 			return nil, err
 		}
@@ -437,15 +462,15 @@ func (r *OpenAIFileRewriter) RewriteArgumentsWithOptionalFields(ctx context.Cont
 	return rewritten, nil
 }
 
-func (r *OpenAIFileRewriter) rewriteValue(ctx context.Context, fieldName string, value any, optionalFields []string) (any, bool, error) {
+func (r *OpenAIFileRewriter) rewriteValue(ctx context.Context, fieldName string, value any, optionalFields []string, hosted *HostedFileUploadContext) (any, bool, error) {
 	switch typed := value.(type) {
 	case string:
-		uploaded, err := r.buildUploadedValue(ctx, fieldName, -1, typed, optionalFields)
+		uploaded, err := r.buildUploadedValue(ctx, fieldName, -1, typed, optionalFields, hosted)
 		return uploaded, true, err
 	case []string:
 		values := make([]any, 0, len(typed))
 		for index, item := range typed {
-			uploaded, err := r.buildUploadedValue(ctx, fieldName, index, item, optionalFields)
+			uploaded, err := r.buildUploadedValue(ctx, fieldName, index, item, optionalFields, hosted)
 			if err != nil {
 				return nil, false, err
 			}
@@ -459,7 +484,7 @@ func (r *OpenAIFileRewriter) rewriteValue(ctx context.Context, fieldName string,
 			if !ok {
 				return nil, false, nil
 			}
-			uploaded, err := r.buildUploadedValue(ctx, fieldName, index, filePath, optionalFields)
+			uploaded, err := r.buildUploadedValue(ctx, fieldName, index, filePath, optionalFields, hosted)
 			if err != nil {
 				return nil, false, err
 			}
@@ -471,7 +496,7 @@ func (r *OpenAIFileRewriter) rewriteValue(ctx context.Context, fieldName string,
 	}
 }
 
-func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName string, index int, filePath string, optionalFields []string) (map[string]any, error) {
+func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName string, index int, filePath string, optionalFields []string, hosted *HostedFileUploadContext) (map[string]any, error) {
 	if r == nil {
 		return nil, fmt.Errorf("failed to upload `%s` for `%s`: rewriter is nil", filePath, fieldName)
 	}
@@ -522,6 +547,7 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 		Path:          displayPath,
 		FileName:      fileName,
 		FileSizeBytes: info.Size,
+		HostedContext: hosted,
 		Open: func(openCtx context.Context) (io.ReadCloser, error) {
 			return fileSystem.Open(openCtx, resolvedURI)
 		},

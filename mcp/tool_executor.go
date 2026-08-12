@@ -22,6 +22,8 @@ type ToolExecutorOptions struct {
 	ServerOrigin                  string
 	ToolInfo                      *MCPToolInfo
 	ToolName                      tool.ToolName
+	ConnectorID                   string
+	Model                         string
 	Parallel                      bool
 	ThreadID                      string
 	TurnID                        string
@@ -37,6 +39,8 @@ type ToolExecutor struct {
 	serverOrigin                  string
 	toolInfo                      MCPToolInfo
 	toolName                      tool.ToolName
+	connectorID                   string
+	model                         string
 	parallel                      bool
 	readOnlyHint                  *bool
 	threadID                      string
@@ -71,6 +75,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.turnID = strings.TrimSpace(options.TurnID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.binding = options.Binding
+	executor.connectorID = strings.TrimSpace(options.ConnectorID)
+	executor.model = strings.TrimSpace(options.Model)
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
 	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
 	return executor
@@ -93,6 +99,7 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 			ServerOrigin:                  tools[i].ServerOrigin,
 			ToolInfo:                      info,
 			ToolName:                      tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
+			ConnectorID:                   tools[i].ConnectorID,
 			OpenAIFileInputOptionalFields: tools[i].OpenAIFileInputOptionalFields,
 		}); err != nil {
 			return err
@@ -131,7 +138,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
 	rewrittenArguments := any(nil)
 	if e.openAIFileRewriter != nil && len(e.openAIFileInputOptionalFields) > 0 {
-		rewritten, err := e.openAIFileRewriter.RewriteArgumentsWithOptionalFields(ctx, arguments, e.openAIFileInputOptionalFields)
+		rewritten, err := e.openAIFileRewriter.RewriteArgumentsWithOptionalFields(ctx, arguments, e.openAIFileInputOptionalFields, e.hostedFileUploadContext())
 		if err != nil {
 			return nil, tool.RespondToModel(err.Error())
 		}
@@ -464,7 +471,62 @@ func runtimeToolInfoToMCPToolInfo(info *RuntimeToolInfo) *MCPToolInfo {
 		Description: info.Tool.Description,
 		InputSchema: cloneAnyMap(info.Tool.InputSchema),
 		Annotations: info.Tool.Annotations,
+		Meta:        cloneJSONValue(info.Meta),
 	}
+}
+
+// hostedFileUploadContext mirrors Rust's hosted-upload derivation in
+// mcp_tool_call.rs (#38101): for Codex Apps MCP tools with both a connector ID
+// and an action name (from the _codex_apps resource_uri), the OpenAI file
+// upload is annotated with connector/action/model.
+func (e *ToolExecutor) hostedFileUploadContext() *HostedFileUploadContext {
+	if e == nil || !IsCodexAppsMCPServerName(e.resolvedServerName()) {
+		return nil
+	}
+	connectorID := strings.TrimSpace(e.connectorID)
+	actionName := mcpToolCallActionName(e.toolInfo.Meta)
+	model := strings.TrimSpace(e.model)
+	if connectorID == "" || actionName == "" || model == "" {
+		return nil
+	}
+	return &HostedFileUploadContext{
+		ConnectorID: connectorID,
+		ActionName:  actionName,
+		Model:       model,
+	}
+}
+
+// mcpToolCallActionName derives the hosted-app action name from the tool's
+// _codex_apps metadata: the last path segment of the resource_uri (Rust
+// MCP_TOOL_RESOURCE_URI_META_KEY = "resource_uri").
+func mcpToolCallActionName(meta any) string {
+	base := metadataMap(meta)
+	if base == nil {
+		return ""
+	}
+	for _, key := range []string{"_codex_apps", "codex_apps", "codexApps"} {
+		nested := metadataMap(base[key])
+		if nested == nil {
+			continue
+		}
+		raw, ok := nested["resource_uri"]
+		if !ok {
+			continue
+		}
+		uri, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		uri = strings.Trim(uri, "/")
+		if index := strings.LastIndex(uri, "/"); index >= 0 {
+			uri = uri[index+1:]
+		}
+		uri = strings.TrimSpace(uri)
+		if uri != "" {
+			return uri
+		}
+	}
+	return ""
 }
 
 func mcpToolReadOnlyHint(annotations any) *bool {

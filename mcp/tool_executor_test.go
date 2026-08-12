@@ -174,6 +174,69 @@ func TestCodexAppsMCPToolExecutorUploadsDeclaredFilesAfterPreHook(t *testing.T) 
 	}
 }
 
+func TestCodexAppsMCPToolExecutorHostedFileUploadContextLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  RuntimeCodexAppsMCPServerName,
+		ConnectorID: "library",
+		Model:       "gpt-work",
+		ToolInfo: &MCPToolInfo{Name: "create_library_file", Meta: map[string]any{
+			"_codex_apps": map[string]any{"resource_uri": "sediment://apps/library/create_library_file"},
+		}},
+	})
+	got := executor.hostedFileUploadContext()
+	if got == nil || got.ConnectorID != "library" || got.ActionName != "create_library_file" || got.Model != "gpt-work" {
+		t.Fatalf("hostedFileUploadContext() = %#v", got)
+	}
+
+	other := NewToolExecutor(&ToolExecutorOptions{ServerName: "calendar", ConnectorID: "library", Model: "gpt-work"})
+	if other.hostedFileUploadContext() != nil {
+		t.Fatal("non-Codex-Apps server should have no hosted context")
+	}
+
+	missingAction := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  RuntimeCodexAppsMCPServerName,
+		ConnectorID: "library",
+		Model:       "gpt-work",
+		ToolInfo:    &MCPToolInfo{Name: "capture"},
+	})
+	if missingAction.hostedFileUploadContext() != nil {
+		t.Fatal("missing action name should have no hosted context")
+	}
+
+	missingModel := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  RuntimeCodexAppsMCPServerName,
+		ConnectorID: "library",
+		ToolInfo: &MCPToolInfo{Name: "capture", Meta: map[string]any{
+			"_codex_apps": map[string]any{"resource_uri": "sediment://apps/library/capture"},
+		}},
+	})
+	if missingModel.hostedFileUploadContext() != nil {
+		t.Fatal("missing model should have no hosted context")
+	}
+}
+
+func TestMcpToolCallActionNameFromCodexAppsMetaLikeRust(t *testing.T) {
+	cases := []struct {
+		name string
+		meta any
+		want string
+	}{
+		{"underscore key", map[string]any{"_codex_apps": map[string]any{"resource_uri": "sediment://apps/library/create_library_file"}}, "create_library_file"},
+		{"trailing slash", map[string]any{"codex_apps": map[string]any{"resource_uri": "sediment://apps/library/create_library_file/"}}, "create_library_file"},
+		{"camel key", map[string]any{"codexApps": map[string]any{"resource_uri": "/apps/library/do_thing"}}, "do_thing"},
+		{"missing resource uri", map[string]any{"_codex_apps": map[string]any{}}, ""},
+		{"empty after trim", map[string]any{"_codex_apps": map[string]any{"resource_uri": "/"}}, ""},
+		{"nil meta", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mcpToolCallActionName(tc.meta); got != tc.want {
+				t.Fatalf("mcpToolCallActionName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMCPToolExecutorKeepsBuiltinLikeNamesMCPPrefixed(t *testing.T) {
 	name := EnsureMCPHookToolName(JoinToolName(tool.NamespacedName("mcp__foo", "exec_command")))
 	if name != "mcp__foo__exec_command" {

@@ -106,23 +106,39 @@
    - Tests: hosted create-body metadata, legacy finalize response fallback,
      empty finalize body preserved, rewriter plumbing.
 2. **#38108 MCP shared approval routing** (main item):
-   - Inventory the current Go MCP approval flow (elicitation handler,
-     `PreToolUse` hook path, guardian reviewer, `ReviewDecision` routing) and
-     map it to Rust `ApprovalAction::McpToolCall`.
-   - Align ordering (hooks before user/automatic review), reviewer selection
-     from the captured policy, preservation of session/persistent choices and
-     MCP prompts, direct `ApprovedMcpPolicyAmendment` return, resolution
-     telemetry.
-   - Tests: permission hooks resolving MCP calls before user/auto review,
-     persistence choices, captured policy routing, MCP turn metadata with
-     strict automatic review.
+   - Inventory result: the Go architecture already routes MCP tool calls
+     through the shared gate — `Router.DispatchWithHooks` runs permission hooks
+     (PreToolUsePayload) before the MCP call executes, and Codex-initiated MCP
+     approval requests (`codex_request_type=approval_request`) route through
+     `appserverMCPElicitationHandler` with the same reviewer split as Rust
+     `routes_approval_policy_to_guardian` (on_request/granular + auto_review →
+     guardian, else user). `ReviewDecisionApprovedMcpPolicyAmendment` was added
+     in the previous batch (wire format).
+   - Delivered: regression test mirroring Rust `hooks_mcp.rs` — a permission
+     hook Allow lets an MCP tool call execute and a Deny blocks it, in both
+     cases without reaching any user/guardian elicitation review
+     (`TestDispatchWithHooksPermissionHookResolvesMcpToolCallBeforeReviewLikeRust`).
+   - Tracked deltas (documented, not structural ports): per-server/per-connector
+     `approvals_reviewer` resolution from MCP config layers (Go resolves the
+     thread-level effective config); persistent MCP approvals ("Allow and don't
+     ask me again" → `approved_mcp_policy_amendment` wire action + policy
+     store, the enum value is unused so far); unified approval resolution-source
+     telemetry (Go records hook runs and `approvals_reviewer=auto_review` meta
+     but not a single Hook/Guardian/User source).
 3. **Verification**: `go build ./...` clean; `go vet` clean on touched
    packages; `gofmt -l` empty; `git diff --check` clean;
-   `go test ./mcp ./appserver ./turn ./session -count=1` passes.
+   `go test ./mcp ./turn -count=1` passes; `go test ./appserver -count=1`
+   passes except for a pre-existing thread fork/resume/rollback cluster
+   (`TestRouterResumeFromPath`, `TestRouterForkFromPath`,
+   `TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread`) and the
+   pre-existing hang in `TestRouterThreadSectionsListUpdateFilterAndClearLikeRust`
+   — all confirmed failing on the baseline without this batch.
 4. **Commit and push** the aligned Go changes to `origin/main`.
 
 ## Deliverable
 
-- Commit aligned to Rust `4ef836f883` covering items 1-2 above, pushed to
-  `origin/main`.
+- Commit aligned to Rust `4ef836f883`: #38101 hosted upload context fully
+  implemented with tests; #38108 verified equivalent + hooks-precedence
+  regression test, with per-server reviewer resolution / persistent MCP
+  approval / resolution-source telemetry tracked. Pushed to `origin/main`.
 - This plan document (`update/plan_2026_08_12_followup.md`).
