@@ -10,6 +10,7 @@ func TestExtensionSkillAliasRootDerivesFromLocator(t *testing.T) {
 		path string
 		want string
 	}{
+		{"skill://root-1/skills/foo", "skill://root-1/skills"},
 		{"skill://root-1/skills/foo/SKILL.md", "skill://root-1/skills"},
 		{"file:///repo/.codex/skills/bar", "file:///repo/.codex"},
 		{"https://example.com/skills/baz", "https://example.com/skills"},
@@ -23,8 +24,8 @@ func TestExtensionSkillAliasRootDerivesFromLocator(t *testing.T) {
 
 func TestBuildExtensionAliasPlanUsesEPrefix(t *testing.T) {
 	lines := []skillRenderLine{
-		{name: "foo", path: "skill://root-1/skills/foo/SKILL.md", locatorKind: "file"},
-		{name: "bar", path: "skill://root-1/skills/bar/SKILL.md", locatorKind: "file"},
+		{name: "foo", path: "skill://root-1/skills/foo", locatorKind: "executor package"},
+		{name: "bar", path: "skill://root-1/skills/bar", locatorKind: "executor package"},
 	}
 	budget := SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 100}
 	plan, ok := buildExtensionAliasPlan(lines, budget)
@@ -47,8 +48,8 @@ func TestBuildExtensionAliasPlanUsesEPrefix(t *testing.T) {
 
 func TestBuildExtensionAliasPlanLongestPrefixMatching(t *testing.T) {
 	lines := []skillRenderLine{
-		{name: "a", path: "skill://root-1/skills/foo/SKILL.md"},
-		{name: "b", path: "skill://root-2/other/bar/SKILL.md"},
+		{name: "a", path: "skill://root-1/skills/foo"},
+		{name: "b", path: "skill://root-2/other/bar"},
 	}
 	plan, ok := buildExtensionAliasPlan(lines, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 500})
 	if !ok || len(plan.rootAliases) != 2 {
@@ -63,5 +64,24 @@ func TestExtensionAliasDoesNotApplyWithoutRoot(t *testing.T) {
 	lines := []skillRenderLine{{name: "a", path: "short/path.md"}}
 	if plan, ok := buildExtensionAliasPlan(lines, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 500}); ok {
 		t.Fatalf("plan = %+v, want none for short path", plan)
+	}
+}
+
+func TestExecutorAliasesPreserveLiteralBackslashesInPackageIDsLikeRust(t *testing.T) {
+	root := `skill://executor/workspace/foo\bar/skills`
+	lines := []skillRenderLine{
+		{name: "demo", path: root + "/demo", locatorKind: "executor package"},
+		{name: "other", path: root + "/other", locatorKind: "executor package"},
+	}
+	plan, ok := buildExtensionAliasPlan(lines, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 500})
+	if !ok {
+		t.Fatalf("buildExtensionAliasPlan() = false, want true")
+	}
+	aliased := applySkillAliases(lines, plan)
+	if len(aliased) != 2 || !strings.HasPrefix(aliased[0].path, "e0/") {
+		t.Fatalf("aliased = %#v, want e0 prefix", aliased)
+	}
+	if !strings.Contains(aliased[0].path, `foo\bar`) {
+		t.Fatalf("aliased path lost literal backslash: %q", aliased[0].path)
 	}
 }

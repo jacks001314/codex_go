@@ -279,6 +279,21 @@ func TestSkillsToolsListAndReadOrchestratorResourcesLikeRust(t *testing.T) {
 	if read.Resource != mainResource || !strings.Contains(read.Contents, "Use this skill") {
 		t.Fatalf("read = %#v", read)
 	}
+	mainReadOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:   "skills-read-main",
+		ToolName: tool.NamespacedName("skills", "read"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"orchestrator"},"package":"` + skillPackage + `"}`},
+	})
+	if err != nil {
+		t.Fatalf("skills.read without resource error = %v", err)
+	}
+	var mainRead skillsReadResponse
+	if err := json.Unmarshal([]byte(mainReadOutput.Body), &mainRead); err != nil {
+		t.Fatalf("skills.read without resource JSON = %v in %s", err, mainReadOutput.Body)
+	}
+	if mainRead.Resource != mainResource || !strings.Contains(mainRead.Contents, "Use this skill") {
+		t.Fatalf("omitted-resource read = %#v, want main resource %q", mainRead, mainResource)
+	}
 	if !containsString(methods, "resources/list") || !containsString(methods, "resources/read") {
 		t.Fatalf("methods = %#v", methods)
 	}
@@ -380,6 +395,17 @@ func TestExecutorSkillsToolsListReadPaginateAndValidateAuthorityLikeRust(t *test
 	}
 	if !strings.Contains(first.Contents, "MARKER") || first.NextCursor == nil || len(readOutput.Body) > maxSkillToolResponseBytes {
 		t.Fatalf("first page = len(body)=%d response=%#v", len(readOutput.Body), first)
+	}
+	mainOutput, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: "read-main", ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"demo@1"},"package":"` + visible.PackageID + `"}`}})
+	if err != nil {
+		t.Fatalf("skills.read without resource error = %v", err)
+	}
+	var mainRead skillsReadResponse
+	if err := json.Unmarshal([]byte(mainOutput.Body), &mainRead); err != nil {
+		t.Fatalf("skills.read without resource JSON = %v", err)
+	}
+	if mainRead.Resource != visible.MainResource {
+		t.Fatalf("omitted-resource read = %#v, want main resource %q", mainRead, visible.MainResource)
 	}
 	secondOutput, err := router.Dispatch(context.Background(), &tool.Invocation{CallID: "read-2", ToolName: tool.NamespacedName("skills", "read"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"demo@1"},"package":"` + visible.PackageID + `","resource":"` + resource + `","cursor":"` + *first.NextCursor + `"}`}})
 	if err != nil {

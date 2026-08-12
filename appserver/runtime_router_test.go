@@ -14819,7 +14819,7 @@ func TestRuntimeRouterOrchestratorSkillCatalogAndExplicitReadLikeRust(t *testing
 			t.Fatalf("turn %d start error: %+v", index, started.Error)
 		}
 		request := waitForRuntimeAgentRequest(t, agent)
-		for _, want := range []string{"Drive:doc-search", "(orchestrator resource: " + skillPackage + ")"} {
+		for _, want := range []string{"Drive:doc-search", "(orchestrator package: " + skillPackage + ")"} {
 			if !strings.Contains(request.Instructions, want) {
 				t.Fatalf("turn %d instructions missing %q:\n%s", index, want, request.Instructions)
 			}
@@ -15223,8 +15223,9 @@ func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLike
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
 	for _, locator := range []string{rootALocator, rootBLocator} {
-		if !strings.Contains(request.Instructions, "(environment resource: "+locator+")") {
-			t.Fatalf("instructions missing selected-root locator %q:\n%s", locator, request.Instructions)
+		packageLocator := strings.TrimSuffix(locator, "/SKILL.md")
+		if !strings.Contains(request.Instructions, "(executor package: "+packageLocator+")") {
+			t.Fatalf("instructions missing selected-root package locator %q:\n%s", packageLocator, request.Instructions)
 		}
 	}
 	if !agentRequestInputItemsContain(request, rootBLocator) || !agentRequestInputItemsContain(request, "ROOT_QUALIFIED_EXECUTOR_SKILL") {
@@ -15616,7 +15617,8 @@ policy:
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "remote-skill") || !strings.Contains(request.Instructions, "Remote capability skill") || !strings.Contains(request.Instructions, "(environment resource: "+remoteDisplayPath+")") {
+	remotePackageLocator := strings.TrimSuffix(remoteDisplayPath, "/SKILL.md")
+	if !strings.Contains(request.Instructions, "remote-skill") || !strings.Contains(request.Instructions, "Remote capability skill") || !strings.Contains(request.Instructions, "(executor package: "+remotePackageLocator+")") {
 		t.Fatalf("instructions missing remote selected capability skill:\n%s", request.Instructions)
 	}
 	for _, want := range []string{"<skill>", "<name>remote-skill</name>", remoteDisplayPath, "Remote capability skill"} {

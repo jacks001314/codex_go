@@ -7315,7 +7315,7 @@ func promptSkillMetadataFromEntriesWithPolicy(entries []SkillsListEntry, preferS
 func promptSkillLocatorKind(entry SkillsListEntry) string {
 	switch strings.ToLower(strings.TrimSpace(entry.Scope)) {
 	case "environment":
-		return "environment resource"
+		return "executor package"
 	default:
 		return "file"
 	}
@@ -7340,7 +7340,7 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 			Scope:         "orchestrator",
 			Path:          skill.MainResource,
 			LocatorPath:   skill.Package,
-			LocatorKind:   "orchestrator resource",
+			LocatorKind:   "orchestrator package",
 			Description:   skill.Description,
 			AuthorityKind: "orchestrator",
 			AuthorityID:   mcp.RuntimeCodexAppsMCPServerName,

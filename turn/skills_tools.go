@@ -121,7 +121,7 @@ func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) 
 	if err := registry.Register(list); err != nil {
 		return err
 	}
-	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one page from a skill resource. Pass the exact authority and package from skills.list or an explicitly selected skill's resource_access metadata, plus its main_resource or a referenced resource beneath that package. Pass next_cursor back as cursor to continue.", catalog, executor)
+	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one page from a skill. Pass its provided package, expanding any root alias. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.", catalog, executor)
 	return registry.Register(read)
 }
 
@@ -222,27 +222,33 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	if err := validateSkillToolHandle("package", args.Package, maxSkillToolHandleBytes); err != nil {
 		return nil, err
 	}
-	if err := validateSkillToolHandle("resource", args.Resource, maxSkillToolHandleBytes); err != nil {
-		return nil, err
-	}
-	if !skillResourceBelongsToPackage(authority, args.Package, args.Resource) {
-		return nil, tool.RespondToModel("skill package is not available from the requested authority")
-	}
 	entry, ok := e.availableSkillPackage(ctx, authority, args.Package)
 	if !ok {
+		return nil, tool.RespondToModel("skill package is not available from the requested authority")
+	}
+	resource := args.Resource
+	if resource == "" {
+		// Rust 69ae78291d (#38167): omitting resource reads the package's
+		// SKILL.md directly without requiring a skills.list lookup.
+		resource = entry.MainResource
+	}
+	if err := validateSkillToolHandle("resource", resource, maxSkillToolHandleBytes); err != nil {
+		return nil, err
+	}
+	if !skillResourceBelongsToPackage(authority, args.Package, resource) {
 		return nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
 	var result skillprovider.ReadResult
 	var err error
 	if authority.Kind == "orchestrator" {
 		var contents string
-		contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, args.Resource)
-		result = skillprovider.ReadResult{Resource: args.Resource, Contents: contents}
+		contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, resource)
+		result = skillprovider.ReadResult{Resource: resource, Contents: contents}
 	} else if e.providers != nil {
 		result, err = e.providers.Read(ctx, skillprovider.ReadRequest{
 			Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: authority.ID},
 			PackageID: entry.Package,
-			Resource:  args.Resource,
+			Resource:  resource,
 		})
 	} else {
 		err = errors.New("executor skill provider is not configured")
@@ -250,7 +256,7 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return nil, tool.RespondToModel("failed to read skill resource")
 	}
-	if result.Resource != args.Resource {
+	if result.Resource != resource {
 		return nil, tool.Fatal("skill provider returned a different resource")
 	}
 	start, cursorErr := parseSkillToolCursor(args.Cursor, result.Contents, "skills.read")
@@ -864,7 +870,7 @@ func skillsToolInputSchema(name string) map[string]any {
 		}
 		properties["package"] = map[string]any{"type": "string"}
 		properties["resource"] = map[string]any{"type": "string"}
-		required = append(required, "package", "resource")
+		required = append(required, "package")
 	}
 	return map[string]any{
 		"type":                 "object",

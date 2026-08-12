@@ -149,16 +149,76 @@ func TestRenderAvailableSkillsUsesLocatorKindAndPathLikeRust(t *testing.T) {
 			Description: "Executor skill",
 			Path:        "environment://remote/remote/skills/env-skill/SKILL.md",
 			LocatorPath: "skill://executor/remote/skills/env-skill/SKILL.md",
-			LocatorKind: "environment resource",
+			LocatorKind: "executor package",
+			PackageID:   "skill://executor/remote/skills/env-skill",
 		},
 	}
 	available := RenderAvailableSkills(skills, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 1000})
 	if available == nil || len(available.SkillLines) != 1 {
 		t.Fatalf("RenderAvailableSkills() = %#v", available)
 	}
-	want := "- env-skill: Executor skill (environment resource: skill://executor/remote/skills/env-skill/SKILL.md)"
+	want := "- env-skill: Executor skill (executor package: skill://executor/remote/skills/env-skill)"
 	if available.SkillLines[0] != want {
 		t.Fatalf("skill line = %q, want %q", available.SkillLines[0], want)
+	}
+}
+
+func TestRenderExtensionAvailableSkillsAddsDirectPackageReadInstructionsLikeRust(t *testing.T) {
+	executor := []InstructionsSkillMetadata{
+		{Name: "env-skill", Description: "Executor skill", Path: "skill://executor/remote/skills/env-skill/SKILL.md", LocatorKind: "executor package", PackageID: "skill://executor/remote/skills/env-skill"},
+		{Name: "orch-skill", Description: "Orchestrator skill", Path: "skill://orchestrator/plugin/skills/orch-skill/SKILL.md", LocatorKind: "orchestrator package", PackageID: "skill://orchestrator/plugin/skills/orch-skill"},
+	}
+	available := RenderExtensionAvailableSkills(executor, false)
+	if available == nil {
+		t.Fatalf("extension available skills = nil")
+	}
+	for _, want := range []string{
+		"Read a skill package directly with `skills.read({\"package\":\"<package>\"})`",
+		"use `skills.list` to find it",
+		"(executor package: skill://executor/remote/skills/env-skill)",
+		"(orchestrator package: skill://orchestrator/plugin/skills/orch-skill)",
+	} {
+		if !strings.Contains(available.Body, want) {
+			t.Fatalf("extension body missing %q in:\n%s", want, available.Body)
+		}
+	}
+}
+
+func TestRenderAvailableSkillsHostCatalogOmitsDirectPackageReadInstructionsLikeRust(t *testing.T) {
+	host := []InstructionsSkillMetadata{
+		{Name: "alpha", Scope: "repo", Path: "/tmp/skills/alpha/SKILL.md", Root: "/tmp/skills"},
+	}
+	available := RenderAvailableSkills(host, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 1 << 20})
+	if available == nil {
+		t.Fatalf("RenderAvailableSkills() = nil")
+	}
+	if strings.Contains(available.Body, "Read a skill package directly with") {
+		t.Fatalf("host catalog unexpectedly includes direct package read instructions:\n%s", available.Body)
+	}
+}
+
+func TestSkillRenderLocatorPreservesLiteralBackslashesInPackageIDsLikeRust(t *testing.T) {
+	pkg := `skill://executor/workspace/foo\bar/skills/demo`
+	lines := extensionSkillRenderLines([]InstructionsSkillMetadata{{
+		Name:        "demo",
+		Description: "Description.",
+		Path:        pkg + "/SKILL.md",
+		LocatorKind: "executor package",
+		PackageID:   pkg,
+	}})
+	if len(lines) != 1 {
+		t.Fatalf("extension lines = %#v", lines)
+	}
+	if lines[0].path != pkg {
+		t.Fatalf("rendered locator = %q, want literal backslash preserved: %q", lines[0].path, pkg)
+	}
+	plan, ok := buildExtensionAliasPlan(lines, SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 500})
+	if !ok {
+		t.Fatalf("buildExtensionAliasPlan() = false, want true")
+	}
+	aliased := applySkillAliases(lines, plan)
+	if len(aliased) != 1 || !strings.HasPrefix(aliased[0].path, "e0/") || !strings.Contains(aliased[0].path, `foo\bar`) {
+		t.Fatalf("aliased path = %#v, want e0/ prefix with preserved backslash", aliased)
 	}
 }
 
@@ -316,8 +376,8 @@ func TestRenderCombinedAvailableSkillsSharesBudgetAndPrioritizesExecutor(t *test
 		{Name: "host-two", Description: strings.Repeat("h", 100), Path: "C:/skills/host-two/SKILL.md", Root: "C:/skills", Scope: "user"},
 	}
 	executor := []InstructionsSkillMetadata{
-		{Name: "executor-one", Description: strings.Repeat("e", 100), Path: "skill://executor/one", LocatorKind: "environment resource"},
-		{Name: "executor-two", Description: strings.Repeat("e", 100), Path: "skill://executor/two", LocatorKind: "environment resource"},
+		{Name: "executor-one", Description: strings.Repeat("e", 100), Path: "skill://executor/one", LocatorKind: "executor package", PackageID: "skill://executor/one"},
+		{Name: "executor-two", Description: strings.Repeat("e", 100), Path: "skill://executor/two", LocatorKind: "executor package", PackageID: "skill://executor/two"},
 	}
 	options := AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 155}}
 	hostAvailable, executorAvailable := RenderCombinedAvailableSkills(host, executor, options)
@@ -338,7 +398,7 @@ func TestRenderCombinedAvailableSkillsSharesBudgetAndPrioritizesExecutor(t *test
 func TestRenderCombinedAvailableSkillsReservesExecutorOmissionMarker(t *testing.T) {
 	executor := make([]InstructionsSkillMetadata, 0, 4)
 	for index := 0; index < 4; index++ {
-		executor = append(executor, InstructionsSkillMetadata{Name: fmt.Sprintf("executor-%d", index), Path: fmt.Sprintf("skill://executor/%d", index), LocatorKind: "environment resource"})
+		executor = append(executor, InstructionsSkillMetadata{Name: fmt.Sprintf("executor-%d", index), Path: fmt.Sprintf("skill://executor/%d", index), LocatorKind: "executor package", PackageID: fmt.Sprintf("skill://executor/%d", index)})
 	}
 	host := []InstructionsSkillMetadata{{Name: "host", Path: "C:/skills/host/SKILL.md", Root: "C:/skills"}}
 	_, executorAvailable := RenderCombinedAvailableSkills(host, executor, AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 120}})
@@ -353,8 +413,8 @@ func TestRenderCombinedAvailableSkillsReservesExecutorOmissionMarker(t *testing.
 func TestRenderExtensionAvailableSkillsMatchesRustBoundedCatalog(t *testing.T) {
 	longDescription := strings.Repeat("x", 1025)
 	skills := []InstructionsSkillMetadata{
-		{Name: "second", Description: "Second", Path: "skill://root/second/SKILL.md", LocatorKind: "environment resource"},
-		{Name: "first", Description: longDescription, Path: "skill://root/first/SKILL.md", LocatorKind: "environment resource"},
+		{Name: "second", Description: "Second", Path: "skill://root/second/SKILL.md", LocatorKind: "executor package", PackageID: "skill://root/second"},
+		{Name: "first", Description: longDescription, Path: "skill://root/first/SKILL.md", LocatorKind: "executor package", PackageID: "skill://root/first"},
 	}
 	available := RenderExtensionAvailableSkills(skills, false)
 	if available == nil || len(available.SkillLines) != 2 {
@@ -362,6 +422,9 @@ func TestRenderExtensionAvailableSkillsMatchesRustBoundedCatalog(t *testing.T) {
 	}
 	if !strings.HasPrefix(available.SkillLines[0], "- second: Second ") {
 		t.Fatalf("extension catalog order changed: %#v", available.SkillLines)
+	}
+	if !strings.Contains(available.SkillLines[0], "(executor package: skill://root/second)") {
+		t.Fatalf("extension catalog locator = %q", available.SkillLines[0])
 	}
 	wantTruncated := strings.Repeat("x", 1021) + "..."
 	if !strings.Contains(available.SkillLines[1], wantTruncated) || strings.Contains(available.SkillLines[1], longDescription) {
@@ -376,7 +439,8 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t 
 			Name:        fmt.Sprintf("skill-%02d", index),
 			Description: strings.Repeat("x", 1024),
 			Path:        fmt.Sprintf("skill://root/skill-%02d/SKILL.md", index),
-			LocatorKind: "environment resource",
+			LocatorKind: "executor package",
+			PackageID:   fmt.Sprintf("skill://root/skill-%02d", index),
 		})
 	}
 	available := RenderExtensionAvailableSkills(skills, false)
@@ -385,5 +449,8 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t 
 	}
 	if available.WarningMessage == nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
 		t.Fatalf("extension bounded catalog body = %q warning=%v", available.Body, available.WarningMessage)
+	}
+	if strings.Contains(strings.Join(available.SkillLines, "\n"), "/SKILL.md") {
+		t.Fatalf("extension catalog still renders full SKILL.md locators: %#v", available.SkillLines)
 	}
 }
