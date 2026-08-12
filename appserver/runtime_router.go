@@ -211,6 +211,8 @@ type RuntimeRouter struct {
 	serverRequestGuards    map[string]*ThreadStatusActiveGuard
 	executedToolCallsMu    sync.Mutex
 	executedToolCalls      map[string]*turn.ExecutedToolCallRecorder
+	newContextWindowMu     sync.Mutex
+	newContextWindowReq    map[string]bool
 	codeModeRuntimesMu     sync.Mutex
 	codeModeRuntimes       map[string]*tool.CodeModeRuntime
 	toolItemReviews        map[string]toolItemReviewSummary
@@ -9329,7 +9331,13 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 	if reviewer == nil && r.services.Agent != nil {
 		reviewer = r.ensureGuardianReviewer(r.services.Agent)
 	}
-	service.SetElicitationHandler(&appserverMCPElicitationHandler{broker: r.requireServerRequests(), reviewer: reviewer, authority: r.currentMCPElicitationAuthority})
+	service.SetElicitationHandler(&appserverMCPElicitationHandler{
+		broker:    r.requireServerRequests(),
+		reviewer:  reviewer,
+		authority: r.currentMCPElicitationAuthority,
+		persist:   r.persistMCPToolApprovalAmendment,
+		record:    r.recordMCPToolApprovalResolution,
+	})
 	service.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
 	service.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
 		return r.mcpRootsForThread(threadID)
@@ -9453,7 +9461,7 @@ func (r *RuntimeRouter) effectiveMCPConfigForThread(threadID string) *config.Con
 	return cfg
 }
 
-func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID string) mcpElicitationAuthority {
+func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, connectorID string) mcpElicitationAuthority {
 	cfg := r.effectiveMCPConfigForThread(threadID)
 	authority := mcpElicitationAuthority{
 		ApprovalPolicy:        turnApprovalPolicyForTurn(cfg, nil),
@@ -9465,6 +9473,9 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID string) mcpElici
 	params := &turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}
 	if settings != nil {
 		cwd = strings.TrimSpace(settings.CWD)
+		if model := strings.TrimSpace(threadSettingsModel(settings)); model != "" {
+			params.Model = model
+		}
 		if policy, ok := parseTurnApprovalPolicy(settings.ApprovalPolicy); ok {
 			authority.ApprovalPolicy = policy
 		}
@@ -9481,6 +9492,9 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID string) mcpElici
 		if cwd == "" {
 			cwd = strings.TrimSpace(active.CWD)
 		}
+		if strings.TrimSpace(params.Model) == "" {
+			params.Model = strings.TrimSpace(active.Model)
+		}
 		if settings == nil || strings.TrimSpace(settings.ApprovalPolicy) == "" {
 			authority.ApprovalPolicy = turnApprovalPolicyForTurn(cfg, active)
 		}
@@ -9496,7 +9510,178 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID string) mcpElici
 	if resolution, err := turnSandboxPermissionProfile(cfg, cwd, params); err == nil && resolution != nil {
 		authority.PermissionProfile = resolution.Profile
 	}
+	// Rust 2230d64464 (#38108): MCP tool call approvals resolve the reviewer
+	// per server/per connector from the apps config layers, validated against
+	// the managed approvals_reviewer requirements, before falling back to the
+	// thread-level reviewer.
+	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, params.Model)
 	return authority
+}
+
+// mcpApprovalsReviewerForElicitation mirrors Rust's
+// mcp_approvals_reviewer_from_layers (codex-rs/core/src/connectors.rs): a
+// model listed in auto_review.required_on_models always uses auto_review; for
+// the codex-apps MCP server the connector-level approvals_reviewer (then the
+// apps default) is used when the managed requirements permit it; otherwise the
+// thread-level reviewer applies.
+func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, serverName, connectorID, model string) string {
+	defaultReviewer = strings.TrimSpace(defaultReviewer)
+	if defaultReviewer == "" {
+		defaultReviewer = "user"
+	}
+	if autoReviewRequiredForModel(cfg, model) {
+		return string(config.ApprovalsReviewerAutoReview)
+	}
+	if !mcp.IsCodexAppsMCPServerName(serverName) {
+		return defaultReviewer
+	}
+	reviewer := connectorApprovalsReviewerFromConfig(cfg, connectorID)
+	if reviewer == "" {
+		return defaultReviewer
+	}
+	if !approvalsReviewerAllowedByRequirements(cfg, reviewer) {
+		return defaultReviewer
+	}
+	return reviewer
+}
+
+// connectorApprovalsReviewerFromConfig reads the connector-level
+// approvals_reviewer from the effective apps config (connector-specific entry,
+// then the `_default` entry). Mirrors Rust apps_config_from_layer_stack.
+func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID string) string {
+	if cfg == nil || cfg.Values == nil {
+		return ""
+	}
+	raw, ok := cfg.Values["apps"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	connectorID = strings.TrimSpace(connectorID)
+	if connectorID != "" {
+		if appValues, ok := raw[connectorID].(map[string]any); ok {
+			if reviewer := firstNonEmpty(stringFromMap(appValues, "approvals_reviewer"), stringFromMap(appValues, "approvalsReviewer")); reviewer != "" {
+				return reviewer
+			}
+		}
+	}
+	if defaults, ok := raw["_default"].(map[string]any); ok {
+		return firstNonEmpty(stringFromMap(defaults, "approvals_reviewer"), stringFromMap(defaults, "approvalsReviewer"))
+	}
+	return ""
+}
+
+// approvalsReviewerAllowedByRequirements reports whether the candidate
+// approvals_reviewer satisfies the managed allowed_approvals_reviewers
+// requirements (Rust requirements.approvals_reviewer.can_set).
+func approvalsReviewerAllowedByRequirements(cfg *config.Config, reviewer string) bool {
+	reviewer = strings.TrimSpace(reviewer)
+	if reviewer == "" {
+		return false
+	}
+	if cfg == nil || cfg.Requirements == nil || len(cfg.Requirements.AllowedApprovalsReviewers) == 0 {
+		return true
+	}
+	for _, allowed := range cfg.Requirements.AllowedApprovalsReviewers {
+		if string(allowed) == reviewer {
+			return true
+		}
+	}
+	return false
+}
+
+// persistMCPToolApprovalAmendment applies the persistent MCP tool approval
+// policy amendment chosen through "Allow and don't ask me again"
+// (Rust maybe_persist_mcp_tool_approval in mcp_tool_call.rs). For the
+// codex-apps server it writes apps.<connector_id>.tools.<tool>.approval_mode;
+// for custom MCP servers it writes mcp_servers.<server>.tools.<tool>
+// .approval_mode in the user config.
+func (r *RuntimeRouter) persistMCPToolApprovalAmendment(request *mcp.MCPElicitationRequest, response *MCPElicitationRequestResponse) error {
+	if r == nil || r.services.Config == nil || request == nil {
+		return nil
+	}
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return fmt.Errorf("MCP tool approval metadata is missing")
+	}
+	toolName := strings.TrimSpace(stringFromMap(meta, "tool_name"))
+	if toolName == "" {
+		return fmt.Errorf("MCP tool approval metadata must include a non-empty tool_name")
+	}
+	serverName := mcpElicitationServerName(request)
+	if serverName == "" {
+		serverName = strings.TrimSpace(request.ServerName)
+	}
+	if serverName == "" {
+		return fmt.Errorf("MCP tool approval is missing the server name")
+	}
+	keyPath := ""
+	if mcp.IsCodexAppsMCPServerName(serverName) {
+		connectorID := strings.TrimSpace(stringFromMap(meta, "connector_id"))
+		if connectorID == "" {
+			return fmt.Errorf("codex-apps MCP tool approval is missing connector_id")
+		}
+		keyPath = "apps." + configKeyPathSegment(connectorID) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+	} else {
+		keyPath = "mcp_servers." + configKeyPathSegment(serverName) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+	}
+	_, err := r.services.Config.BatchWrite(&config.ConfigBatchWriteParams{
+		Edits: []config.ConfigEdit{{
+			KeyPath: keyPath,
+			Value:   "approve",
+		}},
+	})
+	return err
+}
+
+// configKeyPathSegment escapes a config key path segment (quotes and dots) so
+// it can be embedded in a dotted ConfigService key path.
+func configKeyPathSegment(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	if strings.ContainsAny(value, ".\"'") {
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	}
+	return value
+}
+
+// recordMCPToolApprovalResolution records the unified approval
+// resolution-source telemetry for an MCP tool call approval resolved by the
+// user through the client (Rust record_resolution in approvals.rs). Guardian
+// resolutions are recorded through the guardian review analytics path instead;
+// permission-hook resolutions are recorded through hook-run analytics.
+func (r *RuntimeRouter) recordMCPToolApprovalResolution(request *mcp.MCPElicitationRequest, response *MCPElicitationRequestResponse) {
+	if r == nil || request == nil || response == nil {
+		return
+	}
+	if mcpElicitationApprovalKind(request) != "mcp_tool_call" {
+		return
+	}
+	itemID := appserverMCPElicitationID(request)
+	if itemID == "" {
+		return
+	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	turnID := strings.TrimSpace(request.TurnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	outcome := mcpToolApprovalFinalOutcome(response.Action)
+	r.recordToolItemReviewSummary(threadID, turnID, itemID, toolItemReviewSummary{
+		ReviewCount:          1,
+		UserReviewCount:      1,
+		FinalApprovalOutcome: outcome,
+	})
+}
+
+func mcpToolApprovalFinalOutcome(action MCPElicitationAction) string {
+	switch action {
+	case MCPElicitationActionAccept:
+		return telemetry.FinalApprovalOutcomeUserApproved
+	case MCPElicitationActionDecline:
+		return telemetry.FinalApprovalOutcomeUserDenied
+	default:
+		return telemetry.FinalApprovalOutcomeUserAborted
+	}
 }
 
 func granularMCPElicitationsAllowed(cfg *config.Config, params *turn.TurnStartParams) bool {
@@ -9579,10 +9764,13 @@ func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string
 	if err != nil || record == nil {
 		return nil
 	}
-	paths := make([]string, 0, len(record.Metadata.SelectedCapabilityRoots))
-	for _, raw := range record.Metadata.SelectedCapabilityRoots {
-		var selected SelectedCapabilityRoot
-		if json.Unmarshal(raw, &selected) != nil || selected.Location.Type != CapabilityRootLocationEnvironment {
+	// Rust b43de77679 (#38067): merge persisted thread roots with the ready
+	// attachment roots installed by environment readiness reports, keeping
+	// thread roots first and hiding attachments that are not ready yet.
+	status := r.inspectSelectedCapabilityRootsForThread(record)
+	paths := make([]string, 0, len(status.ReadyRoots))
+	for _, selected := range status.ReadyRoots {
+		if selected.Location.Type != CapabilityRootLocationEnvironment {
 			continue
 		}
 		environmentID := strings.TrimSpace(selected.Location.EnvironmentID)
@@ -9596,6 +9784,24 @@ func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string
 		}
 	}
 	return normalizedMCPRootPaths(r, paths)
+}
+
+// inspectSelectedCapabilityRootsForThread returns the merged selected
+// capability roots for a thread: persisted thread roots first, then the ready
+// attachment roots from the environment manager, deduplicated by root ID
+// (Rust ThreadEnvironments::inspect_selected_capability_roots, #38067).
+func (r *RuntimeRouter) inspectSelectedCapabilityRootsForThread(record *session.Record) SelectedCapabilityRootsStatus {
+	threadRoots := make([]SelectedCapabilityRoot, 0, len(record.Metadata.SelectedCapabilityRoots))
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if json.Unmarshal(raw, &selected) == nil {
+			threadRoots = append(threadRoots, selected)
+		}
+	}
+	if r == nil || r.services.Environment == nil {
+		return SelectedCapabilityRootsStatus{ReadyRoots: cloneSelectedCapabilityRoots(threadRoots)}
+	}
+	return r.services.Environment.InspectSelectedCapabilityRoots(threadRoots)
 }
 
 func mergeMCPRootPaths(groups ...[]string) []string {
@@ -10182,6 +10388,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.DynamicTools = params.CloneDynamicTools()
 	}
 	options.ContextStatus = r.contextStatusForThread(threadID)
+	options.NewContextWindow = r.newContextWindowRequesterForTurn(threadID, cfg)
 	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
@@ -11138,6 +11345,41 @@ func (r *RuntimeRouter) contextStatusForThread(threadID string) func() compact.T
 		}
 		return compactTokenStatusFromMetadata(record.Metadata.Extra)
 	}
+}
+
+// newContextWindowRequesterForTurn mirrors Rust's Feature::TokenBudget gate for
+// the new_context tool: the model can request a fresh context window only when
+// the token-budget feature is enabled for the turn.
+func (r *RuntimeRouter) newContextWindowRequesterForTurn(threadID string, cfg *config.Config) func() {
+	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "token_budget") {
+		return nil
+	}
+	return func() {
+		r.requestNewContextWindow(threadID)
+	}
+}
+
+func (r *RuntimeRouter) requestNewContextWindow(threadID string) {
+	if r == nil {
+		return
+	}
+	r.newContextWindowMu.Lock()
+	defer r.newContextWindowMu.Unlock()
+	if r.newContextWindowReq == nil {
+		r.newContextWindowReq = map[string]bool{}
+	}
+	r.newContextWindowReq[threadID] = true
+}
+
+func (r *RuntimeRouter) takeNewContextWindowRequest(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	r.newContextWindowMu.Lock()
+	defer r.newContextWindowMu.Unlock()
+	requested := r.newContextWindowReq[threadID]
+	delete(r.newContextWindowReq, threadID)
+	return requested
 }
 
 func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string) tool.UserInputResponder {

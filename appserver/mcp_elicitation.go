@@ -16,7 +16,9 @@ import (
 type appserverMCPElicitationHandler struct {
 	broker              *ServerRequestBroker
 	reviewer            GuardianReviewer
-	authority           func(string) mcpElicitationAuthority
+	authority           func(string, string, string) mcpElicitationAuthority
+	persist             func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse) error
+	record              func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse)
 	fullAccessFormInput atomic.Bool
 }
 
@@ -55,7 +57,7 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		if request != nil {
 			threadID = strings.TrimSpace(request.ThreadID)
 		}
-		authority = h.authority(threadID)
+		authority = h.authority(threadID, mcpElicitationServerName(request), mcpElicitationConnectorID(request))
 	}
 	switch authority.ApprovalPolicy {
 	case sandbox.ApprovalNever:
@@ -107,11 +109,38 @@ func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Conte
 		}
 		return &mcp.MCPElicitationResponse{Action: action}, nil
 	}
+	// Rust 2230d64464 (#38108): "Allow and don't ask me again" persists the
+	// MCP tool approval as a policy amendment (approval_mode: approve) on the
+	// owning client. Non-MCP approval paths and non-accept actions reject it.
+	if response.Action == MCPElicitationActionAccept && mcpElicitationApprovalKind(request) == "mcp_tool_call" && mcpElicitationRequestsPersistentApproval(&response) && h.persist != nil {
+		if err := h.persist(request, &response); err != nil {
+			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: map[string]any{"message": "failed to persist MCP tool approval: " + err.Error()}}, nil
+		}
+	}
+	// Rust 2230d64464 (#38108): record the unified approval resolution source
+	// (user) for MCP tool call approvals resolved through the client.
+	if mcpElicitationApprovalKind(request) == "mcp_tool_call" && h.record != nil {
+		h.record(request, &response)
+	}
 	return &mcp.MCPElicitationResponse{
 		Action:  mcp.MCPElicitationAction(response.Action),
 		Content: response.Content,
 		Meta:    response.Meta,
 	}, nil
+}
+
+// mcpElicitationRequestsPersistentApproval reports whether the client's
+// elicitation response opts into a persistent MCP policy amendment
+// (Rust codex_protocol::mcp_approval_meta::PERSIST_ALWAYS).
+func mcpElicitationRequestsPersistentApproval(response *MCPElicitationRequestResponse) bool {
+	if response == nil {
+		return false
+	}
+	meta, ok := response.Meta.(map[string]any)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(stringFromMap(meta, "persist")) == "always"
 }
 
 func mcpElicitationAutoDecline() *mcp.MCPElicitationResponse {
@@ -222,6 +251,26 @@ func requestMetaMap(request *mcp.MCPElicitationRequest) (map[string]any, bool) {
 	}
 	meta, ok := request.Meta.(map[string]any)
 	return meta, ok
+}
+
+// mcpElicitationServerName returns the MCP server name that issued the
+// elicitation request, falling back to the request's server field.
+func mcpElicitationServerName(request *mcp.MCPElicitationRequest) string {
+	if request == nil {
+		return ""
+	}
+	return strings.TrimSpace(request.ServerName)
+}
+
+// mcpElicitationConnectorID returns the connector id carried in the
+// elicitation metadata for codex-apps tool calls (Rust
+// codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY).
+func mcpElicitationConnectorID(request *mcp.MCPElicitationRequest) string {
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringFromMap(meta, "connector_id"))
 }
 
 func appserverMCPElicitationParams(request *mcp.MCPElicitationRequest) *MCPElicitationRequestParams {

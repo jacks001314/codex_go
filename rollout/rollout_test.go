@@ -960,6 +960,130 @@ func TestLegacySessionItemMarshalUsesRustResponseItemWireShape(t *testing.T) {
 	}
 }
 
+func TestResponseItemEnvelopeStoresHarnessMetadataBesidePayloadLikeRust(t *testing.T) {
+	line, err := LineFromItem(&Item{
+		ID:      "item-1",
+		Type:    "message",
+		Role:    "developer",
+		Content: []ContentPart{{Type: "input_text", Text: "instructions"}},
+		Data:    map[string]any{"harness_metadata": json.RawMessage(`{"future_field":"value"}`)},
+	}, fixedTime())
+	if err != nil {
+		t.Fatalf("LineFromItem() error = %v", err)
+	}
+	raw, err := json.Marshal(line)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if wire["type"] != "response_item" || wire["payload"] == nil {
+		t.Fatalf("wire line = %#v", wire)
+	}
+	metadata, ok := wire["metadata"].(map[string]any)
+	if !ok || metadata["future_field"] != "value" {
+		t.Fatalf("metadata = %#v, want sidecar beside payload", wire["metadata"])
+	}
+	payload, ok := wire["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %#v", wire["payload"])
+	}
+	if _, hasMetadata := payload["metadata"]; hasMetadata {
+		t.Fatal("harness metadata must not be stored inside the response-item payload")
+	}
+
+	var restored Line
+	if err := unmarshalLine(raw, &restored); err != nil {
+		t.Fatalf("unmarshalLine() error = %v", err)
+	}
+	if len(restored.ItemMetadata) == 0 {
+		t.Fatal("restored line lost harness metadata")
+	}
+	item, ok := ItemFromLine(&restored)
+	if !ok {
+		t.Fatal("ItemFromLine() failed")
+	}
+	if value, ok := item.Data["harness_metadata"].(json.RawMessage); !ok || string(value) == "" {
+		t.Fatalf("item harness metadata = %#v", item.Data["harness_metadata"])
+	}
+}
+
+func TestLegacyResponseItemLineRemainsShapeCompatibleLikeRust(t *testing.T) {
+	legacy := []byte(`{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":7,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}`)
+	var line Line
+	if err := json.Unmarshal(legacy, &line); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(line.ItemMetadata) != 0 {
+		t.Fatalf("legacy line must have no metadata sibling, got %s", line.ItemMetadata)
+	}
+	reencoded, err := json.Marshal(line)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(reencoded, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, hasMetadata := wire["metadata"]; hasMetadata {
+		t.Fatal("legacy-compatible line must omit the metadata sibling when absent")
+	}
+	if _, hasPayload := wire["payload"]; !hasPayload {
+		t.Fatal("legacy-compatible line must keep the payload")
+	}
+}
+
+func TestCompactedReplacementHistoryMetadataSidecarLikeRust(t *testing.T) {
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: t.TempDir(), ThreadID: "thread-compact-meta", Now: now})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	replacement := []Item{{
+		ID:   "item-1",
+		Type: "message",
+		Role: "user",
+		Text: "kept",
+		Data: map[string]any{"harness_metadata": json.RawMessage(`{"future_field":"value"}`)},
+	}}
+	if err := recorder.AppendCompacted("summary", replacement, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendCompacted() error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	lines, parseErrors, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors > 0 {
+		t.Fatalf("Load() parse errors = %v", parseErrors)
+	}
+	var compactedLine *Line
+	for i := range lines {
+		if lines[i].Type == "compacted" {
+			compactedLine = &lines[i]
+			break
+		}
+	}
+	if compactedLine == nil {
+		t.Fatalf("no compacted line in %#v", lines)
+	}
+	event := compactedEventFromPayload(compactedLine.Payload)
+	if event == nil || len(event.ReplacementHistoryMetadata) == 0 {
+		t.Fatalf("event = %#v, want replacement_history_metadata sidecar", event)
+	}
+	restored, ok := compactedReplacementItems(compactedLine.Payload)
+	if !ok || len(restored) != 1 {
+		t.Fatalf("compactedReplacementItems() = %#v ok=%v", restored, ok)
+	}
+	if value, ok := restored[0].Data["harness_metadata"].(json.RawMessage); !ok || string(value) != `{"future_field":"value"}` {
+		t.Fatalf("restored harness metadata = %#v", restored[0].Data["harness_metadata"])
+	}
+}
+
 func TestAppendSessionItemsWritesCanonicalRustResponsePayload(t *testing.T) {
 	home := t.TempDir()
 	now := fixedTime()

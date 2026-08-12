@@ -28,6 +28,42 @@ type SamplingFollowUpContext struct {
 }
 
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
+
+// SamplingCompactionContext carries the state of an in-flight sampling
+// iteration to a mid-turn compaction callback.
+type SamplingCompactionContext struct {
+	Response     *model.AgentResponse
+	Usage        model.AgentUsage
+	Iteration    int
+	HasToolCalls bool
+	// Result is the agent loop's in-progress result. The callback may read
+	// the accumulated responses, tool executions, and input items to build
+	// the compaction request.
+	Result *AgentLoopResult
+}
+
+// SamplingCompactionResult describes a mid-turn roll-over compaction.
+type SamplingCompactionResult struct {
+	// Compacted reports whether the callback compacted the conversation.
+	Compacted bool
+	// ResetWindow reports a context-window reset that does not replace the
+	// conversation history (Rust's token-budget new_context tool). The loop
+	// keeps the sampled responses and pending tool calls when set.
+	ResetWindow bool
+	// InputItems replaces the in-memory conversation items the loop continues
+	// with after the compaction.
+	InputItems []any
+	// PreviousResponseID restarts the conversation after the compaction.
+	// Empty starts a fresh stored response for the compacted history.
+	PreviousResponseID string
+}
+
+// SamplingCompaction is invoked while a turn still needs follow-up and the
+// caller's compaction policy reports the token limit is reached. It mirrors
+// Rust's mid-turn roll-over: the turn's history is compacted in place and the
+// sampling loop continues against the compacted context instead of executing
+// the pending tool calls.
+type SamplingCompaction func(*SamplingCompactionContext) (*SamplingCompactionResult, error)
 type AssistantMessageCallback func(response *model.AgentResponse, iteration int, hasToolCalls bool)
 type ClientMetadataTransform func(map[string]string) map[string]string
 type WarningCallback func(message string)
@@ -80,6 +116,7 @@ type AgentLoopRequest struct {
 	OnWarning                       WarningCallback
 	Timing                          *TimingState
 	SamplingFollowUp                SamplingFollowUp
+	SamplingCompaction              SamplingCompaction
 	OnAssistantMessage              AssistantMessageCallback
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
@@ -97,6 +134,7 @@ type AgentLoopResult struct {
 	Iterations        int
 	TimingProfile     *Profile
 	SamplingFollowUps int
+	Compactions       int
 }
 
 func (r *AgentLoopResult) ModelResponses() []*model.AgentResponse {
@@ -248,6 +286,34 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		toolItems := toolAgentItems(response)
 		if request.OnAssistantMessage != nil && responseHasAssistantMessage(response) {
 			request.OnAssistantMessage(response, iteration, len(toolItems) > 0)
+		}
+		if len(toolItems) > 0 && request.SamplingCompaction != nil {
+			compacted, err := request.SamplingCompaction(&SamplingCompactionContext{
+				Response:     response,
+				Usage:        result.Usage,
+				Iteration:    iteration,
+				HasToolCalls: true,
+				Result:       result,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if compacted != nil && compacted.Compacted {
+				if !compacted.ResetWindow {
+					// The compacted history supersedes every response sampled
+					// before the compaction, so drop them and let the turn's
+					// persisted items start at the post-compaction boundary
+					// (Rust replaces the pre-compaction history with the
+					// summary).
+					result.InputItems = compacted.InputItems
+					result.Response = nil
+					result.Responses = nil
+					result.ToolExecutions = nil
+					previousResponseID = compacted.PreviousResponseID
+				}
+				result.Compactions++
+				continue
+			}
 		}
 		if len(toolItems) == 0 && request.SamplingFollowUp != nil {
 			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: len(toolItems) > 0})

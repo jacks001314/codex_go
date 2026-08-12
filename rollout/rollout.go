@@ -172,12 +172,16 @@ type HistoryPosition struct {
 }
 
 type Line struct {
-	Type             string          `json:"type"`
-	Timestamp        string          `json:"timestamp,omitempty"`
-	Ordinal          *uint64         `json:"ordinal,omitempty"`
-	Meta             *SessionMeta    `json:"meta,omitempty"`
-	Payload          json.RawMessage `json:"payload,omitempty"`
-	Item             json.RawMessage `json:"item,omitempty"`
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp,omitempty"`
+	Ordinal   *uint64         `json:"ordinal,omitempty"`
+	Meta      *SessionMeta    `json:"meta,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	Item      json.RawMessage `json:"item,omitempty"`
+	// ItemMetadata is the optional harness-owned metadata sibling stored
+	// beside a response-item payload (Rust RolloutItemWire::ResponseItem
+	// metadata field, #38058). Absent for legacy lines.
+	ItemMetadata     json.RawMessage `json:"metadata,omitempty"`
 	ItemID           string          `json:"item_id,omitempty"`
 	TurnID           string          `json:"turn_id,omitempty"`
 	Role             string          `json:"role,omitempty"`
@@ -195,10 +199,15 @@ type RollbackEvent struct {
 type CompactedEvent struct {
 	Message            string          `json:"message"`
 	ReplacementHistory json.RawMessage `json:"replacement_history,omitempty"`
-	WindowNumber       *uint64         `json:"window_number,omitempty"`
-	FirstWindowID      string          `json:"first_window_id,omitempty"`
-	PreviousWindowID   string          `json:"previous_window_id,omitempty"`
-	WindowID           string          `json:"window_id,omitempty"`
+	// ReplacementHistoryMetadata is an aligned sidecar for the replacement
+	// history's harness metadata (Rust CompactedItemWire
+	// replacement_history_metadata, #38058). It is optional; legacy payloads
+	// omit it.
+	ReplacementHistoryMetadata json.RawMessage `json:"replacement_history_metadata,omitempty"`
+	WindowNumber               *uint64         `json:"window_number,omitempty"`
+	FirstWindowID              string          `json:"first_window_id,omitempty"`
+	PreviousWindowID           string          `json:"previous_window_id,omitempty"`
+	WindowID                   string          `json:"window_id,omitempty"`
 }
 
 type ThreadGoal struct {
@@ -374,6 +383,15 @@ func (line Line) MarshalJSON() ([]byte, error) {
 		}{Timestamp: line.Timestamp, Ordinal: line.Ordinal, Type: line.Type, Payload: line.Meta})
 	}
 	if line.Type == "response_item" && len(line.Item) > 0 {
+		if len(line.ItemMetadata) > 0 && string(line.ItemMetadata) != "null" {
+			return json.Marshal(struct {
+				Timestamp string          `json:"timestamp"`
+				Ordinal   *uint64         `json:"ordinal,omitempty"`
+				Type      string          `json:"type"`
+				Payload   json.RawMessage `json:"payload"`
+				Metadata  json.RawMessage `json:"metadata"`
+			}{Timestamp: line.Timestamp, Ordinal: line.Ordinal, Type: line.Type, Payload: line.Item, Metadata: line.ItemMetadata})
+		}
 		return json.Marshal(struct {
 			Timestamp string          `json:"timestamp"`
 			Ordinal   *uint64         `json:"ordinal,omitempty"`
@@ -672,25 +690,42 @@ func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.
 		now = time.Now().UTC()
 	}
 	history := make([]json.RawMessage, 0, len(replacement))
+	var historyMetadata []json.RawMessage
 	for i := range replacement {
 		item := replacement[i]
-		raw := item.Raw
+		line, err := LineFromItem(&item, now)
+		if err != nil {
+			return err
+		}
+		raw := line.Item
 		if len(raw) == 0 {
-			data, err := json.Marshal(item)
-			if err != nil {
-				return err
+			data, marshalErr := json.Marshal(item)
+			if marshalErr != nil {
+				return marshalErr
 			}
 			raw = data
 		}
 		history = append(history, append(json.RawMessage(nil), raw...))
+		// Rust #38058: carry harness metadata in an aligned sidecar so the
+		// persisted replacement-history payload shape stays backward
+		// compatible. Metadata missing on an item is stored as an empty
+		// object so the sidecar stays aligned.
+		if metadata, ok := rolloutItemHarnessMetadata(item); ok {
+			historyMetadata = append(historyMetadata, append(json.RawMessage(nil), metadata...))
+		} else if len(historyMetadata) > 0 || i > 0 {
+			historyMetadata = append(historyMetadata, json.RawMessage(`{}`))
+		}
 	}
-	payload, err := json.Marshal(struct {
-		Message            string            `json:"message"`
-		ReplacementHistory []json.RawMessage `json:"replacement_history,omitempty"`
+	payloadValues := struct {
+		Message                    string            `json:"message"`
+		ReplacementHistory         []json.RawMessage `json:"replacement_history,omitempty"`
+		ReplacementHistoryMetadata []json.RawMessage `json:"replacement_history_metadata,omitempty"`
 	}{
-		Message:            strings.TrimSpace(message),
-		ReplacementHistory: history,
-	})
+		Message:                    strings.TrimSpace(message),
+		ReplacementHistory:         history,
+		ReplacementHistoryMetadata: historyMetadata,
+	}
+	payload, err := json.Marshal(payloadValues)
 	if err != nil {
 		return err
 	}
@@ -699,6 +734,27 @@ func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.
 		Timestamp: now.UTC().Format(time.RFC3339Nano),
 		Payload:   payload,
 	})
+}
+
+// rolloutItemHarnessMetadata returns the harness-owned metadata carried on a
+// replacement history item (Rust CodexHarnessMetadata, #38058). It is stored
+// out-of-band in the item's data map and never included in the model-visible
+// response item payload.
+func rolloutItemHarnessMetadata(item Item) (json.RawMessage, bool) {
+	if len(item.Data) == 0 {
+		return nil, false
+	}
+	switch value := item.Data["harness_metadata"].(type) {
+	case json.RawMessage:
+		if len(value) > 0 && string(value) != "null" {
+			return value, true
+		}
+	case string:
+		if strings.TrimSpace(value) != "" {
+			return json.RawMessage(value), true
+		}
+	}
+	return nil, false
 }
 
 func LineFromItem(item *Item, now time.Time) (*Line, error) {
@@ -737,6 +793,11 @@ func LineFromItem(item *Item, now time.Time) (*Line, error) {
 		Role:       item.Role,
 		ResponseID: item.ResponseID,
 		Data:       cloneAnyMap(item.Data),
+	}
+	if raw, ok := item.Data["harness_metadata"].(json.RawMessage); ok {
+		line.ItemMetadata = append(json.RawMessage(nil), raw...)
+	} else if raw, ok := item.Data["harness_metadata"].(string); ok && strings.TrimSpace(raw) != "" {
+		line.ItemMetadata = json.RawMessage(raw)
 	}
 	if turnID, ok := item.Metadata["turnId"].(string); ok {
 		line.TurnID = turnID
@@ -1153,6 +1214,9 @@ func unmarshalLine(data []byte, line *Line) error {
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err == nil {
+		if metadata, ok := raw["metadata"]; ok && len(metadata) > 0 && string(metadata) != "null" && len(line.ItemMetadata) == 0 {
+			line.ItemMetadata = append(json.RawMessage(nil), metadata...)
+		}
 		if payload, ok := raw["payload"]; ok {
 			if len(line.Payload) == 0 {
 				line.Payload = append(json.RawMessage(nil), payload...)
@@ -1312,12 +1376,24 @@ func compactedReplacementItems(payload json.RawMessage) ([]Item, bool) {
 	if err := json.Unmarshal(event.ReplacementHistory, &rawItems); err != nil {
 		return nil, false
 	}
+	var historyMetadata []json.RawMessage
+	if len(event.ReplacementHistoryMetadata) > 0 {
+		_ = json.Unmarshal(event.ReplacementHistoryMetadata, &historyMetadata)
+	}
 	items := make([]Item, 0, len(rawItems))
 	for i := range rawItems {
 		line := Line{Type: "item", Item: rawItems[i]}
 		item, ok := ItemFromLine(&line)
 		if !ok {
 			continue
+		}
+		// Rust #38058: restore the aligned harness metadata sidecar so it
+		// survives compaction/truncation and later resume/fork replay.
+		if i < len(historyMetadata) && len(historyMetadata[i]) > 0 && string(historyMetadata[i]) != "null" && string(historyMetadata[i]) != "{}" {
+			if item.Data == nil {
+				item.Data = map[string]any{}
+			}
+			item.Data["harness_metadata"] = append(json.RawMessage(nil), historyMetadata[i]...)
 		}
 		items = append(items, *item)
 	}
@@ -1400,6 +1476,12 @@ func ItemFromLine(line *Line) (*Item, bool) {
 	}
 	if item.Data == nil {
 		item.Data = cloneAnyMap(line.Data)
+	}
+	if len(line.ItemMetadata) > 0 {
+		if item.Data == nil {
+			item.Data = map[string]any{}
+		}
+		item.Data["harness_metadata"] = append(json.RawMessage(nil), line.ItemMetadata...)
 	}
 	if item.Metadata == nil {
 		item.Metadata = map[string]any{}

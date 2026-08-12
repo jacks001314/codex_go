@@ -1188,6 +1188,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	samplingFollowUp, tokenBudgetDelivery := r.autoCompactFallbackFollowUp(threadID, runConfig)
+	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt)
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Instructions:                 runConfig.Instructions,
@@ -1225,6 +1226,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
 		SamplingFollowUp:                samplingFollowUp,
+		SamplingCompaction:              samplingCompaction,
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	if err != nil {
@@ -1324,7 +1326,16 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status, tokenBudgetDelivery)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
 			if !fallbackRecorded && fallbackErr == nil && status.ShouldCompact {
-				_, _ = r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status)
+				if _, compactErr := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); compactErr != nil {
+					// Surface compaction failures instead of silently leaving
+					// the thread over the limit (Rust reports the error and
+					// the next turn re-attempts compaction).
+					r.persistCompactionFailure(threadID, compactErr)
+					r.notify(NotificationWarning, &WarningNotification{
+						ThreadID: stringPtrIfNotEmpty(threadID),
+						Message:  "Automatic context compaction failed: " + compactErr.Error(),
+					})
+				}
 			}
 		}
 	}
@@ -1445,6 +1456,107 @@ func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *
 		}
 		return items
 	}, delivery
+}
+
+// midTurnSamplingCompaction mirrors Rust's mid-turn roll-over: when a turn
+// still needs follow-up and the auto-compact token limit is reached, the
+// in-flight conversation is compacted in place and the sampling loop continues
+// against the compacted history instead of executing the pending tool calls.
+// The active context is measured from the last sampled response (Rust's
+// context_window_token_status uses the last response plus items recorded after
+// it), not the accumulated turn usage.
+func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string, connectionID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig, startedAt time.Time) turn.SamplingCompaction {
+	if r == nil || runConfig == nil || params == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	return func(ctx *turn.SamplingCompactionContext) (*turn.SamplingCompactionResult, error) {
+		if ctx == nil || ctx.Result == nil || ctx.Response == nil {
+			return nil, nil
+		}
+		record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+		if err != nil || record == nil {
+			return nil, err
+		}
+		extra := cloneAnyMap(record.Metadata.Extra)
+		policy := r.compactPolicyForTurn(runConfig.Model, params, extra)
+		if policy.Scope == compact.ScopeBodyAfterPrefix && policy.PrefillTokens <= 0 {
+			policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
+		}
+		status := compact.Evaluate(policy, int(model.AgentUsageTotalTokens(ctx.Response.Usage)))
+		newContextWindowRequested := r.takeNewContextWindowRequest(threadID)
+		if !status.ShouldCompact && !newContextWindowRequested {
+			return nil, nil
+		}
+		if newContextWindowRequested && !status.ShouldCompact {
+			// Rust's token-budget new_context roll-over restarts the context
+			// window without summarizing the conversation history.
+			if err := r.resetContextWindow(threadID, turnID); err != nil {
+				return nil, err
+			}
+			return &turn.SamplingCompactionResult{
+				Compacted:   true,
+				ResetWindow: true,
+			}, nil
+		}
+		// The number of conversation input items is captured before the
+		// compaction replaces the persisted history, so the world-state
+		// prefix can be split from the original conversation items.
+		historyItems, _ := r.historyInputItemsForTurn(threadID)
+		// The conversation to compact is the persisted thread history plus
+		// the items the current turn accumulated before they are persisted.
+		history := compactItemsFromSessionItems(record.Items)
+		seen := make(map[string]struct{}, len(history))
+		for i := range history {
+			if history[i].ID != "" {
+				seen[history[i].ID] = struct{}{}
+			}
+		}
+		for _, item := range compactItemsFromSessionItems(r.sessionItemsForTurn(turnID, params, ctx.Result, startedAt)) {
+			if item.ID != "" {
+				if _, ok := seen[item.ID]; ok {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+			}
+			history = append(history, item)
+		}
+		_, compactedItems, err := r.compactThreadWithHistory(context.Background(), &runtimeCompactRequest{
+			ThreadID:                  threadID,
+			TurnID:                    turnID,
+			ConnectionID:              connectionID,
+			Trigger:                   compact.TriggerAuto,
+			Reason:                    compactReasonFromStatus(&status),
+			Phase:                     compact.PhaseMidTurn,
+			ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+			History:                   history,
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(compactedItems) == 0 {
+			return nil, nil
+		}
+		// Preserve the turn's non-conversation prefix items (world state,
+		// skills, ...) so the compacted context continues with the same
+		// injected state. The compacted history ends with the last real user
+		// message, so the prefix is placed ahead of it.
+		prefix := runConfig.InputItems
+		if len(historyItems) <= len(prefix) {
+			prefix = append([]any(nil), prefix[len(historyItems):]...)
+		} else {
+			prefix = nil
+		}
+		compactedInputItems := session.InputItemsFromItems(compactedItems, &session.HistoryBuildOptions{
+			IncludeToolOutputs: true,
+			CWD:                strings.TrimSpace(record.Metadata.CWD),
+		})
+		replacement := append(prefix, compactedInputItems...)
+		return &turn.SamplingCompactionResult{
+			Compacted:          true,
+			InputItems:         replacement,
+			PreviousResponseID: "",
+		}, nil
+	}
 }
 
 func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnStartParams, record *turn.TurnRecord, runtime *turn.Runtime, connectionID string) {
@@ -4401,6 +4513,32 @@ func (r *RuntimeRouter) autoCompactThreadAfterTurn(threadID string, turnID strin
 	})
 }
 
+// persistCompactionFailure records a failed automatic compaction on the thread
+// metadata so the failure is observable and the next turn still re-attempts
+// compaction. Errors are best-effort: the thread store may be unavailable.
+func (r *RuntimeRouter) persistCompactionFailure(threadID string, compactErr error) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return
+	}
+	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
+	extra["compaction_error"] = compactErr.Error()
+	extra["compaction_error_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	status := compactTokenStatusFromMetadata(extra)
+	status.ShouldCompact = true
+	status.NewContextWindowRequired = true
+	extra["token_status"] = compactTokenStatusMap(status)
+	record.Metadata.Extra = extra
+	if runtimeRecordEphemeral(record) {
+		r.saveEphemeralThreadRecord(record)
+		return
+	}
+	_, _ = r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
+}
+
 type runtimeCompactRequest struct {
 	ThreadID                  string
 	TurnID                    string
@@ -4410,20 +4548,33 @@ type runtimeCompactRequest struct {
 	Phase                     compact.Phase
 	Prompt                    string
 	ActiveContextTokensBefore int64
+	// History overrides the persisted thread history for mid-turn
+	// compaction, which must include the items accumulated by the current
+	// turn before they are persisted.
+	History []compact.Item
 }
 
 func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompactRequest) (*ContextCompactedNotification, error) {
+	notification, _, err := r.compactThreadWithHistory(ctx, params, nil)
+	return notification, err
+}
+
+func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *runtimeCompactRequest, historyOverride []compact.Item) (*ContextCompactedNotification, []session.Item, error) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || params == nil || strings.TrimSpace(params.ThreadID) == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil || record == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	startedAt := time.Now().UTC()
+	history := historyOverride
+	if len(history) == 0 {
+		history = compactItemsFromSessionItems(record.Items)
+	}
 	request := &compact.Request{
 		ThreadID:  strings.TrimSpace(params.ThreadID),
 		TurnID:    strings.TrimSpace(params.TurnID),
@@ -4431,7 +4582,7 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		Reason:    params.Reason,
 		Phase:     params.Phase,
 		Prompt:    strings.TrimSpace(params.Prompt),
-		History:   compactItemsFromSessionItems(record.Items),
+		History:   history,
 		StartedAt: startedAt,
 	}
 	if request.Trigger == "" {
@@ -4450,12 +4601,12 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
-		return nil, err
+		return nil, nil, err
 	}
 	environmentContext, err := r.compactEnvironmentContext(ctx, record, request)
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
-		return nil, err
+		return nil, nil, err
 	}
 	initialContext = append(initialContext, environmentContext...)
 	compactionItem := session.Item{
@@ -4477,17 +4628,18 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	})
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
-		return nil, err
+		return nil, nil, err
 	}
 	if compacted == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := r.runPostCompactHooks(ctx, hookCtx); err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
-		return nil, err
+		return nil, nil, err
 	}
 	now := time.Now().UTC()
-	record.Items = sessionItemsFromCompactItems(compacted.NewHistory, now)
+	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
+	record.Items = compactedItems
 	compactionItem.CreatedAt = now
 	record.Items = append(record.Items, compactionItem)
 	record.UpdatedAt = now
@@ -4547,7 +4699,7 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 	}
 	record.Metadata.Extra = extra
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	_ = r.appendRuntimeCompacted(request.ThreadID, compacted.Summary, record.Items, now)
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
@@ -4571,7 +4723,63 @@ func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompac
 		ProviderID:  compacted.ProviderID,
 		CompletedAt: compacted.CompletedAt.Format(time.RFC3339Nano),
 		TokenUsage:  compactUsageNotificationValue(compacted.Usage),
-	}, nil
+	}, compactedItems, nil
+}
+
+// resetContextWindow mirrors Rust's token-budget new_context roll-over: the
+// context window accounting restarts without replacing the conversation
+// history. The compaction lifecycle (item started/completed, rollout marker)
+// is emitted for parity with the summarization paths.
+func (r *RuntimeRouter) resetContextWindow(threadID string, turnID string) error {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return err
+	}
+	now := time.Now().UTC()
+	compactionItem := session.Item{
+		ID:        string(newThreadID()),
+		Type:      "contextCompaction",
+		CreatedAt: now,
+		Metadata: appTurnMetadata(turnID, map[string]any{
+			"kind":    "context_compaction",
+			"compact": true,
+		}),
+	}
+	r.notifyContextCompactionItemStarted(threadID, turnID, compactionItem)
+	record.Items = append(record.Items, compactionItem)
+	record.UpdatedAt = now
+	record.RecencyAt = now
+	extra := ensureRecordExtra(cloneAnyMap(record.Metadata.Extra))
+	extra["compacted_at"] = now.Format(time.RFC3339Nano)
+	extra["auto_compacted_at"] = now.Format(time.RFC3339Nano)
+	extra["compaction_summary"] = "A new context window will start without summarizing conversation history."
+	extra["compaction_reason"] = string(compact.ReasonTokenLimit)
+	extra["compaction_trigger"] = string(compact.TriggerAuto)
+	extra["compaction_phase"] = string(compact.PhaseMidTurn)
+	extra["compaction_status"] = string(compact.StatusCompleted)
+	extra["compaction_source"] = string(compact.SourceLocal)
+	// The new window re-arms the token-budget deliveries and clears the
+	// carried prefix baseline (Rust start_new_context_window advances the
+	// window and clears prefill).
+	extra["auto_compact_fallback_delivered"] = false
+	extra["token_budget_reminder_delivered"] = false
+	delete(extra, "auto_compact_window_prefill")
+	delete(extra, "auto_compact_window_prefill_server_observed")
+	status := compactTokenStatusFromMetadata(extra)
+	status.ShouldCompact = false
+	status.NewContextWindowRequired = false
+	status.Reason = ""
+	extra["token_status"] = compactTokenStatusMap(status)
+	record.Metadata.Extra = extra
+	if err := r.runtimeSaveThreadRecord(record); err != nil {
+		return err
+	}
+	_ = r.appendRuntimeCompacted(threadID, "A new context window will start without summarizing conversation history.", record.Items, now)
+	r.notifyContextCompactionItemCompleted(threadID, turnID, compactionItem)
+	return nil
 }
 
 func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *session.Record, request *compact.Request) ([]compact.Item, error) {
@@ -8487,7 +8695,16 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithConfig(modelID string, cfg *confi
 	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
-	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfigForAppTurn(cfg)})
+	modelConfig := modelConfigForAppTurn(cfg)
+	var values map[string]any
+	if cfg != nil {
+		values = cfg.Values
+	}
+	if catalog := model.ModelsCatalogFromConfigValues(values); catalog != nil {
+		info := model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
+		return &info
+	}
+	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig})
 }
 
 func (r *RuntimeRouter) modelUsesResponsesLite(modelID string) bool {

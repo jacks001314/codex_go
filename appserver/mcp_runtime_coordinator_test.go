@@ -98,6 +98,248 @@ func TestMCPToolCallsStayBoundToEachThread(t *testing.T) {
 	}
 }
 
+func TestMCPApprovalsReviewerResolutionPerServerConnectorLikeRust(t *testing.T) {
+	cfg := &config.Config{
+		Values: map[string]any{
+			"approvals_reviewer": "user",
+			"apps": map[string]any{
+				"_default": map[string]any{"approvals_reviewer": "auto_review"},
+				"calendar": map[string]any{"approvals_reviewer": "user"},
+				"drive":    map[string]any{},
+			},
+		},
+	}
+	for _, tc := range []struct {
+		name          string
+		server        string
+		connector     string
+		model         string
+		expected      string
+		expectedModel string
+	}{
+		{name: "codex apps connector", server: "codex_apps", connector: "calendar", expected: "user"},
+		{name: "codex apps default", server: "codex_apps", connector: "drive", expected: "auto_review"},
+		{name: "codex apps no connector", server: "codex_apps", connector: "", expected: "auto_review"},
+		{name: "custom server falls back", server: "custom_server", connector: "calendar", expected: "user"},
+		{name: "auto review protected model", server: "custom_server", connector: "calendar", model: "protected-model", expected: "auto_review", expectedModel: "auto_review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.expectedModel != "" {
+				cfg.Requirements = &config.ConfigRequirements{AutoReview: &config.AutoReviewRequirements{RequiredOnModels: []string{"protected-model"}}}
+			} else {
+				cfg.Requirements = nil
+			}
+			got := mcpApprovalsReviewerForElicitation(cfg, "user", tc.server, tc.connector, tc.model)
+			if got != tc.expected {
+				t.Fatalf("reviewer = %q, want %q", got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestMCPApprovalsReviewerRespectsManagedRequirementsLikeRust(t *testing.T) {
+	cfg := &config.Config{
+		Values: map[string]any{
+			"approvals_reviewer": "auto_review",
+			"apps": map[string]any{
+				"calendar": map[string]any{"approvals_reviewer": "user"},
+			},
+		},
+		Requirements: &config.ConfigRequirements{AllowedApprovalsReviewers: []config.ApprovalsReviewer{config.ApprovalsReviewerAutoReview}},
+	}
+	// Connector asks for "user" but managed requirements only allow
+	// auto_review, so the fallback reviewer wins.
+	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", ""); got != "auto_review" {
+		t.Fatalf("reviewer = %q, want auto_review", got)
+	}
+	// Requirements permitting the connector reviewer let it win.
+	cfg.Requirements = &config.ConfigRequirements{AllowedApprovalsReviewers: []config.ApprovalsReviewer{config.ApprovalsReviewerAutoReview, config.ApprovalsReviewer("user")}}
+	if got := mcpApprovalsReviewerForElicitation(cfg, "auto_review", "codex_apps", "calendar", ""); got != "user" {
+		t.Fatalf("reviewer = %q, want user", got)
+	}
+}
+
+func TestMCPElicitationHandlerPersistsPolicyAmendmentLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{
+			Action: MCPElicitationActionAccept,
+			Meta:   map[string]any{"persist": "always"},
+		}))
+	}))
+	var persistedKey string
+	handler := &appserverMCPElicitationHandler{
+		broker: broker,
+		persist: func(request *mcp.MCPElicitationRequest, response *MCPElicitationRequestResponse) error {
+			meta, _ := request.Meta.(map[string]any)
+			persistedKey = "apps." + stringFromMap(meta, "connector_id") + ".tools." + stringFromMap(meta, "tool_name") + ".approval_mode"
+			return nil
+		},
+	}
+	response, err := handler.HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{
+		ServerName:      "codex_apps",
+		ThreadID:        "thread-1",
+		TurnID:          "turn-1",
+		Method:          "elicitation/create",
+		ElicitationID:   "call-1",
+		RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Meta: map[string]any{
+			"codex_request_type":  "approval_request",
+			"codex_approval_kind": "mcp_tool_call",
+			"tool_name":           "calendar_create",
+			"connector_id":        "calendar",
+		},
+	})
+	if err != nil || response == nil || response.Action != mcp.MCPElicitationActionAccept {
+		t.Fatalf("response = %#v err=%v", response, err)
+	}
+	if persistedKey != "apps.calendar.tools.calendar_create.approval_mode" {
+		t.Fatalf("persisted key = %q", persistedKey)
+	}
+}
+
+func TestMCPElicitationHandlerDoesNotPersistWithoutPersistAlways(t *testing.T) {
+	broker := NewServerRequestBroker()
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{
+			Action: MCPElicitationActionAccept,
+			Meta:   map[string]any{"persist": "session"},
+		}))
+	}))
+	persisted := false
+	handler := &appserverMCPElicitationHandler{
+		broker: broker,
+		persist: func(request *mcp.MCPElicitationRequest, response *MCPElicitationRequestResponse) error {
+			persisted = true
+			return nil
+		},
+	}
+	response, err := handler.HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{
+		ServerName:      "codex_apps",
+		ThreadID:        "thread-1",
+		TurnID:          "turn-1",
+		Method:          "elicitation/create",
+		ElicitationID:   "call-1",
+		RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Meta: map[string]any{
+			"codex_request_type":  "approval_request",
+			"codex_approval_kind": "mcp_tool_call",
+			"tool_name":           "calendar_create",
+			"connector_id":        "calendar",
+		},
+	})
+	if err != nil || response == nil || response.Action != mcp.MCPElicitationActionAccept {
+		t.Fatalf("response = %#v err=%v", response, err)
+	}
+	if persisted {
+		t.Fatal("session-scoped approval must not persist a policy amendment")
+	}
+}
+
+func TestMCPElicitationHandlerRecordsUserResolutionLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}))
+	}))
+	var recordedThreadID, recordedTurnID, recordedItemID string
+	var recordedOutcome string
+	handler := &appserverMCPElicitationHandler{
+		broker: broker,
+		record: func(request *mcp.MCPElicitationRequest, response *MCPElicitationRequestResponse) {
+			recordedThreadID = request.ThreadID
+			recordedTurnID = request.TurnID
+			recordedItemID = appserverMCPElicitationID(request)
+			recordedOutcome = mcpToolApprovalFinalOutcome(MCPElicitationAction(response.Action))
+		},
+	}
+	response, err := handler.HandleMCPElicitation(context.Background(), &mcp.MCPElicitationRequest{
+		ServerName:      "codex_apps",
+		ThreadID:        "thread-1",
+		TurnID:          "turn-1",
+		Method:          "elicitation/create",
+		ElicitationID:   "call-1",
+		RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Meta: map[string]any{
+			"codex_request_type":  "approval_request",
+			"codex_approval_kind": "mcp_tool_call",
+			"tool_name":           "calendar_create",
+			"connector_id":        "calendar",
+		},
+	})
+	if err != nil || response == nil || response.Action != mcp.MCPElicitationActionAccept {
+		t.Fatalf("response = %#v err=%v", response, err)
+	}
+	if recordedThreadID != "thread-1" || recordedTurnID != "turn-1" || recordedItemID != "call-1" {
+		t.Fatalf("recorded = %q/%q/%q", recordedThreadID, recordedTurnID, recordedItemID)
+	}
+	if recordedOutcome != "user_approved" {
+		t.Fatalf("outcome = %q, want user_approved", recordedOutcome)
+	}
+}
+
+func TestRuntimeRouterPersistsMCPToolApprovalAmendment(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	request := &mcp.MCPElicitationRequest{
+		ServerName: "codex_apps",
+		Method:     "elicitation/create",
+		Meta: map[string]any{
+			"codex_request_type":  "approval_request",
+			"codex_approval_kind": "mcp_tool_call",
+			"tool_name":           "calendar_create",
+			"connector_id":        "calendar",
+		},
+	}
+	if err := router.persistMCPToolApprovalAmendment(request, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}); err != nil {
+		t.Fatalf("persistMCPToolApprovalAmendment() error = %v", err)
+	}
+	read, err := router.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		t.Fatalf("Read() = %#v err=%v", read, err)
+	}
+	apps, _ := read.Config["apps"].(map[string]any)
+	calendar, _ := apps["calendar"].(map[string]any)
+	tools, _ := calendar["tools"].(map[string]any)
+	create, _ := tools["calendar_create"].(map[string]any)
+	if create["approval_mode"] != "approve" {
+		t.Fatalf("apps.calendar.tools.calendar_create.approval_mode = %#v, want approve", create["approval_mode"])
+	}
+}
+
+func TestRuntimeRouterPersistsCustomMCPServerApprovalAmendment(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	request := &mcp.MCPElicitationRequest{
+		ServerName: "docs",
+		Method:     "elicitation/create",
+		Meta: map[string]any{
+			"codex_request_type":  "approval_request",
+			"codex_approval_kind": "mcp_tool_call",
+			"tool_name":           "search",
+		},
+	}
+	if err := router.persistMCPToolApprovalAmendment(request, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}); err != nil {
+		t.Fatalf("persistMCPToolApprovalAmendment() error = %v", err)
+	}
+	read, err := router.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		t.Fatalf("Read() = %#v err=%v", read, err)
+	}
+	servers, _ := read.Config["mcp_servers"].(map[string]any)
+	docs, _ := servers["docs"].(map[string]any)
+	tools, _ := docs["tools"].(map[string]any)
+	search, _ := tools["search"].(map[string]any)
+	if search["approval_mode"] != "approve" {
+		t.Fatalf("mcp_servers.docs.tools.search.approval_mode = %#v, want approve", search["approval_mode"])
+	}
+}
+
 func newThreadBoundMCPTestServer(t *testing.T, marker string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

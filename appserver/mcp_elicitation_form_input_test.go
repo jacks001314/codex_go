@@ -22,7 +22,7 @@ func TestAppserverMCPElicitationFullAccessFormInputSurfacedLikeRust(t *testing.T
 	profile := sandbox.FullAccessPermissionProfile()
 	handler := &appserverMCPElicitationHandler{
 		broker: broker,
-		authority: func(string) mcpElicitationAuthority {
+		authority: func(string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:    sandbox.ApprovalNever,
 				ApprovalsReviewer: "user",
@@ -53,7 +53,7 @@ func TestAppserverMCPElicitationFullAccessFormInputDeclinedWithoutCapability(t *
 	profile := sandbox.FullAccessPermissionProfile()
 	handler := &appserverMCPElicitationHandler{
 		broker: broker,
-		authority: func(string) mcpElicitationAuthority {
+		authority: func(string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:    sandbox.ApprovalNever,
 				ApprovalsReviewer: "user",
@@ -82,7 +82,7 @@ func TestAppserverMCPElicitationToolSuggestionAlwaysDeclined(t *testing.T) {
 	profile := sandbox.FullAccessPermissionProfile()
 	handler := &appserverMCPElicitationHandler{
 		broker: broker,
-		authority: func(string) mcpElicitationAuthority {
+		authority: func(string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:    sandbox.ApprovalNever,
 				ApprovalsReviewer: "user",
@@ -113,7 +113,7 @@ func TestAppserverMCPElicitationEmptyFormStillAutoAcceptedInFullAccess(t *testin
 	profile := sandbox.FullAccessPermissionProfile()
 	handler := &appserverMCPElicitationHandler{
 		broker: broker,
-		authority: func(string) mcpElicitationAuthority {
+		authority: func(string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:    sandbox.ApprovalNever,
 				ApprovalsReviewer: "user",

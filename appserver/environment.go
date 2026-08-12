@@ -505,6 +505,123 @@ func (m *EnvironmentManager) SelectedCapabilityRoots(environmentID string) []Sel
 	return cloneSelectedCapabilityRoots(readyInfo.SelectedCapabilityRoots)
 }
 
+// SelectedCapabilityRootsStatus is a passive view of selected capability roots
+// and unavailable environments. Mirrors Rust's
+// SelectedCapabilityRootsStatus (codex-rs/exec-server/src/resolved_capability.rs).
+type SelectedCapabilityRootsStatus struct {
+	// ReadyRoots are selected roots whose environments are ready.
+	ReadyRoots []SelectedCapabilityRoot `json:"readyRoots"`
+	// Warnings describe missing environments and terminal connection failures.
+	Warnings []string `json:"warnings"`
+}
+
+// InspectSelectedCapabilityRoots merges the persisted thread roots with the
+// ready attachment roots installed by environment readiness reports
+// (Rust ThreadEnvironments::inspect_selected_capability_roots, #38067).
+// Thread roots stay first; duplicate root IDs are dropped keeping the first
+// occurrence. Roots whose environments are not ready are omitted, and missing
+// or failed environments produce warnings.
+func (m *EnvironmentManager) InspectSelectedCapabilityRoots(threadRoots []SelectedCapabilityRoot) SelectedCapabilityRootsStatus {
+	status := SelectedCapabilityRootsStatus{}
+	if m == nil {
+		status.ReadyRoots = cloneSelectedCapabilityRoots(threadRoots)
+		return status
+	}
+	m.mu.Lock()
+	records := make(map[string]EnvironmentRecord, len(m.records))
+	for id, record := range m.records {
+		records[id] = cloneEnvironmentRecord(record)
+	}
+	m.mu.Unlock()
+
+	merged := append(cloneSelectedCapabilityRoots(threadRoots), m.readyAttachmentRoots(records)...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, root := range merged {
+		if _, dup := seen[root.ID]; dup {
+			continue
+		}
+		seen[root.ID] = struct{}{}
+		status.ReadyRoots = append(status.ReadyRoots, root)
+	}
+	status.ReadyRoots = m.filterReadyRoots(status.ReadyRoots, records, &status.Warnings)
+	return status
+}
+
+// readyAttachmentRoots returns the selected capability roots installed by
+// ready provisioning reports on all managed environments.
+func (m *EnvironmentManager) readyAttachmentRoots(records map[string]EnvironmentRecord) []SelectedCapabilityRoot {
+	var roots []SelectedCapabilityRoot
+	for _, record := range records {
+		if record.Provisioning == nil {
+			continue
+		}
+		_, readyInfo, _ := record.Provisioning.Current()
+		if readyInfo == nil {
+			continue
+		}
+		roots = append(roots, cloneSelectedCapabilityRoots(readyInfo.SelectedCapabilityRoots)...)
+	}
+	return roots
+}
+
+// filterReadyRoots keeps roots whose environment is ready, emitting warnings
+// for missing or failed environments. Starting or recovering environments are
+// silently omitted.
+func (m *EnvironmentManager) filterReadyRoots(roots []SelectedCapabilityRoot, records map[string]EnvironmentRecord, warnings *[]string) []SelectedCapabilityRoot {
+	readiness := make(map[string]bool, len(roots))
+	emitted := make(map[string]bool, len(roots))
+	out := make([]SelectedCapabilityRoot, 0, len(roots))
+	for _, root := range roots {
+		if root.Location.Type != CapabilityRootLocationEnvironment {
+			out = append(out, root)
+			continue
+		}
+		environmentID := root.Location.EnvironmentID
+		// The primary local environment is always considered ready for
+		// capability-root inspection, matching Rust's always-present local
+		// environment.
+		if environmentID == "" || environmentID == "local" {
+			out = append(out, root)
+			continue
+		}
+		ready, known := readiness[environmentID]
+		if !known {
+			record, exists := records[environmentID]
+			switch {
+			case !exists:
+				ready = false
+				*warnings = append(*warnings, fmt.Sprintf("selected capability root `%s` references unavailable environment `%s`", root.ID, environmentID))
+				emitted[environmentID] = true
+			case record.Provisioning == nil:
+				// Ordinary environments connect eagerly; treat them as ready
+				// only when info was overridden by a host report.
+				ready = record.InfoOverride
+			default:
+				status, _, failure := record.Provisioning.Current()
+				switch status {
+				case ProvisioningReady:
+					ready = true
+				case ProvisioningFailed:
+					ready = false
+					*warnings = append(*warnings, fmt.Sprintf("selected capability environment `%s` is unavailable: %s", environmentID, failure))
+					emitted[environmentID] = true
+				default:
+					ready = false
+				}
+			}
+			readiness[environmentID] = ready
+		}
+		if !ready && !emitted[environmentID] {
+			// Starting/recovering environments are omitted without a warning.
+			continue
+		}
+		if ready {
+			out = append(out, root)
+		}
+	}
+	return out
+}
+
 func (m *EnvironmentManager) SetInfo(environmentID string, shell EnvironmentShellInfo, cwd string) error {
 	if strings.TrimSpace(environmentID) == "" {
 		return fmt.Errorf("%w: environmentId is required", ErrInvalidEnvironmentRequest)

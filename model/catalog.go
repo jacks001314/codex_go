@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -376,6 +377,48 @@ func BundledModelsResponse() ModelsResponse {
 		return catalog
 	}
 	return fallbackBundledModelsResponse()
+}
+
+// LoadModelsResponseFromFile mirrors Rust's load_catalog_json for the
+// model_catalog_json config: the file must parse as a ModelsResponse and
+// contain at least one model.
+func LoadModelsResponseFromFile(path string) (ModelsResponse, error) {
+	data, err := os.ReadFile(strings.TrimSpace(path))
+	if err != nil {
+		return ModelsResponse{}, err
+	}
+	var catalog ModelsResponse
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return ModelsResponse{}, fmt.Errorf("failed to parse model_catalog_json path %q as JSON: %w", strings.TrimSpace(path), err)
+	}
+	if len(catalog.Models) == 0 {
+		return ModelsResponse{}, fmt.Errorf("model_catalog_json path %q must contain at least one model", strings.TrimSpace(path))
+	}
+	return catalog, nil
+}
+
+// ModelsCatalogFromConfigValues mirrors Rust's model_catalog_json config: an
+// optional path to a JSON model catalog applied at config read time. Invalid
+// or empty catalogs fall back to the bundled catalog (Rust surfaces a config
+// load error instead; callers that prefer strictness can use
+// LoadModelsResponseFromFile directly).
+func ModelsCatalogFromConfigValues(values map[string]any) *ModelsResponse {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values["model_catalog_json"]
+	if !ok {
+		return nil
+	}
+	path := strings.TrimSpace(fmt.Sprint(raw))
+	if path == "" {
+		return nil
+	}
+	catalog, err := LoadModelsResponseFromFile(path)
+	if err != nil || len(catalog.Models) == 0 {
+		return nil
+	}
+	return &catalog
 }
 
 func fallbackBundledModelsResponse() ModelsResponse {

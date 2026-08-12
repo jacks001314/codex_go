@@ -6081,6 +6081,73 @@ func TestExecCompactResumeBeforeTurnIgnoresPersistedPrefill(t *testing.T) {
 	}
 }
 
+type execMidTurnRolloverAgent struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (a *execMidTurnRolloverAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if request != nil && strings.Contains(request.Prompt, "Summarize the conversation") {
+		return &model.AgentResponse{
+			ResponseID: "resp-compact",
+			Message:    "compacted summary",
+			Items:      []model.AgentItem{{ID: "compact-1", Type: "agent_message", Text: "compacted summary"}},
+			Usage:      model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		}, nil
+	}
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-tool",
+			Usage:      model.AgentUsage{InputTokens: 300000, OutputTokens: 128000, TotalTokens: 428000},
+			Items: []model.AgentItem{{
+				ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done"}},
+		Usage:      model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}, nil
+}
+
+func TestExecMidTurnRollOverCompactsWhileSamplingLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.Agent = &execMidTurnRolloverAgent{}
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(Request{
+		Exec: cli.ExecOptions{Prompt: "run the tool loop", JSON: true},
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
+	}
+	record := loadSessionRecord(t, home, result.ThreadID)
+	if record.Metadata.Extra["compaction_trigger"] != string(compact.TriggerAuto) ||
+		record.Metadata.Extra["compaction_phase"] != string(compact.PhaseMidTurn) ||
+		record.Metadata.Extra["compaction_summary"] != "compacted summary" {
+		t.Fatalf("mid-turn compaction metadata = %#v", record.Metadata.Extra)
+	}
+	persisted := ""
+	for _, item := range record.Items {
+		persisted += item.Text
+	}
+	if strings.Contains(persisted, "call-1") {
+		t.Fatalf("pre-compaction tool call persisted after roll-over: %q", persisted)
+	}
+	if !strings.Contains(persisted, "compacted summary") || !strings.Contains(persisted, "done") {
+		t.Fatalf("compacted history missing summary or final response: %q", persisted)
+	}
+}
+
 func agentRequestInputItemsHaveText(request *model.AgentRequest, text string) bool {
 	return agentRequestInputItemWithText(request, text) != nil
 }

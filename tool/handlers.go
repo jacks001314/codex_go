@@ -323,6 +323,33 @@ func (h *GetContextRemainingHandler) Execute(ctx context.Context, invocation *In
 	return &Output{Success: true, Body: string(body), Data: payload}, nil
 }
 
+// ContextWindowHandler mirrors Rust's new_context_window.rs: the model can
+// request a fresh context window without summarizing the conversation history.
+// The request callback performs the window reset through the turn runtime.
+type ContextWindowHandler struct {
+	request func()
+}
+
+func NewContextWindowHandler(request func()) *ContextWindowHandler {
+	return &ContextWindowHandler{request: request}
+}
+
+func (h *ContextWindowHandler) Spec() Spec {
+	return Spec{
+		Name:        PlainName("new_context"),
+		Description: "Start a new context window. Does not clear, reset, or otherwise affect environment state.",
+	}
+}
+
+func (h *ContextWindowHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	_ = ctx
+	_ = invocation
+	if h.request != nil {
+		h.request()
+	}
+	return &Output{Success: true, Body: "A new context window will start without summarizing conversation history."}, nil
+}
+
 type SleepHandler struct{}
 
 func (h *SleepHandler) Spec() Spec {
@@ -498,6 +525,7 @@ type CoreHandlerOptions struct {
 	EnableClockSleep               bool
 	EnableLegacySleep              bool
 	DisableUpdatePlan              bool
+	NewContextWindow               func()
 }
 
 func RegisterCoreHandlers(registry *Registry, planStore *PlanStore, status func() compact.TokenStatus, responder UserInputResponder) error {
@@ -528,6 +556,9 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	}
 	if options.EnableClockSleep {
 		handlers = append(handlers, NewClockSleepHandler(options.ClockProvider, options.ThreadID))
+	}
+	if options.NewContextWindow != nil {
+		handlers = append(handlers, NewContextWindowHandler(options.NewContextWindow))
 	}
 	for _, handler := range handlers {
 		if err := registry.Register(handler); err != nil {

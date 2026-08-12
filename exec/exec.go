@@ -257,7 +257,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	runPrompt := prompt
-	inputItems := execStartupInputItems(req, permissionProfile, approvalPolicy, r.now())
+	execStartupItems := execStartupInputItems(req, permissionProfile, approvalPolicy, r.now())
+	inputItems := append([]any(nil), execStartupItems...)
 	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
 	inputItems = append(inputItems, req.AdditionalInputItems...)
 	if len(requestInputs) > 0 {
@@ -389,6 +390,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		SteerMailbox:                   firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
 		OnSteerCommitted:               req.OnSteerCommitted,
 		SamplingFollowUp:               r.execAutoCompactFallbackFollowUp(cfg, modelID),
+		SamplingCompaction:             r.execMidTurnSamplingCompaction(cfg, modelID, providerID, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -532,6 +534,7 @@ type agentRunConfig struct {
 	SteerMailbox                   *turn.SteerMailbox
 	OnSteerCommitted               func(count int)
 	SamplingFollowUp               turn.SamplingFollowUp
+	SamplingCompaction             turn.SamplingCompaction
 }
 
 func firstSteerMailbox(values ...*turn.SteerMailbox) *turn.SteerMailbox {
@@ -994,6 +997,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
 		OnSteerCommitted:             run.OnSteerCommitted,
 		SamplingFollowUp:             run.SamplingFollowUp,
+		SamplingCompaction:           run.SamplingCompaction,
 	})
 }
 
@@ -4002,6 +4006,9 @@ func execModelInfo(modelID string, cfg *config.Config) model.ModelInfo {
 			modelConfig.ModelAutoCompactTokenLimit = int64(value)
 		}
 	}
+	if catalog := model.ModelsCatalogFromConfigValues(configValues(cfg)); catalog != nil {
+		return model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
+	}
 	return model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, modelConfig)
 }
 
@@ -4085,6 +4092,147 @@ func (r *Runner) execAutoCompactFallbackFollowUp(cfg *config.Config, modelID str
 			}
 		}
 		return items
+	}
+}
+
+// execMidTurnSamplingCompaction mirrors Rust's mid-turn roll-over for exec
+// runs: when a turn still needs follow-up and the auto-compact token limit is
+// reached, the in-flight conversation is compacted in place and the sampling
+// loop continues against the compacted history instead of executing the
+// pending tool calls. The active context is measured from the last sampled
+// response (Rust's context_window_token_status), not the accumulated turn
+// usage.
+func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID string, providerID string, agent model.AgentRunner, req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, eventSink *execEventSink, startupItems []any, additionalInputItems []any) turn.SamplingCompaction {
+	if r == nil || req == nil || req.Exec.Ephemeral || cfg == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	return func(ctx *turn.SamplingCompactionContext) (*turn.SamplingCompactionResult, error) {
+		if ctx == nil || ctx.Result == nil || ctx.Response == nil {
+			return nil, nil
+		}
+		store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+		record, err := store.Read(session.ThreadID(threadID), true, true)
+		if err != nil || record == nil {
+			return nil, err
+		}
+		status := compact.Evaluate(execCompactPolicy(record, modelID, cfg), int(model.AgentUsageTotalTokens(ctx.Response.Usage)))
+		if !status.ShouldCompact {
+			return nil, nil
+		}
+		// The conversation to compact is the persisted thread history plus
+		// the items the current turn accumulated before they are persisted.
+		history := execCompactItemsFromSession(record.Items)
+		itemMetadata := map[string]any{}
+		if resumeContext != nil && resumeContext.Record != nil {
+			itemMetadata = map[string]any{"resumed": true}
+		}
+		turnItems := sessionItemsForTurnWithMode(turnID, userPrompt, userInputs, ctx.Result, r.now().UTC(), itemMetadata, &execImageGenerationContext{CodexHome: r.CodexHome, ThreadID: threadID}, execRequestPlanMode(req))
+		seen := make(map[string]struct{}, len(history))
+		for i := range history {
+			if history[i].ID != "" {
+				seen[history[i].ID] = struct{}{}
+			}
+		}
+		for _, item := range execCompactItemsFromSession(turnItems) {
+			if item.ID != "" {
+				if _, ok := seen[item.ID]; ok {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+			}
+			history = append(history, item)
+		}
+		request := &compact.Request{
+			ThreadID:  threadID,
+			TurnID:    turnID,
+			Trigger:   compact.TriggerAuto,
+			Reason:    status.Reason,
+			Phase:     compact.PhaseMidTurn,
+			Prompt:    "Summarize the conversation so far, preserving user intent, decisions, file changes, commands, and unresolved work.",
+			History:   history,
+			StartedAt: r.now().UTC(),
+		}
+		if request.Reason == "" {
+			request.Reason = compact.ReasonTokenLimit
+		}
+		var remoteRunner compact.RemoteRunner
+		if execProviderSupportsRemoteCompaction(cfg, providerID) {
+			remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID}
+		}
+		eventSink.EmitInternal(protocol.Compacting())
+		defer func() { eventSink.EmitInternal(protocol.Compacted()) }()
+		compacted, err := compact.CompactRemotely(context.Background(), request, &compact.RemoteOptions{
+			Runner:          remoteRunner,
+			MaxSummaryChars: 4000,
+			FallbackToLocal: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if compacted == nil || !compacted.Succeeded() {
+			return nil, errors.New("context compaction did not complete")
+		}
+		now := r.now().UTC()
+		compactedItems := execSessionItemsFromCompact(compacted.NewHistory, now)
+		record.Items = compactedItems
+		record.UpdatedAt = now
+		record.RecencyAt = now
+		extra := cloneExecAnyMap(record.Metadata.Extra)
+		if extra == nil {
+			extra = map[string]any{}
+		}
+		extra["compacted_at"] = now.Format(time.RFC3339Nano)
+		extra["auto_compacted_at"] = now.Format(time.RFC3339Nano)
+		extra["compaction_summary"] = compacted.Summary
+		extra["compaction_reason"] = string(request.Reason)
+		extra["compaction_trigger"] = string(request.Trigger)
+		extra["compaction_phase"] = string(request.Phase)
+		extra["compaction_status"] = string(compacted.Status)
+		extra["compaction_source"] = string(compacted.Source)
+		extra["token_status"] = map[string]any{
+			"activeContextTokens":      compact.EstimateTokens(compacted.NewHistory),
+			"shouldCompact":            false,
+			"newContextWindowRequired": false,
+		}
+		usage := execStoredTokenUsage(extra)
+		if usage.Total.TotalTokens == 0 {
+			usage.Total.TotalTokens = int64(status.ActiveContextTokens)
+		}
+		if compacted.Usage != nil {
+			last := protocol.Usage{
+				InputTokens:           compacted.Usage.InputTokens,
+				CachedInputTokens:     compacted.Usage.CachedInputTokens,
+				CacheWriteInputTokens: compacted.Usage.CacheWriteInputTokens,
+				OutputTokens:          compacted.Usage.OutputTokens,
+				ReasoningOutputTokens: compacted.Usage.ReasoningOutputTokens,
+				TotalTokens:           compacted.Usage.InputTokens + compacted.Usage.OutputTokens,
+			}
+			addProtocolUsage(&usage.Total, last)
+			usage.Last = last
+		} else {
+			usage.Last = protocol.Usage{TotalTokens: int64(compact.EstimateTokens(compacted.NewHistory))}
+		}
+		usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
+		record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
+		if err := store.Save(record); err != nil {
+			return nil, err
+		}
+		if err := r.appendExecCompacted(threadID, record, compacted.Summary, now); err != nil {
+			return nil, err
+		}
+		// Preserve the run's non-conversation prefix items (permissions,
+		// environment context, additional inputs) so the compacted context
+		// continues with the same injected state.
+		prefix := append(append([]any(nil), startupItems...), additionalInputItems...)
+		compactedInputItems := session.InputItemsFromItems(compactedItems, &session.HistoryBuildOptions{
+			IncludeToolOutputs: true,
+			CWD:                strings.TrimSpace(record.Metadata.CWD),
+		})
+		return &turn.SamplingCompactionResult{
+			Compacted:          true,
+			InputItems:         append(prefix, compactedInputItems...),
+			PreviousResponseID: "",
+		}, nil
 	}
 }
 
@@ -4311,6 +4459,32 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 	if record == nil {
 		return compact.TokenStatus{}
 	}
+	policy := execCompactPolicy(record, modelID, cfg)
+	stored := execStoredTokenUsage(record.Metadata.Extra)
+	active := stored.Last.TotalTokens
+	if active <= 0 {
+		active = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
+	} else {
+		// Rust derives the active context from the last server-reported total
+		// plus an estimate of any local items recorded after the last
+		// model-generated item (for example a persisted prompt from an
+		// interrupted turn).
+		active = int64(compact.EstimateActiveContextTokens(execCompactItemsFromSession(record.Items), int(active)))
+	}
+	status := compact.Evaluate(policy, int(active))
+	if execStoredContextWindowRequired(record.Metadata.Extra) {
+		status.ShouldCompact = true
+		status.Reason = compact.ReasonContextWindowExceeded
+		status.NewContextWindowRequired = true
+	}
+	return status
+}
+
+// execCompactPolicy mirrors Rust ModelInfo::auto_compact_token_limit and
+// TurnContext::model_context_window for exec runs. The model's resolved
+// window supplies the hard cap; the auto-compact limit is the smaller of the
+// model's configured limit and 9/10 of the resolved window.
+func execCompactPolicy(record *session.Record, modelID string, cfg *config.Config) compact.Policy {
 	info := execModelInfo(modelID, cfg)
 	resolvedWindow := info.ContextWindow
 	if resolvedWindow <= 0 {
@@ -4324,17 +4498,6 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 	if info.AutoCompactTokenLimit > 0 && (limit == 0 || info.AutoCompactTokenLimit < limit) {
 		limit = info.AutoCompactTokenLimit
 	}
-	stored := execStoredTokenUsage(record.Metadata.Extra)
-	active := stored.Last.TotalTokens
-	if active <= 0 {
-		active = int64(compact.EstimateTokens(execCompactItemsFromSession(record.Items)))
-	} else {
-		// Rust derives the active context from the last server-reported total
-		// plus an estimate of any local items recorded after the last
-		// model-generated item (for example a persisted prompt from an
-		// interrupted turn).
-		active = int64(compact.EstimateActiveContextTokens(execCompactItemsFromSession(record.Items), int(active)))
-	}
 	policy := compact.Policy{Enabled: true, TokenLimit: int(limit), WindowTokens: int(window)}
 	if stringConfigValue(cfg, "model_auto_compact_token_limit_scope") == "body_after_prefix" {
 		// Mirrors Rust AutoCompactTokenLimitScope::BodyAfterPrefix: charge only
@@ -4345,13 +4508,7 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 		policy.Scope = compact.ScopeBodyAfterPrefix
 		policy.PrefillTokens = compact.EstimateTokens(execCompactItemsFromSession(record.Items))
 	}
-	status := compact.Evaluate(policy, int(active))
-	if execStoredContextWindowRequired(record.Metadata.Extra) {
-		status.ShouldCompact = true
-		status.Reason = compact.ReasonContextWindowExceeded
-		status.NewContextWindowRequired = true
-	}
-	return status
+	return policy
 }
 
 func execStoredContextWindowRequired(extra map[string]any) bool {

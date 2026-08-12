@@ -79,6 +79,7 @@ type ToolRegistryOptions struct {
 	EnableSleepTool              bool
 	EnableWaitForEnvironment     bool
 	DisableUpdatePlan            bool
+	NewContextWindow             func()
 	DisableWaitAgent             bool
 	DynamicTools                 []DynamicToolSpec
 	ThreadID                     string
@@ -139,6 +140,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			EnableCurrentTime:              options.EnableCurrentTimeTool,
 			EnableClockSleep:               options.EnableSleepTool,
 			DisableUpdatePlan:              options.DisableUpdatePlan,
+			NewContextWindow:               options.NewContextWindow,
 		}); err != nil {
 			return nil, err
 		}

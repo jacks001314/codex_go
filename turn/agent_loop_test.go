@@ -100,6 +100,110 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	}
 }
 
+func TestAgentLoopMidTurnCompactionRollsOverLikeRust(t *testing.T) {
+	agent := &rollOverLoopAgent{}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})
+	compactionCalls := 0
+	replacement := []any{map[string]any{
+		"type": "message", "role": "user",
+		"content": []map[string]any{{"type": "input_text", "text": "compacted context"}},
+	}}
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run",
+		Model:  "gpt-test",
+		SamplingCompaction: func(ctx *SamplingCompactionContext) (*SamplingCompactionResult, error) {
+			compactionCalls++
+			if ctx == nil || ctx.Response == nil || ctx.Result == nil || !ctx.HasToolCalls {
+				t.Fatalf("compaction context = %#v", ctx)
+			}
+			if got := model.AgentUsageTotalTokens(ctx.Response.Usage); got != 428000 {
+				t.Fatalf("active context tokens = %d, want 428000", got)
+			}
+			return &SamplingCompactionResult{
+				Compacted:          true,
+				InputItems:         replacement,
+				PreviousResponseID: "",
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if compactionCalls != 1 {
+		t.Fatalf("compaction calls = %d, want 1", compactionCalls)
+	}
+	if result.Compactions != 1 {
+		t.Fatalf("compactions = %d, want 1", result.Compactions)
+	}
+	if len(result.ToolExecutions) != 0 {
+		t.Fatalf("pending tool calls executed after roll-over: %#v", result.ToolExecutions)
+	}
+	// The pre-compaction response is absorbed by the compaction summary, so
+	// the result only carries responses sampled after the roll-over.
+	if len(result.Responses) != 1 || result.Response == nil || result.Response.Message != "done" {
+		t.Fatalf("responses = %#v", result.ModelResponses())
+	}
+	if len(agent.requests) != 2 {
+		t.Fatalf("agent requests = %d, want 2", len(agent.requests))
+	}
+	if agent.requests[1].PreviousResponseID != "" {
+		t.Fatalf("previous response id after compaction = %q, want empty", agent.requests[1].PreviousResponseID)
+	}
+	if len(agent.requests[1].InputItems) != 1 {
+		t.Fatalf("compacted input items = %#v", agent.requests[1].InputItems)
+	}
+}
+
+func TestAgentLoopMidTurnCompactionSkipsWhenNotNeeded(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	executedToolCalls := NewExecutedToolCallRecorder()
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:             agent,
+		Dispatcher:        NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), ExecutedToolCalls: executedToolCalls}),
+		ExecutedToolCalls: executedToolCalls,
+		MaxTurns:          3,
+	})
+	compactionCalls := 0
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run",
+		Model:  "gpt-test",
+		SamplingCompaction: func(*SamplingCompactionContext) (*SamplingCompactionResult, error) {
+			compactionCalls++
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if compactionCalls != 1 {
+		t.Fatalf("compaction calls = %d, want 1", compactionCalls)
+	}
+	if result.Compactions != 0 || len(result.ToolExecutions) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAgentLoopMidTurnCompactionErrorSurfaces(t *testing.T) {
+	agent := &rollOverLoopAgent{}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})
+	_, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run",
+		Model:  "gpt-test",
+		SamplingCompaction: func(*SamplingCompactionContext) (*SamplingCompactionResult, error) {
+			return nil, errors.New("compaction failed")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "compaction failed") {
+		t.Fatalf("Run() error = %v, want compaction failure", err)
+	}
+}
+
 func TestRuntimeGatesExecutedToolCallMetadataLikeRust(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
@@ -488,6 +592,10 @@ type emptyInputLoopAgent struct {
 
 type followUpLoopAgent struct{ requests []model.AgentRequest }
 
+type rollOverLoopAgent struct {
+	requests []model.AgentRequest
+}
+
 type finalSamplingSteerAgent struct {
 	mailbox  *SteerMailbox
 	requests []model.AgentRequest
@@ -520,6 +628,25 @@ func (a *followUpLoopAgent) Run(_ context.Context, request *model.AgentRequest) 
 		message = "done"
 	}
 	return &model.AgentResponse{ResponseID: "resp-" + strconv.Itoa(len(a.requests)), Message: message, Usage: usage, Items: []model.AgentItem{{Type: "agent_message", Text: message}}}, nil
+}
+
+func (a *rollOverLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-tool",
+			Usage:      model.AgentUsage{InputTokens: 300000, OutputTokens: 128000, TotalTokens: 428000},
+			Items: []model.AgentItem{{
+				ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Usage:      model.AgentUsage{InputTokens: 1000, OutputTokens: 50, TotalTokens: 1050},
+		Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done"}},
+	}, nil
 }
 
 func (a *finalSamplingSteerAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {

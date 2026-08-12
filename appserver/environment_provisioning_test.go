@@ -18,6 +18,72 @@ type failingNoiseProvider struct {
 	calls atomic.Int64
 }
 
+func TestInspectSelectedCapabilityRootsMergesThreadAndReadyRootsLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	registration, err := manager.RegisterDeferredNoiseEnvironment("tools", &failingNoiseProvider{})
+	if err != nil {
+		t.Fatalf("RegisterDeferredNoiseEnvironment() error = %v", err)
+	}
+	if err := registration.CompleteReady(EnvironmentReadyInfo{
+		SelectedCapabilityRoots: []SelectedCapabilityRoot{
+			provisionedRoot("env-root", "tools"),
+			provisionedRoot("dup-root", "tools"),
+		},
+	}); err != nil {
+		t.Fatalf("CompleteReady() error = %v", err)
+	}
+	threadRoots := []SelectedCapabilityRoot{
+		provisionedRoot("thread-root", "local"),
+		provisionedRoot("dup-root", "local"),
+	}
+	status := manager.InspectSelectedCapabilityRoots(threadRoots)
+	// Thread roots stay first; duplicate root IDs drop the later occurrence;
+	// ready attachment roots are appended.
+	if len(status.ReadyRoots) != 3 {
+		t.Fatalf("ReadyRoots = %+v, want 3 roots", status.ReadyRoots)
+	}
+	if status.ReadyRoots[0].ID != "thread-root" || status.ReadyRoots[1].ID != "dup-root" || status.ReadyRoots[2].ID != "env-root" {
+		t.Fatalf("ReadyRoots order = %+v", status.ReadyRoots)
+	}
+	if len(status.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want none", status.Warnings)
+	}
+}
+
+func TestInspectSelectedCapabilityRootsHidesUnavailableEnvironmentsLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	// A pending environment contributes no ready roots yet.
+	if _, err := manager.RegisterDeferredNoiseEnvironment("pending-env", &failingNoiseProvider{}); err != nil {
+		t.Fatalf("RegisterDeferredNoiseEnvironment() error = %v", err)
+	}
+	// A failed environment emits a warning.
+	if _, err := manager.ReportProvisioningStatus("failed-env", nil, stringPtrEnvTest("boom"), &failingNoiseProvider{}); err != nil {
+		t.Fatalf("ReportProvisioningStatus() error = %v", err)
+	}
+	threadRoots := []SelectedCapabilityRoot{
+		provisionedRoot("pending-root", "pending-env"),
+		provisionedRoot("failed-root", "failed-env"),
+		provisionedRoot("missing-root", "missing-env"),
+	}
+	status := manager.InspectSelectedCapabilityRoots(threadRoots)
+	if len(status.ReadyRoots) != 0 {
+		t.Fatalf("ReadyRoots = %+v, want none ready", status.ReadyRoots)
+	}
+	found := false
+	for _, warning := range status.Warnings {
+		if strings.Contains(warning, "missing-env") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Warnings = %v, want missing-environment warning", status.Warnings)
+	}
+}
+
+func stringPtrEnvTest(value string) *string {
+	return &value
+}
+
 func (p *failingNoiseProvider) callCount() int64 {
 	return p.calls.Load()
 }
@@ -586,4 +652,3 @@ func TestDoubleCompletionIsInactive(t *testing.T) {
 		t.Fatalf("SelectedCapabilityRoots = %+v, want first completion to win", got)
 	}
 }
-

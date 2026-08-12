@@ -217,6 +217,7 @@ var configRequiredNullableKeys = []string{
 	"model_context_window",
 	"model_auto_compact_token_limit",
 	"model_auto_compact_token_limit_scope",
+	"model_catalog_json",
 	"model_provider",
 	"approval_policy",
 	"approvals_reviewer",

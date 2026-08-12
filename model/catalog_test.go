@@ -133,6 +133,58 @@ func TestFallbackBundledModelsMatchCurrentRustDefault(t *testing.T) {
 	}
 }
 
+func TestLoadModelsResponseFromFileMirrorsRustModelCatalogJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(`{"models":[{"slug":"deepseek-v4-flash","context_window":1048576,"max_context_window":1048576,"effective_context_window_percent":95}]}`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	catalog, err := LoadModelsResponseFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadModelsResponseFromFile() error = %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].Slug != "deepseek-v4-flash" || catalog.Models[0].ContextWindow != 1048576 {
+		t.Fatalf("catalog = %#v", catalog.Models)
+	}
+	info := NewStaticModelsManager(catalog).GetModelInfo("deepseek-v4-flash", nil)
+	if info.Slug != "deepseek-v4-flash" || info.ContextWindow != 1048576 || info.UsedFallbackModelMetadata {
+		t.Fatalf("custom model info = %#v", info)
+	}
+}
+
+func TestLoadModelsResponseFromFileRejectsEmptyOrInvalidLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(empty, []byte(`{"models":[]}`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	if _, err := LoadModelsResponseFromFile(empty); err == nil || !strings.Contains(err.Error(), "must contain at least one model") {
+		t.Fatalf("empty catalog error = %v", err)
+	}
+	invalid := filepath.Join(dir, "invalid.json")
+	if err := os.WriteFile(invalid, []byte(`{not json`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	if _, err := LoadModelsResponseFromFile(invalid); err == nil || !strings.Contains(err.Error(), "failed to parse model_catalog_json") {
+		t.Fatalf("invalid catalog error = %v", err)
+	}
+}
+
+func TestModelsCatalogFromConfigValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(`{"models":[{"slug":"deepseek-v4-pro","context_window":1048576}]}`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	if catalog := ModelsCatalogFromConfigValues(map[string]any{"model_catalog_json": path}); catalog == nil || len(catalog.Models) != 1 {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+	if catalog := ModelsCatalogFromConfigValues(nil); catalog != nil {
+		t.Fatalf("nil values catalog = %#v", catalog)
+	}
+	if catalog := ModelsCatalogFromConfigValues(map[string]any{"model_catalog_json": filepath.Join(t.TempDir(), "missing.json")}); catalog != nil {
+		t.Fatalf("missing catalog = %#v", catalog)
+	}
+}
+
 func TestDefaultBaseInstructionsRequirePreambleBeforeTools(t *testing.T) {
 	for _, want := range []string{"Before making tool calls", "brief preamble", "immediately about to happen", "Progress updates"} {
 		if !strings.Contains(BaseInstructions, want) {

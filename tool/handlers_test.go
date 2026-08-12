@@ -108,6 +108,21 @@ func TestGetContextRemainingHandler(t *testing.T) {
 	}
 }
 
+func TestNewContextWindowHandler(t *testing.T) {
+	called := false
+	handler := NewContextWindowHandler(func() { called = true })
+	if spec := handler.Spec(); spec.Name.Key() != "new_context" || !strings.Contains(spec.Description, "new context window") {
+		t.Fatalf("new_context spec = %#v", spec)
+	}
+	output, err := handler.Execute(context.Background(), &Invocation{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !called || !output.Success || !strings.Contains(output.Body, "new context window") {
+		t.Fatalf("handler output = %#v, called = %v", output, called)
+	}
+}
+
 func TestSleepHandler(t *testing.T) {
 	handler := &SleepHandler{}
 	ctx, cancel := context.WithCancel(context.Background())

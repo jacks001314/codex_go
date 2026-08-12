@@ -15785,6 +15785,165 @@ func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterMidTurnRollOverCompactsWhileSamplingLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := &midTurnRolloverRuntimeAgent{}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "seed context",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "trigger mid-turn roll-over",
+		Config:   map[string]any{"model_auto_compact_token_limit": 1},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_trigger"] != string(compact.TriggerAuto) ||
+		record.Metadata.Extra["compaction_phase"] != string(compact.PhaseMidTurn) ||
+		record.Metadata.Extra["compaction_summary"] == "" {
+		t.Fatalf("mid-turn compaction metadata = %#v", record.Metadata.Extra)
+	}
+	if len(record.Items) == 0 || record.Items[len(record.Items)-1].Metadata["compact"] != true {
+		t.Fatalf("compacted items = %#v", record.Items)
+	}
+	// The pre-compaction tool-call response is absorbed by the compaction
+	// summary; the last user message is retained above the summary and only
+	// the post-compaction assistant message is persisted alongside it.
+	for _, item := range record.Items {
+		if strings.Contains(item.Text, "call-1") {
+			t.Fatalf("pre-compaction item persisted after roll-over: %#v", item)
+		}
+	}
+	promptCount := 0
+	persisted := ""
+	for _, item := range record.Items {
+		persisted += item.Text
+		if item.Text == "trigger mid-turn roll-over" {
+			promptCount++
+		}
+	}
+	if promptCount != 1 {
+		t.Fatalf("last user message persisted %d times after roll-over, want 1", promptCount)
+	}
+	if !strings.Contains(persisted, "done") {
+		t.Fatalf("post-compaction response missing from persisted items: %q", persisted)
+	}
+}
+
+func TestRuntimeRouterNewContextWindowRollOverResetsWithoutSummarizingLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := &newContextRolloverRuntimeAgent{}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "seed context",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "request a new context window",
+		Config:   map[string]any{"features": map[string]any{"token_budget": true}},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_trigger"] != string(compact.TriggerAuto) ||
+		record.Metadata.Extra["compaction_phase"] != string(compact.PhaseMidTurn) ||
+		record.Metadata.Extra["compaction_summary"] != "A new context window will start without summarizing conversation history." {
+		t.Fatalf("new-context reset metadata = %#v", record.Metadata.Extra)
+	}
+	// The reset must not replace the conversation history (Rust
+	// start_new_context_window keeps the items).
+	persisted := ""
+	compactionItems := 0
+	for _, item := range record.Items {
+		persisted += item.Text
+		if item.Type == "contextCompaction" {
+			compactionItems++
+		}
+	}
+	if !strings.Contains(persisted, "request a new context window") ||
+		!strings.Contains(persisted, "A new context window will start without summarizing conversation history.") ||
+		!strings.Contains(persisted, "done") {
+		t.Fatalf("history lost after window reset: %q", persisted)
+	}
+	if compactionItems != 1 {
+		t.Fatalf("context compaction items = %d, want 1", compactionItems)
+	}
+	if delivered, _ := record.Metadata.Extra["auto_compact_fallback_delivered"].(bool); delivered {
+		t.Fatalf("fallback delivery marker not re-armed after reset: %#v", record.Metadata.Extra)
+	}
+}
+
+func TestRuntimeRouterPersistsCompactionFailure(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "seed",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	router.persistCompactionFailure(threadID, errors.New("compaction boom"))
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_error"] != "compaction boom" {
+		t.Fatalf("compaction error metadata = %#v", record.Metadata.Extra["compaction_error"])
+	}
+	status := compactTokenStatusFromMetadata(record.Metadata.Extra)
+	if !status.ShouldCompact || !status.NewContextWindowRequired {
+		t.Fatalf("token status after failed compaction = %#v", status)
+	}
+}
+
 func TestRuntimeRouterAutoCompactionEmitsCompactionAnalyticsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -24036,6 +24195,70 @@ func (a *apiErrorRuntimeAgent) Run(ctx context.Context, request *model.AgentRequ
 
 func newRecordingRuntimeAgent(message string) *recordingRuntimeAgent {
 	return &recordingRuntimeAgent{message: message, requests: make(chan model.AgentRequest, 1)}
+}
+
+type midTurnRolloverRuntimeAgent struct {
+	mu    sync.Mutex
+	calls int
+}
+
+type newContextRolloverRuntimeAgent struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (a *midTurnRolloverRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-tool",
+			Usage:      model.AgentUsage{InputTokens: 1000, OutputTokens: 500, TotalTokens: 1500},
+			Items: []model.AgentItem{{
+				ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done"}},
+		Usage:      model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}, nil
+}
+
+func (a *newContextRolloverRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	switch call {
+	case 1:
+		return &model.AgentResponse{
+			ResponseID: "resp-new-context",
+			Usage:      model.AgentUsage{InputTokens: 100, OutputTokens: 10, TotalTokens: 110},
+			Items: []model.AgentItem{{
+				ID: "call-new-context", Type: "function_call", Name: "new_context", CallID: "call-new-context", Arguments: `{}`,
+			}},
+		}, nil
+	case 2:
+		return &model.AgentResponse{
+			ResponseID: "resp-after",
+			Usage:      model.AgentUsage{InputTokens: 120, OutputTokens: 10, TotalTokens: 130},
+			Items: []model.AgentItem{{
+				ID: "call-echo", Type: "function_call", Name: "echo", CallID: "call-echo", Arguments: `{}`,
+			}},
+		}, nil
+	default:
+		return &model.AgentResponse{
+			ResponseID: "resp-final",
+			Message:    "done",
+			Usage:      model.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+			Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done"}},
+		}, nil
+	}
 }
 
 func newBlockingReviewRuntimeAgent() *blockingReviewRuntimeAgent {
