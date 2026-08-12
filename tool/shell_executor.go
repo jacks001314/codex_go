@@ -509,18 +509,6 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	var result *ShellResult
 	if e.shouldUseUnifiedExec(req) {
-		// Rust 511262b984: cross-platform remote apply_patch is rejected while
-		// filesystem writes are restricted because patch verification reads
-		// executor files before process sandboxing applies (CA-781).
-		if e.rejectRemoteApplyPatch(req) {
-			return &Output{
-				Success:    false,
-				Body:       "cross-platform remote apply_patch is unavailable until executor-side filesystem sandboxing is supported",
-				Error:      "cross-platform remote apply_patch is unavailable until executor-side filesystem sandboxing is supported",
-				Data:       shellResultData(&ShellResult{ExitCode: 1, HasExitCode: true}, nil, generateShellChunkID()),
-				LogPreview: shellLogPreview("cross-platform remote apply_patch is unavailable"),
-			}, nil
-		}
 		req, err = prepareUnifiedExecShellRequest(req)
 		if err != nil {
 			return nil, err
@@ -555,47 +543,6 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		Data:       shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
 		LogPreview: shellLogPreview(body),
 	}, nil
-}
-
-// rejectRemoteApplyPatch reports whether the request is a remote unified-exec
-// command that invokes apply_patch with restricted filesystem writes (Rust
-// 511262b984 exec_command CA-781 guard).
-func (e *ShellExecutor) rejectRemoteApplyPatch(req *ShellRequest) bool {
-	if e == nil || req == nil {
-		return false
-	}
-	if strings.TrimSpace(req.UnifiedExecRemoteURL) == "" && req.UnifiedExecNoiseProvider == nil {
-		return false
-	}
-	policy := req.PermissionProfile.LegacySandboxPolicy()
-	if policy == nil || policy.HasFullDiskWriteAccess() {
-		return false
-	}
-	command := strings.Join(req.Command, " ")
-	_, isPatch := maybeParseRemoteApplyPatch(command)
-	return isPatch
-}
-
-func maybeParseRemoteApplyPatch(command string) (string, bool) {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return "", false
-	}
-	lower := strings.ToLower(command)
-	if strings.HasPrefix(lower, "apply_patch") || strings.HasPrefix(lower, "apply-patch") {
-		rest := strings.TrimSpace(command[len("apply_patch"):])
-		if rest == "" {
-			return "", true
-		}
-		if strings.HasPrefix(rest, "<<") {
-			return "", true
-		}
-	}
-	// A patch body embedded via heredoc (apply_patch <<'EOF' ... EOF).
-	if strings.Contains(lower, "apply_patch") && strings.Contains(command, "<<") {
-		return "", true
-	}
-	return "", false
 }
 
 func (e *ShellExecutor) resolveUnifiedExecEnvironment(requested string) (*UnifiedExecEnvironment, error) {

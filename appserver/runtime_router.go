@@ -757,7 +757,14 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	}
 	switch {
 	case options != nil && strings.TrimSpace(options.CodeModeHostURL) != "":
-		services.CodeModeProvider = codemode.NewWebSocketProvider(strings.TrimSpace(options.CodeModeHostURL), options.CodeModeHostHTTPClient)
+		hostURL := strings.TrimSpace(options.CodeModeHostURL)
+		if codemode.UsesGrpcCodeModeEndpoint(hostURL) {
+			// Rust 1e557a554e/85f331772f (#38041/#38087): http/https code-mode
+			// host URLs open gRPC sessions; ws/wss continue over WebSocket.
+			services.CodeModeProvider = codemode.NewGrpcCodeModeSessionProvider(hostURL, options.CodeModeHostHTTPClient)
+		} else {
+			services.CodeModeProvider = codemode.NewWebSocketProvider(hostURL, options.CodeModeHostHTTPClient)
+		}
 	case options != nil && (options.CodeModeHostEnabled || options.DisableCodeModeInProcessFallback):
 		program := strings.TrimSpace(options.CodeModeHostProgram)
 		if program == "" {

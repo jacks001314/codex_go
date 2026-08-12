@@ -121,8 +121,14 @@ func AuthsEqualForRefresh(left *AuthDotJSON, right *AuthDotJSON) bool {
 	switch left.Mode() {
 	case "api-key":
 		return strings.TrimSpace(left.OpenAIAPIKey) == strings.TrimSpace(right.OpenAIAPIKey)
-	case "chatgpt", "chatgptAuthTokens":
+	case "chatgpt":
 		return authFingerprint(left) == authFingerprint(right)
+	case "chatgptAuthTokens":
+		// Rust b28aa476f4 (#38054): compare external ChatGPT token data
+		// instead of the full auth JSON so a refreshed access token (with
+		// updated metadata such as plan type or email) is recognized as the
+		// same auth and applied to a retried request.
+		return authTokenDataEqual(left.Tokens, right.Tokens)
 	case "personal-access-token":
 		return strings.TrimSpace(left.PersonalAccessToken) == strings.TrimSpace(right.PersonalAccessToken)
 	case "agent-identity", "bedrock-api-key":
@@ -130,6 +136,24 @@ func AuthsEqualForRefresh(left *AuthDotJSON, right *AuthDotJSON) bool {
 	default:
 		return authFingerprint(left) == authFingerprint(right)
 	}
+}
+
+// authTokenDataEqual compares only the token data of external ChatGPT auth
+// (Rust CodexAuth::get_current_token_data equivalence). JSON marshaling is
+// deterministic because encoding/json sorts map keys.
+func authTokenDataEqual(left map[string]any, right map[string]any) bool {
+	return authTokenDataFingerprint(left) == authTokenDataFingerprint(right)
+}
+
+func authTokenDataFingerprint(tokens map[string]any) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(tokens)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func refreshFailureScopeKey(codexHome string) string {

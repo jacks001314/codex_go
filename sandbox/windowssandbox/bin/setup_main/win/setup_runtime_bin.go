@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"codex_go/sandbox/windowssandbox"
 )
@@ -19,13 +20,12 @@ func SetupRuntimeBin(sandboxGroupSID string) error {
 
 func EnsureCodexAppRuntimePathsReadable(sandboxGroupSID string, refreshErrors *[]string, log io.Writer) error {
 	localAppData := LocalAppDataRoot()
-	if localAppData == "" {
-		return nil
-	}
-	codexRoot := filepath.Join(localAppData, "OpenAI", "Codex")
-	for _, runtimePath := range []string{filepath.Join(codexRoot, "bin"), filepath.Join(codexRoot, "runtimes")} {
-		info, err := os.Stat(runtimePath)
-		if err != nil || !info.IsDir() {
+	// Mirrors Rust setup_runtime_bin.rs runtime_paths (#38064): the local
+	// Codex application root is granted as a whole so the read/execute ACL
+	// inherits across its contents, while the managed primary runtime (outside
+	// LocalAppData) is handled separately.
+	for _, runtimePath := range runtimePaths(localAppData, os.Getenv("USERPROFILE")) {
+		if !runtimeDirEligible(runtimePath) {
 			continue
 		}
 		req := windowssandbox.ACLRequest{Path: runtimePath, SID: sandboxGroupSID, Mask: RuntimeReadExecuteMask}
@@ -50,6 +50,30 @@ func EnsureCodexAppRuntimePathsReadable(sandboxGroupSID string, refreshErrors *[
 		}
 	}
 	return nil
+}
+
+// runtimePaths mirrors Rust runtime_paths: the Codex app root under
+// LocalAppData, then the managed primary runtime under the user profile cache.
+func runtimePaths(localAppData string, userProfile string) []string {
+	var runtimePaths []string
+	if strings.TrimSpace(localAppData) != "" {
+		runtimePaths = append(runtimePaths, filepath.Join(localAppData, "OpenAI", "Codex"))
+	}
+	if strings.TrimSpace(userProfile) != "" {
+		runtimePaths = append(runtimePaths, filepath.Join(userProfile, ".cache", "codex-runtimes"))
+	}
+	return runtimePaths
+}
+
+// runtimeDirEligible mirrors Rust's symlink_metadata guard: only real
+// directories (no reparse points) are inspected or updated. Missing paths,
+// files, and directory junctions/symlinks are skipped.
+func runtimeDirEligible(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || isReparsePoint(info) {
+		return false
+	}
+	return true
 }
 
 func LocalAppDataRoot() string {

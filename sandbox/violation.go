@@ -121,6 +121,20 @@ func ClassifyFileSystemSandboxViolation(sandboxType SandboxType, output SandboxE
 	return nil
 }
 
+// IsLikelyExecutorManagedSandboxDenied detects executor-managed sandbox
+// denials when the concrete backend is unknown (Rust
+// is_likely_executor_managed_sandbox_denied, 34db7e5563 #38043). It mirrors
+// the keyword-based core of the classifier without requiring a platform
+// backend, so remote executors can surface denials for apply_patch and other
+// executor-managed filesystem operations.
+func IsLikelyExecutorManagedSandboxDenied(output SandboxExecOutput) bool {
+	if output.ExitCode == 0 {
+		return false
+	}
+	_, _, matched := filesystemReasonFromOutput(output)
+	return matched
+}
+
 func IsLikelySandboxDenied(sandboxType SandboxType, output SandboxExecOutput) bool {
 	return ClassifyFileSystemSandboxViolation(sandboxType, output) != nil
 }

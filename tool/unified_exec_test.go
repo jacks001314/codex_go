@@ -937,7 +937,14 @@ func TestUnifiedExecSandboxContextUsesPortablePathURIsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unifiedExecSandboxContext() error = %v", err)
 	}
-	if !strings.HasPrefix(context.CWD, "file:") || context.WindowsSandboxLevel != "disabled" {
+	// Rust 34db7e5563 (#38043): a Disabled Windows sandbox level is upgraded
+	// to the restricted-token (unelevated) baseline for Windows-convention
+	// executor paths.
+	expectedLevel := string(sandbox.WindowsSandboxDisabled)
+	if pathUsesWindowsConvention(cwd) {
+		expectedLevel = string(sandbox.WindowsSandboxUnelevated)
+	}
+	if !strings.HasPrefix(context.CWD, "file:") || context.WindowsSandboxLevel != expectedLevel {
 		t.Fatalf("context = %#v", context)
 	}
 	if context.WindowsSandboxProxySettingsMode != execserver.WindowsSandboxProxySettingsPreserve {

@@ -97,6 +97,56 @@ func TestClassifyFileSystemSandboxViolationLinuxSIGSYS(t *testing.T) {
 	}
 }
 
+func TestIsLikelyExecutorManagedSandboxDeniedMatchesRustKeywords(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output SandboxExecOutput
+		want   bool
+	}{
+		{
+			name:   "exit zero is not denied",
+			output: SandboxExecOutput{ExitCode: 0, Stderr: "permission denied"},
+			want:   false,
+		},
+		{
+			name:   "permission denied keyword",
+			output: SandboxExecOutput{ExitCode: 1, Stderr: "open: permission denied"},
+			want:   true,
+		},
+		{
+			name:   "operation not permitted keyword",
+			output: SandboxExecOutput{ExitCode: 1, Stdout: "operation not permitted"},
+			want:   true,
+		},
+		{
+			name:   "read-only file system keyword",
+			output: SandboxExecOutput{ExitCode: 1, AggregatedOutput: "read-only file system"},
+			want:   true,
+		},
+		{
+			name:   "sandbox keyword",
+			output: SandboxExecOutput{ExitCode: 1, Stderr: "sandbox denied the write"},
+			want:   true,
+		},
+		{
+			name:   "failed to write file keyword",
+			output: SandboxExecOutput{ExitCode: 1, Stderr: "failed to write file /tmp/x"},
+			want:   true,
+		},
+		{
+			name:   "plain failure with no keywords",
+			output: SandboxExecOutput{ExitCode: 1, Stderr: "command not found: foo"},
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsLikelyExecutorManagedSandboxDenied(tc.output); got != tc.want {
+				t.Fatalf("IsLikelyExecutorManagedSandboxDenied(%+v) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNetworkSandboxViolationFromBlockedRequestMatchesRust(t *testing.T) {
 	mode := network.ProxyModeLimited
 	port := uint16(443)

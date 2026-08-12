@@ -11,6 +11,7 @@ import (
 func TestEnsureCodexAppRuntimePathsReadableRecordsUnsupportedOffWindows(t *testing.T) {
 	root := makeRuntimeDirs(t)
 	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("USERPROFILE", root)
 	var refreshErrors []string
 	var log bytes.Buffer
 	if err := EnsureCodexAppRuntimePathsReadable("S-1-1-0", &refreshErrors, &log); err != nil {

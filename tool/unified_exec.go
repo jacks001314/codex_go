@@ -633,6 +633,11 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 	if windowsSandboxLevel == "" {
 		windowsSandboxLevel = sandbox.WindowsSandboxDisabled
 	}
+	// Rust 34db7e5563 (#38043): select the baseline restricted-token
+	// (unelevated) sandbox for Windows executor paths when no Windows sandbox
+	// level was configured, so executor-managed sandboxing is never silently
+	// skipped for Windows-convention paths.
+	windowsSandboxLevel = executorWindowsSandboxLevel(windowsSandboxLevel, options.CWD)
 	return &execserver.FileSystemSandboxContext{
 		Permissions:                     json.RawMessage(portableJSON),
 		CWD:                             cwd,
@@ -642,6 +647,32 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,
 		UseLegacyLandlock:               options.UseLegacyLandlock,
 	}, nil
+}
+
+// executorWindowsSandboxLevel mirrors Rust executor_windows_sandbox_level:
+// a Disabled Windows sandbox level with a Windows-convention cwd selects the
+// restricted-token (unelevated) baseline instead of running unsandboxed.
+func executorWindowsSandboxLevel(level sandbox.WindowsSandboxLevel, cwd string) sandbox.WindowsSandboxLevel {
+	if level == sandbox.WindowsSandboxDisabled && pathUsesWindowsConvention(cwd) {
+		return sandbox.WindowsSandboxUnelevated
+	}
+	return level
+}
+
+// pathUsesWindowsConvention reports whether the path uses the Windows path
+// convention (drive letter or UNC), matching Rust PathUri::infer_path_convention.
+func pathUsesWindowsConvention(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if path, err := utils.Parse(value); err == nil {
+		convention, ok := path.InferConvention()
+		return ok && convention == utils.ConventionWindows
+	}
+	legacy := utils.NewLegacyAppPathString(value)
+	convention, ok := legacy.InferAbsolutePathConvention()
+	return ok && convention == utils.ConventionWindows
 }
 
 func portablePermissionProfileJSON(raw string, cwd string) (string, error) {

@@ -1,71 +1,108 @@
 package tool
 
 import (
-	"strings"
 	"testing"
 
 	"codex_go/sandbox"
 )
 
-func TestMaybeParseRemoteApplyPatchDetectsBodies(t *testing.T) {
-	cases := []struct {
-		command string
-		want    bool
+func TestExecutorWindowsSandboxLevelSelectsRestrictedTokenForWindowsPaths(t *testing.T) {
+	windowsCWD := `C:\Users\codex\project`
+	posixCWD := "/home/codex/project"
+	for _, tc := range []struct {
+		name  string
+		level sandbox.WindowsSandboxLevel
+		cwd   string
+		want  sandbox.WindowsSandboxLevel
 	}{
-		{`apply_patch <<'EOF'
-*** Begin Patch
-*** Update File: a.txt
-@@
--old
-+new
-*** End Patch
-EOF`, true},
-		{"apply_patch", true},
-		{"echo hello", false},
-		{"ls -la", false},
-		{"apply_patch --help", false},
+		{
+			name:  "disabled windows path upgrades to unelevated",
+			level: sandbox.WindowsSandboxDisabled,
+			cwd:   windowsCWD,
+			want:  sandbox.WindowsSandboxUnelevated,
+		},
+		{
+			name:  "disabled posix path stays disabled",
+			level: sandbox.WindowsSandboxDisabled,
+			cwd:   posixCWD,
+			want:  sandbox.WindowsSandboxDisabled,
+		},
+		{
+			name:  "disabled empty cwd stays disabled",
+			level: sandbox.WindowsSandboxDisabled,
+			cwd:   "",
+			want:  sandbox.WindowsSandboxDisabled,
+		},
+		{
+			name:  "configured level preserved for windows path",
+			level: sandbox.WindowsSandboxElevated,
+			cwd:   windowsCWD,
+			want:  sandbox.WindowsSandboxElevated,
+		},
+		{
+			name:  "configured unelevated preserved",
+			level: sandbox.WindowsSandboxUnelevated,
+			cwd:   windowsCWD,
+			want:  sandbox.WindowsSandboxUnelevated,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := executorWindowsSandboxLevel(tc.level, tc.cwd); got != tc.want {
+				t.Fatalf("executorWindowsSandboxLevel(%q, %q) = %q, want %q", tc.level, tc.cwd, got, tc.want)
+			}
+		})
 	}
-	for _, tc := range cases {
-		if _, got := maybeParseRemoteApplyPatch(tc.command); got != tc.want {
-			t.Fatalf("maybeParseRemoteApplyPatch(%q) = %v, want %v", tc.command, got, tc.want)
+}
+
+func TestPathUsesWindowsConvention(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: `C:\Users\codex`, want: true},
+		{path: `C:/Users/codex`, want: true},
+		{path: `\\server\share`, want: true},
+		{path: "/home/codex", want: false},
+		{path: "relative/path", want: false},
+		{path: "", want: false},
+	} {
+		if got := pathUsesWindowsConvention(tc.path); got != tc.want {
+			t.Fatalf("pathUsesWindowsConvention(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }
 
-func TestRejectRemoteApplyPatchRestrictedWrite(t *testing.T) {
-	executor := &ShellExecutor{}
+func TestNewFileSystemSandboxContextUpgradesWindowsLevelLikeRust(t *testing.T) {
 	profile := &sandbox.PermissionProfile{Disabled: false, SandboxPolicy: sandbox.NewWorkspaceWritePolicy()}
-	req := &ShellRequest{
-		Command:              []string{"apply_patch", "<<'EOF'"},
-		UnifiedExecRemoteURL: "http://127.0.0.1:8080",
-		PermissionProfile:    profile,
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(*profile)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
 	}
-	if !executor.rejectRemoteApplyPatch(req) {
-		t.Fatal("restricted remote apply_patch was not rejected")
+	windowsCWD := `C:\Users\codex\project`
+	context, err := NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile:     profile,
+		PermissionProfileJSON: profileJSON,
+		CWD:                   windowsCWD,
+		WindowsSandboxLevel:   sandbox.WindowsSandboxDisabled,
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
 	}
-	// Unrestricted profile is allowed.
-	fullDisk := &sandbox.PermissionProfile{Disabled: false, SandboxPolicy: sandbox.NewDangerFullAccessPolicy()}
-	req.PermissionProfile = fullDisk
-	if executor.rejectRemoteApplyPatch(req) {
-		t.Fatal("full-disk remote apply_patch was rejected")
+	if context.WindowsSandboxLevel != string(sandbox.WindowsSandboxUnelevated) {
+		t.Fatalf("WindowsSandboxLevel = %q, want %q", context.WindowsSandboxLevel, sandbox.WindowsSandboxUnelevated)
 	}
-	// Non-apply-patch remote command is allowed.
-	req.PermissionProfile = profile
-	req.Command = []string{"echo", "hello"}
-	if executor.rejectRemoteApplyPatch(req) {
-		t.Fatal("remote echo was rejected")
-	}
-	// Local command is never rejected here.
-	req.Command = []string{"apply_patch", "<<'EOF'"}
-	req.UnifiedExecRemoteURL = ""
-	if executor.rejectRemoteApplyPatch(req) {
-		t.Fatal("local apply_patch was rejected")
-	}
-}
 
-func TestRejectRemoteApplyPatchRestrictedMessage(t *testing.T) {
-	body := "cross-platform remote apply_patch is unavailable until executor-side filesystem sandboxing is supported"
-	if !strings.Contains(body, "executor-side filesystem sandboxing") {
-		t.Fatalf("message = %q", body)
+	posixCWD := "/home/codex/project"
+	context, err = NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile:     profile,
+		PermissionProfileJSON: profileJSON,
+		CWD:                   posixCWD,
+		WindowsSandboxLevel:   sandbox.WindowsSandboxDisabled,
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
+	}
+	if context.WindowsSandboxLevel != string(sandbox.WindowsSandboxDisabled) {
+		t.Fatalf("WindowsSandboxLevel = %q, want %q", context.WindowsSandboxLevel, sandbox.WindowsSandboxDisabled)
 	}
 }
