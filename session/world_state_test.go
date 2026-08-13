@@ -26,3 +26,20 @@ func TestWorldStateRoundTripTracksRuntimeInstructionDomains(t *testing.T) {
 		t.Fatalf("state = %#v", state)
 	}
 }
+
+func TestWorldStatePersistedRepresentationIsObjectLikeRust(t *testing.T) {
+	raw, err := EncodeWorldState(&WorldState{Model: json.RawMessage(`"gpt-5"`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("encoded world state is not an object: %v", err)
+	}
+	if len(object) != 1 || object["model"] != "gpt-5" {
+		t.Fatalf("object = %#v", object)
+	}
+	if _, err := DecodeWorldState(json.RawMessage(`[]`)); err == nil {
+		t.Fatal("DecodeWorldState accepted a non-object JSON array")
+	}
+}

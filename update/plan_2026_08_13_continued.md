@@ -67,6 +67,12 @@
      and falls back to an ephemeral loopback port only after the preferred
      range is exhausted.
 
+7. **Persisted world-state JSON object representation** (`4b07886d59`, #38274)
+   - Go already persists world state as a typed JSON object and reconstructs
+     it without arbitrary JSON values; no production change was required.
+   - Added a regression test asserting `EncodeWorldState` emits an object and
+     `DecodeWorldState` rejects a non-object array.
+
 ## Verification
 
 - `gofmt -l` clean for touched files
@@ -76,16 +82,19 @@
 
 ## Deferred (unchanged)
 
-The remaining large/deferred items from `update/plan_2026_08_13_followup.md`
-remain tracked, including:
+The remaining items from `update/plan_2026_08_13_followup.md` remain tracked,
+including:
 
 - Plugin measurement telemetry family
 - TUI/backend thread-usage surface behavior (`/status` rendering, TUI cards)
 - Unified turn-input submission/routing (#38275)
-- World-state persisted object representation (#38274)
-- Conversation-history creation-time passthrough (#38272)
-- Client-authored developer-message provenance (#38243)
 - Dynamic MCP HTTP header helpers (#38245)
 - gRPC code-mode reconnect (#38257)
-- External auth provider unification (#38258)
-- Windows managed-proxy bounded fallback ports (#38265)
+- Root-turn tracking across delegated requests (#38232)
+
+Architecture/N/A classifications are also retained in that plan:
+
+- #38244 rollout-ID resolution is N/A because Go has no `thread/revert`
+  rollout-ID model; it stores one session record per thread.
+- #38258 external-auth provider unification is N/A for the current Go auth
+  manager, which has no Rust-style `ExternalAuth` provider interface yet.
