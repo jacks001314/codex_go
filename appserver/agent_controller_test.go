@@ -111,7 +111,7 @@ func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
 		t.Fatalf("child agent depth = %d, want 1", childRecord.Metadata.AgentDepth)
 	}
 	// A depth-1 agent cannot spawn or resume (Rust default max_depth = 1).
-	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
 	if _, err := childController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "nested"}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
 		t.Fatalf("nested spawn error = %v", err)
 	}
@@ -203,13 +203,35 @@ func TestRuntimeAgentControllerChildInheritsTurnEnvironmentSelectionsLikeRust(t 
 }
 
 func TestRuntimeAgentControllerAttributesChildTurnsToParentTurn(t *testing.T) {
-	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", t.TempDir(), 1, agent.VersionV1, nil)
+	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", "root-turn", t.TempDir(), 1, agent.VersionV1, nil)
 	runtimeController, ok := controller.(*runtimeAgentController)
 	if !ok {
 		t.Fatalf("controller = %T", controller)
 	}
-	if runtimeController.parentID != "parent-thread" || runtimeController.parentTurnID != "parent-turn" {
-		t.Fatalf("parent provenance = thread %q turn %q", runtimeController.parentID, runtimeController.parentTurnID)
+	if runtimeController.parentID != "parent-thread" || runtimeController.parentTurnID != "parent-turn" || runtimeController.rootTurnID != "root-turn" {
+		t.Fatalf("parent provenance = thread %q turn %q root %q", runtimeController.parentID, runtimeController.parentTurnID, runtimeController.rootTurnID)
+	}
+}
+
+func TestEffectiveRootTurnIDPropagatesRootLikeRust(t *testing.T) {
+	cases := []struct {
+		name           string
+		rootTurnID     string
+		turnID         string
+		parentTurnID   string
+		subagentHeader string
+		want           string
+	}{
+		{name: "explicit root", rootTurnID: "root-1", turnID: "turn-2", parentTurnID: "turn-1", subagentHeader: "review", want: "root-1"},
+		{name: "root turn", turnID: "root-1", want: "root-1"},
+		{name: "subagent without root falls back to parent", turnID: "turn-2", parentTurnID: "turn-1", subagentHeader: "review", want: "turn-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveRootTurnID(tc.rootTurnID, tc.turnID, tc.parentTurnID, tc.subagentHeader); got != tc.want {
+				t.Fatalf("effectiveRootTurnID() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

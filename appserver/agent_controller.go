@@ -20,6 +20,7 @@ type runtimeAgentController struct {
 	router       *RuntimeRouter
 	parentID     string
 	parentTurnID string
+	rootTurnID   string
 	rootID       string
 	scopePath    string
 	cwd          string
@@ -40,10 +41,10 @@ func newRuntimeAgentControllerWithVersion(router *RuntimeRouter, parentID string
 }
 
 func newRuntimeAgentControllerWithEnvironmentSelections(router *RuntimeRouter, parentID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
-	return newRuntimeAgentControllerForTurn(router, parentID, "", cwd, maxThreads, version, environments)
+	return newRuntimeAgentControllerForTurn(router, parentID, "", "", cwd, maxThreads, version, environments)
 }
 
-func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, parentTurnID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
+func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, parentTurnID string, rootTurnID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
 	registry := (*agent.Registry)(nil)
 	rootID := strings.TrimSpace(parentID)
 	scopePath := "/root"
@@ -59,6 +60,7 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 		router:       router,
 		parentID:     strings.TrimSpace(parentID),
 		parentTurnID: strings.TrimSpace(parentTurnID),
+		rootTurnID:   strings.TrimSpace(rootTurnID),
 		rootID:       rootID,
 		scopePath:    scopePath,
 		cwd:          strings.TrimSpace(cwd),
@@ -191,7 +193,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
-		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID}
+		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID}
 		if c.version == agent.VersionV2 {
 			params.AdditionalInputItems = append(params.AdditionalInputItems, runtimeAgentCommunicationInputItem(c.scopePath, agentPath, prompt, true, args.Plaintext))
 			params.AdditionalInputItems = append(params.AdditionalInputItems, args.Items...)
@@ -464,7 +466,7 @@ func (c *runtimeAgentController) FollowupTask(ctx context.Context, args *agent.F
 		return c.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: active.ID, InputItems: []any{item}})
 	}
 	queued := c.router.drainRuntimeAgentMessages(threadID)
-	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, AdditionalInputItems: append(queued, item)}
+	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, AdditionalInputItems: append(queued, item)}
 	_, err = c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
 	return err
 }

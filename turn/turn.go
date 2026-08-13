@@ -273,6 +273,7 @@ type MetadataState struct {
 	ForkedFromThreadID           string
 	ParentThreadID               string
 	ParentTurnID                 string
+	RootTurnID                   string
 	SubagentHeader               string
 	SubagentKind                 string
 	ThreadSource                 string
@@ -395,6 +396,7 @@ type ResponsesClientMetadataOptions struct {
 	ForkedFromThreadID         string
 	ParentThreadID             string
 	ParentTurnID               string
+	RootTurnID                 string
 	SubagentHeader             string
 	SubagentKind               string
 	ThreadSource               string
@@ -436,6 +438,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.ForkedFromThreadID = strings.TrimSpace(options.ForkedFromThreadID)
 	metadata.ParentThreadID = strings.TrimSpace(options.ParentThreadID)
 	metadata.ParentTurnID = strings.TrimSpace(options.ParentTurnID)
+	metadata.RootTurnID = strings.TrimSpace(options.RootTurnID)
 	metadata.SubagentHeader = strings.TrimSpace(options.SubagentHeader)
 	metadata.SubagentKind = strings.TrimSpace(options.SubagentKind)
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)

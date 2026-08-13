@@ -20,6 +20,10 @@ func TestValidateGrpcCodeModeEndpointMatchesRust(t *testing.T) {
 	}{
 		{endpoint: "http://127.0.0.1:8080", want: true},
 		{endpoint: "https://codex.example.com", want: true},
+		{endpoint: "unix:///tmp/codex.sock", want: true},
+		{endpoint: "unix:/tmp/codex.sock", want: true},
+		{endpoint: "unix:///tmp/codex.sock", want: true},
+		{endpoint: "unix:/tmp/codex.sock", want: true},
 		{endpoint: "http://127.0.0.1:8080/", want: true},
 		{endpoint: "ws://127.0.0.1:8080", want: false},
 		{endpoint: "wss://127.0.0.1:8080", want: false},

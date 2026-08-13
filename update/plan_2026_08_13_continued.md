@@ -73,6 +73,20 @@
    - Added a regression test asserting `EncodeWorldState` emits an object and
      `DecodeWorldState` rejects a non-object array.
 
+8. **Root-turn propagation across delegated requests** (`1f4ea79853`, #38232)
+   - Added `root_turn_id` to Responses client/turn metadata and reserved
+     metadata keys.
+   - Propagated `RootTurnID` through turn-start params, agent controller
+     child turns, and runtime client-metadata construction.
+   - Root turns default to the current turn; nested subagents inherit the
+     parent root or, when unavailable, fall back to the immediate parent turn.
+
+9. **Unix socket gRPC code-mode endpoints** (`bde723ae7d`, #38257 partial)
+   - `UsesGrpcCodeModeEndpoint` and endpoint validation now accept `unix://`
+     and `unix:` endpoints without path/query/fragment restrictions.
+   - The existing gRPC transport continues to use insecure transport
+     credentials for Unix sockets.
+
 ## Verification
 
 - `gofmt -l` clean for touched files

@@ -20,6 +20,7 @@ const (
 	ForkedFromThreadIDKey         = "forked_from_thread_id"
 	ParentThreadIDKey             = "parent_thread_id"
 	ParentTurnIDKey               = "parent_turn_id"
+	RootTurnIDKey                 = "root_turn_id"
 	SubagentKindKey               = "subagent_kind"
 	ThreadSourceKey               = "thread_source"
 	SandboxKey                    = "sandbox"
@@ -57,6 +58,7 @@ var reservedMetadataKeys = map[string]bool{
 	ForkedFromThreadIDKey:         true,
 	ParentThreadIDKey:             true,
 	ParentTurnIDKey:               true,
+	RootTurnIDKey:                 true,
 	SubagentKindKey:               true,
 	ThreadSourceKey:               true,
 	SandboxKey:                    true,

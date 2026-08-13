@@ -41,7 +41,7 @@ func NewGrpcCodeModeSessionProvider(endpoint string, httpClient *http.Client) *G
 // gRPC transport (http/https origin) rather than the WebSocket transport.
 func UsesGrpcCodeModeEndpoint(endpoint string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https")
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https" || parsed.Scheme == "unix")
 }
 
 func (p *GrpcCodeModeSessionProvider) Availability() error {
@@ -117,8 +117,14 @@ func validateGrpcCodeModeEndpoint(endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("invalid gRPC code-mode host URL: %w", err)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return errors.New("gRPC code-mode host URL must use http or https")
+	if parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "unix" {
+		return errors.New("gRPC code-mode host URL must use http, https, or unix")
+	}
+	if parsed.Scheme == "unix" {
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("gRPC code-mode Unix socket URL must not include a query or fragment")
+		}
+		return nil
 	}
 	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("gRPC code-mode host URL must not include a path, query, or fragment")

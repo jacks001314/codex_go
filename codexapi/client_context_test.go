@@ -39,6 +39,7 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	metadata.NodeReplDisabled = &nodeReplDisabled
 	metadata.ParentThreadID = "parent"
 	metadata.ParentTurnID = "parent-turn"
+	metadata.RootTurnID = "root-turn"
 	metadata.SubagentHeader = "review"
 	metadata.Extra = map[string]string{"workspace_kind": "git", "thread_id": "bad"}
 	client := metadata.ClientMetadata()
@@ -50,6 +51,9 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	}
 	if client["parent_turn_id"] != "parent-turn" || !strings.Contains(client[ClientCodexTurnMetadataHeader], `"parent_turn_id":"parent-turn"`) {
 		t.Fatalf("ClientMetadata() missing parent turn: %v", client)
+	}
+	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"root_turn_id":"root-turn"`) {
+		t.Fatalf("ClientMetadata() missing root turn: %v", client)
 	}
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"workspace_kind":"git"`) {
 		t.Fatalf("turn metadata missing extra: %s", client[ClientCodexTurnMetadataHeader])
@@ -73,6 +77,9 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 func TestClientReservedMetadataKeysIncludeAutoReviewEnabled(t *testing.T) {
 	if !ClientReservedMetadataKeys()["auto_review_enabled"] {
 		t.Fatal("auto_review_enabled must be a reserved metadata key (Rust f2a6f2585c)")
+	}
+	if !ClientReservedMetadataKeys()["root_turn_id"] {
+		t.Fatal("root_turn_id must be a reserved metadata key")
 	}
 	filtered := ClientFilterExtraMetadata(map[string]string{"auto_review_enabled": "client-value", "workspace_kind": "git"})
 	if _, ok := filtered["auto_review_enabled"]; ok {

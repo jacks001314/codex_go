@@ -5592,6 +5592,7 @@ type appTurnRunConfig struct {
 	SubagentSource                  string
 	ParentThreadID                  string
 	ParentTurnID                    string
+	RootTurnID                      string
 	Ephemeral                       bool
 	WorkspaceKind                   string
 	NumInputImages                  int
@@ -5826,6 +5827,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		SubagentSource:                  lineage.SubagentKind,
 		ParentThreadID:                  lineage.ParentThreadID,
 		ParentTurnID:                    strings.TrimSpace(params.ParentTurnID),
+		RootTurnID:                      effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
 		Ephemeral:                       threadSnapshot.Ephemeral,
 		WorkspaceKind:                   strings.TrimSpace(extraMetadata["workspace_kind"]),
 		NumInputImages:                  countTurnStartInputImages(params),
@@ -5866,6 +5868,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			ForkedFromThreadID:         lineage.ForkedFromThreadID,
 			ParentThreadID:             lineage.ParentThreadID,
 			ParentTurnID:               params.ParentTurnID,
+			RootTurnID:                 effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
 			SubagentHeader:             lineage.SubagentHeader,
 			SubagentKind:               lineage.SubagentKind,
 			ThreadSource:               lineage.ThreadSource,
@@ -6390,9 +6393,12 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	}
 	lineage := r.responsesMetadataLineage(params.ThreadID)
 	parentTurnID := ""
+	rootTurnID := ""
 	if active.Params != nil {
 		parentTurnID = active.Params.ParentTurnID
+		rootTurnID = active.Params.RootTurnID
 	}
+	rootTurnID = effectiveRootTurnID(rootTurnID, params.ExpectedTurnID, parentTurnID, lineage.SubagentHeader)
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:             installationID,
 		SessionID:                  firstNonEmpty(lineage.SessionID, params.ThreadID),
@@ -6403,6 +6409,7 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		ForkedFromThreadID:         lineage.ForkedFromThreadID,
 		ParentThreadID:             lineage.ParentThreadID,
 		ParentTurnID:               parentTurnID,
+		RootTurnID:                 rootTurnID,
 		SubagentHeader:             lineage.SubagentHeader,
 		SubagentKind:               lineage.SubagentKind,
 		ThreadSource:               lineage.ThreadSource,
@@ -6438,6 +6445,20 @@ func (r *RuntimeRouter) responsesMetadataLineage(threadID string) responsesMetad
 	}
 	lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
 	return lineage
+}
+
+func effectiveRootTurnID(rootTurnID string, turnID string, parentTurnID string, subagentHeader string) string {
+	root := strings.TrimSpace(rootTurnID)
+	if root != "" {
+		return root
+	}
+	if strings.TrimSpace(subagentHeader) != "" {
+		if parent := strings.TrimSpace(parentTurnID); parent != "" {
+			return parent
+		}
+		return ""
+	}
+	return strings.TrimSpace(turnID)
 }
 
 func runtimeSessionSourceIsSubagent(source string) bool {

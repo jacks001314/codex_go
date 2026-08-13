@@ -10454,7 +10454,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
-			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, cwd, maxThreads, version, params.Environments)
+			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), cwd, maxThreads, version, params.Environments)
 			if runtimeController, ok := options.AgentController.(*runtimeAgentController); ok {
 				runtimeController.maxDepth = maxDepth
 			}
