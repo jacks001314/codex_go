@@ -27,6 +27,14 @@ type PluginMeasurementBatch struct {
 	Rows        []PluginMeasurementRow
 }
 
+func (s *PluginMetricsSidecar) Cleanup() {
+	if s == nil {
+		return
+	}
+	_ = s.outputFile.Close()
+	_ = os.RemoveAll(s.outputDir)
+}
+
 // PluginMeasurementRow is one validated numeric measurement.
 type PluginMeasurementRow struct {
 	MeasurementName string
@@ -102,14 +110,18 @@ func (s *PluginMetricsSidecar) OutputPath() string {
 	return s.outputEnvValue
 }
 
+func (s *PluginMetricsSidecar) OutputDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.outputDir
+}
+
 func (s *PluginMetricsSidecar) Finish(exitCode int) *PluginMeasurementBatch {
 	if s == nil || exitCode != 0 {
 		return nil
 	}
-	defer func() {
-		_ = s.outputFile.Close()
-		_ = os.RemoveAll(s.outputDir)
-	}()
+	defer s.Cleanup()
 	rows := parsePluginMetricsOutput(s.outputEnvValue, s.resolved)
 	if len(rows) == 0 {
 		return nil

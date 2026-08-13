@@ -102,6 +102,10 @@
     - Shell execution can therefore publish validated
       `codex_plugin_measurement_event` analytics events from the app-server
       turn path.
+    - Sidecar output directories are merged into local sandbox write roots,
+      live background unified-exec processes discard their sidecar instead of
+      publishing a partial batch, and remote executor commands intentionally
+      skip local sidecar creation.
 
 11. **Trusted plugin analytics manifest resolution** (`dc8562d672`, #38238)
     - Added `analytics.yaml` v1 parsing for trusted remote plugin roots:

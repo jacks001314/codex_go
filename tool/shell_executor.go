@@ -506,7 +506,8 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		}
 	}
 	var metricsSidecar *plugin.PluginMetricsSidecar
-	if e.pluginMetricsResolver != nil {
+	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil)
+	if e.pluginMetricsResolver != nil && !remoteEnvironment {
 		if req.Env == nil {
 			req.Env = map[string]string{}
 		}
@@ -515,6 +516,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			metricsSidecar = plugin.NewPluginMetricsSidecar(*resolved)
 			if metricsSidecar != nil {
 				metricsSidecar.InstallOutputEnv(req.Env)
+				req.AdditionalPermissions = sandbox.MergePermissionProfiles(req.AdditionalPermissions, &sandbox.AdditionalPermissionProfile{
+					FileSystem: []string{metricsSidecar.OutputDir()},
+				})
 			}
 		}
 	}
@@ -547,12 +551,16 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		return nil, err
 	}
 	if metricsSidecar != nil {
-		exitCode := 0
-		if result.HasExitCode {
-			exitCode = result.ExitCode
-		}
-		if batch := metricsSidecar.Finish(exitCode); batch != nil && e.pluginMeasurementTracker != nil {
-			e.pluginMeasurementTracker(ctx, *batch)
+		if result.ProcessID != nil {
+			metricsSidecar.Cleanup()
+		} else {
+			exitCode := 0
+			if result.HasExitCode {
+				exitCode = result.ExitCode
+			}
+			if batch := metricsSidecar.Finish(exitCode); batch != nil && e.pluginMeasurementTracker != nil {
+				e.pluginMeasurementTracker(ctx, *batch)
+			}
 		}
 	}
 	if result.EventCallID == "" {
