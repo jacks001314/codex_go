@@ -16,8 +16,9 @@ type PluginCommandAttribution struct {
 }
 
 type trustedPluginRoot struct {
-	pluginID string
-	root     string
+	pluginID                string
+	root                    string
+	metricsOperationsByPath map[string]PluginMetricsOperation
 }
 
 type TrustedPluginRoots struct {
@@ -64,7 +65,8 @@ func NewTrustedPluginRoots(codexHome string, pluginIDs []string) TrustedPluginRo
 			continue
 		}
 		seen[key] = true
-		roots = append(roots, trustedPluginRoot{pluginID: id.Key(), root: filepath.Clean(root)})
+		metrics := loadPluginMetricsOperations(root)
+		roots = append(roots, trustedPluginRoot{pluginID: id.Key(), root: filepath.Clean(root), metricsOperationsByPath: metrics})
 	}
 	return TrustedPluginRoots{roots: roots}
 }

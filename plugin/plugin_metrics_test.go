@@ -1,0 +1,91 @@
+package plugin
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestValidatePluginAnalyticsManifestMatchesRust(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "scripts", "measure.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("print(1)"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := pluginAnalyticsManifest{
+		Version: 1,
+		Operations: map[string]pluginMetricsOperationDecl{
+			"run_measure": {
+				Path: "scripts/measure.py",
+				Measurements: map[string]pluginMetricsMeasureDecl{
+					"tokens": {Dimensions: map[string][]string{"speed": {"fast", "slow"}}},
+				},
+			},
+		},
+	}
+	operations := validatePluginAnalyticsManifest(manifest, root)
+	if len(operations) != 1 || operations["scripts/measure.py"].OperationName != "run_measure" {
+		t.Fatalf("operations = %#v", operations)
+	}
+	measurement := operations["scripts/measure.py"].Measurements["tokens"]
+	if !reflect.DeepEqual(measurement.EnumDimensions["speed"], []string{"fast", "slow"}) {
+		t.Fatalf("dimensions = %#v", measurement)
+	}
+}
+
+func TestValidatePluginMetricsOperationPathRejectsEscapesAndUnsafePaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "ok.py"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := validatePluginMetricsOperationPath(root, "scripts/ok.py"); got != "scripts/ok.py" {
+		t.Fatalf("safe path = %q", got)
+	}
+	for _, path := range []string{"../ok.py", "scripts/../ok.py", "scripts/../../etc/passwd", "\\absolute"} {
+		if got := validatePluginMetricsOperationPath(root, path); got != "" {
+			t.Fatalf("unsafe path %q resolved to %q", path, got)
+		}
+	}
+}
+
+func TestResolveMetricsOperationBindsExactTrustedCommand(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "scripts", "measure.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	roots := TrustedPluginRoots{roots: []trustedPluginRoot{{
+		pluginID: "plugin-1",
+		root:     root,
+		metricsOperationsByPath: map[string]PluginMetricsOperation{
+			"scripts/measure.py": {OperationName: "run_measure", Measurements: map[string]PluginMeasurementDefinition{}},
+		},
+	}}}
+	resolved := roots.ResolveMetricsOperation([]string{"python3", filepath.Join(root, "scripts", "measure.py")}, root)
+	if resolved == nil || resolved.PluginID != "plugin-1" || resolved.Operation.OperationName != "run_measure" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+}
+
+func TestValidPluginMetricIdentifier(t *testing.T) {
+	for _, value := range []string{"a", "abc_def1"} {
+		if !validPluginMetricIdentifier(value) {
+			t.Fatalf("%q should be valid", value)
+		}
+	}
+	for _, value := range []string{"", "A", "1abc", "a-b", "a.b", "a" + string(make([]byte, 65))} {
+		if validPluginMetricIdentifier(value) {
+			t.Fatalf("%q should be invalid", value)
+		}
+	}
+}
