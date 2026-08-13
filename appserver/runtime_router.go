@@ -113,6 +113,32 @@ type RuntimeServices struct {
 	RemoteControlDisabledByRequirements bool
 }
 
+func accountThreadUsageFromBackend(usage *chatgptapi.ThreadUsage) *auth.ThreadUsage {
+	if usage == nil {
+		return nil
+	}
+	groups := make([]auth.ThreadUsageBreakdownGroup, 0, len(usage.Groups))
+	for _, group := range usage.Groups {
+		groups = append(groups, auth.ThreadUsageBreakdownGroup{
+			Model:                       cloneStringPtrAppserver(group.Model),
+			ReasoningEffort:             cloneStringPtrAppserver(group.ReasoningEffort),
+			Speed:                       cloneStringPtrAppserver(group.Speed),
+			EstimatedUsageCreditsMicros: group.EstimatedUsageCreditsMicros,
+			NetNewInputTokens:           cloneInt64PtrAppserver(group.NetNewInputTokens),
+			CachedInputTokens:           cloneInt64PtrAppserver(group.CachedInputTokens),
+			InputTokens:                 cloneInt64PtrAppserver(group.InputTokens),
+			OutputTokens:                cloneInt64PtrAppserver(group.OutputTokens),
+			TotalTokens:                 cloneInt64PtrAppserver(group.TotalTokens),
+		})
+	}
+	return &auth.ThreadUsage{
+		ThreadID:                    usage.ThreadID,
+		EstimatedUsageCreditsMicros: usage.EstimatedUsageCreditsMicros,
+		EstimatedUsageUSDMicros:     cloneInt64PtrAppserver(usage.EstimatedUsageUSDMicros),
+		Groups:                      groups,
+	}
+}
+
 func guardianTurnStart(params *turn.TurnStartParams) bool {
 	if params == nil {
 		return false
@@ -8447,11 +8473,18 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 }
 
 func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetAccountTokenUsageResponse, error) {
+	var params auth.GetAccountTokenUsageParams
 	if len(request.Params) > 0 {
-		var params auth.GetAccountTokenUsageParams
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
+	}
+	threadID := ""
+	if params.ThreadID != nil {
+		threadID = strings.TrimSpace(*params.ThreadID)
+	}
+	if params.ThreadID != nil && threadID == "" {
+		return nil, fmt.Errorf("invalid thread id: thread id is required")
 	}
 	snapshot, err := r.requireCodexBackendAuthForAccountRead("token usage")
 	if err != nil {
@@ -8461,8 +8494,28 @@ func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetA
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct backend client: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountTokenUsageFetchTimeout())
+	timeout := accountTokenUsageFetchTimeout()
+	if threadID != "" {
+		timeout = threadUsageFetchTimeout()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if threadID != "" {
+		usage, err := client.GetThreadUsage(ctx, threadID)
+		if err != nil {
+			var statusErr *chatgptapi.HTTPStatusError
+			if errors.As(err, &statusErr) && (statusErr.StatusCode == http.StatusForbidden || statusErr.StatusCode == http.StatusNotFound) {
+				return &auth.GetAccountTokenUsageResponse{}, nil
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, errors.New("thread usage fetch timed out")
+			}
+			return nil, fmt.Errorf("failed to fetch thread usage: %w", err)
+		}
+		return &auth.GetAccountTokenUsageResponse{
+			ThreadUsage: accountThreadUsageFromBackend(usage),
+		}, nil
+	}
 	profile, err := client.GetTokenUsageProfile(ctx)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return nil, errors.New("token usage profile fetch timed out")
@@ -8533,6 +8586,10 @@ func (r *RuntimeRouter) accountBackendClient(snapshot *auth.AuthDotJSON) (*chatg
 
 func accountTokenUsageFetchTimeout() time.Duration {
 	return 10 * time.Second
+}
+
+func threadUsageFetchTimeout() time.Duration {
+	return 60 * time.Second
 }
 
 func accountWorkspaceMessagesFetchTimeout() time.Duration {

@@ -282,6 +282,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 		} else if m.State != nil {
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
+			m.State.BumpMessagesRevision()
 			m.setStatus("idle")
 			m.refreshTranscript()
 			m.transcript.GotoBottom()
@@ -357,6 +358,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 		}
 	}
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
+	m.State.BumpMessagesRevision()
 	if response.TokenUsage != nil {
 		m.applyTokenUsage(response.TokenUsage)
 	}

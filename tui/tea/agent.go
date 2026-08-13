@@ -198,6 +198,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		if m.State != nil {
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
+			m.State.BumpMessagesRevision()
 			m.setStatus("idle")
 		}
 		m.activeSide = nil
@@ -232,6 +233,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 			if m.State != nil {
 				m.State.SetThreadID(side.ParentThreadID)
 				m.State.Messages = cloneSideMessages(side.ParentMessages)
+				m.State.BumpMessagesRevision()
 				m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
 			}
 		}
@@ -268,6 +270,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		}
 		delete(m.backgroundThreadEvents, entry.ThreadID)
 		m.State.Messages = messages
+		m.State.BumpMessagesRevision()
 		status := strings.TrimSpace(message.Response.Status)
 		if status == "" {
 			status = "idle"

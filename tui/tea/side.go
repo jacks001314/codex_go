@@ -76,6 +76,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		side.SidePlaceholder = m.composer.Placeholder
 		m.State.SetThreadID(side.ParentThreadID)
 		m.State.Messages = cloneSideMessages(side.ParentMessages)
+		m.State.BumpMessagesRevision()
 		m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
 		m.composer.Placeholder = firstNonEmpty(side.ParentPlaceholder, "Ask gcode")
 		side.ShowingSide = false
@@ -85,6 +86,7 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		side.ParentPlaceholder = m.composer.Placeholder
 		m.State.SetThreadID(side.SideThreadID)
 		m.State.Messages = cloneSideMessages(side.SideMessages)
+		m.State.BumpMessagesRevision()
 		m.setStatus(firstNonEmpty(side.SideStatus, "idle"))
 		m.composer.Placeholder = firstNonEmpty(side.SidePlaceholder, "Ask gcode in side conversation")
 		side.ShowingSide = true
@@ -321,6 +323,7 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 	}
 	m.State.SetThreadID(sideThreadID)
 	m.State.Messages = nil
+	m.State.BumpMessagesRevision()
 	m.setStatus("idle")
 	m.composer.Placeholder = "Ask gcode in side conversation"
 	m.notice = m.sideContextLabel()
@@ -406,6 +409,7 @@ func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, n
 	m.sideStartPending = false
 	m.State.SetThreadID(side.ParentThreadID)
 	m.State.Messages = cloneSideMessages(side.ParentMessages)
+	m.State.BumpMessagesRevision()
 	if strings.TrimSpace(side.ParentStatus) != "" {
 		m.setStatus(side.ParentStatus)
 	} else {

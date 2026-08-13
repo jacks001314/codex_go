@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -164,6 +166,64 @@ func TestCloudClientAccountBackendReads(t *testing.T) {
 	}
 	if len(paths) != 2 || paths[0] != "/api/codex/profiles/me" || paths[1] != "/api/codex/workspace-messages" {
 		t.Fatalf("paths = %#v", paths)
+	}
+}
+
+func TestCloudClientGetThreadUsageMatchesRust(t *testing.T) {
+	var method, body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		var requestBody []byte
+		if r.Body != nil {
+			defer r.Body.Close()
+			requestBody, _ = io.ReadAll(r.Body)
+		}
+		body = string(requestBody)
+		switch r.URL.Path {
+		case "/api/codex/usage/thread_usage/query":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"threads": []map[string]any{{
+					"thread_id":                      "thread-1",
+					"estimated_usage_credits_micros": 1234,
+					"estimated_usage_usd_micros":     567,
+					"groups": []map[string]any{{
+						"model":                          "gpt-5.2-codex",
+						"reasoning_effort":               "high",
+						"speed":                          "default",
+						"estimated_usage_credits_micros": 1234,
+						"net_new_input_tokens":           10,
+						"cached_input_tokens":            20,
+						"input_tokens":                   30,
+						"output_tokens":                  40,
+						"total_tokens":                   70,
+					}},
+				}},
+			})
+		case "/api/codex/usage/thread_usage/query/wrong":
+			_ = json.NewEncoder(w).Encode(map[string]any{"threads": []map[string]any{}})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewCloudClient(&CloudClientOptions{BaseURL: server.URL})
+
+	usage, err := client.GetThreadUsage(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatalf("GetThreadUsage error = %v", err)
+	}
+	if method != http.MethodPost || body != `{"thread_ids":["thread-1"]}` {
+		t.Fatalf("request = %s %s", method, body)
+	}
+	if usage.ThreadID != "thread-1" || usage.EstimatedUsageCreditsMicros != 1234 || usage.EstimatedUsageUSDMicros == nil || *usage.EstimatedUsageUSDMicros != 567 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if len(usage.Groups) != 1 || usage.Groups[0].Model == nil || *usage.Groups[0].Model != "gpt-5.2-codex" || usage.Groups[0].OutputTokens == nil || *usage.Groups[0].OutputTokens != 40 {
+		t.Fatalf("groups = %+v", usage.Groups)
+	}
+
+	if _, err := client.GetThreadUsage(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "did not contain requested thread") {
+		t.Fatalf("missing thread error = %v", err)
 	}
 }
 

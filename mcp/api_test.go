@@ -375,6 +375,34 @@ func TestListStatusCheckedExplicitRequiredServerWaitsPastGrace(t *testing.T) {
 	}
 }
 
+func TestRequiredCachedMCPServerStaysDormantForSubagentCatalog(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"required-cached": {Config: ServerConfig{
+			Command:  "this-command-must-not-run",
+			Enabled:  true,
+			Required: true,
+		}},
+	}})
+	defer service.Close()
+	service.servers["required-cached"] = MCPServerStatus{
+		Name:  "required-cached",
+		State: MCPServerReady,
+		Tools: []MCPToolInfo{{Name: "cached-tool"}},
+	}
+
+	response, err := service.ListStatusChecked(&MCPListServerStatusParams{
+		Detail:              &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+		RequiredServers:     []string{"required-cached"},
+		NonBlockingOptional: true,
+	})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if response == nil || len(response.Data) != 1 || response.Data[0].State != MCPServerReady || len(response.Data[0].Tools) != 1 || response.Data[0].Tools[0].Name != "cached-tool" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func mcpUpdateBefore(updates []mcpStartupTestUpdate, before mcpStartupTestUpdate, after mcpStartupTestUpdate) bool {
 	beforeIndex := -1
 	afterIndex := -1

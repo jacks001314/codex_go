@@ -1115,6 +1115,15 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
 			continue
 		}
+		// Rust #38217: a required server with cached tool definitions may stay
+		// dormant under the lazy startup policy. The cached tools satisfy
+		// catalog capture until one of the server's tools is called.
+		if params != nil && params.NonBlockingOptional &&
+			servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 &&
+			(config.Required || required[name]) {
+			notifyMCPStartupObserver(observer, name, MCPServerReady, nil)
+			continue
+		}
 		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
 		pending[i] = name
 		if config.Required || required[name] || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {

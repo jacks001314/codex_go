@@ -687,11 +687,14 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript     viewport.Model
-	composer       textarea.Model
-	activityFollow bool
-	overlay        *chatwidget.TranscriptOverlay
-	slashPopup     slashCommandPopup
+	transcript            viewport.Model
+	composer              textarea.Model
+	activityFollow        bool
+	overlay               *chatwidget.TranscriptOverlay
+	slashPopup            slashCommandPopup
+	transcriptCache       transcriptRenderCache
+	lastTranscriptContent string
+	lastTranscriptHeight  int
 
 	width                  int
 	height                 int
@@ -918,6 +921,18 @@ type Model struct {
 
 	composerPasteEnterUntil *time.Time
 	now                     func() time.Time
+}
+
+type transcriptRenderKey struct {
+	revision uint64
+	width    int
+	raw      bool
+	themeID  string
+}
+
+type transcriptRenderCache struct {
+	key     transcriptRenderKey
+	content string
 }
 
 type toolCallDisplayState struct {
@@ -3281,9 +3296,11 @@ func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines 
 	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw}
 	if index >= 0 && index < len(m.State.Messages) && m.State.Messages[index].Role == codextui.RoleHistory {
 		m.State.Messages[index] = message
+		m.State.BumpMessagesRevision()
 		return index
 	}
 	m.State.Messages = append(m.State.Messages, message)
+	m.State.BumpMessagesRevision()
 	return len(m.State.Messages) - 1
 }
 
@@ -3793,6 +3810,7 @@ func (m *Model) clearRetryActivity() {
 	m.retryActivityMessage = ""
 	if m.State != nil && m.retryMessageIndex >= 0 && m.retryMessageIndex < len(m.State.Messages) {
 		m.State.Messages = append(m.State.Messages[:m.retryMessageIndex], m.State.Messages[m.retryMessageIndex+1:]...)
+		m.State.BumpMessagesRevision()
 	}
 	m.retryMessageIndex = -1
 }
@@ -4267,18 +4285,48 @@ func (m *Model) syncTranscriptHeight() {
 	m.transcript.Height = m.transcriptHeightForLayout()
 }
 
+func (m *Model) transcriptRenderCached(state *codextui.State, width int) string {
+	key := transcriptRenderKey{}
+	if state != nil {
+		key.revision = state.MessagesRevision
+	}
+	key.width = width
+	key.raw = m.rawOutput
+	key.themeID = m.activeTUITheme()
+
+	if m.transcriptCache.key == key {
+		return m.transcriptCache.content
+	}
+
+	content := renderTranscriptWithHistoryMode(state, key.raw, width, key.themeID, false)
+	m.transcriptCache.key = key
+	m.transcriptCache.content = content
+	return content
+}
+
 func (m *Model) refreshTranscript() {
 	if m == nil {
 		return
 	}
-	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
-	yOffset := m.transcript.YOffset
-	m.transcript.SetContent(renderTranscript(m.State, m.rawOutput, m.transcript.Width, m.activeTUITheme()))
-	if wasAtBottom {
-		m.transcript.GotoBottom()
+	m.transcript.Height = m.transcriptHeightForLayout()
+	content := m.transcriptRenderCached(m.State, m.transcript.Width)
+	if content == m.lastTranscriptContent {
+		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
+			m.transcript.GotoBottom()
+		}
+		m.lastTranscriptHeight = m.transcript.Height
 		return
 	}
-	m.transcript.SetYOffset(yOffset)
+	m.lastTranscriptContent = content
+	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
+	yOffset := m.transcript.YOffset
+	m.transcript.SetContent(content)
+	if wasAtBottom {
+		m.transcript.GotoBottom()
+	} else {
+		m.transcript.SetYOffset(yOffset)
+	}
+	m.lastTranscriptHeight = m.transcript.Height
 }
 
 func (m *Model) openTranscriptOverlay() bubbletea.Cmd {

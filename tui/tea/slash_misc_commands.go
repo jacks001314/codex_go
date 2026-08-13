@@ -77,6 +77,7 @@ func (m *Model) applyRateLimitsResult(message RateLimitsResultMsg) bubbletea.Cmd
 		card := pending.snapshot.RenderStatusCardWidth(pending.width)
 		history := statusHistoryText(card)
 		m.State.Messages[pending.messageIndex] = codextui.Message{Role: codextui.RoleHistory, Text: history, RawText: history}
+		m.State.BumpMessagesRevision()
 		m.refreshTranscript()
 	}
 	return m.refreshStatusControlsCmd()

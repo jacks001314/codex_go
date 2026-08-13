@@ -166,6 +166,7 @@ func (m *Model) clearPendingMCPInventoryLoading() {
 	index := m.pendingMCPInventoryMessageIndex
 	if index >= 0 && index < len(m.State.Messages) {
 		m.State.Messages = append(m.State.Messages[:index], m.State.Messages[index+1:]...)
+		m.State.BumpMessagesRevision()
 	}
 	m.pendingMCPInventoryRequestID = 0
 	m.pendingMCPInventoryMessageIndex = -1

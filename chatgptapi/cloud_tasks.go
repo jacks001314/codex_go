@@ -398,6 +398,60 @@ func (c *CloudClient) GetTokenUsageProfile(ctx context.Context) (*TokenUsageProf
 	return &profile, nil
 }
 
+// ThreadUsage is the backend-estimated usage for a single Codex thread.
+type ThreadUsage struct {
+	ThreadID                    string                      `json:"thread_id"`
+	EstimatedUsageCreditsMicros int64                       `json:"estimated_usage_credits_micros"`
+	EstimatedUsageUSDMicros     *int64                      `json:"estimated_usage_usd_micros,omitempty"`
+	Groups                      []ThreadUsageBreakdownGroup `json:"groups"`
+}
+
+// ThreadUsageBreakdownGroup is one model/speed/reasoning bucket in a thread
+// usage estimate.
+type ThreadUsageBreakdownGroup struct {
+	Model                       *string `json:"model,omitempty"`
+	ReasoningEffort             *string `json:"reasoning_effort,omitempty"`
+	Speed                       *string `json:"speed,omitempty"`
+	EstimatedUsageCreditsMicros int64   `json:"estimated_usage_credits_micros"`
+	NetNewInputTokens           *int64  `json:"net_new_input_tokens,omitempty"`
+	CachedInputTokens           *int64  `json:"cached_input_tokens,omitempty"`
+	InputTokens                 *int64  `json:"input_tokens,omitempty"`
+	OutputTokens                *int64  `json:"output_tokens,omitempty"`
+	TotalTokens                 *int64  `json:"total_tokens,omitempty"`
+}
+
+type threadUsageQueryRequest struct {
+	ThreadIDs []string `json:"thread_ids"`
+}
+
+type threadUsageQueryResponse struct {
+	Threads []ThreadUsage `json:"threads"`
+}
+
+// GetThreadUsage reads authoritative estimated usage for one thread from the
+// backend (Rust #38270).
+func (c *CloudClient) GetThreadUsage(ctx context.Context, threadID string) (*ThreadUsage, error) {
+	if c == nil {
+		return nil, errors.New("cloud client is nil")
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, errors.New("thread id is required")
+	}
+	var response threadUsageQueryResponse
+	if err := c.doJSON(ctx, http.MethodPost, c.apiPath("usage", "thread_usage", "query"), nil, threadUsageQueryRequest{
+		ThreadIDs: []string{threadID},
+	}, &response); err != nil {
+		return nil, err
+	}
+	for index := range response.Threads {
+		if response.Threads[index].ThreadID == threadID {
+			return &response.Threads[index], nil
+		}
+	}
+	return nil, fmt.Errorf("thread usage response did not contain requested thread %s", threadID)
+}
+
 func (c *CloudClient) ListWorkspaceMessages(ctx context.Context) (*WorkspaceMessagesResponse, error) {
 	if c == nil {
 		return nil, errors.New("cloud client is nil")

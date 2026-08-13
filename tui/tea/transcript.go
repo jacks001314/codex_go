@@ -238,10 +238,12 @@ func (t *TranscriptComponent) appendAssistantDelta(state *codextui.State, itemID
 	itemID = strings.TrimSpace(itemID)
 	if itemID != "" && t.activeAssistantDeltaItemID != "" && itemID != t.activeAssistantDeltaItemID {
 		state.Messages = append(state.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
+		state.BumpMessagesRevision()
 		t.activeAssistantDeltaItemID = itemID
 		return
 	}
 	state.Messages = appendAssistantDeltaToMessages(state.Messages, delta)
+	state.BumpMessagesRevision()
 	if itemID != "" {
 		t.activeAssistantDeltaItemID = itemID
 	}
@@ -256,6 +258,7 @@ func (t *TranscriptComponent) mergeAssistantFinal(state *codextui.State, text st
 		t.insertFinalMessageSeparatorIfNeeded(state, width)
 	}
 	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
+	state.BumpMessagesRevision()
 }
 
 // completeAssistantCommentary fixes the streamed preamble in transcript history
@@ -266,6 +269,7 @@ func (t *TranscriptComponent) completeAssistantCommentary(state *codextui.State,
 		return
 	}
 	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
+	state.BumpMessagesRevision()
 	t.activeAssistantDeltaItemID = ""
 }
 

@@ -3899,6 +3899,78 @@ func TestRuntimeRouterAccountBackendReadsRequireChatGPTAuth(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterGetAccountThreadUsageMatchesRust(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	plan := "business"
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-123", &plan)); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/codex/usage/thread_usage/query" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer chatgpt-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("ChatGPT-Account-ID"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-ID = %q", got)
+		}
+		defer r.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		ids, _ := body["thread_ids"].([]any)
+		if len(ids) != 1 || ids[0] != "thread-1" {
+			t.Fatalf("thread_ids = %#v", ids)
+		}
+		writeJSON(t, w, map[string]any{
+			"threads": []map[string]any{{
+				"thread_id":                      "thread-1",
+				"estimated_usage_credits_micros": 9876,
+				"estimated_usage_usd_micros":     4321,
+				"groups": []map[string]any{{
+					"model":                          "gpt-5.2-codex",
+					"reasoning_effort":               "medium",
+					"speed":                          "fast",
+					"estimated_usage_credits_micros": 9876,
+					"net_new_input_tokens":           11,
+					"cached_input_tokens":            22,
+					"input_tokens":                   33,
+					"output_tokens":                  44,
+					"total_tokens":                   77,
+				}},
+			}},
+		})
+	}))
+	defer server.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+server.URL+`"`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	threadID := "thread-1"
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccountTokenUsage, auth.GetAccountTokenUsageParams{
+		ThreadID: &threadID,
+	}))
+	if response.Error != nil {
+		t.Fatalf("response error = %+v", response.Error)
+	}
+	usage := response.Result.(*auth.GetAccountTokenUsageResponse)
+	if usage.Summary != (auth.AccountTokenUsageSummary{}) || usage.DailyUsageBuckets != nil {
+		t.Fatalf("usage summary = %+v, buckets = %#v", usage.Summary, usage.DailyUsageBuckets)
+	}
+	if usage.ThreadUsage == nil || usage.ThreadUsage.ThreadID != "thread-1" || usage.ThreadUsage.EstimatedUsageCreditsMicros != 9876 || usage.ThreadUsage.EstimatedUsageUSDMicros == nil || *usage.ThreadUsage.EstimatedUsageUSDMicros != 4321 {
+		t.Fatalf("thread usage = %+v", usage.ThreadUsage)
+	}
+	if len(usage.ThreadUsage.Groups) != 1 || usage.ThreadUsage.Groups[0].Model == nil || *usage.ThreadUsage.Groups[0].Model != "gpt-5.2-codex" || usage.ThreadUsage.Groups[0].TotalTokens == nil || *usage.ThreadUsage.Groups[0].TotalTokens != 77 {
+		t.Fatalf("groups = %+v", usage.ThreadUsage.Groups)
+	}
+}
+
 func TestRuntimeRouterGetAccountRateLimitsReturnsSnapshotLikeRust(t *testing.T) {
 	clearAuthEnvAppserver(t)
 	home := t.TempDir()

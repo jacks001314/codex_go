@@ -61,6 +61,7 @@ type State struct {
 	NoAltScreen             bool
 	Status                  string
 	Messages                []Message
+	MessagesRevision        uint64
 	TotalTokenUsage         TokenUsage
 	LastTokenUsage          TokenUsage
 	ModelContextWindow      *int64
@@ -135,6 +136,7 @@ func (s *State) AddMessage(role MessageRole, text string) {
 		return
 	}
 	s.Messages = append(s.Messages, Message{Role: role, Text: text})
+	s.BumpMessagesRevision()
 }
 
 func (s *State) AddHistoryLines(displayLines []string, rawLines []string) {
@@ -147,11 +149,13 @@ func (s *State) AddHistoryLines(displayLines []string, rawLines []string) {
 	}
 	raw := strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n")
 	s.Messages = append(s.Messages, Message{Role: RoleHistory, Text: display, RawText: raw})
+	s.BumpMessagesRevision()
 }
 
 func (s *State) ClearMessages() {
 	if s != nil {
 		s.Messages = nil
+		s.BumpMessagesRevision()
 	}
 }
 
@@ -167,6 +171,15 @@ func (s *State) ResetThread() {
 		s.RateLimits = nil
 		s.RateLimitsLoaded = false
 		s.RateLimitsRefreshing = false
+		s.BumpMessagesRevision()
+	}
+}
+
+// BumpMessagesRevision marks the message slice as changed so transcript render
+// caches can be invalidated without rescanning every message on each frame.
+func (s *State) BumpMessagesRevision() {
+	if s != nil {
+		s.MessagesRevision++
 	}
 }
 
