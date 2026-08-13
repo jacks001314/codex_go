@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -761,11 +762,15 @@ func LineFromItem(item *Item, now time.Time) (*Line, error) {
 	if item == nil {
 		return nil, errors.New("rollout item is nil")
 	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	raw := item.Raw
 	if len(raw) > 0 {
 		var object map[string]any
 		if json.Unmarshal(raw, &object) == nil && !legacyRolloutItemWrapper(object) {
 			stampResponseItemTurnID(object, item)
+			stampResponseItemCreateTime(object, now)
 			if encoded, marshalErr := json.Marshal(object); marshalErr == nil {
 				raw = encoded
 			}
@@ -782,8 +787,14 @@ func LineFromItem(item *Item, now time.Time) (*Line, error) {
 		}
 		raw = data
 	}
-	if now.IsZero() {
-		now = time.Now().UTC()
+	if len(raw) > 0 {
+		var object map[string]any
+		if json.Unmarshal(raw, &object) == nil && !legacyRolloutItemWrapper(object) {
+			stampResponseItemCreateTime(object, now)
+			if encoded, marshalErr := json.Marshal(object); marshalErr == nil {
+				raw = encoded
+			}
+		}
 	}
 	line := &Line{
 		Type:       "response_item",
@@ -1594,6 +1605,76 @@ func stampResponseItemTurnID(object map[string]any, item *Item) {
 		metadata["turn_id"] = turnID
 	}
 	object["internal_chat_message_metadata_passthrough"] = metadata
+}
+
+// stampResponseItemCreateTime mirrors Rust #38272. It stores the fractional
+// Unix creation time on locally authored durable response items without
+// replacing a time already supplied by a client or an upstream response.
+func stampResponseItemCreateTime(object map[string]any, now time.Time) {
+	if object == nil || !responseItemCreateTimeEligible(object) {
+		return
+	}
+	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if !responseItemMetadataCreateTime(metadata).IsZero() {
+		return
+	}
+	seconds := float64(now.UnixNano()) / 1e9
+	metadata["create_time"] = json.Number(strconv.FormatFloat(seconds, 'f', -1, 64))
+	object["internal_chat_message_metadata_passthrough"] = metadata
+}
+
+func responseItemCreateTimeEligible(object map[string]any) bool {
+	if object == nil {
+		return false
+	}
+	itemType := strings.TrimSpace(stringFromMap(object, "type"))
+	if itemType == "message" {
+		switch strings.TrimSpace(stringFromMap(object, "role")) {
+		case "user", "developer":
+			return true
+		default:
+			return false
+		}
+	}
+	switch itemType {
+	case "agent_message", "function_call_output", "custom_tool_call_output", "tool_search_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func responseItemMetadataCreateTime(metadata map[string]any) time.Time {
+	if metadata == nil {
+		return time.Time{}
+	}
+	switch value := metadata["create_time"].(type) {
+	case json.Number:
+		return createTimeFromJSONNumber(value)
+	case string:
+		if value == "" {
+			return time.Time{}
+		}
+		return createTimeFromJSONNumber(json.Number(value))
+	case float64:
+		return time.Unix(0, int64(value*1e9)).UTC()
+	}
+	return time.Time{}
+}
+
+func createTimeFromJSONNumber(value json.Number) time.Time {
+	seconds, err := value.Float64()
+	if err != nil {
+		return time.Time{}
+	}
+	whole, fraction := math.Modf(seconds)
+	if whole < 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(whole), int64(fraction*1e9)).UTC()
 }
 
 func responseItemTurnID(raw json.RawMessage) string {

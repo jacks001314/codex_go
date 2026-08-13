@@ -3774,6 +3774,52 @@ func TestRouterSearchLoadedTurnsRollbackAndInjectItems(t *testing.T) {
 	}
 }
 
+func TestRouterInjectItemsMarksClientDeveloperMessagesWhenFeatureEnabled(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-client-developer")
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{ID: threadID, CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	router := NewRouter(store)
+	router.retainClientDeveloperMessages = func() bool { return true }
+
+	raw := json.RawMessage(`{"type":"message","role":"developer","content":[{"type":"input_text","text":"client instructions"}]}`)
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadInjectItems, ThreadInjectItemsParams{
+		ThreadID: string(threadID),
+		Items:    []json.RawMessage{raw},
+	}))
+	if response.Error != nil {
+		t.Fatalf("inject items error = %+v", response.Error)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("read thread: %v", err)
+	}
+	if len(record.Items) != 1 {
+		t.Fatalf("items = %#v", record.Items)
+	}
+	metadata := record.Items[0].Data["harness_metadata"]
+	var decoded map[string]any
+	switch value := metadata.(type) {
+	case json.RawMessage:
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			t.Fatalf("unmarshal harness metadata: %v", err)
+		}
+	case map[string]any:
+		decoded = value
+	case string:
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			t.Fatalf("unmarshal harness metadata string: %v", err)
+		}
+	default:
+		t.Fatalf("unexpected harness metadata type %T", metadata)
+	}
+	if decoded["client_authored"] != true {
+		t.Fatalf("harness metadata = %#v", metadata)
+	}
+}
+
 func TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)

@@ -31,6 +31,38 @@ type Router struct {
 	spawnGraph agent.Store
 	threads    *ThreadManager
 	state      *state.StateRuntime
+	// retainClientDeveloperMessages reports whether client-authored developer
+	// messages should be marked in persisted rollout history (#38243). The
+	// lower-level Router is feature-agnostic, so the runtime installs this
+	// predicate.
+	retainClientDeveloperMessages func() bool
+}
+
+func markClientAuthoredDeveloperItem(item *session.Item) {
+	if item == nil || !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	var metadata map[string]any
+	switch value := item.Data["harness_metadata"].(type) {
+	case json.RawMessage:
+		_ = json.Unmarshal(value, &metadata)
+	case string:
+		if strings.TrimSpace(value) != "" {
+			_ = json.Unmarshal([]byte(value), &metadata)
+		}
+	case map[string]any:
+		metadata = cloneAnyMapForRouter(value)
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["client_authored"] = true
+	if encoded, err := json.Marshal(metadata); err == nil {
+		item.Data["harness_metadata"] = json.RawMessage(encoded)
+	}
 }
 
 func NewRouter(store *session.Store) *Router {
@@ -3354,6 +3386,9 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 		item, err := sessionItemFromRaw(raw, now, i)
 		if err != nil {
 			return nil, err
+		}
+		if r != nil && r.retainClientDeveloperMessages != nil && r.retainClientDeveloperMessages() {
+			markClientAuthoredDeveloperItem(&item)
 		}
 		items = append(items, item)
 	}

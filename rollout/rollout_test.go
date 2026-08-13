@@ -960,6 +960,54 @@ func TestLegacySessionItemMarshalUsesRustResponseItemWireShape(t *testing.T) {
 	}
 }
 
+func TestLineFromItemStampsAndPreservesResponseItemCreateTime(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 34, 56, 789000000, time.UTC)
+	line, err := LineFromItem(&Item{
+		ID:       "item-1",
+		Type:     "message",
+		Role:     "developer",
+		Content:  []ContentPart{{Type: "input_text", Text: "instructions"}},
+		Metadata: map[string]any{"turnId": "turn-1"},
+	}, now)
+	if err != nil {
+		t.Fatalf("LineFromItem() error = %v", err)
+	}
+	raw := line.Item
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("unmarshal raw item: %v", err)
+	}
+	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		t.Fatal("missing passthrough metadata")
+	}
+	if _, ok := metadata["create_time"]; !ok {
+		t.Fatalf("create_time = %#v", metadata["create_time"])
+	}
+	created, ok := responseItemCreateTimeFromRaw(raw)
+	if !ok || absDuration(created.Sub(now)) > time.Millisecond {
+		t.Fatalf("responseItemCreateTimeFromRaw() = %v, %v; want %v, true", created, ok, now)
+	}
+
+	// A supplied client creation time is preserved rather than replaced.
+	rawPreserved := json.RawMessage(`{"type":"message","role":"developer","content":[{"type":"input_text","text":"x"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1","create_time":123.5}}`)
+	line, err = LineFromItem(&Item{ID: "item-2", Raw: rawPreserved}, now)
+	if err != nil {
+		t.Fatalf("LineFromItem(preserved) error = %v", err)
+	}
+	created, ok = responseItemCreateTimeFromRaw(line.Item)
+	if !ok || created.UnixNano() != 123500000000 {
+		t.Fatalf("preserved create_time = %v, %v; want 123.5s", created, ok)
+	}
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
 func TestResponseItemEnvelopeStoresHarnessMetadataBesidePayloadLikeRust(t *testing.T) {
 	line, err := LineFromItem(&Item{
 		ID:      "item-1",

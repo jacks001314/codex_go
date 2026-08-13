@@ -476,6 +476,11 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 		if err != nil {
 			return nil, err
 		}
+		if r.services.ThreadRouter != nil &&
+			r.services.ThreadRouter.retainClientDeveloperMessages != nil &&
+			r.services.ThreadRouter.retainClientDeveloperMessages() {
+			markClientAuthoredDeveloperItem(&item)
+		}
 		items = append(items, item)
 	}
 	if _, ok := r.appendEphemeralThreadItems(session.ThreadID(params.ThreadID), items); ok {

@@ -44,12 +44,35 @@
      the terminal framework and viewport stack differ, so the cache is applied
      at the transcript render boundary rather than individual active cells.
 
+4. **Conversation-history creation times** (`361fe2d202`, #38272)
+   - `rollout.LineFromItem` now stamps locally authored user/developer
+     messages and tool/agent output items with fractional Unix `create_time`
+     inside `internal_chat_message_metadata_passthrough`.
+   - `SessionItemFromRolloutItem` prefers the persisted `create_time` when
+     replaying a response item, preserving it across resume/history reads.
+   - Tests cover stamping, fractional second preservation, and client-supplied
+     timestamp preservation.
+
+5. **Client-authored developer-message provenance** (`0e0ef5d818`, #38243)
+   - `Router` gained a feature predicate installed by `RuntimeRouter`; when
+     `retain_client_developer_messages` is enabled, injected developer messages
+     are marked with `harness_metadata.client_authored` before session/rollout
+     persistence.
+   - Active-turn provider input remains unannotated, matching Rust's
+     serialization boundary.
+
+6. **Windows managed-proxy bounded fallback ports** (`631bbb33cc`, #38265)
+   - `startProxyServer` now reserves HTTP and SOCKS5 listeners independently
+     with the Rust-compatible preferred ranges (`3128-3159` and `8081-8112`)
+     and falls back to an ephemeral loopback port only after the preferred
+     range is exhausted.
+
 ## Verification
 
 - `gofmt -l` clean for touched files
 - `go build ./...` clean
 - `go vet ./chatgptapi ./appserver ./mcp` clean
-- `go test ./chatgptapi ./appserver ./mcp ./tui/... -count=1` passes
+- `go test ./rollout ./network ./appserver ./chatgptapi ./mcp ./tui/... -count=1` passes
 
 ## Deferred (unchanged)
 

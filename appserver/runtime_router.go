@@ -412,6 +412,15 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if router.services.ThreadRouter != nil {
 		router.services.ThreadRouter.SetStateRuntime(router.services.StateRuntime)
 	}
+	if router.services.ThreadRouter != nil && router.services.Config != nil {
+		router.services.ThreadRouter.retainClientDeveloperMessages = func() bool {
+			read, err := router.services.Config.Read(&config.ConfigReadParams{})
+			if err != nil || read == nil || read.Config == nil {
+				return false
+			}
+			return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "retain_client_developer_messages")
+		}
+	}
 	router.configureFSChangedCallback()
 	if router.services.Skills != nil {
 		router.services.Skills.SetChangedCallback(func() {

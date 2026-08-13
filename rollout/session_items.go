@@ -1313,6 +1313,9 @@ func SessionItemFromRolloutItem(item *Item, createdAt time.Time, index int) sess
 	if item == nil {
 		return session.Item{}
 	}
+	if rawCreateTime, ok := responseItemCreateTimeFromRaw(item.Raw); ok {
+		createdAt = rawCreateTime
+	}
 	itemType := normalizeRolloutItemType(item.Type)
 	role := item.Role
 	if itemType == "message" && role == "assistant" {
@@ -1357,6 +1360,19 @@ func SessionItemFromRolloutItem(item *Item, createdAt time.Time, index int) sess
 	}
 	normalizeComplexSessionItemFromRollout(&sessionItem, item)
 	return sessionItem
+}
+
+func responseItemCreateTimeFromRaw(raw json.RawMessage) (time.Time, bool) {
+	if len(raw) == 0 {
+		return time.Time{}, false
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) != nil {
+		return time.Time{}, false
+	}
+	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	createTime := responseItemMetadataCreateTime(metadata)
+	return createTime, !createTime.IsZero()
 }
 
 func normalizeComplexSessionItemFromRollout(out *session.Item, item *Item) {

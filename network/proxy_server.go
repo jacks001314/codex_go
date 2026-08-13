@@ -113,7 +113,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 			return nil, err
 		}
 	}
-	httpListener, err := net.ListenTCP("tcp", &runtimeConfig.HTTPAddr)
+	httpListener, err := listenProxyTCP(runtimeConfig.HTTPAddr, proxyWindowsHTTPPortRange())
 	if err != nil {
 		if mitmRuntime != nil {
 			mitmRuntime.Close()
@@ -149,7 +149,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		ConnContext:       proxyHTTPConnContext,
 	}
 	if settings.EnableSocks5 {
-		socksListener, listenErr := net.ListenTCP("tcp", &runtimeConfig.SocksAddr)
+		socksListener, listenErr := listenProxyTCP(runtimeConfig.SocksAddr, proxyWindowsSOCKSPortRange())
 		if listenErr != nil {
 			_ = httpListener.Close()
 			if mitmRuntime != nil {
