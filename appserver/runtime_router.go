@@ -10242,6 +10242,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			}
 		}
 	}
+	var trustedPluginRoots plugin.TrustedPluginRoots
+	if r.services.Plugins != nil && r.services.Config != nil {
+		installed := r.services.Plugins.Installed(&plugin.PluginInstalledParams{})
+		pluginIDs := make([]string, 0, len(installed.Plugins))
+		for _, summary := range installed.Plugins {
+			if summary.Enabled && summary.Installed && strings.TrimSpace(summary.ID) != "" {
+				pluginIDs = append(pluginIDs, summary.ID)
+			}
+		}
+		trustedPluginRoots = plugin.NewTrustedPluginRoots(r.services.Config.CodexHome(), pluginIDs)
+	}
 	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, cwd, params)
 	if err != nil {
 		return nil, err
@@ -10261,6 +10272,33 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.CodeModeProvider = r.services.CodeModeProvider
 	}
 	options.CodeModeRuntime = r.codeModeRuntimeForThread(threadID)
+	if r.services.Plugins != nil && r.services.Config != nil {
+		options.PluginMetricsResolver = func(command []string, commandCWD string) *plugin.ResolvedPluginMetricsOperation {
+			return trustedPluginRoots.ResolveMetricsOperation(command, commandCWD)
+		}
+		options.PluginMeasurementTracker = func(ctx context.Context, batch plugin.PluginMeasurementBatch) {
+			client, ok := r.services.Analytics.(*telemetry.AnalyticsEventsClient)
+			if !ok {
+				return
+			}
+			rows := make([]telemetry.PluginMeasurementRow, 0, len(batch.Rows))
+			for _, row := range batch.Rows {
+				rows = append(rows, telemetry.PluginMeasurementRow{
+					MeasurementName: row.MeasurementName,
+					NumberValue:     row.NumberValue,
+					Dimensions:      row.Dimensions,
+				})
+			}
+			client.TrackCodexPluginMeasurementsEvent(ctx, telemetry.CodexPluginMeasurementsInput{
+				ThreadID:    threadID,
+				TurnID:      strings.TrimSpace(turnID),
+				PluginID:    batch.PluginID,
+				ExecutionID: batch.ExecutionID,
+				Operation:   batch.Operation,
+				Rows:        rows,
+			})
+		}
+	}
 	if cfg != nil {
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
 	}

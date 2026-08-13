@@ -24277,30 +24277,31 @@ type blockingReviewRuntimeAgent struct {
 }
 
 type recordingTurnEventSink struct {
-	events            chan telemetry.CodexTurnEventRequest
-	threadInitialized chan telemetry.CodexThreadInitializedEventRequest
-	turnSteer         chan telemetry.CodexTurnSteerEventRequest
-	compaction        chan telemetry.CodexCompactionEventRequest
-	goal              chan telemetry.CodexGoalEventRequest
-	pluginInstalled   chan telemetry.CodexPluginEventRequest
-	pluginUninstalled chan telemetry.CodexPluginEventRequest
-	pluginEnabled     chan telemetry.CodexPluginEventRequest
-	pluginDisabled    chan telemetry.CodexPluginEventRequest
-	pluginFailed      chan telemetry.CodexPluginInstallFailedEventRequest
-	importComplete    chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest
-	importFailure     chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest
-	hookRun           chan telemetry.CodexHookRunEventRequest
-	acceptedLines     chan telemetry.CodexAcceptedLineFingerprintsEventRequest
-	commandExecution  chan telemetry.CodexCommandExecutionEventRequest
-	fileChange        chan telemetry.CodexFileChangeEventRequest
-	review            chan telemetry.CodexReviewEventRequest
-	mcpToolCall       chan telemetry.CodexMCPToolCallEventRequest
-	dynamicToolCall   chan telemetry.CodexDynamicToolCallEventRequest
-	collabToolCall    chan telemetry.CodexCollabAgentToolCallEventRequest
-	webSearch         chan telemetry.CodexWebSearchEventRequest
-	imageGeneration   chan telemetry.CodexImageGenerationEventRequest
-	skillInvocation   chan telemetry.SkillInvocationEventRequest
-	artifactOperation chan telemetry.ArtifactOperationEventRequest
+	events             chan telemetry.CodexTurnEventRequest
+	threadInitialized  chan telemetry.CodexThreadInitializedEventRequest
+	turnSteer          chan telemetry.CodexTurnSteerEventRequest
+	compaction         chan telemetry.CodexCompactionEventRequest
+	goal               chan telemetry.CodexGoalEventRequest
+	pluginInstalled    chan telemetry.CodexPluginEventRequest
+	pluginUninstalled  chan telemetry.CodexPluginEventRequest
+	pluginEnabled      chan telemetry.CodexPluginEventRequest
+	pluginDisabled     chan telemetry.CodexPluginEventRequest
+	pluginFailed       chan telemetry.CodexPluginInstallFailedEventRequest
+	pluginMeasurements chan telemetry.CodexPluginMeasurementsInput
+	importComplete     chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest
+	importFailure      chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest
+	hookRun            chan telemetry.CodexHookRunEventRequest
+	acceptedLines      chan telemetry.CodexAcceptedLineFingerprintsEventRequest
+	commandExecution   chan telemetry.CodexCommandExecutionEventRequest
+	fileChange         chan telemetry.CodexFileChangeEventRequest
+	review             chan telemetry.CodexReviewEventRequest
+	mcpToolCall        chan telemetry.CodexMCPToolCallEventRequest
+	dynamicToolCall    chan telemetry.CodexDynamicToolCallEventRequest
+	collabToolCall     chan telemetry.CodexCollabAgentToolCallEventRequest
+	webSearch          chan telemetry.CodexWebSearchEventRequest
+	imageGeneration    chan telemetry.CodexImageGenerationEventRequest
+	skillInvocation    chan telemetry.SkillInvocationEventRequest
+	artifactOperation  chan telemetry.ArtifactOperationEventRequest
 }
 
 type standaloneWebSearchRuntimeAgent struct {
@@ -24528,6 +24529,13 @@ func (s *recordingTurnEventSink) TrackCodexPluginInstallFailedEvent(ctx context.
 		return
 	}
 	s.pluginFailed <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexPluginMeasurementsEvent(ctx context.Context, event telemetry.CodexPluginMeasurementsInput) {
+	if s == nil || s.pluginMeasurements == nil {
+		return
+	}
+	s.pluginMeasurements <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest) {

@@ -96,6 +96,13 @@
       no new input enum is required. Existing `turn` tests cover the
       submission/drain boundary, so this item is classified equivalent.
 
+11. **Plugin measurement telemetry call-site wiring**
+    - `RuntimeRouter.toolRouterForTurnContext` now installs the trusted-plugin
+      metrics resolver and analytics tracker into `turn.ToolRegistryOptions`.
+    - Shell execution can therefore publish validated
+      `codex_plugin_measurement_event` analytics events from the app-server
+      turn path.
+
 11. **Trusted plugin analytics manifest resolution** (`dc8562d672`, #38238)
     - Added `analytics.yaml` v1 parsing for trusted remote plugin roots:
       operation path validation, measurement name/dimension validation,
