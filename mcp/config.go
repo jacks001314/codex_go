@@ -35,6 +35,7 @@ type ServerConfig struct {
 	BearerTokenEnvVar        string                            `json:"bearer_token_env_var,omitempty"`
 	HTTPHeaders              map[string]string                 `json:"http_headers,omitempty"`
 	EnvHTTPHeaders           map[string]string                 `json:"env_http_headers,omitempty"`
+	HTTPHeadersHelper        string                            `json:"http_headers_helper,omitempty"`
 	OAuthClientID            string                            `json:"oauth_client_id,omitempty"`
 	OAuthResource            string                            `json:"oauth_resource,omitempty"`
 	Scopes                   []string                          `json:"scopes,omitempty"`
@@ -113,7 +114,18 @@ func (c *ServerConfig) SafeRemoteChatGPTAuthorization() bool {
 }
 
 func ValidateServerAuth(serverName string, config *ServerConfig) error {
-	if config == nil || config.EffectiveAuth() != ServerAuthChatGPT || config.IsLocalEnvironment() {
+	if config == nil {
+		return nil
+	}
+	if strings.TrimSpace(config.HTTPHeadersHelper) != "" {
+		if strings.TrimSpace(config.URL) == "" || strings.TrimSpace(config.Command) != "" {
+			return fmt.Errorf("http_headers_helper is only supported for streamable HTTP MCP servers")
+		}
+		if !config.IsLocalEnvironment() {
+			return fmt.Errorf("http_headers_helper is only supported for local MCP servers")
+		}
+	}
+	if config.EffectiveAuth() != ServerAuthChatGPT || config.IsLocalEnvironment() {
 		return nil
 	}
 	if config.SafeRemoteChatGPTAuthorization() {
@@ -379,6 +391,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.BearerTokenEnvVar = runtimeConfigStringAny(values, "bearer_token_env_var", "bearerTokenEnvVar")
 		server.HTTPHeaders = runtimeConfigStringMap(values, "http_headers")
 		server.EnvHTTPHeaders = runtimeConfigStringMap(values, "env_http_headers")
+		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
 		server.Scopes, server.ScopesConfigured = runtimeConfigOptionalStringSlice(values, "scopes")

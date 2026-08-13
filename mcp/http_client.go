@@ -265,6 +265,14 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 
 func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HTTPDoer) *httpClient {
 	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
+	if config != nil && strings.TrimSpace(config.URL) != "" && strings.TrimSpace(config.HTTPHeadersHelper) != "" {
+		cwd, _ := os.Getwd()
+		helperTransport, helperErr := newMCPHTTPHeadersHelperTransport(client.Transport, config.URL, config.HTTPHeadersHelper, cwd)
+		if helperErr == nil {
+			client.Transport = helperTransport
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		}
+	}
 	protocolMode := MCPProtocolLegacy
 	if config != nil {
 		protocolMode = config.ProtocolMode

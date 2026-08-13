@@ -107,6 +107,17 @@
       publishing a partial batch, and remote executor commands intentionally
       skip local sidecar creation.
 
+12. **MCP dynamic HTTP header helpers** (`379cb68444`, #38245 partial)
+    - Added `http_headers_helper` to `mcp.ServerConfig` and runtime config
+      parsing.
+    - `ValidateServerAuth` rejects helpers for stdio or non-local HTTP
+      servers.
+    - Added a bounded helper runner/parser: 10s timeout, 64 KiB output limit,
+      JSON object-only output, reserved-header and duplicate rejection.
+    - Added an HTTP transport wrapper that applies cached helper headers only
+      to the configured server origin and disables redirect following on
+      helper-enabled clients.
+
 11. **Trusted plugin analytics manifest resolution** (`dc8562d672`, #38238)
     - Added `analytics.yaml` v1 parsing for trusted remote plugin roots:
       operation path validation, measurement name/dimension validation,

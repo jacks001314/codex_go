@@ -39,6 +39,29 @@ func TestRuntimeConfigAppToolApprovalParsesAllModes(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigFromValuesParsesHTTPHeadersHelper(t *testing.T) {
+	runtime := RuntimeConfigFromValues(map[string]any{
+		"mcp_servers": map[string]any{
+			"local-helper": map[string]any{
+				"url":                 "https://mcp-helper.example.test",
+				"http_headers_helper": "print_headers",
+			},
+		},
+	}, "/codex/home")
+	server := runtime.Servers["local-helper"].Config
+	if server.HTTPHeadersHelper != "print_headers" {
+		t.Fatalf("HTTPHeadersHelper = %q", server.HTTPHeadersHelper)
+	}
+	if err := ValidateServerAuth("local-helper", &server); err != nil {
+		t.Fatalf("ValidateServerAuth(local helper) error = %v", err)
+	}
+	remote := server
+	remote.EnvironmentID = "executor"
+	if err := ValidateServerAuth("local-helper", &remote); err == nil {
+		t.Fatal("ValidateServerAuth accepted a remote HTTP headers helper")
+	}
+}
+
 func TestMCPServerOAuthCredentialNameIsolatedByEnvironment(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -336,9 +359,9 @@ func TestRuntimeConfigFromValuesParsesOmitToolsFrom(t *testing.T) {
 				"omit_tools_from": []any{"code_mode", "deferred"},
 			},
 			"camel": map[string]any{
-				"url":            "https://mcp-camel.example.test",
-				"omitToolsFrom":  []any{"direct"},
-				"enabled":        true,
+				"url":           "https://mcp-camel.example.test",
+				"omitToolsFrom": []any{"direct"},
+				"enabled":       true,
 			},
 		},
 	}, "/codex/home")
