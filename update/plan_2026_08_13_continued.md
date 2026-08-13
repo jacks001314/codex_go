@@ -87,6 +87,12 @@
    - The existing gRPC transport continues to use insecure transport
      credentials for Unix sockets.
 
+10. **Unified turn-input submission/routing** (`cbb7e82a8b`, #38275)
+    - Go already routes user input, response items, and inter-agent
+      communication through `SteerMailbox`/`AgentLoopRequest.InputItems`;
+      no new input enum is required. Existing `turn` tests cover the
+      submission/drain boundary, so this item is classified equivalent.
+
 ## Verification
 
 - `gofmt -l` clean for touched files
