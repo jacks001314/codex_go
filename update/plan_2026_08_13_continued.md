@@ -96,6 +96,20 @@
       no new input enum is required. Existing `turn` tests cover the
       submission/drain boundary, so this item is classified equivalent.
 
+11. **Trusted plugin analytics manifest resolution** (`dc8562d672`, #38238)
+    - Added `analytics.yaml` v1 parsing for trusted remote plugin roots:
+      operation path validation, measurement name/dimension validation,
+      duplicate-path rejection, and exact command-to-operation resolution.
+
+12. **Plugin measurement sidecar and analytics events** (`9ca0337dbf`,
+    `d6eefb26a6`, #38252/#38239 partial)
+    - Added `CODEX_PLUGIN_METRICS_OUTPUT` sidecar with temp-file lifecycle,
+      64 KiB / 100-row bounds, enum dimension validation, and cleanup.
+    - Added `codex_plugin_measurement_event` telemetry types, batch row
+      validation, and an analytics-client tracking method.
+    - Runtime shell/unified-exec wiring for automatically installing the
+      sidecar env and publishing batches remains the next integration step.
+
 ## Verification
 
 - `gofmt -l` clean for touched files

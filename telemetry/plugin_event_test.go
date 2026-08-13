@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"testing"
 )
@@ -40,6 +41,30 @@ func TestCodexPluginEventSerializesExpectedRustShape(t *testing.T) {
 	}
 	if !reflect.DeepEqual(params["connector_ids"], []any{"calendar", "drive"}) {
 		t.Fatalf("connector_ids = %#v", params["connector_ids"])
+	}
+}
+
+func TestPluginMeasurementEventsBoundAndValidateLikeRust(t *testing.T) {
+	input := CodexPluginMeasurementsInput{
+		ThreadID:    "thread-1",
+		TurnID:      "turn-1",
+		ItemID:      "item-1",
+		PluginID:    "sample@test",
+		ExecutionID: "exec-1",
+		Operation:   "run_measure",
+		Rows: []PluginMeasurementRow{
+			{MeasurementName: "tokens", NumberValue: 12.5, Dimensions: map[string]string{"speed": "fast"}},
+			{MeasurementName: "bad-name", NumberValue: 1, Dimensions: nil},
+			{MeasurementName: "tokens", NumberValue: math.NaN(), Dimensions: nil},
+			{MeasurementName: "tokens", NumberValue: 3, Dimensions: map[string]string{"speed": "invalid value"}},
+		},
+	}
+	events := PluginMeasurementEvents(input)
+	if len(events) != 1 || events[0].EventType != CodexPluginMeasurementEventType {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].EventParams.MeasurementName != "tokens" || events[0].EventParams.Dimensions["speed"] != "fast" {
+		t.Fatalf("event params = %#v", events[0].EventParams)
 	}
 }
 

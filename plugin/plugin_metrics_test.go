@@ -37,6 +37,37 @@ func TestValidatePluginAnalyticsManifestMatchesRust(t *testing.T) {
 	}
 }
 
+func TestPluginMetricsSidecarParsesAndValidatesOutput(t *testing.T) {
+	resolved := ResolvedPluginMetricsOperation{
+		PluginID: "plugin-1",
+		Operation: PluginMetricsOperation{
+			OperationName: "run_measure",
+			Measurements: map[string]PluginMeasurementDefinition{
+				"tokens": {EnumDimensions: map[string][]string{"speed": {"fast", "slow"}}},
+			},
+		},
+	}
+	sidecar := NewPluginMetricsSidecar(resolved)
+	if sidecar == nil {
+		t.Fatal("NewPluginMetricsSidecar() = nil")
+	}
+	env := map[string]string{}
+	sidecar.InstallOutputEnv(env)
+	if env[PluginMetricsOutputEnvVar] == "" {
+		t.Fatal("output env not installed")
+	}
+	if err := os.WriteFile(sidecar.OutputPath(), []byte(`{"version":1,"measurements":[{"name":"tokens","value":12.5,"dimensions":{"speed":"fast"}},{"name":"tokens","value":3,"dimensions":{"speed":"invalid"}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	batch := sidecar.Finish(0)
+	if batch == nil || batch.PluginID != "plugin-1" || len(batch.Rows) != 1 || batch.Rows[0].NumberValue != 12.5 {
+		t.Fatalf("batch = %#v", batch)
+	}
+	if _, err := os.Stat(sidecar.OutputPath()); !os.IsNotExist(err) {
+		t.Fatalf("sidecar output was not cleaned up")
+	}
+}
+
 func TestValidatePluginMetricsOperationPathRejectsEscapesAndUnsafePaths(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {

@@ -146,6 +146,12 @@ func (c *AnalyticsEventsClient) TrackCodexPluginInstallFailedEvent(ctx context.C
 	c.trackEvent(event)
 }
 
+func (c *AnalyticsEventsClient) TrackCodexPluginMeasurementsEvent(ctx context.Context, input CodexPluginMeasurementsInput) {
+	for _, event := range PluginMeasurementEvents(input) {
+		c.trackEvent(event)
+	}
+}
+
 func (c *AnalyticsEventsClient) TrackCodexOnboardingExternalAgentImportCompleteEvent(ctx context.Context, event CodexOnboardingExternalAgentImportCompleteEventRequest) {
 	c.trackEvent(event)
 }
