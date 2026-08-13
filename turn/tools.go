@@ -85,6 +85,8 @@ type ToolRegistryOptions struct {
 	ThreadID                     string
 	TurnID                       string
 	SessionID                    string
+	PluginMetricsResolver        func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	PluginMeasurementTracker     func(context.Context, plugin.PluginMeasurementBatch)
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -155,6 +157,8 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		shellOptions.UnifiedExecThreadID = options.ThreadID
 		shellOptions.UnifiedExecTurnID = options.TurnID
 		shellOptions.SessionID = options.SessionID
+		shellOptions.PluginMetricsResolver = options.PluginMetricsResolver
+		shellOptions.PluginMeasurementTracker = options.PluginMeasurementTracker
 		shellOptions.UnifiedExec = nil
 		if options.EnableUnifiedExec {
 			shellOptions.ToolName = tool.PlainName(tool.DefaultExecCommandToolName)

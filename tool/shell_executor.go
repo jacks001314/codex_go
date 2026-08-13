@@ -14,6 +14,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/execserver"
 	"codex_go/network"
+	"codex_go/plugin"
 	"codex_go/sandbox"
 	"codex_go/utils"
 )
@@ -44,23 +45,30 @@ type ShellExecutorOptions struct {
 	// (c9c6c0daa9): carry the rollout state into shell child processes so
 	// arg0-dispatched apply_patch preserves CRLF/CR line endings.
 	PreserveLineEndings bool
+	// PluginMetricsResolver resolves a trusted plugin analytics operation for
+	// one shell command (Rust #38252).
+	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	// PluginMeasurementTracker publishes a validated plugin measurement batch.
+	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 }
 
 type ShellExecutor struct {
-	runner                  ShellRunner
-	shell                   *Shell
-	validation              ShellValidationOptions
-	toolName                ToolName
-	approval                ShellApprovalFunc
-	maxOutputTokens         *int
-	unifiedExec             *UnifiedExecManager
-	unifiedExecEvents       UnifiedExecEventSink
-	unifiedExecThreadID     string
-	unifiedExecTurnID       string
-	sessionID               string
-	unifiedExecEnvironments []UnifiedExecEnvironment
-	managedNetworkResolver  ManagedNetworkResolver
-	preserveLineEndings     bool
+	runner                   ShellRunner
+	shell                    *Shell
+	validation               ShellValidationOptions
+	toolName                 ToolName
+	approval                 ShellApprovalFunc
+	maxOutputTokens          *int
+	unifiedExec              *UnifiedExecManager
+	unifiedExecEvents        UnifiedExecEventSink
+	unifiedExecThreadID      string
+	unifiedExecTurnID        string
+	sessionID                string
+	unifiedExecEnvironments  []UnifiedExecEnvironment
+	managedNetworkResolver   ManagedNetworkResolver
+	preserveLineEndings      bool
+	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 }
 
 type ShellApprovalDecision struct {
@@ -118,6 +126,8 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.preserveLineEndings = options.PreserveLineEndings
+	executor.pluginMetricsResolver = options.PluginMetricsResolver
+	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	return executor
 }
 
@@ -495,6 +505,19 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			}, nil
 		}
 	}
+	var metricsSidecar *plugin.PluginMetricsSidecar
+	if e.pluginMetricsResolver != nil {
+		if req.Env == nil {
+			req.Env = map[string]string{}
+		}
+		plugin.StripPluginMetricsOutputEnv(req.Env)
+		if resolved := e.pluginMetricsResolver(req.Command, req.CWD); resolved != nil {
+			metricsSidecar = plugin.NewPluginMetricsSidecar(*resolved)
+			if metricsSidecar != nil {
+				metricsSidecar.InstallOutputEnv(req.Env)
+			}
+		}
+	}
 	if environment != nil {
 		req.UnifiedExecEnvironmentID = environment.ID
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
@@ -522,6 +545,15 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if err != nil {
 		return nil, err
+	}
+	if metricsSidecar != nil {
+		exitCode := 0
+		if result.HasExitCode {
+			exitCode = result.ExitCode
+		}
+		if batch := metricsSidecar.Finish(exitCode); batch != nil && e.pluginMeasurementTracker != nil {
+			e.pluginMeasurementTracker(ctx, *batch)
+		}
 	}
 	if result.EventCallID == "" {
 		result.EventCallID = invocation.CallID
