@@ -43,6 +43,7 @@ type mcpCLIServer struct {
 	BearerTokenEnvVar         string                    `json:"bearer_token_env_var,omitempty"`
 	HTTPHeaders               map[string]string         `json:"http_headers,omitempty"`
 	EnvHTTPHeaders            map[string]string         `json:"env_http_headers,omitempty"`
+	HTTPHeadersHelper         string                    `json:"-"`
 	OAuthClientID             string                    `json:"oauth_client_id,omitempty"`
 	OAuthResource             string                    `json:"oauth_resource,omitempty"`
 	Auth                      string                    `json:"auth,omitempty"`
@@ -554,6 +555,7 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		BearerTokenEnvVar: server.BearerTokenEnvVar,
 		HTTPHeaders:       cloneStringMap(server.HTTPHeaders),
 		EnvHTTPHeaders:    cloneStringMap(server.EnvHTTPHeaders),
+		HTTPHeadersHelper: server.HTTPHeadersHelper,
 		OAuthClientID:     server.OAuthClientID,
 		OAuthResource:     server.OAuthResource,
 		OAuthServerName:   name,
@@ -944,6 +946,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 		server.BearerTokenEnvVar = stringFromAny(table["bearer_token_env_var"])
 		server.HTTPHeaders = stringMapFromAny(table["http_headers"])
 		server.EnvHTTPHeaders = stringMapFromAny(table["env_http_headers"])
+		server.HTTPHeadersHelper = stringFromAny(table["http_headers_helper"])
 		server.OAuthClientID = mcpOAuthClientIDFromConfig(table)
 		server.OAuthResource = stringFromAny(table["oauth_resource"])
 		return server
@@ -969,6 +972,9 @@ func mcpServerToConfigValue(server *mcpCLIServer) map[string]any {
 		}
 		if len(server.EnvHTTPHeaders) > 0 {
 			value["env_http_headers"] = stringMapToAnyMap(server.EnvHTTPHeaders)
+		}
+		if server.HTTPHeadersHelper != "" {
+			value["http_headers_helper"] = server.HTTPHeadersHelper
 		}
 		if server.OAuthClientID != "" {
 			value["oauth"] = map[string]any{"client_id": server.OAuthClientID}

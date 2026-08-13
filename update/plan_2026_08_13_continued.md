@@ -107,6 +107,15 @@
       publishing a partial batch, and remote executor commands intentionally
       skip local sidecar creation.
 
+12. **MCP dynamic HTTP header helper**
+    - `ServerConfig` parses/validates `http_headers_helper` for local
+      streamable HTTP servers.
+    - A same-origin dynamic header transport runs the helper once per
+      connection, applies bounded/validated JSON headers, and disables
+      redirect following for helper-enabled clients.
+    - CLI `mcp list`/`mcp get` persist the helper internally but redact it
+      from transport output.
+
 12. **MCP dynamic HTTP header helpers** (`379cb68444`, #38245 partial)
     - Added `http_headers_helper` to `mcp.ServerConfig` and runtime config
       parsing.
