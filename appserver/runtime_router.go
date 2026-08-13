@@ -8448,7 +8448,7 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 
 func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetAccountTokenUsageResponse, error) {
 	if len(request.Params) > 0 {
-		var params struct{}
+		var params auth.GetAccountTokenUsageParams
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}

@@ -162,6 +162,9 @@ var Registry = []Spec{
 	{Key: "responses_websockets", Stage: StageRemoved},
 	{Key: "responses_websockets_v2", Stage: StageRemoved},
 	{Key: "remote_compaction_v2", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs 1ad4397821): retain client-authored
+	// developer messages across compacted context windows.
+	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
 }

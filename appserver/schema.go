@@ -120,6 +120,14 @@ func BuildProtocolSchema(experimental bool, internal bool) *ProtocolSchema {
 func BuildTypeScriptProtocolSchema(experimental bool, internal bool) *ProtocolSchema {
 	schema := BuildProtocolSchema(experimental, internal)
 	schema.ClientRequests = normalizeProtocolMethods(append(schema.ClientRequests, typeScriptLegacyClientRequestMethods()...))
+	for i := range schema.ClientRequests {
+		if schema.ClientRequests[i].Method == string(MethodGetAccountTokenUsage) {
+			// Rust emits params?: GetAccountTokenUsageParams in the TypeScript
+			// client surface while the stable JSON request variant keeps its
+			// params absent/nullable.
+			schema.ClientRequests[i].Params = "GetAccountTokenUsageParams"
+		}
+	}
 	schema.Notifications = normalizeProtocolMethods(append(schema.Notifications, typeScriptOnlyNotificationMethods()...))
 	schema.Methods = append([]ProtocolMethod(nil), schema.ClientRequests...)
 	return schema

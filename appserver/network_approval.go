@@ -396,7 +396,9 @@ func (s *networkApprovalService) recordGuardianOutcome(call *activeNetworkApprov
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
 	key := networkApprovalCallKey(call.threadID, call.turnID, call.callID)
-	if active := s.calls[key]; active == call && active.outcome == "" {
+	// Rust #38256: an explicit network-review outcome replaces the previously
+	// recorded outcome for the execution instead of keeping the first one.
+	if active := s.calls[key]; active == call {
 		active.outcome = message
 	}
 }
@@ -541,7 +543,7 @@ func (s *networkApprovalService) recordPolicyDenialForThread(threadID string, me
 		}
 		selected = call
 	}
-	if selected != nil && selected.outcome == "" {
+	if selected != nil {
 		selected.outcome = message
 	}
 }

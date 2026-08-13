@@ -18,6 +18,7 @@ type rustAppServerV2SuiteCase struct {
 func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 	return []rustAppServerV2SuiteCase{
 		{Module: "account", Owner: "auth", Focus: "account read/login/logout/rate-limit RPCs"},
+		{Module: "account_thread_usage", Owner: "auth, appserver", Focus: "account usage/read thread-level estimation"},
 		{Module: "analytics", Owner: "telemetry", Focus: "analytics enablement and payload capture"},
 		{Module: "app_installed", Owner: "apps", Focus: "app/installed RPC"},
 		{Module: "app_list", Owner: "apps", Focus: "app list RPC and update notifications"},

@@ -684,6 +684,59 @@ func TestNetworkBlockedObserverDoesNotGuessAcrossConcurrentCommandsLikeRust(t *t
 	}
 }
 
+func TestNetworkApprovalLatestGuardianOutcomeWinsLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	invocation := &tool.Invocation{CallID: "call-latest-guardian", ToolName: tool.PlainName("exec_command")}
+	router.networkApproval.registerActiveCall("thread-network", "turn-network", invocation)
+	call := router.networkApproval.activeCallForApproval(
+		&networkApprovalTurn{threadID: "thread-network", turnID: "turn-network", params: &turn.TurnStartParams{}},
+		"local",
+		"call-latest-guardian",
+	)
+	if call == nil {
+		t.Fatal("active network approval call not registered")
+	}
+	router.networkApproval.recordGuardianOutcome(call, "first rejection")
+	router.networkApproval.recordGuardianOutcome(call, "latest rejection")
+	if outcome := router.networkApproval.finishActiveCall("thread-network", "turn-network", invocation); outcome != "latest rejection" {
+		t.Fatalf("outcome = %q, want latest rejection", outcome)
+	}
+}
+
+func TestNetworkApprovalLatestPolicyOutcomeWinsLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	invocation := &tool.Invocation{CallID: "call-latest-policy", ToolName: tool.PlainName("exec_command")}
+	router.networkApproval.registerActiveCall("thread-network", "turn-network", invocation)
+	router.networkApproval.recordPolicyDenialForThread("thread-network", "first policy message")
+	router.networkApproval.recordPolicyDenialForThread("thread-network", "latest policy message")
+	if outcome := router.networkApproval.finishActiveCall("thread-network", "turn-network", invocation); outcome != "latest policy message" {
+		t.Fatalf("outcome = %q, want latest policy message", outcome)
+	}
+}
+
+func TestNetworkBlockedObserverKeepsExplicitGuardianOutcomeLikeRust(t *testing.T) {
+	router := newNetworkApprovalTestRouter(t, "on-request")
+	invocation := &tool.Invocation{CallID: "call-explicit-outcome", ToolName: tool.PlainName("exec_command")}
+	router.networkApproval.registerActiveCall("thread-network", "turn-network", invocation)
+	call := router.networkApproval.activeCallForApproval(
+		&networkApprovalTurn{threadID: "thread-network", turnID: "turn-network", params: &turn.TurnStartParams{}},
+		"local",
+		"call-explicit-outcome",
+	)
+	if call == nil {
+		t.Fatal("active network approval call not registered")
+	}
+	router.networkApproval.recordGuardianOutcome(call, "explicit guardian rejection")
+	router.networkApproval.OnBlockedRequest(context.Background(), network.ProxyBlockedRequest{
+		Host:     "blocked.example",
+		Reason:   network.ProxyReasonDenied,
+		Decision: string(network.ProxyPolicyDecisionDeny),
+	})
+	if outcome := router.networkApproval.finishActiveCall("thread-network", "turn-network", invocation); outcome != "explicit guardian rejection" {
+		t.Fatalf("outcome = %q, want explicit guardian rejection to win over generic blocked fallback", outcome)
+	}
+}
+
 func TestThreadScopedBlockedObserverAttributesAcrossConcurrentThreadsLikeRust(t *testing.T) {
 	router := newNetworkApprovalTestRouter(t, "on-request")
 	var firstCanceled atomic.Int32

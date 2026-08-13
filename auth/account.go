@@ -549,9 +549,19 @@ type ConsumeRateLimitResetCreditResponse struct {
 	Outcome ConsumeRateLimitResetCreditOutcome `json:"outcome"`
 }
 
+// GetAccountTokenUsageParams selects the scope of the account usage response.
+type GetAccountTokenUsageParams struct {
+	// ThreadID, when present, requests estimated usage for this thread instead
+	// of account-wide token activity (Rust #38270).
+	ThreadID *string `json:"threadId,omitempty"`
+}
+
 type GetAccountTokenUsageResponse struct {
 	Summary           AccountTokenUsageSummary       `json:"summary"`
 	DailyUsageBuckets []AccountTokenUsageDailyBucket `json:"dailyUsageBuckets"`
+	// ThreadUsage is populated when a thread was requested and its billing
+	// route is available (Rust #38270).
+	ThreadUsage *ThreadUsage `json:"threadUsage,omitempty"`
 }
 
 type AccountTokenUsageSummary struct {
@@ -565,6 +575,28 @@ type AccountTokenUsageSummary struct {
 type AccountTokenUsageDailyBucket struct {
 	StartDate string `json:"startDate"`
 	Tokens    int64  `json:"tokens"`
+}
+
+// ThreadUsage is the estimated billing usage for a requested thread.
+type ThreadUsage struct {
+	ThreadID                    string                      `json:"threadId"`
+	EstimatedUsageCreditsMicros int64                       `json:"estimatedUsageCreditsMicros"`
+	EstimatedUsageUSDMicros     *int64                      `json:"estimatedUsageUsdMicros"`
+	Groups                      []ThreadUsageBreakdownGroup `json:"groups"`
+}
+
+// ThreadUsageBreakdownGroup is one model/speed/reasoning bucket in a thread
+// usage estimate.
+type ThreadUsageBreakdownGroup struct {
+	Model                       *string `json:"model"`
+	ReasoningEffort             *string `json:"reasoningEffort"`
+	Speed                       *string `json:"speed"`
+	EstimatedUsageCreditsMicros int64   `json:"estimatedUsageCreditsMicros"`
+	NetNewInputTokens           *int64  `json:"netNewInputTokens"`
+	CachedInputTokens           *int64  `json:"cachedInputTokens"`
+	InputTokens                 *int64  `json:"inputTokens"`
+	OutputTokens                *int64  `json:"outputTokens"`
+	TotalTokens                 *int64  `json:"totalTokens"`
 }
 
 type WorkspaceMessageType string

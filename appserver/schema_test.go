@@ -879,7 +879,7 @@ func requireProtocolMethodSetMatchesRustFixture(t *testing.T, path string, actua
 	}
 }
 
-var rustTypeScriptMethodPattern = regexp.MustCompile(`\{\s*"method":\s*"([^"]+)"[^{}]*?(?:"params"|params):\s*([^,\s}]+)`)
+var rustTypeScriptMethodPattern = regexp.MustCompile(`\{\s*"method":\s*"([^"]+)"[^{}]*?(?:"params"|params)\??:\s*([^,\s}|]+)`)
 
 func requireTypeScriptMethodSetMatchesRustFixture(t *testing.T, path string, actual []ProtocolMethod) {
 	t.Helper()
