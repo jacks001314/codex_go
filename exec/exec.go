@@ -190,6 +190,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	modelID := effectiveModel(req, cfg)
 	modelInfo := execModelInfo(modelID, cfg)
+	nodeReplAutoReviewRequired := modelInfo.NodeReplAutoReviewRequired
+	nodeReplDisabled := modelInfo.NodeReplDisabled
 	parallelToolCalls := modelSupportsParallelToolCalls(modelID)
 	useResponsesLite := modelUsesResponsesLite(modelID)
 	reasoningEffort := effectiveReasoningEffort(req, cfg)
@@ -314,18 +316,20 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	agentWaitDefault, agentWaitMin, agentWaitMax, agentHideSpawnMetadata, agentExposeSpawnOverrides := execAgentWaitConfigFromTools(multiAgentTools)
 	clientMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		InstallationID:   installationID,
-		SessionID:        execSessionID(req, threadID),
-		ThreadID:         threadID,
-		TurnID:           turnID,
-		WindowID:         threadID + ":1",
-		RequestKind:      codexapi.ClientRequestTurn,
-		SubagentHeader:   subagentHeader,
-		SubagentKind:     subagentKind,
-		ParentThreadID:   execParentThreadID(req),
-		ThreadSource:     execThreadSource(req),
-		Extra:            cfg.ResponsesAPIClientMetadata(),
-		UseResponsesLite: useResponsesLite,
+		InstallationID:             installationID,
+		SessionID:                  execSessionID(req, threadID),
+		ThreadID:                   threadID,
+		TurnID:                     turnID,
+		WindowID:                   threadID + ":1",
+		RequestKind:                codexapi.ClientRequestTurn,
+		SubagentHeader:             subagentHeader,
+		SubagentKind:               subagentKind,
+		ParentThreadID:             execParentThreadID(req),
+		ThreadSource:               execThreadSource(req),
+		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
+		NodeReplDisabled:           &nodeReplDisabled,
+		Extra:                      cfg.ResponsesAPIClientMetadata(),
+		UseResponsesLite:           useResponsesLite,
 	})
 	originator := execAgentOriginator(req)
 	if webSearchOptions != nil {

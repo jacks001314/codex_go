@@ -8,59 +8,63 @@ import (
 )
 
 const (
-	InstallationIDKey      = "installation_id"
-	SessionIDKey           = "session_id"
-	ThreadIDKey            = "thread_id"
-	TurnIDKey              = "turn_id"
-	WindowIDKey            = "window_id"
-	RequestKindKey         = "request_kind"
-	CompactionKey          = "compaction"
-	CodeModeToolNamesKey   = "code_mode_tool_names"
-	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
-	ForkedFromThreadIDKey  = "forked_from_thread_id"
-	ParentThreadIDKey      = "parent_thread_id"
-	ParentTurnIDKey        = "parent_turn_id"
-	SubagentKindKey        = "subagent_kind"
-	ThreadSourceKey        = "thread_source"
-	SandboxKey             = "sandbox"
-	SandboxModeKey         = "sandbox_mode"
-	AutoReviewEnabledKey   = "auto_review_enabled"
-	WorkspacesKey          = "workspaces"
-	InstallationIDHeader   = "x-codex-installation-id"
-	WindowIDHeader         = "x-codex-window-id"
-	TurnMetadataHeader     = "x-codex-turn-metadata"
-	ParentThreadIDHeader   = "x-codex-parent-thread-id"
-	OpenAISubagentHeader   = "x-openai-subagent"
-	RequestKindTurn        = "turn"
-	RequestKindPrewarm     = "prewarm"
-	RequestKindCompaction  = "compaction"
-	RequestKindMemory      = "memory"
+	InstallationIDKey             = "installation_id"
+	SessionIDKey                  = "session_id"
+	ThreadIDKey                   = "thread_id"
+	TurnIDKey                     = "turn_id"
+	WindowIDKey                   = "window_id"
+	RequestKindKey                = "request_kind"
+	CompactionKey                 = "compaction"
+	CodeModeToolNamesKey          = "code_mode_tool_names"
+	TurnStartedAtUnixMSKey        = "turn_started_at_unix_ms"
+	ForkedFromThreadIDKey         = "forked_from_thread_id"
+	ParentThreadIDKey             = "parent_thread_id"
+	ParentTurnIDKey               = "parent_turn_id"
+	SubagentKindKey               = "subagent_kind"
+	ThreadSourceKey               = "thread_source"
+	SandboxKey                    = "sandbox"
+	SandboxModeKey                = "sandbox_mode"
+	AutoReviewEnabledKey          = "auto_review_enabled"
+	NodeReplAutoReviewRequiredKey = "node_repl_auto_review_required"
+	NodeReplDisabledKey           = "node_repl_disabled"
+	WorkspacesKey                 = "workspaces"
+	InstallationIDHeader          = "x-codex-installation-id"
+	WindowIDHeader                = "x-codex-window-id"
+	TurnMetadataHeader            = "x-codex-turn-metadata"
+	ParentThreadIDHeader          = "x-codex-parent-thread-id"
+	OpenAISubagentHeader          = "x-openai-subagent"
+	RequestKindTurn               = "turn"
+	RequestKindPrewarm            = "prewarm"
+	RequestKindCompaction         = "compaction"
+	RequestKindMemory             = "memory"
 )
 
 var reservedMetadataKeys = map[string]bool{
-	InstallationIDKey:      true,
-	InstallationIDHeader:   true,
-	SessionIDKey:           true,
-	ThreadIDKey:            true,
-	TurnIDKey:              true,
-	WindowIDKey:            true,
-	WindowIDHeader:         true,
-	TurnMetadataHeader:     true,
-	ParentThreadIDHeader:   true,
-	OpenAISubagentHeader:   true,
-	RequestKindKey:         true,
-	CompactionKey:          true,
-	CodeModeToolNamesKey:   true,
-	TurnStartedAtUnixMSKey: true,
-	ForkedFromThreadIDKey:  true,
-	ParentThreadIDKey:      true,
-	ParentTurnIDKey:        true,
-	SubagentKindKey:        true,
-	ThreadSourceKey:        true,
-	SandboxKey:             true,
-	SandboxModeKey:         true,
-	AutoReviewEnabledKey:   true,
-	WorkspacesKey:          true,
+	InstallationIDKey:             true,
+	InstallationIDHeader:          true,
+	SessionIDKey:                  true,
+	ThreadIDKey:                   true,
+	TurnIDKey:                     true,
+	WindowIDKey:                   true,
+	WindowIDHeader:                true,
+	TurnMetadataHeader:            true,
+	ParentThreadIDHeader:          true,
+	OpenAISubagentHeader:          true,
+	RequestKindKey:                true,
+	CompactionKey:                 true,
+	CodeModeToolNamesKey:          true,
+	TurnStartedAtUnixMSKey:        true,
+	ForkedFromThreadIDKey:         true,
+	ParentThreadIDKey:             true,
+	ParentTurnIDKey:               true,
+	SubagentKindKey:               true,
+	ThreadSourceKey:               true,
+	SandboxKey:                    true,
+	SandboxModeKey:                true,
+	AutoReviewEnabledKey:          true,
+	NodeReplAutoReviewRequiredKey: true,
+	NodeReplDisabledKey:           true,
+	WorkspacesKey:                 true,
 }
 
 const (

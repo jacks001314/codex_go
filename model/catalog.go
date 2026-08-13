@@ -192,6 +192,8 @@ type ModelInfo struct {
 	UsedFallbackModelMetadata      bool             `json:"-"`
 	SupportsSearchTool             bool             `json:"supports_search_tool"`
 	UseResponsesLite               bool             `json:"use_responses_lite"`
+	NodeReplAutoReviewRequired     bool             `json:"node_repl_auto_review_required"`
+	NodeReplDisabled               bool             `json:"node_repl_disabled"`
 	AutoReviewModelOverride        string           `json:"auto_review_model_override"`
 }
 
@@ -235,6 +237,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		InputModalities                []string            `json:"input_modalities"`
 		SupportsSearchTool             bool                `json:"supports_search_tool"`
 		UseResponsesLite               bool                `json:"use_responses_lite"`
+		NodeReplAutoReviewRequired     bool                `json:"node_repl_auto_review_required"`
+		NodeReplDisabled               bool                `json:"node_repl_disabled"`
 		AutoReviewModelOverride        any                 `json:"auto_review_model_override"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -275,6 +279,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		InputModalities:                cloneStrings(raw.InputModalities),
 		SupportsSearchTool:             raw.SupportsSearchTool,
 		UseResponsesLite:               raw.UseResponsesLite,
+		NodeReplAutoReviewRequired:     raw.NodeReplAutoReviewRequired,
+		NodeReplDisabled:               raw.NodeReplDisabled,
 		AutoReviewModelOverride:        stringFromJSONValue(raw.AutoReviewModelOverride),
 	}
 	if m.BaseInstructions == "" {

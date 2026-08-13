@@ -2865,7 +2865,6 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	details = append(details,
 		fmt.Sprintf("handshake result: HTTP %d", status),
 		fmt.Sprintf("reasoning header: %t", websocketHeaderPresent(responseHeaders, "x-reasoning-included")),
-		fmt.Sprintf("models etag present: %t", websocketHeaderPresent(responseHeaders, "x-models-etag")),
 		fmt.Sprintf("server model present: %t", websocketHeaderPresent(responseHeaders, "openai-model", "x-openai-model")),
 	)
 	immediateClose, readErr := websocketImmediateCloseForDoctor(conn, websocketImmediateCloseGrace)

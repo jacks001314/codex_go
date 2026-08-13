@@ -397,6 +397,47 @@ func TestResponsesAgentRunnerRunWebSocketParsesFullResponsesEventModel(t *testin
 	}
 }
 
+func TestResponsesAgentRunnerRunWebSocketReadsModelsETagFromMetadataEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		events := []string{
+			`{"type":"codex.response.metadata","headers":{"x-models-etag":"etag-ws-123"}}`,
+			`{"type":"response.created","response":{"id":"resp-ws-etag"}}`,
+			`{"type":"response.output_text.delta","delta":"ok"}`,
+			`{"type":"response.completed","response":{"id":"resp-ws-etag","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		}
+		for _, event := range events {
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+		}
+	}))
+	defer server.Close()
+
+	var events []ResponsesStreamEvent
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		SupportsWebsockets: true,
+		StreamHandler: func(event *ResponsesStreamEvent) {
+			if event != nil {
+				events = append(events, *event)
+			}
+		},
+	})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "read etag"})
+	if err != nil || response == nil {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	etag := firstEventByKind(events, ResponsesStreamEventModelsETag)
+	if etag == nil || etag.ModelsETag != "etag-ws-123" {
+		t.Fatalf("models etag event = %#v", etag)
+	}
+}
+
 func TestResponsesAgentRunnerRunWebSocketRecoversDeclaredCustomToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		conn, err := websocket.Accept(w, request, nil)
@@ -2180,10 +2221,10 @@ func TestResponsesAgentRunnerStreamsResponsesSSE(t *testing.T) {
 	if response.TimingMetrics["engine_iapi_ttft_total_ms"] != float64(310) || response.TimingMetrics["engine_service_ttft_total_ms"] != float64(340) {
 		t.Fatalf("timing metrics = %#v", response.TimingMetrics)
 	}
-	if len(events) != 19 {
+	if len(events) != 18 {
 		t.Fatalf("events = %#v", events)
 	}
-	if events[0].Kind != ResponsesStreamEventHeaders || events[0].RequestID != "req-1" || events[0].Model != "gpt-stream-header" || events[0].TurnState != "turn-state-1" || events[0].ModelsETag != `"models-etag-1"` {
+	if events[0].Kind != ResponsesStreamEventHeaders || events[0].RequestID != "req-1" || events[0].Model != "gpt-stream-header" || events[0].TurnState != "turn-state-1" || events[0].ModelsETag != "" {
 		t.Fatalf("headers event = %#v", events[0])
 	}
 	if events[0].Headers["x-request-id"] != "req-1" || events[0].Headers["openai-model"] != "gpt-stream-header" {
@@ -2214,10 +2255,6 @@ func TestResponsesAgentRunnerStreamsResponsesSSE(t *testing.T) {
 	}
 	if rateLimits[1].RateLimit == nil || rateLimits[1].RateLimit.LimitID != "codex_secondary" || rateLimits[1].RateLimit.LimitName != "gpt-secondary" || rateLimits[1].RateLimit.Primary == nil || rateLimits[1].RateLimit.Primary.UsedPercent != 80 {
 		t.Fatalf("secondary rate limit = %#v", rateLimits[1])
-	}
-	modelsETag := firstEventByKind(events, ResponsesStreamEventModelsETag)
-	if modelsETag == nil || modelsETag.ModelsETag != `"models-etag-1"` {
-		t.Fatalf("models etag event = %#v", modelsETag)
 	}
 	reasoning := firstEventByKind(events, ResponsesStreamEventReasoning)
 	if reasoning == nil || reasoning.Reasoning == nil || !*reasoning.Reasoning {

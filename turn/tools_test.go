@@ -29,6 +29,30 @@ func TestDynamicToolPreservesInlineAudioContent(t *testing.T) {
 	}
 }
 
+func TestSkillsReadAliasResolutionAndExecutorSkillRoot(t *testing.T) {
+	entries := []skillprovider.CatalogEntry{
+		{Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: "root-1"}, PackageID: "skill://root-1/skills/foo/SKILL.md", MainResource: "skill://root-1/skills/foo/SKILL.md", Enabled: true, PromptVisible: true},
+		{Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: "root-1"}, PackageID: "skill://root-1/skills/bar/SKILL.md", MainResource: "skill://root-1/skills/bar/SKILL.md", Enabled: true, PromptVisible: true},
+	}
+	for _, tt := range []struct {
+		packageID string
+		candidate string
+		want      bool
+	}{
+		{packageID: "skill://root-1/skills/foo/SKILL.md", candidate: "skill://root-1/skills/foo/SKILL.md", want: true},
+		{packageID: "skill://root-1/skills/foo/SKILL.md", candidate: "e0/foo/SKILL.md", want: true},
+		{packageID: "skill://root-1/skills/bar/SKILL.md", candidate: "e0/bar/SKILL.md", want: true},
+		{packageID: "skill://root-1/skills/foo/SKILL.md", candidate: "e0/bar/SKILL.md", want: false},
+	} {
+		if got := skillPackageMatchesAlias(entries, tt.packageID, tt.candidate); got != tt.want {
+			t.Fatalf("skillPackageMatchesAlias(%q, %q) = %v, want %v", tt.packageID, tt.candidate, got, tt.want)
+		}
+	}
+	if got := executorSkillRoot("skill://root-1/skills/foo/SKILL.md"); got != "skill://root-1/skills/foo" {
+		t.Fatalf("executorSkillRoot() = %q", got)
+	}
+}
+
 func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.DisableUpdatePlan = true

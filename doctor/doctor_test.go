@@ -1662,7 +1662,6 @@ func TestWebsocketReachabilityReportsEndpointForSupportedProvider(t *testing.T) 
 		"DNS: 1 IPv4, 0 IPv6, first IPv4",
 		"handshake result: HTTP 101",
 		"reasoning header: true",
-		"models etag present: true",
 		"server model present: true",
 	} {
 		if !containsDetail(check, want) {

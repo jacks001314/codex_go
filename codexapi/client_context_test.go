@@ -33,6 +33,10 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	metadata.RequestKind = ClientRequestTurn
 	enabled := true
 	metadata.AutoReviewEnabled = &enabled
+	nodeReplAutoReviewRequired := true
+	metadata.NodeReplAutoReviewRequired = &nodeReplAutoReviewRequired
+	nodeReplDisabled := false
+	metadata.NodeReplDisabled = &nodeReplDisabled
 	metadata.ParentThreadID = "parent"
 	metadata.ParentTurnID = "parent-turn"
 	metadata.SubagentHeader = "review"
@@ -56,6 +60,10 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"auto_review_enabled":true`) {
 		t.Fatalf("turn metadata missing auto_review_enabled: %s", client[ClientCodexTurnMetadataHeader])
 	}
+	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"node_repl_auto_review_required":true`) ||
+		!strings.Contains(client[ClientCodexTurnMetadataHeader], `"node_repl_disabled":false`) {
+		t.Fatalf("turn metadata missing node repl policy: %s", client[ClientCodexTurnMetadataHeader])
+	}
 	headers := metadata.CompatibilityHeaders()
 	if headers[ClientCodexTurnMetadataHeader] == "" || headers[ClientCodexWindowIDHeader] != "window" {
 		t.Fatalf("CompatibilityHeaders() = %v", headers)
@@ -69,6 +77,27 @@ func TestClientReservedMetadataKeysIncludeAutoReviewEnabled(t *testing.T) {
 	filtered := ClientFilterExtraMetadata(map[string]string{"auto_review_enabled": "client-value", "workspace_kind": "git"})
 	if _, ok := filtered["auto_review_enabled"]; ok {
 		t.Fatalf("client-provided auto_review_enabled leaked: %#v", filtered)
+	}
+	if filtered["workspace_kind"] != "git" {
+		t.Fatalf("non-reserved extra was filtered: %#v", filtered)
+	}
+}
+
+func TestClientReservedMetadataKeysIncludeNodeReplPolicy(t *testing.T) {
+	reserved := ClientReservedMetadataKeys()
+	if !reserved[NodeReplAutoReviewRequiredKey] || !reserved[NodeReplDisabledKey] {
+		t.Fatalf("node repl policy keys are not reserved: %#v", reserved)
+	}
+	filtered := ClientFilterExtraMetadata(map[string]string{
+		NodeReplAutoReviewRequiredKey: "client-value",
+		NodeReplDisabledKey:           "client-value",
+		"workspace_kind":              "git",
+	})
+	if _, ok := filtered[NodeReplAutoReviewRequiredKey]; ok {
+		t.Fatalf("client-provided node repl policy leaked: %#v", filtered)
+	}
+	if _, ok := filtered[NodeReplDisabledKey]; ok {
+		t.Fatalf("client-provided node repl disabled leaked: %#v", filtered)
 	}
 	if filtered["workspace_kind"] != "git" {
 		t.Fatalf("non-reserved extra was filtered: %#v", filtered)

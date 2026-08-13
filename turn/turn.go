@@ -386,25 +386,27 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 }
 
 type ResponsesClientMetadataOptions struct {
-	InstallationID       string
-	SessionID            string
-	ThreadID             string
-	TurnID               string
-	WindowID             string
-	RequestKind          codexapi.ClientRequestKind
-	ForkedFromThreadID   string
-	ParentThreadID       string
-	ParentTurnID         string
-	SubagentHeader       string
-	SubagentKind         string
-	ThreadSource         string
-	Sandbox              string
-	SandboxMode          string
-	AutoReviewEnabled    *bool
-	Extra                map[string]string
-	ResponsesAPIMetadata map[string]string
-	StartedAtMS          int64
-	UseResponsesLite     bool
+	InstallationID             string
+	SessionID                  string
+	ThreadID                   string
+	TurnID                     string
+	WindowID                   string
+	RequestKind                codexapi.ClientRequestKind
+	ForkedFromThreadID         string
+	ParentThreadID             string
+	ParentTurnID               string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	Sandbox                    string
+	SandboxMode                string
+	AutoReviewEnabled          *bool
+	NodeReplAutoReviewRequired *bool
+	NodeReplDisabled           *bool
+	Extra                      map[string]string
+	ResponsesAPIMetadata       map[string]string
+	StartedAtMS                int64
+	UseResponsesLite           bool
 }
 
 func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[string]string {
@@ -440,6 +442,8 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
+	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
+	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	metadata.ResponsesAPIMetadata = cloneStringMap(options.ResponsesAPIMetadata)

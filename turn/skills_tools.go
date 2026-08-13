@@ -72,6 +72,7 @@ type skillsReadArgs struct {
 type skillsReadResponse struct {
 	Resource   string  `json:"resource"`
 	Contents   string  `json:"contents"`
+	SkillRoot  *string `json:"skill_root,omitempty"`
 	NextCursor *string `json:"next_cursor"`
 }
 
@@ -121,7 +122,7 @@ func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) 
 	if err := registry.Register(list); err != nil {
 		return err
 	}
-	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one page from a skill. Pass its provided package, expanding any root alias. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.", catalog, executor)
+	read := newSkillsToolExecutor(options, skillsToolReadName, "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. For executor-backed skills, skill_root is the skill's absolute directory in the executor filesystem and can be used to locate bundled scripts. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.", catalog, executor)
 	return registry.Register(read)
 }
 
@@ -266,7 +267,13 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	if start > len(result.Contents) || !utf8.ValidString(result.Contents) || !isUTF8Boundary(result.Contents, start) {
 		return nil, tool.RespondToModel("skills.read cursor is invalid")
 	}
-	response, pageErr := skillReadPage(result.Resource, result.Contents, start)
+	var skillRoot *string
+	if authority.Kind == "executor" {
+		if root := executorSkillRoot(entry.MainResource); root != "" {
+			skillRoot = stringPtrIfNotEmpty(root)
+		}
+	}
+	response, pageErr := skillReadPage(result.Resource, result.Contents, skillRoot, start)
 	if pageErr != nil {
 		return nil, pageErr
 	}
@@ -408,18 +415,124 @@ func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authorit
 	if authority.Kind == "executor" {
 		catalog := e.executorSkillCatalog(ctx)
 		for _, entry := range catalog.Entries {
-			if entry.Enabled && entry.Authority.Kind == skillprovider.SourceExecutor && entry.Authority.ID == authority.ID && entry.PackageID == pkg {
+			if entry.Enabled && entry.Authority.Kind == skillprovider.SourceExecutor && entry.Authority.ID == authority.ID && skillPackageMatchesAlias(catalog.Entries, entry.PackageID, pkg) {
 				return listedSkill{Authority: authority, Package: entry.PackageID, Name: entry.Name, Description: entry.Description, MainResource: entry.MainResource}, true
 			}
 		}
 		return listedSkill{}, false
 	}
 	for _, entry := range listed {
-		if entry.Package == pkg {
+		if skillPackageMatchesAlias(orchestratorCatalogAsSkillProviderEntries(e.orchestratorSkillCatalog()), entry.Package, pkg) {
 			return entry, true
 		}
 	}
 	return listedSkill{}, false
+}
+
+// skillPackageMatchesAlias accepts the complete package locator or the short
+// alias rendered in the skills catalog under metadata pressure
+// (Rust #38261). Aliases are derived from the leading URI segments and are
+// stable for a single authority/kind list.
+func skillPackageMatchesAlias(entries []skillprovider.CatalogEntry, packageID string, candidate string) bool {
+	if packageID == "" || candidate == "" {
+		return false
+	}
+	if packageID == candidate {
+		return true
+	}
+	visible := make([]skillprovider.CatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Enabled && entry.PromptVisible {
+			visible = append(visible, entry)
+		}
+	}
+	roots := skillAliasRoots(visible)
+	prefix := "e"
+	for _, entry := range visible {
+		if entry.Authority.Kind == skillprovider.SourceOrchestrator {
+			prefix = "o"
+			break
+		}
+	}
+	short := skillShortPackageLocator(packageID, roots, prefix)
+	return short == candidate
+}
+
+func skillAliasRoots(entries []skillprovider.CatalogEntry) []string {
+	seen := map[string]bool{}
+	roots := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.PackageID == "" {
+			continue
+		}
+		root := extensionSkillAliasRoot(entry.PackageID)
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func skillShortPackageLocator(packageID string, roots []string, prefix string) string {
+	for index, root := range roots {
+		rootPrefix := strings.TrimSuffix(root, "/")
+		relative, ok := strings.CutPrefix(packageID, rootPrefix)
+		if !ok || relative == "" || !strings.HasPrefix(relative, "/") {
+			continue
+		}
+		relative = strings.TrimPrefix(relative, "/")
+		return fmt.Sprintf("%s%d/%s", prefix, index, relative)
+	}
+	return ""
+}
+
+func extensionSkillAliasRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	scheme := ""
+	trimmed := path
+	if index := strings.Index(trimmed, "://"); index >= 0 {
+		scheme = trimmed[:index+3]
+		trimmed = trimmed[index+3:]
+		if strings.HasPrefix(trimmed, "/") {
+			scheme += "/"
+			trimmed = strings.TrimLeft(trimmed, "/")
+		}
+	}
+	segments := strings.Split(trimmed, "/")
+	if len(segments) < 3 {
+		return ""
+	}
+	return scheme + segments[0] + "/" + segments[1]
+}
+
+func orchestratorCatalogAsSkillProviderEntries(catalog OrchestratorSkillCatalog) []skillprovider.CatalogEntry {
+	entries := make([]skillprovider.CatalogEntry, 0, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		entries = append(entries, skillprovider.CatalogEntry{
+			PackageID:     skill.Package,
+			Authority:     skillprovider.Authority{Kind: skillprovider.SourceOrchestrator},
+			Enabled:       true,
+			PromptVisible: true,
+			MainResource:  skill.MainResource,
+		})
+	}
+	return entries
+}
+
+func executorSkillRoot(mainResource string) string {
+	mainResource = strings.TrimSpace(mainResource)
+	if mainResource == "" {
+		return ""
+	}
+	if index := strings.LastIndex(mainResource, "/"); index >= 0 {
+		return strings.TrimRight(mainResource[:index], "/")
+	}
+	return mainResource
 }
 
 func ReadOrchestratorSkillResource(service *mcp.MCPService, threadID string, pkg string, resource string) (string, error) {
@@ -623,8 +736,8 @@ func skillToolSerializedLen(value any) int {
 	return len(encoded)
 }
 
-func skillReadPage(resource string, contents string, start int) (skillsReadResponse, error) {
-	complete := skillsReadResponse{Resource: resource, Contents: contents[start:]}
+func skillReadPage(resource string, contents string, skillRoot *string, start int) (skillsReadResponse, error) {
+	complete := skillsReadResponse{Resource: resource, Contents: contents[start:], SkillRoot: cloneStringPtr(skillRoot)}
 	if skillToolSerializedLen(complete) <= maxSkillToolResponseBytes {
 		return complete, nil
 	}
@@ -635,7 +748,7 @@ func skillReadPage(resource string, contents string, start int) (skillsReadRespo
 			end--
 		}
 		cursor := skillToolCursor(contents, end)
-		candidate := skillsReadResponse{Resource: resource, Contents: contents[start:end], NextCursor: &cursor}
+		candidate := skillsReadResponse{Resource: resource, Contents: contents[start:end], SkillRoot: cloneStringPtr(skillRoot), NextCursor: &cursor}
 		if skillToolSerializedLen(candidate) <= maxSkillToolResponseBytes {
 			return candidate, nil
 		}

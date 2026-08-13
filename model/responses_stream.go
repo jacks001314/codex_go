@@ -463,13 +463,6 @@ func emitResponsesHeaderEvents(handler ResponsesStreamHandler, headers http.Head
 			RawType:   string(ResponsesStreamEventRateLimits),
 		})
 	}
-	if etag := responseHeaderValue(headers, responsesModelsETagHeader); etag != "" {
-		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
-			Kind:       ResponsesStreamEventModelsETag,
-			ModelsETag: etag,
-			RawType:    string(ResponsesStreamEventModelsETag),
-		})
-	}
 	if headerExists(headers, responsesReasoningHeader) {
 		included := true
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
@@ -485,13 +478,12 @@ func responsesHeadersEvent(headers http.Header) *ResponsesStreamEvent {
 		return nil
 	}
 	return &ResponsesStreamEvent{
-		Kind:       ResponsesStreamEventHeaders,
-		RequestID:  responseHeaderValue(headers, responsesRequestIDHeader, responsesOAIRequestIDHeader),
-		Model:      responseHeaderValue(headers, responsesOpenAIModelHeader, responsesXOpenAIModelHeader),
-		TurnState:  responseHeaderValue(headers, responsesCodexTurnStateHeader),
-		ModelsETag: responseHeaderValue(headers, responsesModelsETagHeader),
-		Headers:    cloneResponseHeaders(headers),
-		RawType:    string(ResponsesStreamEventHeaders),
+		Kind:      ResponsesStreamEventHeaders,
+		RequestID: responseHeaderValue(headers, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+		Model:     responseHeaderValue(headers, responsesOpenAIModelHeader, responsesXOpenAIModelHeader),
+		TurnState: responseHeaderValue(headers, responsesCodexTurnStateHeader),
+		Headers:   cloneResponseHeaders(headers),
+		RawType:   string(ResponsesStreamEventHeaders),
 	}
 }
 
@@ -782,6 +774,15 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		return false, nil
 	}
 	a.emitServerModelMetadata(sse.Data, handler)
+	if rawType == "codex.response.metadata" {
+		if etag := modelsETagFromCodexResponseMetadata(sse.Data); etag != "" {
+			emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
+				Kind:       ResponsesStreamEventModelsETag,
+				ModelsETag: etag,
+				RawType:    string(ResponsesStreamEventModelsETag),
+			})
+		}
+	}
 	if rawType == "response.metadata" {
 		emitResponsesMetadataEvents(sse.Data, handler)
 	}
@@ -1792,6 +1793,18 @@ func serverModelFromStreamEventData(data []byte) string {
 		return model
 	}
 	return stringFromHeaderMap(payload.Headers, responsesOpenAIModelHeader, responsesXOpenAIModelHeader)
+}
+
+// modelsETagFromCodexResponseMetadata reads the model catalog ETag from a
+// codex.response.metadata WebSocket event (Rust #38251).
+func modelsETagFromCodexResponseMetadata(data []byte) string {
+	var payload struct {
+		Headers map[string]any `json:"headers"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	return stringFromHeaderMap(payload.Headers, responsesModelsETagHeader)
 }
 
 func stringFromHeaderMap(headers map[string]any, names ...string) string {

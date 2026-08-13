@@ -528,7 +528,57 @@ func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata,
 			return &copied
 		}
 	}
+	if path := powershellGetContentSkillPath(command); path != "" {
+		candidatePath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, path))
+		if skill, ok := bySkillDocPath[candidatePath]; ok {
+			copied := skill
+			return &copied
+		}
+	}
 	return nil
+}
+
+// powershellGetContentSkillPath recognizes the PowerShell `Get-Content`
+// forms added by Rust #38228 without requiring POSIX shlex tokenization:
+// `Get-Content <path>`, `Get-Content -Raw <path>`, and quoted paths containing
+// spaces. Windows backslashes are preserved.
+func powershellGetContentSkillPath(command string) string {
+	arguments := strings.TrimSpace(command)
+	if !strings.HasPrefix(arguments, "Get-Content ") {
+		return ""
+	}
+	arguments = strings.TrimSpace(strings.TrimPrefix(arguments, "Get-Content "))
+	if rest, ok := strings.CutPrefix(arguments, "-Raw "); ok {
+		arguments = strings.TrimSpace(rest)
+	}
+	if arguments == "" || strings.HasPrefix(arguments, "-") {
+		return ""
+	}
+	if strings.HasPrefix(arguments, `"`) {
+		rest := strings.TrimPrefix(arguments, `"`)
+		end := strings.IndexByte(rest, '"')
+		if end < 0 {
+			return ""
+		}
+		path := rest[:end]
+		trailing := rest[end+1:]
+		if path == "" || strings.TrimSpace(trailing) != "" {
+			return ""
+		}
+		return path
+	}
+	path := arguments
+	if index := strings.IndexFunc(arguments, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }); index >= 0 {
+		path = arguments[:index]
+		trailing := arguments[index:]
+		if strings.TrimSpace(trailing) != "" {
+			return ""
+		}
+	}
+	if path == "" {
+		return ""
+	}
+	return path
 }
 
 func implicitSkillScriptToken(tokens []string) string {

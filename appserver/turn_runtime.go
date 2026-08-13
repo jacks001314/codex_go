@@ -5804,9 +5804,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	toolMode := ""
 	autoReviewModelOverride := ""
+	nodeReplAutoReviewRequired := false
+	nodeReplDisabled := false
 	if modelInfo != nil {
 		toolMode = modelInfo.ToolMode
 		autoReviewModelOverride = strings.TrimSpace(modelInfo.AutoReviewModelOverride)
+		nodeReplAutoReviewRequired = modelInfo.NodeReplAutoReviewRequired
+		nodeReplDisabled = modelInfo.NodeReplDisabled
 	}
 	toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
 	return &appTurnRunConfig{
@@ -5853,24 +5857,26 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		UnifiedExecEnabled:              unifiedExecEnabled,
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:       installationID,
-			SessionID:            firstNonEmpty(lineage.SessionID, threadID),
-			ThreadID:             threadID,
-			TurnID:               turnID,
-			WindowID:             threadID + ":1",
-			RequestKind:          codexapi.ClientRequestTurn,
-			ForkedFromThreadID:   lineage.ForkedFromThreadID,
-			ParentThreadID:       lineage.ParentThreadID,
-			ParentTurnID:         params.ParentTurnID,
-			SubagentHeader:       lineage.SubagentHeader,
-			SubagentKind:         lineage.SubagentKind,
-			ThreadSource:         lineage.ThreadSource,
-			SandboxMode:          permissionProfilePolicyTag(permissionProfile, cwd),
-			AutoReviewEnabled:    autoReviewEnabledForTurn(cfg, params),
-			Extra:                extraMetadata,
-			ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
-			StartedAtMS:          startedAtMS,
-			UseResponsesLite:     r.modelUsesResponsesLite(modelProviderConfig.Model),
+			InstallationID:             installationID,
+			SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
+			ThreadID:                   threadID,
+			TurnID:                     turnID,
+			WindowID:                   threadID + ":1",
+			RequestKind:                codexapi.ClientRequestTurn,
+			ForkedFromThreadID:         lineage.ForkedFromThreadID,
+			ParentThreadID:             lineage.ParentThreadID,
+			ParentTurnID:               params.ParentTurnID,
+			SubagentHeader:             lineage.SubagentHeader,
+			SubagentKind:               lineage.SubagentKind,
+			ThreadSource:               lineage.ThreadSource,
+			SandboxMode:                permissionProfilePolicyTag(permissionProfile, cwd),
+			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),
+			NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
+			NodeReplDisabled:           &nodeReplDisabled,
+			Extra:                      extraMetadata,
+			ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
+			StartedAtMS:                startedAtMS,
+			UseResponsesLite:           r.modelUsesResponsesLite(modelProviderConfig.Model),
 		}),
 	}, nil
 }
@@ -6374,28 +6380,38 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	if cfg != nil {
 		modelID = stringConfigValue(cfg, "model")
 	}
+	nodeReplAutoReviewRequired := false
+	nodeReplDisabled := false
+	if cfg != nil && modelID != "" {
+		if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
+			nodeReplAutoReviewRequired = info.NodeReplAutoReviewRequired
+			nodeReplDisabled = info.NodeReplDisabled
+		}
+	}
 	lineage := r.responsesMetadataLineage(params.ThreadID)
 	parentTurnID := ""
 	if active.Params != nil {
 		parentTurnID = active.Params.ParentTurnID
 	}
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		InstallationID:       installationID,
-		SessionID:            firstNonEmpty(lineage.SessionID, params.ThreadID),
-		ThreadID:             params.ThreadID,
-		TurnID:               params.ExpectedTurnID,
-		WindowID:             params.ThreadID + ":1",
-		RequestKind:          codexapi.ClientRequestTurn,
-		ForkedFromThreadID:   lineage.ForkedFromThreadID,
-		ParentThreadID:       lineage.ParentThreadID,
-		ParentTurnID:         parentTurnID,
-		SubagentHeader:       lineage.SubagentHeader,
-		SubagentKind:         lineage.SubagentKind,
-		ThreadSource:         lineage.ThreadSource,
-		Extra:                extraMetadata,
-		ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
-		StartedAtMS:          active.StartedAtMS,
-		UseResponsesLite:     r.modelUsesResponsesLite(modelID),
+		InstallationID:             installationID,
+		SessionID:                  firstNonEmpty(lineage.SessionID, params.ThreadID),
+		ThreadID:                   params.ThreadID,
+		TurnID:                     params.ExpectedTurnID,
+		WindowID:                   params.ThreadID + ":1",
+		RequestKind:                codexapi.ClientRequestTurn,
+		ForkedFromThreadID:         lineage.ForkedFromThreadID,
+		ParentThreadID:             lineage.ParentThreadID,
+		ParentTurnID:               parentTurnID,
+		SubagentHeader:             lineage.SubagentHeader,
+		SubagentKind:               lineage.SubagentKind,
+		ThreadSource:               lineage.ThreadSource,
+		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
+		NodeReplDisabled:           &nodeReplDisabled,
+		Extra:                      extraMetadata,
+		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
+		StartedAtMS:                active.StartedAtMS,
+		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
 	})
 }
 

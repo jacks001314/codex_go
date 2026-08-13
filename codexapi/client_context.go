@@ -89,25 +89,27 @@ type ClientWorkspaceMetadata struct {
 }
 
 type ClientMetadata struct {
-	InstallationID      string
-	SessionID           string
-	ThreadID            string
-	TurnID              string
-	WindowID            string
-	RequestKind         ClientRequestKind
-	Compaction          *ClientCompactionMetadata
-	ForkedFromThreadID  string
-	ParentThreadID      string
-	ParentTurnID        string
-	SubagentHeader      string
-	SubagentKind        string
-	ThreadSource        string
-	Sandbox             string
-	SandboxMode         string
-	AutoReviewEnabled   *bool
-	Workspaces          map[string]ClientWorkspaceMetadata
-	TurnStartedAtUnixMS int64
-	Extra               map[string]string
+	InstallationID             string
+	SessionID                  string
+	ThreadID                   string
+	TurnID                     string
+	WindowID                   string
+	RequestKind                ClientRequestKind
+	Compaction                 *ClientCompactionMetadata
+	ForkedFromThreadID         string
+	ParentThreadID             string
+	ParentTurnID               string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	Sandbox                    string
+	SandboxMode                string
+	AutoReviewEnabled          *bool
+	NodeReplAutoReviewRequired *bool
+	NodeReplDisabled           *bool
+	Workspaces                 map[string]ClientWorkspaceMetadata
+	TurnStartedAtUnixMS        int64
+	Extra                      map[string]string
 	// ResponsesAPIMetadata carries bounded, product-owned metadata from the
 	// `responses_api_metadata` config (Rust 9e301c8c9a). Product metadata takes
 	// precedence over client-provided Extra values and is kept out of metadata
@@ -177,6 +179,12 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.AutoReviewEnabled != nil {
 		value[AutoReviewEnabledKey] = *m.AutoReviewEnabled
+	}
+	if m.NodeReplAutoReviewRequired != nil {
+		value[NodeReplAutoReviewRequiredKey] = *m.NodeReplAutoReviewRequired
+	}
+	if m.NodeReplDisabled != nil {
+		value[NodeReplDisabledKey] = *m.NodeReplDisabled
 	}
 	if len(m.Workspaces) > 0 {
 		value["workspaces"] = m.Workspaces
@@ -289,7 +297,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id",
 		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
-		"auto_review_enabled", CodeModeToolNamesKey,
+		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey,
 	}
 	out := make(map[string]bool, len(keys))
 	for _, key := range keys {

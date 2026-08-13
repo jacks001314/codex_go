@@ -56,11 +56,13 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
 	metadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		SessionID:            threadID,
-		ThreadID:             threadID,
-		RequestKind:          codexapi.ClientRequestTurn,
-		Extra:                turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), responsesMetadataFromTurnStart(params)),
-		ResponsesAPIMetadata: cfg.ResponsesAPIMetadata(),
+		SessionID:                  threadID,
+		ThreadID:                   threadID,
+		RequestKind:                codexapi.ClientRequestTurn,
+		NodeReplAutoReviewRequired: &modelInfo.NodeReplAutoReviewRequired,
+		NodeReplDisabled:           &modelInfo.NodeReplDisabled,
+		Extra:                      turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), responsesMetadataFromTurnStart(params)),
+		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 	})
 	return &turn.WebSearchOptions{
 		SessionID:       threadID,

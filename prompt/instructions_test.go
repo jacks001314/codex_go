@@ -159,6 +159,49 @@ func TestDetectImplicitSkillInvocationForCommandMatchesRustFixtures(t *testing.T
 	}
 }
 
+func TestDetectImplicitSkillInvocationForCommandMatchesPowerShellGetContent(t *testing.T) {
+	root := t.TempDir()
+	plainSkillDir := filepath.Join(root, "skill-test")
+	spacedSkillDir := filepath.Join(root, "skill test")
+	if err := os.MkdirAll(plainSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(spacedSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	plainSkillPath := filepath.Join(plainSkillDir, "SKILL.md")
+	spacedSkillPath := filepath.Join(spacedSkillDir, "SKILL.md")
+	if err := os.WriteFile(plainSkillPath, []byte("skill"), 0o600); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+	if err := os.WriteFile(spacedSkillPath, []byte("skill"), 0o600); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+	skills := []InstructionsSkillMetadata{
+		{Name: "test-skill", Path: plainSkillPath},
+		{Name: "spaced-skill", Path: spacedSkillPath},
+	}
+	plainPath := filepath.ToSlash(plainSkillPath)
+	quotedSpacedPath := `"` + filepath.ToSlash(spacedSkillPath) + `"`
+	for _, test := range []struct {
+		command string
+		want    string
+	}{
+		{command: "Get-Content " + plainPath, want: "test-skill"},
+		{command: "Get-Content -Raw " + plainPath, want: "test-skill"},
+		{command: "Get-Content " + quotedSpacedPath, want: "spaced-skill"},
+		{command: "Get-Content -Raw " + quotedSpacedPath, want: "spaced-skill"},
+	} {
+		got := DetectImplicitSkillInvocationForCommand(skills, test.command, root)
+		if got == nil || got.Name != test.want {
+			t.Fatalf("DetectImplicitSkillInvocationForCommand(%q) = %#v, want %s", test.command, got, test.want)
+		}
+	}
+	if got := powershellGetContentSkillPath(`Get-Content C:\skills\example\SKILL.md`); got != `C:\skills\example\SKILL.md` {
+		t.Fatalf("powershellGetContentSkillPath(Windows) = %q", got)
+	}
+}
+
 func TestCollectExplicitSkillMentions(t *testing.T) {
 	root := t.TempDir()
 	buildPath := filepath.Join(root, "skills", "build", "SKILL.md")

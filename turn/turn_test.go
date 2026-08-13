@@ -186,6 +186,49 @@ func TestBuildResponsesClientMetadataIncludesAutoReviewEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesClientMetadataIncludesNodeReplPolicy(t *testing.T) {
+	required := true
+	disabled := false
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID:             "install",
+		SessionID:                  "session",
+		ThreadID:                   "thread",
+		TurnID:                     "turn",
+		RequestKind:                codexapi.ClientRequestTurn,
+		NodeReplAutoReviewRequired: &required,
+		NodeReplDisabled:           &disabled,
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata["node_repl_auto_review_required"] != true || turnMetadata["node_repl_disabled"] != false {
+		t.Fatalf("node repl metadata = %#v", turnMetadata)
+	}
+
+	filtered := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID: "install",
+		SessionID:      "session",
+		ThreadID:       "thread",
+		TurnID:         "turn",
+		RequestKind:    codexapi.ClientRequestTurn,
+		Extra: map[string]string{
+			"node_repl_auto_review_required": "client-value",
+			"node_repl_disabled":             "client-value",
+		},
+	})
+	var filteredMetadata map[string]any
+	if err := json.Unmarshal([]byte(filtered[codexapi.ClientCodexTurnMetadataHeader]), &filteredMetadata); err != nil {
+		t.Fatalf("filtered turn metadata json error = %v", err)
+	}
+	if _, ok := filteredMetadata["node_repl_auto_review_required"]; ok {
+		t.Fatalf("client-provided node repl metadata leaked: %#v", filteredMetadata)
+	}
+	if _, ok := filteredMetadata["node_repl_disabled"]; ok {
+		t.Fatalf("client-provided node repl disabled leaked: %#v", filteredMetadata)
+	}
+}
+
 func TestBudgetStateMaybeReminder(t *testing.T) {
 	state := NewBudgetState()
 	tokens := int64(50)

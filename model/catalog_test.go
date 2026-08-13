@@ -234,7 +234,9 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 			"max_context_window": 1000000,
 			"effective_context_window_percent": 95,
 			"input_modalities": ["text", "image"],
-			"supports_search_tool": true
+			"supports_search_tool": true,
+			"node_repl_auto_review_required": true,
+			"node_repl_disabled": true
 		}]
 	}`), &catalog); err != nil {
 		t.Fatalf("Unmarshal catalog returned error: %v", err)
@@ -245,6 +247,9 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	}
 	if model.Visibility != VisibilityList || !model.SupportsParallelToolCalls || !model.SupportsSearchTool || model.ToolMode != ToolModeCodeModeOnly {
 		t.Fatalf("model flags = %#v", model)
+	}
+	if !model.NodeReplAutoReviewRequired || !model.NodeReplDisabled {
+		t.Fatalf("node repl policy = %#v", model)
 	}
 	if model.ModelMessages == nil || model.ModelMessages.PersonalityFriendly != "Friendly" {
 		t.Fatalf("model messages = %#v", model.ModelMessages)
