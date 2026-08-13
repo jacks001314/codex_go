@@ -20,9 +20,44 @@ import (
 )
 
 type recordingRemoteDelegate struct {
-	mu       sync.Mutex
-	calls    []tool.CodeModeRemoteNestedCall
-	notifies []string
+	mu          sync.Mutex
+	calls       []tool.CodeModeRemoteNestedCall
+	notifies    []string
+	notifyCells []string
+}
+
+func TestCodeModeCellIDGenerationMatchesRust(t *testing.T) {
+	if got := publicCodeModeCellID(1, "cell-1"); got != "cell-1" {
+		t.Fatalf("generation 1 cell id = %q", got)
+	}
+	if got := publicCodeModeCellID(2, "cell-1"); got != "g2:cell-1" {
+		t.Fatalf("generation 2 cell id = %q", got)
+	}
+	remote, err := remoteCellIDForGeneration(2, "g2:cell-1")
+	if err != nil || string(remote) != "cell-1" {
+		t.Fatalf("remoteCellIDForGeneration() = %q, %v", remote, err)
+	}
+	if _, err := remoteCellIDForGeneration(2, "cell-1"); err == nil {
+		t.Fatal("remoteCellIDForGeneration() accepted a stale generation-1 cell id")
+	}
+}
+
+func TestGenerationDelegatePrefixesNestedCellIDs(t *testing.T) {
+	base := &recordingRemoteDelegate{}
+	wrapped := (&codeModeGenerationDelegate{delegate: base, generation: 3})
+	call := tool.CodeModeRemoteNestedCall{CellID: "cell-1"}
+	if _, err := wrapped.Invoke(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.calls) != 1 || base.calls[0].CellID != "g3:cell-1" {
+		t.Fatalf("nested calls = %#v", base.calls)
+	}
+	if err := wrapped.Notify(context.Background(), "call-1", "cell-2", "text"); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.notifyCells) != 1 || base.notifyCells[0] != "g3:cell-2" {
+		t.Fatalf("notify cells = %#v", base.notifyCells)
+	}
 }
 
 func TestRemoteConnectionStalledRequestTimesOutAndInvalidatesConnection(t *testing.T) {
@@ -104,9 +139,10 @@ func (d *recordingRemoteDelegate) Invoke(_ context.Context, call tool.CodeModeRe
 	return json.RawMessage(`{"output":"DELEGATE_OK","success":true}`), nil
 }
 
-func (d *recordingRemoteDelegate) Notify(_ context.Context, _, _, text string) error {
+func (d *recordingRemoteDelegate) Notify(_ context.Context, _, cellID, text string) error {
 	d.mu.Lock()
 	d.notifies = append(d.notifies, text)
+	d.notifyCells = append(d.notifyCells, cellID)
 	d.mu.Unlock()
 	return nil
 }

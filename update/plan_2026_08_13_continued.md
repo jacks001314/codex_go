@@ -86,6 +86,9 @@
      and `unix:` endpoints without path/query/fragment restrictions.
    - The existing gRPC transport continues to use insecure transport
      credentials for Unix sockets.
+   - Added host-generation cell-ID scoping for reconnected sessions: public
+     cells are `gN:` prefixed after generation one, stale cell requests are
+     rejected, and delegate callbacks receive generation-scoped cell IDs.
 
 10. **Unified turn-input submission/routing** (`cbb7e82a8b`, #38275)
     - Go already routes user input, response items, and inter-agent

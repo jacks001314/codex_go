@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,9 +199,10 @@ func handshakeRejectMessage(reason *HandshakeRejectReason) string {
 }
 
 type remoteSession struct {
-	provider remoteSessionProvider
-	delegate tool.CodeModeRemoteDelegate
-	id       SessionID
+	provider   remoteSessionProvider
+	delegate   tool.CodeModeRemoteDelegate
+	id         SessionID
+	generation uint64
 
 	openMu   sync.Mutex
 	mu       sync.Mutex
@@ -233,11 +235,12 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 			OutputSchema: append(json.RawMessage(nil), definition.OutputSchema...),
 		})
 	}
-	response, err := connection.Execute(ctx, s.id, s.delegate, ExecuteRequest{
+	delegate := s.delegateForGeneration(s.generation)
+	response, err := connection.Execute(ctx, s.id, delegate, ExecuteRequest{
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
 	})
-	return publicRemoteResponse(response), err
+	return publicRemoteResponseForGeneration(response, s.generation), err
 }
 
 func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64) (tool.CodeModeRemoteResponse, error) {
@@ -248,8 +251,12 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 	// Account for the runtime's one-second yield grace separately from transport
 	// (mirrors Rust wait()).
 	runtimeTimeout := time.Duration(yieldTimeMS)*time.Millisecond + time.Second
+	remoteCellID, err := remoteCellIDForGeneration(s.generation, cellID)
+	if err != nil {
+		return tool.CodeModeRemoteResponse{}, err
+	}
 	outcome, err := connection.withTransportDeadline(runtimeTimeout, "wait", func(ctx context.Context) (HostResponse, error) {
-		return connection.Request(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: CellID(cellID), YieldTimeMS: yieldTimeMS}))
+		return connection.Request(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}))
 	})
 	if err != nil {
 		if errors.Is(err, errCodeModeHostRequestTimeout) {
@@ -260,7 +267,7 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 	if outcome.Outcome == nil {
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid wait response")
 	}
-	return publicRemoteResponse(outcome.Outcome.Response), nil
+	return publicRemoteResponseForGeneration(outcome.Outcome.Response, s.generation), nil
 }
 
 func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.CodeModeRemoteResponse, error) {
@@ -268,8 +275,12 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
+	remoteCellID, err := remoteCellIDForGeneration(s.generation, cellID)
+	if err != nil {
+		return tool.CodeModeRemoteResponse{}, err
+	}
 	outcome, err := connection.withTransportDeadline(0, "terminate", func(ctx context.Context) (HostResponse, error) {
-		return connection.Request(ctx, TerminateSessionRequest(s.id, CellID(cellID)))
+		return connection.Request(ctx, TerminateSessionRequest(s.id, remoteCellID))
 	})
 	if err != nil {
 		if errors.Is(err, errCodeModeHostRequestTimeout) {
@@ -280,7 +291,7 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 	if outcome.Outcome == nil {
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid terminate response")
 	}
-	return publicRemoteResponse(outcome.Outcome.Response), nil
+	return publicRemoteResponseForGeneration(outcome.Outcome.Response, s.generation), nil
 }
 
 // invalidateConnection drops the session's association with a dead connection so
@@ -362,12 +373,13 @@ func (s *remoteSession) connection(ctx context.Context) (*remoteConnection, erro
 		return nil, fmt.Errorf("code mode session is shutting down")
 	}
 	s.openedOn = connection
+	s.generation++
 	s.mu.Unlock()
-	connection.SetDelegate(s.id, s.delegate)
+	connection.SetDelegate(s.id, s.delegateForGeneration(s.generation))
 	return connection, nil
 }
 
-func publicRemoteResponse(response RuntimeResponse) tool.CodeModeRemoteResponse {
+func publicRemoteResponseForGeneration(response RuntimeResponse, generation uint64) tool.CodeModeRemoteResponse {
 	state := "completed"
 	if response.Variant == "Yielded" {
 		state = "yielded"
@@ -395,7 +407,54 @@ func publicRemoteResponse(response RuntimeResponse) tool.CodeModeRemoteResponse 
 	if response.ErrorText != nil {
 		errorText = *response.ErrorText
 	}
-	return tool.CodeModeRemoteResponse{CellID: response.CellID.String(), State: state, ContentItems: items, ErrorText: errorText}
+	cellID := response.CellID.String()
+	if generation > 1 {
+		cellID = "g" + strconv.FormatUint(generation, 10) + ":" + cellID
+	}
+	return tool.CodeModeRemoteResponse{CellID: cellID, State: state, ContentItems: items, ErrorText: errorText}
+}
+
+type codeModeGenerationDelegate struct {
+	delegate   tool.CodeModeRemoteDelegate
+	generation uint64
+}
+
+func (d *codeModeGenerationDelegate) Invoke(ctx context.Context, call tool.CodeModeRemoteNestedCall) (json.RawMessage, error) {
+	call.CellID = publicCodeModeCellID(d.generation, call.CellID)
+	return d.delegate.Invoke(ctx, call)
+}
+
+func (d *codeModeGenerationDelegate) Notify(ctx context.Context, callID string, cellID string, text string) error {
+	return d.delegate.Notify(ctx, callID, publicCodeModeCellID(d.generation, cellID), text)
+}
+
+func (s *remoteSession) delegateForGeneration(generation uint64) tool.CodeModeRemoteDelegate {
+	if s.delegate == nil {
+		return nil
+	}
+	if generation <= 1 {
+		return s.delegate
+	}
+	return &codeModeGenerationDelegate{delegate: s.delegate, generation: generation}
+}
+
+func publicCodeModeCellID(generation uint64, cellID string) string {
+	if generation <= 1 || strings.TrimSpace(cellID) == "" {
+		return cellID
+	}
+	return "g" + strconv.FormatUint(generation, 10) + ":" + cellID
+}
+
+func remoteCellIDForGeneration(generation uint64, cellID string) (CellID, error) {
+	cellID = strings.TrimSpace(cellID)
+	if generation <= 1 {
+		return CellID(cellID), nil
+	}
+	prefix := "g" + strconv.FormatUint(generation, 10) + ":"
+	if !strings.HasPrefix(cellID, prefix) {
+		return "", fmt.Errorf("cell belongs to a stale code-mode host generation")
+	}
+	return CellID(strings.TrimPrefix(cellID, prefix)), nil
 }
 
 type remotePending struct {
