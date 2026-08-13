@@ -107,8 +107,10 @@
       64 KiB / 100-row bounds, enum dimension validation, and cleanup.
     - Added `codex_plugin_measurement_event` telemetry types, batch row
       validation, and an analytics-client tracking method.
-    - Runtime shell/unified-exec wiring for automatically installing the
-      sidecar env and publishing batches remains the next integration step.
+    - Added `ShellExecutorOptions` resolver/tracker hooks and passed them
+      through the turn tool registry, so runtime callers can install the
+      sidecar environment and publish batches. App-server call-site wiring and
+      remote/unified-exec sandbox permission merging remain the next step.
 
 ## Verification
 
