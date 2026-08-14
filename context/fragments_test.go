@@ -138,6 +138,14 @@ func TestCurrentTimeReminder(t *testing.T) {
 	if body != "It is 2026-06-29 12:00:00 UTC." {
 		t.Fatalf("CurrentTimeReminder = %q", body)
 	}
+	open, close := (&CurrentTimeReminder{Now: now, Location: "UTC"}).Markers()
+	if open != "<current_time_reminder>" || close != "</current_time_reminder>" {
+		t.Fatalf("CurrentTimeReminder markers = %q/%q", open, close)
+	}
+	rendered := Render(&CurrentTimeReminder{Now: now, Location: "UTC"})
+	if rendered == nil || rendered.Content != "<current_time_reminder>\nIt is 2026-06-29 12:00:00 UTC.\n</current_time_reminder>" {
+		t.Fatalf("CurrentTimeReminder rendered = %#v", rendered)
+	}
 }
 
 func TestModelSwitchAndTokenBudget(t *testing.T) {

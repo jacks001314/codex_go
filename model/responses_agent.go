@@ -1343,6 +1343,7 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 				_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, 4<<10))
 				_ = httpResponse.Body.Close()
 			}
+			recordResponsesRetry("request", attempt+1, delay, "http")
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return nil, err
 			}

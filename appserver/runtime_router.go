@@ -7944,6 +7944,9 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if auth.IsWorkloadIdentitySelected() {
+		return nil, jsonRPCInvalidRequest("Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.")
+	}
 	if err := r.validateLoginAccountParams(&params); err != nil {
 		return nil, err
 	}
@@ -8279,6 +8282,9 @@ func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.Acc
 }
 
 func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccountResponse, error) {
+	if auth.IsWorkloadIdentitySelected() {
+		return nil, jsonRPCInvalidRequest("Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.")
+	}
 	if len(request.Params) > 0 {
 		var params struct{}
 		if err := request.DecodeParams(&params); err != nil {
@@ -10778,19 +10784,11 @@ func (r *RuntimeRouter) rememberApprovalForSession(cache map[string]struct{}, th
 func turnApprovalPolicyForTurn(cfg *config.Config, params *turn.TurnStartParams) sandbox.AskForApproval {
 	if params != nil && params.ApprovalPolicy != nil {
 		if policy, ok := parseTurnApprovalPolicy(params.ApprovalPolicy); ok {
-			if autoReviewProtectedModel(cfg, params) {
-				// Rust 208f05b233: auto-review-protected models always run with
-				// on-request approvals.
-				return sandbox.ApprovalOnRequest
-			}
 			return policy
 		}
 	}
 	if cfg != nil && cfg.Values != nil {
 		if policy, ok := parseTurnApprovalPolicy(cfg.Values["approval_policy"]); ok {
-			if autoReviewProtectedModel(cfg, params) {
-				return sandbox.ApprovalOnRequest
-			}
 			return policy
 		}
 	}

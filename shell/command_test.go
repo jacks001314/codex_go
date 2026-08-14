@@ -29,6 +29,62 @@ func TestDetectShellType(t *testing.T) {
 	}
 }
 
+func TestTokenizePowerShellCommandPreservesWindowsPaths(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    []string
+	}{
+		{command: `Get-Content C:\skills\demo\SKILL.md`, want: []string{"Get-Content", "C:/skills/demo/SKILL.md"}},
+		{command: `get-content -Raw "C:\skills and plugins\SKILL.md"`, want: []string{"Get-Content", "-Raw", "C:/skills and plugins/SKILL.md"}},
+		{command: `Get-Content 'C:\skills and plugins\SKILL.md'`, want: []string{"Get-Content", "C:/skills and plugins/SKILL.md"}},
+		{command: `gc C:/skills/demo/SKILL.md`, want: []string{"Get-Content", "C:/skills/demo/SKILL.md"}},
+		{command: `type C:/skills/demo/SKILL.md`, want: []string{"Get-Content", "C:/skills/demo/SKILL.md"}},
+		{command: `Get-Content C:\skills\demo\SKILL.md -Raw`, want: []string{"Get-Content", "C:/skills/demo/SKILL.md", "-Raw"}},
+		{command: `Get-Content -Raw -LiteralPath C:\skills\demo\SKILL.md`, want: []string{"Get-Content", "-Raw", "-LiteralPath", "C:/skills/demo/SKILL.md"}},
+	} {
+		got := TokenizePowerShellCommand(test.command)
+		if !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("TokenizePowerShellCommand(%q) = %#v, want %#v", test.command, got, test.want)
+		}
+	}
+}
+
+func TestReadPathsRecognizesPowerShellGetContentForms(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    string
+	}{
+		{command: `Get-Content C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `Get-Content -Raw C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `Get-Content -Path C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `Get-Content -LiteralPath C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `Get-Content C:/skills/demo/SKILL.md -Raw`, want: "C:/skills/demo/SKILL.md"},
+		{command: `Get-Content -Raw -LiteralPath C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `gc C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+		{command: `type C:/skills/demo/SKILL.md`, want: "C:/skills/demo/SKILL.md"},
+	} {
+		got := ReadPaths(TokenizePowerShellCommand(test.command))
+		if !reflect.DeepEqual(got, []string{test.want}) {
+			t.Fatalf("ReadPaths(TokenizePowerShellCommand(%q)) = %#v, want %#v", test.command, got, []string{test.want})
+		}
+	}
+	for _, command := range []string{
+		`Get-Content 'C:\Users\O''Brien\skill\SKILL.md'`,
+		`Get-Content "$(Remove-Item C:/important)/skills/demo/SKILL.md"`,
+		`Get-Content -ReadCount:([IO.File]::Delete('C:/important')) C:/skills/demo/SKILL.md`,
+		`Get-Content C:/Users/Alice/.ssh/id_rsa,C:/skills/demo/SKILL.md`,
+		`Get-Content C:/skills/demo/SKILL.md -Raw; Remove-Item C:/important`,
+		`Get-Content C:/skills/demo/SKILL.md C:/important`,
+		`Get-Content C:/skills/*/SKILL.md`,
+		`Get-Content -Encoding UTF8 C:/skills/demo/SKILL.md`,
+		`Get-Content -Raw`,
+	} {
+		if got := ReadPaths(TokenizePowerShellCommand(command)); len(got) != 0 {
+			t.Fatalf("ReadPaths(TokenizePowerShellCommand(%q)) = %#v, want none", command, got)
+		}
+	}
+}
+
 func TestShlexJoin(t *testing.T) {
 	got := ShlexJoin([]string{"echo", "hello world", "it's"})
 	if got != `echo 'hello world' 'it'\''s'` {

@@ -200,6 +200,51 @@ func SplitCommandLine(command string) []string {
 	return tokens
 }
 
+// IsPowerShellReadCommand reports whether a model-provided command starts with
+// one of PowerShell's file-read aliases that Rust classifies as a read:
+// Get-Content, gc, or type.
+func IsPowerShellReadCommand(command string) bool {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "get-content", "gc", "type":
+		return true
+	default:
+		return false
+	}
+}
+
+// TokenizePowerShellCommand tokenizes a PowerShell command while preserving
+// Windows paths and normalizing common read aliases to Get-Content.
+//
+// Rust normalizes backslashes to forward slashes before shlex tokenization so
+// paths such as C:\skills\demo\SKILL.md are not treated as escape sequences.
+// The function intentionally returns nil when an alias token cannot be found
+// verbatim in the normalized command, which avoids silently rewriting a
+// PowerShell expression the generic parser does not understand.
+func TokenizePowerShellCommand(command string) []string {
+	normalized := strings.ReplaceAll(command, "\\", "/")
+	tokens, ok := splitCommandLine(normalized)
+	if !ok {
+		tokens = strings.Fields(normalized)
+	}
+	if len(tokens) == 0 {
+		return tokens
+	}
+	switch strings.ToLower(tokens[0]) {
+	case "get-content", "gc", "type":
+		tokens[0] = "Get-Content"
+		for _, argument := range tokens[1:] {
+			if !strings.Contains(normalized, argument) {
+				return nil
+			}
+		}
+	}
+	return tokens
+}
+
 // ReadPaths returns file operands from the read commands recognized by the
 // implicit skill invocation fixtures. Connector-separated commands are
 // inspected independently and a leading cd is applied to later relative paths.
@@ -325,6 +370,10 @@ func readPath(command []string) string {
 	if len(command) == 0 {
 		return ""
 	}
+	switch {
+	case strings.EqualFold(command[0], "Get-Content"):
+		return powerShellReadPath(command)
+	}
 	switch command[0] {
 	case "cat":
 		return singleNonFlagOperand(command[1:], nil)
@@ -351,6 +400,51 @@ func readPath(command []string) string {
 	default:
 		return ""
 	}
+}
+
+// powerShellReadPath mirrors Rust's conservative Get-Content classification.
+// Only the three flags that can appear in front of a simple path are accepted,
+// and the path must be a single safe-looking operand. Complex PowerShell
+// expressions are intentionally left unclassified.
+func powerShellReadPath(command []string) string {
+	if len(command) == 0 || !strings.EqualFold(command[0], "Get-Content") {
+		return ""
+	}
+	for _, argument := range command[1:] {
+		if strings.HasPrefix(argument, "-") {
+			switch {
+			case strings.EqualFold(argument, "-Raw"),
+				strings.EqualFold(argument, "-Path"),
+				strings.EqualFold(argument, "-LiteralPath"):
+				continue
+			default:
+				return ""
+			}
+		}
+	}
+	path := singleNonFlagOperand(command[1:], nil)
+	if path == "" || strings.HasPrefix(path, "-") || !safePowerShellReadPath(path) {
+		return ""
+	}
+	return path
+}
+
+func safePowerShellReadPath(path string) bool {
+	for _, character := range path {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9':
+			continue
+		case character == ' ' || character == '/' || character == '\\' ||
+			character == '.' || character == '-' || character == '_' ||
+			character == ':':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func headReadPath(args []string) string {

@@ -5782,9 +5782,6 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		workspace := sandbox.WorkspaceWritePermissionProfile()
 		permissionProfile = &config.SandboxPermissionProfileResolution{ID: sandbox.BuiltInPermissionProfileWorkspace, Profile: &workspace}
 	}
-	if protectedModel {
-		approvalPolicy = sandbox.ApprovalOnRequest
-	}
 	approvalsReviewer := turnApprovalsReviewerForTurn(cfg, params)
 	if protectedModel {
 		approvalsReviewer = string(config.ApprovalsReviewerAutoReview)
@@ -6110,7 +6107,7 @@ func analyticsSandboxNetworkAccess(resolution *config.SandboxPermissionProfileRe
 // autoReviewRequiredForModel mirrors Rust's auto_review_required_for_model
 // (codex-rs/config/src/config_requirements.rs, Rust 208f05b233): models listed
 // in auto_review.required_on_models (or their exact provider-alias suffix) must
-// run with on-request approvals and the auto_review reviewer.
+// use the auto_review reviewer while preserving the configured approval policy.
 func autoReviewRequiredForModel(cfg *config.Config, model string) bool {
 	if cfg == nil || cfg.Requirements == nil {
 		return false

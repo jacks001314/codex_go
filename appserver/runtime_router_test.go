@@ -16393,6 +16393,30 @@ func TestAutoReviewEnabledForTurnRoutesApprovalPolicyToGuardian(t *testing.T) {
 	}
 }
 
+func TestTurnApprovalPolicyForTurnPreservesAutoReviewProtectedPolicyLikeRust(t *testing.T) {
+	cfg := &config.Config{
+		Values: map[string]any{"approvals_reviewer": "auto_review"},
+		Requirements: &config.ConfigRequirements{
+			AutoReview: &config.AutoReviewRequirements{RequiredOnModels: []string{"protected-model"}},
+		},
+	}
+	for _, test := range []struct {
+		policy string
+		want   sandbox.AskForApproval
+	}{
+		{policy: "never", want: sandbox.ApprovalNever},
+		{policy: "unless-trusted", want: sandbox.ApprovalUnlessTrusted},
+		{policy: "granular", want: sandbox.ApprovalGranular},
+		{policy: "on-request", want: sandbox.ApprovalOnRequest},
+	} {
+		params := &turn.TurnStartParams{Model: "protected-model", ApprovalPolicy: test.policy}
+		got := turnApprovalPolicyForTurn(cfg, params)
+		if got != test.want {
+			t.Fatalf("turnApprovalPolicyForTurn(%q) = %q, want %q", test.policy, got, test.want)
+		}
+	}
+}
+
 func TestRuntimeRouterTurnStartInjectsAdditionalContext(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -16660,7 +16684,7 @@ clock_source = "external"
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
 	developerTexts := messageInputTextsForRole(request.InputItems, "developer")
-	if !slicesContainString(developerTexts, "It is 2026-06-17 17:34:15 UTC.") {
+	if !slicesContainString(developerTexts, "<current_time_reminder>\nIt is 2026-06-17 17:34:15 UTC.\n</current_time_reminder>") {
 		t.Fatalf("developer input texts = %#v", developerTexts)
 	}
 	if !agentRequestCodeModeHasTool(request, "clock", "curr_time") {
@@ -16762,7 +16786,7 @@ stream_max_retries = 0
 		t.Fatalf("recorded bodies = %#v", bodies)
 	}
 	developerTexts := messageInputTextsForRole(bodies[0], "developer")
-	if !slicesContainString(developerTexts, "It is 2026-06-17 17:34:15 UTC.") {
+	if !slicesContainString(developerTexts, "<current_time_reminder>\nIt is 2026-06-17 17:34:15 UTC.\n</current_time_reminder>") {
 		t.Fatalf("developer input texts = %#v; body=%#v", developerTexts, bodies[0])
 	}
 	if instructions, _ := bodies[0]["instructions"].(string); strings.Contains(instructions, "2026-06-17 17:34:15 UTC") {
@@ -25395,6 +25419,11 @@ func currentTimeReminderTextsFromBody(body map[string]any) []string {
 	texts := messageInputTextsForRole(body, "developer")
 	out := []string{}
 	for _, text := range texts {
+		const open = "<current_time_reminder>\n"
+		const close = "\n</current_time_reminder>"
+		if strings.HasPrefix(text, open) && strings.HasSuffix(text, close) {
+			text = strings.TrimSuffix(strings.TrimPrefix(text, open), close)
+		}
 		if strings.HasPrefix(text, "It is ") {
 			out = append(out, text)
 		}

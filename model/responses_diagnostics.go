@@ -65,6 +65,19 @@ func responsesDiagnostic(event string, fields map[string]any) {
 	}
 }
 
+// recordResponsesRetry emits the structured retry event shape introduced by
+// Rust #38452. The Go diagnostic sink is opt-in (CODEX_GO_RESPONSES_DEBUG),
+// mirroring Rust's `codex_otel.trace_safe` tracing target without adding a new
+// mandatory telemetry provider.
+func recordResponsesRetry(operation string, attempt uint64, delay time.Duration, layer string) {
+	responsesDiagnostic("codex.retry", map[string]any{
+		"retry.attempt":   attempt,
+		"retry.delay_ms":  delay.Milliseconds(),
+		"retry.layer":     layer,
+		"retry.operation": operation,
+	})
+}
+
 func responsesRequestDiagnosticFields(request *AgentRequest, apiRequest *responsesAgentRequest) map[string]any {
 	fields := map[string]any{}
 	if request != nil {

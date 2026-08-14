@@ -494,6 +494,11 @@ func markSkillMentionPaths(skill InstructionsSkillMetadata, seen map[string]bool
 func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata, command string, workdir string) *InstructionsSkillMetadata {
 	workdir = canonicalizeImplicitSkillPath(workdir)
 	tokens := codexshell.SplitCommandLine(command)
+	if codexshell.IsPowerShellReadCommand(command) {
+		if powerShellTokens := codexshell.TokenizePowerShellCommand(command); len(powerShellTokens) > 0 {
+			tokens = powerShellTokens
+		}
+	}
 
 	byScriptsDir := make(map[string]InstructionsSkillMetadata, len(skills))
 	bySkillDocPath := make(map[string]InstructionsSkillMetadata, len(skills))

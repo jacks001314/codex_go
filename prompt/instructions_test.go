@@ -189,6 +189,12 @@ func TestDetectImplicitSkillInvocationForCommandMatchesPowerShellGetContent(t *t
 	}{
 		{command: "Get-Content " + plainPath, want: "test-skill"},
 		{command: "Get-Content -Raw " + plainPath, want: "test-skill"},
+		{command: "get-content   -raw '" + plainPath + "'", want: "test-skill"},
+		{command: "Get-Content -Path " + plainPath, want: "test-skill"},
+		{command: "Get-Content -LiteralPath " + plainPath, want: "test-skill"},
+		{command: "Get-Content " + plainPath + " -Raw", want: "test-skill"},
+		{command: "gc " + plainPath, want: "test-skill"},
+		{command: "type " + plainPath, want: "test-skill"},
 		{command: "Get-Content " + quotedSpacedPath, want: "spaced-skill"},
 		{command: "Get-Content -Raw " + quotedSpacedPath, want: "spaced-skill"},
 	} {

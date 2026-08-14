@@ -78,6 +78,64 @@ func TestListModelsExposesMultiAgentVersion(t *testing.T) {
 	}
 }
 
+func TestListModelsExposesUpgradeRetirementTimeLikeRust(t *testing.T) {
+	retirement := int64(1893456000)
+	manager := NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{
+		{
+			Slug:           "current",
+			DisplayName:    "Current",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+			Priority:       0,
+			Upgrade: &ModelInfoUpgrade{
+				Model:             "replacement",
+				MigrationMarkdown: "Use the replacement model.",
+				RetirementAt:      &retirement,
+			},
+		},
+		{
+			Slug:           "no-retirement",
+			DisplayName:    "No Retirement",
+			Visibility:     VisibilityVisible,
+			SupportedInAPI: true,
+			Priority:       1,
+			Upgrade: &ModelInfoUpgrade{
+				Model:             "replacement",
+				MigrationMarkdown: "Use the replacement model.",
+			},
+		},
+	}})
+	response, err := NewModelService(manager).List(&ModelListParams{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	byID := map[string]ModelSummary{}
+	for _, summary := range response.Data {
+		byID[summary.ID] = summary
+	}
+	if got := byID["current"].UpgradeInfo; got == nil || got.RetirementAt == nil || *got.RetirementAt != retirement {
+		t.Fatalf("current upgradeInfo = %#v", got)
+	}
+	if got := byID["no-retirement"].UpgradeInfo; got == nil || got.RetirementAt != nil {
+		t.Fatalf("no-retirement upgradeInfo = %#v", got)
+	}
+	payload := marshalObjectForTest(t, response)
+	data := payload["data"].([]any)
+	for _, raw := range data {
+		modelPayload := raw.(map[string]any)
+		upgradeInfo, _ := modelPayload["upgradeInfo"].(map[string]any)
+		if upgradeInfo == nil {
+			t.Fatalf("missing upgradeInfo in %#v", modelPayload)
+		}
+		if modelPayload["id"] == "current" && upgradeInfo["retirementAt"].(float64) != float64(retirement) {
+			t.Fatalf("current retirementAt = %#v", upgradeInfo)
+		}
+		if modelPayload["id"] == "no-retirement" && upgradeInfo["retirementAt"] != nil {
+			t.Fatalf("no-retirement retirementAt = %#v", upgradeInfo)
+		}
+	}
+}
+
 func TestModelListParamsMarshalRustShape(t *testing.T) {
 	payload := marshalObjectForTest(t, &ModelListParams{RefreshStrategy: string(RefreshOnline)})
 	for _, nullableKey := range []string{"cursor", "limit", "includeHidden"} {

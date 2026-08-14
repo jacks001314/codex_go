@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -876,4 +877,85 @@ func TestModelSummaryCarriesModelSpecialty(t *testing.T) {
 	if plain.ModelSpecialty != nil {
 		t.Fatalf("empty specialty should stay nil: %#v", plain.ModelSpecialty)
 	}
+}
+
+func TestModelInfoUpgradeRetirementTimeParsingMatchesRust(t *testing.T) {
+	cases := []struct {
+		name       string
+		retirement any
+		wantUnix   *int64
+	}{
+		{name: "absent", retirement: nil, wantUnix: nil},
+		{name: "null", retirement: nil, wantUnix: nil},
+		{name: "rfc3339", retirement: "2030-01-01T00:00:00Z", wantUnix: int64Ptr(1893456000)},
+		{name: "malformed", retirement: "not-a-timestamp", wantUnix: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"slug": "current-model", "display_name": "Current", "visibility": "list", "supported_in_api": true}
+			upgrade := map[string]any{"model": "replacement-model", "migration_markdown": "Use the replacement model."}
+			if tc.retirement != nil {
+				upgrade["retirement_at"] = tc.retirement
+			}
+			if tc.name == "null" {
+				upgrade["retirement_at"] = nil
+			}
+			payload["upgrade"] = upgrade
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal error = %v", err)
+			}
+			var info ModelInfo
+			if err := json.Unmarshal(data, &info); err != nil {
+				t.Fatalf("Unmarshal error = %v", err)
+			}
+			if info.Upgrade == nil || info.Upgrade.Model != "replacement-model" {
+				t.Fatalf("Upgrade = %#v, want replacement model", info.Upgrade)
+			}
+			if got := info.Upgrade.RetirementAt; !int64PtrEqual(got, tc.wantUnix) {
+				t.Fatalf("RetirementAt = %v, want %v", int64PtrValue(got), int64PtrValue(tc.wantUnix))
+			}
+		})
+	}
+}
+
+func TestModelSummaryCarriesUpgradeRetirementTime(t *testing.T) {
+	retirement := int64(1893456000)
+	info := ModelInfo{
+		Slug:        "current-model",
+		DisplayName: "Current",
+		Upgrade: &ModelInfoUpgrade{
+			Model:             "replacement-model",
+			MigrationMarkdown: "Use the replacement model.",
+			RetirementAt:      &retirement,
+		},
+	}
+	summary := summaryFromModel(info, false)
+	if summary.Upgrade == nil || *summary.Upgrade != "replacement-model" {
+		t.Fatalf("summary.Upgrade = %#v, want replacement-model", summary.Upgrade)
+	}
+	if summary.UpgradeInfo == nil || summary.UpgradeInfo.Model != "replacement-model" || summary.UpgradeInfo.RetirementAt == nil || *summary.UpgradeInfo.RetirementAt != retirement {
+		t.Fatalf("summary.UpgradeInfo = %#v, want retirement %d", summary.UpgradeInfo, retirement)
+	}
+	if summary.UpgradeInfo.MigrationMarkdown == nil || *summary.UpgradeInfo.MigrationMarkdown != "Use the replacement model." {
+		t.Fatalf("summary.UpgradeInfo.MigrationMarkdown = %#v", summary.UpgradeInfo.MigrationMarkdown)
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func int64PtrValue(value *int64) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return strconv.FormatInt(*value, 10)
+}
+
+func int64PtrEqual(left *int64, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

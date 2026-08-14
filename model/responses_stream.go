@@ -175,6 +175,7 @@ func newResponsesStreamAccumulator(request *AgentRequest) *responsesStreamAccumu
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	maxRetries := r.streamMaxRetries()
 	connectionRetryDelay := initialConnectionRetryDelay
+	connectionRetries := uint64(0)
 	for attempt := uint64(0); ; attempt++ {
 		fields := responsesRequestDiagnosticFields(request, apiRequest)
 		fields["stream_attempt"] = attempt + 1
@@ -189,7 +190,9 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		// window (5-60s exponential) that does not consume the bounded stream
 		// retry budget, for regular sampling on non-Bedrock providers.
 		if isResponsesConnectionFailure(err) && !r.providerIsAmazonBedrock() {
+			connectionRetries++
 			responsesDiagnostic("sampling.connection_retry", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "delay_ms": connectionRetryDelay.Milliseconds()})
+			recordResponsesRetry("sampling", connectionRetries, connectionRetryDelay, "stream")
 			emitResponsesStreamEvent(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), &ResponsesStreamEvent{
 				Kind:        ResponsesStreamEventRetrying,
 				RetryError:  "Reconnecting... waiting for network",
@@ -215,6 +218,7 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		if !requested {
 			delay = responsesRetryDelay(nil, attempt+1)
 		}
+		recordResponsesRetry("sampling", attempt+1, delay, "stream")
 		emitResponsesStreamEvent(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), &ResponsesStreamEvent{
 			Kind:            ResponsesStreamEventRetrying,
 			RetryAttempt:    attempt + 1,

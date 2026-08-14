@@ -1394,6 +1394,28 @@ func TestLoadCountsParseErrors(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesFloatingPointRolloutValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fractional.jsonl")
+	data := `{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"used_percent":0.0,"secondary_used_percent":12.5}}}
+{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":9,"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hello"}]},"metadata":{"client_authored":true}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	lines, parseErrors, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if parseErrors != 0 || len(lines) != 2 {
+		t.Fatalf("Load() lines/errors = %d/%d, want 2/0", len(lines), parseErrors)
+	}
+	if raw := string(lines[0].Payload); !bytes.Contains([]byte(raw), []byte("0.0")) || !bytes.Contains([]byte(raw), []byte("12.5")) {
+		t.Fatalf("event payload lost fractional values: %s", raw)
+	}
+	if raw := string(lines[1].ItemMetadata); !bytes.Contains([]byte(raw), []byte("client_authored")) {
+		t.Fatalf("response item lost metadata: %s", raw)
+	}
+}
+
 func TestBuildThreadItem(t *testing.T) {
 	path := writeRollout(t, t.TempDir(), "thread-1", fixedTime(), "hello")
 	item, ok := BuildThreadItem(path, false)

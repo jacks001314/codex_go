@@ -167,6 +167,7 @@ type ModelUpgradeInfo struct {
 	ModelLink         *string `json:"modelLink"`
 	UpgradeCopy       *string `json:"upgradeCopy"`
 	MigrationMarkdown *string `json:"migrationMarkdown"`
+	RetirementAt      *int64  `json:"retirementAt"`
 }
 
 type ModelAvailabilityNux struct {
@@ -309,6 +310,15 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 	if strings.TrimSpace(info.ModelSpecialty) != "" {
 		value := info.ModelSpecialty
 		summary.ModelSpecialty = &value
+	}
+	if info.Upgrade != nil && strings.TrimSpace(info.Upgrade.Model) != "" {
+		model := strings.TrimSpace(info.Upgrade.Model)
+		summary.Upgrade = &model
+		upgradeInfo := &ModelUpgradeInfo{Model: model, RetirementAt: info.Upgrade.RetirementAt}
+		if migration := strings.TrimSpace(info.Upgrade.MigrationMarkdown); migration != "" {
+			upgradeInfo.MigrationMarkdown = &migration
+		}
+		summary.UpgradeInfo = upgradeInfo
 	}
 	return summary
 }
