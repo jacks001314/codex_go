@@ -1,46 +1,596 @@
 {
   "schemaVersion": 1,
-  "rustFromExclusive": "25eecb071e7f551516d63fe41c922678d51889c2",
-  "rustToInclusive": "bbbf396839b3bab872291354878980ba82ad4aee",
+  "rustFromExclusive": "e766f75989",
+  "rustToInclusive": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
   "commits": [
-    {"sha":"b545c94041017d000e2c8b2f6272705d21b85dfb","subject":"Strengthen session file change approval coverage (#36149)","kind":"test","domains":["approvals"],"status":"complete","evidence":["go test ./appserver ./tool ./sandbox -count=1","TestRuntimeRouterTurnStartFileChangeApprovalAcceptForSessionPersistsLikeRust"]},
-    {"sha":"2fbbb1a11a0f7c0a0f67ecff9993176dfd5aabbd","subject":"Stabilize file approval replay test (#36165)","kind":"test","domains":["approvals"],"status":"complete","evidence":["go test ./appserver -count=1","TestRuntimeRouterThreadResumeReplaysPendingFileChangeApprovalWithWaitingStatusLikeRust"]},
-    {"sha":"856bf5a33af84317b99ff5e3b8abfe4fcc5465e7","subject":"Make pending realtime sideband test deterministic (#36166)","kind":"test","domains":["realtime"],"status":"complete","evidence":["go test ./realtime ./appserver -count=1","go test -race ./realtime ./appserver -run Test.*Realtime -count=1","TestStopCancelsPendingWebRTCSidebandHandshake","TestShutdownRejectsWebRTCStartWhoseCallCompletesLate"]},
-    {"sha":"13ddc7aa5743ad37b003b8c2891805a2d2028fff","subject":"Harden the auto-review model override test (#36167)","kind":"test","domains":["review"],"status":"complete","evidence":["go test ./appserver ./model -count=1","TestGuardianUsesCatalogAutoReviewModelOverrideLikeRust"]},
-    {"sha":"b445967cc0c3082376fc4c95c8101358213ccd7a","subject":"Make tool telemetry tag collection synchronous (#36168)","kind":"runtime","domains":["telemetry"],"status":"complete","evidence":["go test ./tool ./mcp ./turn -count=1","TestMCPToolExecutorTelemetryTagsAreSynchronousLikeRust","TestToolDispatcherCollectsTelemetryTagsSynchronouslyLikeRust"]},
-    {"sha":"578c1b2230288104041e880a86d0f7f3a5ca6e47","subject":"Test workspace-root patch protection for metadata (#36171)","kind":"test","domains":["sandbox"],"status":"complete","evidence":["go test ./sandbox ./tool ./appserver -count=1","TestApplyPatchExecutorWorkspacePolicyProtectsMetadataLikeRust","TestApplyPatchExecutorWorkspacePolicyRejectsOutsideRootLikeRust"]},
-    {"sha":"355d2a802aaad0d5d003b7bba49f25a05bd1db5a","subject":"Test remote Guardian network approval scoping (#36177)","kind":"test","domains":["approvals","sandbox"],"status":"complete","evidence":["go test ./network ./tool ./execserver ./state ./appserver -count=1","go test -race ./tool ./appserver -run Test(RemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust|UnifiedExecRemoteNetworkProxyLaunchWireShapeLikeRust|NetworkApproval) -count=1","TestRemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust","TestBuildPromptSerializesNetworkActionLikeRust","remote execution identity propagates from tool call through exec-server policy callback"]},
-    {"sha":"ceb4bc72c41e333bbafee14aa992e49ba2e953ed","subject":"Record attempted tool calls in response metadata (#36181)","kind":"runtime","domains":["model-protocol","tools"],"status":"complete","evidence":["go test ./model ./turn ./tool ./appserver -count=1","TestRuntimeRouterExecutedToolCallMetadataFeatureAttachesToOutputLikeRust","TestRuntimeRetainsAttemptedToolMetadataAfterFailedSamplingLikeRust","TestToolDispatcherRecordsNestedAttemptOnWaitOutputLikeRust","TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes"]},
-    {"sha":"0dcad0c97217df0ef9511ff1efec9e82720a0fa9","subject":"Use permission profiles throughout sandbox execution (#36183)","kind":"runtime","domains":["permission-profiles","sandbox"],"status":"complete","evidence":["go test ./sandbox ./execserver ./tool ./appserver -count=1","TestBuildCommandRunPlanCanonicalProfileWinsOverStaleJSONLikeRust","TestPermissionProfileAdditionalGrantsPreserveCanonicalEntriesLikeRust","TestFileSystemSandboxContextCanonicalProfileWinsOverLegacyJSONLikeRust","TestApplyPatchExecutorCanonicalProfileWinsOverLegacyPolicyLikeRust"]},
-    {"sha":"483559cc758353c83733b2b34629dbf885a99207","subject":"Coalesce concurrent remote metadata requests (#36184)","kind":"runtime","domains":["exec-server"],"status":"complete","evidence":["go test ./execserver -count=1","go test -race ./execserver -run TestClient.*Metadata -count=1","TestClientCoalescesOnlyConcurrentUnsandboxedMetadataLikeRust","TestClientMetadataFollowerRetriesCancelledInitializerLikeRust","TestClientMutationInvalidatesInFlightMetadataEvenOnErrorLikeRust"]},
-    {"sha":"9eeac78b3f0c510ed9c53d329d466cf18e1af8af","subject":"Refresh environment dates from the configured clock (#36187)","kind":"runtime","domains":["environment"],"status":"complete","evidence":["go test ./appserver ./config -count=1","go test -race ./appserver -run Test(TurnEnvironmentContextRefreshesConfiguredClockEachTurnLikeRust|RuntimeRouterCurrentTimeReadAddsDeveloperInputLikeRust|RuntimeRouterEnvironmentClockFailureStopsBeforeInferenceLikeRust|GuardianReviewRefreshesEnvironmentDateWithoutPrewarmClockReadLikeRust|CompactEnvironmentContextRefreshesConfiguredClockLikeRust)$ -count=1","TestTurnEnvironmentContextRefreshesConfiguredClockEachTurnLikeRust","TestRuntimeRouterCurrentTimeReadAddsDeveloperInputLikeRust","TestRuntimeRouterEnvironmentClockFailureStopsBeforeInferenceLikeRust","TestGuardianReviewRefreshesEnvironmentDateWithoutPrewarmClockReadLikeRust","TestCompactEnvironmentContextRefreshesConfiguredClockLikeRust"]},
-    {"sha":"6256a7ccc7948231befc33d7d61b369041e6eb16","subject":"Make thread history projection resilient to malformed rollouts (#36188)","kind":"persistence","domains":["history","rollout"],"status":"complete","evidence":["go test ./appserver ./state ./rollout -count=1","go test -race ./state ./rollout -run Test(MaterializeThreadHistory|ReadProjectionSteps|PaginatedRecorder|OpenThreadHistoryDB|ThreadHistoryMigrations) -count=1","TestMaterializeThreadHistoryWaitsForUnprojectableLinesLikeRust","TestMaterializeThreadHistorySkipsInferredMalformedOrdinalGapLikeRust","TestMaterializeThreadHistoryUsesEventTimestampBeforeRolloutTimestampLikeRust","TestMaterializeThreadHistoryRollsBackRowsAndCheckpointTogetherLikeRust","TestRouterPaginatedRolloutAutomaticallyMaterializesThreadHistoryLikeRust"]},
-    {"sha":"ba42e6866cef4baed7ad92c73e6be8cd42e49d8b","subject":"Label explicit skill injection metrics (#36191)","kind":"runtime","domains":["telemetry","skills"],"status":"complete","evidence":["TestExplicitSkillInputItemsWarnsWhenHostReadFailsLikeRust","TestExplicitHostSkillTracksInvocationAfterSuccessfulReadLikeRust","TestSanitizeMetricTagValueMatchesRust"]},
-    {"sha":"789c72dcf62d7439863d4d2846454f05b3d51db6","subject":"Avoid shifting bytes in streaming output buffers (#36194)","kind":"runtime","domains":["exec-server"],"status":"complete","evidence":["go test ./tool ./execserver -count=1","TestSplitUnifiedExecValidUTF8PrefixProgressesAcrossInvalidUTF8LikeRust","TestRemoteJSONRPCDecoderFramesAndBoundsLikeRust"]},
-    {"sha":"0042b00986b9cc73c82c93f94e93d747818228be","subject":"Record normalized sandbox violation events (#36207)","kind":"protocol","domains":["sandbox","exec-server"],"status":"complete","evidence":["go test ./sandbox ./execserver ./tool ./appserver -count=1","go test -race ./sandbox ./execserver ./tool ./appserver -run Test(ClassifyFileSystemSandboxViolation|NetworkSandboxViolation|ProcessStateTransportsLocallyClassifiedSandboxDenial|ProcessSandboxTypeProtocolMapping|ExecResponseDistinguishes|UnifiedExecRecordsKnownSandboxViolation|ManagedNetworkBlockedObserverRecords) -count=1","TestExecResponseDistinguishesUnknownFromExplicitlyUnsandboxedLikeRust","TestUnifiedExecRecordsKnownSandboxViolationAndSkipsUnknownBackendLikeRust","TestManagedNetworkBlockedObserverRecordsWithoutRequirementsLikeRust"]},
-    {"sha":"acd540f1581bf30f963fccbcce43ac494102242c","subject":"Precompute app-server protocol exports (#36212)","kind":"protocol","domains":["app-server-schema"],"status":"complete","evidence":["go test ./appserver ./app ./cli ./parity -count=1","go test -race ./appserver -run TestPrecomputed -count=1","TestPrecomputedExportsAreWrittenToDiskLikeRust","TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust","TestPrecomputedTypeScriptOptionsPreserveRustBehavior","TestPrecomputedAppServerExportsMatchRustTarget"]},
-    {"sha":"97576b1794872e342450ebd577123e052ab57626","subject":"Run code mode exclusively through the standalone host (#36217)","kind":"runtime","domains":["code-mode"],"status":"complete","evidence":["go test ./codemode ./tool ./turn ./exec ./appserver ./app ./install -count=1","go test -race ./codemode ./turn ./exec ./appserver -run Test.*CodeMode -count=1","TestProcessProviderExecutesNestedToolsOutsideClientProcess","TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds","TestExecDefaultRouterUsesStandaloneCodeModePolicy","TestRuntimeRouterOwnsCodeModeRuntimePerThread","release build produces adjacent codex and codex-code-mode-host executables"]},
-    {"sha":"e6cfd40c3f444aadd6017c9eeab01db70f48961a","subject":"Expose connector candidates in external agent detection (#36218)","kind":"protocol","domains":["external-agent"],"status":"complete","evidence":["go test ./config ./appserver -count=1","TestProtocolPayloadsValidateAgainstRustSchemas/ExternalAgentConfigDetectResponse"]},
-    {"sha":"745603a5a1eb48b6f343633d622eeb72dd549d7b","subject":"Ignore passthrough metadata when reconciling rollout items (#36221)","kind":"persistence","domains":["rollout"],"status":"complete","evidence":["go test ./session ./rollout -count=1","TestBuildHistoryIgnoresTopLevelInternalChatMessageMetadataPassthrough","TestRolloutItemToInputIgnoresTopLevelInternalChatMessageMetadataPassthrough"]},
-    {"sha":"a01a2d91461a57809e944de7758477b92617ab01","subject":"Preserve executor paths in read command actions (#36223)","kind":"protocol","domains":["command-actions","exec-server"],"status":"complete","evidence":["go test ./utils ./shell ./rollout ./appserver -count=1","TestResolveExecutorPathPreservesForeignConventions","TestCommandExecutionActionsPreserveExecutorPathsLikeRust","TestRolloutReadCommandActionsPreserveExecutorPathsLikeRust"]},
-    {"sha":"3016671bb077c43448b8fa88f3edfa9772e17058","subject":"Support Enterprise automation account plans (#36228)","kind":"protocol","domains":["auth","app-server-schema","tui"],"status":"complete","evidence":["go test ./auth ./chatgptapi ./appserver ./tui/status ./tui -count=1","TestProtocolPayloadsValidateAgainstRustSchemas/GetAccountResponse"]},
-    {"sha":"413492cd6c3a4d4f8dff6f406247ccda5a9d88aa","subject":"Ignore symbolic slash-tmp permissions on Windows (#36237)","kind":"security","domains":["permission-profiles","sandbox"],"status":"complete","evidence":["go test ./sandbox ./execserver ./tool ./appserver -count=1","go test -race ./sandbox ./appserver -run Test(IntersectPermissionProfiles|ServerRequestBrokerIntersectsPermissions|ServerRequestBrokerRejectsSessionScopedStrictAutoReview|WindowsPermissionProfiles) -count=1","TestWindowsPermissionProfilesIgnoreSymbolicSlashTmpLikeRust","TestIntersectPermissionProfilesRejectsSymbolicSlashTmpGrantsOnWindowsLikeRust","TestCanonicalPermissionProfileRoundTripIgnoresSymbolicSlashTmpOnWindows","Linux and macOS sandbox test binaries cross-compile with CGO disabled"]},
-    {"sha":"4642370542739d5dd080b0c87a9de06a6435d3db","subject":"Refresh precomputed app-server protocol exports (#36239)","kind":"protocol","domains":["app-server-schema"],"status":"complete","evidence":["TestPrecomputedExportArtifactsMatchTargetRustCommit","TestPrecomputedAppServerExportsMatchRustTarget","stable SHA-256 2e7ea6908c648299c718d7529441c8db450a511c3983e84b175842e2aa7dc788","experimental SHA-256 3736fff423681ff8ee2515aff14e3854019377f6f661e804b1dab2fa0ebdd5c9"]},
-    {"sha":"53d06e24ea318a963812030fa8fed1bd0fc42d42","subject":"Prefer the bundled resource for the code mode host (#36264)","kind":"runtime","domains":["code-mode","release"],"status":"complete","evidence":["go test ./codemode ./app ./install -count=1","release build resolves the bundled host before sibling and PATH fallbacks"]},
-    {"sha":"f0c30e528a54bdf0fa9a4d52ff74b34383434811","subject":"Derive report prompt hashes from persisted rollouts (#36271)","kind":"persistence","domains":["feedback","rollout"],"status":"complete","evidence":["go test ./appserver -run 'Feedback.*PromptHash|FeedbackTurnMetadata' -count=1","TestFeedbackTurnMetadataFromRolloutUsesPersistedBaseInstructions"]},
-    {"sha":"bf4d3f51ea70ce70ab7fabce7a66f328fef49e57","subject":"Restrict hosted MCP credentials to local environments (#36306)","kind":"security","domains":["mcp","auth"],"status":"complete","evidence":["go test ./mcp ./appserver ./exec -run 'Hosted|ChatGPTAuth|Environment' -count=1","remote hosted MCP auth fails closed while local environments retain ChatGPT credentials"]},
-    {"sha":"5e8b22488f224a1c426f3bdcd41c8715894ef3b4","subject":"Use the host skill provider catalog in world state (#36309)","kind":"runtime","domains":["skills","world-state"],"status":"complete","evidence":["go test ./appserver -run 'PromptSkillMetadataPreservesPluginID|CollaborationWorldState' -count=1","CoreCompatible host metadata uses full descriptions while executor metadata keeps short-description fallback"]},
-    {"sha":"164b3bfeabdbc8e33c7320437e7cd875f93a534e","subject":"Isolate MCP OAuth credentials by environment (#36310)","kind":"security","domains":["mcp","auth"],"status":"complete","evidence":["go test ./mcp ./config ./appserver -run 'OAuth.*Environment|Credential.*Environment|Remote.*Auth' -count=1","OAuth credential keys include the execution environment and legacy local fallback remains bounded"]},
-    {"sha":"aea26afaee177d3fe40721ef261a29f89879d505","subject":"Include skills in debug prompt input output (#36311)","kind":"protocol","domains":["skills","debug"],"status":"complete","evidence":["go test ./prompt ./appserver -run 'DebugPrompt|SkillsPrompt' -count=1","debug prompt output renders the same selected skill catalog used by the request"]},
-    {"sha":"66d63afd18a0e7e0b77f075ca7b9f3c30d503d63","subject":"Preserve discovery order for host skill path aliases (#36327)","kind":"runtime","domains":["skills"],"status":"complete","evidence":["go test ./prompt ./appserver -run 'Skill.*Alias|DiscoveryOrder' -count=1","host skill root aliases preserve provider discovery order and stable first-root ownership"]},
-    {"sha":"ef293f7ac9d756f793f3e952a790f9bec16a6eeb","subject":"Restrict `shell_command` to a single local environment (#36329)","kind":"security","domains":["tools","environment"],"status":"complete","evidence":["go test ./turn ./appserver -run 'LegacyShellCommand|LocalEnvironment' -count=1","TestBuildToolRegistryRestrictsLegacyShellCommandToSingleLocalEnvironmentLikeRust"]},
-    {"sha":"448118f544abb7e2c67c8bc57bcb26e9e75a9b21","subject":"Detect connectors used in external agent sessions (#36336)","kind":"runtime","domains":["external-agent","connectors"],"status":"complete","evidence":["go test ./config ./appserver -run 'External.*Connector|Connector.*Session' -count=1","Claude attribution UUID/name and Cursor cached-plugin tool-use candidates are deduplicated and counted like Rust"]},
-    {"sha":"5548c95d66e29aeb994a982db8a378d9453694b0","subject":"Enable skills in the MCP server (#36339)","kind":"runtime","domains":["mcp","skills"],"status":"complete","evidence":["go test ./app ./appserver ./mcp -run 'MCP.*Skill|Skills.*MCP' -count=1","MCP server prompts include host skills and emit discovery warnings"]},
-    {"sha":"3d1d26915a303c3b4765828f973f5464f8c28c5c","subject":"Stop publishing legacy Linux bundle archives (#36342)","kind":"release","domains":["release"],"status":"complete","evidence":["source audit: Rust-only legacy archive deletion has no Go runtime or published artifact equivalent","Go release matrix already emits the maintained platform archive set"]},
-    {"sha":"7b38c48da930445eaafee166ed86d9240f490c8d","subject":"Require explicit sandbox permissions with shell justifications (#36350)","kind":"security","domains":["sandbox","tools"],"status":"complete","evidence":["go test ./tool ./turn ./appserver -run 'Justification|SandboxPermissions|UnifiedExec' -count=1","shell tool calls bind explicit sandbox_permissions to escalation justifications"]},
-    {"sha":"2c005abb0765bfe3ef42a23fe88d5b806184fa83","subject":"Use model catalog collaboration mode messages (#36351)","kind":"runtime","domains":["collaboration","world-state"],"status":"complete","evidence":["go test ./model ./appserver -run 'CollaborationMode|WorldState' -count=1","model catalog messages drive collaboration mode instructions and persisted world-state restoration"]},
-    {"sha":"35eab50501746159d89fafd8cf1f048b00cf5174","subject":"Pass sessions directly to session tasks (#36354)","kind":"runtime","domains":["session"],"status":"complete","evidence":["source audit: internal Rust ownership refactor with no public behavior change","go test ./session ./appserver -count=1"]},
-    {"sha":"c4f2746c43a3ab87c2978657d7f2c274546e97fe","subject":"Keep MCP tool calls bound to their thread (#36355)","kind":"runtime","domains":["mcp","thread"],"status":"complete","evidence":["go test ./appserver -run 'MCPToolCallsStayBoundToEachThread|MCPRuntimeCoordinatorKeepsThreadConfigIndependent' -count=1","per-thread MCP services keep same-named server calls bound across interleaved threads"]},
-    {"sha":"bbbf396839b3bab872291354878980ba82ad4aee","subject":"Sync updates to imported external agent sessions (#36356)","kind":"persistence","domains":["external-agent","session"],"status":"complete","evidence":["go test ./appserver ./config -run 'ExternalAgentImportSync|ExternalSessionImportCheckpoint' -count=1","six cold/active/diverged/equal-transcript/ambiguous concurrent sync cases preserve checkpoints and chronology"]}
+    {
+      "sha": "5104cb649e653d8ea828db547fd04cbd004d32fb",
+      "subject": "Support gRPC code-mode hosts in app server (#38288)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "8d637ae3980fdae79044e638c93c7e579de3c62e",
+      "subject": "Remove unused apply_patch prompt fallback (#38291)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "b1373b74a27d1d9b65074a873202683355cae772",
+      "subject": "Add durable reverts for paginated threads (#38292)",
+      "kind": "persistence",
+      "domains": [
+        "thread-store"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "357696c5e7127525a9259d3dcfa0574516b1fe84",
+      "subject": "Route network access through the shared approval pipeline (#38299)",
+      "kind": "runtime",
+      "domains": [
+        "network",
+        "approvals"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "363427b5e3fe1b6d7499e6bc47651f62a5a3b1d2",
+      "subject": "Add interrupted turn recovery (#38303)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "902bd9e06b3ecb32cbf7f8e64cd23b956be3e7fe",
+      "subject": "Protect inline visualization viewers from sandbox writes (#38306)",
+      "kind": "security",
+      "domains": [
+        "sandbox"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "e0de12a126f2beb10599a18fd4ca6b08f6e0a1a0",
+      "subject": "Make gRPC code-mode yield tests deterministic (#38321)",
+      "kind": "test",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "fe614a6304ef804be74a622e482fdd75977abcba",
+      "subject": "Add Guardian V2 extension scaffold (#38336)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "c30a3e49c9231361abeaa88d4a57bb7c3e248a50",
+      "subject": "Support sandboxed file streaming in exec-server (#38356)",
+      "kind": "security",
+      "domains": [
+        "sandbox",
+        "exec-server"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "80ceab7aaa25068aee26a52353c0d63039c93b29",
+      "subject": "Optimize orphan output normalization (#38358)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "4ca1af77a561a8908451ae755d8f2b119ca7c434",
+      "subject": "Test hook rejection for explicitly started queue items (#38361)",
+      "kind": "test",
+      "domains": [
+        "thread-queue"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "9ed0047a610aa8e4413dfb456fbf40d7b2f38644",
+      "subject": "Stabilize exec-server byte-budget tests (#38362)",
+      "kind": "test",
+      "domains": [
+        "exec-server"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "72fa74fbc9c4b72d513304bfa0eda427d2402ed9",
+      "subject": "Persist security risk scores in rollout history (#38363)",
+      "kind": "persistence",
+      "domains": [
+        "rollout"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "a7b8c074b577f897111c14de3a5e127b91e2a479",
+      "subject": "Add the Guardian V2 Luna sampler (#38368)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "a7e9fb54800fc784a5039dc461ac68011abed05d",
+      "subject": "Constrain Guardian reviews to parent filesystem permissions (#38377)",
+      "kind": "security",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "d09cf7e5f431bf3c331e78f5a4f7ae2913b4fbd6",
+      "subject": "Preserve user message styling when wrapping long URLs (#38380)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "6fc6b9d6d2580d62622fc9884b5f5707f6505a5e",
+      "subject": "Prevent unread events from blocking in-process requests (#38381)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "911012490ca9b6529dfaf14b0396363dce981169",
+      "subject": "Return Luna samples when streamed JSON completes (#38383)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "5e32f728f1f86a967c6be057351f12505778df8f",
+      "subject": "Refine skill creation guidance and validation (#38384)",
+      "kind": "runtime",
+      "domains": [
+        "skills"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "683716cee9585969ad265eeb08358b24fb93a583",
+      "subject": "Use effective permissions when trusting app-server projects (#38390)",
+      "kind": "security",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "ef596c68ca35dcd42283a0014f9b7fb057147269",
+      "subject": "Reject sessions with unloadable required managed hooks (#38394)",
+      "kind": "security",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "779e9114ae63cad0f6d4f1f792463bd6135b7096",
+      "subject": "Reap orphaned processes in Linux sandboxes (#38396)",
+      "kind": "security",
+      "domains": [
+        "sandbox"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "053dda6b897887c0bbd8efa5d4952a4380dbb5e4",
+      "subject": "Include Node REPL results in Guardian reviews (#38397)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "2bd8727a0c07655fafeae0e4b6fe4c2b4741b399",
+      "subject": "Preserve floating-point values when decoding rollout lines (#38399)",
+      "kind": "persistence",
+      "domains": [
+        "rollout"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "6851fae57cf7306e1d7a093d334b1116d33ce5ad",
+      "subject": "Refresh tracing interest in the token estimate test (#38400)",
+      "kind": "test",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "a70211249ab5d003836a2bb339f69265df84512c",
+      "subject": "Expose conversation history to tool lifecycle extensions (#38403)",
+      "kind": "persistence",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "66919805ea080053d1933b6b43afeb0d8bf70c91",
+      "subject": "Pool Guardian sampling WebSocket connections (#38406)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "d167a3604c404e4ee4bc5b5d0b7923e24e0f54f8",
+      "subject": "Classify tool calls in the Guardian V2 extension (#38409)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "42bb50d5027fbad3431bdd56667bbee30700aad5",
+      "subject": "Allow metadata updates without materializing threads (#38413)",
+      "kind": "persistence",
+      "domains": [
+        "thread-store"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "73862481e52c1d4f610d127663fad564c0652742",
+      "subject": "Add bounded transcript rendering for Guardian v2 (#38414)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "2aba3219e605051bbeca4eb6b1a1f3dce404cfd3",
+      "subject": "Recognize PowerShell `Get-Content` file reads (#38415)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "4f7032173e574c443a9abf6515382d754295bb24",
+      "subject": "Honor filesystem permissions for app file uploads (#38416)",
+      "kind": "security",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "f8a3db0b996c52a248c1dcfc3a9dc507e840ced0",
+      "subject": "Clarify MCP OAuth reauthentication errors (#38418)",
+      "kind": "security",
+      "domains": [
+        "mcp",
+        "auth"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "9946da9af1829410271f6b76f9159961f7281e0a",
+      "subject": "Apply Codex attribution to app-created commits (#38419)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "588e18aae52bdb35fff94a7760b6b502cf0fd154",
+      "subject": "Recover capability discovery after executor disconnects (#38420)",
+      "kind": "security",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "781445f7c6928eda08fe8dc160a6003d2f3a184b",
+      "subject": "Centralize thread environment selection state (#38423)",
+      "kind": "runtime",
+      "domains": [
+        "thread-store"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "990218bbbd5cb4bb5aafd646c56461dfb2f95d17",
+      "subject": "Fail closed when workload identity initialization fails (#38424)",
+      "kind": "security",
+      "domains": [
+        "auth"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "5ed321ce0029614c7277f671c12fb5ea7a30ea6a",
+      "subject": "Protect workload identity auth in app-server account RPCs (#38426)",
+      "kind": "security",
+      "domains": [
+        "auth"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "507ef0b3715d2427326ac090d8818e8dcba5efc0",
+      "subject": "Add Guardian guidance for Node REPL tool calls (#38427)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "f898ebcafdeb0052abc844d9e11b5e754b8ec4af",
+      "subject": "Route curated plugin catalogs by authentication mode (#38429)",
+      "kind": "security",
+      "domains": [
+        "plugins"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "93327c852a1fd9347cacf8fce268d793e6503d1b",
+      "subject": "Gate Node REPL Guardian guidance on model metadata (#38432)",
+      "kind": "runtime",
+      "domains": [
+        "guardian",
+        "model"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "b87327f4e594759f1f1af76d151777d8676fb0cc",
+      "subject": "Add rustls fallback for local MCP HTTP requests (#38436)",
+      "kind": "security",
+      "domains": [
+        "mcp"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "1992f8c0183c6990c82649ef974913cb15a6eef5",
+      "subject": "Preserve approval policies for auto-reviewed models (#38439)",
+      "kind": "runtime",
+      "domains": [
+        "model",
+        "approvals"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "4343b2bdc4e7eb95880a230e588bd07d9f181c2f",
+      "subject": "Add app-server support for reverting paginated threads (#38440)",
+      "kind": "persistence",
+      "domains": [
+        "thread-store"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "53eaa297e595fc98df0f33d4c63686a7014d7c9a",
+      "subject": "Give Guardian V2 full tool action context (#38441)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "3ba52d6075bb69795d008d427139c28fdebdb436",
+      "subject": "Tag current time reminders in model context (#38443)",
+      "kind": "runtime",
+      "domains": [
+        "model",
+        "context"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "bff03ecce582d55ff62d8ee37e576b63c24bc0a9",
+      "subject": "Retain client developer messages across context compaction (#38445)",
+      "kind": "runtime",
+      "domains": [
+        "compact"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "6344a655a5966f92e009a74928fb0559b41f9093",
+      "subject": "Refresh current-time reminders for full-history subagents (#38446)",
+      "kind": "persistence",
+      "domains": [
+        "context"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "ca83f7908ca3c0184d2b7062c7bf2a0cff2d659f",
+      "subject": "Add running-task exit choices to local daemon sessions (#38447)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "1da59ad257115cc5734e6781d5ac0b4f08a6e064",
+      "subject": "Support per-server MCP OAuth callback ports (#38448)",
+      "kind": "security",
+      "domains": [
+        "mcp",
+        "auth"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "5cc65ecb9831917397b9728b708880132d0d58ce",
+      "subject": "Expose model upgrade retirement times (#38449)",
+      "kind": "runtime",
+      "domains": [
+        "model",
+        "context"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "813dc5f08d771d351e1da7f00eace464ffe43263",
+      "subject": "Embed the Windows sandbox setup manifest in Bazel builds (#38450)",
+      "kind": "security",
+      "domains": [
+        "sandbox"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "1b4ea8b3bef397f26216411288eec7bf9bee33ac",
+      "subject": "Add structured telemetry for response retries (#38452)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "4d9f3021c828facd6bc480036684484218e350b5",
+      "subject": "Include node_repl images in Guardian review evidence (#38454)",
+      "kind": "runtime",
+      "domains": [
+        "guardian"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "9341b38310c73957e1313eab3f7c4034689bdec9",
+      "subject": "Add experimental thread queue APIs to app server (#38456)",
+      "kind": "protocol",
+      "domains": [
+        "thread-store",
+        "thread-queue"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "18bbb585e7672e574ca1365d13c9604dbc091df0",
+      "subject": "Add an `AbsolutePathBuf` conversion for `FileSystemPath` (#38460)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "535795f7d12495ee6ea18db3201d2f85c3606aef",
+      "subject": "Centralize turn environment selection state (#38461)",
+      "kind": "runtime",
+      "domains": [
+        "daily-sync"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    },
+    {
+      "sha": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
+      "subject": "Preserve thread subscriptions across revert reloads (#38463)",
+      "kind": "persistence",
+      "domains": [
+        "thread-store"
+      ],
+      "status": "audit_pending",
+      "evidence": []
+    }
   ]
 }

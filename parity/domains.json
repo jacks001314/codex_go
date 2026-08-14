@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "targetRustCommit": "bbbf396839b3bab872291354878980ba82ad4aee",
+  "targetRustCommit": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
   "allowedIdentityMappings": [
     {"rust":"codex","go":"gcode","scope":"published command name only"},
     {"rust":"openai/codex","go":"jacks001314/codex-go","scope":"repository and package coordinates only"}

@@ -922,6 +922,7 @@ func TestV3BatchesCodexOutputRoutesBEMAndFlushesTranscriptTail(t *testing.T) {
 				return
 			}
 		}
+		tailSent := false
 		for {
 			_, payload, err := conn.Read(request.Context())
 			if err != nil {
@@ -933,7 +934,8 @@ func TestV3BatchesCodexOutputRoutesBEMAndFlushesTranscriptTail(t *testing.T) {
 				return
 			}
 			outbound <- message
-			if message["type"] == "delegation.context.append" {
+			if message["type"] == "delegation.context.append" && !tailSent {
+				tailSent = true
 				if err := conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"input_transcript.added","item":{"text":"remaining tail"}}`)); err != nil {
 					return
 				}

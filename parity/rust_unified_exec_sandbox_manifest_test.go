@@ -72,6 +72,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"unified_exec_network_denial_emits_failed_background_end_event",
 				"unified_exec_python_prompt_under_seatbelt",
 				"unified_exec_rejects_justification_without_sandbox_permissions",
+				"unified_exec_rejects_unelevated_windows_sandbox_with_managed_network",
 				"unified_exec_resolves_relative_workdir",
 				"unified_exec_respects_early_exit_notifications",
 				"unified_exec_respects_workdir_override",
@@ -95,7 +96,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Owner:     "execserver, turn, tool",
 			Focus:     "remote exec-server pushed process events, replay gaps, direct denials, and legacy exit metadata",
 			Platform:  "all; async websocket exec-server fixture",
-			TestCases: 6,
+			TestCases: 7,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
 			},
@@ -106,6 +107,8 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Focus:    "zsh fork parent approval flow, denied reads, intercepted exec escalation, and explicit prompt rules",
 			Platform: "Unix-style zsh fork flow; Rust helper skips unsupported targets",
 			Tests: []string{
+				"unified_exec_zsh_fork_guardian_reviews_intercepted_execve",
+				"unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_turn",
 				"unified_exec_zsh_fork_parent_approval_escalates_intercepted_exec",
 				"unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule",
 				"unified_exec_zsh_fork_parent_approval_preserves_denied_reads",

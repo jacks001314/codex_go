@@ -100,6 +100,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"async-utils",
 		"aws-auth",
 		"backend-client",
+		"build-info",
 		"bwrap",
 		"chatgpt",
 		"cli",
@@ -124,7 +125,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"core",
 		"core-api",
 		"core-plugins",
-		"core-skills",
+		"diagnostics",
 		"docs",
 		"exec",
 		"exec-server",
@@ -138,6 +139,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"file-system",
 		"file-watcher",
 		"git-utils",
+		"history",
 		"hooks",
 		"http-client",
 		"install-context",
@@ -183,6 +185,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"vendor",
 		"websocket-client",
 		"windows-sandbox-rs",
+		"workload-identity",
 	}
 }
 
@@ -203,6 +206,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"config",
 		"context",
 		"doctor",
+		"envutil",
 		"eventmap",
 		"exec",
 		"execpolicy",
@@ -231,6 +235,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"shell",
 		"skillprovider",
 		"state",
+		"static",
 		"systemskills",
 		"telemetry",
 		"tool",
