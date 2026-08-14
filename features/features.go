@@ -133,6 +133,8 @@ var Registry = []Spec{
 	{Key: "default_mode_request_user_input", Stage: StageUnderDevelopment},
 	{Key: "terminal_visualization_instructions", Stage: StageUnderDevelopment},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
+	{Key: "guardian_enhanced_node_repl_transcripts", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "guardian_node_repl_transcript_images", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
 	// compaction when restarting Guardian review sessions.
 	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -167,6 +169,7 @@ var Registry = []Spec{
 	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
+	{Key: "psp", Stage: StageUnderDevelopment},
 }
 
 func preventIdleSleepStage() Stage {
