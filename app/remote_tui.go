@@ -347,6 +347,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		UseMemories:               settings.UseMemories,
 		GenerateMemories:          settings.GenerateMemories,
 		FeedbackEnabled:           settings.FeedbackEnabled,
+		ModelPickerOptions:        interactiveModelPickerOptions(root),
 		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
 		Personality:               settings.Personality,
 		Notifications:             settings.Notifications,

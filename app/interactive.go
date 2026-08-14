@@ -686,6 +686,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		UseMemories:                 settings.UseMemories,
 		GenerateMemories:            settings.GenerateMemories,
 		FeedbackEnabled:             settings.FeedbackEnabled,
+		ModelPickerOptions:          interactiveModelPickerOptions(root),
 		ServiceTierCommands:         interactiveServiceTierCommands(state.Model),
 		Personality:                 settings.Personality,
 		Notifications:               settings.Notifications,
@@ -3093,6 +3094,16 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 	options.ReasoningEffort = firstNonEmptyLocal(options.ReasoningEffort, interactiveDefaultReasoningEffort(options.Model))
 	options.CWD = interactiveSessionPickerCWD(root)
 	return codextui.NewState(options)
+}
+
+func interactiveModelPickerOptions(root *cli.RootOptions) []codextui.ModelPickerOption {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err == nil && loaded != nil {
+		if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
+			return codextui.ModelPickerOptionsFromCatalog(*catalog)
+		}
+	}
+	return codextui.BundledModelPickerOptions()
 }
 
 func interactiveStringFromConfig(values map[string]any, key string) string {

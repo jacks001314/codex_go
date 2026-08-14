@@ -511,6 +511,43 @@ func TestModelPickerFiltersHiddenAndSelectsCurrent(t *testing.T) {
 	}
 }
 
+func TestModelPickerOptionsFromCatalogUsesConfiguredModels(t *testing.T) {
+	options := ModelPickerOptionsFromCatalog(model.ModelsResponse{
+		Models: []model.ModelInfo{
+			{
+				Slug:                  "deepseek-v4-flash",
+				DisplayName:           "DeepSeek-V4-Flash",
+				Visibility:            model.VisibilityList,
+				SupportedInAPI:        true,
+				Priority:              1,
+				DefaultReasoningLevel: "high",
+			},
+			{
+				Slug:                  "deepseek-v4-pro",
+				DisplayName:           "DeepSeek-V4-Pro",
+				Visibility:            model.VisibilityList,
+				SupportedInAPI:        true,
+				Priority:              2,
+				DefaultReasoningLevel: "high",
+			},
+		},
+	})
+	if len(options) != 2 {
+		t.Fatalf("options len = %d, want 2", len(options))
+	}
+	picker := NewModelPicker(options, "")
+	for _, want := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		if _, ok := picker.OptionByID(want); !ok {
+			t.Fatalf("missing picker option %q", want)
+		}
+	}
+	for i, option := range options {
+		if option.ID != "deepseek-v4-flash" && option.ID != "deepseek-v4-pro" {
+			t.Fatalf("options[%d].ID = %q, want deepseek model", i, option.ID)
+		}
+	}
+}
+
 func TestModelReasoningPickerSelectsCurrentThenDefault(t *testing.T) {
 	option := ModelPickerOptionsFromPresets([]model.ModelPreset{
 		{

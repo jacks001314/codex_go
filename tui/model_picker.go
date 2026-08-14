@@ -57,6 +57,11 @@ func BundledModelPickerOptions() []ModelPickerOption {
 	return ModelPickerOptionsFromPresets(manager.ListModels(model.RefreshOffline))
 }
 
+func ModelPickerOptionsFromCatalog(catalog model.ModelsResponse) []ModelPickerOption {
+	manager := model.NewStaticModelsManager(catalog)
+	return ModelPickerOptionsFromPresets(manager.ListModels(model.RefreshOffline))
+}
+
 func ModelPickerOptionsFromPresets(presets []model.ModelPreset) []ModelPickerOption {
 	options := make([]ModelPickerOption, 0, len(presets))
 	for _, preset := range presets {
